@@ -16,35 +16,58 @@ capture spike and the documents that decide what gets built.
 | [`DESIGN.md`](./DESIGN.md) | Tokens, visual rules, engineering rules, and the Tauri-over-SwiftUI shell decision. Frontmatter verified against impeccable's reader. |
 | [`docs/screens-and-states.md`](./docs/screens-and-states.md) | Eight surfaces, their lifecycle states, and the five templates derived from them. |
 | [`spike/RESULTS.md`](./spike/RESULTS.md) | What the capture spike proved and, as importantly, what it could not. |
+| [`docs/teardown.md`](./docs/teardown.md) | How Circleback, Fireflies and Granola actually work, and why this is built the way it is. |
 | [`capture/audiotee/`](./capture/) | Vendored MIT tap binary — see [`capture/NOTICE`](./capture/NOTICE). |
 
-Background research on how the commercial products work is at
-`~/Workspace/dev/wip/meeting-notetaker-teardown.md`.
+## Setup
+
+Requires macOS 14.4 or later, Xcode Command Line Tools, and Python 3.10+.
+
+```sh
+git clone <this repo> && cd local-meeting-notes
+
+# 1. Build the tap binary (~35 s).
+(cd capture/audiotee && swift build -c release)
+
+# 2. Python environment.
+python3 -m venv .venv
+.venv/bin/pip install -r spike/requirements.txt
+```
+
+The first `mlx-whisper` run downloads `whisper-large-v3-turbo` (~1.6 GB) to
+`~/.cache/huggingface`. To skip that entirely, run with `--no-transcribe` — the
+drift and bleed measurements need only `numpy` and `sounddevice`.
+
+**Permissions.** The terminal needs System Audio Recording permission, and
+Microphone. The first run prompts for both; some terminal emulators never
+prompt, in which case grant them ahead of time under System Settings → Privacy &
+Security. If the tool runs but records silence, that is what happened.
 
 ## Running the capture spike
 
-Build the tap binary once:
-
 ```sh
-(cd capture/audiotee && swift build -c release)
+.venv/bin/python spike/dual_capture.py --seconds 60
+.venv/bin/python spike/dual_capture.py                    # until Ctrl-C
+.venv/bin/python spike/dual_capture.py --no-transcribe    # measure only
 ```
 
-Then capture both legs, measure clock drift and speaker bleed, and print a
-Me/Them transcript:
+### The run that matters
+
+Drift cannot be measured in a short capture (see below). To close that question,
+run it alongside a real meeting, **on headphones**, for the full length:
 
 ```sh
-python spike/dual_capture.py --seconds 60
-python spike/dual_capture.py                     # until Ctrl-C
-python spike/dual_capture.py --no-transcribe     # capture and measure only
+.venv/bin/python spike/dual_capture.py --seconds 4200 --no-transcribe
 ```
 
-Dependencies are in [`spike/requirements.txt`](./spike/requirements.txt); it runs
-as-is under `local-dictation`'s venv, which already has the Whisper weights
-cached.
+Headphones matter for two reasons: they remove the bleed that otherwise
+duplicates every line of transcript, and they let the same run give a first clean
+read on whether the Me/Them split holds up on real speech. Drop
+`--no-transcribe` if you want that transcript, and expect roughly a minute of
+processing per 10 minutes of audio at the end.
 
-macOS 14.4 or later, and the terminal needs System Audio Recording permission.
-The first run prompts; some terminal emulators do not, in which case grant it
-ahead of time in System Settings.
+Recording a meeting silently is a two-party-consent problem in about a dozen US
+states. Tell the room.
 
 ## The two things worth knowing before building on this
 

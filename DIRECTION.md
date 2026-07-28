@@ -1,9 +1,10 @@
 # Direction — local-meeting-notes
 
-Art direction for this surface. Unlike the `photography` and `urvil` records,
-this one is **authored, not derived**: there is no shipped `DESIGN.md` stating a
-direction to quote, because there is no shipped surface. The thesis below is
-written first and `DESIGN.md`'s tokens answer to it, rather than the reverse.
+Art direction for this surface. Unlike the records that quote an existing
+`DESIGN.md`, this one is **authored, not derived**: there is no shipped
+`DESIGN.md` stating a direction to quote, because there is no shipped surface.
+The thesis below is written first and `DESIGN.md`'s tokens answer to it, rather
+than the reverse.
 
 A finding with no `authorized` row here is a defect. Absence of a record is not
 permission. Direction constrains *how* a correctness failure is fixed — never
