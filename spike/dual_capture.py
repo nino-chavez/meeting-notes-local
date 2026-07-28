@@ -171,12 +171,27 @@ class TapLeg(Leg):
 
 
 class MicLeg(Leg):
-    def __init__(self):
+    """Microphone capture.
+
+    The device is resolved and named at startup rather than left implicit.
+    sounddevice binds whatever macOS has as default input at the moment the
+    stream opens, so connecting headphones after launch leaves the capture on
+    the built-in microphone — or on silence. Across a 70-minute run that is
+    unrecoverable, so the resolved device is printed before any audio arrives.
+    """
+
+    def __init__(self, device=None):
         super().__init__("mic")
         self.stream = None
+        self.device = device
+        self.device_name = None
 
     def start(self):
+        self.device_name = sd.query_devices(
+            self.device if self.device is not None else sd.default.device[0]
+        )["name"]
         self.stream = sd.InputStream(
+            device=self.device,
             samplerate=RATE,
             channels=1,
             dtype="float32",
@@ -205,18 +220,50 @@ def envelope(audio, rate=RATE, hz=ENVELOPE_HZ):
     return np.sqrt((trimmed.astype(np.float64) ** 2).mean(axis=1)).astype(np.float32)
 
 
+def active_span(env, floor_frac=0.05):
+    """First and last frame where the envelope is meaningfully above silence.
+
+    Returns None if nothing clears the floor.
+    """
+    if not len(env):
+        return None
+    loud = np.flatnonzero(env > floor_frac * float(env.max()))
+    if not len(loud):
+        return None
+    return int(loud[0]), int(loud[-1]) + 1
+
+
 def bleed(mic, tap):
     """Peak normalised cross-correlation between the two legs' envelopes.
 
     High correlation means the microphone is hearing what the speakers are
     playing — the Me/Them split is contaminated and needs echo cancellation or
     headphones.
+
+    Measured over the system leg's active span rather than the whole capture.
+    Silence on the system leg cannot demonstrate bleed in either direction — no
+    audio is playing, so none can leak — but it still contributes microphone
+    noise to the correlation's denominator and drags the result toward zero.
+    Measured on a real capture, appending 40 minutes of empty room to a 14-second
+    recording pulled +0.927 down to +0.826. That is the dangerous direction: a
+    contaminated capture reads as clean, and the Me/Them split gets trusted when
+    it shouldn't be. Trimming to the span makes a long over-run harmless.
     """
     a, b = envelope(mic), envelope(tap)
     n = min(len(a), len(b))
     if n < ENVELOPE_HZ:  # under a second of overlap
         return None
     a, b = a[:n], b[:n]
+
+    span = active_span(b)
+    if span is None:
+        return None
+    lo, hi = span
+    if hi - lo < ENVELOPE_HZ:  # under a second of system-side activity
+        return None
+    analysed = (hi - lo) / n
+    a, b = a[lo:hi], b[lo:hi]
+    n = hi - lo
     a = a - a.mean()
     b = b - b.mean()
     denom = np.linalg.norm(a) * np.linalg.norm(b)
@@ -235,7 +282,12 @@ def bleed(mic, tap):
         r /= denom
         if abs(r) > abs(best_r):
             best_r, best_lag = r, lag
-    return {"peak_r": best_r, "lag_ms": best_lag * 1000 / ENVELOPE_HZ}
+    return {
+        "peak_r": best_r,
+        "lag_ms": best_lag * 1000 / ENVELOPE_HZ,
+        "analysed_frac": analysed,
+        "analysed_s": n / ENVELOPE_HZ,
+    }
 
 
 def write_wav(path, audio):
@@ -322,9 +374,13 @@ def report(mic_leg, tap_leg, args, out_dir):
     b = bleed(mic, tap)
     print("\n=== speaker bleed ===")
     if not b:
-        print("  not enough overlapping audio to measure")
+        print("  no system-side audio to measure against — nothing was playing")
     else:
         print(f"  peak envelope correlation {b['peak_r']:+.3f} at {b['lag_ms']:+.0f} ms lag")
+        print(
+            f"  measured over {b['analysed_s']:.0f}s of system-side activity "
+            f"({b['analysed_frac'] * 100:.0f}% of the capture)"
+        )
         if start_skew is not None:
             # The legs are correlated from their own sample zero, so the raw lag
             # is dominated by however far apart they started. Subtracting the
@@ -386,17 +442,41 @@ def main():
     ap.add_argument("--language", default="en")
     ap.add_argument("--no-transcribe", action="store_true")
     ap.add_argument("--out", default=None, help="output dir (default: spike/out)")
+    ap.add_argument(
+        "--input-device", default=None,
+        help="microphone: device index, or a substring of its name "
+             "(default: whatever macOS has as default input at launch)",
+    )
+    ap.add_argument(
+        "--list-devices", action="store_true",
+        help="print available audio devices and exit",
+    )
     args = ap.parse_args()
+
+    if args.list_devices:
+        print(sd.query_devices())
+        return
+
+    device = args.input_device
+    if device is not None and device.isdigit():
+        device = int(device)
 
     out_dir = Path(args.out) if args.out else REPO / "spike" / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    mic_leg, tap_leg = MicLeg(), TapLeg()
+    mic_leg, tap_leg = MicLeg(device), TapLeg()
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
 
     tap_leg.start()
     mic_leg.start()
+
+    # Name both devices before any audio arrives. The tap follows the default
+    # OUTPUT device, so that is the one that decides what lands on the system
+    # leg — worth seeing alongside the microphone.
+    out_name = sd.query_devices(sd.default.device[1])["name"]
+    print(f"  mic    → {mic_leg.device_name}")
+    print(f"  system → tap on default output: {out_name}")
     print(f"capturing — {'Ctrl-C to stop' if not args.seconds else f'{args.seconds:g}s'}")
 
     deadline = time.monotonic() + args.seconds if args.seconds else None

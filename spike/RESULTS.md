@@ -85,6 +85,46 @@ logic against an assumed drift figure.
 
 ---
 
+## Two defects found while preparing the long run
+
+Both were in the spike itself, surfaced by walking through what a 70-minute
+capture on a second machine would actually do. Both are fixed.
+
+**Bleed was measured over the whole capture, so over-running diluted it.** The
+correlation ran across every frame, including stretches where nothing was playing
+on the system leg. Silence there cannot demonstrate bleed in either direction —
+no audio is playing, so none can leak — but it still adds microphone noise to the
+denominator and drags the result toward zero. Measured by appending synthetic
+empty-room audio to a real capture:
+
+| Empty room appended | Before fix | After fix |
+|---|---|---|
+| none | +0.927 | +0.889 |
+| 5 min | +0.916 | +0.889 |
+| 20 min | +0.875 | +0.889 |
+| 40 min | +0.826 | +0.889 |
+
+This failed in the dangerous direction: a contaminated capture reads as *cleaner*
+than it is, so the Me/Them split gets trusted when it shouldn't be. Since
+`--seconds 4200` is sized for the drift measurement rather than the meeting,
+over-running into an empty room is the expected case, not an edge case. Bleed is
+now measured across the system leg's active span only, and the report states how
+much of the capture that covered.
+
+(The two "after" columns differ from the two "before" columns at zero tail
+because the numbers come from different recordings — the point is the decay
+across each column, not the absolute value.)
+
+**The microphone was bound silently.** `sd.InputStream` took no `device=`
+argument, so it grabbed whatever macOS had as default input at the moment the
+stream opened, and never said which. Connect headphones after launch and you
+record the built-in mic, or silence — and you find out 70 minutes later, on a run
+that is expensive to repeat. There is now `--input-device` and `--list-devices`,
+and both resolved devices are printed before any audio arrives. The output device
+is printed too, since the tap follows the default output rather than the input.
+
+---
+
 ## Incidental findings
 
 **Start skew is variable and not small.** First-block arrival differed by

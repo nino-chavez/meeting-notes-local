@@ -86,12 +86,42 @@ sounddevice and skips the 1.6 GB Whisper download entirely. Plain
 for drift to become measurable:
 
 ```sh
+.venv/bin/python spike/dual_capture.py --list-devices       # pick your mic
 .venv/bin/python spike/dual_capture.py --seconds 4200 --no-transcribe
 ```
 
 Headphones do two jobs there: they remove the bleed that duplicates every line,
 and they let the same capture give the first clean read on whether the Me/Them
 split survives real speech.
+
+`--seconds 4200` is sized for the drift measurement, not for your meeting. Over-
+running into an empty room is harmless — bleed is measured only across the span
+where system audio was actually playing — but drift needs the full ~70 minutes of
+wall clock, so a 30-minute meeting won't answer it however long you leave the
+recorder running afterward.
+
+### Recording a specific call
+
+Nothing to configure per platform. The tap captures the machine's audio output,
+so Zoom, Meet, Teams, a browser tab, or a phone call on speaker are all identical
+to it — start the capture, join the meeting, let it run. Nothing joins the call
+and nothing appears in the participant list, which is exactly why the consent
+note below isn't decorative.
+
+The corollary: **everything else on the machine lands on the "them" leg** — Slack
+pings, a music tab, calendar alerts. Quit the noisy apps and turn on Do Not
+Disturb first. The vendored tap can scope to a process (`--include-processes
+<pid>`) and the spike deliberately doesn't expose it, because it works for a
+native Zoom client but not for Meet, whose audio comes from a Chrome helper whose
+PID changes between sessions. A flag that works on one platform and silently
+records nothing on another is worse than no flag.
+
+**Set your audio devices before launching.** The microphone is bound when the
+stream opens, and the tap follows whatever is the default *output* device — so
+connecting headphones mid-capture leaves you recording the built-in mic, or
+silence. Both resolved devices are printed before any audio arrives; read that
+line rather than assuming. `--input-device` pins the microphone explicitly, by
+index or by a substring of its name.
 
 **Permissions.** The terminal needs Microphone and System Audio Recording. The
 first run prompts for both; some terminal emulators never prompt, in which case
