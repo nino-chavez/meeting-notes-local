@@ -135,6 +135,14 @@ LEAK_PATTERNS = [
     re.compile(r"\b(?:assigned to|owner|action owner|responsible)\s*[:—-]\s*\S", re.IGNORECASE),
 ]
 
+# At `channel` the operator IS a known identity, so "you agreed to X" is a
+# correct claim rather than a fabricated one. Everything that individuates the
+# far side is still forbidden.
+CHANNEL_LEAK_PATTERNS = [
+    re.compile(rf"\b(?:he|she)\s+(?:{ATTRIBUTION_VERBS})\b", re.IGNORECASE),
+    re.compile(r"\b(?:assigned to|owner|action owner|responsible)\s*[:—-]\s*\S", re.IGNORECASE),
+]
+
 
 def ollama_chat(model: str, system: str, user: str, num_ctx: int, timeout: int):
     body = json.dumps({
@@ -191,10 +199,25 @@ def check_context(response: dict, prompt: str, num_ctx: int) -> dict:
 
 
 def check_attribution(note: str, transcript: Transcript, stripped_speakers: list[str]) -> dict:
-    """At `none`, any speaker identity in the notes was invented.
+    """Whether the notes claimed a speaker identity the input did not support.
 
-    The model was shown a transcript with the labels removed, so a role name it
-    reproduces cannot have come from its input.
+    Applies at `none` and at `channel`, because both are capture-derived levels
+    where identity is partly or wholly unavailable. Only `named` is exempt.
+
+    At `none` the model was shown a transcript with the labels removed, so a
+    role name it reproduces cannot have come from its input.
+
+    At `channel` the model was shown "Me" and "Them". "Me" is a real identity —
+    the person recording — so attributing to "you" is correct there. "Them" is
+    not: it is an undifferentiated far side, and treating it as one actor is the
+    same fabrication in a different costume. `channel` is what the *recommended*
+    capture produces, since headphones mean low bleed, so leaving it unchecked
+    would leave the default path unenforced.
+
+    "Me" and "Them" are always in the forbidden-name set, not just the corpus
+    speakers. On a real capture the spike has already dropped the labels, so
+    `stripped_speakers` arrives empty and the name arm would otherwise be a
+    no-op on exactly the path that matters.
 
     The bare-name version of this check does not survive contact with real
     transcripts. AMI's speaker roles are "Marketing", "User Interface",
@@ -208,11 +231,18 @@ def check_attribution(note: str, transcript: Transcript, stripped_speakers: list
     So a name only counts when it sits in an attributing position: doing
     something, or credited as the source of something.
     """
-    if transcript.attribution != NONE:
+    if transcript.attribution == NAMED:
         return {"applies": False}
 
+    if transcript.attribution == CHANNEL:
+        forbidden = ["Them"]
+        patterns = CHANNEL_LEAK_PATTERNS
+    else:
+        forbidden = [*stripped_speakers, "Me", "Them"]
+        patterns = LEAK_PATTERNS
+
     names = []
-    for s in stripped_speakers:
+    for s in forbidden:
         n = re.escape(s)
         attributing = (
             rf"\b{n}\b\s*(?:{ATTRIBUTION_VERBS})\b"          # Marketing agreed …
@@ -223,7 +253,7 @@ def check_attribution(note: str, transcript: Transcript, stripped_speakers: list
         if re.search(attributing, note, re.IGNORECASE | re.MULTILINE):
             names.append(s)
 
-    leaks = [m.group(0) for p in LEAK_PATTERNS for m in p.finditer(note)]
+    leaks = [m.group(0) for p in patterns for m in p.finditer(note)]
     return {
         "applies": True,
         "ok": not names and not leaks,
@@ -235,8 +265,9 @@ def check_attribution(note: str, transcript: Transcript, stripped_speakers: list
 # Vocabulary a well-formed note contains because it is a note, not because the
 # meeting was about it. Summary prose reaches for these regardless of subject.
 _NOTE_REGISTER = {
+    "note", "notes", "transcript", "meeting", "speaker", "speakers",
     "summary", "decision", "decisions", "action", "actions", "item", "items",
-    "question", "questions", "open", "meeting", "discussed", "discussion",
+    "question", "questions", "open", "discussed", "discussion",
     "group", "team", "someone", "agreed", "decided", "raised", "unresolved",
     "including", "various", "related", "regarding", "several", "aspects",
     "issues", "topics", "point", "points", "made", "also", "next", "follow",
@@ -466,6 +497,21 @@ SELF_TEST = [
      ["Marketing"], False),
 ]
 
+# The `channel` level has its own contract: "Me" is a real identity, "Them" is
+# not. These run against a channel transcript rather than an unattributed one.
+CHANNEL_SELF_TEST = [
+    ("second person is correct at channel — Me is a known identity",
+     "## Action items\nYou agreed to check the financial feasibility.", True),
+    ("collective phrasing about the far side is fine",
+     "## Decisions\nThe group agreed on kinetic charging.", True),
+    ("treating Them as one actor is caught",
+     "## Action items\nThem agreed to send the revised quote.", False),
+    ("crediting the far side as a source is caught",
+     "## Open questions\nThe cost of the cover, raised by Them.", False),
+    ("individuating the far side is caught",
+     "## Decisions\n- She proposed moving to a rubber cover.", False),
+]
+
 
 def run_self_test() -> int:
     failures = 0
@@ -481,6 +527,18 @@ def run_self_test() -> int:
         if not ok:
             print(f"          got names={got['named_speakers']} "
                   f"phrases={got['actor_phrases']}")
+
+    print("\n=== attribution check at `channel` (the recommended capture path) ===\n")
+    for label, note, expect_ok in CHANNEL_SELF_TEST:
+        t = Transcript(source="self-test", attribution=CHANNEL,
+                       turns=[Turn(text="x", speaker="Me")])
+        got = check_attribution(note, t, [])
+        ok = got["ok"] == expect_ok
+        failures += not ok
+        want = "clean" if expect_ok else "flagged"
+        print(f"  [{'pass' if ok else 'FAIL'}] expects {want:8s} — {label}")
+        if not ok:
+            print(f"          got names={got['named_speakers']} phrases={got['actor_phrases']}")
 
     print("\n=== number check ===\n")
     for label, note, source, expect_ok in [
@@ -558,6 +616,8 @@ def main():
                    help="remove speaker labels, testing the unattributed contract")
     p.add_argument("--simulate-bleed", action="store_true",
                    help="remove labels AND double every line, as a contaminated capture arrives")
+    p.add_argument("--as-channel", metavar="SPEAKER", nargs="?", const=True,
+                   help="collapse to the Me/Them split a clean headphone capture produces")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX)
     p.add_argument("--timeout", type=int, default=900)
@@ -583,6 +643,8 @@ def main():
     stripped_speakers = t.speakers
     if args.simulate_bleed:
         t = t.simulate_bleed()
+    elif args.as_channel:
+        t = t.as_channel(None if args.as_channel is True else args.as_channel)
     elif args.strip:
         t = t.strip_attribution()
 

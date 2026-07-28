@@ -82,6 +82,30 @@ class Transcript:
             turns=[Turn(text=t.text, start=t.start) for t in self.turns],
         )
 
+    def as_channel(self, me: str | None = None) -> "Transcript":  # noqa: UP037
+        """Collapse named speakers to the Me/Them split a clean capture produces.
+
+        This is the level the recommended setup actually yields: headphones mean
+        low bleed, low bleed means the legs stay independent, and the capture
+        writes `channel`. Testing only `named` and `none` would leave the
+        default path unexercised.
+
+        One speaker becomes "Me" — the person holding the microphone — and every
+        other speaker collapses into a single undifferentiated "Them", which is
+        precisely what the system leg is. The far side is not four people to the
+        capture; it is one audio stream.
+        """
+        me = me or (self.speakers[0] if self.speakers else None)
+        return Transcript(
+            source=f"{self.source} (as channel, Me={me})",
+            attribution=CHANNEL,
+            turns=[
+                Turn(text=t.text, start=t.start,
+                     speaker="Me" if t.speaker == me else "Them")
+                for t in self.turns
+            ],
+        )
+
     def simulate_bleed(self) -> "Transcript":  # noqa: UP037
         """What a bleed-contaminated capture actually looks like.
 

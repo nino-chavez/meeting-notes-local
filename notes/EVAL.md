@@ -1,7 +1,8 @@
 # Notes evaluation — does a local model invent things?
 
 Run 2026-07-28. `llama3.1:8b` via Ollama on Apple Silicon, temperature 0,
-`num_ctx` 32768. Three QMSum meetings, seven runs.
+`num_ctx` 32768. Three QMSum meetings, eight runs covering all three attribution
+levels and four input shapes, plus one deliberate truncation control.
 Tool: [`summarize.py`](./summarize.py). Reproduce with `python notes/fetch_corpus.py`.
 
 The capture spike answered whether the audio can be split. This answers the
@@ -52,15 +53,31 @@ treated as crude: it is a coverage smoke test, not a score.
 | Meeting | Kind | Mode | Turns | Prompt tokens | Time | Topics | Words |
 |---|---|---|---|---|---|---|---|
 | ES2004c | AMI, product design | named | 582 | 10 562 | 48 s | 4/5 | 200 |
+| ES2004c | | **channel (Me/Them)** | 582 | 10 145 | 105 s | 4/5 | 174 |
 | ES2004c | | unattributed | 582 | 9 661 | 44 s | 4/5 | 161 |
 | ES2004c | | **bleed simulated** | 1 164 | 18 919 | 127 s | 4/5 | 168 |
 | Bmr006 | ICSI, research group | named | 1 365 | 27 530 | 276 s | 4/5 | 270 |
 | Bmr006 | | unattributed | 1 365 | 24 202 | 214 s | 3/5 | 205 |
-| covid_4 | Committee hearing | named | 276 | 21 884 | 179 s | 2/7 | 252 |
+| covid_4 | Committee hearing | named | 276 | 21 884 | 136 s | 2/7 | 252 |
 | covid_4 | | unattributed | 276 | 20 189 | 158 s | 1/7 | 268 |
 
-Across all seven runs: no invented numbers, no prompt echo, and at every
-unattributed run, no fabricated speaker and no implied actor.
+Across all runs: no invented numbers, no prompt echo, and at every
+capture-derived level, no fabricated speaker and no implied actor.
+
+**`channel` is in that table because it is the path the README recommends.** A
+clean headphone capture measures low bleed, and the spike then writes
+`attribution: "channel"` — so Me/Them is the default a real user hits, not an
+exotic case. It had been specified and never run; `check_attribution` returned
+"does not apply" for it, meaning the contract governing the recommended setup
+was enforced by nothing. It now applies at `channel` too, with `Them` forbidden
+as an actor and `Me` permitted, because the person holding the microphone is a
+real identity and the far side is one undifferentiated audio stream rather than
+a person.
+
+The same fix closes a hole on the production path at `none`: a real capture
+arrives with its labels already dropped by the spike, so the corpus-derived
+speaker list is empty and the name arm of the check had nothing to match. `Me`
+and `Them` are now always in the forbidden set.
 
 ---
 
@@ -117,7 +134,7 @@ model is the obvious next thing to compare against, and the harness takes
 | Check | Gates? | Catches |
 |---|---|---|
 | `check_context` | yes | Silent truncation — the server's own prompt token count against the prompt sent |
-| `check_attribution` | yes | A speaker named, or an actor implied, at attribution level `none` |
+| `check_attribution` | yes | A speaker named, or an actor implied, at `none` **and at `channel`** |
 | `check_numbers` | yes | Figures in the notes that appear nowhere in the transcript |
 | `check_prompt_echo` | yes | Content that came from the instructions rather than the meeting |
 | `check_grounding` | **no** | Content words absent from the transcript — advisory only |
@@ -147,11 +164,29 @@ those fixtures are failures these checks actually had:
 
 ## Incidental findings
 
-**Ollama's context default would have silently eaten most of the corpus.**
-`num_ctx` defaults to 4096 regardless of the model's real window. Bmr006 needs
-27 530 tokens — the default would have summarized the first 15% and produced
-something perfectly well-formed about it. This is why the truncation check gates
-rather than warns.
+**Ollama's context default would have silently eaten most of the corpus, and
+the gate was made to fire before that was claimed.** `num_ctx` defaults to 4096
+regardless of the model's real window. Bmr006 needs 27 530 tokens. Running it
+deliberately at the default:
+
+```
+$ python3 notes/summarize.py notes/corpus/Bmr006.json --num-ctx 4096
+  context   TRUNCATED — server read 4096 prompt tokens for a prompt
+            estimated at 28279; the tail of the meeting was dropped
+```
+
+85% of the meeting discarded, and the notes it produced were well-formed prose
+about the opening with nothing marking the difference. This is why the check
+gates rather than warns.
+
+That run paid for itself twice. The advisory grounding list jumped from 2 terms
+to 12 — truncation does not merely shorten the notes, it pushes the model to
+invent. And it exposed a **false positive in the gating prompt-echo check**: the
+word "notes" appears in every instruction and every note, so it read as content
+that travelled from prompt to output without passing through the transcript.
+"note", "notes", "transcript", "meeting" and "speaker" are now register rather
+than content. A gating check with a false positive fails good work, which is the
+same defect as passing bad work with the sign flipped.
 
 **Temperature 0 is reproducible here.** Two runs of the same transcript produced
 byte-identical notes. Worth knowing before treating any output difference as
@@ -163,8 +198,12 @@ nothing here needs to be real-time.
 
 **Naming is not free even when labels are present.** At attribution level
 `named`, with reliable speaker labels and an instruction to use them, the model
-still wrote mostly agentless notes. Getting owners onto action items will take
-more than having the data.
+still wrote mostly agentless notes. At `channel`, where "you agreed to X" is
+both permitted and correct, it wrote no second-person attributions at all.
+Getting owners onto action items will take more than having the data — which
+also means the attribution checks have so far only ever been exercised against a
+model that under-attributes. They are controls against a failure this model does
+not currently reach for.
 
 ---
 
