@@ -1,0 +1,14 @@
+# Three runtimes per DESIGN.md's shell decision: Rust/TS shell, Python ASR
+# daemon, Swift capture sidecar.
+node_modules/
+dist/
+target/
+.venv/
+__pycache__/
+.build/
+.DS_Store
+
+# Recorded audio and transcripts never belong in the repo.
+*.wav
+*.m4a
+notes.sqlite*
