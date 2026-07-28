@@ -64,7 +64,22 @@ Visible while capturing. Small, positioned, dismissible to the menubar.
 | `tap-lost` | Tap died mid-meeting — device change, permission revoked, aggregate device torn down |
 | `device-changed` | Default input or output switched mid-meeting |
 | `drift` | The two streams' timestamps have diverged past threshold |
+| `bleed-detected` | The microphone is hearing the speakers; the Me/Them split is not trustworthy |
 | `stopping` | Capture ending, buffers flushing |
+
+**`bleed-detected` is measured, not assumed** — added after the capture spike
+(`spike/RESULTS.md`) found envelope correlation of **+0.93** between the two legs
+when the far end plays through speakers, which makes every utterance appear twice
+in the transcript, once as Me and once as Them.
+
+That output is worse than unlabelled: it reads as two people agreeing verbatim,
+and nothing downstream can tell it never happened. So this state changes
+behaviour rather than showing a warning — **when bleed is high the product stops
+claiming a split** and labels the session as one channel. Fabricating a dialogue
+is the one failure mode a meeting record cannot have.
+
+Correlation is measured on the first seconds of capture and re-checked when the
+output device changes, since plugging in headphones mid-meeting resolves it.
 
 **`tap-lost`, `device-changed` and `drift` are states on this surface, not error
 dialogs.** They are expected conditions across a 60-minute capture, and the
