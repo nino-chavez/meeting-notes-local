@@ -1,0 +1,29 @@
+# Pinned so "clean" means the same thing on every machine. Without a config the
+# verdict follows whatever the installed ruff defaults to that month, which makes
+# a passing check unfalsifiable — the same failure mode the notes checks exist to
+# avoid, one layer up.
+#
+#   uvx ruff check .
+
+line-length = 100
+target-version = "py310"
+
+[lint]
+select = [
+    "E", "F",      # pycodestyle, pyflakes
+    "I",           # import sorting
+    "B",           # bugbear — the duplicate-set-item class
+    "UP",          # pyupgrade
+    "SIM",         # simplify
+    "ISC",         # implicit string concatenation, which silently joins list items
+    "FURB",        # modernisation
+    "RUF",         # ruff's own, including unused-noqa
+    "EXE",         # shebang present but file not executable
+]
+
+[lint.per-file-ignores]
+# The SVG generator's long lines are the SVG markup itself — one element per
+# line, with its own text content inline. Wrapping them to 100 columns would
+# hide the shape of the document being emitted to satisfy a rule about the
+# Python around it.
+"assets/readme/generate.py" = ["E501"]

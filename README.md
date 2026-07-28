@@ -7,10 +7,12 @@ the meeting, and the audio never leaves the Mac — system audio comes through a
 Core Audio process tap, your microphone comes through the same path
 `local-dictation` already uses, and the two arrive as separate streams.
 
-> **Status: design definition and a capture spike.** There is no app yet. What
-> exists is a working two-leg capture, the measurements it produced, and the
-> documents deciding what gets built. Start with
-> [`spike/RESULTS.md`](./spike/RESULTS.md).
+> **Status: design definition, a capture spike, and a notes evaluation.** There
+> is no app yet. What exists is a working two-leg capture, a local summarizer
+> with its fabrication checked mechanically, the measurements both produced, and
+> the documents deciding what gets built. Start with
+> [`spike/RESULTS.md`](./spike/RESULTS.md) and
+> [`notes/EVAL.md`](./notes/EVAL.md).
 
 ---
 
@@ -32,6 +34,21 @@ having no speaker labels at all.
 So the product treats this as a measurement, not a caveat: correlation is
 checked at the start of every capture, and when it is high the tool stops
 claiming a split rather than fabricating a dialogue.
+
+**But bleed costs the speaker labels, not the notes.** Feeding a summarizer the
+same contamination — labels dropped, every line doubled, which is what a
+contaminated capture actually delivers — produced notes at full topic coverage
+with a correct decision list. Summarization is compression, and the first thing
+compression discards is repetition. So the product stops claiming who spoke and
+keeps writing the note.
+
+**The worst defect found in the notes half was in the prompt, not the model.**
+The instructions illustrated a phrasing rule with two example sentences, and the
+model reproduced both as decisions a research meeting had reached — in a
+transcript where neither subject appears once. Those notes named nobody,
+invented no numbers, and were read in full, so every check in place passed them.
+Watching numbers turns out to be the wrong check on its own: fabricated prose
+carries no digits. See [`notes/EVAL.md`](./notes/EVAL.md).
 
 **Clock drift is still an open question.** A short capture cannot answer it —
 sample counts are exact but each wall-clock endpoint is only known to about one
@@ -100,6 +117,35 @@ where system audio was actually playing — but drift needs the full ~70 minutes
 wall clock, so a 30-minute meeting won't answer it however long you leave the
 recorder running afterward.
 
+### Turning a transcript into notes
+
+Needs [Ollama](https://ollama.com) and one local model. Nothing leaves the
+machine here either — the transcript is the same secret as the audio.
+
+```sh
+ollama pull llama3.1
+python3 notes/fetch_corpus.py                          # three real meetings
+python3 notes/summarize.py notes/corpus/ES2004c.json
+```
+
+Every run prints its own checks: whether the whole transcript was read, whether
+any speaker was named that the input never contained, whether any figure or any
+content word is absent from the transcript. `--self-test` runs those checks
+against notes with known verdicts, in both directions, so a passing check means
+something.
+
+`--strip` drops the speaker labels; `--simulate-bleed` drops them *and* doubles
+every line, which is what a contaminated capture actually delivers. After a real
+capture, point it at the transcript the spike writes:
+
+```sh
+python3 notes/summarize.py spike/out/transcript.json
+```
+
+That file carries its own attribution level, derived from the capture's measured
+bleed — so a contaminated recording arrives as unattributed without anyone
+having to remember to say so.
+
 ### Recording a specific call
 
 Nothing to configure per platform. The tap captures the machine's audio output,
@@ -136,6 +182,8 @@ silence, that is what happened.
 |---|---|
 | [`spike/RESULTS.md`](./spike/RESULTS.md) | What the capture spike proved, and what it structurally could not. |
 | [`spike/dual_capture.py`](./spike/dual_capture.py) | The spike: two legs, drift and bleed measurement, Me/Them transcript. |
+| [`notes/EVAL.md`](./notes/EVAL.md) | Whether a local model invents things, measured against human-written summaries. |
+| [`notes/summarize.py`](./notes/summarize.py) | Transcript to notes, with four fabrication checks and controls for the checks. |
 | [`docs/screens-and-states.md`](./docs/screens-and-states.md) | Eight surfaces, their lifecycle states, and the five templates derived from them. |
 | [`DIRECTION.md`](./DIRECTION.md) | Art direction. Thesis first; the device ledger stays empty until devices ship. |
 | [`DESIGN.md`](./DESIGN.md) | Tokens, visual rules, engineering rules, and the Tauri-over-SwiftUI shell decision. |

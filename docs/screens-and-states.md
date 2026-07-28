@@ -81,6 +81,19 @@ is the one failure mode a meeting record cannot have.
 Correlation is measured on the first seconds of capture and re-checked when the
 output device changes, since plugging in headphones mid-meeting resolves it.
 
+**What `bleed-detected` must NOT do is degrade the note.** The notes evaluation
+(`notes/EVAL.md`) fed a summarizer a transcript with the labels dropped *and*
+every line doubled — what a contaminated capture actually delivers, not just
+what it lacks. The notes came out at full topic coverage with a correct decision
+list, because summarization is compression and the first thing compression
+discards is repetition.
+
+So this state degrades **attribution only**. The user in a room with speakers
+gets a complete set of notes with no speaker labels — not a warning banner over
+a lesser artifact, and not a refusal. The duplicated transcript stays available
+underneath and stays unpleasant to read, which is the argument for generating
+the note in precisely the case the capture spike called worst.
+
 **`tap-lost`, `device-changed` and `drift` are states on this surface, not error
 dialogs.** They are expected conditions across a 60-minute capture, and the
 recording continues degraded rather than failing. Modeling them as modals is the

@@ -44,6 +44,14 @@ and the room contains the far end. Three ways out, in order of cost:
 Option 2 is now a required product behaviour, not a nice-to-have — see the
 `bleed-detected` state added to `docs/screens-and-states.md`.
 
+**Narrowed since, by [`notes/EVAL.md`](../notes/EVAL.md).** "Worse than degraded
+output" is true of the *transcript* and false of the *notes*. Feeding a
+summarizer the same contamination — labels dropped, every line doubled — produced
+notes at full topic coverage with a correct decision list, because summarization
+discards repetition on its way to compressing. So bleed costs the speaker split
+and nothing else. The product should stop claiming who spoke; it should not stop
+writing the note.
+
 **What was not tested:** a real meeting with a real second human on headphones.
 The far end here was `say` through the speakers, which is the *worst* case by
 design. The clean case still needs a live run.

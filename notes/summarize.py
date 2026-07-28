@@ -1,0 +1,600 @@
+#!/usr/bin/env python3
+"""Transcript to notes, locally, with the fabrication checked rather than hoped for.
+
+This is the second half of the pipeline. The capture spike proved audio can be
+split into two legs; it also proved that on speakers the split is fiction. So
+this half cannot assume it knows who said what, and the interesting question is
+not "can a local model summarize a meeting" but "does it invent things when the
+speaker labels are taken away."
+
+Two things make that answerable instead of a matter of taste:
+
+  1. The corpus ships a human-written summary. Notes are compared against a
+     reference, not against a feeling.
+  2. The unattributed contract is checked mechanically. If the model names a
+     speaker whose label was never in its input, that is a fabrication with no
+     other explanation, and it is found by string search rather than by reading.
+
+Silent truncation is treated as a failure, not a degradation: Ollama defaults
+`num_ctx` to 4096 regardless of what the model supports, which would summarize
+the first eight minutes of a forty-minute meeting and say nothing about it. The
+runner compares the server's own reported prompt token count against the prompt
+it sent and refuses the result if they disagree.
+
+Usage:
+    python notes/summarize.py notes/corpus/ES2004c.json
+    python notes/summarize.py notes/corpus/ES2004c.json --strip
+    python notes/summarize.py notes/corpus/ES2004c.json --simulate-bleed
+    python notes/summarize.py spike/out/transcript.json
+    python notes/summarize.py --self-test
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+from transcript import CHANNEL, NAMED, NONE, Transcript, Turn, load, qmsum_reference
+
+OLLAMA = "http://localhost:11434"
+DEFAULT_MODEL = "llama3.1:latest"
+
+# Ollama silently clamps to 4096 unless told otherwise. 32k holds a ~90-minute
+# meeting at the ~3.7 chars/token these transcripts run at.
+DEFAULT_NUM_CTX = 32768
+
+BASE_RULES = """\
+You are writing notes from a meeting transcript.
+
+Rules that override everything else:
+- Every statement you write must be supported by the transcript. If you are not
+  sure something was said, leave it out.
+- Never invent names, numbers, dates, quantities, or deadlines. If the
+  transcript does not contain a figure, your notes must not contain one.
+- Prefer omitting a section to padding it. An empty section is a true statement
+  about the meeting; a padded one is not.
+- Write plainly. No preamble, no sign-off, no "in this meeting" throat-clearing.
+
+Output exactly these markdown sections, in this order, and omit any section that
+would have no real content:
+
+## Summary
+Three to six sentences on what the meeting was about and where it landed.
+
+## Decisions
+What was actually settled. Not what was discussed.
+
+## Action items
+What someone committed to do next.
+
+## Open questions
+What was raised and left unresolved."""
+
+# The one place the three attribution levels diverge. Everything above is shared;
+# what changes is who the notes are permitted to name.
+CONTRACTS = {
+    NAMED: """\
+Speaker labels in this transcript are reliable. Attribute a decision or an
+action item to a speaker when the transcript makes the owner explicit. When the
+owner is not explicit, write the item without an owner rather than guessing.""",
+    CHANNEL: """\
+This transcript is labelled only "Me" and "Them". "Me" is the person who
+recorded the meeting; "Them" is everyone else, and they are NOT distinguished
+from one another. You may write "you" for things labelled Me. You must never
+invent a name for anyone on the Them side, and you must never write as if Them
+were a single identifiable person.""",
+    # No illustrative sentences here, deliberately. An earlier version of this
+    # contract demonstrated agentless phrasing with two example sentences, and
+    # the model copied both into its notes as decisions the meeting had reached
+    # — in a transcript where neither subject is mentioned once. Style examples
+    # made of content words are indistinguishable from content. The grammar is
+    # described instead, and the groundedness check below exists because that
+    # failure got past every other check in this file.
+    NONE: """\
+This transcript has NO speaker labels. Who said what is not recoverable, because
+the microphone was picking up the other participants through the speakers, so
+the channels cannot be trusted.
+
+Therefore: write every decision and every action item WITHOUT an actor. Put the
+thing that was decided in the subject position and leave the doer out entirely.
+Where a sentence forces an owner, use "someone".
+
+Do not attribute anything on the basis of who was speaking — that information
+does not exist here. You may still report a name if the words themselves assign
+the work, because that comes from what was said rather than from the channel.
+Do not write "you", "I", "he", or "she" as the doer of an action. Do not infer
+that two statements came from the same person. An action item with no
+identifiable owner is a correct and complete answer.""",
+}
+
+# What the unattributed contract actually forbids is claiming that a *particular
+# person* did something, because that is precisely what bleed destroys. It does
+# not forbid saying the meeting as a whole settled on something — "the group
+# agreed", "they decided", "we landed on X" make no identity claim, and a note
+# barred from them would be unreadable.
+#
+# So the line is singular versus collective. "you", "I", "he", "she" individuate
+# and are fabrication. "we", "they", "the group", "someone" do not.
+ATTRIBUTION_VERBS = (
+    r"will|shall|is\s+to|are\s+to|agreed|committed|decided|owns?|takes?|took|"
+    r"said|says|proposed|suggested|volunteered|raised|presented|led|reported|"
+    r"asked|noted|argued|confirmed"
+)
+
+LEAK_PATTERNS = [
+    # Singular actors doing things. `they`/`we` deliberately absent.
+    re.compile(rf"\b(?:you|he|she)\s+(?:{ATTRIBUTION_VERBS})\b", re.IGNORECASE),
+    re.compile(rf"(?<![a-z])I\s+(?:{ATTRIBUTION_VERBS})\b"),
+    # An explicit owner column, whatever fills it.
+    re.compile(r"\b(?:assigned to|owner|action owner|responsible)\s*[:—-]\s*\S", re.IGNORECASE),
+]
+
+
+def ollama_chat(model: str, system: str, user: str, num_ctx: int, timeout: int):
+    body = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "stream": False,
+        "options": {
+            "num_ctx": num_ctx,
+            # Notes are an extraction task. Sampling here buys variation in
+            # exactly the dimension where variation is a defect.
+            "temperature": 0.0,
+        },
+    }).encode()
+    req = urllib.request.Request(
+        f"{OLLAMA}/api/chat", data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.URLError as e:
+        raise SystemExit(
+            f"cannot reach Ollama at {OLLAMA} ({e.reason}).\n"
+            "Start it with `ollama serve`, and check the model is pulled:\n"
+            f"  ollama pull {model}"
+        ) from e
+
+
+def check_context(response: dict, prompt: str, num_ctx: int) -> dict:
+    """Did the server actually read the whole transcript?
+
+    `prompt_eval_count` is the server's own count of the tokens it processed. If
+    the prompt is long and that number lands suspiciously near a context
+    boundary, the tail of the meeting was dropped — and the notes will look
+    perfectly well-formed while covering only the opening.
+    """
+    counted = response.get("prompt_eval_count")
+    estimate = len(prompt) / 3.7
+    if counted is None:
+        return {"ok": None, "reason": "server did not report prompt_eval_count"}
+    truncated = counted >= num_ctx - 64 or (estimate > 1.35 * counted and estimate > 2000)
+    return {
+        "ok": not truncated,
+        "counted": counted,
+        "estimated": int(estimate),
+        "num_ctx": num_ctx,
+        "reason": (
+            f"server read {counted} prompt tokens for a prompt estimated at "
+            f"{int(estimate)}; the tail of the meeting was dropped"
+        ) if truncated else "",
+    }
+
+
+def check_attribution(note: str, transcript: Transcript, stripped_speakers: list[str]) -> dict:
+    """At `none`, any speaker identity in the notes was invented.
+
+    The model was shown a transcript with the labels removed, so a role name it
+    reproduces cannot have come from its input.
+
+    The bare-name version of this check does not survive contact with real
+    transcripts. AMI's speaker roles are "Marketing", "User Interface",
+    "Industrial Designer" — all of which are also ordinary phrases in a meeting
+    *about* designing a product. A note that correctly says the group discussed
+    "market trends, user interface, and materials" gets flagged for naming a
+    speaker it never named. That first-pass check reported a fabrication that had
+    not happened, which is the same failure the tool exists to prevent, pointed
+    the other way.
+
+    So a name only counts when it sits in an attributing position: doing
+    something, or credited as the source of something.
+    """
+    if transcript.attribution != NONE:
+        return {"applies": False}
+
+    names = []
+    for s in stripped_speakers:
+        n = re.escape(s)
+        attributing = (
+            rf"\b{n}\b\s*(?:{ATTRIBUTION_VERBS})\b"          # Marketing agreed …
+            rf"|\b(?:by|from|per|according to)\s+{n}\b"       # … raised by Marketing
+            rf"|\b{n}(?:'s|’s)\s+(?:action|task|commitment|point)"  # noqa: RUF001
+            rf"|^\s*[-*]?\s*{n}\s*[:—-]"                      # Marketing: … / - Marketing —
+        )
+        if re.search(attributing, note, re.IGNORECASE | re.MULTILINE):
+            names.append(s)
+
+    leaks = [m.group(0) for p in LEAK_PATTERNS for m in p.finditer(note)]
+    return {
+        "applies": True,
+        "ok": not names and not leaks,
+        "named_speakers": names,
+        "actor_phrases": sorted(set(leaks)),
+    }
+
+
+# Vocabulary a well-formed note contains because it is a note, not because the
+# meeting was about it. Summary prose reaches for these regardless of subject.
+_NOTE_REGISTER = {
+    "summary", "decision", "decisions", "action", "actions", "item", "items",
+    "question", "questions", "open", "meeting", "discussed", "discussion",
+    "group", "team", "someone", "agreed", "decided", "raised", "unresolved",
+    "including", "various", "related", "regarding", "several", "aspects",
+    "issues", "topics", "point", "points", "made", "also", "next", "follow",
+    "about", "there", "their", "these", "those", "which", "would", "could",
+    "should", "will", "been", "were", "with", "that", "this", "from", "have",
+    "into", "such", "than", "then", "they", "them", "what", "when", "still",
+    "needs", "need", "well", "more", "most", "some", "other", "over",
+    "covered", "handle", "handling", "built", "build", "touched", "management",
+    "provide", "provided", "providing", "ensure", "remains", "continue",
+    "additional", "particularly", "possibility", "consistent",
+}
+
+
+def _words(s: str) -> set[str]:
+    return set(re.findall(r"[a-z]{4,}", s.lower()))
+
+
+def check_prompt_echo(note: str, source_text: str, system: str) -> dict:
+    """Content the notes took from the instructions rather than from the meeting.
+
+    This is the failure that motivated every check below it. The unattributed
+    contract used to demonstrate agentless phrasing with two example sentences.
+    The model lifted both into its notes as decisions the meeting had reached —
+    in a transcript where neither subject occurs once. Those notes were
+    well-formed, named nobody, invented no numbers, and were read in full, so
+    the context, attribution and number checks all passed a wholly fabricated
+    decision. Numbers were the wrong thing to watch on their own: fabricated
+    prose carries no digits.
+
+    The examples are gone, but the prompt is a file and files get edited. This
+    check makes reintroducing content words into any instruction an immediate,
+    named failure rather than something discovered in a note months later.
+
+    Precise by construction: it fires only on words the instructions and the
+    notes share while the transcript does not. There is no innocent reason for
+    a word to travel that route.
+    """
+    echoed = sorted(
+        (_words(note) & _words(system)) - {w for w in _words(source_text)} - _NOTE_REGISTER
+    )
+    source_stems = {w[:5] for w in _words(source_text)}
+    echoed = [w for w in echoed if w[:5] not in source_stems]
+    return {"ok": not echoed, "echoed": echoed}
+
+
+def check_grounding(note: str, source_text: str) -> dict:
+    """Content words in the notes that appear nowhere in the transcript.
+
+    Advisory, not a gate, and the distinction is the point. Matching is by
+    five-character prefix so ordinary paraphrase survives — "anonymization" is
+    grounded by "anonymize" — but a summarizer's job is to compress and
+    rephrase, so some legitimate word choice will always land here. Run against
+    real notes it surfaced the genuine fabrications ("launch", "supplier")
+    alongside innocent paraphrase ("covered", "handle") with nothing in the
+    lexical signal to separate them.
+
+    Reporting it as a verdict would mean either failing good notes or padding
+    the ignore list until it stops catching anything. So it prints terms worth
+    a glance and stays out of the pass/fail decision.
+    """
+    source_stems = {w[:5] for w in _words(source_text)}
+    ungrounded = sorted(
+        w for w in _words(note)
+        if w not in _NOTE_REGISTER and w[:5] not in source_stems
+    )
+    return {"ok": not ungrounded, "ungrounded": ungrounded}
+
+
+def check_numbers(note: str, source_text: str) -> dict:
+    """Numbers in the notes that are nowhere in the transcript.
+
+    A crude probe, but numbers are where fabrication does the most damage —
+    a wrong price or date in a note about a meeting you half-remember is worse
+    than no note. Ordinals and small integers are excluded because prose
+    generates them ("three options", "the second point") without claiming a fact.
+    """
+    in_note = set(re.findall(r"\b\d[\d,.]*\b", note))
+    in_source = set(re.findall(r"\b\d[\d,.]*\b", source_text))
+    invented = sorted(
+        n for n in in_note - in_source
+        if not (n.isdigit() and int(n) <= 10)
+    )
+    return {"ok": not invented, "invented": invented}
+
+
+def summarize(transcript: Transcript, model: str, num_ctx: int, timeout: int) -> dict:
+    system = BASE_RULES + "\n\n" + CONTRACTS[transcript.attribution]
+    rendered = transcript.render()
+    user = f"Transcript:\n\n{rendered}\n\nWrite the notes."
+
+    t0 = time.monotonic()
+    response = ollama_chat(model, system, user, num_ctx, timeout)
+    elapsed = time.monotonic() - t0
+
+    return {
+        "note": response["message"]["content"].strip(),
+        "elapsed_s": elapsed,
+        "model": model,
+        "rendered": rendered,
+        "system": system,
+        "prompt": system + user,
+        "response": response,
+    }
+
+
+def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
+           reference: dict | None, num_ctx: int) -> bool:
+    note = result["note"]
+    ctx = check_context(result["response"], result["prompt"], num_ctx)
+    attr = check_attribution(note, transcript, stripped_speakers)
+    nums = check_numbers(note, result["rendered"])
+    echo = check_prompt_echo(note, result["rendered"], result["system"])
+    grounding = check_grounding(note, result["rendered"])
+
+    print(f"\n=== notes ({transcript.attribution}) ===\n")
+    print(note)
+
+    print("\n=== checks ===\n")
+    print(f"  source        {transcript.source}")
+    print(f"  turns         {len(transcript.turns)}")
+    print(f"  model         {result['model']}  in {result['elapsed_s']:.1f}s")
+
+    if ctx["ok"] is None:
+        print(f"  context       UNVERIFIED — {ctx['reason']}")
+    elif ctx["ok"]:
+        print(f"  context       whole transcript read "
+              f"({ctx['counted']} prompt tokens, num_ctx {ctx['num_ctx']})")
+    else:
+        print(f"  context       TRUNCATED — {ctx['reason']}")
+
+    if attr["applies"]:
+        if attr["ok"]:
+            print("  attribution   clean — no speaker named, no actor implied")
+        else:
+            if attr["named_speakers"]:
+                print(f"  attribution   FABRICATED — named {attr['named_speakers']} "
+                      "from a transcript with no labels")
+            if attr["actor_phrases"]:
+                print(f"  attribution   FABRICATED — implied an actor: {attr['actor_phrases']}")
+    else:
+        print(f"  attribution   n/a at level '{transcript.attribution}'")
+
+    if nums["ok"]:
+        print("  numbers       every figure in the notes appears in the transcript")
+    else:
+        print(f"  numbers       NOT IN TRANSCRIPT: {nums['invented']}")
+
+    if echo["ok"]:
+        print("  prompt echo   no content taken from the instructions")
+    else:
+        print(f"  prompt echo   FABRICATED FROM THE PROMPT: {echo['echoed']}")
+
+    if grounding["ok"]:
+        print("  grounding     every content word traces to something said")
+    else:
+        print(f"  grounding     for review (advisory, expect paraphrase): "
+              f"{grounding['ungrounded']}")
+
+    if reference and reference.get("summary"):
+        print("\n=== human reference ===\n")
+        print(f"  {reference['summary']}")
+        if reference.get("topics"):
+            print("\n  topics the meeting actually covered:")
+            for t in reference["topics"]:
+                covered = _topic_covered(t, note)
+                print(f"    [{'x' if covered else ' '}] {t}")
+            hit = sum(_topic_covered(t, note) for t in reference["topics"])
+            print(f"\n  {hit}/{len(reference['topics'])} topics touched by the notes")
+
+    # Grounding is deliberately absent: it is advisory, for the reason given in
+    # its docstring.
+    return (
+        ctx["ok"] is not False
+        and (not attr["applies"] or attr["ok"])
+        and nums["ok"]
+        and echo["ok"]
+    )
+
+
+_STOPWORDS = {"the", "of", "and", "a", "on", "about", "for", "to", "in", "last",
+              "actual", "up", "study", "meeting", "device", "new"}
+
+
+def _topic_covered(topic: str, note: str) -> bool:
+    """Cheap lexical overlap. Indicative, not a score — see EVAL.md."""
+    words = [w for w in re.findall(r"[a-z]{4,}", topic.lower()) if w not in _STOPWORDS]
+    if not words:
+        return False
+    note_l = note.lower()
+    return sum(w in note_l for w in words) >= max(1, len(words) // 2)
+
+
+# Notes with known verdicts. A check that has only ever been seen to pass is not
+# evidence of anything, so each case below states what it is proving. The false
+# positives are the ones that matter: they are the failures this check already
+# had, kept as fixtures so they cannot come back.
+SELF_TEST = [
+    # (label, note, speakers, expect_ok)
+    ("collective phrasing is not attribution",
+     ("## Decisions\nThe group agreed on kinetic charging. They decided to use plastic.\n"
+      "## Action items\nSomeone is to check the cost of voice recognition."),
+     ["Marketing", "User Interface"], True),
+
+    ("a role name used as a topic is not attribution",
+     ("## Summary\nThe group discussed market trends, user interface, and materials.\n"
+      "Marketing feedback was reviewed alongside the industrial design constraints."),
+     ["Marketing", "User Interface", "Industrial Designer"], True),
+
+    ("a role name in an attributing position is caught",
+     "## Decisions\nMarketing agreed to run the trend study before the next meeting.",
+     ["Marketing", "User Interface"], False),
+
+    ("credit-to-a-source phrasing is caught",
+     "## Open questions\nThe cost of voice recognition, raised by Industrial Designer.",
+     ["Industrial Designer"], False),
+
+    ("an owner column is caught whatever fills it",
+     "## Action items\n- Chase the supplier. Owner: the person who raised it.",
+     ["Marketing"], False),
+
+    ("second person is caught, because it claims the operator committed",
+     "## Action items\nYou agreed to check the financial feasibility.",
+     ["Marketing"], False),
+
+    ("a speaker-prefixed line is caught",
+     "## Decisions\n- Marketing: the cover should be rubberised.",
+     ["Marketing"], False),
+]
+
+
+def run_self_test() -> int:
+    failures = 0
+    print("=== attribution check, positive and negative controls ===\n")
+    for label, note, speakers, expect_ok in SELF_TEST:
+        t = Transcript(source="self-test", attribution=NONE, turns=[Turn(text="x")])
+        got = check_attribution(note, t, speakers)
+        ok = got["ok"] == expect_ok
+        failures += not ok
+        verdict = "pass" if ok else "FAIL"
+        want = "clean" if expect_ok else "flagged"
+        print(f"  [{verdict}] expects {want:8s} — {label}")
+        if not ok:
+            print(f"          got names={got['named_speakers']} "
+                  f"phrases={got['actor_phrases']}")
+
+    print("\n=== number check ===\n")
+    for label, note, source, expect_ok in [
+        ("a figure present in the transcript passes",
+         "Budget is 12.5 euro", "we said 12.5 euro", True),
+        ("a figure absent from the transcript is caught",
+         "Budget is 47 euro", "we said 12.5 euro", False),
+        ("small integers from prose are not treated as claims",
+         "There were 3 options", "no digits here", True),
+    ]:
+        got = check_numbers(note, source)
+        ok = got["ok"] == expect_ok
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        if not ok:
+            print(f"          got invented={got['invented']}")
+
+    # The regression that motivated this check, replayed verbatim. The note is
+    # the one the model actually produced, and the instruction text is the one
+    # that leaked into it.
+    leaky_instruction = ('Use agentless phrasing — "the launch date was moved '
+                         'forward", "someone is to follow up with the supplier".')
+    print("\n=== prompt-echo check (gating) ===\n")
+    for label, note, source, system, expect_ok in [
+        ("instruction examples echoed as decisions are caught",
+         ("## Decisions\n- The launch date was moved forward.\n"
+          "- Someone is to follow up with the supplier."),
+         "we should anonymize the corpus before release", leaky_instruction, False),
+        ("a note that shares no content with the instructions passes",
+         "## Decisions\n- Kinetic charging was chosen.",
+         "we went with kinetic charging", leaky_instruction, True),
+        ("wording present in the transcript is not an echo",
+         "## Decisions\n- The launch date was moved forward.",
+         "we moved the launch date forward", leaky_instruction, True),
+    ]:
+        got = check_prompt_echo(note, source, system)
+        ok = got["ok"] == expect_ok
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        if not ok:
+            print(f"          got echoed={got['echoed']}")
+
+    print("\n=== grounding check (advisory) ===\n")
+    for label, note, source, expect_ok in [
+        ("fabricated content is surfaced",
+         "## Decisions\n- The launch date was moved forward.",
+         "we should anonymize the corpus before release", False),
+        ("note-register vocabulary is not treated as content",
+         "## Summary\nThe meeting discussed several issues and the group agreed.",
+         "kinetic charging", True),
+    ]:
+        got = check_grounding(note, source)
+        ok = got["ok"] == expect_ok
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        if not ok:
+            print(f"          got ungrounded={got['ungrounded']}")
+
+    outcome = (
+        "all controls behaved as specified" if not failures
+        else f"{failures} control(s) wrong"
+    )
+    print(f"\n  {outcome}")
+    return 1 if failures else 0
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("transcript", type=Path, nargs="?",
+                   help="QMSum meeting JSON or a capture transcript")
+    p.add_argument("--self-test", action="store_true",
+                   help="run the fabrication checks against notes with known verdicts")
+    p.add_argument("--strip", action="store_true",
+                   help="remove speaker labels, testing the unattributed contract")
+    p.add_argument("--simulate-bleed", action="store_true",
+                   help="remove labels AND double every line, as a contaminated capture arrives")
+    p.add_argument("--model", default=DEFAULT_MODEL)
+    p.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX)
+    p.add_argument("--timeout", type=int, default=900)
+    p.add_argument("--out", type=Path, help="also write the notes to this file")
+    args = p.parse_args()
+
+    if args.self_test:
+        return run_self_test()
+    if args.transcript is None:
+        p.error("a transcript is required (or --self-test)")
+
+    if not args.transcript.exists():
+        raise SystemExit(
+            f"{args.transcript} not found.\n"
+            "Fetch the evaluation corpus first:  python notes/fetch_corpus.py"
+        )
+
+    t = load(args.transcript)
+    reference = None
+    if t.source.startswith("qmsum:"):
+        reference = qmsum_reference(args.transcript)
+
+    stripped_speakers = t.speakers
+    if args.simulate_bleed:
+        t = t.simulate_bleed()
+    elif args.strip:
+        t = t.strip_attribution()
+
+    result = summarize(t, args.model, args.num_ctx, args.timeout)
+    passed = report(result, t, stripped_speakers, reference, args.num_ctx)
+
+    if args.out:
+        args.out.write_text(result["note"] + "\n")
+        print(f"\n  wrote {args.out}")
+
+    return 0 if passed else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -6,9 +6,17 @@ target/
 .venv/
 __pycache__/
 .build/
+.ruff_cache/
 .DS_Store
 
-# Recorded audio and transcripts never belong in the repo.
+# Recorded audio and transcripts never belong in the repo. A transcript is the
+# same secret as the audio it came from — the repo is public.
 *.wav
 *.m4a
 notes.sqlite*
+spike/out/transcript.json
+
+# Third-party evaluation corpus: someone else's data under someone else's
+# licence. Fetched on demand by notes/fetch_corpus.py.
+notes/corpus/
+notes/out/

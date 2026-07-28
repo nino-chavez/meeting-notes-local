@@ -18,6 +18,7 @@ Run:
 """
 
 import argparse
+import contextlib
 import json
 import os
 import signal
@@ -144,10 +145,9 @@ class TapLeg(Leg):
 
     def _read_logs(self):
         for line in self.proc.stderr:
-            try:
+            # A malformed log line must never take down the capture thread.
+            with contextlib.suppress(ValueError, TypeError):
                 self.log_lines.append(json.loads(line))
-            except (ValueError, TypeError):
-                pass
 
     def stop(self):
         self._stop.set()
@@ -165,8 +165,8 @@ class TapLeg(Leg):
     def tap_error(self):
         """Upstream reports failures as JSON on stderr; surface them verbatim."""
         return [
-            l for l in self.log_lines
-            if l.get("message_type") in ("error", "fatal")
+            entry for entry in self.log_lines
+            if entry.get("message_type") in ("error", "fatal")
         ]
 
 
@@ -433,6 +433,43 @@ def report(mic_leg, tap_leg, args, out_dir):
         )
     for start, label, text in merged:
         print(f"  [{int(start // 60):02d}:{start % 60:05.2f}] {label:4s} {text}")
+
+    write_transcript(out_dir / "transcript.json", merged, b)
+
+
+def write_transcript(path, merged, b):
+    """Hand the capture to the notes half, carrying the bleed verdict with it.
+
+    The attribution level is derived here rather than downstream, because this
+    is the only place that knows how the audio was actually captured. A capture
+    whose legs turned out to be correlated is not a Me/Them transcript that
+    happens to be noisy — it is a transcript with no speaker information at all,
+    and it has to arrive downstream saying so. Otherwise the measurement in this
+    file and the notes written from it can disagree, and the notes will win.
+
+    See notes/transcript.py for what each level licenses.
+    """
+    contaminated = b is not None and abs(b["peak_r"]) > 0.5
+    payload = {
+        "source": f"capture {time.strftime('%Y-%m-%d %H:%M')}",
+        "attribution": "none" if contaminated else "channel",
+        "bleed": {"peak_r": b["peak_r"], "analysed_s": b["analysed_s"]} if b else None,
+        "turns": [
+            # Labels are dropped, not merely marked, when the split is fiction.
+            {
+                "start": round(start, 2),
+                "speaker": None if contaminated else label,
+                "text": text,
+            }
+            for start, label, text in merged
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2))
+    verdict = (
+        "unattributed — bleed made the split unusable"
+        if contaminated else "Me/Them preserved"
+    )
+    print(f"\n  wrote {path} ({verdict})")
 
 
 def main():
