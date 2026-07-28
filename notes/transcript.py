@@ -24,6 +24,7 @@ summarizer enforces a different one for each.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -189,11 +190,77 @@ def load_capture(path: Path) -> Transcript:
     )
 
 
+# A Meet transcript line opens a turn with one to four capitalised name words
+# and a colon. Matched conservatively so that ordinary mid-sentence colons
+# ("the problem is this: nobody updates it") do not read as a new speaker.
+_MEET_SPEAKER = re.compile(r"^([A-Z][\w.'-]*(?: [A-Z][\w.'-]*){0,3}): ?(.*)$")
+_MEET_CLOCK = re.compile(r"^(\d{2}):(\d{2}):(\d{2})\s*$")
+_MEET_END = "Transcription ended after"
+
+
+def load_meet(path: Path) -> Transcript:
+    """A Google Meet transcript, as exported or lifted out of a Gemini notes PDF.
+
+    Meet is a primary target for this tool, so parsing its export belongs in the
+    repository even though no Meet transcript ever will — every one of them is
+    somebody's actual meeting.
+
+    Three things about the format matter downstream:
+
+    Turns wrap across lines. A line without a `Name:` prefix continues the
+    previous speaker rather than starting a new turn, so joining has to be
+    stateful; splitting on newlines shatters sentences mid-clause.
+
+    Timestamps arrive as their own line every minute or so, not per turn. Each
+    turn takes the last clock seen, which makes `start` accurate to roughly the
+    gap between markers — fine for ordering, useless for alignment.
+
+    Overlapping speech is interleaved, not merged. Meet emits each speaker's
+    words in the order it resolved them, so a crosstalk moment arrives as
+    fragments alternating between speakers mid-sentence. That is real ASR output
+    and it is left exactly as it is: repairing it here would hide the input the
+    summarizer actually has to survive.
+    """
+    lines = path.read_text().splitlines()
+
+    start_at = next(
+        (i for i, line in enumerate(lines) if _MEET_CLOCK.match(line)), None
+    )
+    if start_at is None:
+        raise ValueError(f"{path}: no Meet transcript found (expected a HH:MM:SS marker)")
+
+    turns: list[Turn] = []
+    clock = 0.0
+    for line in lines[start_at:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(_MEET_END):
+            break
+        if m := _MEET_CLOCK.match(stripped):
+            h, mnt, s = (int(g) for g in m.groups())
+            clock = h * 3600 + mnt * 60 + s
+            continue
+        if m := _MEET_SPEAKER.match(stripped):
+            turns.append(Turn(text=m.group(2).strip(), speaker=m.group(1), start=clock))
+        elif turns:
+            turns[-1].text = f"{turns[-1].text} {stripped}".strip()
+
+    turns = [t for t in turns if t.text]
+    if not turns:
+        raise ValueError(f"{path}: transcript section found but no speaker turns in it")
+    return Transcript(source=f"meet:{path.stem}", attribution=NAMED, turns=turns)
+
+
 def load(path: Path) -> Transcript:
     """Dispatch on file shape rather than on a flag the caller has to remember."""
-    data = json.loads(path.read_text())
+    raw = path.read_text()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return load_meet(path)
     if "meeting_transcripts" in data:
         return load_qmsum(path)
     if "turns" in data:
         return load_capture(path)
-    raise ValueError(f"{path}: not a QMSum meeting or a capture transcript")
+    raise ValueError(f"{path}: not a QMSum meeting, a capture, or a Meet transcript")

@@ -336,20 +336,121 @@ def check_grounding(note: str, source_text: str) -> dict:
     return {"ok": not ungrounded, "ungrounded": ungrounded}
 
 
+def _section(note: str, heading: str) -> list[str]:
+    """The non-empty lines under one `## Heading`, up to the next heading."""
+    out, inside = [], False
+    for line in note.splitlines():
+        if line.strip().startswith("##"):
+            inside = heading.lower() in line.lower()
+            continue
+        if inside and line.strip():
+            out.append(line.strip())
+    return out
+
+
+def check_owner_grounding(note: str, transcript: Transcript) -> dict:
+    """At `named`, did the person on the hook actually say anything like it?
+
+    This is the check the `named` level was missing, and it guards the failure
+    with the worst consequences of any in this file: an action item that puts a
+    real colleague's name against a commitment they never made. `check_
+    attribution` deliberately does not apply here — at `named` the model is
+    *supposed* to name people — so nothing was watching the one level where the
+    names belong to actual coworkers.
+
+    It found a real case immediately. On a genuine 37-minute Meet transcript the
+    notes put one attendee down as reviewing and giving feedback on the project
+    plan. What that person actually offered was feedback in the first sync
+    meeting. Real person, real offer, wrong object — the kind of drift that
+    survives a proofread because every element of it is individually true.
+
+    Advisory, and it has to be: work is frequently assigned *to* someone by
+    someone else, and the owner may say nothing more than "yeah". Low overlap is
+    a prompt to check the attribution, not proof it is wrong.
+    """
+    if transcript.attribution != NAMED:
+        return {"applies": False}
+
+    speakers = transcript.speakers
+    if not speakers:
+        return {"applies": False}
+
+    said = {
+        s: _words(" ".join(t.text for t in transcript.turns if t.speaker == s))
+        for s in speakers
+    }
+    everything = _words(transcript.render())
+    participant_words = {w for s in speakers for w in _words(s)}
+    # "input", "provide", "share" describe the shape of a commitment rather than
+    # its substance, and appear in notes far more than in speech.
+    participant_words |= {"input", "provide", "share", "shared", "providing"}
+
+    weak = []
+    for line in _section(note, "Action items") + _section(note, "Decisions"):
+        for s in speakers:
+            # Surnames are rare enough in speech that first names carry the match.
+            first = s.split()[0]
+            if not re.search(rf"\b(?:{re.escape(s)}|{re.escape(first)})\b", line, re.IGNORECASE):
+                continue
+            # Every participant's name comes out, not just this owner's. An item
+            # with two owners would otherwise be judged partly on whether each
+            # of them said the other's surname, which nobody does out loud.
+            claim = _words(line) - _NOTE_REGISTER - participant_words
+            # Only judge words the meeting actually contains; anything else is
+            # check_grounding's problem, not an attribution question.
+            claim = {w for w in claim if any(x[:5] == w[:5] for x in everything)}
+            if len(claim) < 3:
+                continue
+            theirs = {w for w in claim if any(x[:5] == w[:5] for x in said[s])}
+            if len(theirs) * 2 < len(claim):
+                weak.append({
+                    "owner": s,
+                    "line": line,
+                    "overlap": f"{len(theirs)}/{len(claim)}",
+                    "absent": sorted(claim - theirs)[:6],
+                })
+    return {"applies": True, "ok": not weak, "weak": weak}
+
+
+# A bare digit in prose is usually rhetoric ("three options"). The same digit
+# in front of a unit is a commitment somebody will be held to.
+_QUANTITY = re.compile(
+    r"\b(\d[\d,.]*)\s*(seconds?|minutes?|hours?|days?|weeks?|months?|quarters?|"
+    r"years?|people|persons?|users?|customers?|engineers?|percent|%|dollars?|"
+    r"euros?|pounds?|[kmb]\b)",
+    re.IGNORECASE,
+)
+
+
 def check_numbers(note: str, source_text: str) -> dict:
     """Numbers in the notes that are nowhere in the transcript.
 
-    A crude probe, but numbers are where fabrication does the most damage —
-    a wrong price or date in a note about a meeting you half-remember is worse
-    than no note. Ordinals and small integers are excluded because prose
-    generates them ("three options", "the second point") without claiming a fact.
+    Numbers are where fabrication does the most damage: a wrong price or date in
+    a note about a meeting you half-remember is worse than no note.
+
+    Bare integers up to ten are ignored, because prose generates them without
+    claiming anything ("three options", "the second point"). That exemption used
+    to swallow the numbers that matter most. A real meeting produced the note
+    line "it will likely take at least 2 months due to security checks" — a
+    schedule commitment somebody would be held to, and invisible to this check
+    because 2 ≤ 10. It happened to be true. Nothing here established that.
+
+    So a digit followed by a unit is always checked, however small, and matched
+    together with its unit: "2 months" is not verified by a transcript that says
+    "2 people".
     """
-    in_note = set(re.findall(r"\b\d[\d,.]*\b", note))
-    in_source = set(re.findall(r"\b\d[\d,.]*\b", source_text))
-    invented = sorted(
-        n for n in in_note - in_source
+    def digits(s: str) -> set[str]:
+        return set(re.findall(r"\b\d[\d,.]*\b", s))
+
+    def quantities(s: str) -> set[str]:
+        return {f"{n} {u.lower()}" for n, u in _QUANTITY.findall(s)}
+
+    bare = sorted(
+        n for n in digits(note) - digits(source_text)
         if not (n.isdigit() and int(n) <= 10)
     )
+    unsupported_quantities = sorted(quantities(note) - quantities(source_text))
+    invented = sorted(set(bare) | set(unsupported_quantities))
     return {"ok": not invented, "invented": invented}
 
 
@@ -381,6 +482,7 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
     nums = check_numbers(note, result["rendered"])
     echo = check_prompt_echo(note, result["rendered"], result["system"])
     grounding = check_grounding(note, result["rendered"])
+    owners = check_owner_grounding(note, transcript)
 
     print(f"\n=== notes ({transcript.attribution}) ===\n")
     print(note)
@@ -419,6 +521,16 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
         print("  prompt echo   no content taken from the instructions")
     else:
         print(f"  prompt echo   FABRICATED FROM THE PROMPT: {echo['echoed']}")
+
+    if owners["applies"]:
+        if owners["ok"]:
+            print("  owners        each attributed item overlaps what that person said")
+        else:
+            print("  owners        CHECK THESE ATTRIBUTIONS (advisory):")
+            for w in owners["weak"]:
+                print(f"                  {w['owner']} — overlap {w['overlap']}, "
+                      f"absent from their turns: {w['absent']}")
+                print(f"                  \"{w['line'][:88]}\"")
 
     if grounding["ok"]:
         print("  grounding     every content word traces to something said")
@@ -540,6 +652,32 @@ def run_self_test() -> int:
         if not ok:
             print(f"          got names={got['named_speakers']} phrases={got['actor_phrases']}")
 
+    print("\n=== owner-grounding check (advisory, `named` only) ===\n")
+    owner_turns = [
+        Turn(text="I'll come up with just a straw man project plan", speaker="Robin Vance"),
+        Turn(text="I'd love to be included on the first one just to give any feedback",
+             speaker="Alex Ferris"),
+        Turn(text="give me your GitHub usernames and I'll get you access", speaker="Robin Vance"),
+    ]
+    for label, note, expect_ok in [
+        ("an owner who said the thing passes",
+         "## Action items\n- Robin Vance will come up with a straw man project plan.", True),
+        # Every element true, wrong object — the drift a proofread survives.
+        ("an owner credited with someone else's object is surfaced",
+         ("## Action items\n- Alex Ferris will review and give feedback on the straw man "
+          "project plan."), False),
+        ("an item with no owner is not an attribution question",
+         "## Action items\n- Someone is to come up with a straw man project plan.", True),
+    ]:
+        t = Transcript(source="self-test", attribution=NAMED, turns=owner_turns)
+        got = check_owner_grounding(note, t)
+        ok = got["ok"] == expect_ok
+        failures += not ok
+        want = "clean" if expect_ok else "flagged"
+        print(f"  [{'pass' if ok else 'FAIL'}] expects {want:8s} — {label}")
+        if not ok:
+            print(f"          got weak={got['weak']}")
+
     print("\n=== number check ===\n")
     for label, note, source, expect_ok in [
         ("a figure present in the transcript passes",
@@ -548,6 +686,13 @@ def run_self_test() -> int:
          "Budget is 47 euro", "we said 12.5 euro", False),
         ("small integers from prose are not treated as claims",
          "There were 3 options", "no digits here", True),
+        # The exemption above used to swallow schedule commitments.
+        ("a small integer with a unit IS a claim and is checked",
+         "It will take at least 2 months", "no timeline was given", False),
+        ("a quantity present in the transcript passes",
+         "It will take at least 2 months", "not sooner than 2 months, security", True),
+        ("a quantity is matched with its unit, not just its digit",
+         "We need 2 months", "there were 2 people on the call", False),
     ]:
         got = check_numbers(note, source)
         ok = got["ok"] == expect_ok

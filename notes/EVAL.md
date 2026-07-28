@@ -137,7 +137,23 @@ model is the obvious next thing to compare against, and the harness takes
 | `check_attribution` | yes | A speaker named, or an actor implied, at `none` **and at `channel`** |
 | `check_numbers` | yes | Figures in the notes that appear nowhere in the transcript |
 | `check_prompt_echo` | yes | Content that came from the instructions rather than the meeting |
+| `check_owner_grounding` | **no** | At `named`, an item whose owner never said anything like it — advisory |
 | `check_grounding` | **no** | Content words absent from the transcript — advisory only |
+
+`check_owner_grounding` closes the level that had nothing watching it. At `none`
+and `channel` the checks forbid naming people; at `named` the model is *supposed*
+to name them, so no check applied — on the one level where the names belong to
+real colleagues. Putting a coworker's name against a commitment they never made
+is the worst thing this tool can do, and it was unguarded.
+
+It is advisory because work is routinely assigned *to* someone by someone else,
+and the owner may say nothing but "yeah". And it has a real blind spot: it
+compares words, so it catches an owner who never discussed the topic and misses
+an owner who discussed something adjacent. On the real meeting below, the note
+put one attendee down as giving feedback on the project plan when what they
+offered was feedback in the first sync meeting. They genuinely said "feedback",
+"project" and "plan" — just not about that object. Word overlap cannot see the object of a
+verb, and this check does not pretend to.
 
 `check_grounding` stays out of the verdict deliberately. On real notes it
 surfaced genuine fabrications (`launch`, `supplier`) alongside innocent
@@ -188,9 +204,17 @@ that travelled from prompt to output without passing through the transcript.
 than content. A gating check with a false positive fails good work, which is the
 same defect as passing bad work with the sign flipped.
 
-**Temperature 0 is reproducible here.** Two runs of the same transcript produced
-byte-identical notes. Worth knowing before treating any output difference as
-signal.
+**Temperature 0 is reproducible back-to-back and not across time — the earlier
+claim here was wrong.** Two consecutive runs of the same transcript do produce
+byte-identical notes, which is what this document originally reported. Running
+the same transcript again later, after other work had passed through Ollama, did
+not: two action items and all three open questions came out different, including
+one run that surfaced a schedule commitment the other never mentioned.
+
+Same input, same model, same temperature, materially different notes. So the
+earlier reading was two samples from one warm model, generalised into a property
+of the setup. Treat any output difference as signal only when the runs are
+adjacent.
 
 **Speed is not a constraint.** 44 s for a 40-minute meeting, 276 s for the
 1 365-turn one, on an 8B model on a laptop. Notes are a post-meeting artifact;
@@ -207,16 +231,54 @@ not currently reach for.
 
 ---
 
+## A real meeting, from Google Meet
+
+Everything above ran on corpus transcripts. The pipeline was then pointed at a
+genuine 37-minute Google Meet call — four colleagues, real ASR output with
+crosstalk interleaved mid-sentence, and Gemini's own notes in the same export to
+compare against. **The transcript and the notes it produced are not in this
+repository and never will be; that meeting belongs to the people in it.** What
+is here is `load_meet()`, which parses the format.
+
+It went better than the corpus runs predicted, and it found two defects.
+
+What the notes got right, verified line by line against the transcript rather
+than against the model's confidence: the project's purpose, the straw-man
+project plan and its correct owner, the data-quality risk, the conflict between
+old documents and current features, and — in the runs that caught it — the
+"not sooner than 2 months because of security checks" timeline, correctly
+attributed. Nothing was invented outright in any run.
+
+What it got wrong is subtler and worth more than the successes:
+
+- **Omission again.** The `named` run missed two commitments Gemini caught: the
+  GitHub-usernames request and the weekly sync, both plainly in the transcript.
+  The `channel` and bleed-simulated runs caught the sync and missed others. No
+  check detects this, which is the same hole covid_4 exposed.
+- **Adjacent-object drift.** One attendee was written down as reviewing and
+  giving feedback on the project plan; what they offered was feedback in the
+  first sync meeting. Every element individually true, the composition wrong.
+  This is the failure a proofread survives.
+
+Two checks changed because of it. `check_owner_grounding` exists at all, and
+`check_numbers` no longer exempts small integers that carry a unit — the note
+line "at least 2 months" was a schedule commitment nobody would be held to by a
+check that skipped every integer under eleven. It happened to be true. Nothing
+in this harness established that, which is the only part that matters.
+
+---
+
 ## What this evaluation structurally cannot tell you
 
 Stated plainly, in the same spirit as `spike/RESULTS.md`:
 
-- **These are clean transcripts.** QMSum is human-corrected. A real capture
-  arrives from Whisper with word errors, unreliable punctuation, and no turn
-  boundaries at all. Every number above is an upper bound.
-- **Turn boundaries were given for free.** The corpus marks them. The spike's
-  merge derives them from segment timestamps across two legs, which is a
-  different and worse input than what was tested here.
+- **The corpus transcripts are clean.** QMSum is human-corrected. The Meet run
+  closes part of this — that is real ASR with real crosstalk — but Meet's
+  recogniser is better than local Whisper and it still gets speaker turns from
+  the platform rather than from audio.
+- **Turn boundaries were given for free in every run.** Both the corpus and Meet
+  mark them. The spike's merge derives them from segment timestamps across two
+  legs, which is a different and worse input than anything tested here.
 - **n = 3 meetings, one model, one prompt.** Enough to find a fabrication class
   and fix it. Not enough to claim a quality level.
 - **Topic coverage is word overlap.** It cannot tell a note that covered a topic
