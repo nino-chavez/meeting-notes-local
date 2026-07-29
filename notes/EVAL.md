@@ -310,16 +310,65 @@ The honest reading of "are local models good enough": for **not lying**, on this
 evidence, yes. For **not leaving most of the commitments on the floor**, no —
 and the checks in this file were all pointed at the wrong failure.
 
-Stated as the comparison it actually is: **against a hosted frontier notetaker,
-on action-item recall, this pipeline is at roughly a third.** That is the number
-to beat, and nothing about it is close yet.
+Stated as the comparison it actually is: **in this configuration, against a
+hosted frontier notetaker, this pipeline is at roughly a third.**
 
-Two caveats that keep it fair in both directions. The reference is another
-model's output, not ground truth — Google's notetaker has its own omissions, and
-nothing here measures those. And the comparison so far is summarizer-against-
-summarizer: our notes were written from *Google's* transcript, so this measures
-our note-writing against theirs with the listening held constant. Our own ASR is
-still unmeasured, and it can only make the number worse.
+That sentence used to end "and nothing about it is close yet", with a warning
+that our own ASR was unmeasured and "can only make the number worse". Both
+halves of that turned out to be wrong, and the next section is why. A third is
+what one configuration scores, not what the pipeline can do.
+
+One caveat holds in both directions regardless: the reference is another model's
+output, not ground truth. Google's notetaker has its own omissions and nothing
+here measures those.
+
+---
+
+## Running the same audio through both chains
+
+The recording for meeting B arrived, so the whole comparison could finally be
+made properly: one 57-minute call, our capture chain against Google's, ending in
+the same six reference commitments. Three arms, changing one thing at a time.
+Every figure below is hand-verified against the transcript, because the models'
+own recall scores are worthless (see above).
+
+| Arm | Transcript | Labels | `llama3.1:8b` | `gemma3:12b` |
+|---|---|---|---|---|
+| A | Google's | named | 1/6 | 2/6 |
+| B | Google's | stripped | 0/6 | 3/6 |
+| C | **ours, from the audio** | none | 0/6 | **4/6** |
+
+**Our speech recognition is not the bottleneck. It is not even a cost.**
+`compare_transcripts.py` checks whether the words each commitment depends on
+survived, which matters more here than word error rate — a transcript can lose
+"um" a hundred times and lose nothing, but lose "brand guidelines" once and that
+commitment becomes unwritable. Across all six commitments, **zero terms present
+in Google's transcript were missing from ours.** Identical counts on every row,
+at 91% of the word count and 25x realtime on a laptop.
+
+**The surprise is that our transcript is better input than Google's.** Meet buys
+speaker labels by cutting turns at every interruption: 43% of its units are three
+words or fewer, against 11% of ours, and during crosstalk it emits speaker labels
+*inside* another speaker's sentence —
+
+```
+Speaker A: Oh, wait. Are you able to share? You should be able Speaker B:
+Speaker A: to. Speaker B: to
+```
+
+— where Whisper returns "Oh wait, are you able to share? You should be able to."
+as one intact sentence. Attribution is paid for with sentence integrity, and for
+writing notes the sentences matter more.
+
+So the best result in this whole evaluation is the **fully local end-to-end**
+one: our audio, our ASR, no speaker labels, agentless notes. 4 of 6 against
+Gemini's 6, on a nine-person hour-long client call.
+
+Two honest limits on that. The effect is **not consistent across models** — the
+same changes that took gemma3 from 2/6 to 4/6 took llama3.1 from 1/6 to 0/6, so
+this is a property of a configuration, not a law. And it is one meeting. What it
+does establish is that the ordering of these arms is not what anyone would have
+guessed, and that the remaining gap is entirely in note-writing.
 
 ---
 
@@ -397,13 +446,19 @@ MENTIONED" contains "MENTIONED", and anything unrecognised is reported as
 
 Stated plainly, in the same spirit as `spike/RESULTS.md`:
 
-- **The corpus transcripts are clean.** QMSum is human-corrected. The Meet run
-  closes part of this — that is real ASR with real crosstalk — but Meet's
-  recogniser is better than local Whisper and it still gets speaker turns from
-  the platform rather than from audio.
-- **Turn boundaries were given for free in every run.** Both the corpus and Meet
-  mark them. The spike's merge derives them from segment timestamps across two
-  legs, which is a different and worse input than anything tested here.
+- **The corpus transcripts are clean.** QMSum is human-corrected. This is now
+  closed for one meeting: arm C ran from the audio through our own recogniser,
+  and the assumption written here previously — that Meet's recogniser is better
+  than local Whisper — did not survive being tested.
+- **Turn boundaries still come from a file, not from two legs.** Arm C gets them
+  from Whisper's segmentation of a single mixed channel. The spike's merge
+  derives them from timestamps across two independently-clocked legs, which is a
+  different and worse input than anything measured here.
+- **Nothing here has run through the capture path.** Arm C decodes a recording;
+  it does not exercise the tap, the mic leg, or the merge. Playing a recording
+  back through the capture would test those — and would also, incidentally,
+  settle the drift question, since drift is a property of the two legs' clocks
+  and does not care what the audio contains.
 - **n = 3 meetings, one model, one prompt.** Enough to find a fabrication class
   and fix it. Not enough to claim a quality level.
 - **Topic coverage is word overlap.** It cannot tell a note that covered a topic
