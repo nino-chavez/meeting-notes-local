@@ -39,7 +39,7 @@ What can honestly be said: within the filter class this fits — one linear
 time-invariant path, estimated in-sample — this is the best that class does on
 this material.
 
-**Three fit modes, because in-sample is the weakest of them**
+**Four fit modes, because in-sample is the weakest of them**
 
   full          fit on the whole take. Optimistic: the filter sees the same
                 double-talk it is later scored on, and can use the reference to
@@ -52,15 +52,26 @@ this material.
                 fails closed on purpose: a selector that finds nothing safe must
                 return nothing, not fall back to everything.
   first-half    fit on the first half. Paired with --score-after, the filter is
-                then scored only on audio it never saw, which is the strongest
-                claim this material supports.
+                then scored only on audio it never saw. That is the strongest
+                claim the EXISTING recordings support, and it is weaker than it
+                sounds: holding out the waveform stops the filter fitting the
+                samples it is scored on, but a filter and mask can still suppress
+                the operator's voice in audio they were never fit to. The
+                room-noise control losing two windows of fourteen is that effect
+                measured directly.
+  prefix        fit only on audio before --fit-before. Intended for a take that
+                opens with a deliberate far-end-only calibration phase and
+                continues, without anyone moving, into double-talk: fit the
+                phase, score what follows. The only arrangement here where the
+                near end is absent from the fit because it had not started, not
+                because a classifier judged it absent.
 
 **How it is scored**
 
 By the voiceprint gate, on operator retention and household false admission —
 not by ERLE. Suppression in dB is a diagnostic here and a misleading headline:
-the take that recovers best does so on 1.3 dB of double-talk suppression, while
-a take with more suppression recovers less. A speaker embedding cares which
+the take that recovers best does so on 1.4 dB of double-talk suppression, while
+the take that recovers least has 3.4 dB. A speaker embedding cares which
 time-frequency cells are corrupted, not how much total energy was removed.
 
 Windows are fixed-length and non-overlapping by default. Overlapping windows
@@ -314,7 +325,8 @@ def align(mic: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.ndarray, int
     return mic, shifted, bulk, peak
 
 
-def process(mic: np.ndarray, ref: np.ndarray, fit_mode: str) -> tuple[dict, dict]:
+def process(mic: np.ndarray, ref: np.ndarray, fit_mode: str,
+            fit_before: float = 0.0) -> tuple[dict, dict]:
     """The three conditions, plus what the fit was estimated from."""
     mic, ref, bulk, peak = align(mic, ref)
     m = len(mic)
@@ -322,6 +334,14 @@ def process(mic: np.ndarray, ref: np.ndarray, fit_mode: str) -> tuple[dict, dict
     excluded = None
     if fit_mode == "full":
         runs = [(0, m)]
+    elif fit_mode == "prefix":
+        # A calibration prefix the operator deliberately kept silent through.
+        # This is the only mode that fits on audio KNOWN to be free of his
+        # voice, rather than on audio a classifier believes is free of it.
+        runs = [(0, min(int(fit_before * RATE), m))]
+        if runs[0][1] < MIN_FIT_TOTAL:
+            return {}, {"skipped": f"prefix of {runs[0][1] / RATE:.2f}s is under the "
+                                   f"{MIN_FIT_TOTAL / RATE:g}s floor"}
     elif fit_mode == "first-half":
         runs = [(0, m // 2)]
     elif fit_mode == "far-end-only":
@@ -393,9 +413,18 @@ def diagnostics(mic: np.ndarray, ref: np.ndarray, resid: np.ndarray,
         out["residual_above_noise_floor_db"] = round(
             float(10 * np.log10((res_pw[far_only].mean() + 1e-20) / (floor + 1e-20))), 2)
 
-    # The ceiling itself: the most any linear filter of any length can suppress
-    # in a band, from the coherence between microphone and reference where the
-    # echo dominates.
+    # Band-averaged magnitude-squared coherence between microphone and
+    # reference, expressed in dB as -10*log10(1 - C^2).
+    #
+    # NOT a ceiling on achievable suppression, though an earlier version of this
+    # called it one and drew conclusions from it. Averaging coherence across a
+    # band before the log is not the same quantity as the per-bin bound, and the
+    # frames it is computed over are chosen by the same residual-to-echo test
+    # used to select the frames ERLE is measured on. On both real takes the
+    # measured linear suppression comes out ABOVE this number, which is the
+    # arithmetic disproving the claim. It is reported as a descriptive statistic
+    # about how linearly related the two legs are, and nothing follows from it
+    # about longer filters.
     sel = np.flatnonzero(far_only if far_only.sum() > 20 else playing)
     win = np.hanning(NFFT)
     freqs = np.fft.rfftfreq(NFFT, 1 / RATE)
@@ -416,7 +445,7 @@ def diagnostics(mic: np.ndarray, ref: np.ndarray, resid: np.ndarray,
             levels.append(10 * np.log10(xb))
             gains.append(10 * np.log10(yb + 1e-20) - 10 * np.log10(xb))
     c2 = np.abs(sxy) ** 2 / (sxx * syy + 1e-20)
-    out["linear_ceiling_db"] = {
+    out["band_coherence_db"] = {
         f"{lo}-{hi}Hz": round(float(-10 * np.log10(
             1 - min(float(c2[(freqs >= lo) & (freqs < hi)].mean()), 0.999))), 2)
         for lo, hi in ((100, 500), (500, 1000), (1000, 2000), (2000, 4000), (4000, 8000))}
@@ -615,6 +644,33 @@ def run_self_test() -> int:
               f"must not be clamped away)")
         ok = False
 
+    # 7. The calibration-prefix protocol, end to end: fit only on the recorded
+    #    far-end-only phase, then measure on the double-talk that follows. This
+    #    is the mode the next recording is for, and it is the one arrangement
+    #    where the fit provably never saw the near end — because the near end
+    #    was not being produced yet, rather than because a classifier said so.
+    #    Scored as near-end fidelity, not ERLE. Suppression during double-talk
+    #    is capped by how loud the near end is — with the two comparable it
+    #    cannot exceed about 3 dB however perfect the filter — so an ERLE
+    #    threshold here would fail a working canceller. What the prefix fit has
+    #    to deliver is that the residual IS the operator.
+    conds, meta = process(mic, far, "prefix", fit_before=12.0)
+    dt_after = ~far_only & (gate > 0)
+    got = 10 * np.log10(((near[dt_after] ** 2).mean() + 1e-20)
+                        / (((conds["linear"][dt_after] - near[dt_after]) ** 2).mean() + 1e-20))
+    print(f"  {'prefix fit recovers the near end after it':52s} SNR  {got:6.1f} dB",
+          end="")
+    if got > 20 and meta["fit_mode"] == "prefix":
+        print("   ok")
+    else:
+        print("   FAILED (expected > 20 on audio after the calibration phase)")
+        ok = False
+    short, meta = process(mic, far, "prefix", fit_before=1.0)
+    print(f"  {'and a prefix under the floor is refused':52s} "
+          f"{'skipped' if not short else 'ACCEPTED':>13}", end="")
+    print("   ok" if not short else "   FAILED")
+    ok &= not short
+
     # 8. Silence is a valid reference, not a crash. This is the singular-matrix
     #    case the ridge floor exists for.
     label = "silent reference yields the identity"
@@ -657,7 +713,13 @@ def main() -> int:
                         "its own. The no-op control: a loud, unrelated reference gives "
                         "the filter every chance to carve out a voice it should not touch")
     p.add_argument("--fit-mode", default="far-end-only",
-                   choices=("far-end-only", "full", "first-half"))
+                   choices=("far-end-only", "full", "first-half", "prefix"))
+    p.add_argument("--fit-before", type=float, default=0.0, metavar="SECONDS",
+                   help="with --fit-mode prefix, fit only on audio before this point. "
+                        "Pair it with --score-after at the same boundary and the "
+                        "filter is fitted on a recorded far-end-only calibration "
+                        "phase and scored on the double-talk that follows it, in one "
+                        "continuous take with the acoustic path unchanged")
     p.add_argument("--segments", action="append", metavar="NAME=FILE", default=[],
                    help="score this take on segments from a JSON list of {start,end} "
                         "instead of fixed windows. This is the gate's actual contract — "
@@ -702,6 +764,10 @@ def main() -> int:
         segment_digests[name] = sha256(seg_path)
 
     enc = sg.load_encoder(args.model_dir)
+    # The checkpoint identifies the scorer as surely as the recordings identify
+    # the input. A score is only reproducible if both are pinned.
+    ckpt = args.model_dir / "embedding_model.ckpt"
+    encoder_digest = sha256(ckpt.resolve()) if ckpt.exists() else None
     embs, durs = [], []
     for name in enroll_names:
         audio = load_wav(takes[name] / "mic.wav").astype(np.float32)
@@ -726,6 +792,10 @@ def main() -> int:
         "supplied_segments": segment_digests,
         "max_lag_s": MAX_LAG_S, "phat_floor": PHAT_FLOOR,
         "min_fit_run": MIN_FIT_RUN, "align_margin": ALIGN_MARGIN,
+        "min_fit_total": MIN_FIT_TOTAL, "dt_ratio": DT_RATIO,
+        "fit_before_s": args.fit_before or None,
+        "harness_sha256": sha256(Path(__file__).resolve()),
+        "encoder_sha256": encoder_digest,
         "vad": {"pct": VAD_PCT, "margin_db": VAD_MARGIN_DB,
                 "floor": VAD_FLOOR, "hangover_s": VAD_HANGOVER_S},
     }, "inputs": {}, "takes": {}}
@@ -746,7 +816,7 @@ def main() -> int:
         if args.max_seconds:
             cut = int(args.max_seconds * RATE)
             mic, ref = mic[:cut], ref[:cut]
-        conds, meta = process(mic, ref, args.fit_mode)
+        conds, meta = process(mic, ref, args.fit_mode, args.fit_before)
         if not conds:
             print(f"{name:11s} skipped: {meta['skipped']}")
             manifest["takes"][name] = meta

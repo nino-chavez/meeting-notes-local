@@ -76,16 +76,17 @@ about 0.15 and still loses two segments in eight.
 **Another voice is the case that breaks it, and echo removal gets most of it
 back.** With the far end coming out of the laptop speakers, the gate admits 1 of
 the operator's 7 speech windows — it rejects him from his own meeting. Removing
-the echo takes that to 6 of 7, on audio the echo filter was never fitted to,
-while the same processing leaves 197 household segments unchanged to three
-decimals. It is not a full repair: the recovered windows average +0.61 against
-+0.78 for the same voice with nothing playing. On a second take with the far end
-roughly 7 dB louder relative to him, recovery is 0 of 8 to 1. Seven windows, one
-speaker, measured offline in closed form rather than with a real canceller; the
-harness and every per-window score are in
+the echo takes that to 6 of 7, on audio the echo filter was fitted before rather
+than on, while the same processing leaves 197 household segments unchanged to
+three decimals. Not a full repair: the recovered windows average +0.61 against
++0.78 for the same voice with nothing playing, and on a second take with the far
+end roughly 7 dB louder relative to him recovery is 0 of 8 to 1. Seven windows,
+one speaker, computed offline in closed form rather than by a real canceller,
+and no recording in this project yet contains the far-end-only calibration
+interval that would settle it properly. The harness, every per-window score, and
+three figures earlier versions of this paragraph got wrong are in
 [`spike/aec_bound.py`](./spike/aec_bound.py) and
-[`spike/RESULTS.md`](./spike/RESULTS.md), including two figures earlier versions
-of this paragraph got wrong.
+[`spike/RESULTS.md`](./spike/RESULTS.md).
 
 **Two defects in the notes half were in the prompt, not the model.** The first
 was fabrication: the instructions illustrated a phrasing rule with two example

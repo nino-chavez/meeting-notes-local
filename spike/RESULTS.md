@@ -617,12 +617,14 @@ closed, it refuses both recordings:
 | overlap | 0.00 s in 0 runs | refused |
 | bleed | 1.02 s in 2 runs | refused, under the 4 s floor |
 
-Not because the takes contain no far-end-only moments — there are 8.4 s and
-13.1 s of them — but because they never last. The operator talks over the far
-end continuously, so those moments arrive in fragments shorter than the 50 ms
-filter, and a fragment shorter than the filter teaches it only that its own
-history is silence. **The 10-of-16 figure is withdrawn.** So is the sentence
-that called the fit double-talk-free.
+The takes do contain 8.4 s and 13.1 s of *echo-dominant frames* — frames where
+the residual after a first-pass fit falls at least 6 dB below the estimated
+echo. That is a classifier's judgement about audio in which the operator is
+known to have been talking throughout, not an observation of him being silent,
+and this document earlier described it as the latter. Those frames also arrive
+scattered: the selector needs 400 ms consecutively and 4 s in total, and gets
+neither. **The 10-of-16 figure is withdrawn**, along with the sentence calling
+the fit double-talk-free.
 
 #### What the material does support: held out in time
 
@@ -635,10 +637,15 @@ thirty seconds — audio the filter never saw:
 | bleed | +0.101 | +0.152 | +0.442 | 0/8 → 1/8 |
 
 Seven windows. That is the honest size of the strongest claim available here,
-and it is the claim that matters: the filter cannot have been quietly cancelling
-the operator in audio it was never fit on. On the same take fit in-sample over
-the whole minute the figure is 3/16 → 12/16, which is the optimistic reading and
-is reported alongside rather than instead.
+and the claim is narrower than it first reads: **recovery generalised to later
+audio.** Holding the waveform out stops the filter fitting the samples it is
+scored on. It does not stop a fitted filter and mask from suppressing the
+operator's voice in audio they never saw — components correlated with the
+reference get removed wherever they occur. The room-noise control below, losing
+two windows of fourteen against a reference unrelated to it, is that effect
+measured directly. On the same take fit in-sample over the whole minute the
+figure is 3/16 → 12/16, the optimistic reading, reported alongside rather than
+instead.
 
 The bleed take does not recover under any fit — 0 of 8, or 1 with the mask. Two
 things differ between the takes and only one is usually named: the far end sits
@@ -680,7 +687,7 @@ scratch script that preceded it:
 | suppression, double-talk | **1.4 dB** | **3.4 dB** |
 | echo above the microphone's noise floor | 12.1 dB | 16.1 dB |
 | residual above that floor | 1.7 dB | 6.5 dB |
-| linear ceiling, best band | 6.5 dB | 6.4 dB |
+| band-averaged coherence, best band | 6.5 dB | 6.4 dB |
 | level dependence, loud vs quiet quartile | −2.9 dB | −1.9 dB |
 
 The take that recovers has *less* double-talk suppression than the take that
@@ -691,8 +698,14 @@ left the signal.
 
 The residual on overlap sits 1.7 dB above the microphone's own noise floor where
 the far end plays alone, so the linear filter is close to finished rather than
-failing; the ceiling of about 6.5 dB in the best band says no longer filter
-recovers more. Level dependence of −2 to −3 dB is small enough that macOS speaker
+failing. The coherence figure is **not** a ceiling, though an earlier version of
+this table called it one and concluded that no longer filter could do better:
+the measured suppression of 10.5 and 9.6 dB is already above it, which is the
+arithmetic refuting the label. Averaging coherence across a band before taking
+the log is not the per-bin bound, and the frames it is measured on are selected
+by the same residual-to-echo test that selects the ERLE frames. It describes how
+linearly related the two legs are and supports no conclusion about filter
+length. Level dependence of −2 to −3 dB is small enough that macOS speaker
 processing downstream of the tap is not the obstacle it might have been.
 
 #### What this does not say
@@ -704,10 +717,35 @@ one microphone — and a windowing that is *not* the gate's contract, since
 `speaker_gate.py` embeds whole caller-supplied segments rather than fixed
 windows.
 
-**The missing input is four seconds of the far end playing while the operator
-says nothing.** That is what a real canceller adapts on, it is trivial to record,
-and not one of these five takes contains it. Every other limit here follows from
-its absence.
+#### The recording that would settle it
+
+**The missing input is a stretch of the far end playing while the operator says
+nothing** — what a real canceller adapts on, and what not one of these five
+takes contains. Every limit above follows from its absence.
+
+It has to be the *opening of the take that is then scored*, not a separate
+recording. A standalone silent take contains no operator speech to measure
+recovery on, the harness holds no way to carry a filter from one take to
+another, and standing up between recordings changes the acoustic path that the
+filter exists to model — which would put the calibration and the measurement in
+different rooms, in effect.
+
+The protocol, in one continuous capture:
+
+1. Sit in the position you would actually take the call from. Set the volume you
+   would actually use. Then touch nothing until the recording stops.
+2. **First 15–30 seconds: far end playing, say nothing.** This is the
+   calibration phase.
+3. **Next 30–60 seconds: talk over the same playback**, as in the overlap take.
+4. Note the boundary in seconds. It goes into the manifest and gets hashed with
+   the recording.
+
+Then `--fit-mode prefix --fit-before <boundary> --score-after <boundary>` fits
+the calibration phase and scores only the double-talk after it. That is the one
+arrangement in this harness where the near end is absent from the fit because it
+had not started yet, rather than because a classifier judged it absent — and it
+is also the exact fixture AEC3 should be handed, since it gives a real canceller
+the single-talk interval it converges on.
 ### Measured: the embedding degrades by half on the leg that needs it
 
 Before deciding whether a speaker-embedding dependency is worth carrying, the

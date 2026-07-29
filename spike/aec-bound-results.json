@@ -22,6 +22,11 @@
       "phat_floor": 0.01,
       "min_fit_run": 6400,
       "align_margin": 100,
+      "min_fit_total": 64000,
+      "dt_ratio": 0.25,
+      "fit_before_s": null,
+      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
         "margin_db": 8.0,
@@ -92,6 +97,11 @@
       "phat_floor": 0.01,
       "min_fit_run": 6400,
       "align_margin": 100,
+      "min_fit_total": 64000,
+      "dt_ratio": 0.25,
+      "fit_before_s": null,
+      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
         "margin_db": 8.0,
@@ -134,7 +144,7 @@
             "erle_double_talk_db": null,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 0.0,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": -0.0,
               "500-1000Hz": -0.0,
               "1000-2000Hz": -0.0,
@@ -194,7 +204,7 @@
             "erle_double_talk_db": null,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 0.0,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": -0.0,
               "500-1000Hz": -0.0,
               "1000-2000Hz": -0.0,
@@ -275,7 +285,7 @@
             "erle_double_talk_db": null,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 0.0,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": -0.0,
               "500-1000Hz": -0.0,
               "1000-2000Hz": -0.0,
@@ -400,7 +410,7 @@
             "double_talk_seconds": 16.8,
             "echo_above_noise_floor_db": 16.08,
             "residual_above_noise_floor_db": 6.52,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 2.89,
               "500-1000Hz": 6.36,
               "1000-2000Hz": 5.05,
@@ -540,7 +550,7 @@
             "double_talk_seconds": 21.6,
             "echo_above_noise_floor_db": 12.12,
             "residual_above_noise_floor_db": 1.66,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 2.71,
               "500-1000Hz": 6.5,
               "1000-2000Hz": 5.62,
@@ -691,6 +701,11 @@
       "phat_floor": 0.01,
       "min_fit_run": 6400,
       "align_margin": 100,
+      "min_fit_total": 64000,
+      "dt_ratio": 0.25,
+      "fit_before_s": null,
+      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
         "margin_db": 8.0,
@@ -729,7 +744,7 @@
             "erle_double_talk_db": null,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 0.0,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": -0.0,
               "500-1000Hz": -0.0,
               "1000-2000Hz": -0.0,
@@ -775,7 +790,7 @@
             "erle_double_talk_db": null,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 0.0,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": -0.0,
               "500-1000Hz": -0.0,
               "1000-2000Hz": -0.0,
@@ -830,7 +845,7 @@
             "double_talk_seconds": 17.3,
             "echo_above_noise_floor_db": 16.09,
             "residual_above_noise_floor_db": 6.25,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 2.92,
               "500-1000Hz": 6.28,
               "1000-2000Hz": 5.38,
@@ -914,7 +929,7 @@
             "double_talk_seconds": 22.2,
             "echo_above_noise_floor_db": 11.92,
             "residual_above_noise_floor_db": 2.26,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 2.79,
               "500-1000Hz": 6.45,
               "1000-2000Hz": 5.58,
@@ -1004,6 +1019,11 @@
       "phat_floor": 0.01,
       "min_fit_run": 6400,
       "align_margin": 100,
+      "min_fit_total": 64000,
+      "dt_ratio": 0.25,
+      "fit_before_s": null,
+      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
         "margin_db": 8.0,
@@ -1042,7 +1062,7 @@
             "erle_double_talk_db": 0.0,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 35.6,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 0.0,
               "500-1000Hz": 0.01,
               "1000-2000Hz": 0.0,
@@ -1103,7 +1123,7 @@
             "erle_double_talk_db": 0.0,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 30.0,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 0.0,
               "500-1000Hz": 0.01,
               "1000-2000Hz": 0.01,
@@ -1187,7 +1207,7 @@
             "double_talk_seconds": 16.8,
             "echo_above_noise_floor_db": 16.08,
             "residual_above_noise_floor_db": 6.52,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 2.89,
               "500-1000Hz": 6.36,
               "1000-2000Hz": 5.05,
@@ -1325,7 +1345,7 @@
             "erle_double_talk_db": 0.0,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 2248.7,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 0.0,
               "500-1000Hz": 0.0,
               "1000-2000Hz": 0.0,
@@ -2940,6 +2960,11 @@
       "phat_floor": 0.01,
       "min_fit_run": 6400,
       "align_margin": 100,
+      "min_fit_total": 64000,
+      "dt_ratio": 0.25,
+      "fit_before_s": null,
+      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
         "margin_db": 8.0,
@@ -2978,7 +3003,7 @@
             "erle_double_talk_db": 0.0,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 35.6,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 0.0,
               "500-1000Hz": 0.01,
               "1000-2000Hz": 0.0,
@@ -3039,7 +3064,7 @@
             "erle_double_talk_db": 0.0,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 30.0,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 0.0,
               "500-1000Hz": 0.01,
               "1000-2000Hz": 0.01,
@@ -3121,7 +3146,7 @@
             "erle_double_talk_db": 0.01,
             "far_end_only_seconds": 0.0,
             "double_talk_seconds": 29.9,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 0.0,
               "500-1000Hz": 0.01,
               "1000-2000Hz": 0.01,
@@ -3247,7 +3272,7 @@
             "double_talk_seconds": 16.8,
             "echo_above_noise_floor_db": 16.08,
             "residual_above_noise_floor_db": 6.52,
-            "linear_ceiling_db": {
+            "band_coherence_db": {
               "100-500Hz": 2.89,
               "500-1000Hz": 6.36,
               "1000-2000Hz": 5.05,
