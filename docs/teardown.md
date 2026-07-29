@@ -175,6 +175,43 @@ two-stream design depends on. You also have to handle mid-call microphone
 switching, mute-state tracking, and drift between the two streams. **[vendor —
 Recall.ai, and self-serving, but technically correct]**
 
+#### Measured 2026-07-29: correct, and for a more useful reason than stated
+
+The claim came from a vendor selling echo cancellation, so it was worth checking
+rather than repeating — especially since macOS has shipped a voice-processing path
+since 10.15 (`AVAudioIONode.setVoiceProcessingEnabled`,
+`kAudioUnitSubType_VoiceProcessingIO`), which Apple documents for macOS. Apple's
+pages say "voice processing features" without naming the reference signal, and the
+reference is the whole question: a canceller can only remove what it holds a copy
+of.
+
+`capture/aec-probe` settles it. It records the microphone over the same playback
+twice, once with voice processing and once without, and compares each take against
+a silent room recorded in the same mode — because voice processing also applies
+noise suppression, and crediting that to the canceller would flatter it.
+
+| far end rendered by | suppression of the far end on the mic |
+|---|---|
+| another process (`say`) | **−1.1 dB** — nothing |
+| the probe's own engine (`--play`) | **+34.6 dB** — pushed below the room floor |
+
+The second row is the control that makes the first trustworthy. Voice processing
+is not misconfigured and not weak: given the reference, it removes 34.6 dB and
+puts the far end 9.9 dB *under* the room noise. It simply cannot see audio another
+process rendered. So the vendor was right, and the sharper statement is: **macOS
+gives you excellent echo cancellation for audio you render yourself, and none for
+Zoom's.** AEC3 with the system tap as its reference is the only path for a
+notetaker that sits beside the meeting client.
+
+Two things worth carrying forward. Enabling voice processing naively would make
+the Me/Them split *worse*, not better: it suppressed the room floor by 4.5 dB
+while leaving the far end untouched, so the bleed came out relatively more
+prominent. And the 34.6 dB figure is a standing architectural option — a design
+where the far end is routed through our own output rather than the meeting
+client's would get platform-quality cancellation for free and need no canceller of
+its own. That is a much larger product decision than this spike, but it should be
+decided rather than defaulted past.
+
 ---
 
 ## Can we build this?
