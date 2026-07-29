@@ -276,13 +276,24 @@ evaluation was the one *this file's own prompt* put there.
 
 What happens instead is **omission**, and it happens constantly.
 
-Measured against the four action items Google Meet's own notetaker recorded for
-the same call, hand-verified line by line against the transcript:
+Measured against the action items Google Meet's own notetaker recorded for the
+same calls — two real meetings, 37 and 56 minutes — hand-verified line by line
+against the transcripts:
 
-| Model | Reference items recovered | What it missed |
-|---|---|---|
-| `llama3.1:8b` | 2 of 4 | GitHub usernames, weekly sync |
-| `gemma3:12b` | 2 of 4 | GitHub usernames, weekly sync |
+| Meeting | Reference items | `llama3.1:8b` | `gemma3:12b` |
+|---|---|---|---|
+| A — 37 min, 4 attendees | 4 | 2 | 2 |
+| B — 56 min, 9 attendees | 6 | 1 | 2 |
+| **Total** | **10** | **3** | **4** |
+
+Every one of those ten items was confirmed present in the transcript first, so
+these are our omissions rather than the reference's inventions: "brand
+guidelines" is said five times in meeting B and appears in neither of our notes
+until the 12B run; "measurement plan" twice; "signal box" twice.
+
+**Roughly a third of the commitments.** On a 56-minute nine-person call, the 8B
+model produced three action items where the reference had six, and only one of
+its three matched anything in the reference.
 
 Both notes passed every gating check. Both were true. Both were half a meeting,
 presented with the structure and confidence of a complete one — which is the
@@ -296,8 +307,19 @@ larger model is not more complete, it is differently incomplete. That is not the
 shape of a problem that goes away by scaling up on a laptop.
 
 The honest reading of "are local models good enough": for **not lying**, on this
-evidence, yes. For **not leaving half the commitments on the floor**, no — and
-the checks in this file were all pointed at the wrong failure.
+evidence, yes. For **not leaving most of the commitments on the floor**, no —
+and the checks in this file were all pointed at the wrong failure.
+
+Stated as the comparison it actually is: **against a hosted frontier notetaker,
+on action-item recall, this pipeline is at roughly a third.** That is the number
+to beat, and nothing about it is close yet.
+
+Two caveats that keep it fair in both directions. The reference is another
+model's output, not ground truth — Google's notetaker has its own omissions, and
+nothing here measures those. And the comparison so far is summarizer-against-
+summarizer: our notes were written from *Google's* transcript, so this measures
+our note-writing against theirs with the listening held constant. Our own ASR is
+still unmeasured, and it can only make the number worse.
 
 ---
 
@@ -345,6 +367,20 @@ recall  4/4 — judged by gemma3:12b, not measured; calibrate it with --validate
 That 4/4 is a model grading its own output with an instrument that failed
 calibration. Hand-checking the same notes against the transcript gives 2/4. The
 label is doing real work.
+
+On the second meeting it does much more than that. Both models were asked to
+score their own notes against the same six reference items:
+
+| Model | Self-judged recall | Hand-verified |
+|---|---|---|
+| `llama3.1:8b` | 5/6 | 1/6 |
+| `gemma3:12b` | 6/6 | 2/6 |
+
+**A local model rates its own notes three to five times better than they are.**
+Not a small calibration offset — the 8B model claimed it had captured five of
+six commitments while having captured one. Any pipeline that let a model grade
+its own output here would report near-perfect recall forever, and every number
+in this document would have been decoration.
 
 **A parse failure nearly became a verdict here too.** Asked for `PRESENT`/
 `ABSENT`, llama3.1 answered `MENTIONED` / `NOT MENTIONED` — four substantively
