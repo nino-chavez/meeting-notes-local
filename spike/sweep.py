@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -130,44 +131,98 @@ def cancel(take: Path) -> Path:
     return out
 
 
-def analyse(name: str, take: Path, whisper: str, language: str) -> dict:
-    """One take: measured level axis, then retention on raw and cancelled."""
-    doc = json.loads((take / "protocol.json").read_text())
-    if doc.get("schema") != "capture-protocol/1":
-        sys.exit(f"{take}/protocol.json: expected schema capture-protocol/1")
-    protocol = ret.observed_phases(doc)
-    mic = ab.load_wav(take / "mic.wav")
-    far_segs = json.loads((take / "system-segments.json").read_text()).get("segments") or []
+def provenance(take: Path, cancelled: Path, whisper: str) -> dict:
+    """Everything a figure here depends on, by digest.
 
+    A recall number is a function of the recording, the schedule, the canceller
+    binary and its configuration, the ASR checkpoint and the tokenizer. This file
+    used to record none of them, so two runs that disagreed could not be told apart
+    from two runs of different things — which happened: the same file returned recall
+    from 16.6% to 37.1% across invocations, and there was no way to prove it was the
+    same file.
+    """
+    return {
+        "mic_sha256": ab.sha256(take / "mic.wav"),
+        "system_sha256": ab.sha256(take / "system.wav"),
+        "protocol_sha256": ab.sha256(take / "protocol.json"),
+        "system_segments_sha256": ab.sha256(take / "system-segments.json"),
+        "cancelled_sha256": ab.sha256(cancelled),
+        "aec3_binary_sha256": ab.sha256(AEC3_BIN),
+        "aec3_config": "echo_canceller only; agc and ns off",
+        "asr_checkpoint": whisper,
+        "tokenizer_version": ab.TOKENIZER_VERSION,
+    }
+
+
+def analyse(name: str, take: Path, whisper: str, language: str,
+            repeats: int) -> dict:
+    """One take: measured level axis, then retention on raw and cancelled.
+
+    The schedule and the microphone segments go through `aec_bound`'s loaders, which
+    check both legs' digests and sample counts. Reading the JSON directly — which
+    this did — accepts a schedule belonging to a different recording, or one whose
+    audio was truncated afterwards so every phase boundary slid underneath it. The
+    conditions themselves cannot be bound that way, since they are derived audio;
+    they are recorded by digest in `provenance` instead.
+    """
+    mic_p, sys_p = take / "mic.wav", take / "system.wav"
+    protocol = ab.load_protocol(
+        take / "protocol.json",
+        mic_digest=ab.sha256(mic_p), mic_samples=ab.wav_frames(mic_p),
+        sys_digest=ab.sha256(sys_p), sys_samples=ab.wav_frames(sys_p))
+    # load_protocol resolves observed boundaries itself; observed_phases would be a
+    # second implementation of the same rule over an already-resolved document.
+    mic = ab.load_wav(mic_p)
+    far_segs = ab.load_segments(
+        take / "system-segments.json", digest=ab.sha256(sys_p),
+        samples=ab.wav_frames(sys_p), leg="system")
+
+    cancelled = cancel(take)
     row = {"name": name, "take": str(take), "level": signal_to_echo(mic, protocol),
-           "conditions": {}}
-    for cond, wav in (("raw", take / "mic.wav"), ("aec3", cancel(take))):
-        segs = ret.transcribe_file(wav, whisper, language)
-        rows = ret.measure(protocol, segs, far_segs)
-        recall = [r["recall"] for r in rows if r["recall"] is not None]
-        leak = [r["leakage"] for r in rows if r["leakage"] is not None]
-        row["conditions"][cond] = {
-            "recall": round(float(np.mean(recall)), 3) if recall else None,
-            "leakage": round(float(np.mean(leak)), 3) if leak else None,
-            "intervals": rows}
+           "provenance": provenance(take, cancelled, whisper),
+           "dropped_phases": protocol["dropped_phases"], "conditions": {}}
+    for cond, wav in (("raw", mic_p), ("aec3", cancelled)):
+        row["conditions"][cond] = ret.score(wav, protocol, far_segs, whisper,
+                                            language, repeats)
     return row
 
 
-def record(levels: list[int], pairs: int, out: Path, restore: int | None) -> list[Path]:
+def record(levels: list[int], pairs: int, out: Path, restore: int | None,
+           playback: Path | None) -> list[Path]:
     """Drive a take at each playback level.
+
+    With --playback, the sweep starts the SAME audio file from its beginning before
+    each take and stops it after. Without it the operator starts whatever is to hand,
+    and the first sweep did exactly that: the three system legs correlated at -0.003
+    to +0.002 with 9.6-16.2% vocabulary overlap, so level, words, spectrum and running
+    order all moved together and no row could be attributed to level. Far-end content
+    dominates outcome inside a single level — at one nominal ratio the three intervals
+    of one take gave 59%, 65% and 0% recall — so this is the difference between a
+    curve and three anecdotes.
+
+    afplay is a separate process rendering to the default output device, which is the
+    real condition: the notetaker never renders the far end, and a canceller that only
+    works on audio the enabling process played is no use here.
 
     The volume is set before each take and put back at the end, including on
     Ctrl-C: leaving someone's speakers at 70 because a measurement was interrupted
     is a rude way to fail.
     """
-    takes = []
+    takes, player = [], None
     try:
-        for level in levels:
-            take = out / f"level-{level:02d}"
+        for i, level in enumerate(levels, 1):
+            take = out / f"take-{i:02d}-level-{level:02d}"
             set_output_volume(level)
-            print(f"\n{'=' * 70}\n  output volume {level}. Start the far end playing, "
-                  f"then press Enter.\n  Take {len(takes) + 1} of {len(levels)} → "
-                  f"{take}\n{'=' * 70}")
+            if playback:
+                # Restarted from the top for every take, so each condition hears the
+                # same words in the same order. Killed and relaunched rather than
+                # left running, which would give every take a different excerpt.
+                player = subprocess.Popen(["afplay", str(playback)],
+                                          stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL)
+            print(f"\n{'=' * 70}\n  take {i} of {len(levels)}, output volume {level}"
+                  f"{'' if playback else ' — start the far end playing yourself'}\n"
+                  f"  {take}\n  Press Enter when ready.\n{'=' * 70}")
             input()
             # stdout is deliberately not captured: the cues are the operator's
             # interface and piping them somewhere would leave them reading nothing.
@@ -175,12 +230,19 @@ def record(levels: list[int], pairs: int, out: Path, restore: int | None) -> lis
                 [sys.executable, str(REPO / "spike" / "dual_capture.py"), "--protocol",
                  "--protocol-pairs", str(pairs), "--out", str(take)],
                 check=False)
+            if player:
+                player.terminate()
+                player.wait()
+                player = None
             if proc.returncode != 0:
                 print(f"  take at level {level} was abandoned — skipping it, and the "
                       f"sweep continues with the levels that recorded")
                 continue
             takes.append(take)
     finally:
+        if player:
+            player.terminate()
+            player.wait()
         if restore is not None:
             set_output_volume(restore)
             print(f"\n  output volume restored to {restore}")
@@ -199,10 +261,30 @@ def main() -> int:
                         "level and less evidence per level; three is the floor that "
                         "still gives the silent controls the axis depends on")
     p.add_argument("--out", type=Path, help="parent directory for recorded takes")
+    p.add_argument("--playback", type=Path,
+                   help="the far end: ONE audio file, restarted from its beginning "
+                        "before every take, so content is held fixed while level "
+                        "varies. Without it the operator starts whatever is to hand "
+                        "and the sweep confounds level with words, spectrum and "
+                        "order — which is what happened the first time")
+    p.add_argument("--replicates", type=int, default=1,
+                   help="how many times to record each level. More than one is what "
+                        "separates a level effect from a take effect")
+    p.add_argument("--shuffle", type=int, metavar="SEED",
+                   help="randomise the order takes are recorded in, with this seed "
+                        "recorded in the manifest. Sequential 25/45/70 confounds "
+                        "level with time: room noise, the operator's voice and their "
+                        "attention all drift over a session")
     p.add_argument("--take", action="append", metavar="NAME=DIR", default=[],
                    help="analyse an existing take, repeatable")
     p.add_argument("--whisper", default="mlx-community/whisper-large-v3-turbo")
     p.add_argument("--language", default="en")
+    p.add_argument("--repeats", type=int, default=ret.REPEATS,
+                   help="transcription passes per condition. One is not a "
+                        "measurement: the same file returned 16.6%% to 37.1%% recall "
+                        "across separate invocations, because MLX's Metal kernels are "
+                        "not bit-reproducible and a last-bit difference becomes a "
+                        "different token")
     p.add_argument("--json", type=Path, help="write the full rows here, outside the repo")
     args = p.parse_args()
 
@@ -218,8 +300,25 @@ def main() -> int:
         levels = [int(v) for v in args.levels.split(",") if v.strip()]
         if not levels:
             p.error("--levels parsed to nothing")
+        if args.playback and not args.playback.exists():
+            p.error(f"--playback {args.playback} does not exist")
+        if not args.playback:
+            print("no --playback: the far end will be whatever you start yourself, "
+                  "so content is not held fixed and level cannot be separated from "
+                  "it. The first sweep did this and its rows are not a curve.\n")
+        levels = levels * max(1, args.replicates)
+        if args.shuffle is not None:
+            random.Random(args.shuffle).shuffle(levels)
+        print(f"recording order: {', '.join(str(v) for v in levels)}"
+              + (f"  (shuffled, seed {args.shuffle})" if args.shuffle is not None else ""))
         args.out.mkdir(parents=True, exist_ok=True)
-        for take in record(levels, args.pairs, args.out, output_volume()):
+        (args.out / "sweep-design.json").write_text(json.dumps({
+            "levels": levels, "replicates": args.replicates, "shuffle_seed": args.shuffle,
+            "pairs": args.pairs,
+            "playback": str(args.playback) if args.playback else None,
+            "playback_sha256": ab.sha256(args.playback) if args.playback else None,
+        }, indent=2) + "\n")
+        for take in record(levels, args.pairs, args.out, output_volume(), args.playback):
             takes.append((take.name, take))
         if not takes:
             # Distinguished from "you passed nothing", which is what this used to
@@ -242,24 +341,27 @@ def main() -> int:
         if missing:
             print(f"{name:12s} skipped: no {', '.join(missing)} in {take}")
             continue
-        rows.append(analyse(name, take, args.whisper, args.language))
+        rows.append(analyse(name, take, args.whisper, args.language, args.repeats))
 
     def pct(row: dict, cond: str, key: str) -> str:
-        v = row["conditions"][cond][key]
-        return f"{v * 100:.1f}%" if v is not None else "n/a"
+        b = row["conditions"][cond][key]
+        if b is None:
+            return "n/a"
+        return f"{b['mean'] * 100:.0f}% ({b['min'] * 100:.0f}-{b['max'] * 100:.0f})"
 
     def dbfs(v) -> str:
         return f"{v:.1f}" if v is not None else "n/a"
 
     print(f"\n{'take':12s} {'echo':>8s} {'operator':>9s} {'S/E':>8s}   "
-          f"{'raw recall':>10s} {'aec3 recall':>11s}   {'raw leak':>8s} {'aec3 leak':>9s}")
+          f"{'raw recall':>14s} {'aec3 recall':>14s}   "
+          f"{'raw leak':>14s} {'aec3 leak':>14s}")
     for r in rows:
         lv = r["level"]
         ser = f"{lv['ser_db']:+.1f} dB" if lv.get("ser_db") is not None else "n/a"
         print(f"{r['name']:12s} {dbfs(lv.get('echo_dbfs')):>8s} "
               f"{dbfs(lv.get('operator_dbfs')):>9s} {ser:>8s}   "
-              f"{pct(r, 'raw', 'recall'):>10s} {pct(r, 'aec3', 'recall'):>11s}   "
-              f"{pct(r, 'raw', 'leakage'):>8s} {pct(r, 'aec3', 'leakage'):>9s}")
+              f"{pct(r, 'raw', 'recall'):>14s} {pct(r, 'aec3', 'recall'):>14s}   "
+              f"{pct(r, 'raw', 'leakage'):>14s} {pct(r, 'aec3', 'leakage'):>14s}")
         if lv.get("why"):
             print(f"{'':12s} {lv['why']}")
 

@@ -83,6 +83,53 @@ def transcribe_file(wav: Path, whisper: str, language: str) -> list[dict]:
     return dc.transcribe(ab.load_wav(wav), whisper, language)
 
 
+REPEATS = 3
+
+
+def score(wav: Path, protocol: dict, far_segs: list[dict], whisper: str,
+          language: str, repeats: int = REPEATS) -> dict:
+    """Recall and leakage for one condition, over several transcription passes.
+
+    One pass is not a measurement of this. mlx_whisper is stable *within* a process
+    — the same call three times running returns the same text — and moves between
+    processes, because MLX's Metal kernels are not bit-reproducible and
+    autoregressive decoding turns a last-bit difference into a different token and
+    then a different sentence. On the same cancelled file, four separate invocations
+    returned 16.6%, 30.7%, 31.2% and 37.1% recall.
+
+    That band is wider than several differences this project published as findings.
+    A one-point gap between two conditions is inside it and means nothing; the gap
+    between 0% and 30% is far outside it and means what it appears to. Reporting the
+    mean with the spread beside it is what lets a reader tell those apart, so the
+    spread is not decoration and is never dropped from the output.
+
+    Fixing the decoder instead was tried and rejected: `temperature=0.0` disables
+    Whisper's fallback and IS reproducible, at 19.2% against the default's 31.2% on
+    the same audio. It removes the variance by removing the retries that recover
+    hard speech, which is precisely the audio under study. Measuring the decoder the
+    product would actually ship, several times, beats measuring a crippled one once.
+    """
+    runs = []
+    for _ in range(max(1, repeats)):
+        rows = measure(protocol, transcribe_file(wav, whisper, language), far_segs)
+        recall = [r["recall"] for r in rows if r["recall"] is not None]
+        leak = [r["leakage"] for r in rows if r["leakage"] is not None]
+        runs.append({
+            "recall": float(np.mean(recall)) if recall else None,
+            "leakage": float(np.mean(leak)) if leak else None,
+            "rows": rows})
+
+    def band(key: str) -> dict | None:
+        vals = [r[key] for r in runs if r[key] is not None]
+        if not vals:
+            return None
+        return {"mean": round(float(np.mean(vals)), 3), "min": round(min(vals), 3),
+                "max": round(max(vals), 3), "runs": [round(v, 3) for v in vals]}
+
+    return {"recall": band("recall"), "leakage": band("leakage"),
+            "passes": len(runs), "intervals": runs[0]["rows"]}
+
+
 def interval_text(segs: list[dict], lo: float, hi: float) -> str:
     """Everything transcribed that overlaps this interval.
 
@@ -150,6 +197,8 @@ def main() -> int:
                    required=True, help="a condition's audio, repeatable")
     p.add_argument("--whisper", default="mlx-community/whisper-large-v3-turbo")
     p.add_argument("--language", default="en")
+    p.add_argument("--repeats", type=int, default=REPEATS,
+                   help="transcription passes per condition — see score()")
     p.add_argument("--out", type=Path,
                    help="write the per-interval rows here. Carries what was "
                         "transcribed, so it is a transcript and cannot go in the repo")
@@ -178,23 +227,21 @@ def main() -> int:
         if not wav.exists():
             p.error(f"condition {name}: no {wav}")
         audio = ab.load_wav(wav)
-        segs = transcribe_file(wav, args.whisper, args.language)
-        rows = measure(protocol, segs, far_segs)
+        scored = score(wav, protocol, far_segs, args.whisper, args.language,
+                       args.repeats)
+        rows = scored["intervals"]
         results[name] = {"audio": str(wav), "sha256": ab.sha256(wav),
-                         "seconds": round(len(audio) / ab.RATE, 2), "intervals": rows}
-
-        recall = [r["recall"] for r in rows if r["recall"] is not None]
-        leak = [r["leakage"] for r in rows if r["leakage"] is not None]
-        if not recall:
-            print(f"{name:10s} {len(segs):3d} segments   nothing measurable — no "
-                  f"speak interval had usable words left after contested ones went")
-        else:
-            print(f"{name:10s} {len(segs):3d} segments   "
-                  f"recall {np.mean(recall) * 100:5.1f}% mean "
-                  f"({min(recall) * 100:.0f}-{max(recall) * 100:.0f}% over "
-                  f"{len(recall)} intervals)   "
-                  f"far-end leakage {np.mean(leak) * 100:5.1f}%"
-                  if leak else "   leakage unmeasured")
+                         "seconds": round(len(audio) / ab.RATE, 2), **scored}
+        rb, lb = scored["recall"], scored["leakage"]
+        print(f"{name:10s} {scored['passes']} passes   "
+              f"recall {rb['mean'] * 100:.0f}% ({rb['min'] * 100:.0f}-"
+              f"{rb['max'] * 100:.0f}% across passes)   "
+              f"leakage {lb['mean'] * 100:.0f}%" if rb and lb
+              else f"{name:10s} nothing measurable")
+        # The per-interval detail is from the first pass only, and says so. Averaging
+        # it across passes would hide the thing that made repeats necessary — which
+        # interval a pass gave up on differs between passes.
+        print(f"           per-interval, first pass of {scored['passes']}:")
         for r in rows:
             print(f"           {r['start']:6.0f}s  recall {r['recall']}  "
                   f"({r['recovered']}/{r['passage_words']} words)  "

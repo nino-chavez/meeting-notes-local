@@ -127,10 +127,17 @@ the playback. Run by [`../sweep.py`](../sweep.py), which measures the ratio per 
 from the recording's own silent and speaking intervals rather than trusting the
 volume slider.
 
-The ceiling matters more than any single row, so it is measured too: the same
-passages read with **no far end at all** recover **78.9%** of their content words
-(68–91% across five intervals). ASR loses a fifth of this vocabulary unaided. Every
-figure below should be read against 78.9%, not against 100%.
+A reference point matters more than any single row. The **same three passages** read
+with no far end at all, from the enrolment take, recover **77.7%** of their content
+words (68–91% per passage, stable across three transcription passes). ASR loses about
+a fifth of this deliberately-rare vocabulary unaided, so every figure below should be
+read against 77.7% rather than 100%.
+
+Two caveats on that number. It is matched by passage to the sweep — an earlier
+version of this section quoted 78.9%, which averaged five passages against the
+sweep's three and was not a like-for-like comparison. And it comes from the enrolment
+take, which is a different recording session, so it is a reference point rather than
+a controlled arm. A headphones take inside the same run is what would make it one.
 
 | S/E | raw recall | AEC3 recall | raw leakage | AEC3 leakage |
 |---|---|---|---|---|
@@ -138,27 +145,46 @@ figure below should be read against 78.9%, not against 100%.
 | **+1.4 dB** | **0.0%** | **30.7%** | **98.1%** | 2.0% |
 | **−7.0 dB** | 1.8% | 8.0% | 66.7% | 0.0% |
 
-**Leakage is solved, unconditionally.** 30–98% of the raw transcript's content words
-belong to the far end; after AEC3 it is 0–2% at every level. The canceller does that
-job completely and it does not depend on the ratio.
+**These are three observations, not a level-response curve.** The takes were
+recorded sequentially at 25, 45 and 70 with whatever happened to be playing, so the
+far end differs between them in content as well as level: sample correlation between
+the three system legs is −0.003 to +0.002 and their transcript vocabularies overlap
+by 9.6–16.2%. Level, words, spectrum and running order all moved together.
 
-**Recall is rescued in the middle and untouched at the top.** At +1.4 dB the raw
-transcript is a recording of the other party — 0% of the operator's words, 98%
-someone else's — and AEC3 turns that into 30.7%. That is the single most valuable
-number here. At +9.3 dB the raw microphone already reaches 41.4% and AEC3 gives
-40.2%, which is a wash: where the echo is quiet, cancellation neither helps nor
-meaningfully hurts recall, and its whole contribution is removing the other party.
+That is not a quibble, because far-end *content* visibly dominates outcome inside a
+single level. At +9.3 dB the three intervals of one take gave raw recall of 59%, 65%
+and **0%**, with leakage 8%, 0% and **82%** — the third interval collapsed because
+the playback happened to be talking over it, at the same nominal ratio as the two
+that did not. Any curve drawn through the three rows above is drawn through that
+noise.
 
-**Nothing reaches the clean ceiling.** The best case is 40% against 78.9% — any
-far-end presence costs about half the recoverable words, and cancellation does not
-give them back. It prevents the collapse; it does not restore clean performance.
+What the rows do support:
 
-That is an envelope rather than a verdict, and it is a shippable one: **speaker mode
-with AEC3 gives trustworthy attribution and a partial transcript.** Nothing of the
-far end lands on the operator's leg, which is what the Me/Them split needs. Roughly
-half the words are missing, which is survivable for notes and gist and is not
-survivable for a verbatim record. Below about +1 dB signal-to-echo the transcript
-thins fast, and that is the point to warn on.
+- **AEC3 reduced detected far-end lexical overlap to 0–2% in all three takes**, at
+  every measured ratio and against raw values from 30% to 98%. That is a large,
+  consistent effect across three different far-end excerpts.
+- **At the middle observation it converted an unusable transcript into a partial
+  one** — raw 0% of the operator's words against 98% someone else's, AEC3 15–31%
+  depending on the pass. That single comparison is the strongest evidence here.
+- **AEC3 also stabilised the within-take variation.** Across level-25's three
+  intervals raw ran 59/65/0% and AEC3 ran 50/39/32%. Removing the far end appears to
+  remove the content dependence, which is what it should do.
+- **Nothing approached the no-far-end reference.** Best observed recall is ~40%
+  against a clean reading in the high 70s.
+- **The gain controllers are worse on retention** in every take measured.
+
+What they do not support, and these were claimed here before and are withdrawn:
+unconditional leakage removal, "trustworthy attribution", a shippable envelope, a
++1 dB warning threshold, and any statement about the result being survivable for
+notes. The last one needs a notes-quality evaluation — summarise the recovered
+transcript and have a human judge coverage of decisions, names, actions and
+hallucinations. Unique-token recall cannot stand in for that.
+
+Nor is the Me/Them attribution contract demonstrated: the voice gate was not
+rescored on the sweep takes, and on the take before it the gate admitted nothing at
+all. Leakage here means lexical overlap detected through two imperfect ASR passes,
+not all acoustic leakage, and the two legs' timelines have not been validated
+against each other.
 
 ## What this does not establish
 
@@ -166,13 +192,21 @@ The three gaps this section used to list — no double-talk, a file rather than 
 tapped reference, no retention or admission figures — are closed by the real take
 above. What replaced them is larger:
 
-- **One axis of the matrix, one room, one microphone, one voice.** The level sweep
-  ran; distance, room acoustics, a second speaker, and headphones did not. Three
-  points on one axis is an envelope sketch, not an envelope.
-- **Half the words are missing even at the best ratio**, and the sweep does not say
-  why. It could be the microphone, the residual after cancellation, or a floor on
-  what any canceller can hand an ASR. Distinguishing those decides whether speaker
-  mode improves further or is done improving.
+- **The level experiment is confounded and has to be redone.** Content, spectrum and
+  running order moved with level. `sweep.py` now takes `--playback` (one fixed asset,
+  restarted from the top before every take), `--replicates`, and `--shuffle SEED`,
+  and records the design and every input digest. Nothing here should be quoted as a
+  level effect until that has run.
+- **One room, one microphone, one voice, no headphones arm.** Distance, room
+  acoustics and a second speaker are untouched, and the no-far-end reference comes
+  from a different session rather than an arm inside the run.
+- **Half the words are missing even at the best observation**, and this cannot say
+  why — the microphone, the residual after cancellation, or a floor on what any
+  canceller can hand an ASR.
+- **The gate was not rescored**, so Me/Them attribution end to end is undemonstrated.
+- **No notes-quality evaluation.** Whether a partial transcript supports usable notes
+  needs a human reading summaries for coverage of decisions, names and actions, and
+  for hallucination. Token recall cannot answer it.
 - **The gate never admitted anything.** AEC3 moved the voiceprint from +0.064 to
   +0.386 against a +0.580 threshold. Whether the remaining gap closes with a better
   level ratio or whether the threshold is wrong for cancelled audio is unmeasured,

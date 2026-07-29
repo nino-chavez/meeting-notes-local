@@ -1119,6 +1119,15 @@ STOPWORDS = frozenset((
 # vocabulary of the passages this project actually uses. Extend it with the passages
 # rather than reaching for a general normaliser: a wide fold invents matches, and
 # this is evidence about whether words survived.
+# Bumped whenever STOPWORDS, NUMBER_WORDS or SPELLINGS change. It goes in every
+# result manifest, because the fold changes scores: level-45's recall moved 14.8% to
+# 30.7% when it was introduced, and it moves conditions unequally — a fold only
+# restores a word where the ASR emitted some variant of it, so a condition that
+# dropped the word entirely gains nothing. Two numbers produced under different
+# tokenizers are not comparable, and without this recorded there is no way to tell
+# that they were.
+TOKENIZER_VERSION = 2
+
 NUMBER_WORDS = {
     "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
     "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11",
@@ -1999,6 +2008,30 @@ def _ground_truth_controls() -> bool:
         fine["classes"]["calibration"] = {"windows": quiet_cal["calibration"]}
         check("but far-end speech there is what the interval is for",
               run_verdict(fine, clean, 0.58)["verdict"], "scored")
+
+        # 26. The tokenizer fold. It changes published scores — level-45's recall
+        #     moved 14.8% to 30.7% when it arrived — so its behaviour is pinned
+        #     rather than assumed, including where it deliberately does nothing.
+        check("a number word and its digit are one token",
+              tokens("seventeen violet anchors") == tokens("17 violet anchors"))
+        check("British and American spellings fold together",
+              tokens("past the harbour") == tokens("past the harbor"))
+        check("and folding does not collapse different sentences",
+              tokens("past the harbour") == tokens("past the woollen harbor"), False)
+        check("a folded number survives the short-word filter",
+              "17" in tokens("nine and seventeen"), shown=str(sorted(tokens("seventeen"))))
+        #     The fold is one-directional in effect, which is the honest limit: it
+        #     restores a word only where the ASR emitted SOME variant of it. A
+        #     condition that dropped the word entirely gains nothing, so the fold
+        #     moves conditions unequally and cannot be treated as a constant offset.
+        check("a word the ASR never emitted is still missing",
+              tokens("seventeen violet anchors") - tokens("17 anchors"), {"violet"})
+        #     And it must not invent matches between unrelated words, which is why
+        #     it is a fixed table rather than edit distance.
+        check("unrelated words do not fold",
+              tokens("anchors") & tokens("anchovies"), set())
+        check("the version is recorded so two tokenizers are not compared",
+              isinstance(TOKENIZER_VERSION, int))
 
         # 26. The scores artifact carries what each segment transcribed, so it is
         #     a transcript, and this repo is public. Refused in the tool rather
