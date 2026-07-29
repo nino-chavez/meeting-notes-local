@@ -162,13 +162,52 @@ Capture both legs, measure drift and bleed, print a labelled transcript:
 sounddevice and skips the 1.6 GB Whisper download entirely. Plain
 `dual_capture.py` runs until Ctrl-C.
 
-**The run that matters now** — a real two-person call, on headphones. Drift has
-been measured; what has never been exercised is the Me/Them split with genuine
-speech arriving on *both* legs at once. Every capture so far put all the real
-words on one leg.
+**The run that matters now** — a two-minute cued capture on *speakers*, which is
+what the echo work is scored against:
 
 ```sh
-.venv/bin/python spike/dual_capture.py --list-devices       # pick your mic
+.venv/bin/python spike/dual_capture.py --list-devices        # pick your mic
+.venv/bin/python spike/dual_capture.py --protocol --out ~/take
+```
+
+Start the far end playing first, sit where you would take the call, and read each
+passage aloud until the cue changes. The cue displays the passage — there is
+nothing to memorise, and nothing is ever played audibly, because an audible cue
+would land on both legs and pollute the evidence it exists to provide. It writes
+`mic.wav`, `system.wav`, `protocol.json` and both legs' segments into the output
+directory. `--protocol-pairs` changes the number of speak/silence pairs from the
+default five.
+
+Scoring it needs a **second, separate capture to enrol the voice** — a minute of
+you talking with no far end playing, on headphones or in a quiet room. It has to be
+a different take: the gate is scored on whether it recognises you, so building the
+voiceprint from the same audio being scored would be marking its own homework, and
+`--fit-mode prefix` refuses the run outright if every take is also an enrolment
+take.
+
+```sh
+.venv/bin/python spike/dual_capture.py --seconds 60 --out ~/enroll
+```
+
+Then score the cued take, with a real canceller beside the offline estimate:
+
+```sh
+(cd spike/aec3 && make)          # needs webrtc-audio-processing; see its README
+spike/aec3/aec3_offline --mic ~/take/mic.wav --ref ~/take/system.wav \
+                        --out ~/take/aec3.wav
+
+.venv/bin/python spike/aec_bound.py \
+  --take e=~/enroll --take t=~/take --enroll e \
+  --segments t=~/take/mic-segments.json --protocol t=~/take/protocol.json \
+  --condition aec3=t:~/take/aec3.wav --fit-mode prefix --fit-before 30
+```
+
+**Also still unexercised** — a real two-person call on headphones. Drift has been
+measured; what has never been tested is the Me/Them split with genuine speech
+arriving on *both* legs at once. Every capture so far put all the real words on one
+leg.
+
+```sh
 .venv/bin/python spike/dual_capture.py --seconds 3600
 ```
 
