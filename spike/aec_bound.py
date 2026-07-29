@@ -784,7 +784,7 @@ def classify(segs: list[dict], phases: list[dict], margin: float,
     of an interval by `scheduled_bounds`, rather than the retained subset being
     published as the result.
     """
-    far_tokens = _tokens(far_text) if far_text else set()
+    far_tokens = tokens(far_text) if far_text else set()
     out = {"operator": [], "operator_unverified": [], "control": [],
            "calibration": [], "unattributable": []}
     for seg in segs:
@@ -796,8 +796,8 @@ def classify(segs: list[dict], phases: list[dict], margin: float,
                 phase = ph
                 break
         if placed == "operator":
-            want = _tokens(phase["script"] or "") - far_tokens
-            heard = _tokens(seg.get("text", ""))
+            want = tokens(phase["script"] or "") - far_tokens
+            heard = tokens(seg.get("text", ""))
             hit = len(heard & want) / len(heard) if heard else 0.0
             seg = dict(seg, script_precision=round(hit, 2),
                        tokens_heard=len(heard))
@@ -811,8 +811,8 @@ def classify(segs: list[dict], phases: list[dict], margin: float,
             # file; here it is at least testable in one direction. A calibration
             # segment carrying a passage means he started reading before the cue,
             # and the run says so rather than fitting on it.
-            want = {t for ph in phases for t in _tokens(ph["script"] or "")} - far_tokens
-            heard = _tokens(seg.get("text", ""))
+            want = {t for ph in phases for t in tokens(ph["script"] or "")} - far_tokens
+            heard = tokens(seg.get("text", ""))
             hit = len(heard & want) / len(heard) if heard else 0.0
             seg = dict(seg, script_precision=round(hit, 2), tokens_heard=len(heard))
         out.setdefault(placed or "unattributable", []).append(seg)
@@ -1106,7 +1106,7 @@ STOPWORDS = frozenset((
 ))
 
 
-def _tokens(text: str) -> set[str]:
+def tokens(text: str) -> set[str]:
     return {w for w in "".join(c.lower() if c.isalnum() else " "
                               for c in text).split()
             if len(w) > 2 and w not in STOPWORDS}
@@ -1150,7 +1150,7 @@ def protocol_compliance(protocol: dict, mic: np.ndarray, margin: float,
     trust. Alongside them goes the time each cue was actually displayed, because
     a cue that appeared late labels audio against a boundary nobody saw.
     """
-    far_tokens = _tokens(far_text) if far_text else set()
+    far_tokens = tokens(far_text) if far_text else set()
     phases, notes, verified, unverified = [], [], 0, 0
     for ph in protocol["phases"]:
         span = phase_interior(ph, margin)
@@ -1171,7 +1171,7 @@ def protocol_compliance(protocol: dict, mic: np.ndarray, margin: float,
                    + 1e-12), 1),
                "heard": heard[:200] or None}
         if ph["script"]:
-            want = _tokens(ph["script"])
+            want = tokens(ph["script"])
             leaked = want & far_tokens
             # Struck only when the far end could pass the check ON ITS OWN. A
             # word or two in common is inevitable and harmless; what makes a
@@ -1187,7 +1187,7 @@ def protocol_compliance(protocol: dict, mic: np.ndarray, margin: float,
                              f"the far end says {leak:.0%} of this phrase itself "
                              f"({sorted(leaked)}) — it cannot verify anything")
             else:
-                hit = len(want & _tokens(heard)) / max(len(want), 1)
+                hit = len(want & tokens(heard)) / max(len(want), 1)
                 row["script_overlap"] = round(hit, 2)
                 row["cue_verified"] = hit >= SCRIPT_OVERLAP_MIN
                 if row["cue_verified"]:

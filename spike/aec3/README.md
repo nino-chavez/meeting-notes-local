@@ -62,21 +62,88 @@ That control is the one that matters most. A canceller that attenuated everythin
 would post the same suppression figure and destroy the voice the product exists to
 keep. AEC3 removes what correlates with its reference and leaves the rest.
 
+## Measured on a real speaker-mode take
+
+117 seconds, built-in mic and speakers, a podcast playing as the far end while five
+cued passages were read over it. The reference is the actual system tap, so this
+carries the clock drift and D/A path the file-reference measurement above did not.
+
+Echo-only suppression, over 19 s of far-end-active silent interval:
+
+| condition | suppression |
+|---|---|
+| linear (offline estimate) | +3.5 dB |
+| masked (offline estimate) | +7.6 dB |
+| **AEC3** | **+25.3 dB** |
+| **AEC3 + agc + ns** | **+29.8 dB** |
+
+And on the voiceprint, over the segments inside the reading intervals, mean score
+went **+0.064 raw → +0.386 with AEC3** — six times better, and still short of the
++0.580 gate, so nothing was admitted.
+
+### Transcript retention, which is the number that matters
+
+Measured by [`../retention.py`](../retention.py): the passages were fixed before the
+audio existed, so how many of their content words come back is external ground
+truth. `leakage` is the share of transcribed content words belonging to the far end
+instead.
+
+| condition | segments | passage recall | far-end leakage |
+|---|---|---|---|
+| raw microphone | 23 | **0.0%** | **80.6%** |
+| AEC3 | 14 | **13.3%** (0–29%) | **0.0%** |
+| AEC3 + agc + ns | 6 | 3.4% (0–11%) | 0.0% |
+
+Three things fall out of that, and only the first is good news.
+
+**Raw is not degraded, it is inverted.** Zero of the operator's words survived any
+interval, and four fifths of what did transcribe belonged to the playback. The
+microphone leg is a recording of the far end with a person faintly behind it. This
+is the first time "speaker bleed destroys the Me/Them split" has been stated in
+words recovered rather than correlation coefficients.
+
+**AEC3 removes the wrong words completely.** Leakage 80.6% → 0.0%. Nothing of the
+far end reaches the transcript. That is the whole job of the canceller and it does
+it.
+
+**But it does not yet bring the right words back.** 13.3% recall is not a usable
+transcript. The echo is gone and the operator is still mostly missing, which is a
+different failure from the one this project has been chasing and cannot be fixed by
+cancelling harder.
+
+Two readings of the recall column are worth separating. The far end sat about 7 dB
+*louder* than the operator at the microphone (−20.2 against −27.6 dBFS), which is a
+punishing ratio and the first thing to vary. And recall climbs across the take —
+0%, 4%, 11%, 29%, 22% — which is AEC3's adaptive filter converging. It does not use
+the 35 s calibration prefix; it adapts continuously, so the early intervals are
+measuring a filter that has not settled yet. Both point at the operating matrix
+rather than at the canceller.
+
+The gain controllers make retention **worse** — 3.4% against 13.3%, on a quarter of
+the segments. They were off by default here for a level-comparison reason; that
+default now has a retention reason too, which is a better one.
+
 ## What this does not establish
 
-Nothing here has been through the gate or a transcript, and three of the four
-conditions that decide the product are untested:
+The three gaps this section used to list — no double-talk, a file rather than a
+tapped reference, no retention or admission figures — are closed by the real take
+above. What replaced them is larger:
 
-- **No double-talk.** The room was silent by design, so this measures suppression
-  and says nothing about preserving the operator's voice underneath the echo. That
-  is the hard case and the only one the product needs.
-- **The reference is a file, not a tap.** `far.wav` is the source that was played,
-  not a recording of what the device rendered. No D/A path, no clock drift between
-  the legs, no start skew. The real reference is `system.wav` from a dual capture,
-  which is measurably a few thousand samples adrift over two minutes.
-- **No voiceprint admission and no transcript retention.** Decibels are not the
-  metric the product ships on. Whether the gate admits the operator, and whether
-  words survive, comes next and on the cued protocol.
+- **One point in the operating matrix, and a hostile one.** A single take, one
+  seat, one volume, one room, with the far end 7 dB louder than the operator. The
+  level sweep is the obvious next axis, and until it runs there is no supported
+  envelope — only one measurement inside it.
+- **Retention is not usable yet.** 13.3% recall does not make a transcript. Whether
+  that is the level ratio, filter convergence, the microphone, or a floor on what
+  cancellation can do for ASR is exactly what the matrix is for.
+- **The gate never admitted anything.** AEC3 moved the voiceprint from +0.064 to
+  +0.386 against a +0.580 threshold. Whether the remaining gap closes with a better
+  level ratio or whether the threshold is wrong for cancelled audio is unmeasured,
+  and picking the second answer without evidence would be tuning the ruler.
+- **Nothing real-time.** Every figure here is offline, over whole recordings, with
+  the entire far end available. AEC3 is a real-time algorithm being run in a batch
+  and that is a fair use of it, but the product has to do this live, on a stream,
+  inside a capture that cannot pause.
 
 ## Building
 
