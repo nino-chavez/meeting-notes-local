@@ -636,6 +636,26 @@ thirty seconds — audio the filter never saw:
 | **overlap** | +0.326 | +0.535 | +0.615 | **1/7 → 5/7** |
 | bleed | +0.101 | +0.152 | +0.442 | 0/8 → 1/8 |
 
+**The denominator is voiced microphone windows, not operator speech windows,**
+and on a speakers take those are not the same thing. The window selector takes
+voiced spans of the microphone, and with the far end coming out of the speakers
+the microphone is voiced whether or not the operator is talking. Some unknown
+number of these fourteen windows hold the far end alone. That makes both ratios
+a floor on recall rather than an estimate of it: an echo-only window can only
+ever count as a miss. It is also why the recording protocol below had to change
+— nothing in the audio distinguishes the two, so the labels have to come from a
+cue schedule fixed before the recording exists.
+
+One inflation channel was checked directly rather than argued away, since a
+conservative denominator does not by itself make the numerator safe. After the
+mask, an echo-only window becomes near-silence, and a speaker embedding of
+near-silence can score anywhere — including above the threshold, which would be
+an admission with nothing behind it. Every window admitted after cancellation
+but not before was measured against its own take's noise floor: all of them carry
+13 to 27 times that level, and none sits at it. The figures survive the check
+that could have killed them. It does not confirm them: residual energy proves a
+window is not empty, not that what remains is the operator.
+
 Seven windows. It was six of seven until the alignment leak below was closed —
 estimating the delay over the whole take let audio after the boundary influence
 the shift the fit was built on, and one window did not survive taking that away.
@@ -739,24 +759,36 @@ another, and standing up between recordings changes the acoustic path that the
 filter exists to model — which would put the calibration and the measurement in
 different rooms, in effect.
 
-The protocol, in one continuous capture:
+The protocol runs itself. `dual_capture.py --protocol` shows timed cues in the
+terminal and writes the schedule beside the recordings:
 
-1. Sit in the position you would actually take the call from. Set the volume you
-   would actually use. Then touch nothing until the recording stops.
-2. **First 15–30 seconds: far end playing, say nothing.** This is the
-   calibration phase.
-3. **Next 30–60 seconds: talk over the same playback**, as in the overlap take.
-4. Note when you started talking. That boundary goes into the manifest and is
-   hashed alongside the recording.
+```sh
+python3 spike/dual_capture.py --protocol --out ~/enroll-calibrated
+```
 
-Then, with the boundary at 30 s:
+Start the far end playing first, sit where you would actually take the call, set
+the volume you would actually use, and then change nothing for the ~2 minutes the
+capture runs. The cues say only when to talk:
+
+1. **35 s: say nothing** while the far end plays. This is the fit interval.
+2. **Then five pairs**, ten seconds talking over the same playback and six
+   seconds silent while it keeps playing.
+
+The silent intervals are not padding. They are the far end with nothing behind
+it, which makes them the negative control for the gate — audio that must *not* be
+admitted as the operator in any condition — and the first echo-only audio in this
+project, which is what an honest suppression figure needs and what none of the
+earlier ones had.
+
+Then:
 
 ```sh
 python3 spike/aec_bound.py --label acceptance \
   --enroll read,free --take read=... --take free=... \
   --take calib=~/enroll-calibrated \
-  --segments calib=~/enroll-calibrated/transcript.json \
-  --fit-mode prefix --fit-before 28 --score-after 32 \
+  --segments calib=~/enroll-calibrated/mic-segments.json \
+  --protocol calib=~/enroll-calibrated/protocol.json \
+  --fit-mode prefix --fit-before 30 --score-after 34 \
   --out spike/aec-bound-results.json
 ```
 
@@ -791,12 +823,35 @@ the gate consumes — `speaker_gate.py` embeds whole segments its caller hands i
 An acceptance run scored on fixed windows would measure something the product
 never does. They stay available as a secondary diagnostic by omitting the flag.
 
-**The prefix is checked, not asserted.** The harness refuses the run if any
-microphone segment begins before `--fit-before`, so a calibration phase the
-operator talked through is caught rather than fitted, and the manifest records
-the *observed* onset of speech alongside the boundary that was aimed at. That is
-the artifact's evidence that the calibration audio was genuinely free of him —
-"I stayed quiet for the first thirty seconds" is not.
+**`--protocol` is required in this mode too, and it is the part that took two
+attempts to get right.** An earlier version of this section checked the
+calibration phase by refusing any run whose microphone segments began before
+`--fit-before` — reasoning that a segment there meant the operator had spoken.
+That check was unsound, and it would have rejected every correct recording. On
+speakers the far end reaches the microphone and transcribes there, which is the
+entire premise of `drop_bled`; a silent operator and a talking one both produce
+microphone segments throughout the calibration phase. Its absence would not have
+proved silence either.
+
+The same mistake, one level up, was the denominator. "Microphone-only" names the
+channel, not the talker. Between the operator's phrases the microphone still
+carries the far end, so a list of voiced microphone intervals is a mixture of the
+voice being recovered and the voice being cancelled — and every figure in this
+document above was scored against exactly that mixture.
+
+Nothing in the audio fixes this, so the labels come from outside it. The cue
+schedule is decided before any audio exists and written to `protocol.json`, bound
+to `mic.wav` by digest and sample count. A keypress mark would have been simpler
+and is the wrong shape: it is the operator attesting afterwards to what he did,
+which is the class of evidence this project keeps refusing. A schedule fixed in
+advance cannot be fitted to the result.
+
+The harness then scores three groups separately: segments wholly inside a speak
+interval, segments wholly inside a silent one, and segments straddling a cue,
+which belong to neither and are reported apart rather than assigned. One second
+is trimmed from each end of every interval, because a cue is seen and acted on
+rather than obeyed instantly. Compliance is reported, not enforced — a speak
+interval the operator stayed quiet through reaches the artifact saying so.
 
 This is also the exact fixture AEC3 should be handed first, since it gives a real
 canceller the single-talk interval it converges on.
@@ -990,14 +1045,19 @@ in 2.2 s.
   today.
 - **Echo removal recovers the operator on one take and almost none on the
   other.** Fit offline on the first thirty seconds and scored only on audio it
-  never saw: 1 admitted speech window of 7 becomes 5 where the far end sits
-  below the operator, and 0 of 8 becomes 1 where it sits ~7 dB above. Enough to
+  never saw: 1 admitted window of 7 becomes 5 where the far end sits
+  below the operator, and 0 of 8 becomes 1 where it sits ~7 dB above. Those are
+  voiced *microphone* windows and not all of them hold the operator, so each
+  ratio is a floor on recovery rather than a measure of it. Enough to
   justify one bounded AEC3 integration; not enough to design a warning around,
   since the two takes differ in operator distance as well as level.
 - **No take in this project contains four seconds of the far end playing while
   the operator is silent**, which is what a real canceller adapts on. That
   single missing input is why the fit has to be held out in time rather than by
-  regime, and it is trivial to record.
+  regime. `dual_capture.py --protocol` now records it, cueing the operator
+  through a calibration phase and then alternating speak and silent intervals —
+  which also supplies the one thing no recording can: which intervals held his
+  voice, decided before the audio existed rather than inferred from it after.
 - Separability is measured and the answer is "half". An off-the-shelf embedding
   recognises the same voice on the built-in mic at 0.243 cosine against 0.524 on
   the system tap, with real speaker structure present on both. Loudness does not

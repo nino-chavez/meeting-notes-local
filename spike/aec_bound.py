@@ -88,6 +88,23 @@ embeds each complete segment its caller supplies. Fixed windows are an
 experimental control for equalising takes, not the shipping contract, and any
 figure from here transfers to the product only as far as that difference allows.
 
+**And neither windows nor segments say who was talking.** Both come from voicing
+on the microphone, and on speakers the microphone is voiced whenever the far end
+plays — so a count of them mixes the voice being recovered with the voice being
+cancelled. Transcribing does not separate them either, with more confidence and
+the same error. Every figure here measured before --protocol existed used that
+mixture as its denominator, which makes those ratios floors on recovery rather
+than measures of it: an interval holding no operator can only count as a miss.
+
+--protocol is the way out, and prefix mode requires it. `dual_capture.py
+--protocol` shows the operator timed visual cues and writes the schedule beside
+the recordings, bound to the audio by digest and sample count. Segments are then
+scored in three groups — wholly inside a speak interval, wholly inside a silent
+one, straddling a cue — with a second trimmed off each interval's edges for
+reaction time. The silent intervals do double duty: audio that must not be
+admitted as the operator under any condition, and the only echo-only stretches
+in this project, which is what a suppression figure needs to mean anything.
+
 Audio never enters the repository. `--out` writes scores and input digests, so a
 result can be checked against the recording that produced it without publishing
 anyone's voice.
@@ -116,6 +133,7 @@ ALIGN_MARGIN = TAPS // 8  # headroom so the direct path lands at a positive lag
 MIN_FIT_TOTAL = 4 * RATE  # under four seconds is not an echo path, it is a guess
 DT_RATIO = 0.25         # residual within 6 dB of the echo estimate means near end
 PREFIX_GUARD_S = 2.0    # gap between a calibration fit and the audio it is scored on
+FLOOR_RATIO_MIN = 3.0   # below this a window is the take's own noise, not a voice
 
 
 def sha256(path: Path) -> str:
@@ -124,6 +142,13 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def wav_frames(path: Path) -> int:
+    """Length from the header. Pre-flight validation must not depend on reading
+    a 75-minute control into memory to find out that its schedule is wrong."""
+    with wave.open(str(path)) as w:
+        return w.getnframes()
 
 
 def load_wav(path: Path) -> np.ndarray:
@@ -520,6 +545,224 @@ def windows(x: np.ndarray, win_s: float, hop_s: float) -> list[dict]:
 
 
 # --------------------------------------------------------------------------
+# Ground truth. Everything below answers one question the audio cannot: which
+# intervals held the operator's voice.
+#
+# Voicing does not answer it. On speakers the far end reaches the microphone,
+# so a voiced microphone interval means "something was audible here", and both
+# a talking operator and a silent one produce those. Transcribing does not
+# answer it either, for the same reason and with more confidence. Every earlier
+# number in this file used voiced microphone windows as its denominator, which
+# is a mixture, and this is what replaces that.
+# --------------------------------------------------------------------------
+
+class SourceError(Exception):
+    """A supplied artifact cannot support the claim the run would make from it."""
+
+
+def _check_binding(path: Path, doc: dict, mic_digest: str, mic_samples: int) -> None:
+    """An artifact indexes one specific recording or it indexes nothing.
+
+    Both fields are load-bearing. The digest catches a same-schema file from a
+    different take, which otherwise loads in silence and points every segment at
+    unrelated audio. The sample count catches the same recording trimmed after
+    the fact — that slides all the times relative to the audio while leaving a
+    rewritten file's digest perfectly self-consistent with itself.
+    """
+    for field in ("mic_sha256", "mic_samples"):
+        if doc.get(field) is None:
+            raise SourceError(
+                f"{path} carries no {field}, so nothing ties it to a recording. "
+                f"Re-run the capture: dual_capture writes both.")
+    if doc["mic_sha256"] != mic_digest:
+        raise SourceError(
+            f"{path} was written for a different recording "
+            f"({doc['mic_sha256'][:12]}…, this mic.wav is {mic_digest[:12]}…). "
+            f"Its times index audio that is not here.")
+    if int(doc["mic_samples"]) != int(mic_samples):
+        raise SourceError(
+            f"{path} was written against {doc['mic_samples']} samples and this "
+            f"mic.wav has {mic_samples}. The recording changed length after the "
+            f"artifact was written, so every time in it has moved.")
+
+
+def load_segments(path: Path, *, mic_digest: str, mic_samples: int) -> list[dict]:
+    """Read a mic-segments/1 list, or refuse with the reason it cannot be used."""
+    loaded = json.loads(Path(path).read_text())
+    if not isinstance(loaded, dict):
+        raise SourceError(
+            f"{path} is a bare list. A list carries no guarantee that its times "
+            f"are on the microphone's own clock or that it holds only the "
+            f"microphone, and both have to be true for the result to mean "
+            f"anything. Use mic-segments.json from the capture.")
+    if loaded.get("schema") != "mic-segments/1":
+        if "turns" in loaded:
+            raise SourceError(
+                f"{path} is a merged transcript, which cannot index mic.wav. It "
+                f"carries both legs with speaker labels cleared whenever bleed "
+                f"is detected, so operator and far-end turns are "
+                f"indistinguishable in it; its times are on the merged session "
+                f"clock rather than the microphone's, off by the startup skew; "
+                f"and its microphone turns have already been through drop_bled, "
+                f"which removes exactly the contaminated operator speech an echo "
+                f"experiment is trying to recover. Use mic-segments.json from "
+                f"the same capture.")
+        raise SourceError(f"{path}: expected schema mic-segments/1, got "
+                          f"{loaded.get('schema')!r}.")
+    if loaded.get("timeline") != "mic-local":
+        raise SourceError(f"{path} declares timeline {loaded.get('timeline')!r}. "
+                          f"Only mic-local times index mic.wav.")
+    if "voicing" not in (loaded.get("filtered") or []):
+        raise SourceError(
+            f"{path} does not declare the voicing filter, so it is not the "
+            f"artifact this expects. A list that has been through drop_bled "
+            f"would also arrive here, and that one has had the contaminated "
+            f"operator speech removed from it already.")
+    _check_binding(Path(path), loaded, mic_digest, mic_samples)
+    segs = loaded["segments"]
+    if any("end" not in s for s in segs):
+        raise SourceError(
+            f"{path} has segments with no end. Inferring an end from the next "
+            f"segment's start swallows the pause before it — at a speaker "
+            f"change, the next speaker's onset as well.")
+    return segs
+
+
+def load_protocol(path: Path, *, mic_digest: str, mic_samples: int) -> dict:
+    """Read the cue schedule that says who was supposed to be talking when.
+
+    Phases running past the end of the recording are dropped rather than
+    refused: a take stopped early still carries whatever intervals completed,
+    and throwing those away would be its own kind of waste. A calibration phase
+    that does not fit IS refused, because a prefix fit has nothing to stand on
+    without it.
+    """
+    doc = json.loads(Path(path).read_text())
+    if not isinstance(doc, dict) or doc.get("schema") != "capture-protocol/1":
+        raise SourceError(f"{path}: expected schema capture-protocol/1.")
+    if doc.get("timeline") != "mic-local":
+        raise SourceError(f"{path} declares timeline {doc.get('timeline')!r}. "
+                          f"Only mic-local times index mic.wav.")
+    if doc.get("rate") != RATE:
+        raise SourceError(f"{path} was recorded at {doc.get('rate')} Hz, not {RATE}.")
+    _check_binding(Path(path), doc, mic_digest, mic_samples)
+    phases = doc.get("phases") or []
+    for ph in phases:
+        if not {"start", "end", "expect", "role"} <= set(ph):
+            raise SourceError(f"{path}: a phase is missing start/end/expect/role.")
+        if ph["expect"] not in ("silence", "operator"):
+            raise SourceError(f"{path}: unknown expect {ph['expect']!r}.")
+    if any(a["end"] > b["start"] + 1e-9 for a, b in pairwise(phases)):
+        raise SourceError(f"{path}: phases overlap, so an interval has two labels.")
+
+    duration = mic_samples / RATE
+    cal = [ph for ph in phases if ph["role"] == "calibration"]
+    if not cal:
+        raise SourceError(f"{path} declares no calibration phase.")
+    if cal[-1]["end"] > duration:
+        raise SourceError(
+            f"{path}: the calibration phase ends at {cal[-1]['end']:.1f}s and the "
+            f"recording is {duration:.1f}s. The take was stopped before the fit "
+            f"interval finished — record it again.")
+    kept = [ph for ph in phases if ph["end"] <= duration]
+    doc["phases"] = kept
+    doc["dropped_phases"] = len(phases) - len(kept)
+    return doc
+
+
+def phase_interior(ph: dict, margin: float) -> tuple[float, float] | None:
+    """The part of a phase far enough from both cues to be attributable.
+
+    A cue is seen and acted on, not obeyed instantaneously; speech also trails
+    past the cue that ends it. The margin is what keeps a late start or a long
+    tail from being scored as if it belonged to the next interval.
+    """
+    lo, hi = ph["start"] + margin, ph["end"] - margin
+    return (lo, hi) if hi - lo > 0 else None
+
+
+def classify(segs: list[dict], phases: list[dict], margin: float) -> dict:
+    """Split segments by the phase whose interior wholly contains them.
+
+    Containment is strict on both ends. A segment straddling a boundary spans
+    two different intentions and belongs to neither; counting it under the phase
+    it starts in is how a mixture gets back into a denominator that exists to
+    exclude one.
+    """
+    out = {"operator": [], "control": [], "calibration": [], "unattributable": []}
+    for seg in segs:
+        placed = None
+        for ph in phases:
+            span = phase_interior(ph, margin)
+            if span and span[0] <= seg["start"] and seg["end"] <= span[1]:
+                placed = "operator" if ph["expect"] == "operator" else ph["role"]
+                break
+        out.setdefault(placed or "unattributable", []).append(seg)
+    return out
+
+
+def floor_rms(x: np.ndarray) -> float:
+    """The level of the quietest tenth — what a window holding nothing looks like."""
+    return float(np.sqrt(np.percentile(x.astype(np.float64) ** 2, 10)))
+
+
+def protocol_compliance(protocol: dict, mic: np.ndarray, margin: float) -> dict:
+    """Did the operator actually follow the cues.
+
+    The schedule is an instruction, not an observation, and the gap between them
+    is exactly what an unchecked protocol hides. Two ways it can fail, and both
+    are reported rather than absorbed: a speak interval with no voiced audio in
+    it is a cue that was missed, and a silent interval with voiced audio in it is
+    either a cue overrun or the far end being loud enough to carry — which is
+    normal on speakers and is why the silent intervals are a control on the gate
+    rather than a claim about the room.
+
+    Nothing here rejects a take. It gives the reader the numbers to decide, in
+    the same artifact as the result they qualify.
+    """
+    voiced = voiced_spans(mic)
+    notes, phases = [], []
+    for ph in protocol["phases"]:
+        span = phase_interior(ph, margin)
+        if not span:
+            continue
+        lo, hi = span
+        overlap = sum(max(0.0, min(hi, b) - max(lo, a)) for a, b in voiced)
+        frac = overlap / (hi - lo)
+        phases.append({"role": ph["role"], "expect": ph["expect"],
+                       "start": ph["start"], "end": ph["end"],
+                       "voiced_fraction": round(frac, 3)})
+        if ph["expect"] == "operator" and frac < 0.2:
+            notes.append(f"speak interval {ph['start']:.0f}-{ph['end']:.0f}s is "
+                         f"{frac:.0%} voiced - the cue looks missed")
+    return {"phases": phases, "notes": notes}
+
+
+def control_erle(protocol: dict, conds: dict, margin: float) -> dict:
+    """Suppression measured where the far end plays and the operator does not.
+
+    This is the figure every earlier echo-return-loss number in this file wanted
+    and none could have. Splitting a take by which signal happened to dominate
+    put near-end speech on both sides of the split, so "suppression during far
+    end" was partly the filter declining to remove a voice it was right to keep.
+    The silent control intervals are far end with nothing behind it by
+    construction, so the ratio measured across them is echo removal and nothing
+    else.
+    """
+    mask = np.zeros(len(conds["raw"]), dtype=bool)
+    for ph in protocol["phases"]:
+        if ph["role"] != "control":
+            continue
+        span = phase_interior(ph, margin)
+        if span:
+            mask[int(span[0] * RATE):min(int(span[1] * RATE), len(mask))] = True
+    if not mask.any():
+        return {}
+    return {cond: round(float(_erle(conds["raw"], audio, mask)), 2)
+            for cond, audio in conds.items() if cond != "raw"}
+
+
+# --------------------------------------------------------------------------
 # Controls. These run on numpy alone: the encoder is an argument everywhere it
 # is needed, so a machine without torch can still check that the arithmetic in
 # this file does what the prose says.
@@ -737,9 +980,156 @@ def run_self_test() -> int:
     print("   ok" if disjoint and w else "   FAILED")
     ok &= disjoint and bool(w)
 
+    ok &= _ground_truth_controls()
+
     print("\n  all controls behaved as specified" if ok
           else "\n  SOME CONTROLS FAILED — do not trust results from this file")
     return 0 if ok else 1
+
+
+def _ground_truth_controls() -> bool:
+    """The artifacts that say who was talking, and the guards that read them.
+
+    These exercise the real writers in dual_capture, not a local copy of their
+    output shape. A hand-rolled fixture would keep passing after the writer
+    changed, which is the failure a round-trip control exists to catch.
+    """
+    import tempfile
+
+    import dual_capture as dc
+
+    ok = True
+
+    def check(label: str, got, want=True, shown=None) -> None:
+        nonlocal ok
+        good = got == want
+        ok &= good
+        print(f"  {label:52s} {shown if shown is not None else got!s:>13}"
+              f"{'   ok' if good else '   FAILED'}")
+
+    def refused(fn) -> str | bool:
+        """The first clause of the refusal, or False if it was accepted."""
+        try:
+            fn()
+        except SourceError as exc:
+            return str(exc).split(".")[0][:40]
+        return False
+
+    def write_wav(path: Path, x: np.ndarray) -> None:
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(RATE)
+            w.writeframes((np.clip(x, -1, 1) * 32767).astype("<i2").tobytes())
+
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        # A recording, and the artifacts a capture would write beside it.
+        mic = _synth(140.0, 11, 100, 7000)
+        wav = d / "mic.wav"
+        write_wav(wav, mic)
+        digest, samples = sha256(wav), len(mic)
+        phases = dc.build_schedule()
+
+        # 10. The far end is audible on the microphone through the calibration
+        #     phase, so segments land there whatever the operator does. This is
+        #     the control for a guard that USED to live here and rejected such a
+        #     take as proof the operator had spoken — it cannot be, and a run
+        #     that refuses this take refuses every correct recording.
+        segs = [{"start": 3.0, "end": 9.0, "text": "far end, no operator"},
+                {"start": 40.0, "end": 43.0, "text": "operator"}]
+        seg_p, proto_p = d / "mic-segments.json", d / "protocol.json"
+        dc.write_mic_segments(seg_p, segs, samples / RATE, wav, samples)
+        dc.write_protocol(proto_p, phases, wav, samples)
+        loaded = load_segments(seg_p, mic_digest=digest, mic_samples=samples)
+        check("echo in the calibration prefix is not a defect", len(loaded), 2)
+
+        proto = load_protocol(proto_p, mic_digest=digest, mic_samples=samples)
+        # 11. And the schedule places those same two segments correctly: the one
+        #     inside the calibration phase is not the operator, the one inside a
+        #     speak interval is. Nothing in the audio distinguishes them.
+        cls = classify(loaded, proto["phases"], proto["cue_margin_s"])
+        check("the schedule separates them, the audio cannot",
+              (len(cls["calibration"]), len(cls["operator"])), (1, 1),
+              shown=f"{len(cls['calibration'])} cal, {len(cls['operator'])} op")
+
+        # 12. A segment across a cue boundary belongs to neither interval.
+        edge = classify([{"start": phases[0]["end"] - 1.5,
+                          "end": phases[0]["end"] + 1.5}],
+                        proto["phases"], proto["cue_margin_s"])
+        check("a segment straddling a cue is unattributable",
+              len(edge["unattributable"]), 1)
+
+        # 13. The margin has to leave a scorable interval behind, or the silent
+        #     control intervals yield nothing and the negative control is
+        #     decorative rather than absent — which is worse, because it looks
+        #     like it ran.
+        ctrl = next(ph for ph in phases if ph["role"] == "control")
+        lo, hi = phase_interior(ctrl, dc.CUE_MARGIN_S)
+        check("a silent interval still admits a scorable segment",
+              hi - lo >= 2.0, shown=f"{hi - lo:.1f}s interior")
+
+        # 14. Every way the wrong file can arrive is refused, and each says why.
+        merged = d / "transcript.json"
+        merged.write_text(json.dumps({"turns": [{"start": 0, "end": 1}]}))
+        check("a merged transcript is refused",
+              bool(refused(lambda: load_segments(
+                  merged, mic_digest=digest, mic_samples=samples))))
+        bare = d / "bare.json"
+        bare.write_text(json.dumps([{"start": 0, "end": 1}]))
+        check("a bare list is refused",
+              bool(refused(lambda: load_segments(
+                  bare, mic_digest=digest, mic_samples=samples))))
+        check("a list from another recording is refused",
+              bool(refused(lambda: load_segments(
+                  seg_p, mic_digest="0" * 64, mic_samples=samples))))
+        check("a recording trimmed after the fact is refused",
+              bool(refused(lambda: load_segments(
+                  seg_p, mic_digest=digest, mic_samples=samples - 1))))
+        check("a schedule from another recording is refused",
+              bool(refused(lambda: load_protocol(
+                  proto_p, mic_digest="0" * 64, mic_samples=samples))))
+
+        # 15. A take stopped early. Both cases are built the way the capture
+        #     builds them — a genuinely shorter recording with its own artifact
+        #     written from it — because faking the length instead trips the
+        #     binding check first and the control then passes for the wrong
+        #     reason. It did, on the first run of this file.
+        for label, cut_s, want_refusal in (
+            ("a take cut inside the calibration phase is refused",
+             phases[0]["end"] - 1.0, True),
+            ("phases past the end of a short take are dropped",
+             phases[3]["end"] + 0.5, False),
+        ):
+            sub = d / f"short-{cut_s:.0f}"
+            sub.mkdir()
+            cut = mic[:int(cut_s * RATE)]
+            write_wav(sub / "mic.wav", cut)
+            dc.write_protocol(sub / "protocol.json", phases,
+                              sub / "mic.wav", len(cut))
+            def load(s=sub, c=cut):
+                return load_protocol(s / "protocol.json",
+                                     mic_digest=sha256(s / "mic.wav"),
+                                     mic_samples=len(c))
+            if want_refusal:
+                check(label, bool(refused(load)))
+            else:
+                part = load()
+                check(label,
+                      part["dropped_phases"] > 0 and len(part["phases"]) >= 3,
+                      shown=f"kept {len(part['phases'])}, "
+                            f"dropped {part['dropped_phases']}")
+
+        # 16. Compliance is reported, not enforced. A speak interval the
+        #     operator never spoke in has to reach the artifact saying so.
+        silent = np.zeros(int(140.0 * RATE))
+        notes = protocol_compliance(proto, silent, proto["cue_margin_s"])["notes"]
+        check("a missed speak cue is reported",
+              len(notes), sum(1 for ph in proto["phases"]
+                              if ph["expect"] == "operator"),
+              shown=f"{len(notes)} notes")
+
+    return ok
 
 
 def main() -> int:
@@ -769,6 +1159,13 @@ def main() -> int:
                         "speaker_gate embeds whole caller-supplied segments — so it is "
                         "how a result transfers to the product rather than staying an "
                         "experimental control")
+    p.add_argument("--protocol", action="append", metavar="NAME=FILE", default=[],
+                   help="the capture's protocol.json: the cue schedule that says "
+                        "which intervals the operator was asked to speak in and "
+                        "which he was asked to stay silent through. Nothing in the "
+                        "audio answers that — on speakers the far end is audible on "
+                        "the microphone throughout — so this is the only source of "
+                        "who-was-talking ground truth, and prefix mode requires it")
     p.add_argument("--max-seconds", type=float, default=0.0,
                    help="analyse only the first N seconds of each take. The chain is "
                         "O(n) in Python-level STFT frames, so a 75-minute capture used "
@@ -799,34 +1196,12 @@ def main() -> int:
         name, _, path = spec.partition("=")
         takes[name] = Path(path).expanduser()
     enroll_names = [n.strip() for n in args.enroll.split(",") if n.strip()]
-    supplied, segment_digests, schemas = {}, {}, {}
-    for spec in args.segments:
-        name, _, path = spec.partition("=")
-        seg_path = Path(path).expanduser()
-        loaded = json.loads(seg_path.read_text())
-        if isinstance(loaded, dict) and loaded.get("schema") == "mic-segments/1":
-            segs = loaded["segments"]
-            schemas[name] = loaded["schema"]
-        elif isinstance(loaded, dict) and "turns" in loaded:
-            p.error(
-                f"{seg_path} is a merged transcript, which cannot index mic.wav. It "
-                f"carries both legs with speaker labels cleared whenever bleed is "
-                f"detected, so operator and far-end turns are indistinguishable in "
-                f"it; its times are on the merged session clock rather than the "
-                f"microphone's, off by the startup skew; and its microphone turns "
-                f"have already been through drop_bled, which removes exactly the "
-                f"contaminated operator speech an echo experiment is trying to "
-                f"recover. Use mic-segments.json from the same capture.")
-        else:
-            segs = loaded            # a bare [{start, end}] list
-            schemas[name] = "list"
-        if any("end" not in seg for seg in segs):
-            p.error(f"{seg_path} has segments with no end. Inferring an end from the "
-                    f"next segment's start swallows the pause before it — at a "
-                    f"speaker change, the next speaker's onset as well. Supply a "
-                    f"segment list with measured ends.")
-        supplied[name] = segs
-        segment_digests[name] = sha256(seg_path)
+    seg_paths = dict(spec.partition("=")[::2] for spec in args.segments)
+    proto_paths = dict(spec.partition("=")[::2] for spec in args.protocol)
+    unknown = (set(seg_paths) | set(proto_paths)) - set(takes)
+    if unknown:
+        p.error(f"--segments/--protocol name takes that were not passed: "
+                f"{', '.join(sorted(unknown))}")
 
     if args.fit_mode == "prefix":
         if not args.fit_before:
@@ -839,31 +1214,60 @@ def main() -> int:
                     f"A prefix run that scores its own calibration audio is not "
                     f"held out, and reporting it as such is the failure this mode "
                     f"exists to prevent.")
-        # Enrolment takes are exempt: they exist to build the profile, and their
-        # rows are a sanity check rather than the measurement.
-        wrong = [n for n in supplied if schemas.get(n) != "mic-segments/1"]
-        if wrong:
-            p.error(f"--fit-mode prefix needs mic-segments/1 for {', '.join(wrong)}. "
-                    f"A bare list carries no guarantee that its times are on the "
-                    f"microphone's own clock or that it holds only the microphone, "
-                    f"and both have to be true for the result to mean anything.")
-        for n, segs in supplied.items():
-            early = [g for g in segs if g["start"] < args.fit_before]
-            if early:
+        # Enrolment takes are exempt from both: they exist to build the profile,
+        # and their rows are a sanity check rather than the measurement.
+        scored_names = [n for n in takes if n not in enroll_names]
+        if not scored_names:
+            p.error("--fit-mode prefix has nothing to score: every --take is "
+                    "also in --enroll.")
+        for flag, have, why in (
+            ("--segments", seg_paths,
+             ("the gate consumes whole caller-supplied segments, so scoring on "
+              "fixed windows would measure something the product never runs")),
+            ("--protocol", proto_paths,
+             ("microphone segments say what was audible, not who said it: on "
+              "speakers the far end is audible on the microphone throughout, so "
+              "without the cue schedule the denominator mixes the voice being "
+              "recovered with the voice being cancelled")),
+        ):
+            missing = [n for n in scored_names if n not in have]
+            if missing:
+                p.error(f"--fit-mode prefix needs {flag} for "
+                        f"{', '.join(missing)}: {why}.")
+
+    # Pre-flight. Every supplied artifact is read and checked against the
+    # recording it claims, and the fit boundary is checked against the schedule,
+    # before the encoder loads or a single take is scored. Validating inside the
+    # scoring loop instead meant a run with an invalid boundary spent minutes
+    # building a profile and scoring the takes ahead of the bad one first.
+    mic_digests, mic_lengths, supplied, protocols = {}, {}, {}, {}
+    for name, take in takes.items():
+        mic_p = take / "mic.wav"
+        if not mic_p.exists():
+            p.error(f"{name}: no mic.wav in {take}")
+        mic_digests[name] = sha256(mic_p)
+        mic_lengths[name] = wav_frames(mic_p)
+        try:
+            if name in seg_paths:
+                supplied[name] = load_segments(
+                    Path(seg_paths[name]).expanduser(),
+                    mic_digest=mic_digests[name], mic_samples=mic_lengths[name])
+            if name in proto_paths:
+                protocols[name] = load_protocol(
+                    Path(proto_paths[name]).expanduser(),
+                    mic_digest=mic_digests[name], mic_samples=mic_lengths[name])
+        except SourceError as exc:
+            p.error(f"{name}: {exc}")
+        proto = protocols.get(name)
+        if proto and args.fit_mode == "prefix":
+            cal = [ph for ph in proto["phases"] if ph["role"] == "calibration"][-1]
+            span = phase_interior(cal, proto["cue_margin_s"])
+            if not span or not (span[0] < args.fit_before <= span[1]):
                 p.error(
-                    f"{n}: {len(early)} mic segment(s) start inside the calibration "
-                    f"prefix, the first at {min(g['start'] for g in early):.1f}s "
-                    f"against a boundary of {args.fit_before:g}s. The prefix is "
-                    f"supposed to be the operator saying nothing, and this is the "
-                    f"check that it was — take the recording again rather than "
-                    f"fitting an echo path on audio with his voice in it.")
-        missing = [n for n in takes if n not in supplied and n not in enroll_names]
-        if missing:
-            p.error(f"--fit-mode prefix needs --segments for {', '.join(missing)}. "
-                    f"This is the acceptance path, and the gate consumes whole "
-                    f"caller-supplied segments; scoring it on fixed windows would "
-                    f"measure something the product never runs. Pass the capture's "
-                    f"own transcript.json.")
+                    f"{name}: --fit-before {args.fit_before:g}s is not inside the "
+                    f"calibration phase, whose attributable interior runs "
+                    f"{span[0]:.1f}-{span[1]:.1f}s. The fit would take in audio "
+                    f"the operator was never cued to be silent through.")
 
 
     enc = sg.load_encoder(args.model_dir)
@@ -892,12 +1296,10 @@ def main() -> int:
         "threshold": args.threshold, "enrolled_on": enroll_names,
         "max_seconds": args.max_seconds or None,
         "score_after_s": args.score_after or None,
-        "supplied_segments": segment_digests,
-        "supplied_schemas": schemas,
-        # The observed onset, not the boundary that was aimed for. It is what
-        # shows the calibration phase was actually free of the operator.
-        "first_mic_speech_s": {n: (min(g["start"] for g in segs) if segs else None)
-                               for n, segs in supplied.items()},
+        "supplied_segments": {n: sha256(Path(v).expanduser())
+                              for n, v in seg_paths.items()},
+        "supplied_protocols": {n: sha256(Path(v).expanduser())
+                               for n, v in proto_paths.items()},
         "max_lag_s": MAX_LAG_S, "phat_floor": PHAT_FLOOR,
         "min_fit_run": MIN_FIT_RUN, "align_margin": ALIGN_MARGIN,
         "min_fit_total": MIN_FIT_TOTAL, "dt_ratio": DT_RATIO,
@@ -908,13 +1310,15 @@ def main() -> int:
                 "floor": VAD_FLOOR, "hangover_s": VAD_HANGOVER_S},
     }, "inputs": {}, "takes": {}}
 
-    print(f"{'take':11s} {'condition':10s} {'n':>4} {'min':>7} {'mean':>7} {'max':>7} "
-          f"{'admitted':>10}")
+    print(f"{'take':11s} {'class':13s} {'condition':10s} {'n':>4} {'min':>7} "
+          f"{'mean':>7} {'max':>7} {'admitted':>10}")
     for name, take in takes.items():
         source = takes[args.reference_from] if args.reference_from else take
         mic_p, ref_p = take / "mic.wav", source / "system.wav"
-        manifest["inputs"][name] = {"mic_sha256": sha256(mic_p), "system_sha256": sha256(ref_p)}
+        manifest["inputs"][name] = {"mic_sha256": mic_digests[name],
+                                    "system_sha256": sha256(ref_p)}
         mic, ref = load_wav(mic_p), load_wav(ref_p)
+        supplied_segs, protocol = supplied.get(name), protocols.get(name)
         if args.reference_from and len(ref) < len(mic):
             # Repeat the borrowed reference rather than letting `process` clip
             # the take to its length. Truncating instead would quietly shorten a
@@ -929,30 +1333,66 @@ def main() -> int:
             print(f"{name:11s} skipped: {meta['skipped']}")
             manifest["takes"][name] = meta
             continue
-        if name in supplied:
-            limit = len(conds["raw"]) / RATE
-            segs = [s for s in supplied[name]
+        limit = len(conds["raw"]) / RATE
+        if supplied_segs is not None:
+            segs = [s for s in supplied_segs
                     if s["end"] - s["start"] >= sg.MIN_SCORABLE_S and s["end"] <= limit]
         else:
             segs = windows(conds["raw"], args.window, args.hop)
         segs = [s for s in segs if s["start"] >= args.score_after]
-        if not segs:
-            print(f"{name:11s} no windows at or after {args.score_after:g}s")
-            continue
-        rows = {"meta": meta, "windows": [dict(s) for s in segs]}
-        for cond, audio in conds.items():
-            scored = sg.embed_segments(audio.astype(np.float32), segs, enc)
-            v = np.array([sg.score(profile, e) for e in scored if e is not None])
-            if not len(v):
-                # Every window came back unscorable. Say so rather than raising
-                # from inside a format string, which tells the reader nothing.
-                print(f"{name:11s} {cond:10s}    0   (no window reached "
-                      f"{sg.MIN_SCORABLE_S:g}s of scorable audio)")
+
+        rows = {"meta": meta}
+        if protocol:
+            margin = protocol["cue_margin_s"]
+            classes = classify(segs, protocol["phases"], margin)
+            rows["compliance"] = protocol_compliance(protocol, conds["raw"], margin)
+            rows["echo_only_erle_db"] = control_erle(protocol, conds, margin)
+            rows["dropped_phases"] = protocol["dropped_phases"]
+            for line in rows["compliance"]["notes"]:
+                print(f"{name:11s} NOTE  {line}")
+            if rows["echo_only_erle_db"]:
+                erle = "  ".join(f"{c} {v:+.1f} dB"
+                                 for c, v in rows["echo_only_erle_db"].items())
+                print(f"{name:11s} echo-only suppression (no near end): {erle}")
+        else:
+            classes = {"all": segs}
+
+        rows["classes"] = {}
+        for cls, members in classes.items():
+            if not members or cls == "calibration":
                 continue
-            for row, e in zip(rows["windows"], scored, strict=True):
-                row[cond] = None if e is None else round(float(sg.score(profile, e)), 4)
-            print(f"{name:11s} {cond:10s} {len(v):4d} {v.min():+7.3f} {v.mean():+7.3f} "
-                  f"{v.max():+7.3f} {(v >= args.threshold).sum():5d}/{len(v):<4d}")
+            block = {"windows": [dict(s) for s in members]}
+            for cond, audio in conds.items():
+                a32 = audio.astype(np.float32)
+                floor = floor_rms(audio)
+                scored = sg.embed_segments(a32, members, enc)
+                v = np.array([sg.score(profile, e) for e in scored if e is not None])
+                if not len(v):
+                    # Every window came back unscorable. Say so rather than
+                    # raising from inside a format string, which says nothing.
+                    print(f"{name:11s} {cls:13s} {cond:10s}    0   (nothing "
+                          f"reached {sg.MIN_SCORABLE_S:g}s of scorable audio)")
+                    continue
+                for row, e in zip(block["windows"], scored, strict=True):
+                    row[cond] = None if e is None else round(float(sg.score(profile, e)), 4)
+                    lo, hi = int(row["start"] * RATE), int(row["end"] * RATE)
+                    # Recorded for every window, because the check it supports
+                    # is one-directional: an admitted window whose residual sits
+                    # at the take's own floor holds nothing, and its score is the
+                    # embedding reacting to near-silence rather than to a voice.
+                    row[f"{cond}_rms_over_floor"] = round(
+                        float(np.sqrt((audio[lo:hi] ** 2).mean()) / (floor + 1e-12)), 1)
+                hollow = sum(
+                    1 for row in block["windows"]
+                    if row.get(cond) is not None and row[cond] >= args.threshold
+                    and row[f"{cond}_rms_over_floor"] < FLOOR_RATIO_MIN)
+                warn = f"  {hollow} admitted at the noise floor" if hollow else ""
+                print(f"{name:11s} {cls:13s} {cond:10s} {len(v):4d} {v.min():+7.3f} "
+                      f"{v.mean():+7.3f} {v.max():+7.3f} "
+                      f"{(v >= args.threshold).sum():5d}/{len(v):<4d}{warn}")
+            rows["classes"][cls] = block
+        if not rows["classes"]:
+            print(f"{name:11s} nothing scorable at or after {args.score_after:g}s")
         manifest["takes"][name] = rows
         print()
 

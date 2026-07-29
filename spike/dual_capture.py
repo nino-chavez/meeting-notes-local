@@ -15,10 +15,20 @@ The mic leg is sounddevice at 16 kHz float32 — the same capture path
 Run:
     python spike/dual_capture.py --seconds 60
     python spike/dual_capture.py                 # until Ctrl-C
+    python spike/dual_capture.py --protocol      # cued echo-calibration take
+
+`--protocol` runs a fixed, timed schedule and writes `protocol.json` beside the
+recordings. It exists because the echo experiments need one thing the audio
+cannot supply: which intervals held the operator's voice. On speakers the far
+end reaches the microphone and transcribes there, so voicing and transcription
+both answer "was something audible", not "was it him". The schedule is fixed
+before any audio exists, shown as visual cues during capture, and bound to the
+recording by digest and sample count.
 """
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import queue
@@ -32,7 +42,15 @@ import wave
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
+
+try:
+    import sounddevice as sd
+except ModuleNotFoundError:
+    # Recording needs it; writing and reading this file's artifacts does not.
+    # aec_bound's controls check that mic-segments.json and protocol.json
+    # round-trip through the real writers here, and a control that can only run
+    # on a machine with an audio stack is a control that stops being run.
+    sd = None
 
 RATE = 16_000
 REPO = Path(__file__).resolve().parent.parent
@@ -761,7 +779,7 @@ def drop_bled(segs, mic, tap, b, label):
     return kept
 
 
-def report(mic_leg, tap_leg, args, out_dir):
+def report(mic_leg, tap_leg, args, out_dir, phases=None):
     mic = mic_leg.audio()
     tap = tap_leg.audio()
 
@@ -851,13 +869,21 @@ def report(mic_leg, tap_leg, args, out_dir):
             how = "written at the end; the incremental file was not this capture"
         print(f"  wrote {path} ({len(audio) / RATE:.2f}s, {how})")
 
+    if phases:
+        # After the WAV is on disk, so the digest is of the file a consumer will
+        # actually open, and before the transcription that may take minutes and
+        # may fail — the schedule is the part that cannot be reconstructed.
+        write_protocol(out_dir / "protocol.json", phases,
+                       out_dir / "mic.wav", len(mic))
+
     if args.no_transcribe:
         return
 
     print("\n=== transcript ===")
     t0 = time.monotonic()
     mic_voiced = drop_unvoiced(transcribe(mic, args.whisper, args.language), mic, "mic")
-    write_mic_segments(out_dir / "mic-segments.json", mic_voiced, len(mic) / RATE)
+    write_mic_segments(out_dir / "mic-segments.json", mic_voiced, len(mic) / RATE,
+                       out_dir / "mic.wav", len(mic))
     mic_segs = drop_bled(mic_voiced, mic, tap, b, "mic")
     tap_segs = drop_unvoiced(transcribe(tap, args.whisper, args.language), tap, "system")
     print(f"  (transcribed both legs in {time.monotonic() - t0:.1f}s)\n")
@@ -896,7 +922,151 @@ def report(mic_leg, tap_leg, args, out_dir):
         print(f"  [{int(start // 60):02d}:{start % 60:05.2f}] {label:4s} {text}")
 
 
-def write_mic_segments(path, segs, duration_s):
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# The calibration protocol. An echo-cancellation experiment needs two things no
+# ordinary capture supplies: a stretch of the far end playing while the operator
+# is silent, to fit on, and per-interval ground truth about who was talking, to
+# score against.
+#
+# Neither can be recovered from the recording afterwards. Transcribing the
+# microphone does not answer "was the operator silent here" — on speakers the
+# far end reaches the microphone and transcribes there too, which is the whole
+# premise of this project's `drop_bled`. A silent operator and a talking one
+# both produce microphone segments during playback.
+#
+# So the schedule is decided BEFORE any audio exists and shown as a visual cue
+# during capture. A keypress mark would be simpler and is the wrong shape: it is
+# the operator attesting afterwards to what he did, which is the class of
+# evidence this project keeps refusing. A schedule written in advance cannot be
+# fitted to the result, and compliance with it is independently checkable from
+# the microphone's own energy — a "speak" interval with no voiced audio in it is
+# a missed cue and says so.
+#
+# Cues are visual, never audible. A beep would be recorded by the microphone,
+# and on speakers it would also reach the tap, putting a marker signal into both
+# legs of an experiment about what leaks between them.
+CUE_POLL_S = 0.05        # how often the loop looks at the clock
+CUE_MARGIN_S = 1.0       # trimmed off each phase edge before anything is scored
+PROTOCOL_TAIL_S = 2.0    # recorded past the last cue, so the last interval fits
+CALIBRATION_S = 35.0
+SPEAK_S, CONTROL_S = 10.0, 6.0
+DEFAULT_PAIRS = 5
+
+
+def build_schedule(calibration_s=CALIBRATION_S, pairs=DEFAULT_PAIRS,
+                   speak_s=SPEAK_S, control_s=CONTROL_S):
+    """Calibration, then alternating speak/silent intervals, all on the mic clock.
+
+    The silent intervals after the calibration phase are not padding. They are
+    the far end playing with no operator behind it, which makes them two things
+    at once: the negative control for the voiceprint gate — audio that must NOT
+    be admitted as the operator, in any condition — and the first echo-only
+    audio in this project, which is what an honest echo-return-loss figure needs
+    and what every earlier one lacked.
+
+    Phase lengths are set by what has to fit inside them once CUE_MARGIN_S is
+    trimmed from each edge: a 6 s silent interval leaves 4 s, which admits two
+    segments at speaker_gate's 2 s floor, and a 10 s speak interval leaves 8 s.
+    Shortening either below 2 * CUE_MARGIN_S + 2.0 makes the interval yield
+    nothing and the control decorative.
+    """
+    interior = min(speak_s, control_s) - 2 * CUE_MARGIN_S
+    if interior < 2.0:
+        raise ValueError(
+            f"phases of {min(speak_s, control_s):g}s leave {interior:g}s after "
+            f"{CUE_MARGIN_S:g}s of margin at each edge, which is below the 2s a "
+            f"segment needs to be scorable. The interval would yield nothing.")
+    phases = [{"start": 0.0, "end": calibration_s,
+               "expect": "silence", "role": "calibration"}]
+    t = calibration_s
+    for _ in range(pairs):
+        phases.append({"start": t, "end": t + speak_s,
+                       "expect": "operator", "role": "speak"})
+        t += speak_s
+        phases.append({"start": t, "end": t + control_s,
+                       "expect": "silence", "role": "control"})
+        t += control_s
+    return phases
+
+
+CUE_TEXT = {
+    "calibration": "SAY NOTHING — let the far end play. This is the fit interval.",
+    "speak": "TALK NOW — keep talking over the playback.",
+    "control": "SAY NOTHING — playback continues.",
+}
+
+
+def run_cues(mic_leg, phases, stop):
+    """Show each cue at its scheduled point on the microphone's own clock.
+
+    Timed from the arrival of the first microphone block, so phase boundaries
+    are the same numbers that index mic.wav. The two known offsets are small
+    against CUE_MARGIN_S: one block of capture latency between a sample being
+    recorded and arriving here, and up to CUE_POLL_S of scheduling granularity.
+    Operator reaction time is the large one, and it is what the margin is for.
+    """
+    while not mic_leg.arrivals and not stop.is_set():
+        time.sleep(CUE_POLL_S)
+    if stop.is_set():
+        return
+    t0 = mic_leg.arrivals[0][0]
+    total = phases[-1]["end"]
+    shown = None
+    while not stop.is_set():
+        now = time.monotonic() - t0
+        if now >= total:
+            break
+        cur = next((p for p in phases if p["start"] <= now < p["end"]), None)
+        if cur is None:
+            break
+        if cur is not shown:
+            shown = cur
+            print(f"\n  [{now:6.1f}s] {CUE_TEXT[cur['role']]}")
+        print(f"\r           {cur['end'] - now:4.1f}s left ", end="", flush=True)
+        time.sleep(CUE_POLL_S)
+    # Run past the last cue so the final interval is comfortably inside the
+    # audio, then end the capture from here. This thread is the only one holding
+    # the microphone's clock; a wall-clock deadline in main() starts before the
+    # first block arrives and would cut the schedule short by that much.
+    time.sleep(PROTOCOL_TAIL_S)
+    print("\r  protocol complete — recording stops here.        ")
+    stop.set()
+
+
+def write_protocol(path, phases, mic_path, mic_samples):
+    """The schedule, bound to the recording it was displayed over.
+
+    Both bindings matter. The digest says this schedule belongs to this audio
+    and not to another take with the same phase lengths; the sample count says
+    the recording was not truncated afterwards, which would slide every phase
+    boundary relative to the audio underneath it while leaving the digest of a
+    re-written file self-consistent.
+    """
+    payload = {
+        "schema": "capture-protocol/1",
+        "timeline": "mic-local",
+        "rate": RATE,
+        "mic_sha256": sha256(mic_path),
+        "mic_samples": int(mic_samples),
+        "cue_margin_s": CUE_MARGIN_S,
+        "cue_poll_s": CUE_POLL_S,
+        "phases": phases,
+    }
+    path.write_text(json.dumps(payload, indent=2))
+    speak = sum(1 for p in phases if p["expect"] == "operator")
+    ctrl = sum(1 for p in phases if p["role"] == "control")
+    print(f"  wrote {path} ({speak} speak, {ctrl} silent-control intervals, "
+          f"{phases[-1]['end']:.0f}s scheduled)")
+
+
+def write_mic_segments(path, segs, duration_s, mic_path=None, mic_samples=None):
     """The microphone leg's own speech, on its own clock, before any filtering.
 
     `transcript.json` is a presentation artifact and is wrong for every job that
@@ -917,12 +1087,25 @@ def write_mic_segments(path, segs, duration_s):
     So this is written before the merge and before `drop_bled`, carrying only
     the microphone, only its own timeline, and a schema marker so a consumer
     that needs those guarantees can insist on them rather than hope.
+
+    What it does NOT carry is who was speaking. "Microphone-only" names the
+    channel, not the talker: on speakers, the far end arrives here too, so this
+    list holds the operator's turns and the echo of the far end's, mixed and
+    indistinguishable. Anything that needs the difference has to get it from
+    somewhere outside the audio — `protocol.json` is that somewhere.
+
+    The digest and sample count bind the list to the recording it indexes.
+    Without them a same-schema file from another take loads silently and every
+    segment points at the wrong audio.
     """
     payload = {
         "schema": "mic-segments/1",
         "timeline": "mic-local",
         "duration_s": round(duration_s, 3),
         "filtered": ["voicing"],
+        "labels": None,
+        "mic_sha256": sha256(mic_path) if mic_path else None,
+        "mic_samples": int(mic_samples) if mic_samples is not None else None,
         "segments": [
             {"start": round(s["start"], 2), "end": round(s["end"], 2), "text": s["text"]}
             for s in segs
@@ -996,7 +1179,29 @@ def main():
         "--list-devices", action="store_true",
         help="print available audio devices and exit",
     )
+    ap.add_argument(
+        "--protocol", action="store_true",
+        help="run the echo-calibration protocol: show timed visual cues during "
+             "capture and write protocol.json beside the recordings. Start the "
+             "far end playing first and leave it playing throughout; the cues "
+             "only say when to talk.",
+    )
+    ap.add_argument("--protocol-pairs", type=int, default=DEFAULT_PAIRS,
+                    help="speak/silent interval pairs after the calibration phase")
     args = ap.parse_args()
+
+    if sd is None:
+        ap.error("sounddevice is not installed, so no audio can be captured. "
+                 "pip install -r spike/requirements.txt")
+
+    phases = build_schedule(pairs=args.protocol_pairs) if args.protocol else None
+    if phases:
+        if args.seconds:
+            ap.error("--protocol sets its own duration; drop --seconds")
+        # A backstop only. The cue thread ends the capture on the microphone's
+        # own clock; this fires solely if that thread never starts, which is
+        # what a microphone that produces no audio at all looks like.
+        args.seconds = phases[-1]["end"] + PROTOCOL_TAIL_S + 30.0
 
     if args.list_devices:
         print(sd.query_devices())
@@ -1030,16 +1235,24 @@ def main():
         print(f"  system → tap on default output: {out_name}")
         print(f"capturing — {'Ctrl-C to stop' if not args.seconds else f'{args.seconds:g}s'}")
 
+        if phases:
+            print(f"\n  protocol: {phases[-1]['end']:.0f}s. Far end should already "
+                  f"be playing, at the volume and seat you would really use.\n"
+                  f"  Follow the cues and change nothing else until it stops.")
+            cue = threading.Thread(target=run_cues, args=(mic_leg, phases, stop),
+                                   daemon=True)
+            cue.start()
+
         deadline = time.monotonic() + args.seconds if args.seconds else None
         while not stop.is_set():
             if deadline and time.monotonic() >= deadline:
                 break
-            time.sleep(0.05)
+            time.sleep(CUE_POLL_S)
     finally:
         mic_leg.stop()
         tap_leg.stop()
 
-    report(mic_leg, tap_leg, args, out_dir)
+    report(mic_leg, tap_leg, args, out_dir, phases)
 
 
 if __name__ == "__main__":

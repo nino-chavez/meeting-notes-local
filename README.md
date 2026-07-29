@@ -75,10 +75,13 @@ about 0.15 and still loses two segments in eight.
 
 **Another voice is the case that breaks it, and echo removal gets most of it
 back.** With the far end coming out of the laptop speakers, the gate admits 1 of
-the operator's 7 speech windows — it rejects him from his own meeting. Removing
-the echo takes that to 5 of 7, on audio the echo filter was fitted before rather
-than on, while the same processing leaves 197 household segments unchanged to
-three decimals. Not a full repair: the recovered windows average +0.61 against
+the operator's 7 voiced microphone windows — it rejects him from his own meeting.
+Removing the echo takes that to 5 of 7, on audio the echo filter was fitted
+before rather than on, while the same processing leaves 197 household segments
+unchanged to three decimals. Voiced microphone windows, not operator-speech
+windows: with the far end on the speakers the microphone is voiced either way, so
+some of those seven hold no operator at all and the ratio is a floor on recovery
+rather than a measure of it. Not a full repair: the recovered windows average +0.61 against
 +0.78 for the same voice with nothing playing, and on a second take with the far
 end roughly 7 dB louder relative to him recovery is 0 of 8 to 1. Seven windows,
 one speaker, computed offline in closed form rather than by a real canceller,
@@ -203,10 +206,19 @@ bleed — so a contaminated recording arrives as unattributed without anyone
 having to remember to say so.
 
 A run also writes `mic-segments.json`: the microphone leg alone, on its own
-clock, before the bleed filter runs. The transcript is for reading; that file is
-for anything that indexes back into `mic.wav`, because the transcript's times
-belong to the merged session clock and its microphone turns have already had the
-contaminated ones removed.
+clock, before the bleed filter runs, carrying the recording's digest and sample
+count so it cannot be read against different audio. The transcript is for
+reading; that file is for anything that indexes back into `mic.wav`, because the
+transcript's times belong to the merged session clock and its microphone turns
+have already had the contaminated ones removed.
+
+What neither file carries is who was speaking. "Microphone-only" names the
+channel, not the talker — on speakers the far end arrives on the microphone too.
+`--protocol` is the answer: it runs a two-minute cued capture and writes
+`protocol.json` beside the recordings, a schedule of which intervals the operator
+was asked to speak in and which to stay silent through, fixed before any audio
+exists. It is the only ground truth about the talker in the project, and the echo
+experiments require it.
 
 ### Recording a specific call
 
