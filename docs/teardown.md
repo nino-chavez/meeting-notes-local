@@ -399,7 +399,7 @@ while the semantic core is being replaced underneath it.
 Do the definition work; skip the stamp. **Done 2026-07-28** — artifacts live at
 `~/Workspace/dev/tools/local-meeting-notes/`:
 
-- `docs/screens-and-states.md` — the L5 inventory: eight surfaces, their
+- `docs/screens-and-states.md` — the L5 inventory: nine surfaces, their
   lifecycle states, and the five L4 templates derived from them.
 - `DIRECTION.md` — art direction. Five-block thesis, the constraints it
   generates, and an intentionally empty device ledger.

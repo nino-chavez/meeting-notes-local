@@ -208,15 +208,92 @@ documents this trap.
 
 ---
 
+## I. Voice enrolment
+
+Added 2026-07-29, when the voiceprint gate landed in the capture
+(`spike/speaker_gate.py`, `spike/dual_capture.py`). The product now requires a
+voiceprint before it can tell the operator from the room, and no surface owned
+that. Recorded here rather than improvised at implementation time, because this
+file opens with the reason: patching at L1 when the missing primitive is at L4
+produces bugs that *move* from surface to surface instead of closing.
+
+| State | Trigger | Notes |
+|---|---|---|
+| `unenrolled` | No material yet | The gate is off and the menubar says the mic leg is whoever was audible. Not an error, and not a wizard to dismiss. |
+| `accumulating` | Some sittings, contract unmet | The common state, and it can last days. Shows exactly what is missing, in the contract's own terms. |
+| `needs-other-voice` | Operator material sufficient, no negative sample | The one step requiring a deliberate act. |
+| `ready-to-build` | Contract satisfied | The operating point is the only decision left. |
+| `choosing-operating-point` | Operator is picking the threshold | Shows what each choice costs, both directions. |
+| `enrolled` | A profile exists | Carries its provenance: sittings, held-out count, measured rate, when. |
+| `stale` | The encoder changed under the profile | Cosines between two embedding spaces are not comparable, so the threshold means nothing. `load_profile` already refuses this; the surface has to explain it. |
+| `experimental` | Built past the contract | Visually distinct from `enrolled`. Nothing a capture gated by it does is a measured result. |
+
+**Enrolment is passive by default, and that is a design decision with a measured
+reason.** Teams and Zoom both build the profile from ordinary in-meeting speech and
+neither ships a setup ritual; `docs/teardown.md` records that. On headphones the
+other participants arrive on the *system* leg, so the microphone leg of an ordinary
+meeting is already a recording of just the operator — which means `accumulating`
+advances by itself every time a meeting is captured, and the deliberate flow exists
+only for someone who would rather not wait.
+
+**The load-bearing rule is that `accumulating` states the shortfall in the terms
+the code enforces, not as a progress bar.** `enforce_enrollment` refuses for four
+specific reasons, and a percentage cannot express any of them:
+
+- fewer than two sittings,
+- sittings less than an hour apart — including two pieces of one recording, which is
+  the case that reads as satisfied and is not,
+- fewer held-out segments than the chosen operating point can express (twenty for
+  5%, and the floor moves with the target),
+- no recording of a voice that is not the operator.
+
+A bar at "80%" tells the operator to keep going. "One more sitting, on a different
+day, and a minute of anyone else" tells them what to do. The second is the whole
+job of this surface.
+
+**`choosing-operating-point` is the one screen in the product that presents a
+trade-off rather than a reading**, which makes it the exception to the thesis and
+the reason it is its own state. The CLI prints every operating point beside what it
+admits of the other voice, and that pairing is the point: the threshold cannot be
+chosen well from one number. Both costs are concrete and asymmetric — dropping the
+operator removes the answer to the only question this tool exists to answer, while
+admitting the room perturbs which real content survives compression. The surface has
+to say which cost is which, because the two are not interchangeable and a slider
+alone implies they are.
+
+**`experimental` must not look like `enrolled`.** The override exists so a
+measurement can be taken with material that does not meet the contract, and its only
+value is that the weakening stays visible downstream. Two surfaces already carry
+that marker — the capture's console output and `transcript.json` — and a settings
+panel that renders it identically to a real profile silently removes it from the one
+place a person looks.
+
+**No accent here, including while recording.** This surface records audio, so the
+temptation is to reach for the live indicator. `DIRECTION.md` reserves the accent for
+capture that is running, and enrolment recording *is* capture — so the accent is
+correct on the menubar item (state A `recording`) and wrong as decoration on this
+panel. The panel shows a level meter, which is a reading, and no other motion.
+
+---
+
 ## L4 templates derived from the above
 
 Five, and no more until an L5 state demands a sixth:
 
-1. **Shell chrome** — window frame, sidebar, title treatment. Used by D, E, F, G.
+1. **Shell chrome** — window frame, sidebar, title treatment. Used by D, E, F, G, I.
 2. **List–detail** — F to E.
 3. **Transient overlay** — B and C. Positioned, non-modal, dismissible.
-4. **Form** — G.
+4. **Form** — G, and `choosing-operating-point` in I.
 5. **Sequence** — H, and only H.
+
+**Surface I does not demand a sixth template, and that was checked rather than
+assumed.** The instinct is to call enrolment a Sequence like first run, and it is
+not: a Sequence is a series of steps taken in one sitting, and enrolment's central
+constraint is that it *cannot* be — two sittings must be an hour apart and should be
+a day apart. So `accumulating` is a status panel in the shell chrome that persists
+across days, not a step in a flow, and the only genuinely form-shaped state is
+choosing the operating point. Modelling enrolment as a wizard would encode exactly
+the shortcut the enrolment contract refuses.
 
 The menubar item (A) is not a template. It is a single glyph with seven states
 and is specified directly.
