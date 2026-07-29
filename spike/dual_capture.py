@@ -41,6 +41,17 @@ TAP_BIN = REPO / "capture" / "audiotee" / ".build" / "release" / "audiotee"
 ENVELOPE_HZ = 100
 BLEED_MAX_LAG_S = 0.5
 
+# Independent hardware clocks typically differ by tens of ppm, so a run has to
+# resolve that scale before it can report a drift value rather than a bound.
+HARDWARE_DRIFT_PPM = 50
+
+# What the merge can absorb. It sorts Whisper segments, which run seconds long —
+# a 57-minute meeting decoded into 769 of them, averaging 4.5 s. Divergence has
+# to approach that scale before it can put two turns in the wrong order, so a
+# bound comfortably under a second per hour settles the question for the merge
+# even when it cannot produce a value.
+MERGE_TOLERANCE_MS = 1000
+
 
 class Leg:
     """One capture leg: float32 mono blocks plus the wall time each arrived."""
@@ -266,7 +277,14 @@ def bleed(mic, tap):
     n = hi - lo
     a = a - a.mean()
     b = b - b.mean()
-    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    # float() here at the boundary rather than at the call site. numpy's norm
+    # returns a float32, and the `r /= denom` below silently converts every
+    # correlation back into one — which json.dumps refuses to encode. That
+    # surfaced as a crash in write_transcript at the very end of a 75-minute
+    # capture, after both legs had already been transcribed, and it means the
+    # handoff to the notes half had never once completed on a capture where
+    # bleed was measurable at all.
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
     if denom == 0:
         return None
     max_lag = int(BLEED_MAX_LAG_S * ENVELOPE_HZ)
@@ -314,6 +332,85 @@ def transcribe(audio, repo_id, language):
     ]
 
 
+def start_skew_ms(stats):
+    """How far apart the two legs' first blocks arrived, in milliseconds."""
+    if not (stats.get("mic") and stats.get("system")):
+        return None
+    return (stats["mic"]["first_arrival"] - stats["system"]["first_arrival"]) * 1000
+
+
+def drift_lines(stats):
+    """The clock-drift section, returned rather than printed.
+
+    Separated out because one of its branches was wrong for as long as it was
+    unreachable. Reaching the branch where the divergence is bounded tightly
+    requires a capture over an hour long, so nobody ever read its output: it
+    told a 75-minute capture that it needed to run for 67 minutes, and quietly
+    discarded the bound the run had actually established. A function taking a
+    plain dict can be checked at any capture length in a second.
+    """
+    lines = []
+    for name in ("mic", "system"):
+        s = stats.get(name)
+        if not s:
+            lines.append(f"  {name:7s} too few blocks to measure")
+            continue
+        lines.append(
+            f"  {name:7s} measured {s['measured_rate']:.3f} Hz "
+            f"({s['ppm']:+.0f} ± {s['uncertainty_ppm']:.0f} ppm) over {s['span_s']:.2f}s"
+        )
+
+    if not (stats.get("mic") and stats.get("system")):
+        return lines
+
+    rel_ppm = stats["mic"]["ppm"] - stats["system"]["ppm"]
+    # Endpoint quantisation is independent per leg, so the relative figure
+    # carries both legs' uncertainty.
+    rel_unc = (
+        stats["mic"]["uncertainty_ppm"] ** 2 + stats["system"]["uncertainty_ppm"] ** 2
+    ) ** 0.5
+    lines.append(f"\n  relative drift  {rel_ppm:+.0f} ± {rel_unc:.0f} ppm")
+
+    bound_ms = rel_unc * 3600 / 1000
+    if abs(rel_ppm) > rel_unc:
+        hour_ms = rel_ppm * 3600 / 1000
+        lines.append(f"  projected over 60 min: {hour_ms:+.0f} ± {bound_ms:.0f} ms of divergence")
+    else:
+        # A run that resolves no drift value still bounds one, and the bound is
+        # the figure the merge actually needs. Reporting only "cannot resolve"
+        # throws that away: a 75-minute capture bounded the two legs at under a
+        # quarter-second of divergence per hour, which answers the question the
+        # merge asks even though it is not a value.
+        lines.append(
+            f"  no value resolvable, but bounded: under {bound_ms:.0f} ms of "
+            "divergence per hour"
+        )
+        lines.append("  " + (
+            "that is below the seconds-long segments the merge sorts, so drift "
+            "cannot\n  reorder turns"
+            if bound_ms <= MERGE_TOLERANCE_MS else
+            "that is looser than the segments the merge sorts, so reordering is "
+            "not\n  ruled out"
+        ))
+        if rel_unc > HARDWARE_DRIFT_PPM:
+            worst = max(s["block_period_s"] for s in stats.values() if s)
+            # The relative figure carries both legs' uncertainty in quadrature,
+            # so each leg has to land a factor of sqrt(2) tighter than the
+            # target for their difference to reach it. Sizing the run from a
+            # single leg under-states the length by 41%, which is how a
+            # 75-minute capture came back advising a 67-minute one.
+            need_min = worst * 2 ** 0.5 / (HARDWARE_DRIFT_PPM * 1e-6) / 60
+            lines.append(
+                f"  measuring an actual drift value needs ~{need_min:.0f} min at this "
+                f"{worst * 1000:.0f} ms block period,\n  or the same run with smaller "
+                "blocks — the bound scales with both"
+            )
+
+    skew = start_skew_ms(stats)
+    lines.append(f"  start skew (first block arrival): {skew:+.0f} ms")
+    return lines
+
+
 def report(mic_leg, tap_leg, args, out_dir):
     mic = mic_leg.audio()
     tap = tap_leg.audio()
@@ -331,45 +428,10 @@ def report(mic_leg, tap_leg, args, out_dir):
             print(f"    {json.dumps(e.get('data', e))}")
 
     print("\n=== clock drift ===")
-    stats = {}
-    for leg in (mic_leg, tap_leg):
-        s = leg.rate_stats()
-        stats[leg.name] = s
-        if not s:
-            print(f"  {leg.name:7s} too few blocks to measure")
-            continue
-        print(
-            f"  {leg.name:7s} measured {s['measured_rate']:.3f} Hz "
-            f"({s['ppm']:+.0f} ± {s['uncertainty_ppm']:.0f} ppm) over {s['span_s']:.2f}s"
-        )
-
-    if stats.get("mic") and stats.get("system"):
-        rel_ppm = stats["mic"]["ppm"] - stats["system"]["ppm"]
-        # Endpoint quantisation is independent per leg, so the relative figure
-        # carries both legs' uncertainty.
-        rel_unc = (
-            stats["mic"]["uncertainty_ppm"] ** 2 + stats["system"]["uncertainty_ppm"] ** 2
-        ) ** 0.5
-        print(f"\n  relative drift  {rel_ppm:+.0f} ± {rel_unc:.0f} ppm")
-
-        if abs(rel_ppm) <= rel_unc:
-            worst = max(s["block_period_s"] for s in stats.values() if s)
-            need_min = worst / 50e-6 / 60
-            print(
-                "  INDISTINGUISHABLE FROM ZERO at this capture length — the "
-                "measurement\n  cannot resolve real hardware drift (tens of ppm) "
-                f"until the capture runs\n  ~{need_min:.0f} minutes. Do not quote "
-                "the number above as a finding."
-            )
-        else:
-            hour_ms = rel_ppm * 3600 / 1000
-            hour_unc = rel_unc * 3600 / 1000
-            print(f"  projected over 60 min: {hour_ms:+.0f} ± {hour_unc:.0f} ms of divergence")
-
-    start_skew = None
-    if stats.get("mic") and stats.get("system"):
-        start_skew = (stats["mic"]["first_arrival"] - stats["system"]["first_arrival"]) * 1000
-        print(f"  start skew (first block arrival): {start_skew:+.0f} ms")
+    stats = {leg.name: leg.rate_stats() for leg in (mic_leg, tap_leg)}
+    for line in drift_lines(stats):
+        print(line)
+    start_skew = start_skew_ms(stats)
 
     b = bleed(mic, tap)
     print("\n=== speaker bleed ===")
@@ -425,6 +487,14 @@ def report(mic_leg, tap_leg, args, out_dir):
     if not merged:
         print("  (no speech detected on either leg)")
         return
+
+    # The artifact lands before the 1200 lines of console output, not after.
+    # When this ran the other way round, a crash while serialising discarded
+    # four and a half minutes of transcription that had already succeeded —
+    # the expensive work was complete and unrecoverable because the cheap
+    # step downstream of it failed.
+    write_transcript(out_dir / "transcript.json", merged, b)
+
     if b and abs(b["peak_r"]) > 0.5:
         print(
             "  NOTE: bleed is high, so expect every utterance to appear TWICE —\n"
@@ -433,8 +503,6 @@ def report(mic_leg, tap_leg, args, out_dir):
         )
     for start, label, text in merged:
         print(f"  [{int(start // 60):02d}:{start % 60:05.2f}] {label:4s} {text}")
-
-    write_transcript(out_dir / "transcript.json", merged, b)
 
 
 def write_transcript(path, merged, b):

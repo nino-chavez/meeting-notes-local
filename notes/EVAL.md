@@ -287,9 +287,14 @@ against the transcripts:
 | **Total** | **10** | **3** | **4** |
 
 Every one of those ten items was confirmed present in the transcript first, so
-these are our omissions rather than the reference's inventions: "brand
-guidelines" is said five times in meeting B and appears in neither of our notes
-until the 12B run; "measurement plan" twice; "signal box" twice.
+these are our omissions rather than the reference's inventions. The clearest
+case: one two-word noun phrase naming a document to be sent is said five times
+in meeting B and appears in neither of our notes until the 12B run. Two other
+commitment phrases are said twice each and are missed by both models.
+
+(The meetings behind these figures are real client calls, so the phrases are
+described rather than quoted. Nothing from them — audio, transcript, notes, or
+participant names — is in this repository.)
 
 **Roughly a third of the commitments.** On a 56-minute nine-person call, the 8B
 model produced three action items where the reference had six, and only one of
@@ -341,8 +346,9 @@ own recall scores are worthless (see above).
 **Our speech recognition is not the bottleneck. It is not even a cost.**
 `compare_transcripts.py` checks whether the words each commitment depends on
 survived, which matters more here than word error rate — a transcript can lose
-"um" a hundred times and lose nothing, but lose "brand guidelines" once and that
-commitment becomes unwritable. Across all six commitments, **zero terms present
+"um" a hundred times and lose nothing, but lose the one phrase naming a promised
+document once and that commitment becomes unwritable. Across all six
+commitments, **zero terms present
 in Google's transcript were missing from ours.** Identical counts on every row,
 at 91% of the word count and 25x realtime on a laptop.
 
@@ -454,11 +460,23 @@ Stated plainly, in the same spirit as `spike/RESULTS.md`:
   from Whisper's segmentation of a single mixed channel. The spike's merge
   derives them from timestamps across two independently-clocked legs, which is a
   different and worse input than anything measured here.
-- **Nothing here has run through the capture path.** Arm C decodes a recording;
-  it does not exercise the tap, the mic leg, or the merge. Playing a recording
-  back through the capture would test those — and would also, incidentally,
-  settle the drift question, since drift is a property of the two legs' clocks
-  and does not care what the audio contains.
+- **~~Nothing here has run through the capture path.~~ Closed, and it cost
+  nothing.** The 57.6-minute recording behind arm C was played back through the
+  tap while both legs recorded for 75 minutes. Comparing the system leg against
+  arm C's direct decode of the same file holds audio and model constant: the two
+  transcripts carried **identical counts** of every commitment term, and the
+  capture-path transcript ran 101% of the direct decode's word count. The
+  resampling round-trip and the block chunking cost no content. Drift came out
+  bounded under ~230 ms/hour, far inside what the merge tolerates. Details and
+  the three unrelated defects that run exposed are in
+  [`spike/RESULTS.md`](../spike/RESULTS.md).
+- **The mic leg still invalidates `channel`, for a new reason.** That same run
+  showed a silent operator leg producing 400 hallucinated turns — 92 of them the
+  single line `"Thank you."` — which the merge labelled `Me` because bleed
+  measured LOW and the capture kept its labels. So every recall number in this
+  file was measured at `none` or `named`, and the `channel` figures here come from
+  `as_channel()` on clean corpus text. A real `channel` transcript is dirtier than
+  anything measured in this document.
 - **n = 3 meetings, one model, one prompt.** Enough to find a fabrication class
   and fix it. Not enough to claim a quality level.
 - **Topic coverage is word overlap.** It cannot tell a note that covered a topic

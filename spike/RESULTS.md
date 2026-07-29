@@ -1,11 +1,14 @@
 # Spike results — dual-leg capture
 
 Run 2026-07-28 on macOS 26.5.2, Apple Silicon, Swift 6.3.3.
-Tool: [`dual_capture.py`](./dual_capture.py). Two runs, 22 s and 14 s.
+Tool: [`dual_capture.py`](./dual_capture.py). Runs of 14 s, 22 s, and 75 min.
 
 The spike existed to answer two questions the design documents could not.
-**One is answered and it changes the product. The other is not answered, and
-this spike structurally cannot answer it.**
+**Both are now answered** — speaker bleed destroys the Me/Them split, and clock
+drift is bounded well below anything the merge cares about. Playing a real
+meeting through the capture to settle the second question turned up three
+findings nobody was looking for, including a crash on the seam between the two
+halves of the pipeline that meant it had never worked.
 
 ---
 
@@ -58,7 +61,41 @@ design. The clean case still needs a live run.
 
 ---
 
-## Not answered: clock drift
+## Answered since: clock drift is bounded, not measured
+
+A 75-minute capture ran on 2026-07-28 with a 57.6-minute recorded meeting playing
+through the default output. Both legs recorded the full span — 4499.8 s each,
+72 000 000 samples on the system leg.
+
+| Leg | Measured | Span |
+|---|---|---|
+| mic | 16000.061 Hz (+4 ± 44 ppm) | 4499.58 s |
+| system | 15999.996 Hz (−0 ± 44 ppm) | 4499.80 s |
+
+Relative drift **+4 ± 63 ppm** — inside its own error bars, so there is still no
+drift *value*. What the run does produce is a *bound*, and the bound is the figure
+the merge actually needs: ±63 ppm is under **~230 ms of divergence per hour**
+(derived from the measured ppm, not printed by the run), against a merge that
+sorts Whisper segments averaging 4.5 s. Drift cannot reorder turns on this
+hardware. Timestamp-stitching logic is no longer blocked on an unknown.
+
+**Scope this narrowly.** The microphone and the speakers are both built-in and
+plausibly share a clock domain, so a near-zero result is the *expected* one. This
+settles the same-device case only. The configuration where drift actually bites —
+a USB interface or a Bluetooth headset on one leg and the internal clock on the
+other — remains untested, and is the case worth measuring next.
+
+**The ~67-minute figure below was wrong, and the tool now says ~94.** The relative
+uncertainty carries both legs in quadrature, so each leg has to land a factor of
+√2 tighter than the target for their difference to reach it. Sizing the run from a
+single leg under-states the requirement by 41% — which is how a 75-minute capture
+came back advising a 67-minute one. Resolution also scales with block period, not
+just run length, so halving the block size buys the same tightening as doubling
+the run.
+
+---
+
+## Superseded: the original drift non-result
 
 The first run reported −1231 ppm of relative drift, which would be 4.4 seconds of
 divergence per hour. **That number is meaningless and was discarded.**
@@ -79,17 +116,92 @@ span to be long enough that endpoint quantisation stops dominating:
 | 10 min | ± 333 ppm |
 | 60 min | ± 56 ppm |
 
-**~67 minutes** to resolve 50 ppm. The tool now prints its own error bars and
-refuses to project an hourly figure when the reading is inside them.
+**~67 minutes** to resolve 50 ppm — under-stated, see the correction above. The
+tool prints its own error bars and refuses to project an hourly figure when the
+reading is inside them.
 
-**To actually answer this**, run it against a real meeting:
+---
 
-```bash
-python spike/dual_capture.py --seconds 4200 --no-transcribe
+## Playing a known meeting back through the capture
+
+Every measurement in [`notes/EVAL.md`](../notes/EVAL.md) fed the summarizer a
+transcript that arrived by some other route — a corpus file, a platform export,
+or a recording decoded straight off disk. The capture path itself had never run
+on real material. So a 57.6-minute meeting recording whose direct decode we
+already had was played through the default output while both legs recorded.
+
+System output was held at **volume 0** for the run. A Core Audio process tap
+reads the rendered stream before hardware volume, so the tap is unaffected while
+the room stays silent — verified on a 22-second probe first: tap RMS 0.099, mic
+RMS 0.003, bleed −0.081. That makes a silent playback rig, and it is also the
+reason muting is not a privacy control: **output volume does not protect audio
+from a tap.**
+
+### The capture path costs nothing
+
+Transcribing the system leg alone and comparing it against the direct decode of
+the same file holds the audio and the ASR model constant, leaving one variable:
+the round-trip through the output device (16 kHz up to the device rate and back)
+plus 200 ms block chunking.
+
+| | units | words | mean | ≤3 words |
+|---|---|---|---|---|
+| direct decode | 769 | 8583 | 11.2 | 11% |
+| through the capture | 691 | 8665 | 12.5 | 14% |
+
+Across six reference commitments, the two transcripts contained **identical
+counts** of the terms each commitment depends on — 3/7, 10/13, 3/6, 6/6, 10/12,
+9/13 on both sides. Zero terms present in the direct decode were missing after
+the capture. The resampling round-trip is not costing content.
+
+### The handoff to the notes half had never once worked
+
+The run crashed at its final step:
+
+```
+TypeError: Object of type float32 is not JSON serializable
 ```
 
-Until that runs, treat drift as an open risk. Do not build timestamp-stitching
-logic against an assumed drift figure.
+`np.linalg.norm` returns a `float32`, so `r /= denom` in `bleed()` silently
+converted every correlation back into one, and `json.dumps` refuses to encode it.
+That value is `peak_r`, which `write_transcript` writes — so the capture failed to
+hand anything to the notes half **on every capture where bleed was measurable at
+all**, which is every real capture. Four and a half minutes of completed
+transcription were discarded because the cheap step downstream of it failed.
+
+Both halves of that are fixed: the conversion happens at the boundary in
+`bleed()`, and the transcript is now written *before* the console output rather
+than after it, so the expensive artifact lands first.
+
+### A silent operator leg fabricates speech
+
+The mic leg recorded an empty room for 75 minutes. Whisper did not return
+nothing — it returned **400 turns**, against 787 real ones on the system leg. 182
+of them fall after playback had ended, in pure silence. The single line
+`"Thank you."` appears **92 times**, at 30-second intervals: one hallucinated
+token per empty decode window. The system leg's own 17-minute silent tail did the
+same thing 34 times, so this is a property of the decoder, not of one leg.
+
+This inverts the bleed finding rather than repeating it. Bleed was the *dirty*
+failure: legs correlated, split contaminated, and the capture correctly degrades
+to `none`. This is the **clean** failure. Bleed measured −0.012, LOW — the state
+the design tells you to aim for — so the capture keeps the labels, writes
+`channel`, and hands the notes half 400 turns asserting the operator said things
+they never said. The contract that looks safest is the one that fabricates.
+
+An energy gate ahead of transcription would remove it, and the numbers above are
+what would set its threshold. That is a product change with its own design
+questions, so it is recorded here rather than bolted on: **the next change to the
+capture is gating the mic leg on speech energy.**
+
+### An open microphone records the room, not the operator
+
+Not everything on the mic leg was hallucinated. Some of it was a real
+conversation between other people in the house, transcribed cleanly and merged
+into the meeting as `Me`. No energy gate fixes that — the mic genuinely heard it.
+A notetaker running with the microphone open captures whoever is in the room,
+including people who are not in the meeting and have not consented to being
+recorded. That belongs in the product's consent story, not just its README.
 
 ---
 
@@ -162,11 +274,17 @@ in 2.2 s.
 
 ## What this means for the build
 
-- The two-stream capture architecture works. The tap is stable, the format is
-  right, and the seam between the Swift binary and the Python daemon is a plain
-  pipe — as designed.
-- **Me/Them is conditional, not free.** The design docs treated it as the thing
-  you get for nothing from capture topology. That is true only on headphones. On
-  speakers it produces confident fiction, which is worse than no labels.
-- Drift remains the open engineering risk and needs a full-length capture before
-  any stitching logic is written.
+- The two-stream capture architecture works, now demonstrated over 75 minutes
+  rather than 22 seconds. The tap is stable, survives the audio source exiting,
+  and costs nothing in transcribed content.
+- **Me/Them is conditional, not free** — and it fails in *both* directions. On
+  speakers, bleed makes the split confident fiction. On a clean capture with a
+  quiet operator, silence makes it confident fiction. The design docs treated the
+  split as the thing you get for nothing from capture topology; it is the thing
+  that needs the most defending.
+- Drift is no longer the open engineering risk for same-device capture. It is
+  bounded under ~230 ms/hour, well inside what the merge tolerates. Mixed-clock
+  hardware (USB, Bluetooth) is still unmeasured.
+- The next change to the capture is an energy gate on the mic leg. The one after
+  that is a live two-person run on headphones — the Me/Them split has still never
+  been exercised with real speech on both legs at once.

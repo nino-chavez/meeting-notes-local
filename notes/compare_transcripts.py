@@ -4,8 +4,9 @@
 Written to answer one question: is our own speech recognition good enough to
 build notes on, or is it the thing holding recall down? Word error rate is the
 usual answer and it is the wrong one here. A transcript can miss "um" a hundred
-times and lose nothing; miss "brand guidelines" once and the commitment that
-depends on it cannot be written. So this measures **whether the terms the
+times and lose nothing; miss the one noun phrase naming the document somebody
+promised to send, once, and the commitment that depends on it cannot be written.
+So this measures **whether the terms the
 meeting's commitments rest on survived**, and takes those terms from the
 reference action items rather than from a hand-written list.
 
@@ -22,6 +23,13 @@ emits speaker labels *inside* another speaker's sentence:
 Whisper, given the same audio, returns continuous sentences and no labels at
 all. Attribution is bought with sentence integrity, and for note-writing the
 sentences turned out to matter more.
+
+Holding one side fixed and varying the other answers different questions with the
+same measurement. Against a platform's transcript it asks whether our recogniser
+is the bottleneck. Against our own direct decode of a file it asks what the
+capture path costs — same audio, same model, so anything lost belongs to the tap,
+the resampling round-trip, or the block chunking. The answer to both, so far, is
+nothing.
 
 Usage:
     python notes/compare_transcripts.py theirs.txt ours.json
@@ -125,7 +133,13 @@ def main() -> int:
     print(f"\n  {lost_total} commitment term(s) present in the reference transcript "
           "and absent from ours")
     if not lost_total:
-        print("  Speech recognition is not what is limiting recall here.")
+        # Deliberately not "speech recognition is fine". The same comparison is
+        # used to hold the recogniser constant and vary something else — a
+        # capture path against a direct decode of the same file, say — and there
+        # the conclusion is about the capture, not the ASR. Name the measurement,
+        # not a component the tool cannot see.
+        print("  Every term the commitments rest on survived the transcript under "
+              "test.\n  Whatever is limiting recall, it is not transcription loss.")
     return 0
 
 
