@@ -20,6 +20,10 @@ Tool: [`dual_capture.py`](./dual_capture.py). Runs of 14 s, 22 s, and 75 min.
 > AEC3 integrated, cancellation wired through segmentation into the voice gate,
 > and transcript retention measured end to end across a real operating matrix.
 > Everything below stands as recorded; nothing below is a GA gate.
+>
+> That work has started in [`aec3/`](./aec3/README.md), which is where the
+> replacement figures live. Read it instead of this file for anything about the
+> real canceller.
 
 The spike existed to answer two questions the design documents could not.
 **Both are now answered** — speaker bleed destroys the Me/Them split, and clock

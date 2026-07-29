@@ -20,3 +20,6 @@ spike/out/transcript.json
 # licence. Fetched on demand by notes/fetch_corpus.py.
 notes/corpus/
 notes/out/
+
+# Built C++ binary; the library it links is not vendored (see spike/aec3/README.md).
+spike/aec3/aec3_offline
