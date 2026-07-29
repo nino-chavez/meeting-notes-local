@@ -422,6 +422,183 @@ _QUANTITY = re.compile(
 )
 
 
+# Models answer this question in their own vocabulary regardless of the format
+# they are given. Asked for PRESENT/ABSENT, llama3.1 replied MENTIONED / NOT
+# MENTIONED — four substantively correct-ish judgements that a PRESENT|ABSENT
+# regex scored as zero parsed answers, which then read downstream as "nothing
+# was found". A parse failure that arrives looking like a verdict is worse than
+# a crash, so negatives are matched before positives (NOT MENTIONED contains
+# MENTIONED) and anything unrecognised is reported as unparsed, never folded
+# into a result.
+_ABSENT_WORDS = re.compile(
+    r"\b(?:absent|missing|not\s+(?:mentioned|present|covered|found)|no\b|omitted|"
+    r"uncovered)", re.IGNORECASE)
+_PRESENT_WORDS = re.compile(
+    r"\b(?:present|mentioned|covered|found|yes|included)\b", re.IGNORECASE)
+
+
+def _parse_verdict(text: str, n: int) -> bool | None:
+    """True present, False absent, None when the model did not answer item n."""
+    m = re.search(rf"^\s*{n}\s*[.):\-]?\s*(.+)$", text, re.MULTILINE)
+    if not m:
+        return None
+    answer = m.group(1).strip()
+    if _ABSENT_WORDS.search(answer):
+        return False
+    if _PRESENT_WORDS.search(answer):
+        return True
+    return None
+
+
+# Known-answer fixtures. A judge that cannot pass these is not measuring recall,
+# and its agreement with these is reported rather than assumed.
+JUDGE_FIXTURES = [
+    (["Send the signed contract to the vendor by Friday",
+      "Book the venue for the offsite",
+      "Migrate the billing service off the legacy queue"],
+     ("## Action items\n- Someone will get the contract signed and over to the "
+      "vendor this week.\n- The billing service needs to come off the old queue."),
+     [True, False, True]),
+    (["Share GitHub usernames so access can be granted",
+      "Draft a straw man project plan"],
+     ("## Action items\n- Draft a straw man project plan with objectives and "
+      "open questions.\n- Provide access to the project repository."),
+     [False, True]),
+]
+
+
+def validate_judge(model: str, num_ctx: int, timeout: int) -> dict:
+    """Does this model actually agree with known answers?
+
+    Recall is the one check here that asks a model instead of counting strings,
+    which means the instrument needs calibrating before its readings mean
+    anything. Two local models disagreed sharply on the same real notes — one
+    marked every reference item present, the other marked most of them
+    correctly — so "the judge said 4/4" is not a fact about the notes until the
+    judge has been shown to distinguish the cases at all.
+    """
+    right = total = 0
+    detail = []
+    for items, note, expected in JUDGE_FIXTURES:
+        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(items))
+        out = ollama_chat(
+            model, RECALL_JUDGE,
+            f"REFERENCE ITEMS:\n{numbered}\n\nNOTES:\n{note}\n\n"
+            f"Answer for items 1 to {len(items)}.",
+            num_ctx, timeout,
+        )["message"]["content"]
+        for i, want in enumerate(expected, start=1):
+            got = _parse_verdict(out, i)
+            total += 1
+            right += got == want
+            detail.append({"item": items[i - 1], "want": want, "got": got})
+    return {"model": model, "agreement": f"{right}/{total}",
+            "ok": right == total, "detail": detail}
+
+
+RECALL_JUDGE = """\
+You are checking whether a set of meeting notes covers a list of reference items.
+
+For each numbered reference item, decide whether the notes mention that item —
+the same commitment or topic, in any wording. Paraphrase counts. A different
+owner still counts. Vague overlap does not: the notes must actually refer to
+that specific thing.
+
+Answer with one line per item and nothing else:
+
+1. PRESENT
+2. ABSENT
+
+No explanation, no preamble, no other text."""
+
+
+def check_recall(note: str, reference_items: list[str], model: str,
+                 num_ctx: int, timeout: int) -> dict:
+    """What the notes left out, measured against an independent list.
+
+    Every other check in this file asks whether something in the notes is false.
+    None of them asks whether something true is missing — and after four
+    meetings, omission is the failure that actually happens. A committee hearing
+    came back covering one topic of seven. A real Meet call dropped two of the
+    four commitments its own platform had recorded. Both sets of notes passed
+    every check cleanly, because everything they *did* say was true.
+
+    Confident, well-formed, and half the meeting. Nothing in the output marks
+    the difference, and a reader with no transcript cannot tell the complete
+    note from the partial one.
+
+    Recall needs a reference, so this takes one: a list of items somebody else
+    produced from the same meeting — a platform's own action items, a human's
+    notes. Not ground truth, since the reference has its own omissions. It is a
+    second opinion, and disagreement in either direction is worth reading.
+
+    This is the one check here that asks a model rather than counting strings,
+    and it is deliberate. Two lexical versions were written first and both were
+    wrong in opposite directions. Scoring against all of an item's content words
+    called a note 4/4 that never mentioned GitHub usernames once — "provide",
+    "project", "repository" and the attendees' names appear in every row, so an
+    item cleared the bar without its subject appearing anywhere. Restricting to
+    each item's unique terms then failed notes that plainly did cover the item,
+    because the unique set fills up with incidental words like "gain" and
+    "access". The gap between "send GitHub usernames" and "Share GitHub
+    Usernames: provide GitHub usernames to gain access" is semantic, and no
+    amount of threshold-tuning turns word overlap into meaning. Tuning it until
+    the fixtures passed would have produced a number that measured the fixtures.
+
+    So the model does the matching, and the result is labelled as a model's
+    judgement rather than a measurement. Its verdicts on a real meeting were
+    checked by hand against a transcript before this was trusted at all.
+    """
+    if not reference_items:
+        return {"applies": False}
+
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(reference_items))
+    verdicts = ollama_chat(
+        model, RECALL_JUDGE,
+        f"REFERENCE ITEMS:\n{numbered}\n\nNOTES:\n{note}\n\nAnswer for items 1 to "
+        f"{len(reference_items)}.",
+        num_ctx, timeout,
+    )["message"]["content"]
+
+    found, missed, unparsed = [], [], []
+    for i, item in enumerate(reference_items, start=1):
+        verdict = _parse_verdict(verdicts, i)
+        if verdict is None:
+            unparsed.append(item)
+        elif verdict:
+            found.append({"item": item})
+        else:
+            missed.append({"item": item})
+
+    total = len(found) + len(missed)
+    return {
+        "applies": True,
+        "ok": not missed and not unparsed,
+        "found": found,
+        "missed": missed,
+        "unparsed": unparsed,
+        "judge": model,
+        "score": f"{len(found)}/{total}" if total else "0/0",
+    }
+
+
+# Reference lists arrive as bullets, checkboxes, or "[Owner] Title: body" rows.
+_REF_BULLET = re.compile(r"^\s*(?:[-*•●]|\[\s*[x ]?\s*\]|\d+[.)])\s+(.*)$")
+
+
+def load_reference(path: Path) -> list[str]:
+    """A list of expected items, one per line, however it was bulleted."""
+    items = []
+    for line in path.read_text().splitlines():
+        if line.strip().startswith("#"):
+            continue
+        if m := _REF_BULLET.match(line):
+            items.append(m.group(1).strip())
+        elif line.strip() and items and not line[:1].strip():
+            items[-1] = f"{items[-1]} {line.strip()}"
+    return [i for i in items if i]
+
+
 def check_numbers(note: str, source_text: str) -> dict:
     """Numbers in the notes that are nowhere in the transcript.
 
@@ -475,7 +652,7 @@ def summarize(transcript: Transcript, model: str, num_ctx: int, timeout: int) ->
 
 
 def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
-           reference: dict | None, num_ctx: int) -> bool:
+           reference: dict | None, num_ctx: int, expected: list[str] | None = None) -> bool:
     note = result["note"]
     ctx = check_context(result["response"], result["prompt"], num_ctx)
     attr = check_attribution(note, transcript, stripped_speakers)
@@ -483,6 +660,7 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
     echo = check_prompt_echo(note, result["rendered"], result["system"])
     grounding = check_grounding(note, result["rendered"])
     owners = check_owner_grounding(note, transcript)
+    recall = check_recall(note, expected or [], result["model"], num_ctx, 300)
 
     print(f"\n=== notes ({transcript.attribution}) ===\n")
     print(note)
@@ -531,6 +709,17 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
                 print(f"                  {w['owner']} — overlap {w['overlap']}, "
                       f"absent from their turns: {w['absent']}")
                 print(f"                  \"{w['line'][:88]}\"")
+
+    if recall["applies"]:
+        # Never print this number without saying who produced it. It is one
+        # model's opinion of another model's output, and on this machine no
+        # local judge has yet passed --validate-judge.
+        print(f"  recall        {recall['score']} — judged by {recall['judge']}, "
+              "not measured; calibrate it with --validate-judge")
+        for m in recall["missed"]:
+            print(f"                  MISSED: {m['item'][:78]}")
+        for u in recall["unparsed"]:
+            print(f"                  NO VERDICT (judge did not answer): {u[:60]}")
 
     if grounding["ok"]:
         print("  grounding     every content word traces to something said")
@@ -757,6 +946,8 @@ def main():
                    help="QMSum meeting JSON or a capture transcript")
     p.add_argument("--self-test", action="store_true",
                    help="run the fabrication checks against notes with known verdicts")
+    p.add_argument("--validate-judge", action="store_true",
+                   help="check whether a model can judge recall, against known answers")
     p.add_argument("--strip", action="store_true",
                    help="remove speaker labels, testing the unattributed contract")
     p.add_argument("--simulate-bleed", action="store_true",
@@ -767,10 +958,26 @@ def main():
     p.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX)
     p.add_argument("--timeout", type=int, default=900)
     p.add_argument("--out", type=Path, help="also write the notes to this file")
+    p.add_argument("--reference", type=Path,
+                   help="a list of expected items to measure recall against "
+                        "(a platform's own action items, or a human's notes)")
     args = p.parse_args()
 
     if args.self_test:
         return run_self_test()
+    if args.validate_judge:
+        v = validate_judge(args.model, args.num_ctx, 300)
+        print(f"\n=== recall judge: {v['model']} ===\n")
+        for d in v["detail"]:
+            got = {True: "present", False: "absent", None: "UNPARSED"}[d["got"]]
+            want = "present" if d["want"] else "absent"
+            print(f"  [{'pass' if d['got'] == d['want'] else 'FAIL'}] "
+                  f"wanted {want:8s} got {got:8s} — {d['item'][:60]}")
+        print(f"\n  agreement {v['agreement']}")
+        if not v["ok"]:
+            print("  This model cannot be trusted to measure recall. Its verdicts\n"
+                  "  would be a number, not a measurement.")
+        return 0 if v["ok"] else 1
     if args.transcript is None:
         p.error("a transcript is required (or --self-test)")
 
@@ -793,8 +1000,10 @@ def main():
     elif args.strip:
         t = t.strip_attribution()
 
+    expected = load_reference(args.reference) if args.reference else []
+
     result = summarize(t, args.model, args.num_ctx, args.timeout)
-    passed = report(result, t, stripped_speakers, reference, args.num_ctx)
+    passed = report(result, t, stripped_speakers, reference, args.num_ctx, expected)
 
     if args.out:
         args.out.write_text(result["note"] + "\n")

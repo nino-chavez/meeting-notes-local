@@ -268,6 +268,95 @@ in this harness established that, which is the only part that matters.
 
 ---
 
+## The finding this whole harness was built in the wrong direction for
+
+Every gating check here detects **invention**. After four meetings and a dozen
+runs, invention barely happened. The only outright fabrication in the entire
+evaluation was the one *this file's own prompt* put there.
+
+What happens instead is **omission**, and it happens constantly.
+
+Measured against the four action items Google Meet's own notetaker recorded for
+the same call, hand-verified line by line against the transcript:
+
+| Model | Reference items recovered | What it missed |
+|---|---|---|
+| `llama3.1:8b` | 2 of 4 | GitHub usernames, weekly sync |
+| `gemma3:12b` | 2 of 4 | GitHub usernames, weekly sync |
+
+Both notes passed every gating check. Both were true. Both were half a meeting,
+presented with the structure and confidence of a complete one — which is the
+part that matters, because a reader without the transcript cannot tell the
+difference.
+
+**Model size did not fix it.** 8B and 12B miss the same count, and interestingly
+not the same items: the 12B run recovered a standing Monday checkpoint meeting
+that the 8B run dropped entirely, and it is genuinely in the transcript. So the
+larger model is not more complete, it is differently incomplete. That is not the
+shape of a problem that goes away by scaling up on a laptop.
+
+The honest reading of "are local models good enough": for **not lying**, on this
+evidence, yes. For **not leaving half the commitments on the floor**, no — and
+the checks in this file were all pointed at the wrong failure.
+
+---
+
+## The recall judge has to be calibrated before it is quoted
+
+`check_recall` is the only check here that asks a model instead of counting
+strings. That was arrived at the hard way: two lexical versions were written
+first, and both were wrong in opposite directions. Scoring against an item's
+full content words rated a note **4/4** that never says "GitHub" once, because
+"provide", "project", "repository" and the attendees' names appear in every row.
+Restricting to each item's unique terms then rejected notes that plainly did
+cover the item, because the unique set fills with incidental words like "gain"
+and "access".
+
+The gap between "send GitHub usernames" and "Share GitHub Usernames: provide
+GitHub usernames to gain access" is semantic. No threshold turns word overlap
+into meaning, and tuning one until the fixtures passed would have produced a
+number that measured the fixtures.
+
+So a model judges it — and then the judge itself gets tested, because a model's
+opinion is not a measurement until it is shown to distinguish the cases:
+
+```
+$ python3 notes/summarize.py --validate-judge --model gemma3:12b
+  agreement 4/5
+```
+
+| Judge | Agreement with known answers |
+|---|---|
+| `llama3.1:8b` | 3/5 — marks absent items present |
+| `gemma3:12b` | 4/5 |
+
+**Neither passes.** Both fail the same fixture, and it is the decisive one: a
+note saying "provide access to the project repository" is scored as covering
+"share GitHub usernames so access can be granted". That is the same
+adjacent-object confusion the notes themselves commit — the judge cannot see it
+because the judge has the failure.
+
+Which is exactly why the report never prints a recall score on its own:
+
+```
+recall  4/4 — judged by gemma3:12b, not measured; calibrate it with --validate-judge
+```
+
+That 4/4 is a model grading its own output with an instrument that failed
+calibration. Hand-checking the same notes against the transcript gives 2/4. The
+label is doing real work.
+
+**A parse failure nearly became a verdict here too.** Asked for `PRESENT`/
+`ABSENT`, llama3.1 answered `MENTIONED` / `NOT MENTIONED` — four substantively
+reasonable judgements that a `PRESENT|ABSENT` regex scored as zero parsed
+answers, which read downstream as "nothing found". The first conclusion drawn
+from that was that the model could not follow the format. The model was fine;
+the parser was brittle. Negatives are now matched before positives, since "NOT
+MENTIONED" contains "MENTIONED", and anything unrecognised is reported as
+`NO VERDICT` rather than folded into a count.
+
+---
+
 ## What this evaluation structurally cannot tell you
 
 Stated plainly, in the same spirit as `spike/RESULTS.md`:
@@ -283,9 +372,15 @@ Stated plainly, in the same spirit as `spike/RESULTS.md`:
   and fix it. Not enough to claim a quality level.
 - **Topic coverage is word overlap.** It cannot tell a note that covered a topic
   well from one that mentioned it.
-- **No check detects omission.** Every check here asks whether something in the
-  notes is false. None asks whether something true is missing — which is exactly
-  how covid_4 fails.
+- **Omission is measured, not solved.** `check_recall` finally asks whether
+  something true is missing, but it needs a reference list to compare against
+  and a judge good enough to compare with. Neither local model passes judge
+  calibration, so on this machine recall is currently a model's opinion with a
+  warning label, not a number to quote.
+- **One meeting with a platform reference.** The recall figures above rest on
+  four action items from one 37-minute call. Enough to establish that omission
+  is the dominant failure and that 12B does not fix it; nowhere near enough to
+  put a percentage on either claim.
 
 The way to close the first two is the capture that was already the next step:
 run a real meeting, then point `summarize.py` at `spike/out/transcript.json`.
