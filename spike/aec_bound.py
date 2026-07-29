@@ -826,6 +826,22 @@ def union_seconds(segs: list[dict]) -> float:
     return total
 
 
+def conditions(rows: dict) -> tuple[str, ...]:
+    """The conditions this run actually scored.
+
+    `run_verdict` and `scheduled_bounds` both used to name raw/linear/masked
+    literally, so a condition added with --condition — a real canceller's output,
+    which is the whole point of the flag — appeared in the printed table and in
+    neither the noise-floor check nor the bounds. A figure that no guard covers is
+    worse than a missing one, because it reads as having passed them.
+
+    The fallback is for hand-built fixtures in the self-test, which predate the
+    key. It is the historical triple, so those controls keep testing what they were
+    written to test.
+    """
+    return tuple(rows.get("conditions") or ("raw", "linear", "masked"))
+
+
 def scheduled_bounds(rows: dict, threshold: float) -> dict:
     """Both readings of the speak intervals, because neither one is the answer.
 
@@ -858,7 +874,7 @@ def scheduled_bounds(rows: dict, threshold: float) -> dict:
     out = {}
     ver = rows["classes"].get("operator", {}).get("windows", [])
     unv = rows["classes"].get("operator_unverified", {}).get("windows", [])
-    for cond in ("raw", "linear", "masked"):
+    for cond in conditions(rows):
         def rate(ws: list[dict], cond: str = cond) -> dict | None:
             scored = [w for w in ws if w.get(cond) is not None]
             if not scored:
@@ -993,7 +1009,7 @@ def run_verdict(rows: dict, protocol: dict, threshold: float) -> dict:
     # not the same as excluding it from the file.
     for cls in ("operator", "operator_unverified", "control"):
         for row in rows["classes"].get(cls, {}).get("windows", []):
-            for cond in ("raw", "linear", "masked"):
+            for cond in conditions(rows):
                 ratio = row.get(f"{cond}_rms_over_floor")
                 if (row.get(cond) is not None and row[cond] >= threshold
                         and ratio is not None and ratio < FLOOR_RATIO_MIN):
@@ -1860,6 +1876,36 @@ def _ground_truth_controls() -> bool:
         check("and the seconds they disagree over are named",
               bounds["excluded_seconds"], 6.0)
 
+        # 24. A condition supplied with --condition — a real canceller's output —
+        #     has to reach the guards, not just the printed table. Both the
+        #     noise-floor check and the bounds named raw/linear/masked literally,
+        #     so an added condition would have been reported with nothing
+        #     verifying it, which reads as having passed.
+        check("an added condition is one of the run's conditions",
+              conditions({"conditions": ["aec3", "raw"]}), ("aec3", "raw"))
+        check("and a fixture without the key keeps the historical triple",
+              conditions({}), ("raw", "linear", "masked"))
+        added = rows_for()
+        added["conditions"] = ["aec3"]
+        for w in added["classes"]["operator"]["windows"]:
+            w["aec3"], w["aec3_rms_over_floor"] = 0.7, 9.0
+        for w in added["classes"]["control"]["windows"]:
+            w["aec3"], w["aec3_rms_over_floor"] = 0.1, 9.0
+        check("a run scored on an added condition alone is scored",
+              run_verdict(added, clean, 0.58)["verdict"], "scored")
+        hollow_add = json.loads(json.dumps(added))
+        hollow_add["classes"]["operator"]["windows"][0]["aec3_rms_over_floor"] = 1.1
+        check("and a hollow admission in it is caught",
+              run_verdict(hollow_add, clean, 0.58)["verdict"], "inconclusive")
+        b2 = scheduled_bounds({"conditions": ["aec3"], "classes": {
+            "operator": {"windows": [{"start": 0.0, "end": 3.0, "aec3": 0.7}]},
+            "operator_unverified": {"windows": [{"start": 8.0, "end": 11.0,
+                                                "aec3": 0.2}]}}}, 0.58)
+        check("and it is bounded like any other",
+              (b2["conditions"]["aec3"]["verified"]["admitted"],
+               b2["conditions"]["aec3"]["scheduled"]["of"]), (1, 2),
+              shown="1 of 1 verified, 2 scheduled")
+
     return ok
 
 
@@ -1900,6 +1946,17 @@ def main() -> int:
                         "controlled human protocol, not independent labels: "
                         "adherence is assumed in the silent intervals and checked "
                         "against a contaminated transcript in the speaking ones")
+    p.add_argument("--condition", action="append", metavar="NAME=TAKE:FILE", default=[],
+                   help="score an already-cancelled WAV as an extra condition beside "
+                        "raw/linear/masked — the output of spike/aec3/aec3_offline, or "
+                        "any other canceller. This is how a real canceller gets "
+                        "compared against the offline estimate on one window set and "
+                        "one voiceprint, which is the only way the two numbers mean "
+                        "the same thing. The file is 16 kHz mono like every other leg, "
+                        "and its digest goes in the artifact: it is derived audio, so "
+                        "nothing can bind it to the recording the way segments and "
+                        "protocols are bound, and the digest is what makes a run "
+                        "reproducible instead")
     p.add_argument("--max-seconds", type=float, default=0.0,
                    help="analyse only the first N seconds of each take. The chain is "
                         "O(n) in Python-level STFT frames, so a 75-minute capture used "
@@ -1936,6 +1993,23 @@ def main() -> int:
     if unknown:
         p.error(f"--segments/--protocol name takes that were not passed: "
                 f"{', '.join(sorted(unknown))}")
+
+    # NAME=TAKE:FILE, collected per take. Names are checked against the built-in
+    # conditions here rather than at scoring time: a condition called `masked`
+    # would silently replace the one `process` computes, and the table would
+    # compare the offline estimate against itself.
+    extra: dict[str, dict[str, Path]] = {}
+    for spec in args.condition:
+        cname, _, rest = spec.partition("=")
+        tname, _, path = rest.partition(":")
+        if not cname or not tname or not path:
+            p.error(f"--condition {spec!r} is not NAME=TAKE:FILE")
+        if cname in ("raw", "linear", "masked") or cname.startswith("_"):
+            p.error(f"--condition {cname!r} collides with a built-in condition; "
+                    f"it would replace the one this run computes")
+        if tname not in takes:
+            p.error(f"--condition {cname} names take {tname!r}, which was not passed")
+        extra.setdefault(tname, {})[cname] = Path(path).expanduser()
 
     if args.fit_mode == "prefix":
         if not args.fit_before:
@@ -2085,6 +2159,39 @@ def main() -> int:
             print(f"{name:11s} skipped: {meta['skipped']}")
             manifest["takes"][name] = meta
             continue
+
+        # Cancelled audio from outside this program — AEC3, or anything else. It
+        # joins `conds` before anything is scored, so every condition meets the
+        # same window set, the same voiceprint and the same floor check. Scoring
+        # it in a separate run instead is how two figures end up describing
+        # different windows and get quoted as if they described the same ones.
+        for cname, cpath in sorted(extra.get(name, {}).items()):
+            if not cpath.exists():
+                p.error(f"{name}: no {cpath} for condition {cname}")
+            audio = load_wav(cpath)
+            if len(audio) > len(mic):
+                # Longer means it is not this take, or not this --max-seconds.
+                # Trimming would align the wrong samples to every segment time.
+                p.error(f"{name}: condition {cname} is {len(audio) / RATE:.2f}s "
+                        f"against {len(mic) / RATE:.2f}s of microphone — that is a "
+                        f"different recording, or one made before --max-seconds")
+            meta.setdefault("conditions", {})[cname] = {
+                "path": str(cpath), "sha256": sha256(cpath), "samples": len(audio)}
+            conds[cname] = audio
+
+        # Every condition has to cover every scored window or the comparison is
+        # between different audio. A block-based canceller returns whole blocks of
+        # the shorter leg, so its output is legitimately a little short; the
+        # scored region shrinks to what they all cover, and says by how much.
+        shortest = min(len(v) for v in scored_conditions(conds).values())
+        if shortest < len(conds["raw"]):
+            dropped = (len(conds["raw"]) - shortest) / RATE
+            thinnest = min(scored_conditions(conds).items(), key=lambda kv: len(kv[1]))[0]
+            print(f"{name:11s} scoring the first {shortest / RATE:.2f}s: "
+                  f"{dropped:.2f}s dropped because condition {thinnest!r} ends "
+                  f"there and every condition must cover every window")
+            conds = {k: v[:shortest] if not k.startswith("_") else v
+                     for k, v in conds.items()}
         limit = len(conds["raw"]) / RATE
         if supplied_segs is not None:
             segs = [s for s in supplied_segs
@@ -2093,7 +2200,12 @@ def main() -> int:
             segs = windows(conds["raw"], args.window, args.hop)
         segs = [s for s in segs if s["start"] >= args.score_after]
 
-        rows = {"meta": meta}
+        # Recorded so the verdict and the bounds iterate what was actually scored
+        # rather than a hardcoded triple. Both used to name raw/linear/masked
+        # literally, which meant an added condition escaped the noise-floor check
+        # and the bounds table — it would have appeared in the printed rows and in
+        # nothing that guards them.
+        rows = {"meta": meta, "conditions": sorted(scored_conditions(conds))}
         if protocol:
             margin = protocol["cue_margin_s"]
             classes = classify(segs, protocol["phases"], margin,

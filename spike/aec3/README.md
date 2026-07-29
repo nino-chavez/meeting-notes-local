@@ -104,3 +104,31 @@ Then:
 make
 ./aec3_offline --mic mic.wav --ref system.wav --out cancelled.wav
 ```
+
+## Scoring it against the offline estimate
+
+`aec_bound.py --condition` takes the cancelled WAV as a fourth condition, so AEC3
+meets the same window set, the same voiceprint and the same noise-floor check as
+`raw`, `linear` and `masked`:
+
+```sh
+./aec3_offline --mic take/mic.wav --ref take/system.wav --out take/aec3.wav
+
+python3 ../aec_bound.py --take calib=take --enroll enroll \
+  --segments calib=take/mic-segments.json \
+  --protocol calib=take/protocol.json \
+  --condition aec3=calib:take/aec3.wav \
+  --fit-mode prefix --fit-before 30
+```
+
+One run, one table. Scoring the two separately is how two figures end up
+describing different windows and get quoted as though they described the same
+ones. The condition's digest goes in the artifact: it is derived audio, so nothing
+can bind it to the recording the way segments and protocols are bound, and the
+digest is what makes the run reproducible instead.
+
+A condition that is shorter than the microphone — which a block-based canceller
+legitimately is, since it returns whole blocks of the shorter leg — shrinks the
+scored region for *every* condition, and the run says by how much. Comparing a
+condition over a window another condition does not cover is comparing different
+audio.
