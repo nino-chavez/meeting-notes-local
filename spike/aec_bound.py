@@ -799,20 +799,31 @@ def main() -> int:
         name, _, path = spec.partition("=")
         takes[name] = Path(path).expanduser()
     enroll_names = [n.strip() for n in args.enroll.split(",") if n.strip()]
-    supplied, segment_digests = {}, {}
+    supplied, segment_digests, schemas = {}, {}, {}
     for spec in args.segments:
         name, _, path = spec.partition("=")
         seg_path = Path(path).expanduser()
         loaded = json.loads(seg_path.read_text())
-        # Either a bare [{start, end}] list or a capture's own transcript.json,
-        # which is what an operator actually has after a run.
-        segs = loaded["turns"] if isinstance(loaded, dict) else loaded
+        if isinstance(loaded, dict) and loaded.get("schema") == "mic-segments/1":
+            segs = loaded["segments"]
+            schemas[name] = loaded["schema"]
+        elif isinstance(loaded, dict) and "turns" in loaded:
+            p.error(
+                f"{seg_path} is a merged transcript, which cannot index mic.wav. It "
+                f"carries both legs with speaker labels cleared whenever bleed is "
+                f"detected, so operator and far-end turns are indistinguishable in "
+                f"it; its times are on the merged session clock rather than the "
+                f"microphone's, off by the startup skew; and its microphone turns "
+                f"have already been through drop_bled, which removes exactly the "
+                f"contaminated operator speech an echo experiment is trying to "
+                f"recover. Use mic-segments.json from the same capture.")
+        else:
+            segs = loaded            # a bare [{start, end}] list
+            schemas[name] = "list"
         if any("end" not in seg for seg in segs):
-            p.error(f"{seg_path} has segments with no end. Captures written before "
-                    f"dual_capture.py carried ends through the merge have starts "
-                    f"only, and inferring an end from the next segment's start "
-                    f"swallows the pause before it — at a speaker change, the next "
-                    f"speaker's onset as well. Re-run the capture, or supply a "
+            p.error(f"{seg_path} has segments with no end. Inferring an end from the "
+                    f"next segment's start swallows the pause before it — at a "
+                    f"speaker change, the next speaker's onset as well. Supply a "
                     f"segment list with measured ends.")
         supplied[name] = segs
         segment_digests[name] = sha256(seg_path)
@@ -830,6 +841,22 @@ def main() -> int:
                     f"exists to prevent.")
         # Enrolment takes are exempt: they exist to build the profile, and their
         # rows are a sanity check rather than the measurement.
+        wrong = [n for n in supplied if schemas.get(n) != "mic-segments/1"]
+        if wrong:
+            p.error(f"--fit-mode prefix needs mic-segments/1 for {', '.join(wrong)}. "
+                    f"A bare list carries no guarantee that its times are on the "
+                    f"microphone's own clock or that it holds only the microphone, "
+                    f"and both have to be true for the result to mean anything.")
+        for n, segs in supplied.items():
+            early = [g for g in segs if g["start"] < args.fit_before]
+            if early:
+                p.error(
+                    f"{n}: {len(early)} mic segment(s) start inside the calibration "
+                    f"prefix, the first at {min(g['start'] for g in early):.1f}s "
+                    f"against a boundary of {args.fit_before:g}s. The prefix is "
+                    f"supposed to be the operator saying nothing, and this is the "
+                    f"check that it was — take the recording again rather than "
+                    f"fitting an echo path on audio with his voice in it.")
         missing = [n for n in takes if n not in supplied and n not in enroll_names]
         if missing:
             p.error(f"--fit-mode prefix needs --segments for {', '.join(missing)}. "
@@ -866,6 +893,11 @@ def main() -> int:
         "max_seconds": args.max_seconds or None,
         "score_after_s": args.score_after or None,
         "supplied_segments": segment_digests,
+        "supplied_schemas": schemas,
+        # The observed onset, not the boundary that was aimed for. It is what
+        # shows the calibration phase was actually free of the operator.
+        "first_mic_speech_s": {n: (min(g["start"] for g in segs) if segs else None)
+                               for n, segs in supplied.items()},
         "max_lag_s": MAX_LAG_S, "phat_floor": PHAT_FLOOR,
         "min_fit_run": MIN_FIT_RUN, "align_margin": ALIGN_MARGIN,
         "min_fit_total": MIN_FIT_TOTAL, "dt_ratio": DT_RATIO,

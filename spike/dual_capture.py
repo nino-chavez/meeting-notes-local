@@ -856,10 +856,9 @@ def report(mic_leg, tap_leg, args, out_dir):
 
     print("\n=== transcript ===")
     t0 = time.monotonic()
-    mic_segs = drop_bled(
-        drop_unvoiced(transcribe(mic, args.whisper, args.language), mic, "mic"),
-        mic, tap, b, "mic",
-    )
+    mic_voiced = drop_unvoiced(transcribe(mic, args.whisper, args.language), mic, "mic")
+    write_mic_segments(out_dir / "mic-segments.json", mic_voiced, len(mic) / RATE)
+    mic_segs = drop_bled(mic_voiced, mic, tap, b, "mic")
     tap_segs = drop_unvoiced(transcribe(tap, args.whisper, args.language), tap, "system")
     print(f"  (transcribed both legs in {time.monotonic() - t0:.1f}s)\n")
 
@@ -895,6 +894,43 @@ def report(mic_leg, tap_leg, args, out_dir):
         )
     for start, _end, label, text in merged:
         print(f"  [{int(start // 60):02d}:{start % 60:05.2f}] {label:4s} {text}")
+
+
+def write_mic_segments(path, segs, duration_s):
+    """The microphone leg's own speech, on its own clock, before any filtering.
+
+    `transcript.json` is a presentation artifact and is wrong for every job that
+    indexes back into `mic.wav`, in three separate ways:
+
+    * **It holds both legs.** And when bleed is detected it deliberately clears
+      every speaker label, so nothing downstream can tell an operator turn from
+      a far-end one. Anything scoring "the operator's segments" against it is
+      scoring a mixture.
+    * **Its clock is the merged session's, not the microphone's.** Each leg is
+      offset by when its first block arrived so the two can be interleaved.
+      Slicing `mic.wav` with those numbers is off by the startup skew, which has
+      run to 1.7 s on these captures.
+    * **It is filtered by `drop_bled`.** That is right for a transcript and
+      exactly wrong for measuring echo cancellation: the segments it removes are
+      the contaminated operator speech such an experiment exists to recover.
+
+    So this is written before the merge and before `drop_bled`, carrying only
+    the microphone, only its own timeline, and a schema marker so a consumer
+    that needs those guarantees can insist on them rather than hope.
+    """
+    payload = {
+        "schema": "mic-segments/1",
+        "timeline": "mic-local",
+        "duration_s": round(duration_s, 3),
+        "filtered": ["voicing"],
+        "segments": [
+            {"start": round(s["start"], 2), "end": round(s["end"], 2), "text": s["text"]}
+            for s in segs
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2))
+    first = f", first speech at {segs[0]['start']:.1f}s" if segs else ""
+    print(f"  wrote {path} ({len(segs)} mic segments{first})")
 
 
 def write_transcript(path, merged, b):

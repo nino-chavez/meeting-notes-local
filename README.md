@@ -202,6 +202,12 @@ That file carries its own attribution level, derived from the capture's measured
 bleed — so a contaminated recording arrives as unattributed without anyone
 having to remember to say so.
 
+A run also writes `mic-segments.json`: the microphone leg alone, on its own
+clock, before the bleed filter runs. The transcript is for reading; that file is
+for anything that indexes back into `mic.wav`, because the transcript's times
+belong to the merged session clock and its microphone turns have already had the
+contaminated ones removed.
+
 ### Recording a specific call
 
 Nothing to configure per platform. The tap captures the machine's audio output,

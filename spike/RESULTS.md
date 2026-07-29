@@ -773,13 +773,30 @@ reported as a held-out one.
 not to be, which let audio after the boundary influence the delay the fit was
 built from — a quieter version of the leak the fit spans exist to close.
 
-**`--segments` is required in this mode**, and points at the capture's own
-transcript. Everything else in this document is measured on fixed three-second
-windows, which are a control for comparing takes and are *not* what the gate
-consumes: `speaker_gate.py` embeds whole segments its caller hands it. An
-acceptance run has to be scored on the shipping contract or it measures
-something the product never does. Fixed windows stay available as a secondary
-diagnostic by omitting the flag.
+**`--segments` is required in this mode**, and points at `mic-segments.json` —
+not at `transcript.json`, which cannot do this job in three separate ways. The
+transcript holds both legs, and clears every speaker label whenever bleed is
+detected, so operator and far-end turns are indistinguishable in it. Its times
+are on the merged session clock rather than the microphone's, off by a startup
+skew that has reached 1.7 s, so slicing `mic.wav` with them selects the wrong
+audio. And its microphone turns have already been through `drop_bled`, which
+removes precisely the contaminated operator speech an echo experiment exists to
+recover. `dual_capture.py` now writes `mic-segments.json` before the merge and
+before that filter: microphone only, microphone clock, voicing filtering and
+nothing else, with a schema marker the harness checks rather than trusts.
+
+That also matters because everything else in this document is measured on fixed
+three-second windows, which are a control for comparing takes and are *not* what
+the gate consumes — `speaker_gate.py` embeds whole segments its caller hands it.
+An acceptance run scored on fixed windows would measure something the product
+never does. They stay available as a secondary diagnostic by omitting the flag.
+
+**The prefix is checked, not asserted.** The harness refuses the run if any
+microphone segment begins before `--fit-before`, so a calibration phase the
+operator talked through is caught rather than fitted, and the manifest records
+the *observed* onset of speech alongside the boundary that was aimed at. That is
+the artifact's evidence that the calibration audio was genuinely free of him —
+"I stayed quiet for the first thirty seconds" is not.
 
 This is also the exact fixture AEC3 should be handed first, since it gives a real
 canceller the single-talk interval it converges on.
