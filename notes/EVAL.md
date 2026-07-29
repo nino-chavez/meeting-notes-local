@@ -603,6 +603,59 @@ The two-pass measurements above predate this change; both arms there used the ol
 rules, so that comparison stands on its own terms but its absolute numbers are no
 longer the current baseline.
 
+## Where omission happens, and why fixing it there does not work
+
+The two models miss almost disjoint sets of commitments, which is odd enough to
+chase. Locating each reference commitment in its transcript explains it:
+
+| commitment | position | mentions | `gemma3:12b` | `llama3.1` |
+|---|---|---|---|---|
+| access to the recording | 0–1% | repeated | hit | miss |
+| categorise the data breakdown | 5% | once | hit | miss |
+| share a measurement plan | 50% | once | hit | miss |
+| draft a project plan | 76% | once | hit | hit |
+| provide usernames for access | **92%** | **once** | **miss** | hit |
+| engineering review of a diagram | **95%** | **once** | **miss** | hit |
+
+Both of the 12B model's misses are mentioned exactly once in the final 10%.
+Single-mention commitments at 5%, 50% and 76% are all found, so the variable is
+position rather than rarity. The 8B model fails the other way round — it misses
+early and middle items and catches both late ones. They are not differently
+capable; they are differently biased, and that is why their union is complete.
+
+**The information is there and the model can extract it.** Handed only the last
+fifth of the same two transcripts, `gemma3:12b` found both commitments it had
+just missed. Reading everything is what loses them.
+
+Which makes the fix look obvious: run one extra short pass over the closing fifth
+and hand its commitments to the main pass as a checklist. That was built and
+measured. **It does not work.**
+
+| | one pass | plus a closing pass |
+|---|---|---|
+| `gemma3:12b` | **8/10** | 7/10 |
+| `llama3.1` | 4.5/10 | 4.5/10 |
+
+Both late commitments were recovered, exactly as designed. Three earlier ones
+were lost paying for them — including, on one meeting, the single most
+substantial commitment in it, replaced by end-of-meeting logistics phrased as
+"someone will have something halfbaked within the week". Reverted; the code is
+not in the repository.
+
+That is the third intervention to behave this way. Two passes: relocation.
+Room-noise contamination: relocation. A closing pass: relocation. Set against the
+one change that did raise the number — deleting the instructions to omit — the
+pattern is hard to miss:
+
+> **The model reports a roughly fixed number of commitments. Interventions that
+> redirect its attention change which ones fill that budget. The only thing that
+> raised the count was changing what it was told to produce.**
+
+Worth holding loosely — it rests on two meetings and one scoring rule, and a
+budget that moved once could move again. But it predicts that further attention
+plumbing is not where the next gain is, and it is cheap to falsify: any
+attention-level change that raises the total on both models refutes it.
+
 ## What this evaluation structurally cannot tell you
 
 Stated plainly, in the same spirit as `spike/RESULTS.md`:
