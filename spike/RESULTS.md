@@ -578,6 +578,105 @@ offline against retained paired fixtures before changing any architecture. Judge
 it on downstream outcomes — operator words retained, household false admits,
 residual echo — not on filter convergence.
 
+### Answered: cancellation restores the operator, up to a level the capture can measure
+
+That spike ran, and it did not need AEC3, WebRTC, or a single line of Swift. The
+question a real integration answers is "can *this* implementation do it"; the
+question worth asking first is "can *any* implementation do it", and that one has
+a closed form. So the echo was removed twice under conditions no shippable
+canceller can reach, and the voiceprint gate was asked what it made of the
+result.
+
+**Condition 1, linear.** The best possible linear echo estimate, solved in closed
+form over the whole take. AEC3's linear stage is a streaming approximation of
+exactly this filter and cannot beat it.
+
+**Condition 2, plus suppressor.** Then an oracle Wiener mask per time-frequency
+bin, built from the true echo estimate. AEC3's residual suppressor is a real-time
+guess at this mask from statistics it has to estimate; this version is handed the
+answer.
+
+The point of the second condition is to make a negative result mean something. A
+linear shortfall alone leaves "but the nonlinear stage might catch it" open, and
+that argument can be run forever.
+
+Scores against a profile enrolled on 98 s of the two takes with no far end in
+them, at the +0.580 operating point:
+
+| take | far end | raw | linear | + suppressor | admitted |
+|---|---|---|---|---|---|
+| read | none | +0.753 | +0.752 | +0.752 | 16/16 → 16/16 |
+| free | none | +0.784 | +0.783 | +0.783 | 11/11 → 11/11 |
+| roomnoise | off-device music | +0.645 | +0.640 | +0.641 | 6/8 → 6/8 |
+| **overlap** | **speakers, −4.3 dB** | **+0.495** | **+0.791** | **+0.800** | **2/4 → 4/4** |
+| bleed | speakers, +2.6 dB | +0.179 | +0.367 | +0.481 | 1/9 → 1/9 |
+
+The overlap take recovers completely. Its four segments land at +0.77 to +0.84,
+which is the range the clean takes occupy — the operator is not merely readmitted
+but restored to roughly the score he would have had if the far end had never been
+playing. **The linear stage does nearly all of that work**; the oracle suppressor
+adds +0.009. That matters for the build, because the linear stage is the part
+AEC3 does deterministically and well, and the suppressor is the part that has to
+guess.
+
+The bleed take does not recover. Every one of its nine segments moves — seven by
+more than +0.15, mean +0.179 to +0.481 — and they still land short. The two takes
+differ by about 7 dB in how loud the far end sits relative to the operator
+(+2.6 dB against −4.3 dB), and that is the whole of the difference. **The
+recoverable regime is bounded by that ratio, not by filter quality**, and the
+capture can already measure it.
+
+**The controls.** Both clean takes and the room-noise take ran through the
+identical chain against the bleed take's system audio as a fake reference — a
+loud, entirely unrelated signal, and every opportunity to carve the operator out
+of a recording that never contained an echo. Nothing moved by more than 0.006.
+The 197 household segments — other people, same microphone, same room — scored
++0.037 mean in all three conditions, identical to three decimals, 0/197 admitted
+throughout. Whatever cancellation is doing, it is not lifting everything toward
+the profile.
+
+**The dB metrics were the wrong lens, and would have killed this.** Measured as
+signal processing, the result looks hopeless: 6–7.5 dB of suppression on
+far-end-only spans, and 1.3–2.7 dB during double-talk, which is the regime that
+matters because an operator segment with the far end playing *is* double-talk.
+Against a dose-response that wanted roughly 12 dB, that reads as a fourfold
+shortfall in power and an obvious no. The overlap take recovers fully on 1.3 dB.
+A speaker embedding does not care about broadband attenuation; it cares whether a
+competing voice is corrupting the specific time-frequency cells that carry
+identity. Every number in this paragraph was measured before the gate was run,
+and every one of them pointed the wrong way.
+
+Three further measurements say the linear filter is close to finished rather than
+failing, which is why the suppressor adds so little: on echo-dominant frames the
+residual sits 1.6 dB above the microphone's own noise floor; the echo is only
+8–12 dB above that floor to begin with; and the coherence ceiling — the most any
+linear filter of any length can suppress — is about 10 dB in its best band and
+essentially nothing above 4 kHz. The path is also nearly level-independent
+(−1.1 dB across the loudest and quietest quartiles), so macOS speaker processing
+downstream of the tap is not the obstacle it might have been.
+
+**Alignment is a fixed offset over a minute, not a tracking problem.** GCC-PHAT
+locked on 14 of 14 windows in both takes, with the per-window lag spread within
+six samples of the bulk delay and drift of −0 and +3 ppm. Bulk delay was +15.4
+and +14.4 ms. Re-fitting the filter every block bought about 1 dB over one static
+filter, and applying a block's filter to the *next* block was catastrophically
+worse than useless at short blocks (−21 dB at 250 ms) — the path is not moving,
+so per-block fits are fitting noise. Sixty seconds, one machine, no USB or
+Bluetooth leg; this does not retire the drift question, it bounds it.
+
+**Verified rather than assumed:** the overlap take's near end is the operator
+speaking at the laptop, not a phone playing back a recording of him — a
+distinction that would have made its retention figure meaningless. Its long-term
+average spectrum carries +17.4 dB at 80–150 Hz relative to 1 kHz, against +22.0
+for the clean take. A phone speaker cannot reproduce that band at all.
+
+**What this does not say.** It does not say AEC3 clears the bar; it says the bar
+is clearable, and by a margin large enough that a real implementation has room to
+fall short. Thirteen segments, two takes, sixty seconds each, one speaker. The
+suppressor was handed the true echo. The next measurement is the same table with
+AEC3 in place of the oracle, and it is now worth building, because the outcome it
+would be judged on is known to exist.
+
 ### Measured: the embedding degrades by half on the leg that needs it
 
 Before deciding whether a speaker-embedding dependency is worth carrying, the
@@ -766,16 +865,26 @@ in 2.2 s.
   cancellation for one, an enrolled voiceprint for the other — and neither is
   implemented here yet, which is the only reason headphones are load-bearing
   today.
+- **Echo cancellation is now known to work on this material, within a bounded
+  regime.** Removing the echo under oracle conditions restores the operator's
+  segments to clean-take scores when the far end sits at or below his level, and
+  moves them substantially but insufficiently when it sits ~3 dB above. The
+  linear stage carries almost all of that, which is the part AEC3 does
+  deterministically. The bound is a level ratio the capture can measure, so the
+  product can tell the operator to turn the call down instead of failing
+  silently — but the measurement is thirteen segments from one speaker with the
+  suppressor handed the true echo, and AEC3 in place of the oracle is the next
+  number, not a formality.
 - Separability is measured and the answer is "half". An off-the-shelf embedding
   recognises the same voice on the built-in mic at 0.243 cosine against 0.524 on
   the system tap, with real speaker structure present on both. Loudness does not
   explain the gap, so the comfortable story — the operator is close and therefore
   fine — is not available. The gate is neither ruled in nor out.
-- **The one input that would settle it is sixty seconds of the operator speaking
-  into the laptop microphone.** Every mic leg in this project is silence or the
-  household, so the gate's positive class has never been sampled in the channel
-  it would run on. No code is needed for it; `dual_capture.py --seconds 60` is
-  the whole procedure.
+- **That input was collected**: five sixty-second takes — read, spontaneous, far
+  end on the speakers, off-device music, and the operator talking over the far
+  end. They are what turned the gate's threshold from a guess into a number, and
+  what every echo-cancellation figure above is measured on. They also carry the
+  project's sharpest remaining limit: one speaker, one room, one microphone.
 - Still unexercised: a live two-person run on headphones. The Me/Them split has
   never seen real speech on both legs at once — every measurement so far put all
   the real words on one leg.

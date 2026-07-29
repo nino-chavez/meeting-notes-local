@@ -36,9 +36,12 @@ The transcript then reads as two people agreeing with each other word for word,
 and nothing downstream can tell that it never happened. That is worse than
 having no speaker labels at all.
 
-So the product treats this as a measurement, not a caveat: correlation is
-checked at the start of every capture, and when it is high the tool stops
-claiming a split rather than fabricating a dialogue.
+So the product treats this as a measurement, not a caveat: correlation between
+the two legs is measured over the span where system audio actually played, and
+when it is high the transcript stops claiming a split rather than fabricating a
+dialogue. The measurement needs the whole capture, so the verdict lands when the
+recording stops — a run cannot warn you at the top that it is about to be
+contaminated.
 
 **But bleed costs the speaker labels, not the notes.** Feeding a summarizer the
 same contamination — labels dropped, every line doubled, which is what a
@@ -59,11 +62,24 @@ survives compression without changing how much does.
 Teams and Zoom both solve this by gating the microphone on an enrolled voice
 profile, and neither requires an enrollment ritual — the profile is built
 passively from ordinary speech. Google Meet does not attempt it and says so
-outright: "voices from TV or people talking won't be canceled." Whether an
-off-the-shelf embedding is strong enough on *this* microphone is measured in
-[`spike/RESULTS.md`](./spike/RESULTS.md): it recognises the same voice at 0.243
-cosine on the built-in mic against 0.524 on the system tap, so roughly half the
-margin, with real speaker structure present but no comfortable answer yet.
+outright: "voices from TV or people talking won't be canceled."
+
+An off-the-shelf embedding is strong enough here, measured on five minutes of the
+operator's own speech through the microphone the gate would run on: household
+speech recorded in the same room on the same microphone never scores above
++0.577, and his own speech reaches +0.68 to +0.89 when nothing else is playing.
+Music across the room costs about 0.15 of that and it survives.
+
+**Another voice is the case that breaks it, and echo cancellation gets it back.**
+When the far end comes out of the laptop speakers, the operator's own segments
+collapse to +0.50 and below and the gate rejects him. Removing the echo restores
+them to +0.79 — clean-capture scores — while the same processing leaves 197
+household segments unchanged to three decimals. That result holds where the far
+end sits at or below his own level and falls short about 3 dB above it, so the
+usable regime is a level ratio the capture can already measure. It was produced
+with an ideal canceller rather than a shipping one, on thirteen segments from a
+single speaker; see [`spike/RESULTS.md`](./spike/RESULTS.md) for what that does
+and does not settle.
 
 **Two defects in the notes half were in the prompt, not the model.** The first
 was fabrication: the instructions illustrated a phrasing rule with two example
@@ -232,9 +248,14 @@ appears nowhere else.
 
 - **An open microphone records the room.** Speech from people near you is
   transcribed and labelled as yours. Headphones do not help — they cut the far
-  end out of your microphone, which is a different defect. Until the voiceprint
-  gate exists, use this where you are the only person in the room, or capture the
-  system leg alone and accept unattributed notes.
+  end out of your microphone, which is a different defect. The voiceprint gate
+  that fixes this is written and measured but not yet wired into the capture, so
+  today: be the only person in the room, or capture the system leg alone and
+  accept unattributed notes.
+- **On speakers, the gate would reject you too.** The far end returning through
+  the room corrupts your own voiceprint, not just your transcript. Echo
+  cancellation is measured to recover it and is not built. Headphones are the
+  only configuration that works today, and that is why.
 - **macOS only.** Core Audio process taps are 14.4+. The Windows equivalent is
   WASAPI loopback and is not implemented.
 - **Speaker labels stop at "me" and "them."** Named participants come from a bot
