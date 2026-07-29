@@ -212,10 +212,48 @@ the design tells you to aim for — so the capture keeps the labels, writes
 `channel`, and hands the notes half 400 turns asserting the operator said things
 they never said. The contract that looks safest is the one that fabricates.
 
-An energy gate ahead of transcription would remove it, and the numbers above are
-what would set its threshold. That is a product change with its own design
-questions, so it is recorded here rather than bolted on: **the next change to the
-capture is gating the mic leg on speech energy.**
+### Fixed: gate segments on sustained voicing, not on energy
+
+Raw energy does not separate confabulation from speech. A keyboard click clears
+any peak threshold a hallucination fails, so a peak test removed 85% of the
+confabulated turns only by discarding 11% of everything else — the wrong trade,
+since silently dropping real speech is harder to notice than inventing it.
+
+Sustained voicing separates them properly. Measuring what fraction of each
+segment's span sits above the leg's own noise floor, across all 400 turns of that
+capture:
+
+| | median voiced fraction |
+|---|---|
+| the repeated confabulation | **0.01** |
+| every other turn | **0.75** |
+
+A 75x separation, wide enough that the exact cut point barely matters — which is
+the sign of a feature measuring the right thing rather than a threshold tuned to
+one recording. `drop_unvoiced()` keeps segments where at least 25% of the span
+sits 8 dB above the leg's noise floor, with the floor estimated per leg because a
+microphone in a quiet room and one beside a fan differ by more than any constant
+survives. An absolute term handles what a percentile cannot: a tap on an idle
+output device emits *exact* digital zero, and no multiplier lifts zero.
+
+Re-running both legs of the 75-minute capture through it:
+
+| | segments | `"Thank you."` | during the meeting | silent tail |
+|---|---|---|---|---|
+| system leg | 723 → 688 | 35 → **1** | 688 → **688** (8663 → **8663** words) | 34 → **0** |
+| mic leg | 428 → 320 | 93 → **7** | 238 → 135 | 189 → 185 |
+
+The system-leg row is the one that matters: **every fabrication in the silent
+tail removed, and not one word of real meeting content touched.** A gate that
+bought the first at the cost of the second would be worse than no gate.
+
+The gate runs after transcription rather than before it. Gating first would save
+the compute, but it decides what Whisper never sees, and that failure mode is
+worse than the one it prevents.
+
+Note what the mic leg's silent tail does *not* do: 185 of 189 turns survive. That
+tail is not silent — it is a room with people in it, and those turns are backed by
+real voiced audio. Which is the next finding, and no gate addresses it.
 
 ### An open microphone records the room, not the operator
 
@@ -310,6 +348,9 @@ in 2.2 s.
   demotes drift from open risk to known quantity rather than closing it.
   Mixed-clock hardware (USB, Bluetooth) is still unmeasured and is where drift
   would actually be expected.
-- The next change to the capture is an energy gate on the mic leg. The one after
-  that is a live two-person run on headphones — the Me/Them split has still never
-  been exercised with real speech on both legs at once.
+- Fabricated turns are gated out, validated at zero cost to real content. What
+  remains on the mic leg is genuine room audio, which is a consent question
+  rather than an engineering one.
+- The next change is a live two-person run on headphones. The Me/Them split has
+  still never been exercised with real speech on both legs at once — every
+  measurement so far put all the real words on one leg.

@@ -45,6 +45,17 @@ BLEED_MAX_LAG_S = 0.5
 # resolve that scale before it can report a drift value rather than a bound.
 HARDWARE_DRIFT_PPM = 50
 
+# Speech gate. A segment is kept when this fraction of its span sits this far
+# above the leg's own noise floor. The floor is estimated per leg rather than
+# fixed, because a built-in microphone in a quiet room and one beside a fan
+# differ by more than any constant survives. The absolute term catches the case
+# the percentile cannot: a tap on an idle output device emits *exact* digital
+# zero, and no multiplier lifts zero off the ground.
+SPEECH_FLOOR_PCT = 10
+SPEECH_MARGIN_DB = 8
+SPEECH_ABS_FLOOR = 1e-4
+SPEECH_MIN_VOICED = 0.25
+
 # There is deliberately no "tolerance" constant here. An earlier version had one
 # set against segment duration, on the reasoning that divergence had to approach
 # the length of a turn to reorder it. That is the wrong quantity: reordering
@@ -411,6 +422,59 @@ def drift_lines(stats):
     return lines
 
 
+def voiced_fraction(env, start, end, thresh):
+    """How much of [start, end) sits above `thresh`, in envelope frames."""
+    lo = max(int(start * ENVELOPE_HZ), 0)
+    hi = min(max(int(end * ENVELOPE_HZ), lo + 1), len(env))
+    window = env[lo:hi]
+    return float((window > thresh).mean()) if len(window) else 0.0
+
+
+def drop_unvoiced(segs, audio, label):
+    """Remove transcript segments that no voiced audio backs.
+
+    Whisper does not return nothing when handed silence — it returns text. The
+    microphone leg of a 75-minute capture of an empty room produced 400 turns,
+    92 of them the single line "Thank you." at 30-second intervals: one
+    confabulation per empty decode window. Left in, they reach the merge, are
+    given a speaker label because bleed measured low, and arrive at the notes
+    half as things the operator said. Bleed corrupts the Me/Them split when the
+    capture is dirty; this corrupts it when the capture is clean.
+
+    Energy alone does not separate them. A keyboard click clears any peak
+    threshold that a hallucination fails, so a peak test removed 85% of the
+    confabulations only by discarding 11% of everything else. Sustained voicing
+    separates them properly: measured over that capture's 400 turns, the
+    fraction of each segment's span above the leg's own noise floor ran a median
+    of 0.01 for the repeated confabulation against 0.75 for the rest. With a
+    gap that wide the exact cut point barely matters, which is the sign of a
+    feature that is actually measuring the right thing.
+
+    This runs after transcription rather than gating the audio before it. Gating
+    first would save the compute, but it decides what Whisper never sees, and
+    the failure it risks — silently dropping real speech — is worse than the one
+    it prevents. Filtering afterwards is checkable against the transcript that
+    was actually produced.
+    """
+    if not segs:
+        return segs
+    env = envelope(audio)
+    if not len(env):
+        return segs
+    floor = float(np.percentile(env, SPEECH_FLOOR_PCT))
+    thresh = max(floor * 10 ** (SPEECH_MARGIN_DB / 20), SPEECH_ABS_FLOOR)
+    kept = [
+        s for s in segs
+        if voiced_fraction(env, s["start"], s["end"], thresh) >= SPEECH_MIN_VOICED
+    ]
+    if len(kept) != len(segs):
+        print(
+            f"  {label}: dropped {len(segs) - len(kept)} of {len(segs)} segments with "
+            f"no voiced audio behind them (floor {thresh:.5f})"
+        )
+    return kept
+
+
 def report(mic_leg, tap_leg, args, out_dir):
     mic = mic_leg.audio()
     tap = tap_leg.audio()
@@ -467,8 +531,8 @@ def report(mic_leg, tap_leg, args, out_dir):
 
     print("\n=== transcript ===")
     t0 = time.monotonic()
-    mic_segs = transcribe(mic, args.whisper, args.language)
-    tap_segs = transcribe(tap, args.whisper, args.language)
+    mic_segs = drop_unvoiced(transcribe(mic, args.whisper, args.language), mic, "mic")
+    tap_segs = drop_unvoiced(transcribe(tap, args.whisper, args.language), tap, "system")
     print(f"  (transcribed both legs in {time.monotonic() - t0:.1f}s)\n")
 
     # Offset each leg by when its first block arrived, so the merge is against
