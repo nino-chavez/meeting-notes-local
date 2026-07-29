@@ -49,18 +49,7 @@ DEFAULT_MODEL = "llama3.1:latest"
 # meeting at the ~3.7 chars/token these transcripts run at.
 DEFAULT_NUM_CTX = 32768
 
-BASE_RULES = """\
-You are writing notes from a meeting transcript.
-
-Rules that override everything else:
-- Every statement you write must be supported by the transcript. If you are not
-  sure something was said, leave it out.
-- Never invent names, numbers, dates, quantities, or deadlines. If the
-  transcript does not contain a figure, your notes must not contain one.
-- Prefer omitting a section to padding it. An empty section is a true statement
-  about the meeting; a padded one is not.
-- Write plainly. No preamble, no sign-off, no "in this meeting" throat-clearing.
-
+SECTIONS = """\
 Output exactly these markdown sections, in this order, and omit any section that
 would have no real content:
 
@@ -75,6 +64,63 @@ What someone committed to do next.
 
 ## Open questions
 What was raised and left unresolved."""
+
+BASE_RULES = """\
+You are writing notes from a meeting transcript.
+
+Rules that override everything else:
+- Every statement you write must be supported by the transcript. If you are not
+  sure something was said, leave it out.
+- Never invent names, numbers, dates, quantities, or deadlines. If the
+  transcript does not contain a figure, your notes must not contain one.
+- Prefer omitting a section to padding it. An empty section is a true statement
+  about the meeting; a padded one is not.
+- Write plainly. No preamble, no sign-off, no "in this meeting" throat-clearing.
+
+""" + SECTIONS
+
+# The two-pass prompts. Omission, not invention, is what the measurements in
+# EVAL.md keep finding, and a single pass over a 57-minute transcript compresses
+# roughly 8600 words into 150 — a 57:1 ratio at which dropping things is the
+# expected behaviour rather than a defect. These split that into a slice-level
+# pass that is not allowed to compress and a merge that is not allowed to select.
+EXTRACT_RULES = """\
+You are reading ONE SLICE of a longer meeting transcript and pulling out the raw
+material for its notes. This is not the notes. Something left out here cannot be
+recovered later, because no later step sees this transcript again.
+
+Rules that override everything else:
+- Every line must be supported by this slice. Never invent names, numbers,
+  dates, quantities, or deadlines.
+- Completeness beats brevity. This is the opposite of summarising: if something
+  might be a decision, a commitment, or an unresolved question, include it.
+- Keep the transcript's own words for the specific things involved — documents,
+  systems, datasets, metrics, deliverables. A commitment stripped of the name of
+  the thing it concerns cannot be reconstructed downstream, and that is the
+  failure this pass exists to prevent.
+- One item per line, each starting with DECISION:, ACTION:, or QUESTION:.
+- A slice is mostly ordinary conversation. If it contains none of these, output
+  nothing at all.
+- No preamble, no summary, no headings, no commentary."""
+
+CONSOLIDATE_RULES = """\
+You are turning an ordered list of items, extracted from consecutive slices of
+one meeting, into that meeting's notes.
+
+Because the slices overlap and people repeat themselves, the same commitment
+often appears several times in slightly different words.
+
+Rules that override everything else:
+- Use ONLY the items given. Add nothing, however plausible it would be.
+- Merge duplicates: several lines describing one commitment become one line,
+  keeping the most specific wording, including the names of documents and
+  systems.
+- Do NOT drop an item because the list is long. Every distinct decision, action
+  and open question in the input must survive into the output. This is a
+  de-duplication task, not a selection task — you are not choosing the important
+  ones, you are removing the repeated ones.
+
+""" + SECTIONS
 
 # The one place the three attribution levels diverge. Everything above is shared;
 # what changes is who the notes are permitted to name.
@@ -130,7 +176,11 @@ ATTRIBUTION_VERBS = (
 LEAK_PATTERNS = [
     # Singular actors doing things. `they`/`we` deliberately absent.
     re.compile(rf"\b(?:you|he|she)\s+(?:{ATTRIBUTION_VERBS})\b", re.IGNORECASE),
-    re.compile(rf"(?<![a-z])I\s+(?:{ATTRIBUTION_VERBS})\b"),
+    # The lookbehind excludes upper case as well as lower: it used to be
+    # `(?<![a-z])`, which let "AI will be used to generate X" register as the
+    # operator personally committing to something. Case-sensitivity is still
+    # wanted for the "I" itself, so this cannot fold into re.IGNORECASE.
+    re.compile(rf"(?<![A-Za-z])I\s+(?:{ATTRIBUTION_VERBS})\b"),
     # An explicit owner column, whatever fills it.
     re.compile(r"\b(?:assigned to|owner|action owner|responsible)\s*[:—-]\s*\S", re.IGNORECASE),
 ]
@@ -173,13 +223,13 @@ def ollama_chat(model: str, system: str, user: str, num_ctx: int, timeout: int):
         ) from e
 
 
-def check_context(response: dict, prompt: str, num_ctx: int) -> dict:
-    """Did the server actually read the whole transcript?
+def check_one_context(response: dict, prompt: str, num_ctx: int) -> dict:
+    """Did the server actually read the whole prompt for a single call?
 
     `prompt_eval_count` is the server's own count of the tokens it processed. If
     the prompt is long and that number lands suspiciously near a context
-    boundary, the tail of the meeting was dropped — and the notes will look
-    perfectly well-formed while covering only the opening.
+    boundary, the tail was dropped — and the notes will look perfectly
+    well-formed while covering only the opening.
     """
     counted = response.get("prompt_eval_count")
     estimate = len(prompt) / 3.7
@@ -193,9 +243,32 @@ def check_context(response: dict, prompt: str, num_ctx: int) -> dict:
         "num_ctx": num_ctx,
         "reason": (
             f"server read {counted} prompt tokens for a prompt estimated at "
-            f"{int(estimate)}; the tail of the meeting was dropped"
+            f"{int(estimate)}; the tail was dropped"
         ) if truncated else "",
     }
+
+
+def check_context(calls: list[dict], num_ctx: int) -> dict:
+    """The same check across every model call a run made.
+
+    A multi-pass run reads the transcript in slices, so there is no single
+    prompt to check — and a strategy that exists to improve recall would be
+    self-defeating if one slice in the middle were silently truncated. One bad
+    call condemns the run: the notes cannot be better than the worst read.
+    """
+    results = [check_one_context(c["response"], c["prompt"], num_ctx) for c in calls]
+    if not results:
+        return {"ok": None, "reason": "no model calls recorded", "calls": 0}
+    bad = [(c, r) for c, r in zip(calls, results, strict=True) if r["ok"] is False]
+    unverified = [r for r in results if r["ok"] is None]
+    if bad:
+        call, res = bad[0]
+        return {**res, "calls": len(calls),
+                "reason": f"{call['label']}: {res['reason']}"
+                          + (f" (and {len(bad) - 1} other calls)" if len(bad) > 1 else "")}
+    if unverified:
+        return {**unverified[0], "calls": len(calls)}
+    return {**max(results, key=lambda r: r["counted"]), "calls": len(calls)}
 
 
 def check_attribution(note: str, transcript: Transcript, stripped_speakers: list[str]) -> dict:
@@ -285,6 +358,17 @@ def _words(s: str) -> set[str]:
     return set(re.findall(r"[a-z]{4,}", s.lower()))
 
 
+# Four words: long enough that ordinary phrasing does not collide by accident,
+# short enough to catch a lifted clause rather than only a whole sentence.
+_ECHO_NGRAM = 4
+
+
+def _ngrams(s: str, n: int) -> set[str]:
+    """Every n-word sequence in `s`, normalised to bare lowercase words."""
+    words = re.findall(r"[a-z']+", s.lower())
+    return {" ".join(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
 def check_prompt_echo(note: str, source_text: str, system: str) -> dict:
     """Content the notes took from the instructions rather than from the meeting.
 
@@ -301,15 +385,37 @@ def check_prompt_echo(note: str, source_text: str, system: str) -> dict:
     check makes reintroducing content words into any instruction an immediate,
     named failure rather than something discovered in a note months later.
 
-    Precise by construction: it fires only on words the instructions and the
-    notes share while the transcript does not. There is no innocent reason for
-    a word to travel that route.
+    Matched on phrases, not single words. The first version compared word sets
+    and claimed there was "no innocent reason for a word to travel that route",
+    which is simply false: it gated three real runs on "rather", "involved" and
+    "leave", ordinary register vocabulary that happened to sit in the rules and
+    not in that particular meeting. The defence was `_NOTE_REGISTER`, a
+    hand-maintained list of innocent words, and a list that grew by three in one
+    evening was never going to converge.
+
+    A phrase is the right unit anyway, because the failure this exists for was
+    two whole example *sentences* lifted verbatim. Four consecutive words shared
+    with the instructions and absent from the meeting is strong evidence; one
+    word is noise. A phrase whose content words all appear in the transcript is
+    not an echo either — the model can reach the prompt's phrasing honestly by
+    way of the meeting, which is the third self-test control.
     """
-    echoed = sorted(
-        (_words(note) & _words(system)) - {w for w in _words(source_text)} - _NOTE_REGISTER
-    )
-    source_stems = {w[:5] for w in _words(source_text)}
-    echoed = [w for w in echoed if w[:5] not in source_stems]
+    src_words = _words(source_text)
+    src_stems = {w[:5] for w in src_words}
+    note_grams = _ngrams(note, _ECHO_NGRAM)
+    shared = note_grams & _ngrams(system, _ECHO_NGRAM)
+
+    echoed = []
+    for gram in sorted(shared):
+        content = [w for w in gram.split() if len(w) >= 4 and w not in _NOTE_REGISTER]
+        # Nothing but register words: no content travelled, whatever matched.
+        if not content:
+            continue
+        # Every content word is in the meeting, so the phrasing is reachable
+        # from the transcript and the overlap with the prompt proves nothing.
+        if all(w in src_words or w[:5] in src_stems for w in content):
+            continue
+        echoed.append(gram)
     return {"ok": not echoed, "echoed": echoed}
 
 
@@ -578,7 +684,15 @@ def check_recall(note: str, reference_items: list[str], model: str,
         "missed": missed,
         "unparsed": unparsed,
         "judge": model,
-        "score": f"{len(found)}/{total}" if total else "0/0",
+        # A judge that answered nothing used to render as "0/0", which reads like
+        # a reference list with no items rather than a judge that failed on every
+        # one of them. It happened for real: a 2200-word note pushed the judge
+        # into prose it could not be parsed out of, and the run reported 0/0
+        # beside a four-item reference. The denominator now counts what was
+        # asked, and unanswered items are named rather than divided away.
+        "score": (f"{len(found)}/{total}" if not unparsed else
+                  f"{len(found)}/{len(reference_items)} with "
+                  f"{len(unparsed)} unanswered — judge output unusable"),
     }
 
 
@@ -646,15 +760,100 @@ def summarize(transcript: Transcript, model: str, num_ctx: int, timeout: int) ->
         "model": model,
         "rendered": rendered,
         "system": system,
-        "prompt": system + user,
-        "response": response,
+        "calls": [{"label": "notes", "prompt": system + user, "response": response}],
+    }
+
+
+def chunk_transcript(transcript: Transcript, target_words: int,
+                     overlap_words: int) -> list[Transcript]:
+    """Slice a transcript into overlapping windows, cutting on turn boundaries.
+
+    The windows overlap because commitments are routinely made across a turn
+    boundary — one person asks, another agrees — and a cut between the two
+    leaves neither half usable in either slice. Overlap costs duplicate items,
+    which the consolidation pass is explicitly told to merge; a missed
+    commitment has no such remedy.
+    """
+    windows, current, words, i = [], [], 0, 0
+    turns = transcript.turns
+    while i < len(turns):
+        current.append(turns[i])
+        words += len(turns[i].text.split())
+        i += 1
+        if words >= target_words and i < len(turns):
+            windows.append(current)
+            back, rewound = 0, 0
+            while back < len(current) - 1 and rewound < overlap_words:
+                back += 1
+                rewound += len(current[-back].text.split())
+            i -= back
+            current, words = [], 0
+    if current:
+        windows.append(current)
+    return [
+        Transcript(source=f"{transcript.source} [slice {n}/{len(windows)}]",
+                   attribution=transcript.attribution, turns=w)
+        for n, w in enumerate(windows, 1)
+    ]
+
+
+_ITEM = re.compile(r"^\s*(?:[-*]\s*)?(DECISION|ACTION|QUESTION)\s*:\s*(.+)$", re.IGNORECASE)
+
+
+def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout: int,
+                      target_words: int, overlap_words: int) -> dict:
+    """Extract per slice, then consolidate — trading passes for recall.
+
+    The single-pass summarizer is asked to compress a whole meeting in one step,
+    and every measurement in EVAL.md says what it loses under that pressure is
+    commitments. Here each slice is compressed gently and the merge is forbidden
+    to select, so no step faces the ratio that causes the loss.
+
+    This is not free. It makes one model call per slice plus one, and it
+    introduces a second place for omission to happen — the merge. The extracted
+    items are returned alongside the note precisely so the two stages can be
+    scored separately: if extraction finds a commitment the note lacks, the
+    defect is in the merge, which is a different fix.
+    """
+    contract = CONTRACTS[transcript.attribution]
+    extract_system = EXTRACT_RULES + "\n\n" + contract
+    consolidate_system = CONSOLIDATE_RULES + "\n\n" + contract
+    slices = chunk_transcript(transcript, target_words, overlap_words)
+
+    t0 = time.monotonic()
+    calls, items = [], []
+    for chunk in slices:
+        user = f"Transcript slice:\n\n{chunk.render()}\n\nList the items."
+        response = ollama_chat(model, extract_system, user, num_ctx, timeout)
+        calls.append({"label": chunk.source, "prompt": extract_system + user,
+                      "response": response})
+        for line in response["message"]["content"].splitlines():
+            if m := _ITEM.match(line):
+                items.append(f"{m.group(1).upper()}: {m.group(2).strip()}")
+
+    listing = "\n".join(items) if items else "(no items were extracted)"
+    user = f"Items extracted from the meeting, in order:\n\n{listing}\n\nWrite the notes."
+    response = ollama_chat(model, consolidate_system, user, num_ctx, timeout)
+    calls.append({"label": "consolidate", "prompt": consolidate_system + user,
+                  "response": response})
+    elapsed = time.monotonic() - t0
+
+    return {
+        "note": response["message"]["content"].strip(),
+        "elapsed_s": elapsed,
+        "model": model,
+        "rendered": transcript.render(),
+        "system": extract_system + "\n" + consolidate_system,
+        "calls": calls,
+        "extracted": items,
+        "slices": len(slices),
     }
 
 
 def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
            reference: dict | None, num_ctx: int, expected: list[str] | None = None) -> bool:
     note = result["note"]
-    ctx = check_context(result["response"], result["prompt"], num_ctx)
+    ctx = check_context(result["calls"], num_ctx)
     attr = check_attribution(note, transcript, stripped_speakers)
     nums = check_numbers(note, result["rendered"])
     echo = check_prompt_echo(note, result["rendered"], result["system"])
@@ -673,8 +872,10 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
     if ctx["ok"] is None:
         print(f"  context       UNVERIFIED — {ctx['reason']}")
     elif ctx["ok"]:
-        print(f"  context       whole transcript read "
-              f"({ctx['counted']} prompt tokens, num_ctx {ctx['num_ctx']})")
+        across = f" across {ctx['calls']} calls" if ctx.get("calls", 1) > 1 else ""
+        print(f"  context       whole transcript read{across} "
+              f"({ctx['counted']} prompt tokens at the largest, "
+              f"num_ctx {ctx['num_ctx']})")
     else:
         print(f"  context       TRUNCATED — {ctx['reason']}")
 
@@ -957,6 +1158,16 @@ def main():
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX)
     p.add_argument("--timeout", type=int, default=900)
+    p.add_argument(
+        "--passes", type=int, choices=(1, 2), default=1,
+        help="1 = summarize the whole transcript in one call. 2 = extract items "
+             "per slice, then consolidate; slower, aimed at omission",
+    )
+    p.add_argument("--chunk-words", type=int, default=1500,
+                   help="target words per slice at --passes 2")
+    p.add_argument("--overlap-words", type=int, default=150,
+                   help="overlap between slices, so a commitment spanning a cut "
+                        "survives in one of them")
     p.add_argument("--out", type=Path, help="also write the notes to this file")
     p.add_argument("--reference", type=Path,
                    help="a list of expected items to measure recall against "
@@ -1002,12 +1213,24 @@ def main():
 
     expected = load_reference(args.reference) if args.reference else []
 
-    result = summarize(t, args.model, args.num_ctx, args.timeout)
+    if args.passes == 2:
+        result = summarize_chunked(t, args.model, args.num_ctx, args.timeout,
+                                   args.chunk_words, args.overlap_words)
+    else:
+        result = summarize(t, args.model, args.num_ctx, args.timeout)
     passed = report(result, t, stripped_speakers, reference, args.num_ctx, expected)
 
     if args.out:
         args.out.write_text(result["note"] + "\n")
         print(f"\n  wrote {args.out}")
+        if "extracted" in result:
+            # Written beside the notes so the two stages can be scored apart.
+            # A commitment present here and absent from the notes is a merge
+            # defect; one absent from both is an extraction defect, and they do
+            # not have the same fix.
+            items = args.out.with_suffix(".items.md")
+            items.write_text("\n".join(result["extracted"]) + "\n")
+            print(f"  wrote {items} ({len(result['extracted'])} extracted items)")
 
     return 0 if passed else 1
 

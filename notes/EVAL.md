@@ -448,6 +448,61 @@ MENTIONED" contains "MENTIONED", and anything unrecognised is reported as
 
 ---
 
+## Two passes do not fix omission. They move it.
+
+Every finding above says the same thing: what the local models lose is
+commitments, not accuracy. A single pass compresses ~8600 words into ~280 — a
+30:1 ratio at which dropping things is the expected behaviour. So the obvious fix
+is to stop asking for that ratio in one step: extract items from each slice of
+the transcript, then consolidate. `--passes 2` does exactly that, with
+overlapping slices so a commitment spanning a cut survives in one of them.
+
+It does not work, and the way it fails is more interesting than the fact.
+
+Two meetings, one model (`gemma3:12b`), same transcript and same contract within
+each meeting, hand-scored against the rule written *before* the run — a
+precaution taken because the previous turn's strict-versus-generous call on a
+single item moved a total from 3/6 to 4/6.
+
+| | one pass | two passes |
+|---|---|---|
+| meeting A (57 min, 6 reference commitments) | **5/6** | 4/6 |
+| meeting B (37 min, 4 reference commitments) | 2/4 | **3/4** |
+| **total** | **7/10** | **7/10** |
+| note length | 18 and 11 bullets | 118 and 61 bullets |
+| wall clock | 64 s and 43 s | 344 s and 138 s |
+
+A dead heat on recall, for 5x the output and 4x the time. Worse, the extra
+output is not elaboration — the consolidation pass turned **118 extracted items
+into 118 bullets**. It merged nothing. The step told "this is a de-duplication
+task, not a selection task" performed neither, and the result is a transcript
+dump wearing the shape of notes.
+
+**The two arms miss different things, and their union is complete.** Meeting A's
+single pass caught a housekeeping commitment about access and a decision about
+categorising a data breakdown that the two-pass run lost entirely; the two-pass
+run caught an engineering-review commitment the single pass never mentioned. Same
+pattern in meeting B. Take the union of the two arms and every meeting scores
+**6/6 and 4/4**.
+
+That is the finding worth keeping. The information survives into *some* note
+every time; no single strategy collects all of it. That points at ensembling —
+run both, union the items — rather than at a better prompt, and it is a different
+project from tuning one pass.
+
+Two smaller results fell out of the same run:
+
+- **Local extraction lacks the context to know what matters.** The commitment
+  about meeting access was missed by the extraction pass, not lost in the merge —
+  it never appeared in the 118 extracted items at all. Reading only the opening
+  slice, the model saw housekeeping chatter; reading the whole meeting, it saw an
+  action item. Slicing buys a gentler compression ratio and pays for it in
+  context.
+- **The model judge is worse than its calibration score suggests.** On meeting B
+  it reported 4/4 where hand-scoring gives 2/4. On the two-pass note it produced
+  output that could not be parsed at all for any of the four items. Recall here
+  stays hand-checked.
+
 ## What this evaluation structurally cannot tell you
 
 Stated plainly, in the same spirit as `spike/RESULTS.md`:
