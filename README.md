@@ -253,6 +253,5 @@ appears nowhere else.
 
 ## License
 
-The vendored tap is MIT, Copyright © 2025 Nick Payne — see
-[`capture/NOTICE`](./capture/NOTICE). The rest of this repository has no license
-declared yet, which means default copyright applies.
+MIT — see [`LICENSE`](./LICENSE). The vendored tap is separately MIT, Copyright
+© 2025 Nick Payne; see [`capture/NOTICE`](./capture/NOTICE).
