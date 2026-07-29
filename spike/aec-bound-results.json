@@ -25,7 +25,7 @@
       "min_fit_total": 64000,
       "dt_ratio": 0.25,
       "fit_before_s": null,
-      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "harness_sha256": "880fae65d9a4d0f3f4d57d83d8c0f6146127e2723f8f8d856151c5779e0b7ef4",
       "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
@@ -100,7 +100,7 @@
       "min_fit_total": 64000,
       "dt_ratio": 0.25,
       "fit_before_s": null,
-      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "harness_sha256": "880fae65d9a4d0f3f4d57d83d8c0f6146127e2723f8f8d856151c5779e0b7ef4",
       "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
@@ -704,7 +704,7 @@
       "min_fit_total": 64000,
       "dt_ratio": 0.25,
       "fit_before_s": null,
-      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "harness_sha256": "880fae65d9a4d0f3f4d57d83d8c0f6146127e2723f8f8d856151c5779e0b7ef4",
       "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
@@ -834,7 +834,7 @@
       "bleed": {
         "meta": {
           "bulk_delay_ms": 15.375,
-          "phat_peak": 0.1571,
+          "phat_peak": 0.1623,
           "fit_seconds": 29.9,
           "fit_runs": 1,
           "fit_mode": "first-half",
@@ -917,26 +917,26 @@
       },
       "overlap": {
         "meta": {
-          "bulk_delay_ms": 14.4375,
-          "phat_peak": 0.1222,
+          "bulk_delay_ms": 14.125,
+          "phat_peak": 0.2551,
           "fit_seconds": 30.0,
           "fit_runs": 1,
           "fit_mode": "first-half",
           "diagnostics": {
-            "erle_far_end_only_db": 9.66,
+            "erle_far_end_only_db": 9.64,
             "erle_double_talk_db": 1.35,
-            "far_end_only_seconds": 7.8,
+            "far_end_only_seconds": 7.7,
             "double_talk_seconds": 22.2,
-            "echo_above_noise_floor_db": 11.92,
-            "residual_above_noise_floor_db": 2.26,
+            "echo_above_noise_floor_db": 11.94,
+            "residual_above_noise_floor_db": 2.3,
             "band_coherence_db": {
-              "100-500Hz": 2.79,
-              "500-1000Hz": 6.45,
-              "1000-2000Hz": 5.58,
-              "2000-4000Hz": 2.87,
+              "100-500Hz": 2.7,
+              "500-1000Hz": 6.23,
+              "1000-2000Hz": 5.42,
+              "2000-4000Hz": 2.84,
               "4000-8000Hz": 0.2
             },
-            "level_dependence_db": -2.9
+            "level_dependence_db": -2.94
           },
           "excluded_fraction": null
         },
@@ -945,50 +945,50 @@
             "start": 32.61,
             "end": 35.61,
             "raw": 0.111,
-            "linear": 0.5922,
-            "masked": 0.6458
+            "linear": 0.5806,
+            "masked": 0.647
           },
           {
             "start": 38.65,
             "end": 41.65,
             "raw": 0.669,
-            "linear": 0.6446,
-            "masked": 0.6617
+            "linear": 0.6509,
+            "masked": 0.6669
           },
           {
             "start": 41.65,
             "end": 44.65,
             "raw": 0.2739,
-            "linear": 0.4897,
-            "masked": 0.6092
+            "linear": 0.4954,
+            "masked": 0.6053
           },
           {
             "start": 44.65,
             "end": 47.65,
             "raw": 0.1999,
-            "linear": 0.5335,
-            "masked": 0.6193
+            "linear": 0.5309,
+            "masked": 0.6213
           },
           {
             "start": 47.65,
             "end": 50.65,
             "raw": 0.3408,
-            "linear": 0.3897,
-            "masked": 0.5455
+            "linear": 0.3896,
+            "masked": 0.5477
           },
           {
             "start": 50.65,
             "end": 53.65,
             "raw": 0.272,
-            "linear": 0.4827,
-            "masked": 0.5804
+            "linear": 0.4844,
+            "masked": 0.5794
           },
           {
             "start": 53.65,
             "end": 56.65,
             "raw": 0.4152,
-            "linear": 0.6091,
-            "masked": 0.6361
+            "linear": 0.6104,
+            "masked": 0.6387
           }
         ]
       }
@@ -1022,7 +1022,7 @@
       "min_fit_total": 64000,
       "dt_ratio": 0.25,
       "fit_before_s": null,
-      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "harness_sha256": "880fae65d9a4d0f3f4d57d83d8c0f6146127e2723f8f8d856151c5779e0b7ef4",
       "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,
@@ -2963,7 +2963,7 @@
       "min_fit_total": 64000,
       "dt_ratio": 0.25,
       "fit_before_s": null,
-      "harness_sha256": "3a87ef8632b5503a48d4d1eaa3a185c53ecde7312a69dfcd6e007a0273cc5bcd",
+      "harness_sha256": "880fae65d9a4d0f3f4d57d83d8c0f6146127e2723f8f8d856151c5779e0b7ef4",
       "encoder_sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
       "vad": {
         "pct": 10,

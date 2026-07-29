@@ -873,7 +873,7 @@ def report(mic_leg, tap_leg, args, out_dir):
         s = stats.get(leg.name)
         offset = (s["first_arrival"] - origin) if s else 0.0
         for seg in segs:
-            merged.append((seg["start"] + offset, label, seg["text"]))
+            merged.append((seg["start"] + offset, seg["end"] + offset, label, seg["text"]))
     merged.sort(key=lambda r: r[0])
 
     if not merged:
@@ -893,7 +893,7 @@ def report(mic_leg, tap_leg, args, out_dir):
             "  once as Me and once as Them. That is the contamination, not a\n"
             "  transcription bug. Re-run on headphones to see the real split.\n"
         )
-    for start, label, text in merged:
+    for start, _end, label, text in merged:
         print(f"  [{int(start // 60):02d}:{start % 60:05.2f}] {label:4s} {text}")
 
 
@@ -923,10 +923,17 @@ def write_transcript(path, merged, b):
             # Labels are dropped, not merely marked, when the split is fiction.
             {
                 "start": round(start, 2),
+                # The end was carried this far and then dropped, which left every
+                # consumer inferring it from the next turn's start — swallowing
+                # each pause, and at a speaker change the next speaker's onset
+                # too. That silently corrupted one dataset in this project
+                # before anyone noticed, and it is the reason the voiceprint
+                # measurements had to re-derive boundaries from voicing.
+                "end": round(end, 2),
                 "speaker": None if contaminated else label,
                 "text": text,
             }
-            for start, label, text in merged
+            for start, end, label, text in merged
         ],
     }
     path.write_text(json.dumps(payload, indent=2))

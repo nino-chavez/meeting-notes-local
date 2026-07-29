@@ -6,18 +6,21 @@ his own meeting. The question this answers is whether removing the echo is worth
 building — and specifically whether it is worth integrating WebRTC's AEC3, which
 is a substantial dependency.
 
-That question does not need AEC3 to answer. A strong offline reference condition
-can be computed in closed form, and if *that* fails to restore the operator, no
-real-time canceller will. What it measures is a floor under the decision, not a
-ceiling over it. Read the limits below before quoting any number from here.
+That question does not need AEC3 to answer first. A strong offline condition can
+be computed in closed form and scored on the outcome that matters, which is
+cheap enough to run before committing to an integration. It is evidence about
+whether the effect exists on this material, in neither direction a proof: it
+does not bound AEC3 from above, since AEC3 adapts where this does not, and a
+failure here would not rule AEC3 out either. An earlier version of this line
+claimed the second half of that, and it contradicted the paragraph below it.
 
 **What this computes**
 
   raw        the microphone as captured.
   linear     minus a finite-impulse-response echo estimate, fit by least squares
              in closed form over the spans chosen by --fit-mode, with the bulk
-             delay supplied by cross-correlation over the whole recording. No
-             real-time filter gets to see a recording before filtering it.
+             delay estimated over those same spans. No real-time filter gets to
+             see a recording before filtering it.
   masked     then a Wiener-style time-frequency gain built from that same echo
              estimate: G = |E|^2 / (|E|^2 + |Y_hat|^2).
 
@@ -112,6 +115,7 @@ MIN_FIT_RUN = 8 * TAPS  # a fit range shorter than this is mostly wrong history
 ALIGN_MARGIN = TAPS // 8  # headroom so the direct path lands at a positive lag
 MIN_FIT_TOTAL = 4 * RATE  # under four seconds is not an echo path, it is a guess
 DT_RATIO = 0.25         # residual within 6 dB of the echo estimate means near end
+PREFIX_GUARD_S = 2.0    # gap between a calibration fit and the audio it is scored on
 
 
 def sha256(path: Path) -> str:
@@ -283,7 +287,8 @@ def far_end_only(mic: np.ndarray,
     return runs, sum(b - a for a, b in active)
 
 
-def align(mic: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.ndarray, int, float]:
+def align(mic: np.ndarray, ref: np.ndarray,
+          window: tuple[int, int] | None = None) -> tuple[np.ndarray, np.ndarray, int, float]:
     """Put the reference just before the echo, never on top of it, either sign.
 
     The margin is not cosmetic. Cross-correlation reports the delay of the
@@ -308,7 +313,13 @@ def align(mic: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.ndarray, int
         ref = np.concatenate([ref, np.zeros(len(mic) - len(ref))])
     else:
         ref = ref[:len(mic)]
-    bulk, peak = gcc_phat(mic, ref, int(MAX_LAG_S * RATE))
+    # Delay is estimated over `window` when given, and the resulting shift is
+    # applied to the whole reference. Estimating it over the whole take would
+    # let audio the fit is later scored on decide the alignment the fit is built
+    # from — a quieter version of the same leak the fit spans exist to close,
+    # and one that near-end speech correlated with the reference could bend.
+    a, b = window or (0, len(mic))
+    bulk, peak = gcc_phat(mic[a:b], ref[a:b], int(MAX_LAG_S * RATE))
     if peak < PHAT_FLOOR:
         bulk = 0                       # nothing to lock onto; do not chop the take
     applied = bulk - ALIGN_MARGIN
@@ -328,7 +339,19 @@ def align(mic: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.ndarray, int
 def process(mic: np.ndarray, ref: np.ndarray, fit_mode: str,
             fit_before: float = 0.0) -> tuple[dict, dict]:
     """The three conditions, plus what the fit was estimated from."""
-    mic, ref, bulk, peak = align(mic, ref)
+    m = min(len(mic), len(ref)) if len(ref) >= len(mic) else len(mic)
+    # Alignment is estimated over the same audio the filter is fitted on,
+    # wherever that is knowable before fitting.
+    if fit_mode == "prefix":
+        window = (0, min(int(fit_before * RATE), m))
+    elif fit_mode == "first-half":
+        window = (0, m // 2)
+    else:
+        # `full` is in-sample by definition, and `far-end-only` cannot choose
+        # its spans until a provisional alignment exists. Both estimate over the
+        # whole take, and neither supports an out-of-sample claim.
+        window = None
+    mic, ref, bulk, peak = align(mic, ref, window)
     m = len(mic)
 
     excluded = None
@@ -665,6 +688,26 @@ def run_self_test() -> int:
     else:
         print("   FAILED (expected > 20 on audio after the calibration phase)")
         ok = False
+    #    And the delay must come from the prefix alone. Here the audio AFTER the
+    #    calibration phase carries a second, louder copy of the reference at a
+    #    different lag — a stand-in for anything post-boundary that correlates
+    #    with the far end. Estimating alignment over the whole take walks onto
+    #    that lag; estimating it over the prefix does not, and the difference is
+    #    whether the fit was built from audio it is later scored on.
+    decoy = mic.copy()
+    after = slice(12 * RATE, len(mic))
+    decoy[after] += 3.0 * np.roll(far, 9000)[after]
+    _, meta_whole = process(decoy, far, "full")
+    _, meta_pref = process(decoy, far, "prefix", fit_before=12.0)
+    print(f"  {'prefix alignment ignores a decoy after the boundary':52s} "
+          f"{meta_pref['bulk_delay_ms']:6.1f} ms", end="")
+    if abs(meta_pref["bulk_delay_ms"] - 15.0) < 1.0 < abs(meta_whole["bulk_delay_ms"] - 15.0):
+        print("   ok")
+    else:
+        print(f"   FAILED (whole-take estimate {meta_whole['bulk_delay_ms']:.1f} ms; "
+              f"the decoy must move that one and not this one)")
+        ok = False
+
     short, meta = process(mic, far, "prefix", fit_before=1.0)
     print(f"  {'and a prefix under the floor is refused':52s} "
           f"{'skipped' if not short else 'ACCEPTED':>13}", end="")
@@ -760,8 +803,41 @@ def main() -> int:
     for spec in args.segments:
         name, _, path = spec.partition("=")
         seg_path = Path(path).expanduser()
-        supplied[name] = json.loads(seg_path.read_text())
+        loaded = json.loads(seg_path.read_text())
+        # Either a bare [{start, end}] list or a capture's own transcript.json,
+        # which is what an operator actually has after a run.
+        segs = loaded["turns"] if isinstance(loaded, dict) else loaded
+        if any("end" not in seg for seg in segs):
+            p.error(f"{seg_path} has segments with no end. Captures written before "
+                    f"dual_capture.py carried ends through the merge have starts "
+                    f"only, and inferring an end from the next segment's start "
+                    f"swallows the pause before it — at a speaker change, the next "
+                    f"speaker's onset as well. Re-run the capture, or supply a "
+                    f"segment list with measured ends.")
+        supplied[name] = segs
         segment_digests[name] = sha256(seg_path)
+
+    if args.fit_mode == "prefix":
+        if not args.fit_before:
+            p.error("--fit-mode prefix needs --fit-before")
+        if not args.score_after:
+            args.score_after = args.fit_before + PREFIX_GUARD_S
+        if args.score_after < args.fit_before + PREFIX_GUARD_S:
+            p.error(f"--score-after {args.score_after:g} overlaps the fit interval "
+                    f"(ends {args.fit_before:g}, needs {PREFIX_GUARD_S:g}s of guard). "
+                    f"A prefix run that scores its own calibration audio is not "
+                    f"held out, and reporting it as such is the failure this mode "
+                    f"exists to prevent.")
+        # Enrolment takes are exempt: they exist to build the profile, and their
+        # rows are a sanity check rather than the measurement.
+        missing = [n for n in takes if n not in supplied and n not in enroll_names]
+        if missing:
+            p.error(f"--fit-mode prefix needs --segments for {', '.join(missing)}. "
+                    f"This is the acceptance path, and the gate consumes whole "
+                    f"caller-supplied segments; scoring it on fixed windows would "
+                    f"measure something the product never runs. Pass the capture's "
+                    f"own transcript.json.")
+
 
     enc = sg.load_encoder(args.model_dir)
     # The checkpoint identifies the scorer as surely as the recordings identify

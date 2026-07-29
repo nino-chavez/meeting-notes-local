@@ -76,7 +76,7 @@ about 0.15 and still loses two segments in eight.
 **Another voice is the case that breaks it, and echo removal gets most of it
 back.** With the far end coming out of the laptop speakers, the gate admits 1 of
 the operator's 7 speech windows — it rejects him from his own meeting. Removing
-the echo takes that to 6 of 7, on audio the echo filter was fitted before rather
+the echo takes that to 5 of 7, on audio the echo filter was fitted before rather
 than on, while the same processing leaves 197 household segments unchanged to
 three decimals. Not a full repair: the recovered windows average +0.61 against
 +0.78 for the same voice with nothing playing, and on a second take with the far

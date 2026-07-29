@@ -633,10 +633,13 @@ thirty seconds — audio the filter never saw:
 
 | take | raw | linear | masked | admitted |
 |---|---|---|---|---|
-| **overlap** | +0.326 | +0.535 | +0.614 | **1/7 → 6/7** |
+| **overlap** | +0.326 | +0.535 | +0.615 | **1/7 → 5/7** |
 | bleed | +0.101 | +0.152 | +0.442 | 0/8 → 1/8 |
 
-Seven windows. That is the honest size of the strongest claim available here,
+Seven windows. It was six of seven until the alignment leak below was closed —
+estimating the delay over the whole take let audio after the boundary influence
+the shift the fit was built on, and one window did not survive taking that away.
+That is the honest size of the strongest claim available here,
 and the claim is narrower than it first reads: **recovery generalised to later
 audio.** Holding the waveform out stops the filter fitting the samples it is
 scored on. It does not stop a fitted filter and mask from suppressing the
@@ -683,9 +686,9 @@ scratch script that preceded it:
 
 | | overlap (recovers) | bleed (does not) |
 |---|---|---|
-| suppression, far end alone | 10.5 dB | 9.6 dB |
+| suppression, echo-dominant frames | 10.5 dB | 9.6 dB |
 | suppression, double-talk | **1.4 dB** | **3.4 dB** |
-| echo above the microphone's noise floor | 12.1 dB | 16.1 dB |
+| echo above the microphone's noise floor, same frames | 12.1 dB | 16.1 dB |
 | residual above that floor | 1.7 dB | 6.5 dB |
 | band-averaged coherence, best band | 6.5 dB | 6.4 dB |
 | level dependence, loud vs quiet quartile | −2.9 dB | −1.9 dB |
@@ -696,9 +699,15 @@ have ranked the two backwards and retired a mechanism that works. A speaker
 embedding cares which time-frequency cells are corrupted, not how much energy
 left the signal.
 
-The residual on overlap sits 1.7 dB above the microphone's own noise floor where
-the far end plays alone, so the linear filter is close to finished rather than
-failing. The coherence figure is **not** a ceiling, though an earlier version of
+The residual on overlap sits 1.7 dB above the microphone's own noise floor on
+the frames the classifier calls echo-dominant. That is suggestive and not more:
+those frames are selected *because* their residual is low relative to the
+estimated echo, so a low residual there is partly the selection rule restating
+itself, and the operator was talking throughout. Read it as "on the frames where
+this filter did best, it ran out of echo to remove", not as "the far end plays
+alone there" or "the linear filter is close to finished" — both of which this
+document asserted and neither of which follows. The coherence figure is **not** a
+ceiling either, though an earlier version of
 this table called it one and concluded that no longer filter could do better:
 the measured suppression of 10.5 and 9.6 dB is already above it, which is the
 arithmetic refuting the label. Averaging coherence across a band before taking
@@ -737,15 +746,43 @@ The protocol, in one continuous capture:
 2. **First 15–30 seconds: far end playing, say nothing.** This is the
    calibration phase.
 3. **Next 30–60 seconds: talk over the same playback**, as in the overlap take.
-4. Note the boundary in seconds. It goes into the manifest and gets hashed with
-   the recording.
+4. Note when you started talking. That boundary goes into the manifest and is
+   hashed alongside the recording.
 
-Then `--fit-mode prefix --fit-before <boundary> --score-after <boundary>` fits
-the calibration phase and scores only the double-talk after it. That is the one
-arrangement in this harness where the near end is absent from the fit because it
-had not started yet, rather than because a classifier judged it absent — and it
-is also the exact fixture AEC3 should be handed, since it gives a real canceller
-the single-talk interval it converges on.
+Then, with the boundary at 30 s:
+
+```sh
+python3 spike/aec_bound.py --label acceptance \
+  --enroll read,free --take read=... --take free=... \
+  --take calib=~/enroll-calibrated \
+  --segments calib=~/enroll-calibrated/transcript.json \
+  --fit-mode prefix --fit-before 28 --score-after 32 \
+  --out spike/aec-bound-results.json
+```
+
+Three things in that command are the point.
+
+**The fit stops at 28 s and scoring starts at 32 s**, leaving four seconds
+neither is allowed to touch. Identical boundaries would put the filter's last
+fitted sample next to the first scored one, and a two-second guard is cheaper
+than arguing about whether that matters. The harness refuses a prefix run whose
+scoring reaches back into its own fit, rather than letting an invalid result be
+reported as a held-out one.
+
+**Alignment is estimated from the prefix too**, not from the whole take. It used
+not to be, which let audio after the boundary influence the delay the fit was
+built from — a quieter version of the leak the fit spans exist to close.
+
+**`--segments` is required in this mode**, and points at the capture's own
+transcript. Everything else in this document is measured on fixed three-second
+windows, which are a control for comparing takes and are *not* what the gate
+consumes: `speaker_gate.py` embeds whole segments its caller hands it. An
+acceptance run has to be scored on the shipping contract or it measures
+something the product never does. Fixed windows stay available as a secondary
+diagnostic by omitting the flag.
+
+This is also the exact fixture AEC3 should be handed first, since it gives a real
+canceller the single-talk interval it converges on.
 ### Measured: the embedding degrades by half on the leg that needs it
 
 Before deciding whether a speaker-embedding dependency is worth carrying, the
@@ -936,7 +973,7 @@ in 2.2 s.
   today.
 - **Echo removal recovers the operator on one take and almost none on the
   other.** Fit offline on the first thirty seconds and scored only on audio it
-  never saw: 1 admitted speech window of 7 becomes 6 where the far end sits
+  never saw: 1 admitted speech window of 7 becomes 5 where the far end sits
   below the operator, and 0 of 8 becomes 1 where it sits ~7 dB above. Enough to
   justify one bounded AEC3 integration; not enough to design a warning around,
   since the two takes differ in operator distance as well as level.
