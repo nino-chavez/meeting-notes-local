@@ -313,12 +313,19 @@ this the operator?" — and it is an off-the-shelf capability (compact speaker
 embeddings, running locally) rather than a research problem. It costs a model
 dependency this project does not yet have, which is the real decision to make.
 
-Worth noting what the fallback looks like if verification is not present: a
-system-leg-only capture at `none`. That is not a crippled mode — it is the
-configuration that scored *best* of everything measured in
-[`notes/EVAL.md`](../notes/EVAL.md). It loses the operator's own speech, which is
-why the mic leg exists at all: an online meeting's system audio contains everyone
-except the person holding the microphone.
+Worth noting what a system-leg-only capture at `none` looks like, because it
+scored *best* of everything measured in [`notes/EVAL.md`](../notes/EVAL.md): it
+is a good degraded mode and a bad product. It loses the operator's own speech,
+which is why the mic leg exists at all — an online meeting's system audio
+contains everyone except the person holding the microphone, so the notes come
+back without a single thing *you* committed to. For a tool whose question is
+"what did I agree to", that is not a reduced scope; it is the wrong answer
+delivered confidently.
+
+**So this is not an off-ramp.** Degrading to system-only is what the capture does
+when it detects it cannot honour the split — a correctness behaviour, already
+built. It is not the shape of the product, and the gate below is not optional
+work that a smaller release could skip.
 
 ### The canonical pattern agrees, and it does not require an enrollment ritual
 
@@ -464,9 +471,29 @@ depends on, and it is the one thing none of the existing audio samples. Sixty
 seconds of the operator speaking at a normal working distance, captured through
 `dual_capture.py`, is the entire remaining input.
 
-Until then the honest summary is: an off-the-shelf embedding finds real speaker
-structure in far-field room audio at roughly half the strength it manages
-near-field, and whether that half is enough is not yet answerable.
+**This measured the harder problem than the gate has to solve, in two ways, and
+the numbers above should not be read as the gate's expected accuracy.**
+
+*It measured room against room.* Every segment here is far-field: people at
+conversational distance from a laptop that is not pointed at them. The gate's
+actual job is operator against room, and the operator is the near-field case on
+that same microphone — a metre away, speaking toward it. The control leg shows
+what near-field buys, 0.524 against 0.243. Where the operator's own segments land
+between those is unknown because no recording of them exists, and the
+loudness-quartile result specifically does not answer it: within-channel volume
+predicted nothing, but the 21 dB *between*-channel difference came with a large
+quality difference, so distance and channel remain live where gain does not.
+
+*It measured clustering, not verification.* Silhouette and cluster structure ask
+whether every speaker can be told apart from every other. The gate asks one
+binary question against one enrolled identity — keep, or drop. That is a strictly
+easier problem, and it is the one Teams and Zoom ship.
+
+So the honest summary is narrower than it first reads: an off-the-shelf embedding
+finds real speaker structure in far-field room audio at roughly half the strength
+it manages near-field, which bounds the *pessimistic* case. The gate's own case
+is untested and has reason to be better. What settles it is the operator sample,
+not more analysis of this recording.
 
 ---
 
