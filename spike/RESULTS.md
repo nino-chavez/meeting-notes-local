@@ -255,14 +255,70 @@ Note what the mic leg's silent tail does *not* do: 185 of 189 turns survive. Tha
 tail is not silent — it is a room with people in it, and those turns are backed by
 real voiced audio. Which is the next finding, and no gate addresses it.
 
-### An open microphone records the room, not the operator
+### Open: an open microphone records the room, not the operator
 
 Not everything on the mic leg was hallucinated. Some of it was a real
 conversation between other people in the house, transcribed cleanly and merged
-into the meeting as `Me`. No energy gate fixes that — the mic genuinely heard it.
-A notetaker running with the microphone open captures whoever is in the room,
-including people who are not in the meeting and have not consented to being
-recorded. That belongs in the product's consent story, not just its README.
+into the meeting as `Me`. The voicing gate passes all of it, correctly — it asks
+whether audio is behind a segment, and audio is. It never asks whether the audio
+is the *meeting*.
+
+**This is a correctness defect, not only a consent one**, and an earlier version
+of this document filed it under consent alone, which was wrong. Two distinct
+problems sit here:
+
+1. **Consent.** People in the room are recorded without agreeing to it.
+2. **Content.** Their speech enters the transcript labelled `Me` and reaches the
+   notes as something a meeting participant said. The `channel` contract's entire
+   premise is that one leg *is* the operator. A mic leg carrying other voices
+   makes that premise false, exactly the way bleed does.
+
+Bleed and room audio are the same defect approached from opposite sides, and the
+capture already knows how to handle one of them: measure, and when the premise
+fails, stop claiming the split. But degrading to `none` does not fix this one —
+it drops the labels while leaving the foreign content in the transcript. The
+pollution is in the words, not the attribution.
+
+**Measured, because "it probably washes out" is what bleed taught us not to
+assume.** Merging the gated legs over the meeting window gives 802 turns, of
+which **114 turns and 966 words — 14.2% — are the room**, labelled `Me`. Running
+the notes on that, against a control with the room turns removed and nothing else
+changed:
+
+- **Room content does not reach the notes.** Of 130 words the room contributed
+  that the meeting never used, exactly two appear in the notes: "importance" and
+  "such". No household subject matter survives compression.
+- **But the notes change anyway, and deterministically.** Three repeat runs were
+  byte-identical, so this is not sampling noise. With the room in: 3 action items
+  and 4 decisions. With it out: 5 action items and 5 decisions, and an entirely
+  different set of open questions.
+- **Recall barely moves.** Hand-checked against the six reference commitments,
+  the contaminated notes hit 3 and the clean notes hit 2 — and they are not the
+  same 3 and 2. The contaminated run caught a commitment about a measurement plan
+  that the clean run missed entirely; the clean run caught a document-sharing
+  commitment in full where the contaminated run got half of it.
+
+So the damage is not "your family's conversation appears in your meeting notes".
+It is that **irrelevant input perturbs which real content survives compression**,
+without changing how much of it does. On this meeting that is a wash. The
+mechanism keeping it a wash is that the meeting outweighs the room ten to one in
+word count — which is precisely what inverts in the case that matters: a short
+or quiet meeting, an active room, or a long side conversation. One meeting, one
+model, one ratio; the finding is the mechanism, not the 3-versus-2.
+
+**The fix is speaker verification on the mic leg.** Enroll the operator's voice
+once; keep the segments that match. It is the same architectural move as the
+voicing gate, one level up — that gate asks "is this audio?", this one asks "is
+this the operator?" — and it is an off-the-shelf capability (compact speaker
+embeddings, running locally) rather than a research problem. It costs a model
+dependency this project does not yet have, which is the real decision to make.
+
+Worth noting what the fallback looks like if verification is not present: a
+system-leg-only capture at `none`. That is not a crippled mode — it is the
+configuration that scored *best* of everything measured in
+[`notes/EVAL.md`](../notes/EVAL.md). It loses the operator's own speech, which is
+why the mic leg exists at all: an online meeting's system audio contains everyone
+except the person holding the microphone.
 
 ---
 
