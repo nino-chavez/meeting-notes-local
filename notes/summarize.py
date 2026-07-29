@@ -1060,6 +1060,14 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
     print(f"  turns         {len(transcript.turns)}")
     print(f"  model         {result['model']}  in {result['elapsed_s']:.1f}s")
 
+    # Before the fabrication checks, because this one is about what is MISSING from
+    # the input rather than what the model added to it. Every check below asks
+    # whether the notes say more than the transcript supports; this asks whether
+    # the transcript itself is short of the meeting. A reader who does not know
+    # that words were removed will read a gap as a meeting that had none.
+    for warning in transcript.gate_warnings:
+        print(f"  capture       {warning}")
+
     if ctx["ok"] is None:
         print(f"  context       UNVERIFIED — {ctx['reason']}")
     elif ctx["ok"]:

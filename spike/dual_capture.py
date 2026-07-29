@@ -41,6 +41,7 @@ import threading
 import time
 import wave
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -805,19 +806,53 @@ def drop_bled(segs, mic, tap, b, label):
     return kept
 
 
-def load_voiceprint(path, model_dir):
-    """The operator's profile, its threshold, and where the encoder is cached.
+class Voiceprint(NamedTuple):
+    """A profile, its threshold, its manifest, and a LOADED encoder.
 
-    Loaded before capture starts, not before the transcript is filtered. A bad
-    path or a profile from a different embedding space should cost the operator an
-    error message, not a meeting — by the time the gate runs, the audio is
-    recorded and the ASR has already spent minutes on it.
+    The encoder belongs in here rather than being built where it is used, and that
+    is the whole point of the type. An earlier version loaded the profile JSON
+    before capture and the 111 MB network only when the gate ran — which is after
+    the recording has finished and after minutes of ASR. A missing checkpoint, a
+    broken torch install, no network on first use, or an embedding width that does
+    not match the profile all failed *there*: past the point where the meeting
+    could be re-taken, and before the merged transcript was written.
+
+    The docstring of that version said a bad profile "should cost the operator an
+    error message, not a meeting". It did not do that. This does.
+    """
+
+    profile: object
+    threshold: float
+    manifest: dict
+    embed: object
+
+
+def load_voiceprint(path, model_dir):
+    """Read the profile and build its encoder, before the microphone opens.
+
+    Both halves are preflight. The JSON check catches a wrong file or a profile
+    from another embedding space; the probe catches an encoder that loads but
+    cannot produce a vector this profile can be compared against — a dimension
+    mismatch is silent otherwise, because a cosine between different widths raises
+    deep inside numpy at gate time rather than here.
     """
     import speaker_gate as sg
 
     profile, threshold, doc = sg.load_profile(Path(path))
-    doc["model_dir"] = model_dir
-    return profile, threshold, doc
+    doc["model_dir"] = str(model_dir)
+    embed = sg.load_encoder(model_dir)
+
+    # Two seconds of noise, which is the floor the gate scores at anyway. Silence
+    # would be a degenerate input to an embedding network and a poor probe.
+    probe = np.random.default_rng(0).standard_normal(int(2.0 * RATE)).astype(np.float32) * 0.05
+    got = np.asarray(embed(probe))
+    want = np.asarray(profile.centroid).shape[-1]
+    if got.shape[-1] != want:
+        raise SystemExit(
+            f"{path} holds a {want}-dimensional voiceprint but the encoder in "
+            f"{model_dir} returns {got.shape[-1]} dimensions. Nothing can be "
+            f"compared against this profile. Re-enroll with this encoder.")
+    return Voiceprint(profile, threshold, doc, embed)
 
 
 def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
@@ -865,6 +900,15 @@ def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
     what decides whether the operator survives. Production passes nothing and gets
     the real encoder.
 
+    **This returns a report as well as the segments**, which the other two filters
+    do not, and the asymmetry is deliberate. `drop_unvoiced` discards
+    confabulations and `drop_bled` discards the far end; neither is a person. This
+    one can discard a colleague, and `docs/screens-and-states.md` requires that
+    warning to survive to the post-meeting note rather than living only in a HUD
+    nobody had open. A printed line does not survive a closed terminal, so
+    printing was not enough: the counts, the close calls and the co-located alert
+    go into `transcript.json` where the notes half can find them.
+
     Rejections are reported, always, including how many were close calls and
     whether the dropped speech keeps coming back as one voice. That last one is
     the Teams alert: someone co-located is being deleted from the transcript, and
@@ -872,22 +916,24 @@ def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
     contamination it replaces, because the transcript then omits speech with no
     record that it did.
     """
-    if not segs or voiceprint is None:
-        return segs
+    if not segs:
+        return segs, {"applied": False, "why": "no microphone segments survived "
+                                               "the earlier filters"}
+    if voiceprint is None:
+        return segs, None
     if contaminated(b):
         print(f"  {label}: voiceprint gate SKIPPED — bleed is high, so the speaker "
               f"labels are already dropped and on this audio the gate is measured "
               f"to reject the operator as well. The room's words stay in the "
               f"transcript; that content cost is accepted rather than risked "
               f"against deleting the operator.")
-        return segs
+        return segs, {"applied": False,
+                      "why": "bleed above the attribution cut"}
 
     import speaker_gate as sg
 
-    profile, threshold, manifest = voiceprint
-    if embed is None:
-        embed = sg.load_encoder(manifest["model_dir"])
-    embeddings = sg.embed_segments(mic.astype(np.float32), segs, embed)
+    profile, threshold, manifest, loaded = voiceprint
+    embeddings = sg.embed_segments(mic.astype(np.float32), segs, embed or loaded)
     result = sg.gate(profile, segs, embeddings, threshold)
 
     # From the enrollment list itself, which load_profile refuses to load without.
@@ -912,7 +958,14 @@ def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
               f"(~{share * result.rejected_seconds:.0f}s). Someone beside you is being "
               f"removed from this transcript. If that is a participant, this capture "
               f"is missing their words.")
-    if sittings == 1:
+    op = manifest.get("operating_point") or {}
+    if op.get("experimental"):
+        # The override was recorded at enrolment precisely so it cannot be forgotten
+        # here. A run gated by material that did not meet the contract must not read
+        # like a measured configuration.
+        print("    EXPERIMENTAL PROFILE: written past the enrolment contract "
+              "(--experimental). Nothing this gate did is a measured result.")
+    elif sittings == 1:
         print("    NOTE: the profile came from one sitting, which is measurably "
               "over-tight — expect more of the operator dropped than the target asked.")
 
@@ -924,7 +977,31 @@ def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
     # leaks whatever short utterances the room contributed, and that cost is
     # stated above rather than hidden in a default.
     keep = set(result.kept) | set(result.unscorable)
-    return [s for i, s in enumerate(segs) if i in keep]
+    return [s for i, s in enumerate(segs) if i in keep], {
+        "applied": True,
+        "why": None,
+        "kept": len(result.kept),
+        "kept_seconds": round(result.kept_seconds, 1),
+        "rejected": len(result.rejected),
+        "rejected_seconds": round(result.rejected_seconds, 1),
+        "borderline": len(result.borderline),
+        "unscorable_kept": len(result.unscorable),
+        "unscorable_seconds": round(result.unscorable_seconds, 1),
+        # The two fields a human has to see. `coherent_share` is the evidence for
+        # the flag, and multiplied by the rejected seconds it gives the figure that
+        # actually matters: roughly how much of one person's speech went.
+        "persistent_other": result.persistent_other,
+        "coherent_share": (round(result.coherent_share, 3)
+                           if result.coherent_share is not None else None),
+        # Every rejection, with its score and whether it was a close call. The
+        # timestamps are the point: they are what lets someone go back to the audio
+        # and listen to what the gate removed. Without them "12 segments dropped"
+        # is unfalsifiable. No text — a rejected segment's words are not the
+        # operator's to publish, and the audio is on disk for anyone who needs them.
+        "rejections": [{"start": r.start, "end": r.end,
+                        "score": round(r.score, 3), "reason": r.reason}
+                       for r in result.rejected],
+    }
 
 
 def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
@@ -1033,8 +1110,8 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
     # After drop_bled, not before. The bled segments are the far end, and asking a
     # voiceprint whether the far end is the operator wastes an embedding per
     # segment to arrive at the answer the cheaper acoustic test already gave.
-    gating = voiceprint_provenance(args.voiceprint, b, bool(mic_segs))
-    mic_segs = drop_offprint(mic_segs, mic, args.voiceprint, b, "mic")
+    mic_segs, gate_outcome = drop_offprint(mic_segs, mic, args.voiceprint, b, "mic")
+    gating = voiceprint_provenance(args.voiceprint, gate_outcome)
     tap_segs = drop_unvoiced(transcribe(tap, args.whisper, args.language), tap, "system")
     write_leg_segments(out_dir / "system-segments.json", tap_segs, len(tap) / RATE,
                        out_dir / "system.wav", len(tap), "system")
@@ -1418,38 +1495,39 @@ def write_leg_segments(path, segs, duration_s, audio_path, audio_samples, leg):
     print(f"  wrote {path} ({len(segs)} {leg} segments{first})")
 
 
-def voiceprint_provenance(voiceprint, b, had_segments):
-    """What gated the microphone leg, for the artifact to carry.
+def voiceprint_provenance(voiceprint, outcome):
+    """What gated the microphone leg and what it did, for the artifact to carry.
 
-    Several states, and the reason this is not a boolean is that a reader six
-    months later cannot tell them apart from the segments alone. A leg can be
-    ungated because no profile was supplied, because bleed sent the gate down the
-    skip path, or because there was nothing on the leg to gate. `null` would report
-    all of those as the first, which reads as "nobody asked for a gate" when what
-    happened is "a gate was asked for and did not run".
+    `outcome` is `drop_offprint`'s own second return value, not a re-derivation of
+    it. An earlier version rebuilt the verdict here from the bleed measurement and
+    a segment count, which meant the artifact recorded what the gate was *expected*
+    to do — and it recorded nothing at all about what it actually did. Every
+    rejection, every close call and the co-located-speaker alert were printed to a
+    terminal and then discarded, in direct contradiction of
+    `docs/screens-and-states.md`, which requires that alert to reach the note.
 
-    `had_segments` mirrors `drop_offprint`'s own early return. Without it a capture
-    whose microphone leg transcribed nothing wrote `applied: true` — a gate result
-    for a gate that never executed.
+    Several states rather than a boolean, because a reader six months later cannot
+    otherwise tell "no profile was supplied" from "a profile was supplied and the
+    gate declined to run".
     """
     if voiceprint is None:
         return None
-    _profile, threshold, doc = voiceprint
+    _profile, threshold, doc, _embed = voiceprint
     op = doc.get("operating_point") or {}
-    if contaminated(b):
-        why = "bleed above the attribution cut"
-    elif not had_segments:
-        why = "no microphone segments survived the earlier filters"
-    else:
-        why = None
     return {
-        "applied": why is None,
-        "skipped_reason": why,
         "threshold": threshold,
         "target_frr": op.get("target_frr"),
+        "measured_frr": op.get("measured_frr"),
+        "false_admit_rate": op.get("false_admit_rate"),
         "n_sittings": len(doc["sittings"]),
+        "n_held_out": op.get("n_operator"),
         "profile_seconds": doc.get("seconds"),
+        "profile_sha256": doc.get("_profile_sha256"),
         "encoder": doc.get("encoder"),
+        "encoder_fingerprint": doc.get("encoder_fingerprint"),
+        "versions": doc.get("versions"),
+        # What it did, straight from the gate.
+        **(outcome or {"applied": False, "why": "the gate did not run"}),
     }
 
 

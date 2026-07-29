@@ -1079,13 +1079,23 @@ separate them. Note the limit precisely: **RMS conflates how loudly someone
 spoke with how close they were**, so this rules out level as the driver without
 ruling out proximity.
 
-**Which is exactly why the missing sample is the blocker.** There is no
-recording of the operator on this microphone — every mic leg in the project is
-silence or the household. Proximity is the one condition that might put the
-operator in a better regime than the room, it is the condition the vendor gate
-depends on, and it is the one thing none of the existing audio samples. Sixty
-seconds of the operator speaking at a normal working distance, captured through
-`dual_capture.py`, is the entire remaining input.
+**Which is exactly why the missing sample is the blocker.** Proximity is the one
+condition that might put the operator in a better regime than the room, it is the
+condition the vendor gate depends on, and it is the one thing none of the audio
+behind this section samples. Sixty seconds of the operator speaking at a normal
+working distance, captured through `dual_capture.py`, is the entire remaining
+input.
+
+> **Updated 2026-07-29, and this paragraph's premise no longer holds.** When this
+> was written there was no recording of the operator on this microphone at all.
+> One now exists — 117 s, nine scorable segments — so the sentence "every mic leg
+> in the project is silence or the household", which this paragraph used to carry,
+> was true when frozen and is false now. The frozen banner at the top of this file
+> covers the *echo findings*; it does not license a stale claim about what exists.
+> The gap is now narrower and specific: one sitting rather than none, still short
+> of the two `leave_one_sitting_out_scores` needs and of the twenty held-out scores
+> a 5% false-reject rate can express. `speaker_gate.enforce_enrollment` refuses a
+> profile until both are met.
 
 **This measured the harder problem than the gate has to solve, in two ways, and
 the numbers above should not be read as the gate's expected accuracy.**

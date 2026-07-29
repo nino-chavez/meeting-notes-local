@@ -189,8 +189,8 @@ profile is built. Both `--self-test` suites deliberately need neither — the en
 is an argument rather than an import, so every control runs on numpy alone.
 
 **The run that matters now** is an ordinary meeting on headphones with the
-voiceprint gate on. Nothing to read, nothing playing in the background, no cues.
-Three recordings, and you talk normally in all of them — see
+voiceprint gate on. Nothing to read, nothing playing in the background, no cues —
+a few short recordings to enrol your voice, then the meeting. See
 [Keeping the room out of your half](#keeping-the-room-out-of-your-half) below for
 the commands.
 
@@ -207,29 +207,39 @@ turns were other people talking near the laptop — transcribed cleanly and hand
 to the notes as things a participant said. The voiceprint gate removes them, and it
 now runs inside the capture rather than beside it.
 
-Three recordings get you there. **You talk normally in all of them.** Nothing to
-read, nothing playing in the background, no cues on screen.
+**You talk normally in all of these.** Nothing to read, nothing playing in the
+background, no cues on screen.
 
-**1. A minute of you talking, alone, with nothing playing.**
-
-```sh
-.venv/bin/python spike/dual_capture.py --seconds 60 --out ~/enroll-1
-```
-
-Say anything — read your inbox aloud, describe your morning. It only needs your
-voice, not particular words.
-
-**2. The same again, on a different day.**
+**1. A few minutes of you talking, alone, with nothing playing — on two separate
+days.**
 
 ```sh
-.venv/bin/python spike/dual_capture.py --seconds 60 --out ~/enroll-2
+.venv/bin/python spike/dual_capture.py --seconds 180 --out ~/enroll-1
+.venv/bin/python spike/dual_capture.py --seconds 180 --out ~/enroll-2   # another day
 ```
 
-Two sittings, because one is measurably worse and in the harmful direction. A
-threshold from a single recording sat above the honest one in all nine comparisons
-this project has, by 0.006 to 0.181 — and too high means the gate deletes *you*
-from your own meeting. One recording cannot see that, because every segment in it
-shares the same room, gain and day.
+Say anything — read your inbox aloud, describe your morning. It needs your voice,
+not particular words. One take of this kind already exists from the echo work (117
+seconds, nine judgeable segments), so this may be one new recording rather than two.
+
+Both details are enforced rather than advised. **Two separate days**, because a
+threshold from a single sitting sat above the honest one in all nine comparisons
+this project has, by 0.006 to 0.181 — too high means the gate deletes *you* from
+your own meeting, and one recording cannot see that because every segment in it
+shares the same room, gain and day. **Three minutes, not one**, because a 5%
+operating point needs twenty judgeable segments before any one of them *is* the
+fifth percentile, and a minute does not reliably produce twenty.
+
+**2. A minute of someone who is not you.** A podcast, the radio, anyone else in the
+room.
+
+```sh
+.venv/bin/python spike/dual_capture.py --seconds 60 --out ~/not-me
+```
+
+Without it the threshold is a rejection rate rather than a gate: it says how much of
+*you* it drops and nothing about what it lets through. Enrolment refuses to write a
+profile without it.
 
 **3. Build the voiceprint, then take a real meeting on headphones.**
 
@@ -237,15 +247,28 @@ shares the same room, gain and day.
 .venv/bin/python spike/speaker_gate.py \
   --calibrate ~/enroll-1/mic-segments.json ~/enroll-1/mic.wav \
   --calibrate ~/enroll-2/mic-segments.json ~/enroll-2/mic.wav \
+  --against   ~/not-me/mic-segments.json  ~/not-me/mic.wav \
   --enroll-out ~/voiceprint.json --target-frr 0.05
 
 .venv/bin/python spike/dual_capture.py --seconds 3600 --voiceprint ~/voiceprint.json
 ```
 
+Every operating point is printed with what it admits of the other voice before
+anything is written, so `--target-frr` is a choice made with the cost in view. If
+the material falls short the run refuses and names which requirement failed;
+`--experimental` overrides that and marks the profile, and every capture gated by an
+experimental profile says so rather than reading like a measured configuration.
+
 Then hand the transcript to the notes half below and **read the note**. That is the
 step, and it cannot be automated: whether a partial transcript supports usable
 notes is a judgement about coverage of decisions, names and actions, and about
 whether anything in it was invented. Token counts cannot answer it.
+
+**Do a five-minute canary before a real meeting**, and check the three artifacts
+reconcile: the gate's printed counts against `transcript.json`'s `voiceprint`
+block, and that block against the `capture` line the notes print. Disagreement is
+far easier to spot on five minutes than on an hour, and a meeting cannot be
+re-taken.
 
 Over-running into an empty room is harmless — bleed is measured only across the
 span where system audio was actually playing.

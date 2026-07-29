@@ -2066,12 +2066,16 @@ def _ground_truth_controls() -> bool:
         #     voiceprint here is a sentinel that raises if unpacked, so a control
         #     that passes proves the skip happened before any use of it.
         one_seg = [{"start": 1.0, "end": 4.0, "text": "something said"}]
+        skipped_segs, skipped_rep = dc.drop_offprint(one_seg, mic, object(),
+                                                     dirty_b, "mic")
         check("the gate is skipped where the labels are already gone",
-              dc.drop_offprint(one_seg, mic, object(), dirty_b, "mic"), one_seg,
-              shown="unchanged")
-        check("and does nothing at all with no profile supplied",
-              dc.drop_offprint(one_seg, mic, None, clean_b, "mic"), one_seg,
-              shown="unchanged")
+              skipped_segs, one_seg, shown="unchanged")
+        check("and the skip is recorded with its reason, not left to a terminal",
+              (skipped_rep["applied"], bool(skipped_rep["why"])), (False, True),
+              shown="not applied, reason given")
+        check("and it does nothing at all with no profile supplied",
+              dc.drop_offprint(one_seg, mic, None, clean_b, "mic"), (one_seg, None),
+              shown="unchanged, no report")
 
         #     The line that actually decides what survives. Both controls above
         #     assert *unchanged*, so they cover only the two skip paths — the index
@@ -2091,11 +2095,12 @@ def _ground_truth_controls() -> bool:
         mixed_spans = [(1.0, 5.0, 0), (7.0, 11.0, 0), (13.0, 17.0, 1),
                        (19.0, 23.0, 0), (25.0, 26.0, 0)]
         mixed_audio, mixed = sg._fixture_audio(mixed_spans, g_rng)
-        vp_fix = (g_profile, 0.5, {"seconds": 32.0, "encoder": "fixture",
-                                   "sittings": [{}, {}],
-                                   "operating_point": {"target_frr": 0.05}})
-        kept = dc.drop_offprint(mixed, mixed_audio, vp_fix, clean_b, "mic",
-                                embed=g_embed)
+        vp_fix = dc.Voiceprint(g_profile, 0.5,
+                               {"seconds": 32.0, "encoder": "fixture",
+                                "sittings": [{}, {}],
+                                "operating_point": {"target_frr": 0.05}},
+                               g_embed)
+        kept, rep = dc.drop_offprint(mixed, mixed_audio, vp_fix, clean_b, "mic")
         check("the gate drops the voice that is not the operator",
               [s["start"] for s in kept], [1.0, 7.0, 19.0, 25.0],
               shown="intruder at 13.0s gone")
@@ -2104,26 +2109,41 @@ def _ground_truth_controls() -> bool:
         check("the surviving list is the original objects in the original order",
               all(a is b for a, b in zip(kept, [mixed[i] for i in (0, 1, 3, 4)],
                                          strict=True)))
+        #     The encoder travels in the Voiceprint, so production does not build it
+        #     after the meeting. Passing it explicitly must still work, for fixtures.
+        check("the encoder carried in the profile is used when none is passed",
+              dc.drop_offprint(mixed, mixed_audio, vp_fix, clean_b, "mic",
+                               embed=g_embed)[0] == kept)
+
+        #     What the gate DID has to survive a closed terminal. Every count here
+        #     was computed, printed and thrown away before this control existed,
+        #     including the co-located-speaker alert that screens-and-states.md
+        #     requires to reach the post-meeting note.
+        check("the report carries what was dropped, not just what survived",
+              (rep["applied"], rep["rejected"], rep["unscorable_kept"]),
+              (True, 1, 1), shown="1 rejected, 1 unscorable kept")
+        check("and every rejection carries its timestamp, so it can be listened to",
+              [r["start"] for r in rep["rejections"]], [13.0])
+        check("and its score and whether it was a close call",
+              set(rep["rejections"][0]) == {"start", "end", "score", "reason"})
 
         #     Several states, not a boolean: a reader cannot otherwise tell "no gate
         #     was asked for" from "a gate was asked for and did not run".
-        vp = (None, 0.61, {"seconds": 300.0, "encoder": "e", "sittings": [{}, {}],
-                           "operating_point": {"target_frr": 0.05}})
+        vp = dc.Voiceprint(None, 0.61,
+                           {"seconds": 300.0, "encoder": "e", "sittings": [{}, {}],
+                            "operating_point": {"target_frr": 0.05,
+                                                "measured_frr": 0.04}}, None)
         check("an ungated capture says so",
-              dc.voiceprint_provenance(None, clean_b, True), None)
-        check("a gated one records the threshold it used",
-              (dc.voiceprint_provenance(vp, clean_b, True)["applied"],
-               dc.voiceprint_provenance(vp, clean_b, True)["threshold"]), (True, 0.61),
-              shown="applied at 0.61")
-        skipped = dc.voiceprint_provenance(vp, dirty_b, True)
+              dc.voiceprint_provenance(None, rep), None)
+        gated = dc.voiceprint_provenance(vp, rep)
+        check("a gated one records the threshold it used and what it did",
+              (gated["applied"], gated["threshold"], gated["rejected"]),
+              (True, 0.61, 1), shown="applied at 0.61, 1 dropped")
+        check("and the measured rate, not only the target that was asked for",
+              (gated["target_frr"], gated["measured_frr"]), (0.05, 0.04))
+        skipped = dc.voiceprint_provenance(vp, skipped_rep)
         check("and a skipped one is distinguishable from an ungated one",
-              (skipped["applied"], bool(skipped["skipped_reason"])), (False, True),
-              shown="not applied, reason given")
-        #     drop_offprint returns early on an empty leg too, and reporting that as
-        #     applied is a gate result for a gate that never executed.
-        empty = dc.voiceprint_provenance(vp, clean_b, False)
-        check("a leg with nothing on it did not have a gate applied to it",
-              (empty["applied"], bool(empty["skipped_reason"])), (False, True),
+              (skipped["applied"], bool(skipped["why"])), (False, True),
               shown="not applied, reason given")
         #     The sitting count comes from the enrollment list, which load_profile
         #     refuses to load without. Read from the nested operating point instead
@@ -2131,18 +2151,36 @@ def _ground_truth_controls() -> bool:
         #     warning — for exactly the profile that most needed it.
         check("the sitting count survives a profile with no operating point",
               dc.voiceprint_provenance(
-                  (None, 0.61, {"sittings": [{}, {}, {}]}), clean_b, True)["n_sittings"],
-              3)
+                  dc.Voiceprint(None, 0.61, {"sittings": [{}, {}, {}]}, None),
+                  rep)["n_sittings"], 3)
 
         #     And it reaches the artifact, which is where a later reader looks to
         #     find out whether the mic leg holds the operator or whoever was audible.
         gated_p = d / "transcript-gated.json"
         dc.write_transcript(gated_p, [(1.0, 4.0, "Me", "something said")], clean_b,
-                            dc.voiceprint_provenance(vp, clean_b, True))
+                            dc.voiceprint_provenance(vp, rep))
         wrote = json.loads(gated_p.read_text())
         check("the transcript carries what gated the microphone leg",
-              (wrote["voiceprint"]["applied"], wrote["voiceprint"]["n_sittings"]),
-              (True, 2), shown="applied, 2 sittings")
+              (wrote["voiceprint"]["applied"], wrote["voiceprint"]["n_sittings"],
+               wrote["voiceprint"]["rejected"]), (True, 2, 1),
+              shown="applied, 2 sittings, 1 dropped")
+        #     And the notes half surfaces it. A warning that stops at the JSON is the
+        #     same failure one layer down from a warning that stops at the terminal.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notes"))
+        import transcript as nt
+
+        loaded_note = nt.load_capture(gated_p)
+        check("the notes loader carries the gate report through",
+              bool(loaded_note.gate) and loaded_note.gate["rejected"] == 1)
+        check("and turns a co-located-speaker alert into a human warning",
+              any("recurring voice" in w for w in nt.Transcript(
+                  source="x", attribution="channel",
+                  gate={"applied": True, "persistent_other": True,
+                        "coherent_share": 0.8, "rejected_seconds": 40.0},
+              ).gate_warnings))
+        check("a clean gate run produces no warning to cry wolf with",
+              nt.Transcript(source="x", attribution="channel",
+                            gate={"applied": True, "rejected": 0}).gate_warnings, [])
 
     return ok
 

@@ -16,20 +16,26 @@ in-meeting speech, Zoom from the first speech in a call. Enrollment here is
 therefore a centroid over microphone audio the project already records, not a
 setup screen.
 
-**The threshold is not calibrated, and nothing in this repository can calibrate
-it.** `gate()` takes it as a required argument with no default, because the only
-defensible value is a quantile of the operator's own score distribution on the
-built-in microphone, and no recording of the operator on that microphone exists
-— every mic leg in this project is silence or the household. A plausible
-constant here would be indistinguishable from a measured one to every later
-reader, which is the failure this file is written to avoid.
+**The threshold is not a constant this module may supply.** `gate()` takes it as a
+required argument with no default, and `load_profile` refuses a file that does not
+carry one, because the only defensible value is a quantile of the operator's own
+score distribution on the microphone it will gate. A plausible constant here would
+be indistinguishable from a measured one to every later reader, which is the
+failure this file is written to avoid.
 
-The remaining input is a minute of the operator speaking at a working distance,
-captured through `dual_capture.py`, in each of two or three separate sittings —
-and the plural is measured, not cautious. Thresholds derived from a single
-session ran too strict in all nine speaker-by-operating-point comparisons
-available, by 0.006 to 0.181, which drops more of the operator than the target
-asked for. `--calibrate` turns that recording into the number in one pass.
+One sitting of that material now exists — 117 s, nine scorable segments — which is
+not enough, and the shortfall is measured rather than cautious. Thresholds derived
+from a single session ran too strict in all nine speaker-by-operating-point
+comparisons available, by 0.006 to 0.181, which drops more of the operator than
+the target asked for; `leave_one_sitting_out_scores` is what measures the
+difference and it needs two. Nine scorable segments is also below the twenty a 5%
+false-reject rate needs before any observation IS the fifth percentile.
+
+So the remaining input is **at least one more sitting**, longer than a minute, plus
+a recording of somebody who is not the operator for `--against`. `enforce_enrollment`
+refuses a profile without both rather than leaving it to this paragraph — an
+earlier version of this note said the same thing and nothing enforced it, which is
+how a one-sitting profile with no negative evidence became writable.
 
 Both vendors also state the failure mode, and it is the reason this module
 returns rejections rather than a filtered list. Teams alerts the user when it
@@ -579,6 +585,86 @@ def _wav_samples(path: Path) -> int:
 
 PROFILE_SCHEMA = "voiceprint/1"
 
+# Below this many held-out scores a quantile cannot even express the requested
+# operating point: a 5% false-reject rate needs 20 observations before one of them
+# IS the 5th percentile, and asking numpy for it below that returns an
+# interpolation between neighbours rather than a measured rate. This is not a
+# tuning constant — it is 1/target_frr, computed per request.
+def min_resolvable(target_frr: float) -> int:
+    return int(np.ceil(1.0 / target_frr))
+
+
+# And above the resolvable floor there is still thin. Thirty is where a sample
+# quantile stops moving by more than a hundredth when one observation is added or
+# removed, measured on this project's own score distributions. Between the floor
+# and here the number is real but soft, and the run says so rather than presenting
+# it with the same confidence as a well-sampled one.
+THIN_HELD_OUT = 30
+
+
+def _finite(name: str, value, lo: float | None = None, hi: float | None = None) -> float:
+    """A float that is actually a number, in range, or a refusal naming the field.
+
+    NaN is the case this exists for and it is not hypothetical: a NaN threshold
+    round-tripped through `save_profile` and `load_profile` unchallenged, and every
+    comparison `score >= nan` is False — so the gate rejects every scorable segment
+    while keeping the ones too short to judge. The transcript comes out holding
+    only the sub-two-second turns, no error is raised, and the printed count of
+    what was dropped is the only evidence anything went wrong.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise SystemExit(f"{name} is {value!r}, which is not a number") from None
+    if not np.isfinite(v):
+        raise SystemExit(
+            f"{name} is {v}, which is not a finite number. Every comparison against "
+            f"it would be False, so the gate would silently reject all judgeable "
+            f"speech and keep only what it cannot judge.")
+    if (lo is not None and v < lo) or (hi is not None and v > hi):
+        raise SystemExit(f"{name} is {v}, outside the valid range [{lo}, {hi}]")
+    return v
+
+
+def encoder_fingerprint(savedir: str | Path | None = None) -> str | None:
+    """A digest of the embedding weights, not the name of the recipe that fetched them.
+
+    `ECAPA_SOURCE` is a Hugging Face repo id, and a repo id is a moving target: the
+    same string resolved to different weights would produce a different embedding
+    space and silently invalidate every threshold derived under the old one. The
+    cosine would still be a number, the gate would still run, and nothing would
+    say the profile no longer describes what the encoder emits.
+
+    Only `embedding_model.ckpt` is hashed. The recipe also fetches a VoxCeleb
+    classification head this module never calls, and including a file that cannot
+    affect an embedding would make the fingerprint change for reasons that do not
+    matter. Returns None when the checkpoint has not been fetched yet, which is not
+    an error — a profile can be built by a caller supplying its own encoder.
+    """
+    d = Path(savedir) if savedir else Path.home() / ".cache" / "speaker-gate"
+    ckpt = d / "embedding_model.ckpt"
+    if not ckpt.exists():
+        return None
+    # resolve(): the cache stores symlinks into the Hugging Face hub, and hashing a
+    # symlink's own bytes would fingerprint the path rather than the weights.
+    return ab.sha256(ckpt.resolve())
+
+
+def runtime_versions() -> dict:
+    """The library versions behind an embedding, for a reader who has to reproduce it.
+
+    Imported defensively rather than at module scope, for the reason
+    `load_encoder` gives: the controls in `--self-test` run on numpy alone, and a
+    provenance helper that drags in 153 MB would make them stop running.
+    """
+    out = {}
+    for mod in ("torch", "speechbrain", "numpy"):
+        try:
+            out[mod] = __import__(mod).__version__
+        except (ImportError, AttributeError):
+            out[mod] = None
+    return out
+
 
 def save_profile(path: Path, profile: Profile, threshold: float, *,
                  operating_point: dict, sittings: list[dict],
@@ -604,9 +690,20 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
             "a profile with no recorded enrollment material cannot state how many "
             "sittings produced it, and a single-sitting threshold is measurably "
             "over-tight — see leave_one_out_scores")
-    path.write_text(json.dumps({
+    # Validated on the way OUT as well as in. A profile that cannot be used is
+    # better refused where it is produced, beside the material that explains why,
+    # than at the start of a meeting an hour later.
+    _finite("threshold", threshold, -1.0, 1.0)
+    _finite("cohesion", profile.cohesion, -1.0, 1.0)
+    _finite("spread", profile.spread, 0.0, 2.0)
+    if not np.all(np.isfinite(profile.centroid)):
+        raise ValueError("the centroid holds non-finite values")
+
+    doc = {
         "schema": PROFILE_SCHEMA,
         "encoder": encoder,
+        "encoder_fingerprint": encoder_fingerprint(),
+        "versions": runtime_versions(),
         "centroid": profile.centroid.tolist(),
         "n_enrolled": profile.n_enrolled,
         "n_excluded": profile.n_excluded,
@@ -616,7 +713,15 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
         "threshold": threshold,
         "operating_point": operating_point,
         "sittings": sittings,
-    }, indent=2) + "\n")
+    }
+    # Owner-only, and written through a temporary file in the same directory so an
+    # interrupted write cannot leave a half-parsed profile where a whole one was.
+    # A voiceprint is biometric: it is not a secret the way a password is, but it
+    # identifies a person and it does not need to be world-readable to work.
+    tmp = path.with_suffix(path.suffix + ".partial")
+    tmp.write_text(json.dumps(doc, indent=2) + "\n")
+    tmp.chmod(0o600)
+    tmp.replace(path)
 
 
 def load_profile(path: Path) -> tuple[Profile, float, dict]:
@@ -639,15 +744,25 @@ def load_profile(path: Path) -> tuple[Profile, float, dict]:
     for field in ("centroid", "threshold", "cohesion", "spread", "sittings"):
         if doc.get(field) is None:
             raise SystemExit(f"{path}: no {field}. This is not a usable profile.")
+    centroid = np.asarray(doc["centroid"], dtype=np.float64)
+    if not centroid.size or not np.all(np.isfinite(centroid)):
+        raise SystemExit(f"{path}: the centroid is empty or holds non-finite values, "
+                         f"so every score against it is meaningless.")
     profile = Profile(
-        centroid=_unit(np.asarray(doc["centroid"], dtype=np.float64)),
+        centroid=_unit(centroid),
         n_enrolled=int(doc["n_enrolled"]),
         n_excluded=int(doc["n_excluded"]),
-        seconds=float(doc["seconds"]),
-        cohesion=float(doc["cohesion"]),
-        spread=float(doc["spread"]),
+        seconds=_finite(f"{path}: seconds", doc["seconds"], 0.0),
+        cohesion=_finite(f"{path}: cohesion", doc["cohesion"], -1.0, 1.0),
+        spread=_finite(f"{path}: spread", doc["spread"], 0.0, 2.0),
     )
-    return profile, float(doc["threshold"]), doc
+    # A cosine threshold outside [-1, 1] can never be met or never be missed, and
+    # NaN is met by nothing at all — see _finite.
+    threshold = _finite(f"{path}: threshold", doc["threshold"], -1.0, 1.0)
+    # Recorded so the transcript can say which profile gated it. Computed here
+    # rather than stored inside, because a digest of a file cannot live in it.
+    doc["_profile_sha256"] = ab.sha256(Path(path))
+    return profile, threshold, doc
 
 
 # ---------------------------------------------------------------------------
@@ -1011,6 +1126,93 @@ def run_self_test() -> int:
             "built-in fallback is the exact failure this module exists to prevent",
             _raises(lambda: load_profile(Path(tmp) / "bare.json"), SystemExit),
         )
+        check(
+            "and it is written owner-only, because a centroid identifies a person",
+            pp.stat().st_mode & 0o077 == 0,
+            f"mode {pp.stat().st_mode & 0o777:o}",
+        )
+
+        # A NaN threshold is met by nothing: `score >= nan` is False for every
+        # segment, so the gate rejects all judgeable speech and keeps only what it
+        # cannot judge — a transcript of sub-two-second turns, with no error. It
+        # round-tripped through both functions unchallenged before these two.
+        check(
+            "a NaN threshold is refused on the way out",
+            _raises(lambda: save_profile(pp, operator, float("nan"),
+                                        operating_point=point,
+                                        sittings=[{}, {}]), SystemExit),
+        )
+        for bad, label in ((float("nan"), "NaN"), (2.0, "above +1"),
+                           (-3.0, "below -1")):
+            broken = json.loads(pp.read_text())
+            broken["threshold"] = bad
+            bp = Path(tmp) / f"bad-{label.replace(' ', '-')}.json"
+            bp.write_text(json.dumps(broken))
+            check(
+                f"and a threshold {label} is refused on the way in",
+                _raises(lambda p=bp: load_profile(p), SystemExit),
+            )
+        hollow_centroid = json.loads(pp.read_text())
+        hollow_centroid["centroid"] = [float("nan")] * _DIM
+        hc = Path(tmp) / "nan-centroid.json"
+        hc.write_text(json.dumps(hollow_centroid))
+        check(
+            "a centroid of NaNs is refused, not normalised into one",
+            _raises(lambda: load_profile(hc), SystemExit),
+        )
+        check(
+            "the profile's own digest travels with it, so a transcript can say "
+            "which voiceprint gated it",
+            len(load_profile(pp)[2]["_profile_sha256"]) == 64,
+        )
+
+    print("\n=== the enrolment contract ===\n")
+    # Each of these wrote a production profile before the contract existed.
+    two_ok = [{"audio_sha256": "aaa"}, {"audio_sha256": "bbb"}]
+    plenty = [0.8] * 40
+    other_ok = [0.2, 0.3]
+    check(
+        "material that meets the contract is accepted",
+        not _raises(lambda: enforce_enrollment(two_ok, plenty, other_ok, 0.05, False),
+                    SystemExit),
+    )
+    check(
+        "the same recording passed twice is one sitting, not two — digests, not paths",
+        _raises(lambda: enforce_enrollment(
+            [{"audio_sha256": "aaa"}, {"audio_sha256": "aaa"}],
+            plenty, other_ok, 0.05, False), SystemExit),
+    )
+    check(
+        "one sitting is refused",
+        _raises(lambda: enforce_enrollment([{"audio_sha256": "aaa"}], plenty,
+                                           other_ok, 0.05, False), SystemExit),
+    )
+    check(
+        "no negative-speaker material is refused — that is a rejection rate, not a gate",
+        _raises(lambda: enforce_enrollment(two_ok, plenty, [], 0.05, False),
+                SystemExit),
+    )
+    check(
+        "too few held-out scores to express the target is refused",
+        _raises(lambda: enforce_enrollment(two_ok, [0.8] * 19, other_ok, 0.05, False),
+                SystemExit),
+        f"19 scores against the {min_resolvable(0.05)} a 5% target needs",
+    )
+    check(
+        "and the floor tracks the target rather than being a constant",
+        (min_resolvable(0.05), min_resolvable(0.20), min_resolvable(0.01))
+        == (20, 5, 100),
+    )
+    check(
+        "a looser target makes the same thin sample sufficient",
+        not _raises(lambda: enforce_enrollment(two_ok, [0.8] * 19, other_ok, 0.20,
+                                              False), SystemExit),
+    )
+    check(
+        "--experimental writes it anyway, which is what keeps the override visible",
+        not _raises(lambda: enforce_enrollment([{"audio_sha256": "aaa"}], [0.8] * 4,
+                                              [], 0.05, True), SystemExit),
+    )
 
     outcome = (
         "all controls behaved as specified" if not failures else f"{failures} control(s) wrong"
@@ -1128,14 +1330,86 @@ def run_calibrate(args) -> int:
                 "--enroll-out needs --target-frr: the file carries one threshold, and "
                 "which operating point it is has to be a choice on the record rather "
                 "than a default this module picked.")
+        _finite("--target-frr", args.target_frr, 0.0, 1.0)
+        enforce_enrollment(manifest, own, other, args.target_frr, args.experimental)
         chosen = calibrate(own, args.target_frr, other or None)
         chosen["held_out"] = held
         chosen["n_sittings"] = len(sittings)
+        chosen["experimental"] = bool(args.experimental)
         save_profile(args.enroll_out, profile, chosen["threshold"],
                      operating_point=chosen, sittings=manifest)
-        print(f"\n  wrote {args.enroll_out} — threshold {chosen['threshold']:.3f} at "
-              f"{args.target_frr:.0%} operator-dropped, {len(sittings)} sitting(s)")
+        mark = "  EXPERIMENTAL — " if args.experimental else "  "
+        print(f"\n{mark}wrote {args.enroll_out} — threshold "
+              f"{chosen['threshold']:.3f} at {args.target_frr:.0%} operator-dropped, "
+              f"{len(sittings)} sitting(s), {len(own)} held-out scores")
     return 0
+
+
+def enforce_enrollment(manifest: list[dict], own: list[float],
+                       other: list[float], target_frr: float,
+                       experimental: bool) -> None:
+    """Refuse to write a profile the material cannot support.
+
+    Everything below was documented as required and enforced by nothing, which is
+    the gap between a README and a contract. Each of these produced a profile that
+    looked exactly like a good one:
+
+      * **One sitting.** Measurably over-tight, in the direction that deletes the
+        operator, and the file recorded `n_sittings: 1` where nothing read it.
+      * **The same recording passed twice.** Counted as two sittings and reported as
+        two. Caught by this project's own smoke test doing precisely that by
+        accident — two `--calibrate` pairs pointing at one file, printed as
+        "2 sitting(s)", with none of the session diversity that plural is for. Audio
+        digests, not paths: a copy under another name is the same sitting.
+      * **No negative-speaker material.** `--calibrate` already prints that a
+        threshold without it "is a rejection rate, not a gate", then wrote one.
+      * **Too few held-out scores to express the operating point.** A 5% target
+        needs 20 observations before any of them is the 5th percentile.
+
+    `--experimental` allows all of it and is recorded in the profile, so a run
+    gated by one says so rather than reading as a measured configuration. That is
+    the point of an override: not to weaken the rule, but to keep the weakening
+    visible downstream.
+    """
+    digests = {m["audio_sha256"] for m in manifest}
+    problems = []
+    if len(digests) < 2:
+        problems.append(
+            f"{len(manifest)} --calibrate pair(s) but only {len(digests)} distinct "
+            f"recording(s). A threshold needs material from separate sittings; the "
+            f"same audio twice carries none of the session variation that is for."
+            + (" The two pairs point at the same file."
+               if len(manifest) > 1 else ""))
+    floor = min_resolvable(target_frr)
+    if len(own) < floor:
+        problems.append(
+            f"{len(own)} held-out scores cannot express a {target_frr:.0%} "
+            f"false-reject rate — that needs at least {floor}, or the quantile is an "
+            f"interpolation between neighbours rather than a measured rate. Record "
+            f"longer sittings or ask for a looser target.")
+    if not other:
+        problems.append(
+            "no --against material, so nothing states what this threshold admits of "
+            "a voice that is not the operator. That is a rejection rate, not a gate.")
+    if problems and not experimental:
+        raise SystemExit(
+            "\n  refusing to write this profile:\n"
+            + "".join(f"\n    - {p}" for p in problems)
+            + "\n\n  Pass --experimental to write it anyway. The profile will record "
+              "that it is experimental and every capture gated by it will say so.")
+    if problems:
+        # Named, not waved through. An override that prints nothing is
+        # indistinguishable from material that met the contract.
+        print("\n  EXPERIMENTAL — written past the contract on:"
+              + "".join(f"\n    - {p}" for p in problems))
+    # Only where the floor was actually cleared. Under an override the sample can be
+    # below the floor, and "clears the 20 needed" printed over 4 scores is worse
+    # than silence — it reports a passed check that failed.
+    if floor <= len(own) < THIN_HELD_OUT:
+        print(f"\n  THIN: {len(own)} held-out scores clears the {floor} needed to "
+              f"express {target_frr:.0%}, but a sample quantile is still soft below "
+              f"{THIN_HELD_OUT}. The threshold is real; treat its third decimal as "
+              f"noise.")
 
 
 def main() -> int:
@@ -1155,17 +1429,32 @@ def main() -> int:
                         "threshold. Repeatable")
     p.add_argument("--enroll-out", type=Path,
                    help="write the voiceprint and its threshold here, for "
-                        "dual_capture.py --voiceprint")
+                        "dual_capture.py --voiceprint. Cannot be inside the "
+                        "repository: a centroid identifies a person")
     p.add_argument("--target-frr", type=float,
                    help="the operating point to persist: the fraction of the "
                         "operator's own speech the threshold may drop. Required "
                         "with --enroll-out, and deliberately has no default")
+    p.add_argument("--experimental", action="store_true",
+                   help="write a profile the material does not support — one "
+                        "sitting, duplicate audio, no --against, or too few scores "
+                        "for the target. Recorded in the profile, and every capture "
+                        "gated by it says so")
     p.add_argument("--model-dir", type=Path, default=Path.home() / ".cache" / "speaker-gate",
                    help="where the ECAPA checkpoint is cached")
     args = p.parse_args()
 
     if args.self_test:
         return run_self_test()
+    if args.enroll_out and ab.inside_repo(args.enroll_out):
+        # The same refusal the transcript artifacts carry, for a stronger reason.
+        # A transcript is a record of what was said; a centroid is a measurement of
+        # who was speaking, usable to recognise the same voice in other audio. This
+        # repository is public, and 197 lines of household speech reached it once
+        # already — closed in the tool then, and closed in the tool here, because
+        # .gitignore only covers the paths somebody thought of in advance.
+        p.error(f"--enroll-out {args.enroll_out} is inside the repository. A "
+                f"voiceprint identifies a person. Write it to your home directory.")
     if args.calibrate:
         return run_calibrate(args)
     p.error("nothing to do: pass --self-test or --calibrate")

@@ -46,10 +46,40 @@ class Transcript:
     source: str
     attribution: str
     turns: list[Turn] = field(default_factory=list)
+    # What the capture's voiceprint gate did, when there was one. Carried through
+    # rather than dropped at the loader because the gate can delete a co-located
+    # participant, and `docs/screens-and-states.md` requires that warning to reach
+    # the post-meeting note. It never influences the prompt — a summarizer must not
+    # be told that words are missing, only the human reading the result.
+    gate: dict | None = None
 
     def __post_init__(self):
         if self.attribution not in LEVELS:
             raise ValueError(f"attribution must be one of {LEVELS}, got {self.attribution!r}")
+
+    @property
+    def gate_warnings(self) -> list[str]:
+        """Anything about the gate a human reading these notes has to be told."""
+        g = self.gate
+        if not g:
+            return []
+        out = []
+        if g.get("persistent_other"):
+            share, secs = g.get("coherent_share") or 0, g.get("rejected_seconds") or 0
+            out.append(
+                f"the capture's voiceprint gate removed ~{share * secs:.0f}s of one "
+                f"recurring voice ({share:.0%} of everything it dropped). If that was "
+                f"a participant, these notes are missing their words.")
+        elif g.get("rejected"):
+            out.append(
+                f"the voiceprint gate removed {g['rejected']} segment(s), "
+                f"{g.get('rejected_seconds', 0)}s, as not the operator"
+                + (f", {g['borderline']} of them close calls" if g.get("borderline")
+                   else ""))
+        if g.get("applied") is False and g.get("why"):
+            out.append(f"the voiceprint gate did not run: {g['why']}. Speech from the "
+                       f"room, if there was any, is in this transcript.")
+        return out
 
     @property
     def speakers(self) -> list[str]:
@@ -187,6 +217,7 @@ def load_capture(path: Path) -> Transcript:
             Turn(text=t["text"], speaker=t.get("speaker"), start=t.get("start"))
             for t in data["turns"]
         ],
+        gate=data.get("voiceprint"),
     )
 
 
