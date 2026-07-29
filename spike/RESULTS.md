@@ -3,6 +3,24 @@
 Run 2026-07-28 on macOS 26.5.2, Apple Silicon, Swift 6.3.3.
 Tool: [`dual_capture.py`](./dual_capture.py). Runs of 14 s, 22 s, and 75 min.
 
+> **Status: frozen as of 2026-07-29. These findings are directional feasibility,
+> not acceptance evidence.**
+>
+> The offline harness answered the question it was built for: echo removal
+> materially improves voiceprint recognition over part of the operating range,
+> which is enough to decide that a real canceller is worth building. It cannot
+> establish that speaker mode is acceptable, and further sharpening of the
+> instrument will not change that — the remaining limits are structural
+> (no independent near-end labels; suppression measured on an oracle-free but
+> offline path), not defects to file down.
+>
+> Nine rounds of review hardened the wording and the guards to the point where
+> the harness refuses to publish a claim it cannot support. That was worth doing
+> and it is done. The next evidence has to come from the product pipeline —
+> AEC3 integrated, cancellation wired through segmentation into the voice gate,
+> and transcript retention measured end to end across a real operating matrix.
+> Everything below stands as recorded; nothing below is a GA gate.
+
 The spike existed to answer two questions the design documents could not.
 **Both are now answered** — speaker bleed destroys the Me/Them split, and clock
 drift is bounded well below anything the merge cares about. Playing a real
@@ -895,11 +913,11 @@ twenty-five-word passage, so requiring most of the passage would reject every
 real segment by arithmetic. What is asked is how much of what the segment *does*
 say comes from the passage.
 
-Segments that fail go to `operator_unverified` — reported, excluded from the
-claim, and not treated as violations. Nobody reads a passage without breathing,
-so a segment landing on a gap will always fail; what makes a run inconclusive is
-unverified audio *outweighing* verified, at which point most of what was supposed
-to be reading is unestablished.
+Segments that fail go to `operator_unverified` — reported, and not treated as
+violations. Nobody reads a passage without breathing, so a segment landing on a
+gap will always fail; what makes a run inconclusive is unverified audio
+*outweighing* verified, at which point most of what was supposed to be reading is
+unestablished.
 
 This runs one way only. Echo-contaminated speech transcribes badly — that is the
 condition under study — so a segment that fails to match is **not** evidence of
@@ -907,6 +925,32 @@ silence. And the silent intervals have no equivalent check at all, because
 nothing can demonstrate an absence there. That they were silent is an assumption
 the artifact states as one, which is why the verdict calls the whole thing a
 controlled human protocol and never ground truth.
+
+**And it selects on the contaminated signal, which bounds every figure below.**
+The passage check reads the raw microphone transcript — the thing cancellation
+exists to improve. The segments it drops are therefore not a random sample: they
+are disproportionately the ones echo wrecked, which are exactly the ones where a
+canceller has the most to do. A rate computed over the survivors is recovery
+*conditional on the raw transcript having already found the operator*, which is
+not the question the table claims to answer.
+
+Nothing in this rig can fix that. It needs a near-end observation channel — a
+close-talk mic worn by the operator, feeding labels and nothing else — which
+would make the labels independent of the signal under test. Short of that, the
+honest move is to stop reporting one number and report the interval it lies in.
+The harness now scores `operator_unverified` too and prints a pair per condition:
+
+* **verified subset** — segments whose own transcript carries the passage. The
+  optimistic end, selected as described above.
+* **whole cued reading** — every segment inside a speak interval, verified or
+  not. The pessimistic end, which assumes the operator read throughout the
+  interval he was cued to read through. That is the same controlled-human
+  assumption the silent intervals already run on, applied consistently rather
+  than only where it flatters the result.
+
+The truth is between them and the spread is the price of having no independent
+labels, so the run also prints how many seconds the two disagree over. A single
+figure quoted from either end alone is a misreading of what was measured.
 
 The far end's own transcript is checked too, and any passage the playback says
 enough of itself is struck from the evidence rather than credited to him.
@@ -918,18 +962,36 @@ is trimmed from each end of every interval, because a cue is seen and acted on
 rather than obeyed instantly. Compliance is reported, not enforced — a speak
 interval the operator stayed quiet through reaches the artifact saying so.
 
+That second is trimmed from the moment the cue was **observed**, not from the
+moment it was scheduled. Trimming from the schedule let display lateness spend the
+operator's reaction time instead of moving the interval: a control cue 0.9 s late
+passes a 1.0 s margin check and leaves 0.1 s to stop talking before the echo-only
+window opens, so an overrunning sentence scores as far-end-only audio in a control
+the operator had not been told to start. Both edges move with the observation,
+because what ends an interval is the next cue appearing rather than the clock — an
+instruction stands until it is replaced, so a late successor genuinely extends its
+predecessor. This propagates: the compliance check and the suppression measurement
+read the same interiors.
+
 **A run that cannot support a conclusion records itself as inconclusive.** Four
 things have to hold, and an earlier version checked only the first: both classes
 populated (three segments and eight seconds each, measured as *distinct* audio —
 summing lengths let three copies of one three-second span satisfy an eight-second
 bar, and overlapping segment lists are now refused at load); at least one speak
 interval verified from content, because zero verified cues means the labels are
-the schedule's intent rather than an observation; every cue displayed within the
-attribution margin of its scheduled time, since `protocol.json` records when each
-cue *actually* appeared and not only when it was meant to; and no admitted
-segment sitting at the take's own noise floor, which was previously a console
-warning that left the admission in the numerator regardless. Phases that ran past
-the end of a short take put the run in that state too. It still writes its manifest, with the counts that made it
+the schedule's intent rather than an observation; every cue carrying a recorded
+display time *and* falling within the attribution margin of its scheduled time;
+and no admitted segment sitting at the take's own noise floor, which was
+previously a console warning that left the admission in the numerator regardless.
+Phases that ran past the end of a short take put the run in that state too.
+
+The display-time requirement has two halves because the first version only had
+the second, and it held vacuously. The lateness filter skipped over the missing
+timestamps on its way to comparing magnitudes, so a run that recorded no cue
+times at all satisfied "every cue displayed within the margin" trivially and
+returned `scored` with nothing in its list of reasons. Unobserved is not
+compliant; it is unproven, and without those times the interiors above fall back
+to boundaries the operator may never have seen. It still writes its manifest, with the counts that made it
 inconclusive; a missing label reads as "not run yet", which is a different fact.
 
 Suppression on the silent intervals is only reported where the far end was

@@ -705,6 +705,27 @@ def load_protocol(path: Path, *, mic_digest: str, mic_samples: int,
             f"recording is {duration:.1f}s. The take was stopped before the fit "
             f"interval finished — record it again.")
     kept = [ph for ph in phases if ph["end"] <= duration]
+    for i, ph in enumerate(kept):
+        # Attribution runs off the boundaries the OPERATOR saw, not the ones the
+        # schedule intended. A cue displayed late used to eat the reaction margin
+        # instead of moving the interval: a control cue 0.9s late against a 1.0s
+        # margin left 0.1s to stop talking before the echo-only window opened,
+        # and any overrun scored as far-end-only audio. Both edges move, because
+        # what ends an interval is the next cue appearing, not the clock: an
+        # instruction stands until it is replaced, so a late successor genuinely
+        # extends its predecessor.
+        nxt = kept[i + 1] if i + 1 < len(kept) else None
+        ph["obs_start"] = ph.get("shown_at_s")
+        ph["obs_end"] = nxt.get("shown_at_s") if nxt else None
+        if ph["obs_start"] is None:
+            ph["obs_start"] = ph["start"]
+        if ph["obs_end"] is None:
+            # The last interval has no successor to end it, and a protocol
+            # written before cue times were recorded has none at all. The
+            # schedule is the fallback, and a run missing them is inconclusive
+            # for that reason alone — so this fallback never backs a published
+            # figure, it only keeps the synthetic paths readable.
+            ph["obs_end"] = ph["end"]
     doc["phases"] = kept
     doc["dropped_phases"] = len(phases) - len(kept)
     return doc
@@ -715,9 +736,12 @@ def phase_interior(ph: dict, margin: float) -> tuple[float, float] | None:
 
     A cue is seen and acted on, not obeyed instantaneously; speech also trails
     past the cue that ends it. The margin is what keeps a late start or a long
-    tail from being scored as if it belonged to the next interval.
+    tail from being scored as if it belonged to the next interval — and it is
+    measured from when the cue was OBSERVED, so display lateness moves the
+    interval rather than spending the operator's reaction time.
     """
-    lo, hi = ph["start"] + margin, ph["end"] - margin
+    lo = ph.get("obs_start", ph["start"]) + margin
+    hi = ph.get("obs_end", ph["end"]) - margin
     return (lo, hi) if hi - lo > 0 else None
 
 
@@ -747,9 +771,18 @@ def classify(segs: list[dict], phases: list[dict], margin: float,
     reject every real segment.
 
     A segment that fails goes to `operator_unverified`, which is reported and not
-    counted. That is deliberate and one-directional: echo-contaminated speech
-    transcribes badly, which is the condition under study, so a failure is not
-    evidence he was silent. It is evidence this segment cannot carry the claim.
+    counted in the verified class. That is deliberate and one-directional:
+    echo-contaminated speech transcribes badly, which is the condition under
+    study, so a failure is not evidence he was silent. It is evidence this
+    segment cannot carry the claim.
+
+    Which is also the limit of this test, and it has to be said plainly: the
+    passage check reads the RAW transcript, so it selects on the contamination
+    the experiment is measuring. The segments it drops are disproportionately the
+    hard ones. Nothing here can fix that — it needs a near-end channel this rig
+    does not have — so the class is scored anyway and reported as the other end
+    of an interval by `scheduled_bounds`, rather than the retained subset being
+    published as the result.
     """
     far_tokens = _tokens(far_text) if far_text else set()
     out = {"operator": [], "operator_unverified": [], "control": [],
@@ -791,6 +824,56 @@ def union_seconds(segs: list[dict]) -> float:
             total += hi - lo
             cursor = hi
     return total
+
+
+def scheduled_bounds(rows: dict, threshold: float) -> dict:
+    """Both readings of the speak intervals, because neither one is the answer.
+
+    `classify` decides which segments carry the operator by reading the RAW
+    microphone transcript — the contaminated signal the experiment exists to
+    improve on. That makes the retained set a biased sample, and biased in the
+    direction that flatters the result: the segments where echo most wrecks the
+    transcript are exactly the segments where cancellation has the most to do,
+    and those are the ones that fail the passage check and leave. A rate computed
+    over what remains is recovery CONDITIONAL ON raw ASR already having found
+    him, which is not the question.
+
+    Correcting it needs a near-end observation channel this rig does not have — a
+    close-talk mic worn by the operator, used only as labels. Short of that, the
+    honest move is to stop reporting one number and report the interval it lies
+    in:
+
+      verified   — only segments whose own transcript carries the passage. The
+                   optimistic end, selected as described above.
+      scheduled  — every segment inside a speak interval, verified or not. The
+                   pessimistic end, which treats "he read throughout the cued
+                   interval" as an assumption — the same controlled-human
+                   assumption the silent intervals already run on, applied
+                   consistently instead of only where it helps.
+
+    The truth is between them, and the spread is the cost of having no
+    independent labels. Both are arithmetic over rows already scored, so this
+    costs no extra encoding.
+    """
+    out = {}
+    ver = rows["classes"].get("operator", {}).get("windows", [])
+    unv = rows["classes"].get("operator_unverified", {}).get("windows", [])
+    for cond in ("raw", "linear", "masked"):
+        def rate(ws: list[dict], cond: str = cond) -> dict | None:
+            scored = [w for w in ws if w.get(cond) is not None]
+            if not scored:
+                return None
+            return {"admitted": sum(1 for w in scored if w[cond] >= threshold),
+                    "of": len(scored), "seconds": round(union_seconds(scored), 1)}
+        both = rate(ver + unv)
+        if both is None:
+            continue
+        out[cond] = {"verified": rate(ver), "scheduled": both}
+    return {"conditions": out,
+            "excluded_seconds": round(union_seconds(unv), 1),
+            "why": "the verified subset is selected using the raw contaminated "
+                   "transcript, so it is an upper bound; the scheduled set "
+                   "assumes cue adherence, so it is a lower bound"}
 
 
 def scored_conditions(conds: dict) -> dict:
@@ -866,6 +949,18 @@ def run_verdict(rows: dict, protocol: dict, threshold: float) -> dict:
             f"not one speak interval was verified from content "
             f"({c.get('speak_intervals_unverified', 0)} unverified) — the labels "
             f"are the schedule's intent, not an observation of who spoke")
+    # A missing cue time is not a passing one. The earlier filter skipped the
+    # Nones on its way to comparing magnitudes, so a run that recorded no cue
+    # times at all satisfied "every cue displayed within the margin" vacuously —
+    # it returned `scored` with an empty `why`. Unobserved is unproven: without
+    # these, every label is the schedule's intent, and the interiors above fall
+    # back to scheduled boundaries the operator may never have seen.
+    unobserved = [ph for ph in c.get("phases", []) if ph.get("cue_late_s") is None]
+    if unobserved:
+        why.append(
+            f"{len(unobserved)} of {len(c.get('phases', []))} cues have no "
+            f"recorded display time — nothing establishes that the audio was "
+            f"labelled against boundaries the operator actually saw")
     late = [ph for ph in c.get("phases", [])
             if ph.get("cue_late_s") is not None
             and abs(ph["cue_late_s"]) > protocol["cue_margin_s"]]
@@ -892,7 +987,11 @@ def run_verdict(rows: dict, protocol: dict, threshold: float) -> dict:
             f"passage against {verified:.1f}s that does — most of what was "
             f"supposed to be the operator reading is unestablished")
 
-    for cls in ("operator", "control"):
+    # `operator_unverified` is in here because it is scored and published as the
+    # pessimistic bound, so a hollow admission there reaches a reported figure
+    # exactly as one in the verified class does. Excluding it from the claim is
+    # not the same as excluding it from the file.
+    for cls in ("operator", "operator_unverified", "control"):
         for row in rows["classes"].get(cls, {}).get("windows", []):
             for cond in ("raw", "linear", "masked"):
                 ratio = row.get(f"{cond}_rms_over_floor")
@@ -911,9 +1010,12 @@ def run_verdict(rows: dict, protocol: dict, threshold: float) -> dict:
         why.append("no echo-only interval long enough to measure suppression on")
     return {"verdict": "inconclusive" if why else "scored", "why": why,
             # Never "ground truth". The labels come from a human following a
-            # schedule, checked against content where content allows it.
-            "evidence": "controlled human protocol, verified per segment where "
-                        "the passage transcribed"}
+            # schedule, checked against content where content allows it — and
+            # that check reads the contaminated transcript, so the figure is an
+            # interval rather than a number. See `scheduled_bounds`.
+            "evidence": "controlled human protocol; per-segment verification "
+                        "selects on the raw transcript, so results are reported "
+                        "as bounds, not a point estimate"}
 
 
 def floor_rms(x: np.ndarray) -> float:
@@ -1585,6 +1687,14 @@ def _ground_truth_controls() -> bool:
         #     verified cue, a late cue, or an admission at the noise floor is
         #     inconclusive and says so — it must not write a manifest that looks
         #     like a measurement.
+        #     Every fixture carries observed cue times, because a run without
+        #     them is now inconclusive on that ground alone. The earlier version
+        #     used `phases: []`, which satisfied "every cue was observed"
+        #     vacuously and so never exercised the requirement it was there for.
+        def observed(*late):
+            return [{"start": 35.0 + 10 * i, "cue_late_s": v}
+                    for i, v in enumerate(late)]
+
         def rows_for(**over):
             base = {
                 "classes": {
@@ -1596,7 +1706,8 @@ def _ground_truth_controls() -> bool:
                          "masked_rms_over_floor": 9.0} for t in (0.0, 4.0, 8.0)]}},
                 "echo_only": {"erle_db": {"linear": 5.0}},
                 "compliance": {"speak_intervals_verified": 5,
-                               "speak_intervals_unverified": 0, "phases": []},
+                               "speak_intervals_unverified": 0,
+                               "phases": observed(0.03, 0.01, 0.02)},
             }
             base.update(over)
             return base
@@ -1623,12 +1734,23 @@ def _ground_truth_controls() -> bool:
         check("and so is one with no verified speak cue",
               run_verdict(rows_for(compliance={
                   "speak_intervals_verified": 0, "speak_intervals_unverified": 5,
-                  "phases": []}), clean, 0.58)["verdict"], "inconclusive")
+                  "phases": observed(0.03, 0.01)}), clean, 0.58)["verdict"],
+              "inconclusive")
         check("and so is one whose cue appeared late",
               run_verdict(rows_for(compliance={
                   "speak_intervals_verified": 5, "speak_intervals_unverified": 0,
-                  "phases": [{"start": 35.0, "cue_late_s": 2.4}]}),
+                  "phases": observed(0.03, 2.4)}),
                   clean, 0.58)["verdict"], "inconclusive")
+        #     And so is one that never recorded when its cues appeared. This is
+        #     the case that used to return `scored` with an empty `why`: the
+        #     lateness filter skipped the Nones on its way to comparing
+        #     magnitudes, so "every cue was within the margin" held vacuously.
+        blind = run_verdict(rows_for(compliance={
+            "speak_intervals_verified": 5, "speak_intervals_unverified": 0,
+            "phases": observed(None, None)}), clean, 0.58)
+        check("and so is one with no recorded cue display times",
+              blind["verdict"], "inconclusive",
+              shown=f"{blind['verdict']} ({len(blind['why'])} reasons)")
         hollow = rows_for()
         hollow["classes"]["operator"]["windows"][0]["masked_rms_over_floor"] = 1.1
         check("and so is one admitting a window at the noise floor",
@@ -1686,6 +1808,58 @@ def _ground_truth_controls() -> bool:
         check("a far end that never pauses counts as playing",
               c["seconds"] > MIN_ECHO_ONLY_S, shown=f"{c['seconds']:.1f}s")
 
+        # 22. Attribution runs off the cue the operator SAW. A cue displayed
+        #     0.9s late passes the 1.0s margin check, and used to leave 0.1s of
+        #     reaction time before the next interval's interior opened — an
+        #     overrunning sentence scored as far-end-only audio in a control it
+        #     had not been told to start yet.
+        ctrl2 = next(ph for ph in phases
+                     if ph["role"] == "control" and ph["start"] > speak["start"])
+        late_p = d / "protocol-late.json"
+        dc.write_protocol(
+            late_p, phases, wav, samples, sys_wav, sys_samples,
+            shown_at={i: (ph["start"] + 0.9 if ph is ctrl2 else ph["start"])
+                      for i, ph in enumerate(phases)})
+        lp = load_protocol(late_p, mic_digest=digest, mic_samples=samples,
+                           sys_digest=sys_digest, sys_samples=sys_samples)
+        sched = phase_interior(ctrl2, proto["cue_margin_s"])
+        obs = phase_interior(
+            next(ph for ph in lp["phases"] if ph["start"] == ctrl2["start"]),
+            lp["cue_margin_s"])
+        check("a late cue moves its interval, not the margin",
+              round(obs[0] - sched[0], 2), 0.9,
+              shown=f"{sched[0]:.1f} -> {obs[0]:.1f}s")
+        #     Which is the whole point: audio in the reclaimed reaction time is
+        #     no longer scored as the echo-only control.
+        edge2 = [{"start": ctrl2["start"] + 1.0, "end": ctrl2["start"] + 1.6,
+                  "text": "still finishing the passage"}]
+        check("audio inside the reaction gap is not the control",
+              (len(classify(edge2, proto["phases"], proto["cue_margin_s"])["control"]),
+               len(classify(edge2, lp["phases"], lp["cue_margin_s"])["control"])),
+              (1, 0), shown="scheduled 1, observed 0")
+
+        # 23. Both readings of the speak intervals, because the verified subset
+        #     is selected by reading the RAW contaminated transcript. The
+        #     segments that fail are disproportionately the ones echo wrecked,
+        #     which are the ones cancellation exists for — so publishing the
+        #     retained subset alone reports recovery conditional on raw ASR
+        #     having already found the operator.
+        bounds = scheduled_bounds({"classes": {
+            "operator": {"windows": [
+                {"start": t, "end": t + 3.0, "masked": 0.7} for t in (0.0, 4.0)]},
+            "operator_unverified": {"windows": [
+                {"start": t, "end": t + 3.0, "masked": 0.2} for t in (8.0, 12.0)]}}},
+            0.58)
+        m = bounds["conditions"]["masked"]
+        check("the verified subset is the upper bound",
+              (m["verified"]["admitted"], m["verified"]["of"]), (2, 2),
+              shown="2 of 2 admitted")
+        check("the whole cued reading is the lower bound",
+              (m["scheduled"]["admitted"], m["scheduled"]["of"]), (2, 4),
+              shown="2 of 4 admitted")
+        check("and the seconds they disagree over are named",
+              bounds["excluded_seconds"], 6.0)
+
     return ok
 
 
@@ -1721,8 +1895,11 @@ def main() -> int:
                         "which intervals the operator was asked to speak in and "
                         "which he was asked to stay silent through. Nothing in the "
                         "audio answers that — on speakers the far end is audible on "
-                        "the microphone throughout — so this is the only source of "
-                        "who-was-talking ground truth, and prefix mode requires it")
+                        "the microphone throughout — so this is the only evidence "
+                        "about the talker, and prefix mode requires it. It is a "
+                        "controlled human protocol, not independent labels: "
+                        "adherence is assumed in the silent intervals and checked "
+                        "against a contaminated transcript in the speaking ones")
     p.add_argument("--max-seconds", type=float, default=0.0,
                    help="analyse only the first N seconds of each take. The chain is "
                         "O(n) in Python-level STFT frames, so a 75-minute capture used "
@@ -1885,7 +2062,7 @@ def main() -> int:
                 "floor": VAD_FLOOR, "hangover_s": VAD_HANGOVER_S},
     }, "inputs": {}, "takes": {}}
 
-    print(f"{'take':11s} {'class':13s} {'condition':10s} {'n':>4} {'min':>7} "
+    print(f"{'take':11s} {'class':19s} {'condition':10s} {'n':>4} {'min':>7} "
           f"{'mean':>7} {'max':>7} {'admitted':>10}")
     for name, take in takes.items():
         source = takes[args.reference_from] if args.reference_from else take
@@ -1956,7 +2133,7 @@ def main() -> int:
                 if not len(v):
                     # Every window came back unscorable. Say so rather than
                     # raising from inside a format string, which says nothing.
-                    print(f"{name:11s} {cls:13s} {cond:10s}    0   (nothing "
+                    print(f"{name:11s} {cls:19s} {cond:10s}    0   (nothing "
                           f"reached {sg.MIN_SCORABLE_S:g}s of scorable audio)")
                     continue
                 for row, e in zip(block["windows"], scored, strict=True):
@@ -1973,7 +2150,7 @@ def main() -> int:
                     if row.get(cond) is not None and row[cond] >= args.threshold
                     and row[f"{cond}_rms_over_floor"] < FLOOR_RATIO_MIN)
                 warn = f"  {hollow} admitted at the noise floor" if hollow else ""
-                print(f"{name:11s} {cls:13s} {cond:10s} {len(v):4d} {v.min():+7.3f} "
+                print(f"{name:11s} {cls:19s} {cond:10s} {len(v):4d} {v.min():+7.3f} "
                       f"{v.mean():+7.3f} {v.max():+7.3f} "
                       f"{(v >= args.threshold).sum():5d}/{len(v):<4d}{warn}")
             rows["classes"][cls] = block
@@ -1982,6 +2159,18 @@ def main() -> int:
         if protocol:
             # After every class has been scored, because the verdict reads the
             # per-window floor ratios those passes write.
+            rows["bounds"] = scheduled_bounds(rows, args.threshold)
+            for cond, b in rows["bounds"]["conditions"].items():
+                v, s = b["verified"], b["scheduled"]
+                lo = f"{s['admitted']}/{s['of']}"
+                hi = f"{v['admitted']}/{v['of']}" if v else "none verified"
+                print(f"{name:11s} {cond:10s} admitted {lo} over the whole cued "
+                      f"reading, {hi} over the verified subset")
+            if rows["bounds"]["excluded_seconds"]:
+                print(f"{name:11s} the two differ over "
+                      f"{rows['bounds']['excluded_seconds']:.1f}s the raw "
+                      f"transcript could not attribute — the result lies between "
+                      f"them, and closing the gap needs a near-end channel")
             rows["verdict"] = run_verdict(rows, protocol, args.threshold)
             if rows["verdict"]["verdict"] != "scored":
                 for why in rows["verdict"]["why"]:

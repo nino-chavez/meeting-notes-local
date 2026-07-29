@@ -222,12 +222,24 @@ channel, not the talker — on speakers the far end arrives on the microphone to
 was asked to speak in and which to stay silent through, fixed before any audio
 exists. Each speaking cue shows a passage to read aloud for the whole interval, so the
 run can verify *per segment* that a given three seconds holds him — echo can make
-the microphone loud, but it cannot put his words there. Segments that do not
-carry the passage are reported apart rather than counted, and a run whose
-evidence does not hold up records itself as inconclusive instead of as a result. It is the only ground truth about the talker in the project, and the
-echo experiments require it. The far end's own transcript is written too, as
-`system-segments.json`, so a cue passage the playback happens to say is struck
-from the evidence rather than credited.
+the microphone loud, but it cannot put his words there. A run whose evidence does
+not hold up records itself as inconclusive instead of as a result. The far end's
+own transcript is written too, as `system-segments.json`, so a cue passage the
+playback happens to say is struck from the evidence rather than credited.
+
+This is a controlled human protocol, not ground truth, and the difference is
+worth being exact about because it bounds every number the spike reports. Two
+assumptions remain. In the silent intervals, nothing can demonstrate an absence,
+so adherence is assumed. In the speaking intervals it is checked — but checked
+against the *contaminated* microphone transcript, which is the signal the
+experiment exists to improve. Segments that fail that check are
+disproportionately the ones echo wrecked, which are the ones cancellation is for.
+So a rate computed over only the verified segments is recovery conditional on the
+raw transcript having already found him. The harness therefore reports a pair: the
+verified subset as the optimistic end, and every segment inside a cued reading
+interval as the pessimistic end. Closing that gap needs a near-end observation
+channel — a close-talk mic worn by the operator, used only as labels — which this
+rig does not have.
 
 ### Recording a specific call
 
