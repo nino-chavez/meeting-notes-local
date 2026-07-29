@@ -207,28 +207,37 @@ turns were other people talking near the laptop — transcribed cleanly and hand
 to the notes as things a participant said. The voiceprint gate removes them, and it
 now runs inside the capture rather than beside it.
 
-**You talk normally in all of these.** Nothing to read, nothing playing in the
+**You talk normally throughout.** Nothing to read, nothing playing in the
 background, no cues on screen.
 
-**1. A few minutes of you talking, alone, with nothing playing — on two separate
-days.**
+**1. Two real meetings on headphones, on different days.** No dedicated enrolment
+recording at all — on headphones the other participants arrive on the system leg, so
+the *microphone* leg of an ordinary meeting is already a recording of just you.
 
 ```sh
-.venv/bin/python spike/dual_capture.py --seconds 180 --out ~/enroll-1
-.venv/bin/python spike/dual_capture.py --seconds 180 --out ~/enroll-2   # another day
+.venv/bin/python spike/dual_capture.py --seconds 3600 --out ~/meeting-1
+# another day
+.venv/bin/python spike/dual_capture.py --seconds 3600 --out ~/meeting-2
 ```
 
-Say anything — read your inbox aloud, describe your morning. It needs your voice,
-not particular words. One take of this kind already exists from the echo work (117
-seconds, nine judgeable segments), so this may be one new recording rather than two.
+This is the pattern Teams and Zoom use — the profile comes from ordinary speech
+rather than a setup screen — and it means step 1 costs nothing beyond remembering to
+start the capture. A deliberate three-minute monologue works too if you would rather
+not wait for two meetings.
 
-Both details are enforced rather than advised. **Two separate days**, because a
-threshold from a single sitting sat above the honest one in all nine comparisons
-this project has, by 0.006 to 0.181 — too high means the gate deletes *you* from
-your own meeting, and one recording cannot see that because every segment in it
-shares the same room, gain and day. **Three minutes, not one**, because a 5%
-operating point needs twenty judgeable segments before any one of them *is* the
-fifth percentile, and a minute does not reliably produce twenty.
+**Two things that cannot be shortcut, and both are enforced rather than advised.**
+
+*Different days, not two pieces of one session.* Chunking one recording into
+"sittings" gives every chunk a different digest while carrying none of the
+session-to-session variation the plural is for — same room, same gain, same
+position, same voice, same half hour. The threshold would then be measured
+leave-one-*sitting*-out across sittings that do not exist, claiming cross-session
+evidence it does not have, and reading *better* than the truth. Every capture
+records when it happened and enrolment refuses sittings less than an hour apart.
+
+*Enough judgeable speech.* A 5% operating point needs twenty segments of two seconds
+or more before any one of them *is* the fifth percentile. The 117-second take from
+the echo work has nine, which is why it is not enough on its own.
 
 **2. A minute of someone who is not you.** A podcast, the radio, anyone else in the
 room.
@@ -241,17 +250,21 @@ Without it the threshold is a rejection rate rather than a gate: it says how muc
 *you* it drops and nothing about what it lets through. Enrolment refuses to write a
 profile without it.
 
-**3. Build the voiceprint, then take a real meeting on headphones.**
+**3. Build the voiceprint, then take a third meeting with it on.**
 
 ```sh
 .venv/bin/python spike/speaker_gate.py \
-  --calibrate ~/enroll-1/mic-segments.json ~/enroll-1/mic.wav \
-  --calibrate ~/enroll-2/mic-segments.json ~/enroll-2/mic.wav \
-  --against   ~/not-me/mic-segments.json  ~/not-me/mic.wav \
+  --calibrate ~/meeting-1/mic-segments.json ~/meeting-1/mic.wav \
+  --calibrate ~/meeting-2/mic-segments.json ~/meeting-2/mic.wav \
+  --against   ~/not-me/mic-segments.json    ~/not-me/mic.wav \
   --enroll-out ~/voiceprint.json --target-frr 0.05
 
 .venv/bin/python spike/dual_capture.py --seconds 3600 --voiceprint ~/voiceprint.json
 ```
+
+The first two meetings are also test data — they went through the same capture, so
+their transcripts and notes are readable now, ungated. The gate is what the third one
+adds.
 
 Every operating point is printed with what it admits of the other voice before
 anything is written, so `--target-frr` is a choice made with the cost in view. If

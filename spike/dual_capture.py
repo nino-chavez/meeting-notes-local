@@ -1485,6 +1485,14 @@ def write_leg_segments(path, segs, duration_s, audio_path, audio_samples, leg):
         "labels": None,
         "audio_sha256": sha256(audio_path),
         "audio_samples": int(audio_samples),
+        # WHEN, not just what. Additive to the schema — every existing reader checks
+        # named fields and ignores the rest — and it exists because "two sittings"
+        # could not be verified without it. The enrolment contract tested distinct
+        # audio digests as a proxy for distinct sessions, and slicing one recording
+        # into pieces produces distinct digests while carrying none of the
+        # session-to-session variation the plural is for. A capture window is the
+        # fact that separates the two: chunks of one recording share it.
+        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "segments": [
             {"start": round(s["start"], 2), "end": round(s["end"], 2), "text": s["text"]}
             for s in segs

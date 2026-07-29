@@ -68,6 +68,7 @@ import sys
 import wave
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -1168,7 +1169,12 @@ def run_self_test() -> int:
 
     print("\n=== the enrolment contract ===\n")
     # Each of these wrote a production profile before the contract existed.
-    two_ok = [{"audio_sha256": "aaa"}, {"audio_sha256": "bbb"}]
+    def sitting_at(name: str, stamp: str | None) -> dict:
+        return {"audio_sha256": name, "audio": f"/tmp/{name}.wav",
+                "captured_at": stamp}
+
+    two_ok = [sitting_at("aaa", "2026-07-20T09:00:00+0000"),
+              sitting_at("bbb", "2026-07-22T14:00:00+0000")]
     plenty = [0.8] * 40
     other_ok = [0.2, 0.3]
     check(
@@ -1179,13 +1185,52 @@ def run_self_test() -> int:
     check(
         "the same recording passed twice is one sitting, not two — digests, not paths",
         _raises(lambda: enforce_enrollment(
-            [{"audio_sha256": "aaa"}, {"audio_sha256": "aaa"}],
+            [sitting_at("aaa", "2026-07-20T09:00:00+0000"),
+             sitting_at("aaa", "2026-07-20T09:00:00+0000")],
             plenty, other_ok, 0.05, False), SystemExit),
     )
     check(
         "one sitting is refused",
-        _raises(lambda: enforce_enrollment([{"audio_sha256": "aaa"}], plenty,
-                                           other_ok, 0.05, False), SystemExit),
+        _raises(lambda: enforce_enrollment(
+            [sitting_at("aaa", "2026-07-20T09:00:00+0000")], plenty,
+            other_ok, 0.05, False), SystemExit),
+    )
+    # The case that defeated the digest test: slice one recording and every chunk
+    # has different bytes, a different digest, and the same capture window.
+    chunks = [sitting_at("chunk-a", "2026-07-20T09:00:00+0000"),
+              sitting_at("chunk-b", "2026-07-20T09:00:00+0000")]
+    check(
+        "two CHUNKS of one recording are refused, though their digests differ — "
+        "distinct bytes were never evidence of a distinct sitting",
+        _raises(lambda: enforce_enrollment(chunks, plenty, other_ok, 0.05, False),
+                SystemExit),
+    )
+    check(
+        "and so are two takes from the same half-hour, which is the same thing "
+        "with extra steps",
+        _raises(lambda: enforce_enrollment(
+            [sitting_at("aaa", "2026-07-20T09:00:00+0000"),
+             sitting_at("bbb", "2026-07-20T09:25:00+0000")],
+            plenty, other_ok, 0.05, False), SystemExit),
+    )
+    check(
+        "material with no capture time is refused rather than assumed separate",
+        _raises(lambda: enforce_enrollment(
+            [sitting_at("aaa", None), sitting_at("bbb", None)],
+            plenty, other_ok, 0.05, False), SystemExit),
+    )
+    check(
+        "an unparseable capture time is refused rather than ignored",
+        _raises(lambda: enforce_enrollment(
+            [sitting_at("aaa", "last Tuesday"), sitting_at("bbb", "later")],
+            plenty, other_ok, 0.05, False), SystemExit),
+    )
+    check(
+        "order does not matter — the gap is between sorted neighbours",
+        not _raises(lambda: enforce_enrollment(
+            [sitting_at("bbb", "2026-07-22T14:00:00+0000"),
+             sitting_at("aaa", "2026-07-20T09:00:00+0000")],
+            plenty, other_ok, 0.05, False), SystemExit),
     )
     check(
         "no negative-speaker material is refused — that is a rejection rate, not a gate",
@@ -1210,8 +1255,8 @@ def run_self_test() -> int:
     )
     check(
         "--experimental writes it anyway, which is what keeps the override visible",
-        not _raises(lambda: enforce_enrollment([{"audio_sha256": "aaa"}], [0.8] * 4,
-                                              [], 0.05, True), SystemExit),
+        not _raises(lambda: enforce_enrollment(
+            [sitting_at("aaa", None)], [0.8] * 4, [], 0.05, True), SystemExit),
     )
 
     outcome = (
@@ -1238,6 +1283,7 @@ def _embed_pair(pair: list[Path], embed, leg: str = "mic") -> tuple[list, list, 
     return emb, dur, {
         "segments": str(seg_p), "audio": str(wav_p),
         "audio_sha256": ab.sha256(wav_p), "audio_samples": _wav_samples(wav_p),
+        "captured_at": json.loads(seg_p.read_text()).get("captured_at"),
         "scorable_segments": len(emb), "scorable_seconds": round(sum(dur), 1),
     }
 
@@ -1345,6 +1391,65 @@ def run_calibrate(args) -> int:
     return 0
 
 
+# A judgement, and labelled as one rather than dressed up as a measurement. The
+# evidence that single-sitting thresholds run over-tight came from labelled corpora
+# with real time between enrolment and test; it puts no number on how much time is
+# enough. An hour is the smallest gap where "a different sitting" is plausibly true
+# of a room, a seating position, a gain setting and a voice. A different day is
+# better and is what the README asks for.
+MIN_SITTING_GAP_S = 3600
+
+
+def _sitting_problems(manifest: list[dict]) -> list[str]:
+    """Whether these recordings are really from separate sittings.
+
+    Distinct audio digests were the original test and they are not sufficient:
+    slicing one recording into chunks produces distinct digests for every chunk
+    while carrying none of the session-to-session variation the plural exists for —
+    same room, same gain, same position, same voice, same minute. The check passed
+    and the profile was worse than one honest sitting, because a threshold measured
+    leave-one-*sitting*-out across fabricated sittings claims cross-session evidence
+    it does not have.
+
+    A capture window is the fact that separates the two cases, so `write_leg_segments`
+    records one and this reads it. Chunks of one recording share it.
+
+    Material with no `captured_at` predates that field and cannot be checked either
+    way. It is refused rather than assumed good, because the failure it would hide —
+    a threshold that deletes the operator from his own meeting — is worse than the
+    inconvenience of re-recording. `--experimental` accepts it and marks the profile.
+    """
+    import datetime as dt
+
+    stamps = []
+    for m in manifest:
+        raw = m.get("captured_at")
+        if not raw:
+            return [(f"{m['audio']} does not record when it was captured, so nothing "
+                     f"establishes it as a separate sitting from the others. "
+                     f"Recordings made before that field existed cannot be checked; "
+                     f"re-record, or pass --experimental.")]
+        try:
+            stamps.append((dt.datetime.fromisoformat(raw), m))
+        except ValueError:
+            return [(f"{m['audio']} records captured_at {raw!r}, which is not a "
+                     f"timestamp this can compare.")]
+
+    stamps.sort(key=lambda s: s[0])
+    out = []
+    for (t1, m1), (t2, m2) in pairwise(stamps):
+        gap = (t2 - t1).total_seconds()
+        if gap < MIN_SITTING_GAP_S:
+            out.append(
+                f"{Path(m1['audio']).name} and {Path(m2['audio']).name} were captured "
+                f"{gap / 60:.0f} minutes apart"
+                + (" — the same capture window, so these are pieces of one recording "
+                   "rather than two sittings" if gap == 0 else "")
+                + f". Separate sittings means at least {MIN_SITTING_GAP_S // 3600}h "
+                  f"apart, and a different day is what the measured bias is about.")
+    return out
+
+
 def enforce_enrollment(manifest: list[dict], own: list[float],
                        other: list[float], target_frr: float,
                        experimental: bool) -> None:
@@ -1380,6 +1485,7 @@ def enforce_enrollment(manifest: list[dict], own: list[float],
             f"same audio twice carries none of the session variation that is for."
             + (" The two pairs point at the same file."
                if len(manifest) > 1 else ""))
+    problems.extend(_sitting_problems(manifest))
     floor = min_resolvable(target_frr)
     if len(own) < floor:
         problems.append(
