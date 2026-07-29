@@ -395,12 +395,78 @@ Isolation mic mode only as filtering "background sounds"
 it does not claim to remove other people's speech, and we have not tested
 whether it does.
 
-**The measurement that decides this** is separability, not architecture: how far
-apart are the operator and the household interferers in a local speaker-embedding
-space, on `mic.wav` — a capture that already contains a known target speaker and
-known interfering speech. If the margin is wide the gate is trivial; if it is
-narrow, no amount of plumbing saves it. That is the falsifiable version of "the
-fix is speaker verification", and it has not been run.
+### Measured: the embedding degrades by half on the leg that needs it
+
+Before deciding whether a speaker-embedding dependency is worth carrying, the
+question is whether one would even work on this microphone. Ran
+`speechbrain/spkrec-ecapa-voxceleb` over both legs of the 75-minute capture.
+
+**The segments have no speaker labels, so the positive class was manufactured
+without any: the two halves of a single utterance are the same speaker by
+construction** — same person, same channel, same session, same distance from the
+microphone. Half-versus-half within a segment is a guaranteed positive; the same
+comparison across segments is a mixture. Both sides use equal-length audio,
+because embedding similarity climbs with duration and would otherwise flatter
+the positives.
+
+Two controls, neither of which the first version had, and both of which changed
+the result:
+
+- **A duration cap.** Whisper emits segments up to 30 s, and a 30-second span of
+  conversation is not one speaker. Splitting those manufactures negatives
+  labelled as positives. Restricted to 3-12 s.
+- **A control leg.** The same code over the system tap — near-field meeting
+  audio. Without it there is no way to tell a hard acoustic condition from a
+  broken harness, and the mic number alone cannot distinguish them.
+
+| leg | speech RMS | same speaker | arbitrary pair | gap | silhouette |
+|---|---|---|---|---|---|
+| system tap (near-field) | 0.110 | 0.524 | 0.211 | **+0.313** | 0.397 |
+| built-in mic (the room) | 0.010 | 0.243 | 0.096 | **+0.148** | 0.227 |
+
+The control passes, so the instrument is sound. **On far-field room audio the
+same voice is recognised at less than half the confidence, and the margin over
+an arbitrary pair is 47% of the near-field margin.** That is the honest state:
+not dead, not comfortable.
+
+**Speaker structure is present even so.** People hold the floor for many ASR
+segments in a row, so if clusters track speakers, consecutive segments should
+land in the same cluster more often than cluster sizes predict. They do, on both
+legs — 1.9x chance on the mic, 1.7x on the system tap. This uses timing only, so
+it is independent of the embeddings it is checking. Individually weak embeddings
+still carry a speaker signal that survives aggregation, which is what an
+enrolment centroid does.
+
+**Loudness is not the explanation, and that kills the convenient hypothesis.**
+The mic leg is 21 dB quieter, so the obvious story is that the operator sits
+close to the laptop and lands in a better regime than the room. Split-half
+consistency by loudness quartile refuses it:
+
+| quartile | system RMS / score | mic RMS / score |
+|---|---|---|
+| quietest | 0.082 → 0.487 | 0.0054 → 0.229 |
+| lower | 0.101 → 0.576 | 0.0069 → 0.257 |
+| upper | 0.113 → 0.572 | 0.0081 → 0.252 |
+| loudest | 0.135 → 0.466 | 0.0135 → 0.237 |
+
+Flat on both legs. Within a channel, a segment 2.5x louder embeds no better.
+Whatever the mic leg loses, it is not gain — reverberation, distance, or the
+microphone's own front end are all still live, and this measurement does not
+separate them. Note the limit precisely: **RMS conflates how loudly someone
+spoke with how close they were**, so this rules out level as the driver without
+ruling out proximity.
+
+**Which is exactly why the missing sample is the blocker.** There is no
+recording of the operator on this microphone — every mic leg in the project is
+silence or the household. Proximity is the one condition that might put the
+operator in a better regime than the room, it is the condition the vendor gate
+depends on, and it is the one thing none of the existing audio samples. Sixty
+seconds of the operator speaking at a normal working distance, captured through
+`dual_capture.py`, is the entire remaining input.
+
+Until then the honest summary is: an off-the-shelf embedding finds real speaker
+structure in far-field room audio at roughly half the strength it manages
+near-field, and whether that half is enough is not yet answerable.
 
 ---
 
@@ -497,10 +563,16 @@ in 2.2 s.
   cancellation for one, an enrolled voiceprint for the other — and neither is
   implemented here yet, which is the only reason headphones are load-bearing
   today.
-- The next measurement is separability: how far apart the operator and the room
-  sit in a local speaker-embedding space, on a capture that already contains
-  both. It decides whether the voiceprint gate is worth its dependency, and it
-  costs nothing but compute.
+- Separability is measured and the answer is "half". An off-the-shelf embedding
+  recognises the same voice on the built-in mic at 0.243 cosine against 0.524 on
+  the system tap, with real speaker structure present on both. Loudness does not
+  explain the gap, so the comfortable story — the operator is close and therefore
+  fine — is not available. The gate is neither ruled in nor out.
+- **The one input that would settle it is sixty seconds of the operator speaking
+  into the laptop microphone.** Every mic leg in this project is silence or the
+  household, so the gate's positive class has never been sampled in the channel
+  it would run on. No code is needed for it; `dual_capture.py --seconds 60` is
+  the whole procedure.
 - Still unexercised: a live two-person run on headphones. The Me/Them split has
   never seen real speech on both legs at once — every measurement so far put all
   the real words on one leg.
