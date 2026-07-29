@@ -487,10 +487,96 @@ far end exactly, with the lag measured — so the missing piece is the adaptive
 filter, not the information it needs.
 
 **Until that exists, the honest statement is narrower than "the gate works":** on
-headphones there is no acoustic path, no mixture, and the gate works as measured
-above. On speakers, every moment the operator talks over the far end is lost from
-the notes. That is what headphones now buy — not the room problem, which the
-voiceprint solves, but the overlap problem, which it cannot.
+headphones there is no acoustic path, no mixture, and the gate separates as
+measured above. On speakers, every moment the operator talks over the far end is
+lost from the notes. That is what headphones now buy — not the room problem,
+which the voiceprint solves, but the overlap problem, which it cannot.
+
+### Corrections to the section above, from an external review
+
+An independent review of the commit that first published these numbers found
+four overstatements and three defects. The defects are fixed in the same change
+as this note. The overstatements are corrected here rather than quietly edited,
+because the original claims were pushed to a public repository.
+
+**The quoted false-rejection rates were targets, not measurements.** `calibrate`
+takes a *target* FRR and returns both the threshold and the `measured_frr` it
+actually achieves; the table above quoted the target. With ten operator scores a
+sample quantile cannot resolve 2% — every target at or below 10% lands on the
+same place in the order statistics, and the measured rejection is **10%**, not
+2%. The module was honest and the write-up was not.
+
+**+0.580 is 0.005 above the strongest household segment.** That is not a margin,
+it is a coincidence of this sample, and it was reported as an operating point
+with the thinness relegated to a clause. Nothing should ship on it. It stands as
+an experiment result.
+
+**"Removes a subsystem from the build" was too strong.** Fourteen read segments
+from one speaker support "a scripted seed is worth trying", not "passive
+enrollment is unnecessary" — particularly when the same measurement concludes
+that calibration must span conditions, which is an argument *for* continuing
+adaptation, not against it.
+
+**"Twentyfold margin" is not a meaningful way to report cosine separation.**
+Ratios of cosine similarities have no operational meaning. The claim that
+survives is held-out FAR/FRR, and at the sample sizes here (10 quiet, 14 read,
+11 with music, one operator, one household, one day) even that is an estimate
+with wide bars. Every conclusion above is single-subject.
+
+**The recordings and the analysis harness are not retained in the repository.**
+The audio is the operator's own voice and a household, so it cannot be committed,
+but that leaves these numbers unreproducible from a clone — a real gap, and the
+same reproducibility standard this project applies to its own claims.
+
+### Three capture defects the review found, now fixed
+
+**The bleed verdict condemned clean captures.** Attribution degraded on
+`abs(peak_r) > 0.5`, while the code immediately above it explained that a
+negative peak is turn-taking rather than an acoustic path. Two perfectly
+complementary streams — one leg loud exactly when the other is silent, which is
+what a *good* headphones capture looks like — give `peak_r = -0.994` and were
+being stripped of every speaker label they had legitimately earned. All four
+sites now test `positive_r`, and the reproduction confirms the reversal.
+
+**A split sample corrupted everything after it.** The tap pipe reader discarded
+an odd trailing byte. Pipes do not guarantee sample-aligned reads, and dropping
+one byte shifts every subsequent sample by one, pairing each low byte with the
+next high byte so the remainder of the capture decodes as noise. The byte is now
+carried into the next read; verified across deliberately odd splits.
+
+**Driver dropouts were discarded.** The microphone callback ignored
+sounddevice's `status`, which is the hardware reporting that samples were lost —
+the one event that leaves a leg's sample count looking healthy while its timeline
+has a hole. Dropouts are now recorded with their offset and reported.
+
+### What the review changes about the echo canceller
+
+The previous section said the missing piece was "the adaptive filter, not the
+information it needs". Both halves of that were wrong.
+
+**The reference is not time-aligned yet.** The tap's Core Audio callback receives
+a hardware timestamp and discards it; the Python side timestamps *pipe arrival*
+instead, and the microphone callback ignored its `time_info` entirely. That is
+adequate for merging a transcript, where the tolerance is a syllable. Echo
+cancellation needs ordered frames near the hardware boundary, and the measured
+start skew on these captures ran to 1.7 s.
+
+**And an adaptive filter is not an echo canceller.** Production AEC needs delay
+estimation, path-change handling, double-talk protection, residual-echo
+estimation and suppression. WebRTC's AEC3 has all of them and is BSD-licensed.
+Writing an NLMS filter here would be exactly the custom shape the workspace's
+canonical-pattern-first rule exists to prevent — the vendor implementation is the
+baseline, and this project has no disqualifier to name against it.
+
+Apple's Voice Processing I/O is not the shortcut it appears to be either: it
+requires both the input and output nodes to participate, and this application
+does not own the conferencing app's playback.
+
+So the next step is a feasibility spike, not production work: preserve hardware
+timestamps and callback discontinuities, emit framed 10 ms streams, and run AEC3
+offline against retained paired fixtures before changing any architecture. Judge
+it on downstream outcomes — operator words retained, household false admits,
+residual echo — not on filter convergence.
 
 ### Measured: the embedding degrades by half on the leg that needs it
 

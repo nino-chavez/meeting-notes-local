@@ -172,6 +172,7 @@ class Leg:
         self.name = name
         self.blocks = []
         self.arrivals = []  # (monotonic, samples_in_this_block)
+        self.dropouts = []  # (monotonic, driver status) — see MicLeg._callback
         self.lock = threading.Lock()
         self.writer = WavWriter(wav_path)
 
@@ -238,6 +239,7 @@ class TapLeg(Leg):
         super().__init__("system", wav_path)
         self.proc = None
         self.reader = None
+        self._tail = b""   # half a sample carried between pipe reads
         self.stderr_reader = None
         self.log_lines = []
         self._stop = threading.Event()
@@ -268,8 +270,18 @@ class TapLeg(Leg):
             if not raw:
                 break
             # s16le mono -> float32 in [-1, 1), matching sounddevice's dtype.
+            #
+            # A pipe read can split a sample across two reads. The odd byte used
+            # to be DISCARDED, which is not a rounding error: dropping one byte
+            # shifts every following sample by one, so the low byte of each pairs
+            # with the high byte of the next and the remainder of the capture
+            # decodes as noise. Carrying it forward is the only way the stream
+            # stays sample-aligned, and it costs one byte of state.
+            raw = self._tail + raw
             if len(raw) % 2:
-                raw = raw[:-1]
+                raw, self._tail = raw[:-1], raw[-1:]
+            else:
+                self._tail = b""
             self.add(np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0)
 
     def _read_logs(self):
@@ -331,6 +343,14 @@ class MicLeg(Leg):
         self.stream.start()
 
     def _callback(self, indata, frames, time_info, status):
+        # `status` was discarded. It carries input overflow, which is the
+        # hardware telling us samples were lost — the one event that silently
+        # breaks alignment between the legs, because the leg keeps counting
+        # blocks while the timeline underneath it has a hole. Recording it is
+        # what lets report() say so instead of presenting a shortened leg as a
+        # complete one.
+        if status:
+            self.dropouts.append((time.monotonic(), str(status)))
         self.add(indata[:, 0].copy())
 
     def stop(self):
@@ -751,6 +771,18 @@ def report(mic_leg, tap_leg, args, out_dir):
         rms = float(np.sqrt((audio.astype(np.float64) ** 2).mean())) if len(audio) else 0.0
         print(f"  {leg:7s} {len(audio):>9d} samples  {secs:6.2f}s  rms {rms:.5f}")
 
+    # A dropout is a hole in the timeline that leaves the sample count looking
+    # healthy, so it has to be said out loud or a leg with gaps reads as a leg
+    # without them. It also disqualifies the capture as an echo-cancellation
+    # reference, where alignment is the whole premise.
+    for leg in (mic_leg, tap_leg):
+        if leg.dropouts:
+            print(f"\n  {leg.name}: {len(leg.dropouts)} driver dropout(s) — samples were "
+                  f"lost, so this leg's timeline has holes")
+            t0 = leg.arrivals[0][0] if leg.arrivals else leg.dropouts[0][0]
+            for when, what in leg.dropouts[:5]:
+                print(f"    at {when - t0:6.1f}s  {what}")
+
     errors = tap_leg.tap_error()
     if errors:
         print("\n  tap reported errors:")
@@ -781,9 +813,16 @@ def report(mic_leg, tap_leg, args, out_dir):
                 f"  minus start skew: {b['lag_ms'] - start_skew:+.0f} ms "
                 "(the acoustic component)"
             )
-        if abs(b["peak_r"]) > 0.5:
+        # positive_r, not abs(peak_r). An acoustic path adds the far end into the
+        # mic, so bleed is POSITIVE correlation. A strong negative peak is
+        # turn-taking — one leg loud while the other is quiet — which is the
+        # signature of a capture with no bleed at all. Judging on absolute value
+        # condemns exactly the clean captures this verdict exists to certify:
+        # two perfectly complementary streams give peak_r = -1.0 and were being
+        # reported as contaminated.
+        if b["positive_r"] > 0.5:
             print("  HIGH — the mic is hearing the speakers; Me/Them split is contaminated")
-        elif abs(b["peak_r"]) > 0.25:
+        elif b["positive_r"] > 0.25:
             print("  MODERATE — some bleed present")
         else:
             print("  LOW — legs are acoustically independent (headphones, or quiet room)")
@@ -848,7 +887,7 @@ def report(mic_leg, tap_leg, args, out_dir):
     # step downstream of it failed.
     write_transcript(out_dir / "transcript.json", merged, b)
 
-    if b and abs(b["peak_r"]) > 0.5:
+    if b and b["positive_r"] > 0.5:
         print(
             "  NOTE: bleed is high, so expect every utterance to appear TWICE —\n"
             "  once as Me and once as Them. That is the contamination, not a\n"
@@ -870,11 +909,16 @@ def write_transcript(path, merged, b):
 
     See notes/transcript.py for what each level licenses.
     """
-    contaminated = b is not None and abs(b["peak_r"]) > 0.5
+    # Positive correlation only: an echo path ADDS the far end to the mic. A
+    # large negative peak means the legs alternate, which is what a clean
+    # headphones capture looks like, and condemning it drops every speaker
+    # label the capture legitimately earned.
+    contaminated = b is not None and b["positive_r"] > 0.5
     payload = {
         "source": f"capture {time.strftime('%Y-%m-%d %H:%M')}",
         "attribution": "none" if contaminated else "channel",
-        "bleed": {"peak_r": b["peak_r"], "analysed_s": b["analysed_s"]} if b else None,
+        "bleed": {"peak_r": b["peak_r"], "positive_r": b["positive_r"],
+                  "analysed_s": b["analysed_s"]} if b else None,
         "turns": [
             # Labels are dropped, not merely marked, when the split is fiction.
             {
