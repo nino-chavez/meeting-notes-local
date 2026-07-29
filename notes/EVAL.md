@@ -448,6 +448,42 @@ MENTIONED" contains "MENTIONED", and anything unrecognised is reported as
 
 ---
 
+## How a commitment is scored as recalled
+
+Every recall figure in this file is hand-checked, which makes the judgement the
+instrument — and an instrument calibrated after seeing the results is not one.
+This rule was written before the two-pass run below and applied to both arms
+unchanged.
+
+A reference commitment counts as **hit** when both hold: the note names the same
+object of the commitment (paraphrase and synonyms fine; a category standing in
+for the object is not — "share a document" does not hit "share the brand
+guidelines"), and it appears *as a commitment*, under Decisions or Action items
+or stated in the Summary as something that will happen. A topic raised in
+discussion does not hit a commitment to act on it.
+
+The cases that actually came up, resolved in advance:
+
+- **Same object, different verb** — "review X" against a reference item "send X".
+  **Miss.** They are different commitments with different owners, and counting
+  them together would let any mention of the object score.
+- **Right commitment, wrong owner.** **Hit**, recorded separately. Owner errors
+  are their own defect class, already measured by `check_owner_grounding`.
+- **Commitment split across two bullets.** **Hit** if the bullets together carry
+  the object and the commitment.
+- **Reference item naming two artefacts, one covered.** **Half.** Scoring it
+  whole hides real omission; scoring it a miss hides real recall.
+- **Right commitment filed under the wrong heading.** **Hit.** Section placement
+  is formatting, not recall.
+
+Scoring goes one reference item at a time across all arms, rather than one arm
+end to end, because scoring an arm as a unit invites calibrating to its voice.
+
+**This rule postdates some numbers above.** The earlier arm-C figure of 4/6 on
+meeting A and the 5/6 baseline below are the same configuration scored before and
+after it existed. The rule is the reason the numbers differ; treat figures from
+this section onward as the comparable ones.
+
 ## Two passes do not fix omission. They move it.
 
 Every finding above says the same thing: what the local models lose is
@@ -478,17 +514,20 @@ into 118 bullets**. It merged nothing. The step told "this is a de-duplication
 task, not a selection task" performed neither, and the result is a transcript
 dump wearing the shape of notes.
 
-**The two arms miss different things, and their union is complete.** Meeting A's
-single pass caught a housekeeping commitment about access and a decision about
-categorising a data breakdown that the two-pass run lost entirely; the two-pass
-run caught an engineering-review commitment the single pass never mentioned. Same
-pattern in meeting B. Take the union of the two arms and every meeting scores
-**6/6 and 4/4**.
+**The two arms miss different things.** Meeting A's single pass caught a
+housekeeping commitment about access and a decision about categorising a data
+breakdown that the two-pass run lost entirely; the two-pass run caught an
+engineering-review commitment the single pass never mentioned. Same pattern in
+meeting B. Scored as a union, the two arms together cover **6/6 and 4/4**.
 
-That is the finding worth keeping. The information survives into *some* note
-every time; no single strategy collects all of it. That points at ensembling —
-run both, union the items — rather than at a better prompt, and it is a different
-project from tuning one pass.
+Read that as a ceiling, not a result. It is a union taken *after* scoring both
+arms against the reference — the score an oracle gets for knowing which arm to
+believe. A real ensemble would have to merge 118 bullets with 18 and no reference
+to guide it, and this same run measured what unguided merging does: 118 items in,
+118 bullets out. So the honest statement is that **the information survives into
+some arm every time, which bounds what any ensemble could recover** — not that
+ensembling is therefore the answer. Whether merging can be made to work without a
+reference is untested, and the one measurement here is discouraging.
 
 Two smaller results fell out of the same run:
 
