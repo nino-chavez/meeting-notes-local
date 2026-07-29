@@ -601,57 +601,84 @@ linear shortfall alone leaves "but the nonlinear stage might catch it" open, and
 that argument can be run forever.
 
 Scores against a profile enrolled on 98 s of the two takes with no far end in
-them, at the +0.580 operating point:
+them, at the +0.580 operating point. Fixed three-second windows at a 1.5 s hop,
+for a reason worth stating before the numbers:
+
+> The first version of this table used voice-activity segments, and the far end
+> running continuously bridged the overlap take into **four** spans, two of them
+> around twenty seconds, against four-second utterances on the quiet takes. A
+> speaker embedding is more stable the more audio it gets, so that table compared
+> window lengths as much as it compared conditions, and it read about 0.15
+> better on the take the argument rests on. Fixed windows equalise it and put
+> *n* at 26–31 per take instead of 4. They are also closer to production, where
+> the gate sees ASR utterances rather than twenty-second blobs. Every figure
+> below is the equalised one.
 
 | take | far end | raw | linear | + suppressor | admitted |
 |---|---|---|---|---|---|
-| read | none | +0.753 | +0.752 | +0.752 | 16/16 → 16/16 |
-| free | none | +0.784 | +0.783 | +0.783 | 11/11 → 11/11 |
-| roomnoise | off-device music | +0.645 | +0.640 | +0.641 | 6/8 → 6/8 |
-| **overlap** | **speakers, −4.3 dB** | **+0.495** | **+0.791** | **+0.800** | **2/4 → 4/4** |
-| bleed | speakers, +2.6 dB | +0.179 | +0.367 | +0.481 | 1/9 → 1/9 |
+| read | none | +0.762 | +0.762 | +0.761 | 5/5 → 5/5 |
+| free | none | +0.772 | +0.768 | +0.770 | 14/14 → 14/14 |
+| roomnoise | off-device music | +0.590 | +0.587 | +0.589 | 16/26 → 14/26 |
+| **overlap** | **speakers, −4.3 dB** | **+0.357** | **+0.614** | **+0.642** | **5/31 → 26/31** |
+| bleed | speakers, +2.6 dB | +0.138 | +0.285 | +0.422 | 0/26 → 2/26 |
 
-The overlap take recovers completely. Its four segments land at +0.77 to +0.84,
-which is the range the clean takes occupy — the operator is not merely readmitted
-but restored to roughly the score he would have had if the far end had never been
-playing. **The linear stage does nearly all of that work**; the oracle suppressor
-adds +0.009. That matters for the build, because the linear stage is the part
-AEC3 does deterministically and well, and the suppressor is the part that has to
-guess.
+**The overlap take goes from 5 admitted windows out of 31 to 26.** That is the
+result: a capture the gate almost entirely rejects becomes one it almost entirely
+accepts. It is not a full restoration — the clean takes sit at +0.77 and the
+recovered ones at +0.64, so a 0.13 gap survives cancellation, and five windows
+still fall short. An earlier draft of this section called it "restored to
+clean-capture scores"; that was the segmentation artefact talking.
 
-The bleed take does not recover. Every one of its nine segments moves — seven by
-more than +0.15, mean +0.179 to +0.481 — and they still land short. The two takes
-differ by about 7 dB in how loud the far end sits relative to the operator
-(+2.6 dB against −4.3 dB), and that is the whole of the difference. **The
-recoverable regime is bounded by that ratio, not by filter quality**, and the
-capture can already measure it.
+**Both stages matter, and that is a change from the first reading too.** The
+linear stage carries the bulk (+0.357 → +0.614, 5 windows → 20) and the oracle
+suppressor adds six more windows on top (+0.028 mean, 20 → 26). Under the unequal
+segmentation the suppressor looked worth +0.009 and therefore skippable. It is
+not: about a fifth of the recovery comes from the stage AEC3 has to *guess* at,
+which is the stage most likely to underperform its oracle.
+
+The bleed take does not recover — 0 of 26 windows to 2. Every window moves, mean
++0.138 to +0.422, and they land short. Two things differ between the takes, and
+only one of them is the one being claimed: the far end sits about 7 dB louder
+relative to the operator (+2.6 dB against −4.3 dB), *and* the operator carries
+about 10 dB less low-frequency energy, consistent with being further from the
+microphone or turned away. The level ratio is the difference that tracks the
+outcome; it is not established as the only difference. Both ratios are also
+lower bounds, since they are computed from the LS fit, which by construction
+sees only the linearly predictable part of the echo.
 
 **The controls.** Both clean takes and the room-noise take ran through the
 identical chain against the bleed take's system audio as a fake reference — a
 loud, entirely unrelated signal, and every opportunity to carve the operator out
-of a recording that never contained an echo. Nothing moved by more than 0.006.
-The 197 household segments — other people, same microphone, same room — scored
-+0.037 mean in all three conditions, identical to three decimals, 0/197 admitted
-throughout. Whatever cancellation is doing, it is not lifting everything toward
-the profile.
+of a recording that never contained an echo. The clean takes did not move: 5/5
+and 14/14 in every condition, means within 0.004. **The room-noise take lost two
+windows of 26**, 16 admitted to 14, on a mean shift of −0.003 — its windows sit
+in a cluster right at the operating point, so a shift far too small to see in the
+mean moves the count. Small, real, and the honest reading is that the chain is
+not free even where there is nothing to cancel. The 197 household segments —
+other people, same microphone, same room — scored +0.037 mean in all three
+conditions, identical to three decimals, 0/197 admitted throughout. Whatever
+cancellation is doing, it is not lifting everything toward the profile.
 
 **The dB metrics were the wrong lens, and would have killed this.** Measured as
 signal processing, the result looks hopeless: 6–7.5 dB of suppression on
 far-end-only spans, and 1.3–2.7 dB during double-talk, which is the regime that
 matters because an operator segment with the far end playing *is* double-talk.
 Against a dose-response that wanted roughly 12 dB, that reads as a fourfold
-shortfall in power and an obvious no. The overlap take recovers fully on 1.3 dB.
-A speaker embedding does not care about broadband attenuation; it cares whether a
-competing voice is corrupting the specific time-frequency cells that carry
-identity. Every number in this paragraph was measured before the gate was run,
-and every one of them pointed the wrong way.
+shortfall in power and an obvious no. The overlap take goes from 5 admitted
+windows to 26 on 1.3 dB. A speaker embedding does not care about broadband
+attenuation; it cares whether a competing voice is corrupting the specific
+time-frequency cells that carry identity. Every number in this paragraph was
+measured before the gate was run, and every one of them pointed the wrong way.
 
 Three further measurements say the linear filter is close to finished rather than
-failing, which is why the suppressor adds so little: on echo-dominant frames the
-residual sits 1.6 dB above the microphone's own noise floor; the echo is only
-8–12 dB above that floor to begin with; and the coherence ceiling — the most any
-linear filter of any length can suppress — is about 10 dB in its best band and
-essentially nothing above 4 kHz. The path is also nearly level-independent
+failing: on echo-dominant frames the residual sits 1.6 dB above the microphone's
+own noise floor; the echo is only 8–12 dB above that floor to begin with; and the
+coherence ceiling — the most any linear filter of any length can suppress — is
+about 10 dB in its best band and essentially nothing above 4 kHz. That is
+consistent with the suppressor still being worth a fifth of the recovery: what it
+adds is not more echo removal but a spectral decision about which cells to trust,
+which is a different operation from subtracting a filtered reference. The path is
+also nearly level-independent
 (−1.1 dB across the loudest and quietest quartiles), so macOS speaker processing
 downstream of the tap is not the obstacle it might have been.
 
@@ -671,8 +698,10 @@ average spectrum carries +17.4 dB at 80–150 Hz relative to 1 kHz, against +22.
 for the clean take. A phone speaker cannot reproduce that band at all.
 
 **What this does not say.** It does not say AEC3 clears the bar; it says the bar
-is clearable, and by a margin large enough that a real implementation has room to
-fall short. Thirteen segments, two takes, sixty seconds each, one speaker. The
+is clearable, and by a margin narrower than the first reading of this measurement
+suggested — five of the overlap take's 31 windows still fail even under an
+oracle, and a fifth of the recovery comes from the stage AEC3 has to estimate
+rather than solve. Two takes, sixty seconds each, one speaker. The
 suppressor was handed the true echo. The next measurement is the same table with
 AEC3 in place of the oracle, and it is now worth building, because the outcome it
 would be judged on is known to exist.
@@ -866,15 +895,15 @@ in 2.2 s.
   implemented here yet, which is the only reason headphones are load-bearing
   today.
 - **Echo cancellation is now known to work on this material, within a bounded
-  regime.** Removing the echo under oracle conditions restores the operator's
-  segments to clean-take scores when the far end sits at or below his level, and
-  moves them substantially but insufficiently when it sits ~3 dB above. The
-  linear stage carries almost all of that, which is the part AEC3 does
-  deterministically. The bound is a level ratio the capture can measure, so the
-  product can tell the operator to turn the call down instead of failing
-  silently — but the measurement is thirteen segments from one speaker with the
-  suppressor handed the true echo, and AEC3 in place of the oracle is the next
-  number, not a formality.
+  regime and short of a full repair.** Under oracle conditions it takes the
+  operator from 5 admitted speech windows out of 31 to 26 when the far end sits
+  below his level, and from 0 of 26 to 2 when it sits ~3 dB above. Four fifths of
+  that comes from the linear stage, which AEC3 solves deterministically; the
+  remaining fifth comes from the residual suppressor, which it has to estimate.
+  The bound is a level ratio the capture can measure, so the product can tell the
+  operator to turn the call down instead of failing silently — but this is one
+  speaker with the suppressor handed the true echo, and AEC3 in place of the
+  oracle is the next number, not a formality.
 - Separability is measured and the answer is "half". An off-the-shelf embedding
   recognises the same voice on the built-in mic at 0.243 cosine against 0.524 on
   the system tap, with real speaker structure present on both. Loudness does not

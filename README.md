@@ -64,22 +64,26 @@ profile, and neither requires an enrollment ritual — the profile is built
 passively from ordinary speech. Google Meet does not attempt it and says so
 outright: "voices from TV or people talking won't be canceled."
 
-An off-the-shelf embedding is strong enough here, measured on five minutes of the
-operator's own speech through the microphone the gate would run on: household
-speech recorded in the same room on the same microphone never scores above
-+0.577, and his own speech reaches +0.68 to +0.89 when nothing else is playing.
-Music across the room costs about 0.15 of that and it survives.
+An off-the-shelf embedding separates the operator from his own household,
+measured on five minutes of his speech through the microphone the gate would run
+on. His own speech reaches +0.68 to +0.89 with nothing else playing; 197
+segments of household speech in the same room on the same microphone reach
++0.577 at the very top. That gap is real but it is not yet a margin — the
+strongest household segment lands 0.003 under the operating point, which is a
+property of this sample and not a number to ship on. Music across the room costs
+about 0.15 and still loses two segments in eight.
 
-**Another voice is the case that breaks it, and echo cancellation gets it back.**
-When the far end comes out of the laptop speakers, the operator's own segments
-collapse to +0.50 and below and the gate rejects him. Removing the echo restores
-them to +0.79 — clean-capture scores — while the same processing leaves 197
-household segments unchanged to three decimals. That result holds where the far
-end sits at or below his own level and falls short about 3 dB above it, so the
-usable regime is a level ratio the capture can already measure. It was produced
-with an ideal canceller rather than a shipping one, on thirteen segments from a
-single speaker; see [`spike/RESULTS.md`](./spike/RESULTS.md) for what that does
-and does not settle.
+**Another voice is the case that breaks it, and echo cancellation gets most of it
+back.** With the far end coming out of the laptop speakers, the gate admits 5 of
+the operator's 31 speech windows — it rejects him from his own meeting. Removing
+the echo takes that to 26 of 31, while the same processing leaves 197 household
+segments unchanged to three decimals. It is not a full repair: the recovered
+windows average +0.64 against +0.77 for the same voice with nothing playing, and
+five still fail. On a second take with the far end about 3 dB louder relative to
+him, recovery goes to 2 of 26 — so the usable regime is a level ratio, and the
+capture can already measure it. Produced with an ideal canceller rather than a
+shipping one, on one speaker; see [`spike/RESULTS.md`](./spike/RESULTS.md) for
+what that does and does not settle.
 
 **Two defects in the notes half were in the prompt, not the model.** The first
 was fabrication: the instructions illustrated a phrasing rule with two example
