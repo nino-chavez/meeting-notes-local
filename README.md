@@ -244,10 +244,14 @@ Three things are worth knowing before reading its output as a result:
   the wiring is under control, but no capture in this project has yet been through
   the gate. What it does to a real conversation is unmeasured.
 - **It stands down when bleed is high**, and says so. Above the correlation cut the
-  transcript has already dropped every speaker label, so there is no split left to
-  protect — and that is the same audio where the gate is measured to reject the
-  operator from his own meeting, 1 of 7 voiced windows admitted. Running it there
-  would delete you to defend a label that was already gone.
+  transcript has already dropped every speaker label, so no attribution is left to
+  protect — and that is the same audio where the gate performs worst, admitting 1
+  of 7 voiced microphone windows. Those seven are windows of unknown composition,
+  so that is an unlabelled outcome rather than a recovery rate, and either reading
+  is a reason not to trust the gate there. What the skip costs is the room's words
+  staying in the transcript, which [`notes/EVAL.md`](./notes/EVAL.md) measured as a
+  real change to the notes — three action items with the room in, five with it out.
+  That content cost is accepted rather than risked against deleting you.
 - **Segments under two seconds are kept, not judged.** The embedding is unreliable
   below that, and short turns are "yes", "agreed", "I'll do that" — the
   commitments the tool exists to record. The run reports how many and how long, so

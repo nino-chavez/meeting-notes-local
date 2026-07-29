@@ -820,7 +820,7 @@ def load_voiceprint(path, model_dir):
     return profile, threshold, doc
 
 
-def drop_offprint(segs, mic, voiceprint, b, label):
+def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
     """Remove mic segments that are not the operator's voice.
 
     The third and last filter on the microphone leg, and it asks the third
@@ -832,19 +832,37 @@ def drop_offprint(segs, mic, voiceprint, b, label):
     were other people talking near the laptop, transcribed cleanly and delivered
     to the notes labelled as the operator.
 
-    **It runs only when a speaker label is being claimed**, and that coupling is
-    load-bearing rather than an optimisation. Above `BLEED_CONTAMINATED_R` the
-    transcript already drops every label, so there is no Me/Them claim left for
-    this gate to protect — and the same audio is where the gate is measured to
-    fail hardest, admitting 1 of the operator's 7 voiced windows with the far end
-    on the speakers. Running it there would delete the operator from his own
-    meeting in order to defend a label that had already been cleared. Both halves
-    read the same `contaminated()`, so the two decisions cannot drift apart.
+    **It runs only when a speaker label is being claimed.** Above
+    `BLEED_CONTAMINATED_R` the transcript has already dropped every label, and the
+    same audio is where the gate performs worst: 1 of 7 voiced microphone windows
+    admitted with the far end on the speakers. Those seven are windows of unknown
+    composition — with the far end on the speakers the microphone is voiced either
+    way, so some hold no operator at all — which makes it an unlabelled outcome
+    rather than a recovery rate, and the reason not to trust the gate there
+    regardless of which reading is right.
+
+    What that skip costs is worth stating exactly, because "nothing is lost" would
+    be false. The label is already gone, so no attribution is being protected —
+    but the room's *segments* still reach the merged transcript and the notes, and
+    `notes/EVAL.md` measured that content cost as real: the 75-minute capture's
+    14.2% room turns changed the output deterministically, three action items with
+    them in against five with them out. So this accepts a known content
+    contamination in order not to risk deleting the operator, which is the worse
+    of the two failures. It is a choice between costs, not a free skip.
+
+    Both halves read the same `contaminated()`, so the two decisions cannot drift.
 
     The threshold comes from the profile file, never from this module. There is no
     constant here to fall back to, because a plausible one would be
     indistinguishable from a measured one to every later reader — see
     speaker_gate's own opening note.
+
+    `embed` exists so the filtering path can be exercised without a 153 MB install
+    and an 89 MB model fetch. That is the same reason `speaker_gate.load_encoder`
+    is imported lazily and its controls run on a fixture: a test that needs the
+    real model is a test that stops being run, and the index arithmetic below is
+    what decides whether the operator survives. Production passes nothing and gets
+    the real encoder.
 
     Rejections are reported, always, including how many were close calls and
     whether the dropped speech keeps coming back as one voice. That last one is
@@ -857,18 +875,25 @@ def drop_offprint(segs, mic, voiceprint, b, label):
         return segs
     if contaminated(b):
         print(f"  {label}: voiceprint gate SKIPPED — bleed is high, so the speaker "
-              f"labels are already dropped and there is nothing for it to protect. "
-              f"On this audio the gate is measured to reject the operator too.")
+              f"labels are already dropped and on this audio the gate is measured "
+              f"to reject the operator as well. The room's words stay in the "
+              f"transcript; that content cost is accepted rather than risked "
+              f"against deleting the operator.")
         return segs
 
     import speaker_gate as sg
 
     profile, threshold, manifest = voiceprint
-    embed = sg.load_encoder(manifest["model_dir"])
+    if embed is None:
+        embed = sg.load_encoder(manifest["model_dir"])
     embeddings = sg.embed_segments(mic.astype(np.float32), segs, embed)
     result = sg.gate(profile, segs, embeddings, threshold)
 
-    sittings = manifest.get("operating_point", {}).get("n_sittings")
+    # From the enrollment list itself, which load_profile refuses to load without.
+    # Reading it out of the nested operating point instead let an older or
+    # hand-edited profile print "None sitting(s)" and skip the over-tight warning
+    # entirely — the warning most needed by exactly the profile missing the field.
+    sittings = len(manifest["sittings"])
     print(f"  {label}: voiceprint gate at {threshold:.3f} "
           f"(profile {profile.seconds:.0f}s over {sittings} sitting(s))")
     print(f"    kept {len(result.kept)} ({result.kept_seconds:.1f}s), "
@@ -1007,6 +1032,7 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
     # After drop_bled, not before. The bled segments are the far end, and asking a
     # voiceprint whether the far end is the operator wastes an embedding per
     # segment to arrive at the answer the cheaper acoustic test already gave.
+    gating = voiceprint_provenance(args.voiceprint, b, bool(mic_segs))
     mic_segs = drop_offprint(mic_segs, mic, args.voiceprint, b, "mic")
     tap_segs = drop_unvoiced(transcribe(tap, args.whisper, args.language), tap, "system")
     write_leg_segments(out_dir / "system-segments.json", tap_segs, len(tap) / RATE,
@@ -1035,7 +1061,7 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
     # four and a half minutes of transcription that had already succeeded —
     # the expensive work was complete and unrecoverable because the cheap
     # step downstream of it failed.
-    write_transcript(out_dir / "transcript.json", merged, b, args.voiceprint)
+    write_transcript(out_dir / "transcript.json", merged, b, gating)
 
     if contaminated(b):
         print(
@@ -1391,32 +1417,42 @@ def write_leg_segments(path, segs, duration_s, audio_path, audio_samples, leg):
     print(f"  wrote {path} ({len(segs)} {leg} segments{first})")
 
 
-def voiceprint_provenance(voiceprint, b):
+def voiceprint_provenance(voiceprint, b, had_segments):
     """What gated the microphone leg, for the artifact to carry.
 
-    Three states, and the middle one is the reason this is not a boolean. A leg
-    can be ungated because no profile was supplied, or ungated because bleed sent
-    the gate down the skip path in `drop_offprint` — and a reader six months later
-    cannot tell those apart from the segments alone. `null` would report the
-    second as the first, which reads as "nobody asked for a gate" when what
-    happened is "a gate was asked for and declined to run".
+    Several states, and the reason this is not a boolean is that a reader six
+    months later cannot tell them apart from the segments alone. A leg can be
+    ungated because no profile was supplied, because bleed sent the gate down the
+    skip path, or because there was nothing on the leg to gate. `null` would report
+    all of those as the first, which reads as "nobody asked for a gate" when what
+    happened is "a gate was asked for and did not run".
+
+    `had_segments` mirrors `drop_offprint`'s own early return. Without it a capture
+    whose microphone leg transcribed nothing wrote `applied: true` — a gate result
+    for a gate that never executed.
     """
     if voiceprint is None:
         return None
     _profile, threshold, doc = voiceprint
     op = doc.get("operating_point") or {}
+    if contaminated(b):
+        why = "bleed above the attribution cut"
+    elif not had_segments:
+        why = "no microphone segments survived the earlier filters"
+    else:
+        why = None
     return {
-        "applied": not contaminated(b),
-        "skipped_reason": "bleed above the attribution cut" if contaminated(b) else None,
+        "applied": why is None,
+        "skipped_reason": why,
         "threshold": threshold,
         "target_frr": op.get("target_frr"),
-        "n_sittings": op.get("n_sittings"),
+        "n_sittings": len(doc["sittings"]),
         "profile_seconds": doc.get("seconds"),
         "encoder": doc.get("encoder"),
     }
 
 
-def write_transcript(path, merged, b, voiceprint=None):
+def write_transcript(path, merged, b, gating=None):
     """Hand the capture to the notes half, carrying the bleed verdict with it.
 
     The attribution level is derived here rather than downstream, because this
@@ -1437,7 +1473,9 @@ def write_transcript(path, merged, b, voiceprint=None):
         # Whether the mic leg holds the operator or whoever was audible. The
         # attribution level above says which CHANNEL a turn came from; this says
         # whether anything checked that the channel held the person it names.
-        "voiceprint": voiceprint_provenance(voiceprint, b),
+        # Computed by the caller, which is the only place that knows whether the
+        # gate actually executed — see voiceprint_provenance.
+        "voiceprint": gating,
         "turns": [
             # Labels are dropped, not merely marked, when the split is fiction.
             {

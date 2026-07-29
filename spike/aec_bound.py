@@ -2073,25 +2073,72 @@ def _ground_truth_controls() -> bool:
               dc.drop_offprint(one_seg, mic, None, clean_b, "mic"), one_seg,
               shown="unchanged")
 
-        #     Three states, not a boolean: a reader cannot otherwise tell "no gate
-        #     was asked for" from "a gate was asked for and declined to run".
-        vp = (None, 0.61, {"seconds": 300.0, "encoder": "e",
-                           "operating_point": {"target_frr": 0.05, "n_sittings": 2}})
-        check("an ungated capture says so", dc.voiceprint_provenance(None, clean_b), None)
+        #     The line that actually decides what survives. Both controls above
+        #     assert *unchanged*, so they cover only the two skip paths — the index
+        #     map that keeps the operator had never executed in a test, and it
+        #     cannot without the 153 MB install that load_encoder's own docstring
+        #     says makes a test stop being run. So drop_offprint takes the encoder,
+        #     and this passes the same fixture speaker_gate's controls use.
+        import speaker_gate as sg
+
+        g_rng = np.random.default_rng(11)
+        g_dirs = sg._speaker_directions(g_rng, 2)
+        g_embed = sg._fixture_encoder(g_dirs, within=0.038)
+        g_audio, g_segs = sg._fixture_audio(sg._spans(8, 0, 1.0), g_rng)
+        g_emb = [e for e in sg.embed_segments(g_audio, g_segs, g_embed) if e is not None]
+        g_profile = sg.enroll(g_emb, [s["end"] - s["start"] for s in g_segs])
+        # Operator, operator, intruder, operator, and one too short to judge.
+        mixed_spans = [(1.0, 5.0, 0), (7.0, 11.0, 0), (13.0, 17.0, 1),
+                       (19.0, 23.0, 0), (25.0, 26.0, 0)]
+        mixed_audio, mixed = sg._fixture_audio(mixed_spans, g_rng)
+        vp_fix = (g_profile, 0.5, {"seconds": 32.0, "encoder": "fixture",
+                                   "sittings": [{}, {}],
+                                   "operating_point": {"target_frr": 0.05}})
+        kept = dc.drop_offprint(mixed, mixed_audio, vp_fix, clean_b, "mic",
+                                embed=g_embed)
+        check("the gate drops the voice that is not the operator",
+              [s["start"] for s in kept], [1.0, 7.0, 19.0, 25.0],
+              shown="intruder at 13.0s gone")
+        check("and keeps the segment too short to judge rather than deciding it",
+              25.0 in [s["start"] for s in kept])
+        check("the surviving list is the original objects in the original order",
+              all(a is b for a, b in zip(kept, [mixed[i] for i in (0, 1, 3, 4)],
+                                         strict=True)))
+
+        #     Several states, not a boolean: a reader cannot otherwise tell "no gate
+        #     was asked for" from "a gate was asked for and did not run".
+        vp = (None, 0.61, {"seconds": 300.0, "encoder": "e", "sittings": [{}, {}],
+                           "operating_point": {"target_frr": 0.05}})
+        check("an ungated capture says so",
+              dc.voiceprint_provenance(None, clean_b, True), None)
         check("a gated one records the threshold it used",
-              (dc.voiceprint_provenance(vp, clean_b)["applied"],
-               dc.voiceprint_provenance(vp, clean_b)["threshold"]), (True, 0.61),
+              (dc.voiceprint_provenance(vp, clean_b, True)["applied"],
+               dc.voiceprint_provenance(vp, clean_b, True)["threshold"]), (True, 0.61),
               shown="applied at 0.61")
-        skipped = dc.voiceprint_provenance(vp, dirty_b)
+        skipped = dc.voiceprint_provenance(vp, dirty_b, True)
         check("and a skipped one is distinguishable from an ungated one",
               (skipped["applied"], bool(skipped["skipped_reason"])), (False, True),
               shown="not applied, reason given")
+        #     drop_offprint returns early on an empty leg too, and reporting that as
+        #     applied is a gate result for a gate that never executed.
+        empty = dc.voiceprint_provenance(vp, clean_b, False)
+        check("a leg with nothing on it did not have a gate applied to it",
+              (empty["applied"], bool(empty["skipped_reason"])), (False, True),
+              shown="not applied, reason given")
+        #     The sitting count comes from the enrollment list, which load_profile
+        #     refuses to load without. Read from the nested operating point instead
+        #     it went None on an older profile and silently dropped the over-tight
+        #     warning — for exactly the profile that most needed it.
+        check("the sitting count survives a profile with no operating point",
+              dc.voiceprint_provenance(
+                  (None, 0.61, {"sittings": [{}, {}, {}]}), clean_b, True)["n_sittings"],
+              3)
 
         #     And it reaches the artifact, which is where a later reader looks to
         #     find out whether the mic leg holds the operator or whoever was audible.
         gated_p = d / "transcript-gated.json"
-        dc.write_transcript(gated_p, [(1.0, 4.0, "Me", "something said")],
-                            clean_b, vp)
+        dc.write_transcript(gated_p, [(1.0, 4.0, "Me", "something said")], clean_b,
+                            dc.voiceprint_provenance(vp, clean_b, True))
         wrote = json.loads(gated_p.read_text())
         check("the transcript carries what gated the microphone leg",
               (wrote["voiceprint"]["applied"], wrote["voiceprint"]["n_sittings"]),
