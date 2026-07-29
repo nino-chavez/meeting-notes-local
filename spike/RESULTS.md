@@ -460,8 +460,8 @@ plays through speakers — is the one configuration the gate cannot handle. On a
 capture with both live at once, 2 of 15 segments survived. Those fifteen are
 voiced *microphone* segments, and with the far end on the speakers the
 microphone is voiced whether or not the operator is talking, so some of them
-hold no operator at all — the ratio is a floor on retention rather than a
-measure of it. The table below does not have that problem: it mixes the far end
+hold no operator at all — an unlabelled outcome rather than a retention rate.
+The table below does not have that problem: it mixes the far end
 into the operator's own clean segments at known ratios, so every segment in it
 is his by construction.
 
@@ -642,25 +642,33 @@ thirty seconds — audio the filter never saw:
 | **overlap** | +0.326 | +0.535 | +0.615 | **1/7 → 5/7** |
 | bleed | +0.101 | +0.152 | +0.442 | 0/8 → 1/8 |
 
-**The denominator is voiced microphone windows, not operator speech windows,**
-and on a speakers take those are not the same thing. The window selector takes
-voiced spans of the microphone, and with the far end coming out of the speakers
-the microphone is voiced whether or not the operator is talking. Some unknown
-number of these fourteen windows hold the far end alone. That makes both ratios
-a floor on recall rather than an estimate of it: an echo-only window can only
-ever count as a miss. It is also why the recording protocol below had to change
-— nothing in the audio distinguishes the two, so the labels have to come from a
-cue schedule fixed before the recording exists.
+**These are unlabelled outcomes, not measures of operator recall, and not
+floors on it either.** The window selector takes voiced spans of the microphone,
+and with the far end coming out of the speakers the microphone is voiced whether
+or not the operator is talking. An unknown number of these fourteen windows hold
+the far end alone.
 
-One inflation channel was checked directly rather than argued away, since a
-conservative denominator does not by itself make the numerator safe. After the
-mask, an echo-only window becomes near-silence, and a speaker embedding of
-near-silence can score anywhere — including above the threshold, which would be
-an admission with nothing behind it. Every window admitted after cancellation
-but not before was measured against its own take's noise floor: all of them carry
-13 to 27 times that level, and none sits at it. The figures survive the check
-that could have killed them. It does not confirm them: residual energy proves a
-window is not empty, not that what remains is the operator.
+An earlier version of this paragraph called the ratios a floor on recall, on the
+reasoning that an echo-only window can only ever count as a miss. That is wrong,
+and the paragraph conceded as much two sentences later without noticing the
+contradiction: an echo-only window can be *admitted*, and then it enters the
+numerator as well as the denominator. A floor requires every echo-only window to
+be rejected, which is exactly what is not established. What these numbers report
+is what the gate did on a window set of unknown composition. Nothing more.
+
+The obvious way that could inflate was checked and does not settle it. After the
+mask an echo-only window becomes near-silence, and a speaker embedding of
+near-silence can score anywhere, so every window admitted after cancellation but
+not before was measured against its take's own noise floor. The first version of
+that check was itself broken — it estimated the floor from a percentile of
+squared *samples*, which a waveform's zero crossings drag toward zero, so pure
+noise scored 7.96 against its own "floor" and cleared the 3x guard by two and a
+half times. Recomputed over 25 ms frames, where noise scores 1.05, the admitted
+windows run **3.7 to 8.3 times the floor** rather than the 13 to 27 first
+published. The recomputation weakened the evidence and it is stated at its new
+strength. What survives is narrow: those windows are not empty. Whether what
+fills them is the operator or residual echo, this cannot say — which is why the
+recording protocol below had to change.
 
 Seven windows. It was six of seven until the alignment leak below was closed —
 estimating the delay over the whole take let audio after the boundary influence
@@ -674,12 +682,11 @@ reference get removed wherever they occur. The room-noise control below, losing
 two windows of fourteen against a reference unrelated to it, is that effect
 measured directly. On the same take fit in-sample over the whole minute the
 figure is 3/16 → 12/16, the optimistic reading, reported alongside rather than
-instead — and carrying the same mixed denominator as the held-out figure above,
-which matters more here because this is the number a skimmer quotes.
+instead — and an unlabelled outcome in the same way as the held-out figure
+above, which matters more here because this is the number a skimmer quotes.
 
 The bleed take does not recover under any fit — 0 of 8, or 1 with the mask,
-against the same denominator of voiced microphone windows rather than known
-operator speech. Two
+over the same window set of unknown composition. Two
 things differ between the takes and only one is usually named: the far end sits
 about 7 dB louder relative to the operator, *and* the operator carries about
 10 dB less low-frequency energy, consistent with being further from the
@@ -781,7 +788,9 @@ capture runs. The cues say only when to talk:
 
 1. **35 s: say nothing** while the far end plays. This is the fit interval.
 2. **Then five pairs**, ten seconds talking over the same playback and six
-   seconds silent while it keeps playing.
+   seconds silent while it keeps playing. Each talking cue shows a phrase — read
+   it, then keep talking until the cue changes. The phrase is what lets the run
+   verify you spoke rather than assume it.
 
 The silent intervals are not padding. They are the far end with nothing behind
 it, which makes them the negative control for the gate — audio that must *not* be
@@ -859,12 +868,45 @@ and is the wrong shape: it is the operator attesting afterwards to what he did,
 which is the class of evidence this project keeps refusing. A schedule fixed in
 advance cannot be fitted to the result.
 
+**Compliance is checked from content, because energy cannot check it.** The
+first version of this asked whether each speak interval contained voiced
+microphone audio. On the only configuration that matters it always does — the far
+end plays throughout — so a missed cue read as compliant, and the control that
+"proved" the check worked used a silent recording, the one condition the
+experiment never runs in.
+
+What echo cannot fake is the operator's words. Each speak cue displays a phrase;
+if the microphone transcript inside that interval carries enough of it, he spoke
+there. The far end's own transcript is checked too, and any phrase the playback
+says enough of itself is struck from the evidence rather than credited to him.
+
+This runs one way only. Echo-contaminated speech transcribes badly — that is the
+condition under study — so a phrase that fails to match is **not** evidence of
+silence; it is reported as unverified. And the silent intervals have no
+equivalent check at all, because nothing can demonstrate an absence here. That
+they were silent is an assumption the artifact states as one.
+
 The harness then scores three groups separately: segments wholly inside a speak
 interval, segments wholly inside a silent one, and segments straddling a cue,
 which belong to neither and are reported apart rather than assigned. One second
 is trimmed from each end of every interval, because a cue is seen and acted on
 rather than obeyed instantly. Compliance is reported, not enforced — a speak
 interval the operator stayed quiet through reaches the artifact saying so.
+
+**A run that cannot support a conclusion records itself as inconclusive.** Both
+classes have to be populated — three segments and eight seconds each — because
+the operator class is the claim and the silent class is what stops the claim
+resting on a gate that admits everything. Phases that ran past the end of a short
+take, or a silent interval that yielded no scorable segment, put the run in that
+state too. It still writes its manifest, with the counts that made it
+inconclusive; a missing label reads as "not run yet", which is a different fact.
+
+Suppression on the silent intervals is only reported where the far end was
+**actually playing**. Real playback pauses between sentences, and a pause inside
+a silent interval contributes room noise to both sides of the ratio, which drags
+the figure toward zero and calls it a measurement. The reference has to be 20 dB
+over its own floor, and four seconds of that have to exist, or the run says there
+is no figure rather than printing one.
 
 This is also the exact fixture AEC3 should be handed first, since it gives a real
 canceller the single-talk interval it converges on.
@@ -1061,7 +1103,8 @@ in 2.2 s.
   never saw: 1 admitted window of 7 becomes 5 where the far end sits
   below the operator, and 0 of 8 becomes 1 where it sits ~7 dB above. Those are
   voiced *microphone* windows and not all of them hold the operator, so each
-  ratio is a floor on recovery rather than a measure of it. Enough to
+  ratio is what the gate did on a window set of unknown composition — not a
+  recovery rate, and not a floor on one either. Enough to
   justify one bounded AEC3 integration; not enough to design a warning around,
   since the two takes differ in operator distance as well as level.
 - **No take in this project contains four seconds of the far end playing while

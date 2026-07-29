@@ -870,11 +870,12 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None):
         print(f"  wrote {path} ({len(audio) / RATE:.2f}s, {how})")
 
     if phases:
-        # After the WAV is on disk, so the digest is of the file a consumer will
-        # actually open, and before the transcription that may take minutes and
-        # may fail — the schedule is the part that cannot be reconstructed.
+        # After both WAVs are on disk, so the digests are of the files a consumer
+        # will actually open, and before the transcription that may take minutes
+        # and may fail — the schedule is the part that cannot be reconstructed.
         write_protocol(out_dir / "protocol.json", phases,
-                       out_dir / "mic.wav", len(mic))
+                       out_dir / "mic.wav", len(mic),
+                       out_dir / "system.wav", len(tap))
 
     if args.no_transcribe:
         return
@@ -882,10 +883,12 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None):
     print("\n=== transcript ===")
     t0 = time.monotonic()
     mic_voiced = drop_unvoiced(transcribe(mic, args.whisper, args.language), mic, "mic")
-    write_mic_segments(out_dir / "mic-segments.json", mic_voiced, len(mic) / RATE,
-                       out_dir / "mic.wav", len(mic))
+    write_leg_segments(out_dir / "mic-segments.json", mic_voiced, len(mic) / RATE,
+                       out_dir / "mic.wav", len(mic), "mic")
     mic_segs = drop_bled(mic_voiced, mic, tap, b, "mic")
     tap_segs = drop_unvoiced(transcribe(tap, args.whisper, args.language), tap, "system")
+    write_leg_segments(out_dir / "system-segments.json", tap_segs, len(tap) / RATE,
+                       out_dir / "system.wav", len(tap), "system")
     print(f"  (transcribed both legs in {time.monotonic() - t0:.1f}s)\n")
 
     # Offset each leg by when its first block arrived, so the merge is against
@@ -960,6 +963,31 @@ SPEAK_S, CONTROL_S = 10.0, 6.0
 DEFAULT_PAIRS = 5
 
 
+# One phrase per speak interval, shown as the cue. They exist so compliance can
+# be checked from content rather than assumed: if the microphone transcript
+# inside a speak interval carries these words, the operator spoke there, and no
+# amount of far-end echo can produce them.
+#
+# The check is one-directional and has to stay that way. Echo-contaminated
+# speech transcribes badly — that is the condition under study — so a phrase
+# that fails to match is not evidence the operator was silent. Presence proves
+# speech; absence proves nothing.
+#
+# Chosen to be unlike anything a meeting or a podcast contains, so a match is
+# hard to produce by accident. The far-end leg is transcribed too and any phrase
+# that turns up in IT is excluded from the evidence rather than credited.
+SCRIPT = [
+    "seventeen violet anchors drifting past the harbour",
+    "the copper lantern hums beneath a crooked staircase",
+    "eleven paper foxes counting gravel in the courtyard",
+    "a brass kettle whistles under the tilted greenhouse",
+    "nine amber turtles arguing about the wrong timetable",
+    "the velvet piano leans against a rusted weather vane",
+    "four glass herons folding maps inside a quiet elevator",
+    "an iron sparrow rehearses arithmetic beside the canal",
+]
+
+
 def build_schedule(calibration_s=CALIBRATION_S, pairs=DEFAULT_PAIRS,
                    speak_s=SPEAK_S, control_s=CONTROL_S):
     """Calibration, then alternating speak/silent intervals, all on the mic clock.
@@ -983,15 +1011,20 @@ def build_schedule(calibration_s=CALIBRATION_S, pairs=DEFAULT_PAIRS,
             f"phases of {min(speak_s, control_s):g}s leave {interior:g}s after "
             f"{CUE_MARGIN_S:g}s of margin at each edge, which is below the 2s a "
             f"segment needs to be scorable. The interval would yield nothing.")
+    if pairs < 1:
+        raise ValueError(
+            "a schedule with no speak intervals is not a degenerate calibration "
+            "take, it is not a schedule: there would be nothing to score and "
+            "nothing to hold the gate's negative control against.")
     phases = [{"start": 0.0, "end": calibration_s,
-               "expect": "silence", "role": "calibration"}]
+               "expect": "silence", "role": "calibration", "script": None}]
     t = calibration_s
-    for _ in range(pairs):
-        phases.append({"start": t, "end": t + speak_s,
-                       "expect": "operator", "role": "speak"})
+    for k in range(pairs):
+        phases.append({"start": t, "end": t + speak_s, "expect": "operator",
+                       "role": "speak", "script": SCRIPT[k % len(SCRIPT)]})
         t += speak_s
         phases.append({"start": t, "end": t + control_s,
-                       "expect": "silence", "role": "control"})
+                       "expect": "silence", "role": "control", "script": None})
         t += control_s
     return phases
 
@@ -1030,6 +1063,8 @@ def run_cues(mic_leg, phases, stop):
         if cur is not shown:
             shown = cur
             print(f"\n  [{now:6.1f}s] {CUE_TEXT[cur['role']]}")
+            if cur["script"]:
+                print(f"             say: \"{cur['script']}\", then keep talking")
         if live:
             # Only where a carriage return means what it looks like. Redirected
             # to a file this line does not overwrite itself, and a two-minute
@@ -1045,14 +1080,20 @@ def run_cues(mic_leg, phases, stop):
     stop.set()
 
 
-def write_protocol(path, phases, mic_path, mic_samples):
-    """The schedule, bound to the recording it was displayed over.
+def write_protocol(path, phases, mic_path, mic_samples, tap_path, tap_samples):
+    """The schedule, bound to both recordings it was displayed over.
 
     Both bindings matter. The digest says this schedule belongs to this audio
     and not to another take with the same phase lengths; the sample count says
     the recording was not truncated afterwards, which would slide every phase
     boundary relative to the audio underneath it while leaving the digest of a
     re-written file self-consistent.
+
+    The system leg is bound too, and to its own count rather than the
+    microphone's — the two legs run on independent clocks and legitimately
+    differ by thousands of samples over a couple of minutes. Anything measuring
+    echo suppression has to know the far end was actually playing, which means
+    reading this leg, which means being sure it is the right one.
     """
     payload = {
         "schema": "capture-protocol/1",
@@ -1060,6 +1101,8 @@ def write_protocol(path, phases, mic_path, mic_samples):
         "rate": RATE,
         "mic_sha256": sha256(mic_path),
         "mic_samples": int(mic_samples),
+        "system_sha256": sha256(tap_path),
+        "system_samples": int(tap_samples),
         "cue_margin_s": CUE_MARGIN_S,
         "cue_poll_s": CUE_POLL_S,
         "phases": phases,
@@ -1071,8 +1114,8 @@ def write_protocol(path, phases, mic_path, mic_samples):
           f"{phases[-1]['end']:.0f}s scheduled)")
 
 
-def write_mic_segments(path, segs, duration_s, mic_path=None, mic_samples=None):
-    """The microphone leg's own speech, on its own clock, before any filtering.
+def write_leg_segments(path, segs, duration_s, audio_path, audio_samples, leg):
+    """One leg's own speech, on its own clock, before any cross-leg filtering.
 
     `transcript.json` is a presentation artifact and is wrong for every job that
     indexes back into `mic.wav`, in three separate ways:
@@ -1089,15 +1132,20 @@ def write_mic_segments(path, segs, duration_s, mic_path=None, mic_samples=None):
       exactly wrong for measuring echo cancellation: the segments it removes are
       the contaminated operator speech such an experiment exists to recover.
 
-    So this is written before the merge and before `drop_bled`, carrying only
-    the microphone, only its own timeline, and a schema marker so a consumer
-    that needs those guarantees can insist on them rather than hope.
+    So this is written before the merge and before `drop_bled`, carrying one leg,
+    only its own timeline, and a schema marker so a consumer that needs those
+    guarantees can insist on them rather than hope.
 
     What it does NOT carry is who was speaking. "Microphone-only" names the
-    channel, not the talker: on speakers, the far end arrives here too, so this
-    list holds the operator's turns and the echo of the far end's, mixed and
+    channel, not the talker: on speakers, the far end arrives here too, so the
+    mic list holds the operator's turns and the echo of the far end's, mixed and
     indistinguishable. Anything that needs the difference has to get it from
     somewhere outside the audio — `protocol.json` is that somewhere.
+
+    The system leg gets the same treatment, and not for symmetry. The protocol's
+    script phrases are checked against it: a phrase the far end happens to say
+    is a phrase its echo can put in the mic transcript, so any that appear here
+    are struck from the compliance evidence rather than credited to the operator.
 
     The digest and sample count bind the list to the recording it indexes.
     Without them a same-schema file from another take loads silently and every
@@ -1105,12 +1153,13 @@ def write_mic_segments(path, segs, duration_s, mic_path=None, mic_samples=None):
     """
     payload = {
         "schema": "mic-segments/1",
-        "timeline": "mic-local",
+        "timeline": f"{leg}-local",
+        "leg": leg,
         "duration_s": round(duration_s, 3),
         "filtered": ["voicing"],
         "labels": None,
-        "mic_sha256": sha256(mic_path) if mic_path else None,
-        "mic_samples": int(mic_samples) if mic_samples is not None else None,
+        "audio_sha256": sha256(audio_path),
+        "audio_samples": int(audio_samples),
         "segments": [
             {"start": round(s["start"], 2), "end": round(s["end"], 2), "text": s["text"]}
             for s in segs
@@ -1118,7 +1167,7 @@ def write_mic_segments(path, segs, duration_s, mic_path=None, mic_samples=None):
     }
     path.write_text(json.dumps(payload, indent=2))
     first = f", first speech at {segs[0]['start']:.1f}s" if segs else ""
-    print(f"  wrote {path} ({len(segs)} mic segments{first})")
+    print(f"  wrote {path} ({len(segs)} {leg} segments{first})")
 
 
 def write_transcript(path, merged, b):
@@ -1199,7 +1248,10 @@ def main():
         ap.error("sounddevice is not installed, so no audio can be captured. "
                  "pip install -r spike/requirements.txt")
 
-    phases = build_schedule(pairs=args.protocol_pairs) if args.protocol else None
+    try:
+        phases = build_schedule(pairs=args.protocol_pairs) if args.protocol else None
+    except ValueError as exc:
+        ap.error(str(exc))
     if phases:
         if args.seconds:
             ap.error("--protocol sets its own duration; drop --seconds")
