@@ -8,11 +8,15 @@ Core Audio process tap, your microphone comes through the same path
 `local-dictation` already uses, and the two arrive as separate streams.
 
 > **Status: design definition, a capture spike, and a notes evaluation.** There
-> is no app yet. What exists is a working two-leg capture, a local summarizer
-> with its fabrication checked mechanically, the measurements both produced, and
-> the documents deciding what gets built. Start with
-> [`spike/RESULTS.md`](./spike/RESULTS.md) and
+> is no app yet. What exists is a working two-leg capture — validated end to end
+> over a 75-minute meeting — a local summarizer with its fabrication checked
+> mechanically, the measurements both produced, and the documents deciding what
+> gets built. Start with [`spike/RESULTS.md`](./spike/RESULTS.md) and
 > [`notes/EVAL.md`](./notes/EVAL.md).
+>
+> **Usable today** for a call taken on headphones with nobody else in the room.
+> Outside that, see [Limits](#limits) — an open microphone records the room into
+> the transcript, and the fix is not built.
 
 ---
 
@@ -23,7 +27,8 @@ Core Audio process tap, your microphone comes through the same path
 </p>
 
 Capturing the microphone and the system separately is supposed to give you
-"me versus them" for free. It does — **on headphones**.
+"me versus them" for free. It does — **on headphones, in an empty room**. Both
+halves of that condition are load-bearing, and they fail for different reasons.
 
 On speakers it does the opposite. The microphone is a correct recording of the
 room, and the room contains the far end, so every sentence lands on both legs.
@@ -42,19 +47,48 @@ with a correct decision list. Summarization is compression, and the first thing
 compression discards is repetition. So the product stops claiming who spoke and
 keeps writing the note.
 
-**The worst defect found in the notes half was in the prompt, not the model.**
-The instructions illustrated a phrasing rule with two example sentences, and the
-model reproduced both as decisions a research meeting had reached — in a
-transcript where neither subject appears once. Those notes named nobody,
-invented no numbers, and were read in full, so every check in place passed them.
-Watching numbers turns out to be the wrong check on its own: fabricated prose
-carries no digits. See [`notes/EVAL.md`](./notes/EVAL.md).
+**But an open microphone records the room, and that is a correctness defect —
+not a manners one.** On an online call, people talking near you are transcribed,
+labelled `Me`, and delivered to the notes as things a participant said. Measured
+on the 75-minute capture: **14.2% of merged turns were the room.** No household
+subject matter survived compression into the notes, but the notes changed anyway
+and deterministically — three action items with the room in, five with it out,
+and different open questions. Irrelevant input perturbs *which* real content
+survives compression without changing how much does.
 
-**Clock drift is still an open question.** A short capture cannot answer it —
-sample counts are exact but each wall-clock endpoint is only known to about one
-block period, so 22 seconds of audio carries ±9 000 ppm of uncertainty against a
-real drift of tens of ppm. It needs roughly a 67-minute run. The tool now prints
-its own error bars and refuses to project an hourly figure it cannot support.
+Teams and Zoom both solve this by gating the microphone on an enrolled voice
+profile, and neither requires an enrollment ritual — the profile is built
+passively from ordinary speech. Google Meet does not attempt it and says so
+outright: "voices from TV or people talking won't be canceled." Whether an
+off-the-shelf embedding is strong enough on *this* microphone is measured in
+[`spike/RESULTS.md`](./spike/RESULTS.md): it recognises the same voice at 0.243
+cosine on the built-in mic against 0.524 on the system tap, so roughly half the
+margin, with real speaker structure present but no comfortable answer yet.
+
+**Two defects in the notes half were in the prompt, not the model.** The first
+was fabrication: the instructions illustrated a phrasing rule with two example
+sentences, and the model reproduced both as decisions a research meeting had
+reached — in a transcript where neither subject appears once. Those notes named
+nobody, invented no numbers, and were read in full, so every check in place
+passed them. Watching numbers is the wrong check on its own; fabricated prose
+carries no digits.
+
+The second was the opposite failure. Two rules told the model to leave out
+anything it was unsure of and to prefer omitting a section to padding it — rules
+written when the open question was whether a local model invents things. It does
+not. It omits. Deleting those two rules is **the only change in this project
+measured across two models, two domains and five meetings with no regression**;
+on the longest transcript tested it took action items from three to eleven. See
+[`notes/EVAL.md`](./notes/EVAL.md).
+
+**Clock drift is bounded, not measured.** A 75-minute capture puts relative drift
+at +4 ± 63 ppm — inside its own error bars, so there is still no drift *value*,
+but the bound is under ~230 ms per hour. That does not close the question the way
+it first appears: reordering depends on the gap between adjacent turns across the
+two legs, not on turn length, and 7.2% of 416 measured cross-leg transitions sit
+closer together than the bound. Drift compensation is not urgent and not provably
+unnecessary. Same-device only — a USB or Bluetooth leg is where drift would
+actually be expected and is untested.
 
 ---
 
@@ -99,23 +133,22 @@ Capture both legs, measure drift and bleed, print a labelled transcript:
 sounddevice and skips the 1.6 GB Whisper download entirely. Plain
 `dual_capture.py` runs until Ctrl-C.
 
-**The run that matters** — alongside a real meeting, on headphones, long enough
-for drift to become measurable:
+**The run that matters now** — a real two-person call, on headphones. Drift has
+been measured; what has never been exercised is the Me/Them split with genuine
+speech arriving on *both* legs at once. Every capture so far put all the real
+words on one leg.
 
 ```sh
 .venv/bin/python spike/dual_capture.py --list-devices       # pick your mic
-.venv/bin/python spike/dual_capture.py --seconds 4200 --no-transcribe
+.venv/bin/python spike/dual_capture.py --seconds 3600
 ```
 
 Headphones do two jobs there: they remove the bleed that duplicates every line,
-and they let the same capture give the first clean read on whether the Me/Them
-split survives real speech.
+and they let the same capture give the first clean read on whether the split
+survives real speech.
 
-`--seconds 4200` is sized for the drift measurement, not for your meeting. Over-
-running into an empty room is harmless — bleed is measured only across the span
-where system audio was actually playing — but drift needs the full ~70 minutes of
-wall clock, so a 30-minute meeting won't answer it however long you leave the
-recorder running afterward.
+Over-running into an empty room is harmless — bleed is measured only across the
+span where system audio was actually playing.
 
 ### Turning a transcript into notes
 
@@ -197,12 +230,24 @@ appears nowhere else.
 
 ## Limits
 
+- **An open microphone records the room.** Speech from people near you is
+  transcribed and labelled as yours. Headphones do not help — they cut the far
+  end out of your microphone, which is a different defect. Until the voiceprint
+  gate exists, use this where you are the only person in the room, or capture the
+  system leg alone and accept unattributed notes.
 - **macOS only.** Core Audio process taps are 14.4+. The Windows equivalent is
   WASAPI loopback and is not implemented.
 - **Speaker labels stop at "me" and "them."** Named participants come from a bot
   in the call or from scraping the meeting UI, never from the audio alone. See
   [`docs/teardown.md`](./docs/teardown.md) for how the commercial products get
   them.
+- **Recall trails a hosted notetaker.** On two real calls hand-scored against a
+  published rule, these notes caught 8 of 10 commitments that Gemini caught 10 of.
+  Every recall figure here rests on ten commitments across two meetings — the
+  thinnest evidence in the project.
+- **Muting is not a privacy control.** The tap reads the rendered stream before
+  hardware volume, so a muted or zeroed output is still captured in full. Stop
+  the capture; do not rely on the volume knob.
 - **Recording a call silently is a two-party-consent problem** in roughly a dozen
   US states. Tell the room.
 
