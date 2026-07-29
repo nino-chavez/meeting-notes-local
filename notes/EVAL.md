@@ -542,6 +542,67 @@ Two smaller results fell out of the same run:
   output that could not be parsed at all for any of the four items. Recall here
   stays hand-checked.
 
+## The prompt was telling it to omit
+
+Two of the four rules at the top of the summarizer used to read:
+
+> If you are not sure something was said, leave it out.
+> Prefer omitting a section to padding it.
+
+Those were written when the open question was whether a local model invents
+things. It measurably does not. What it does is leave commitments out — the
+finding this entire document keeps arriving at — and the instructions were asking
+for exactly that. The prompt was tuned against the failure that was feared and
+never revisited after the real one was found.
+
+The fix keeps every accuracy rule and stops the accuracy rules from doubling as
+permission to write less. "If you are not sure, leave it out" becomes "do not
+write anything the transcript does not support" — the same bar on each sentence,
+with no invitation to write fewer of them. "Prefer omitting to padding" says what
+padding actually is (filler and restatement) and states plainly that it does not
+mean dropping something genuinely decided. And one rule was added, aimed at what
+the misses had in common:
+
+> List every decision and every commitment, including routine ones — scheduling
+> a meeting, sending a file, granting access, following up.
+
+Same transcripts, same contract, same scoring rule, only the rules changed:
+
+| | before | after |
+|---|---|---|
+| `gemma3:12b` | 7/10 | **8/10** |
+| `llama3.1:8b` | 1/10 | **4.5/10** |
+
+**Both models improve, which nothing else in this document has managed.** Every
+earlier change moved one model and moved the other the wrong way — attribution
+level took gemma 2/6→4/6 while taking llama 1/6→0/6, and two passes took gemma
+down and llama's meeting up. This is the first change that survives a second
+model.
+
+The 8B model is the striking one. On the 57-minute meeting under the old rules it
+scored **zero** — four decisions, three action items, all true, not one of them a
+commitment the reference recorded. It was not failing to understand the meeting.
+It was doing what it had been told.
+
+Three things worth stating about what this is not:
+
+- **Nothing was traded for it.** All four runs pass every gating check —
+  attribution, numbers, prompt echo, context. The two owners the 8B model names
+  appear 3 and 15 times in the transcript, so they come from what was said. Notes
+  grew from 18 to 21 bullets and 11 to 16, not to the 118 that two passes
+  produced.
+- **The gained items are the ones the change aimed at.** The clearest is a
+  commitment to schedule a recurring sync — administrative, easy to read as not
+  worth writing down, and recorded by the reference.
+- **One commitment is missed by both models under both prompts**: providing
+  usernames so repository access can be granted. The two-pass run caught it. That
+  is the ceiling result again — the information reaches some arm, and no single
+  configuration collects all of it.
+
+The two-pass measurements above predate this change; both arms there used the old
+rules, so that comparison stands on its own terms but its absolute numbers are no
+longer the current baseline.
+
 ## What this evaluation structurally cannot tell you
 
 Stated plainly, in the same spirit as `spike/RESULTS.md`:

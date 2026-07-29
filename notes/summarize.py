@@ -60,21 +60,33 @@ Three to six sentences on what the meeting was about and where it landed.
 What was actually settled. Not what was discussed.
 
 ## Action items
-What someone committed to do next.
+What someone committed to do next. Every one of them, routine included.
 
 ## Open questions
 What was raised and left unresolved."""
 
+# Two of the four rules here used to instruct omission — "if you are not sure,
+# leave it out" and "prefer omitting a section to padding it". They were written
+# when the open question was whether a local model invents things. It does not;
+# what it does is leave commitments out, and these rules were telling it to.
+# Accuracy is still absolute, but it now applies to each statement written rather
+# than doubling as a reason to write fewer of them.
 BASE_RULES = """\
 You are writing notes from a meeting transcript.
 
 Rules that override everything else:
-- Every statement you write must be supported by the transcript. If you are not
-  sure something was said, leave it out.
+- Every statement you write must be supported by the transcript. Do not write
+  anything the transcript does not support.
 - Never invent names, numbers, dates, quantities, or deadlines. If the
   transcript does not contain a figure, your notes must not contain one.
-- Prefer omitting a section to padding it. An empty section is a true statement
-  about the meeting; a padded one is not.
+- List every decision and every commitment, including routine ones — scheduling
+  a meeting, sending a file, granting access, following up. A commitment that
+  seems too small or too administrative to write down is still a commitment, and
+  leaving those out is the most common way notes like these go wrong.
+- Do not pad. Padding means filler, restatement, or anything the meeting did not
+  produce; it does not mean leaving out something that was genuinely decided or
+  promised. An empty section is a true statement about a meeting that settled
+  nothing — it is not a target.
 - Write plainly. No preamble, no sign-off, no "in this meeting" throat-clearing.
 
 """ + SECTIONS
