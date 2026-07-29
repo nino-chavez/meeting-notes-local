@@ -854,6 +854,22 @@ def conditions(rows: dict) -> tuple[str, ...]:
     return tuple(rows.get("conditions") or ("raw", "linear", "masked"))
 
 
+def inside_repo(path: Path, repo: Path | None = None) -> bool:
+    """Whether an output path lands in the working tree.
+
+    Extracted so a control can hold it. The rule it enforces — the scores artifact
+    carries what was said, and this repo is public — was learned the expensive way:
+    197 lines of a household recording reached four public commits inside
+    `spike/aec-bound-results.json`. A .gitignore rule only covers paths someone
+    thought of, so the refusal lives in the tool.
+    """
+    repo = repo or Path(__file__).resolve().parent.parent
+    try:
+        return path.expanduser().resolve().is_relative_to(repo.resolve())
+    except OSError:
+        return False
+
+
 def scheduled_bounds(rows: dict, threshold: float) -> dict:
     """Both readings of the speak intervals, because neither one is the answer.
 
@@ -1952,6 +1968,14 @@ def _ground_truth_controls() -> bool:
         check("but far-end speech there is what the interval is for",
               run_verdict(fine, clean, 0.58)["verdict"], "scored")
 
+        # 26. The scores artifact carries what each segment transcribed, so it is
+        #     a transcript, and this repo is public. Refused in the tool rather
+        #     than left to .gitignore, which only covers paths someone thought of.
+        check("an artifact path inside the repo is refused",
+              inside_repo(Path(__file__).parent / "out" / "scores.json"))
+        check("and one outside it is allowed",
+              inside_repo(Path(tmp) / "scores.json"), False)
+
         check("and it is bounded like any other",
               (b2["conditions"]["aec3"]["verified"]["admitted"],
                b2["conditions"]["aec3"]["scheduled"]["of"]), (1, 2),
@@ -2023,8 +2047,24 @@ def main() -> int:
     p.add_argument("--label", default="run",
                    help="name this experiment inside the output artifact, so one file "
                         "can hold the measurement and every control beside it")
-    p.add_argument("--out", type=Path, help="write per-window scores and input digests here")
+    p.add_argument("--out", type=Path,
+                   help="write per-window scores and input digests here. It carries "
+                        "what each segment transcribed — deliberately, so a borderline "
+                        "passage match is the reader's judgement rather than a boolean "
+                        "they have to trust — which makes it a transcript, and this "
+                        "refuses to write one inside the repository")
     args = p.parse_args()
+
+    # A transcript is the same secret as the audio it came from, and this repo is
+    # public. The artifact is refused inside the working tree rather than left to a
+    # .gitignore rule, because a rule only covers the paths someone thought of: 197
+    # lines of a household recording reached four public commits through
+    # `spike/aec-bound-results.json`, a path no rule named. The tool declining the
+    # write is the only version of this that holds for paths nobody has invented yet.
+    if args.out and inside_repo(args.out):
+        p.error(f"--out {args.out} is inside the repository. This artifact contains "
+                f"what was said. Write it somewhere outside — the recordings' own "
+                f"directory is the obvious place.")
 
     if args.self_test:
         return run_self_test()

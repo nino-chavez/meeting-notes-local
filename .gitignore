@@ -23,3 +23,8 @@ notes/out/
 
 # Built C++ binary; the library it links is not vendored (see spike/aec3/README.md).
 spike/aec3/aec3_offline
+
+# The aec_bound scores artifact carries what each segment transcribed, which makes
+# it a transcript. The tool refuses to write one in here; this is the second line.
+spike/**/results.json
+spike/**/scores.json
