@@ -4,7 +4,8 @@ mlx-whisper==0.4.3
 sounddevice==0.5.5
 numpy==2.4.6
 
-# speaker_gate.py only. Costed here because this ships to end users and a
+# speaker_gate.py, and aec_bound.py when it scores real takes. Costed here
+# because this ships to end users and a
 # dependency is not free: on macOS arm64 these two pull 36 wheels totalling
 # 153 MB, of which torch alone is 111 MB and scipy 20 MB, and ECAPA's checkpoint
 # adds 89 MB the first time a profile is built — 242 MB before the gate scores
@@ -17,7 +18,7 @@ numpy==2.4.6
 # smaller and is the obvious thing to price if the gate ships — but it has not
 # been measured here, and an unmeasured swap is not a saving.
 #
-# `--self-test` deliberately needs neither. The encoder is an argument rather
-# than an import, so every control in that file runs on numpy alone.
+# `--self-test` deliberately needs neither, in both files. The encoder is an
+# argument rather than an import, so every control runs on numpy alone.
 speechbrain==1.1.0
 torch==2.13.0

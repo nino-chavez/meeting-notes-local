@@ -73,17 +73,18 @@ strongest household segment lands 0.003 under the operating point, which is a
 property of this sample and not a number to ship on. Music across the room costs
 about 0.15 and still loses two segments in eight.
 
-**Another voice is the case that breaks it, and echo cancellation gets most of it
-back.** With the far end coming out of the laptop speakers, the gate admits 5 of
-the operator's 31 speech windows — it rejects him from his own meeting. Removing
-the echo takes that to 26 of 31, while the same processing leaves 197 household
+**Another voice is the case that breaks it, and echo removal gets most of it
+back.** With the far end coming out of the laptop speakers, the gate admits 3 of
+the operator's 16 speech windows — it rejects him from his own meeting. Removing
+the echo takes that to 10 of 16, while the same processing leaves 197 household
 segments unchanged to three decimals. It is not a full repair: the recovered
-windows average +0.64 against +0.77 for the same voice with nothing playing, and
-five still fail. On a second take with the far end about 3 dB louder relative to
-him, recovery goes to 2 of 26 — so the usable regime is a level ratio, and the
-capture can already measure it. Produced with an ideal canceller rather than a
-shipping one, on one speaker; see [`spike/RESULTS.md`](./spike/RESULTS.md) for
-what that does and does not settle.
+windows average +0.61 against +0.78 for the same voice with nothing playing, and
+six still fail. On a second take with the far end roughly 7 dB louder relative to
+him, recovery is 0 of 16 to 1. Measured offline in closed form rather than with a
+real canceller, on one speaker, two takes; the harness and every per-window score
+are in [`spike/aec_bound.py`](./spike/aec_bound.py) and
+[`spike/RESULTS.md`](./spike/RESULTS.md), including what an earlier version of
+this paragraph got wrong.
 
 **Two defects in the notes half were in the prompt, not the model.** The first
 was fabrication: the instructions illustrated a phrasing rule with two example
@@ -257,8 +258,8 @@ appears nowhere else.
   today: be the only person in the room, or capture the system leg alone and
   accept unattributed notes.
 - **On speakers, the gate would reject you too.** The far end returning through
-  the room corrupts your own voiceprint, not just your transcript. Echo
-  cancellation is measured to recover it and is not built. Headphones are the
+  the room corrupts your own voiceprint, not just your transcript. Offline echo
+  removal recovers most of it, measured; nothing is built. Headphones are the
   only configuration that works today, and that is why.
 - **macOS only.** Core Audio process taps are 14.4+. The Windows equivalent is
   WASAPI loopback and is not implemented.

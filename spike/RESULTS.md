@@ -578,118 +578,130 @@ offline against retained paired fixtures before changing any architecture. Judge
 it on downstream outcomes — operator words retained, household false admits,
 residual echo — not on filter convergence.
 
-### Answered: cancellation restores the operator, up to a level the capture can measure
+### Answered: echo removal recovers most of the operator, and the first version of this was wrong twice
 
 That spike ran, and it did not need AEC3, WebRTC, or a single line of Swift. The
-question a real integration answers is "can *this* implementation do it"; the
-question worth asking first is "can *any* implementation do it", and that one has
-a closed form. So the echo was removed twice under conditions no shippable
-canceller can reach, and the voiceprint gate was asked what it made of the
-result.
+question a real integration answers is "can *this* implementation do it"; the one
+worth asking first is "is there anything here to recover", and that has a closed
+form. The harness is [`aec_bound.py`](./aec_bound.py) — parameters, controls and
+all — and [`aec-bound-results.json`](./aec-bound-results.json) carries every
+per-window score plus SHA-256 digests of the recordings that produced them, so a
+figure below can be checked rather than taken.
 
-**Condition 1, linear.** The best possible linear echo estimate, solved in closed
-form over the whole take. AEC3's linear stage is a streaming approximation of
-exactly this filter and cannot beat it.
+**What is computed.** `linear` subtracts a least-squares FIR echo estimate.
+`masked` then applies a Wiener-style time-frequency gain built from that same
+estimate.
 
-**Condition 2, plus suppressor.** Then an oracle Wiener mask per time-frequency
-bin, built from the true echo estimate. AEC3's residual suppressor is a real-time
-guess at this mask from statistics it has to estimate; this version is handed the
-answer.
+**What it is not.** The first version of this section called the mask an oracle
+and the linear stage an upper bound on AEC3. Both were wrong. An oracle mask
+needs the true isolated echo; this mask is built from an *estimate* and inherits
+every error the estimate makes. And a single static fit is not a ceiling over
+AEC3 — AEC3 adapts continuously, tracks delay and drift, detects double-talk,
+and derives suppression from statistics this harness never computes. On material
+where the path moves it can beat a static fit outright. What can be said is
+narrower: within one linear time-invariant path fit in closed form, this is what
+that class does here.
 
-The point of the second condition is to make a negative result mean something. A
-linear shortfall alone leaves "but the nonlinear stage might catch it" open, and
-that argument can be run forever.
+**The controls found two bugs in the measurement itself**, which is the only
+reason the numbers below differ from the ones this document carried yesterday.
+
+The first was worth 26 dB. Alignment shifted the reference by the exact
+cross-correlation peak — but that peak reports the *strongest* reflection, and
+the direct path arrives earlier, so part of the impulse response landed at a
+negative lag where a causal filter cannot represent it at all. On a synthetic
+path with a known answer the fit recovered 40 dB of echo as 14. Every published
+figure inherited it.
+
+The second was in the double-talk-free fit. Selecting frames by percentile and
+concatenating them produced hundreds of ranges shorter than the filter, so every
+sample sat inside the stretch where the filter is handed silence instead of
+history. Far-end activity now comes from the same voice-activity detector used
+on speech, and near-end activity from what a first-pass filter could *not*
+explain — which is what double-talk detection actually keys on.
 
 Scores against a profile enrolled on 98 s of the two takes with no far end in
-them, at the +0.580 operating point. Fixed three-second windows at a 1.5 s hop,
-for a reason worth stating before the numbers:
+them, at the +0.580 operating point, on fixed **non-overlapping** three-second
+windows. The fit excludes double-talk entirely, so the filter never sees the
+operator's voice while estimating the echo path:
 
-> The first version of this table used voice-activity segments, and the far end
-> running continuously bridged the overlap take into **four** spans, two of them
-> around twenty seconds, against four-second utterances on the quiet takes. A
-> speaker embedding is more stable the more audio it gets, so that table compared
-> window lengths as much as it compared conditions, and it read about 0.15
-> better on the take the argument rests on. Fixed windows equalise it and put
-> *n* at 26–31 per take instead of 4. They are also closer to production, where
-> the gate sees ASR utterances rather than twenty-second blobs. Every figure
-> below is the equalised one.
-
-| take | far end | raw | linear | + suppressor | admitted |
+| take | far end | raw | linear | masked | admitted |
 |---|---|---|---|---|---|
-| read | none | +0.762 | +0.762 | +0.761 | 5/5 → 5/5 |
-| free | none | +0.772 | +0.768 | +0.770 | 14/14 → 14/14 |
-| roomnoise | off-device music | +0.590 | +0.587 | +0.589 | 16/26 → 14/26 |
-| **overlap** | **speakers, −4.3 dB** | **+0.357** | **+0.614** | **+0.642** | **5/31 → 26/31** |
-| bleed | speakers, +2.6 dB | +0.138 | +0.285 | +0.422 | 0/26 → 2/26 |
+| **overlap** | speakers | +0.361 | +0.568 | +0.612 | **3/16 → 10/16** |
+| bleed | speakers, ~7 dB louder | +0.142 | +0.325 | +0.461 | 0/16 → 1/16 |
 
-**The overlap take goes from 5 admitted windows out of 31 to 26.** That is the
-result: a capture the gate almost entirely rejects becomes one it almost entirely
-accepts. It is not a full restoration — the clean takes sit at +0.77 and the
-recovered ones at +0.64, so a 0.13 gap survives cancellation, and five windows
-still fall short. An earlier draft of this section called it "restored to
-clean-capture scores"; that was the segmentation artefact talking.
+**The overlap take goes from 3 admitted windows of 16 to 10.** That is the
+result, and it is worth stating at its real size: a capture the gate mostly
+rejects becomes one it mostly accepts, and six of sixteen windows still fail.
+The recovered windows average +0.61 against +0.78 for the same voice with
+nothing playing, so a 0.17 gap survives. Yesterday's version of this table read
+2/4 → 4/4 and called it a full restoration; it used overlapping windows, a fit
+that had seen the double-talk it was scored on, and the mis-aligned reference.
 
-**Both stages matter, and that is a change from the first reading too.** The
-linear stage carries the bulk (+0.357 → +0.614, 5 windows → 20) and the oracle
-suppressor adds six more windows on top (+0.028 mean, 20 → 26). Under the unequal
-segmentation the suppressor looked worth +0.009 and therefore skippable. It is
-not: about a fifth of the recovery comes from the stage AEC3 has to *guess* at,
-which is the stage most likely to underperform its oracle.
+**Both stages matter.** Of the seven windows recovered, the linear stage
+contributes four and the mask three — 57% and 43%. Measured on mean score
+instead, the split is 82% and 18%. Those two readings disagree because the mask
+moves many windows a little, which changes a mean far less than it changes a
+count near the threshold. An earlier draft said "four fifths and one fifth",
+which matches neither.
 
-The bleed take does not recover — 0 of 26 windows to 2. Every window moves, mean
-+0.138 to +0.422, and they land short. Two things differ between the takes, and
-only one of them is the one being claimed: the far end sits about 7 dB louder
-relative to the operator (+2.6 dB against −4.3 dB), *and* the operator carries
-about 10 dB less low-frequency energy, consistent with being further from the
-microphone or turned away. The level ratio is the difference that tracks the
-outcome; it is not established as the only difference. Both ratios are also
-lower bounds, since they are computed from the LS fit, which by construction
-sees only the linearly predictable part of the echo.
+**Excluding double-talk from the fit costs about two windows.** The same take
+fit in-sample reaches 12/16 rather than 10/16. The gap is the honest price of
+not letting the filter use the reference to predict the operator's own voice,
+and the finding survives paying it.
+
+The bleed take does not recover: 0 of 16 to 1. Two things differ between the
+takes and only one is the one usually claimed — the far end sits about 7 dB
+louder relative to the operator, *and* the operator carries about 10 dB less
+low-frequency energy, consistent with being further from the microphone. **Level
+ratio is a hypothesis about the boundary, not an established rule**, and both
+ratios are lower bounds besides, since they come from a fit that sees only the
+linearly predictable part of the echo. A controlled sweep — same position, same
+posture, volume varied deliberately — is what would turn it into something the
+product could warn on.
 
 **The controls.** Both clean takes and the room-noise take ran through the
-identical chain against the bleed take's system audio as a fake reference — a
+identical chain against the bleed take's system audio as a borrowed reference: a
 loud, entirely unrelated signal, and every opportunity to carve the operator out
-of a recording that never contained an echo. The clean takes did not move: 5/5
-and 14/14 in every condition, means within 0.004. **The room-noise take lost two
-windows of 26**, 16 admitted to 14, on a mean shift of −0.003 — its windows sit
-in a cluster right at the operating point, so a shift far too small to see in the
-mean moves the count. Small, real, and the honest reading is that the chain is
-not free even where there is nothing to cancel. The 197 household segments —
-other people, same microphone, same room — scored +0.037 mean in all three
-conditions, identical to three decimals, 0/197 admitted throughout. Whatever
-cancellation is doing, it is not lifting everything toward the profile.
+of a recording that never contained an echo. The clean takes did not move — 3/3
+and 8/8 in every condition, means within 0.005. The room-noise take lost one
+window of 14, on a mean shift of +0.001; its windows sit in a cluster right at
+the operating point, so a shift too small to see in the mean still moves the
+count. The chain is not free even where there is nothing to cancel. And the 197
+household segments — other people, same microphone, same room, scored on the
+segmentation the pipeline actually produced rather than on fixed windows — came
+back identical in all three conditions, 0/197 admitted, mean +0.037.
 
-**The dB metrics were the wrong lens, and would have killed this.** Measured as
-signal processing, the result looks hopeless: 6–7.5 dB of suppression on
-far-end-only spans, and 1.3–2.7 dB during double-talk, which is the regime that
+**These windows are not what the gate does in production.** `speaker_gate.py`
+embeds whole segments its caller hands it; it does not window or pool. Fixed
+windows are a control for equalising takes whose speech comes in very different
+lengths, and the household figures above are the only ones here measured on the
+shipping contract. Everything else transfers only as far as that difference
+allows.
+
+**The dB metrics point the wrong way, and would have killed this.** Measured as
+signal processing the result looks hopeless: 6–7.5 dB of suppression on
+far-end-only spans and 1.3–2.7 dB during double-talk, which is the regime that
 matters because an operator segment with the far end playing *is* double-talk.
-Against a dose-response that wanted roughly 12 dB, that reads as a fourfold
-shortfall in power and an obvious no. The overlap take goes from 5 admitted
-windows to 26 on 1.3 dB. A speaker embedding does not care about broadband
-attenuation; it cares whether a competing voice is corrupting the specific
-time-frequency cells that carry identity. Every number in this paragraph was
-measured before the gate was run, and every one of them pointed the wrong way.
+The take that recovers best does so on the *lower* of those double-talk figures,
+and the take with more suppression recovers less. A speaker embedding cares
+which time-frequency cells are corrupted, not how much energy left the signal.
 
-Three further measurements say the linear filter is close to finished rather than
-failing: on echo-dominant frames the residual sits 1.6 dB above the microphone's
-own noise floor; the echo is only 8–12 dB above that floor to begin with; and the
-coherence ceiling — the most any linear filter of any length can suppress — is
-about 10 dB in its best band and essentially nothing above 4 kHz. That is
-consistent with the suppressor still being worth a fifth of the recovery: what it
-adds is not more echo removal but a spectral decision about which cells to trust,
-which is a different operation from subtracting a filtered reference. The path is
-also nearly level-independent
-(−1.1 dB across the loudest and quietest quartiles), so macOS speaker processing
-downstream of the tap is not the obstacle it might have been.
+Three further measurements say the linear filter is close to finished rather
+than failing: on echo-dominant frames the residual sits 1.6 dB above the
+microphone's own noise floor; the echo is only 8–12 dB above that floor to begin
+with; and the coherence ceiling — the most any linear filter of any length can
+suppress — is about 10 dB in its best band and essentially nothing above 4 kHz.
+The path is also nearly level-independent (−1.1 dB across the loudest and
+quietest quartiles), so macOS speaker processing downstream of the tap is not the
+obstacle it might have been. These were computed before the alignment fix and
+are diagnostics rather than headline figures; they are directionally safe
+because the fix only ever improves the fit.
 
 **Alignment is a fixed offset over a minute, not a tracking problem.** GCC-PHAT
 locked on 14 of 14 windows in both takes, with the per-window lag spread within
-six samples of the bulk delay and drift of −0 and +3 ppm. Bulk delay was +15.4
-and +14.4 ms. Re-fitting the filter every block bought about 1 dB over one static
-filter, and applying a block's filter to the *next* block was catastrophically
-worse than useless at short blocks (−21 dB at 250 ms) — the path is not moving,
-so per-block fits are fitting noise. Sixty seconds, one machine, no USB or
-Bluetooth leg; this does not retire the drift question, it bounds it.
+six samples of the bulk delay and drift of −0 and +3 ppm. Sixty seconds, one
+machine, no USB or Bluetooth leg; this bounds the drift question rather than
+retiring it.
 
 **Verified rather than assumed:** the overlap take's near end is the operator
 speaking at the laptop, not a phone playing back a recording of him — a
@@ -697,15 +709,12 @@ distinction that would have made its retention figure meaningless. Its long-term
 average spectrum carries +17.4 dB at 80–150 Hz relative to 1 kHz, against +22.0
 for the clean take. A phone speaker cannot reproduce that band at all.
 
-**What this does not say.** It does not say AEC3 clears the bar; it says the bar
-is clearable, and by a margin narrower than the first reading of this measurement
-suggested — five of the overlap take's 31 windows still fail even under an
-oracle, and a fifth of the recovery comes from the stage AEC3 has to estimate
-rather than solve. Two takes, sixty seconds each, one speaker. The
-suppressor was handed the true echo. The next measurement is the same table with
-AEC3 in place of the oracle, and it is now worth building, because the outcome it
-would be judged on is known to exist.
-
+**What this does not say.** It does not say AEC3 clears the bar, and it is not
+an upper bound that would let AEC3 be dismissed either. It says there is enough
+recoverable signal here to be worth one bounded integration. Two takes, sixteen
+windows each, one speaker, one room, one microphone. The next measurement is
+this table with AEC3's output in the `linear` and `masked` columns, scored on
+the segmentation the gate actually uses.
 ### Measured: the embedding degrades by half on the leg that needs it
 
 Before deciding whether a speaker-embedding dependency is worth carrying, the
@@ -894,16 +903,14 @@ in 2.2 s.
   cancellation for one, an enrolled voiceprint for the other — and neither is
   implemented here yet, which is the only reason headphones are load-bearing
   today.
-- **Echo cancellation is now known to work on this material, within a bounded
-  regime and short of a full repair.** Under oracle conditions it takes the
-  operator from 5 admitted speech windows out of 31 to 26 when the far end sits
-  below his level, and from 0 of 26 to 2 when it sits ~3 dB above. Four fifths of
-  that comes from the linear stage, which AEC3 solves deterministically; the
-  remaining fifth comes from the residual suppressor, which it has to estimate.
-  The bound is a level ratio the capture can measure, so the product can tell the
-  operator to turn the call down instead of failing silently — but this is one
-  speaker with the suppressor handed the true echo, and AEC3 in place of the
-  oracle is the next number, not a formality.
+- **Echo removal recovers most of the operator on one take and almost none on
+  the other.** Offline, in closed form, with double-talk excluded from the fit:
+  3 admitted speech windows of 16 becomes 10 where the far end sits below the
+  operator, and 0 of 16 becomes 1 where it sits ~7 dB above. Roughly 57% of the
+  recovery is the linear stage and 43% the spectral mask. That is enough to
+  justify one bounded AEC3 integration and not enough to design a warning
+  around: the two takes differ in operator distance as well as level, so the
+  boundary is a hypothesis until a controlled volume sweep tests it.
 - Separability is measured and the answer is "half". An off-the-shelf embedding
   recognises the same voice on the built-in mic at 0.243 cosine against 0.524 on
   the system tap, with real speaker structure present on both. Loudness does not
