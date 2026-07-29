@@ -1068,6 +1068,14 @@ def _ground_truth_controls() -> bool:
         lo, hi = phase_interior(ctrl, dc.CUE_MARGIN_S)
         check("a silent interval still admits a scorable segment",
               hi - lo >= 2.0, shown=f"{hi - lo:.1f}s interior")
+        #     Phase lengths are settable, so the guard has to hold for lengths
+        #     nobody has tried, not only for the ones shipped as defaults.
+        try:
+            dc.build_schedule(control_s=2 * dc.CUE_MARGIN_S + 1.0)
+            refused_short = False
+        except ValueError:
+            refused_short = True
+        check("and a shorter one is refused rather than emptied", refused_short)
 
         # 14. Every way the wrong file can arrive is refused, and each says why.
         merged = d / "transcript.json"

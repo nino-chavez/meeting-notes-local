@@ -457,7 +457,13 @@ a meeting, and a gate that accepted it would be the defect.
 
 The case every real call contains — the operator talking *while* the far end
 plays through speakers — is the one configuration the gate cannot handle. On a
-capture with both live at once, 2 of 15 segments survived.
+capture with both live at once, 2 of 15 segments survived. Those fifteen are
+voiced *microphone* segments, and with the far end on the speakers the
+microphone is voiced whether or not the operator is talking, so some of them
+hold no operator at all — the ratio is a floor on retention rather than a
+measure of it. The table below does not have that problem: it mixes the far end
+into the operator's own clean segments at known ratios, so every segment in it
+is his by construction.
 
 The mechanism is not a badly-set threshold. Mixing the actual far end into the
 operator's own clean segments at known ratios:
@@ -668,9 +674,12 @@ reference get removed wherever they occur. The room-noise control below, losing
 two windows of fourteen against a reference unrelated to it, is that effect
 measured directly. On the same take fit in-sample over the whole minute the
 figure is 3/16 → 12/16, the optimistic reading, reported alongside rather than
-instead.
+instead — and carrying the same mixed denominator as the held-out figure above,
+which matters more here because this is the number a skimmer quotes.
 
-The bleed take does not recover under any fit — 0 of 8, or 1 with the mask. Two
+The bleed take does not recover under any fit — 0 of 8, or 1 with the mask,
+against the same denominator of voiced microphone windows rather than known
+operator speech. Two
 things differ between the takes and only one is usually named: the far end sits
 about 7 dB louder relative to the operator, *and* the operator carries about
 10 dB less low-frequency energy, consistent with being further from the
@@ -836,8 +845,12 @@ proved silence either.
 The same mistake, one level up, was the denominator. "Microphone-only" names the
 channel, not the talker. Between the operator's phrases the microphone still
 carries the far end, so a list of voiced microphone intervals is a mixture of the
-voice being recovered and the voice being cancelled — and every figure in this
-document above was scored against exactly that mixture.
+voice being recovered and the voice being cancelled. Every echo figure in this
+document was scored against exactly that mixture. The controls are not affected
+in the same way: the quiet takes have no far end to leak, the household rate
+counts admissions of segments that are deliberately *not* the operator, and the
+synthetic level sweep mixes into his own clean audio, so what it scores is his
+by construction.
 
 Nothing in the audio fixes this, so the labels come from outside it. The cue
 schedule is decided before any audio exists and written to `protocol.json`, bound

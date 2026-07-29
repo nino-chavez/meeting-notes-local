@@ -1018,6 +1018,7 @@ def run_cues(mic_leg, phases, stop):
         return
     t0 = mic_leg.arrivals[0][0]
     total = phases[-1]["end"]
+    live = sys.stdout.isatty()
     shown = None
     while not stop.is_set():
         now = time.monotonic() - t0
@@ -1029,14 +1030,18 @@ def run_cues(mic_leg, phases, stop):
         if cur is not shown:
             shown = cur
             print(f"\n  [{now:6.1f}s] {CUE_TEXT[cur['role']]}")
-        print(f"\r           {cur['end'] - now:4.1f}s left ", end="", flush=True)
+        if live:
+            # Only where a carriage return means what it looks like. Redirected
+            # to a file this line does not overwrite itself, and a two-minute
+            # capture buries the cues under a thousand countdown fragments.
+            print(f"\r           {cur['end'] - now:4.1f}s left ", end="", flush=True)
         time.sleep(CUE_POLL_S)
     # Run past the last cue so the final interval is comfortably inside the
     # audio, then end the capture from here. This thread is the only one holding
     # the microphone's clock; a wall-clock deadline in main() starts before the
     # first block arrives and would cut the schedule short by that much.
     time.sleep(PROTOCOL_TAIL_S)
-    print("\r  protocol complete — recording stops here.        ")
+    print(f"{chr(13) if live else chr(10)}  protocol complete — recording stops here.        ")
     stop.set()
 
 
