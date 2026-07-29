@@ -32,6 +32,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import re
 import sys
@@ -555,12 +556,17 @@ _PRESENT_WORDS = re.compile(
     r"\b(?:present|mentioned|covered|found|yes|included)\b", re.IGNORECASE)
 
 
-def _parse_verdict(text: str, n: int) -> bool | None:
-    """True present, False absent, None when the model did not answer item n."""
-    m = re.search(rf"^\s*{n}\s*[.):\-]?\s*(.+)$", text, re.MULTILINE)
-    if not m:
-        return None
-    answer = m.group(1).strip()
+def _parse_verdict(text: str) -> bool | None:
+    """True present, False absent, None when the model did not answer.
+
+    This used to take an item number and pick that line out of a batched reply,
+    which coupled every verdict to the model's numbering holding for the whole
+    list. It did not: one 2200-word note pushed the judge into prose, all four
+    items came back unparsed together, and the run reported 0/0. Items are asked
+    one per call now, so a reply is a verdict or it is nothing, and one
+    unreadable answer costs one item instead of the list.
+    """
+    answer = text.strip()
     if _ABSENT_WORDS.search(answer):
         return False
     if _PRESENT_WORDS.search(answer):
@@ -568,21 +574,201 @@ def _parse_verdict(text: str, n: int) -> bool | None:
     return None
 
 
+# Asking "the same commitment **or topic**" is not the rule any recall figure in
+# EVAL.md was scored under. That rule — §"How a commitment is scored as recalled"
+# — says a topic raised in discussion does not hit a commitment to act on it, and
+# requires the notes to name the commitment's own object. On the fixture that
+# decides calibration, notes reading "provide access to the project repository"
+# against a reference item "share GitHub usernames so access can be granted", the
+# old wording licensed PRESENT while the fixture expected ABSENT.
+#
+# That disagreement was recorded as the judge sharing the adjacent-object
+# blindness of the notes it grades. Part of it was simpler than that: two
+# instruments were being asked two different questions and marked against one
+# answer key. Transcribing the rule clause for clause takes gemma3:12b from 12/16
+# to 16/16 on the fixtures below, holding everything else fixed.
+#
+# Half credit is the one clause deliberately not transcribed. The rule awards it
+# to a reference item naming two artefacts where the notes cover one, and a third
+# verdict word would widen a parse surface that has already failed twice here.
+# Such an item is split into one fixture per artefact instead, which scores the
+# same and keeps the vocabulary binary.
+# The list framing below is deliberate and survives an attempt to remove it.
+# Items are asked one per call, so "which of a list" describes a request that
+# arrives holding exactly one item, and rewriting it into the singular reads
+# better. Rewritten that way it measures worse, on both models and stably:
+# gemma3:12b 15/16 against 16/16, llama3.1 12/16 against 13/16, three runs each.
+# The one fixture the singular version loses is the wrong-owner case, which is
+# not obviously connected to plurality. No account of why is offered here
+# because none was established — only that the tidier wording is the worse
+# instrument, and the wording was chosen by measurement rather than by reading.
+RECALL_JUDGE = """\
+You are checking which of a list of commitments from a meeting were written down
+in that meeting's notes.
+
+A reference item is PRESENT only when BOTH of these hold:
+
+1. The notes name the same thing the commitment is about. Paraphrase and
+   synonyms are fine. A broader category standing in for that thing is not:
+   notes saying "share a document" do not cover "share the brand guidelines".
+   Where a reference item states a purpose ("... so that X can happen"), the
+   thing is what gets done, not the purpose — notes that mention only the
+   purpose do not cover the commitment.
+2. The notes state it as something that will be done — under Decisions or
+   Action items, or in the Summary as something that is going to happen.
+
+Otherwise the item is ABSENT. In particular:
+
+- The same thing with a different action is ABSENT. "Review the report" does not
+  cover a commitment to send the report; those are different commitments.
+- The thing only coming up in discussion is ABSENT. A topic the meeting talked
+  about is not a commitment to act on it.
+
+Three differences do NOT make an item absent:
+
+- A different owner, or no owner at all. Who is named does not matter.
+- The commitment split across two bullets, if between them they carry both the
+  thing and the commitment.
+- The item filed under a different heading than you would expect. Where it sits
+  is formatting.
+
+Answer with one word and nothing else: PRESENT or ABSENT."""
+
+
+def _judge_item(item: str, note: str, model: str, num_ctx: int, timeout: int,
+                system: str = RECALL_JUDGE) -> bool | None:
+    """One reference item, one call.
+
+    Batching the whole list into a single call was the original shape and it
+    costs accuracy as well as robustness: on the fixtures below gemma3:12b scores
+    14/16 batched and 16/16 asked one at a time, under the identical rule. The
+    two it recovers are both absent items it had called present, which is the
+    direction that matters — a judge that waves items through reports recall the
+    notes did not earn.
+
+    `system` is a parameter so the harness can run a deliberately broken judge
+    down this same path. A control that bypasses the call and the parser proves
+    nothing about a pipeline whose failures have all been in the call and the
+    parser.
+    """
+    out = ollama_chat(model, system, f"REFERENCE ITEM:\n{item}\n\nNOTES:\n{note}",
+                      num_ctx, timeout)
+    return _parse_verdict(out["message"]["content"])
+
+
 # Known-answer fixtures. A judge that cannot pass these is not measuring recall,
 # and its agreement with these is reported rather than assumed.
+#
+# There were five judgements here, covering two of the rule's clauses. Five is
+# not enough to separate a judge from a coin, and worse, a judge answering
+# PRESENT to everything — the documented failure of the 8B model — scored 3 of
+# them, a majority. The set now walks every clause of EVAL.md's "How a commitment
+# is scored as recalled" in both directions.
+#
+# The clauses are the anti-fitting argument. That rule was written before the
+# two-pass run and published; each case below is one of its enumerated
+# resolutions rather than a case chosen because a model gets it right. Where the
+# rule states an example ("share a document" against "share the brand
+# guidelines"), the fixture uses the rule's own example rather than a new one.
+#
+# Balance is a property to preserve when editing: 8 present against 8 absent, so
+# neither degenerate answer takes more than half. `--validate-judge` proves that
+# on the real path every time it runs, by scoring a sabotaged judge alongside the
+# real one, and `--self-test` proves it offline against three synthetic ones.
 JUDGE_FIXTURES = [
+    # Paraphrase hits, and an item the notes simply do not contain.
     (["Send the signed contract to the vendor by Friday",
       "Book the venue for the offsite",
       "Migrate the billing service off the legacy queue"],
      ("## Action items\n- Someone will get the contract signed and over to the "
       "vendor this week.\n- The billing service needs to come off the old queue."),
      [True, False, True]),
+
+    # The fixture calibration turns on. The notes record the *purpose* of the
+    # commitment — access — and never its object, the usernames. Both local
+    # models called this present, which was read as the judge sharing the
+    # adjacent-object blindness of the notes it grades.
     (["Share GitHub usernames so access can be granted",
       "Draft a straw man project plan"],
      ("## Action items\n- Draft a straw man project plan with objectives and "
       "open questions.\n- Provide access to the project repository."),
      [False, True]),
+
+    # A category standing in for the object, then the same object under a
+    # different verb. Both notes lines are real commitments about adjacent
+    # things, which is the only shape that discriminates: a judge matching on
+    # subject matter passes them, a judge matching on the commitment does not.
+    (["Send the brand guidelines to the agency",
+      "Review the Q3 forecast before the board meeting"],
+     ("## Action items\n- Someone will send a document over to the agency.\n"
+      "- The Q3 forecast goes into the board pack on Monday."),
+     [False, False]),
+
+    # Three differences the rule says do not count — wrong owner, wrong heading,
+    # split across two bullets — against one item that is genuinely missing.
+    (["Priya will circulate the migration runbook",
+      "Book a follow-up session with the data team",
+      "Update the onboarding checklist and publish it to the wiki",
+      "Archive the old runbook"],
+     ("## Decisions\n- The migration runbook will be circulated by Tom after the "
+      "review.\n## Action items\n- A follow-up with the data team goes in the "
+      "calendar this week.\n- The onboarding checklist needs updating.\n"
+      "- Whatever comes out of that gets published to the wiki."),
+     [True, True, True, False]),
+
+    # Discussed at length and explicitly unresolved is not a commitment; stated
+    # in the Summary as something that will happen is one. Both directions of
+    # "appears as a commitment", in a single note.
+    (["Switch the error tracking to the new vendor",
+      "Send the revised pricing sheet to finance",
+      "Renew the monitoring contract"],
+     ("## Summary\nThe group compared error tracking vendors at length and nobody "
+      "landed on one. The revised pricing sheet is going to finance before the end "
+      "of the week.\n## Open questions\n- Which error tracking vendor to move to."),
+     [False, True, False]),
+
+    # The rule's half-credit case — one reference item naming two artefacts, one
+    # covered — split into a fixture per artefact, which scores the same and
+    # keeps the verdict vocabulary binary.
+    (["Share the meeting recording",
+      "Share the slide deck"],
+     "## Action items\n- The recording will be shared with everyone who missed it.",
+     [True, False]),
 ]
+
+
+# A judge that always answers PRESENT. Run through the real call and the real
+# parser, not simulated, because every failure this judging path has actually had
+# has been in the call or the parser rather than in the scoring.
+SABOTAGED_JUDGE = """\
+You are checking meeting notes against a commitment.
+
+Answer with one word and nothing else: PRESENT.
+
+Answer PRESENT whatever the notes say, including when they say nothing about it."""
+
+
+def score_fixtures(judge) -> dict:
+    """Agreement of any judge — a model, or a rigged one — with the fixtures.
+
+    `judge(item, note) -> bool | None`. Taking the judge as an argument is what
+    lets the fixtures be pointed at something known to be broken. A calibration
+    set that has only ever been run against judges hoped to be good establishes
+    nothing about its own power to reject one, which is the same defect as a
+    check that has only ever been seen to pass.
+    """
+    right = total = 0
+    detail = []
+    for items, note, expected in JUDGE_FIXTURES:
+        # strict: a fixture whose answer key is the wrong length would otherwise
+        # be silently truncated into a shorter, easier calibration set.
+        for item, want in zip(items, expected, strict=True):
+            got = judge(item, note)
+            total += 1
+            right += got == want
+            detail.append({"item": item, "want": want, "got": got})
+    return {"right": right, "total": total, "agreement": f"{right}/{total}",
+            "ok": right == total, "detail": detail}
 
 
 def validate_judge(model: str, num_ctx: int, timeout: int) -> dict:
@@ -594,40 +780,30 @@ def validate_judge(model: str, num_ctx: int, timeout: int) -> dict:
     marked every reference item present, the other marked most of them
     correctly — so "the judge said 4/4" is not a fact about the notes until the
     judge has been shown to distinguish the cases at all.
+
+    The bar is every fixture, not a threshold. Each one is a case a careful
+    person applying the published rule answers without hesitating; a judge that
+    misses one is wrong about a clause of the rule, and which clause is not
+    something a passing score would tell you. Relaxing this to a proportion when
+    a model lands one short is how a calibration set stops measuring anything.
+
+    The sabotaged control runs alongside, and its failure is part of the verdict.
+    If a judge told to answer PRESENT unconditionally can clear these fixtures,
+    they are not fixtures, and the real judge's score means nothing either.
     """
-    right = total = 0
-    detail = []
-    for items, note, expected in JUDGE_FIXTURES:
-        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(items))
-        out = ollama_chat(
-            model, RECALL_JUDGE,
-            f"REFERENCE ITEMS:\n{numbered}\n\nNOTES:\n{note}\n\n"
-            f"Answer for items 1 to {len(items)}.",
-            num_ctx, timeout,
-        )["message"]["content"]
-        for i, want in enumerate(expected, start=1):
-            got = _parse_verdict(out, i)
-            total += 1
-            right += got == want
-            detail.append({"item": items[i - 1], "want": want, "got": got})
-    return {"model": model, "agreement": f"{right}/{total}",
-            "ok": right == total, "detail": detail}
-
-
-RECALL_JUDGE = """\
-You are checking whether a set of meeting notes covers a list of reference items.
-
-For each numbered reference item, decide whether the notes mention that item —
-the same commitment or topic, in any wording. Paraphrase counts. A different
-owner still counts. Vague overlap does not: the notes must actually refer to
-that specific thing.
-
-Answer with one line per item and nothing else:
-
-1. PRESENT
-2. ABSENT
-
-No explanation, no preamble, no other text."""
+    real = score_fixtures(
+        lambda item, note: _judge_item(item, note, model, num_ctx, timeout))
+    control = score_fixtures(
+        lambda item, note: _judge_item(item, note, model, num_ctx, timeout,
+                                       SABOTAGED_JUDGE))
+    return {
+        "model": model,
+        "agreement": real["agreement"],
+        "detail": real["detail"],
+        "control": control["agreement"],
+        "control_rejected": not control["ok"],
+        "ok": real["ok"] and not control["ok"],
+    }
 
 
 def check_recall(note: str, reference_items: list[str], model: str,
@@ -663,24 +839,24 @@ def check_recall(note: str, reference_items: list[str], model: str,
     amount of threshold-tuning turns word overlap into meaning. Tuning it until
     the fixtures passed would have produced a number that measured the fixtures.
 
-    So the model does the matching, and the result is labelled as a model's
-    judgement rather than a measurement. Its verdicts on a real meeting were
-    checked by hand against a transcript before this was trusted at all.
+    So the model does the matching, against the same written rule the hand
+    scoring used, and the judge is calibrated in the same run that uses it rather
+    than on somebody's memory of having calibrated it once. Temperature 0 is
+    reproducible back to back and not across time — the same transcript, model
+    and temperature produced materially different notes on a later day — so a
+    calibration from another session is a claim about another session. It costs
+    32 calls, sixteen known answers and sixteen for the sabotaged control: 15 s
+    on gemma3:12b beside the 87 s that run's summarization took, and 8 s on
+    llama3.1. A sixth of the run to know whether the number means anything.
     """
     if not reference_items:
         return {"applies": False}
 
-    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(reference_items))
-    verdicts = ollama_chat(
-        model, RECALL_JUDGE,
-        f"REFERENCE ITEMS:\n{numbered}\n\nNOTES:\n{note}\n\nAnswer for items 1 to "
-        f"{len(reference_items)}.",
-        num_ctx, timeout,
-    )["message"]["content"]
+    calibration = validate_judge(model, num_ctx, timeout)
 
     found, missed, unparsed = [], [], []
-    for i, item in enumerate(reference_items, start=1):
-        verdict = _parse_verdict(verdicts, i)
+    for item in reference_items:
+        verdict = _judge_item(item, note, model, num_ctx, timeout)
         if verdict is None:
             unparsed.append(item)
         elif verdict:
@@ -696,6 +872,9 @@ def check_recall(note: str, reference_items: list[str], model: str,
         "missed": missed,
         "unparsed": unparsed,
         "judge": model,
+        "calibrated": calibration["ok"],
+        "calibration": calibration["agreement"],
+        "control_rejected": calibration["control_rejected"],
         # A judge that answered nothing used to render as "0/0", which reads like
         # a reference list with no items rather than a judge that failed on every
         # one of them. It happened for real: a 2200-word note pushed the judge
@@ -924,11 +1103,24 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
                 print(f"                  \"{w['line'][:88]}\"")
 
     if recall["applies"]:
-        # Never print this number without saying who produced it. It is one
-        # model's opinion of another model's output, and on this machine no
-        # local judge has yet passed --validate-judge.
-        print(f"  recall        {recall['score']} — judged by {recall['judge']}, "
-              "not measured; calibrate it with --validate-judge")
+        # Never print this number without saying who produced it and whether that
+        # judge agreed with the known answers in this same run. It stays one
+        # model's opinion of another model's output; what the calibration line
+        # buys is knowing whether the opinion tracks the rule the hand scoring
+        # used. An uncalibrated judge does not get to render a score — the 8B
+        # model rated its own notes 5/6 where hand-checking gave 1/6, and a
+        # number like that printed beside a warning is still read as a number.
+        if recall["calibrated"]:
+            print(f"  recall        {recall['score']} — judged by {recall['judge']}, "
+                  f"which agreed with {recall['calibration']} known answers in "
+                  "this run")
+        else:
+            reason = (f"agreed with only {recall['calibration']} known answers"
+                      if recall["control_rejected"] else
+                      "passed a control judge rigged to answer PRESENT, so the "
+                      "fixtures decided nothing")
+            print(f"  recall        NOT MEASURED — {recall['judge']} "
+                  f"{reason}. Its verdicts below are not a score.")
         for m in recall["missed"]:
             print(f"                  MISSED: {m['item'][:78]}")
         for u in recall["unparsed"]:
@@ -1144,6 +1336,70 @@ def run_self_test() -> int:
         if not ok:
             print(f"          got ungrounded={got['ungrounded']}")
 
+    # Verdict parsing is the whole of what stands between a model's reply and a
+    # recall number, and asking items one at a time removed the numbering that
+    # used to sit in front of it. It has failed twice: llama3.1 answering
+    # MENTIONED / NOT MENTIONED to a PRESENT|ABSENT regex, and a long note
+    # pushing the judge into prose. Neither is caught by the fixture arms below,
+    # which hand the scorer verdicts directly and never reach the parser —
+    # breaking the negative alternation so that "NOT MENTIONED" reads as present
+    # leaves every one of them green. Replayed here against known strings.
+    print("\n=== verdict parsing ===\n")
+    for reply, want in [
+        ("PRESENT", True),
+        ("ABSENT", False),
+        # The regression itself: negatives are matched first because the string
+        # for "no" is contained in the string for "yes".
+        ("NOT MENTIONED", False),
+        ("MENTIONED", True),
+        ("Yes, the notes cover this.", True),
+        ("No, the notes do not mention it.", False),
+        ("  present  ", True),
+        # Prose in neither vocabulary is unparsed, never folded into a count. A
+        # parse failure arriving dressed as a verdict is worse than a crash.
+        ("It is difficult to say either way from these notes.", None),
+    ]:
+        got = _parse_verdict(reply)
+        ok = got == want
+        failures += not ok
+        name = {True: "present", False: "absent", None: "unparsed"}
+        print(f"  [{'pass' if ok else 'FAIL'}] {name[want]:8s} — {reply.strip()[:44]!r}")
+        if not ok:
+            print(f"          got {name[got]}")
+
+    # The recall fixtures are the one calibration set here that a model is
+    # measured against, which makes their power to reject a bad judge the thing
+    # holding up every recall number. These arms need no Ollama: they replace the
+    # model with a judge whose answers are known in advance, and assert the
+    # fixtures fail it. A calibration set that a judge answering without reading
+    # can pass reports confidence nobody earned.
+    print("\n=== recall fixtures reject a judge that does not read ===\n")
+    # The alternating judge's score is an artifact of the order the fixtures
+    # happen to sit in, not a property of anything. Only its rejection is the
+    # assertion; reordering the fixtures will move the number and must not be
+    # read as the arm getting better or worse.
+    flips = itertools.count()
+    degenerate = [
+        ("always present — the 8B model's documented failure", lambda i, n: True),
+        ("always absent", lambda i, n: False),
+        ("alternating, ignoring the notes", lambda i, n: next(flips) % 2 == 0),
+        ("never answers at all", lambda i, n: None),
+    ]
+    for label, judge in degenerate:
+        got = score_fixtures(judge)
+        ok = not got["ok"]
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] rejected — {label} "
+              f"(scored {got['agreement']})")
+
+    # Balance is what stops a degenerate judge scoring a respectable number even
+    # while failing. It is asserted rather than trusted to survive editing.
+    wants = [w for _, _, expected in JUDGE_FIXTURES for w in expected]
+    balanced = sum(wants) * 2 == len(wants)
+    failures += not balanced
+    print(f"  [{'pass' if balanced else 'FAIL'}] fixtures balanced — "
+          f"{sum(wants)} present, {len(wants) - sum(wants)} absent")
+
     outcome = (
         "all controls behaved as specified" if not failures
         else f"{failures} control(s) wrong"
@@ -1197,7 +1453,12 @@ def main():
             print(f"  [{'pass' if d['got'] == d['want'] else 'FAIL'}] "
                   f"wanted {want:8s} got {got:8s} — {d['item'][:60]}")
         print(f"\n  agreement {v['agreement']}")
-        if not v["ok"]:
+        print(f"  control   {v['control']} for a judge rigged to answer PRESENT — "
+              f"{'rejected' if v['control_rejected'] else 'NOT REJECTED'}")
+        if not v["control_rejected"]:
+            print("  The fixtures did not reject a judge that answers without\n"
+                  "  reading. Nothing above is evidence about the real judge.")
+        elif not v["ok"]:
             print("  This model cannot be trusted to measure recall. Its verdicts\n"
                   "  would be a number, not a measurement.")
         return 0 if v["ok"] else 1
