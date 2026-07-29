@@ -515,6 +515,68 @@ without its instrument's status travelling with it. That costs sixteen extra
 model calls per run, which is the right trade while the judge is new and the
 wrong one once it is boring; revisit it when the cost is felt.
 
+### And it still does not transfer to real notes
+
+Everything above is calibration against fixtures. Calibration is not external
+validity, and the two come apart here badly enough that **recall on real
+meetings still has to be hand-checked.**
+
+`spike/RESULTS.md` records the one published hand-scored result this project
+has: against six reference commitments, room-contaminated notes hit 3 and a
+clean control hit 2. Running the calibrated judge over those same notes and the
+same six items:
+
+| Notes | Hand-scored | Judge | Re-adjudicated here |
+|---|---|---|---|
+| room-contaminated | 3/6 | **1/6** | ~2.5/6 |
+| clean control | 2/6 | **1/6** | ~1.5/6 |
+
+The third column is this document's own re-reading of both notes against the
+rule, item by item, and it lands between the other two — so the hand figures
+were slightly generous and the judge is badly under-reporting. A judge that
+finds one commitment where a careful reader finds two and a half cannot gate
+regressions: the changes worth detecting are smaller than its error.
+
+**What it is not.** Each of these was tested and eliminated rather than assumed:
+
+- *Not the item format.* The reference items carry `[Owner] {Title}:`
+  scaffolding unlike any fixture. Stripping it changes nothing — 1/6 either way.
+- *Not compound items.* Two of the missed items name two objects where the notes
+  carry one, which the rule scores as a half. Reducing them to a single object
+  does not flip either verdict.
+- *Not the owner.* The prompt already says owners do not matter, and removing
+  the owner from the item changes nothing.
+- *Not sampling noise.* `ollama_chat` pins `temperature: 0.0`, and the same item
+  against the same note returns the same verdict seven times out of seven.
+
+**What it is, at least in part.** On a one-line note the judge calls "provide the
+measurement plan to the team" ABSENT against "share a measurement plan with
+&lt;client&gt;", and PRESENT against "share a measurement plan with the team". The
+recipient is doing the work. That is wrong under a rule that turns on the
+*object* of the commitment — a recipient is a party to it, exactly like an
+owner, and owners are already excluded.
+
+**The obvious fix was tried and rejected on the evidence.** Adding a recipient
+clause to the prompt's list of differences that do not matter held the fixtures
+at 16/16 — and dropped the contaminated note from 1/6 to 0/6, flipping an
+unrelated, clear-cut item ("John will share the brand guidelines document"
+against "send the brand guidelines document") from PRESENT to ABSENT. Two
+different wordings, the same regression. It was reverted rather than kept for
+the fixture score.
+
+That failure is the more useful finding: **a bullet that should have touched only
+recipient cases changed a verdict that has no recipient ambiguity at all.** A 12B
+judge is sensitive to prompt edits in ways sixteen fixtures cannot detect, which
+means fixture agreement is necessary and nowhere near sufficient.
+
+**The structural gap.** Every fixture note is a handful of tidy lines. The real
+notes are ~250 words across four headings and fourteen bullets. The calibration
+set does not exercise the condition the judge runs in, so passing it says
+nothing about the operating case. Closing this needs fixtures built from real
+notes — which needs hand-scored real meetings, of which this project has two.
+That is the same sample-size wall every recall claim here runs into, and no
+amount of prompt work gets around it.
+
 ---
 
 ## How a commitment is scored as recalled
