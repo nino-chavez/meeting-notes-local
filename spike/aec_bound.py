@@ -44,13 +44,16 @@ this material.
   full          fit on the whole take. Optimistic: the filter sees the same
                 double-talk it is later scored on, and can use the reference to
                 predict near-end speech that merely happens to correlate.
-  far-end-only  fit only where the far end is playing and the microphone is
-                quiet, then score everywhere. This is the honest one. It is also
-                what a real canceller does, since adaptation freezes during
-                double-talk. If recovery survives here, it is not the filter
-                quietly cancelling the operator.
-  first-half    fit on the first half, score the second. Held out in time rather
-                than by regime.
+  far-end-only  fit only on stretches where the far end plays and the near end
+                does not, then score everywhere. This is what a real canceller
+                does, since adaptation freezes during double-talk — and it
+                REFUSES both of this project's echo recordings, because in them
+                the operator talks over the far end almost continuously. It
+                fails closed on purpose: a selector that finds nothing safe must
+                return nothing, not fall back to everything.
+  first-half    fit on the first half. Paired with --score-after, the filter is
+                then scored only on audio it never saw, which is the strongest
+                claim this material supports.
 
 **How it is scored**
 
@@ -96,6 +99,8 @@ VAD_PCT, VAD_MARGIN_DB, VAD_FLOOR = 10, 8.0, 1e-4
 VAD_HANGOVER_S = 0.35
 MIN_FIT_RUN = 8 * TAPS  # a fit range shorter than this is mostly wrong history
 ALIGN_MARGIN = TAPS // 8  # headroom so the direct path lands at a positive lag
+MIN_FIT_TOTAL = 4 * RATE  # under four seconds is not an echo path, it is a guess
+DT_RATIO = 0.25         # residual within 6 dB of the echo estimate means near end
 
 
 def sha256(path: Path) -> str:
@@ -157,7 +162,15 @@ def ls_fir(y: np.ndarray, x: np.ndarray, taps: int = TAPS,
     rxx = np.zeros(taps)
     rxy = np.zeros(taps)
     for a, b in spans:
-        ys, xs = y[a:b], x[a:b]
+        xs = x[a:b]
+        # Zero the output over the run's first `taps` samples. Those are exactly
+        # the samples whose history lies outside the run, so including them asks
+        # the filter to explain audio from a reference it was not given. Dropping
+        # them removes that error from the cross-correlation entirely; only the
+        # autocorrelation still carries an edge effect, bounded by taps over run
+        # length and damped by the ridge.
+        ys = y[a:b].copy()
+        ys[:min(taps, len(ys))] = 0.0
         n = 1 << int(np.ceil(np.log2(2 * max(len(xs), taps))))
         X, Y = np.fft.rfft(xs, n), np.fft.rfft(ys, n)
         rxx += np.fft.irfft(X * np.conj(X), n)[:taps]
@@ -191,8 +204,10 @@ def frame_power(x: np.ndarray) -> np.ndarray:
     return np.array([((x[i * HOP:i * HOP + NFFT] * win) ** 2).sum() for i in range(max(n, 0))])
 
 
-def far_end_only(mic: np.ndarray, ref: np.ndarray) -> list[tuple[int, int]]:
-    """Sample ranges where the far end plays and the microphone is quiet.
+def far_end_only(mic: np.ndarray,
+                 ref: np.ndarray) -> tuple[list[tuple[int, int]], int]:
+    """Ranges where the far end plays and the near end does not, and how much
+    far-end-active audio there was to choose from.
 
     Far-end activity comes from the same voice-activity detector used on speech,
     not from a percentile of frame power. On material that is mostly playing —
@@ -213,7 +228,7 @@ def far_end_only(mic: np.ndarray, ref: np.ndarray) -> list[tuple[int, int]]:
     active = [(int(lo * RATE), min(int(hi * RATE), len(mic))) for lo, hi in voiced_spans(ref)]
     active = [(a, b) for a, b in active if b - a >= MIN_FIT_RUN]
     if not active:
-        return []
+        return [], 0
 
     # Two passes, because "the microphone is quiet" cannot be read off the
     # microphone. Echo is in it too, so thresholding raw level throws away the
@@ -222,10 +237,19 @@ def far_end_only(mic: np.ndarray, ref: np.ndarray) -> list[tuple[int, int]]:
     # at what the filter could NOT explain: that residual is the near end, and
     # it is what double-talk detection actually keys on.
     h = ls_fir(mic, ref, runs=active)
-    resid = mic - np.convolve(ref, h)[:len(mic)]
+    echo = np.convolve(ref, h)[:len(mic)]
+    resid_pw, echo_pw = frame_power(mic - echo), frame_power(echo)
+    n = min(len(resid_pw), len(echo_pw))
+    # Near-end present where the filter's leftover rivals the echo it removed.
+    # A voice-activity detector on the residual was tried first and is the wrong
+    # instrument: its absolute floor has no relationship to how loud the echo
+    # is, so on quiet material it marked the filter's own error as speech and
+    # excluded the entire take, and on loud material it would miss a talker
+    # sitting under the floor. The ratio self-calibrates to the fit.
+    loud = resid_pw[:n] > DT_RATIO * echo_pw[:n]
     near = np.zeros(len(mic), dtype=bool)
-    for lo, hi in voiced_spans(resid):
-        near[int(lo * RATE):min(int(hi * RATE), len(mic))] = True
+    for i in np.flatnonzero(loud):
+        near[i * HOP:i * HOP + NFFT] = True
 
     runs = []
     for a, b in active:
@@ -239,11 +263,17 @@ def far_end_only(mic: np.ndarray, ref: np.ndarray) -> list[tuple[int, int]]:
                 start = None
         if start is not None and b - start >= MIN_FIT_RUN:
             runs.append((start, b))
-    return runs or active
+
+    # Fail closed. An earlier version ended `return runs or active`, which on
+    # material where the operator never stops talking handed back every
+    # far-end-active span — the exact double-talk this function exists to
+    # remove — and reported it as a double-talk-free fit. A selector that finds
+    # nothing must say nothing, and let the caller skip the take.
+    return runs, sum(b - a for a, b in active)
 
 
 def align(mic: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.ndarray, int, float]:
-    """Delay the reference to sit just before the echo, never on top of it.
+    """Put the reference just before the echo, never on top of it, either sign.
 
     The margin is not cosmetic. Cross-correlation reports the delay of the
     strongest reflection, and the direct path arrives earlier — so shifting by
@@ -251,16 +281,36 @@ def align(mic: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.ndarray, int
     lag, where a causal filter cannot represent it at all. On a synthetic path
     with a known answer that cost 26 dB: the fit recovered a 40 dB echo at 14,
     and every downstream conclusion would have inherited it.
+
+    A negative bulk delay — the microphone leading the reference — has the same
+    consequence and was previously clamped to zero, which left the echo
+    non-causal and cancelled nothing. It cannot happen through a loudspeaker,
+    but it happens easily through a capture bug or a mislabelled leg, and a
+    harness that silently returns 0.06 dB in that case is a harness that hides
+    the bug it should be reporting. Both legs shift.
     """
-    m = min(len(mic), len(ref))
-    mic, ref = mic[:m], ref[:m]
+    # The microphone defines the timeline. Trimming it to a shorter reference
+    # discards recorded audio for no reason — on one take that silently dropped
+    # the last 1.4 seconds, and the window it contained appeared or vanished
+    # depending on which reference the run happened to borrow.
+    if len(ref) < len(mic):
+        ref = np.concatenate([ref, np.zeros(len(mic) - len(ref))])
+    else:
+        ref = ref[:len(mic)]
     bulk, peak = gcc_phat(mic, ref, int(MAX_LAG_S * RATE))
     if peak < PHAT_FLOOR:
         bulk = 0                       # nothing to lock onto; do not chop the take
-    applied = max(bulk - ALIGN_MARGIN, 0)
+    applied = bulk - ALIGN_MARGIN
     shifted = np.roll(ref, applied)
-    if applied:
+    if applied > 0:
         shifted[:applied] = 0.0
+    elif applied < 0:
+        # Rolling left wraps the head of the reference onto its tail, which is
+        # fabricated audio the filter would happily fit. Only the reference ever
+        # moves: a first version of this shifted the MICROPHONE for negative
+        # delays and zeroed its head, which destroyed real recorded audio and
+        # showed up as a clean take scoring -0.070 in the no-op control.
+        shifted[applied:] = 0.0
     return mic, shifted, bulk, peak
 
 
@@ -269,16 +319,19 @@ def process(mic: np.ndarray, ref: np.ndarray, fit_mode: str) -> tuple[dict, dict
     mic, ref, bulk, peak = align(mic, ref)
     m = len(mic)
 
+    excluded = None
     if fit_mode == "full":
         runs = [(0, m)]
     elif fit_mode == "first-half":
         runs = [(0, m // 2)]
     elif fit_mode == "far-end-only":
-        runs = far_end_only(mic, ref)
+        runs, active_samples = far_end_only(mic, ref)
         fitted = sum(b - a for a, b in runs)
-        if fitted < 8 * TAPS:
-            return {}, {"skipped": f"only {fitted} far-end-only samples in "
-                                   f"{len(runs)} usable runs"}
+        if fitted < MIN_FIT_TOTAL:
+            return {}, {"skipped": f"{fitted / RATE:.2f}s of double-talk-free audio in "
+                                   f"{len(runs)} runs, under the {MIN_FIT_TOTAL / RATE:g}s "
+                                   f"floor"}
+        excluded = round(1 - fitted / active_samples, 3) if active_samples else None
     else:
         raise ValueError(f"unknown fit mode: {fit_mode}")
 
@@ -291,7 +344,93 @@ def process(mic: np.ndarray, ref: np.ndarray, fit_mode: str) -> tuple[dict, dict
     return ({"raw": mic, "linear": linear, "masked": masked},
             {"bulk_delay_ms": bulk / RATE * 1000, "phat_peak": round(peak, 4),
              "fit_seconds": round(sum(b - a for a, b in runs) / RATE, 2),
-             "fit_runs": len(runs), "fit_mode": fit_mode})
+             "fit_runs": len(runs), "fit_mode": fit_mode,
+             "diagnostics": diagnostics(mic, ref, linear, echo),
+             # How much far-end-active time the near-end detector actually
+             # removed. Near zero means the fit is in-sample in all but name,
+             # and the take's result must not be described as double-talk-free.
+             "excluded_fraction": excluded})
+
+
+def diagnostics(mic: np.ndarray, ref: np.ndarray, resid: np.ndarray,
+                echo: np.ndarray) -> dict:
+    """The signal-processing view, recomputed through the corrected chain.
+
+    These are diagnostics, not the result. An earlier draft carried them from a
+    scratch script written before the alignment fix and argued they were
+    "directionally safe because the fix only improves the fit" — which does not
+    follow. Changing the alignment and the fit spans moves the residual, and
+    coherence and level-dependence are not monotone in fit quality. They are
+    computed here so they can be quoted.
+    """
+    mic_pw, ref_pw = frame_power(mic), frame_power(ref)
+    res_pw, echo_pw = frame_power(resid), frame_power(echo)
+    n = min(len(mic_pw), len(ref_pw), len(res_pw), len(echo_pw))
+    mic_pw, ref_pw = mic_pw[:n], ref_pw[:n]
+    res_pw, echo_pw = res_pw[:n], echo_pw[:n]
+    if n < 20:
+        return {}
+
+    playing = ref_pw > np.percentile(ref_pw, 50)
+    far_only = playing & (res_pw <= DT_RATIO * echo_pw)
+    double_talk = playing & ~far_only
+    idle = (~playing) & (mic_pw < np.percentile(mic_pw, 25))
+    floor = float(np.median(res_pw[idle])) if idle.sum() > 5 else float(np.percentile(res_pw, 5))
+
+    def db(sel, a, b):
+        return (round(float(10 * np.log10((a[sel].mean() + 1e-20) / (b[sel].mean() + 1e-20))), 2)
+                if sel.sum() > 5 else None)
+
+    out = {
+        "erle_far_end_only_db": db(far_only, mic_pw, res_pw),
+        "erle_double_talk_db": db(double_talk, mic_pw, res_pw),
+        "far_end_only_seconds": round(float(far_only.sum()) * HOP / RATE, 1),
+        "double_talk_seconds": round(float(double_talk.sum()) * HOP / RATE, 1),
+    }
+    if far_only.sum() > 5:
+        out["echo_above_noise_floor_db"] = round(
+            float(10 * np.log10((mic_pw[far_only].mean() + 1e-20) / (floor + 1e-20))), 2)
+        out["residual_above_noise_floor_db"] = round(
+            float(10 * np.log10((res_pw[far_only].mean() + 1e-20) / (floor + 1e-20))), 2)
+
+    # The ceiling itself: the most any linear filter of any length can suppress
+    # in a band, from the coherence between microphone and reference where the
+    # echo dominates.
+    sel = np.flatnonzero(far_only if far_only.sum() > 20 else playing)
+    win = np.hanning(NFFT)
+    freqs = np.fft.rfftfreq(NFFT, 1 / RATE)
+    sxy = np.zeros(NFFT // 2 + 1, dtype=complex)
+    sxx = np.zeros(NFFT // 2 + 1)
+    syy = np.zeros(NFFT // 2 + 1)
+    gains, levels = [], []
+    band = (freqs >= 200) & (freqs < 3000)
+    for i in sel:
+        s = i * HOP
+        X = np.fft.rfft(ref[s:s + NFFT] * win, NFFT)
+        Y = np.fft.rfft(mic[s:s + NFFT] * win, NFFT)
+        sxy += Y * np.conj(X)
+        sxx += np.abs(X) ** 2
+        syy += np.abs(Y) ** 2
+        xb, yb = (np.abs(X[band]) ** 2).sum(), (np.abs(Y[band]) ** 2).sum()
+        if xb > 1e-18:
+            levels.append(10 * np.log10(xb))
+            gains.append(10 * np.log10(yb + 1e-20) - 10 * np.log10(xb))
+    c2 = np.abs(sxy) ** 2 / (sxx * syy + 1e-20)
+    out["linear_ceiling_db"] = {
+        f"{lo}-{hi}Hz": round(float(-10 * np.log10(
+            1 - min(float(c2[(freqs >= lo) & (freqs < hi)].mean()), 0.999))), 2)
+        for lo, hi in ((100, 500), (500, 1000), (1000, 2000), (2000, 4000), (4000, 8000))}
+
+    if len(levels) >= 8:
+        order = np.argsort(levels)
+        g = np.array(gains)
+        lo_q, hi_q = order[:len(order) // 4], order[-len(order) // 4:]
+        # A linear path holds one gain at every level; a limiter gives back less
+        # as you ask for more. This separates "the speaker is compressing" from
+        # "the echo is simply weak".
+        out["level_dependence_db"] = round(
+            float(np.median(g[hi_q]) - np.median(g[lo_q])), 2)
+    return out
 
 
 def voiced_spans(x: np.ndarray) -> list[tuple[float, float]]:
@@ -433,7 +572,50 @@ def run_self_test() -> int:
         print("   FAILED (expected 15.0 ms)")
         ok = False
 
-    # 6. Silence is a valid reference, not a crash. This is the singular-matrix
+    # 6a. The double-talk selector must fail CLOSED. Near-end speech covering
+    #     every far-end interval leaves nothing safe to fit on, and the previous
+    #     version returned every far-end-active span instead — handing back the
+    #     exact double-talk it exists to remove, labelled double-talk-free.
+    # Matched to the echo's level on purpose. A near end 10 dB under the echo is
+    # not double-talk in any sense the fit cares about — it barely perturbs the
+    # least-squares solution — and a control built at that level would pass
+    # while proving nothing. Double-talk is when the two are comparable.
+    true_echo = np.convolve(far, h_true)[:len(far)]
+    talky = _synth(24.0, 5, 100, 7000)           # the operator never stops
+    talky *= np.sqrt((true_echo[gate > 0] ** 2).mean() / (talky ** 2).mean())
+    busy = talky + true_echo
+    runs, _active = far_end_only(*align(busy, far)[:2])
+    print(f"  {'continuous near end leaves no span to fit on':52s} "
+          f"{len(runs):6d} runs", end="")
+    if not runs:
+        print("   ok")
+    else:
+        print(f"   FAILED (returned {sum(b - a for a, b in runs) / RATE:.1f}s as safe)")
+        ok = False
+    conds, _ = process(busy, far, "far-end-only")
+    print(f"  {'and the run is skipped rather than reported':52s} "
+          f"{'skipped' if not conds else 'REPORTED':>13}", end="")
+    print("   ok" if not conds else "   FAILED")
+    ok &= not conds
+
+    # 6b. A reference that arrives LATER than the echo gives a negative bulk
+    #     delay. Through a loudspeaker that cannot happen; through a capture bug
+    #     or a mislabelled leg it happens easily, and the delay used to be
+    #     clamped to zero, which cancelled nothing and said nothing.
+    late_ref = np.roll(far, 500)
+    late_ref[:500] = 0.0
+    conds, meta = process(mic, late_ref, "full")
+    got = _erle(conds["raw"], conds["linear"], far_only)
+    print(f"  {'reference arriving after the echo still cancels':52s} ERLE {got:6.1f} dB",
+          end="")
+    if got > 20 and meta["bulk_delay_ms"] < 0:
+        print("   ok")
+    else:
+        print(f"   FAILED (bulk {meta['bulk_delay_ms']:+.1f} ms; a negative delay "
+              f"must not be clamped away)")
+        ok = False
+
+    # 8. Silence is a valid reference, not a crash. This is the singular-matrix
     #    case the ridge floor exists for.
     label = "silent reference yields the identity"
     try:
@@ -446,7 +628,7 @@ def run_self_test() -> int:
         print(f"  {label:52s} {'raised':>13}   FAILED")
         ok = False
 
-    # 7. Windows must not overlap by default, or the count overstates the
+    # 9. Windows must not overlap by default, or the count overstates the
     #    evidence behind it.
     speech = _synth(12.0, 3, 100, 7000)
     speech[4 * RATE:6 * RATE] *= 0.001           # a gap the VAD has to respect
@@ -486,10 +668,17 @@ def main() -> int:
                    help="analyse only the first N seconds of each take. The chain is "
                         "O(n) in Python-level STFT frames, so a 75-minute capture used "
                         "as a control costs more than the control is worth")
+    p.add_argument("--score-after", type=float, default=0.0, metavar="SECONDS",
+                   help="score only windows starting at or after this point. Paired "
+                        "with --fit-mode first-half it gives a genuinely held-out "
+                        "number: the filter is fit on audio it is then never scored on")
     p.add_argument("--window", type=float, default=WINDOW_S)
     p.add_argument("--hop", type=float, default=HOP_S)
     p.add_argument("--threshold", type=float, default=0.580)
     p.add_argument("--model-dir", type=Path, default=Path.home() / ".cache" / "speaker-gate")
+    p.add_argument("--label", default="run",
+                   help="name this experiment inside the output artifact, so one file "
+                        "can hold the measurement and every control beside it")
     p.add_argument("--out", type=Path, help="write per-window scores and input digests here")
     args = p.parse_args()
 
@@ -505,10 +694,12 @@ def main() -> int:
         name, _, path = spec.partition("=")
         takes[name] = Path(path).expanduser()
     enroll_names = [n.strip() for n in args.enroll.split(",") if n.strip()]
-    supplied = {}
+    supplied, segment_digests = {}, {}
     for spec in args.segments:
         name, _, path = spec.partition("=")
-        supplied[name] = json.loads(Path(path).expanduser().read_text())
+        seg_path = Path(path).expanduser()
+        supplied[name] = json.loads(seg_path.read_text())
+        segment_digests[name] = sha256(seg_path)
 
     enc = sg.load_encoder(args.model_dir)
     embs, durs = [], []
@@ -531,7 +722,8 @@ def main() -> int:
         "fit_mode": args.fit_mode, "window_s": args.window, "hop_s": args.hop,
         "threshold": args.threshold, "enrolled_on": enroll_names,
         "max_seconds": args.max_seconds or None,
-        "supplied_segments": sorted(supplied),
+        "score_after_s": args.score_after or None,
+        "supplied_segments": segment_digests,
         "max_lag_s": MAX_LAG_S, "phat_floor": PHAT_FLOOR,
         "min_fit_run": MIN_FIT_RUN, "align_margin": ALIGN_MARGIN,
         "vad": {"pct": VAD_PCT, "margin_db": VAD_MARGIN_DB,
@@ -565,6 +757,10 @@ def main() -> int:
                     if s["end"] - s["start"] >= sg.MIN_SCORABLE_S and s["end"] <= limit]
         else:
             segs = windows(conds["raw"], args.window, args.hop)
+        segs = [s for s in segs if s["start"] >= args.score_after]
+        if not segs:
+            print(f"{name:11s} no windows at or after {args.score_after:g}s")
+            continue
         rows = {"meta": meta, "windows": [dict(s) for s in segs]}
         for cond, audio in conds.items():
             scored = sg.embed_segments(audio.astype(np.float32), segs, enc)
@@ -583,8 +779,10 @@ def main() -> int:
         print()
 
     if args.out:
-        args.out.write_text(json.dumps(manifest, indent=2) + "\n")
-        print(f"wrote {args.out}")
+        existing = json.loads(args.out.read_text()) if args.out.exists() else {}
+        existing[args.label] = manifest
+        args.out.write_text(json.dumps(dict(sorted(existing.items())), indent=2) + "\n")
+        print(f"wrote {args.out} [{args.label}]")
     return 0
 
 
