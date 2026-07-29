@@ -138,8 +138,11 @@ FLOOR_RATIO_MIN = 2.5   # against a FRAME floor, where noise itself scores 1.05
 MIN_CLASS_SEGMENTS = 3  # per scored class, below which a run is inconclusive
 MIN_CLASS_SECONDS = 8.0
 MIN_ECHO_ONLY_S = 4.0   # far-end-active audio needed before suppression is a number
-REF_ACTIVE_DB = 20.0    # reference this far over its own floor counts as playing
-SCRIPT_OVERLAP_MIN = 0.5  # fraction of a cue phrase's words that must transcribe
+REF_ACTIVE_DB = 20.0    # within this of the reference's loud level counts as playing
+REF_ACTIVE_FLOOR = 1e-4  # and above this absolutely, so digital silence never counts
+SCRIPT_OVERLAP_MIN = 0.5   # of a passage, in the far end, before it is unusable
+SEGMENT_PRECISION_MIN = 0.5  # of a segment's own words that must come from the passage
+MIN_SEGMENT_TOKENS = 3     # fewer than this transcribed is unverified, not judged
 
 
 def sha256(path: Path) -> str:
@@ -415,7 +418,14 @@ def process(mic: np.ndarray, ref: np.ndarray, fit_mode: str,
     E, Y = stft(linear), stft(echo)
     masked = istft(E * (np.abs(E) ** 2 / (np.abs(E) ** 2 + np.abs(Y) ** 2 + 1e-20)), m)
 
-    return ({"raw": mic, "linear": linear, "masked": masked},
+    return ({"raw": mic, "linear": linear, "masked": masked,
+             # Not scored conditions. Carried because every consumer downstream
+             # works on the microphone's timeline, and the reference does not
+             # arrive on it — `align` shifted a private copy by up to the 1.7 s
+             # of startup skew this project has measured. Anything selecting
+             # "where the far end was playing" from the caller's own array is
+             # selecting the wrong samples, silently.
+             "_aligned_ref": ref, "_echo": echo},
             {"bulk_delay_ms": bulk / RATE * 1000, "phat_peak": round(peak, 4),
              "fit_seconds": round(sum(b - a for a, b in runs) / RATE, 2),
              "fit_runs": len(runs), "fit_mode": fit_mode,
@@ -638,6 +648,16 @@ def load_segments(path: Path, *, digest: str, samples: int,
             f"{path} has segments with no end. Inferring an end from the next "
             f"segment's start swallows the pause before it — at a speaker "
             f"change, the next speaker's onset as well.")
+    for a, b in pairwise(segs):
+        if b["start"] < a["end"] - 1e-9:
+            raise SourceError(
+                f"{path} has overlapping segments ({a['start']:.2f}-{a['end']:.2f} "
+                f"and {b['start']:.2f}-{b['end']:.2f}). Overlap counts the same "
+                f"audio more than once, which inflates every count and every "
+                f"duration computed from this list — three copies of one "
+                f"three-second span satisfy an eight-second requirement.")
+        if b["start"] < a["start"] - 1e-9:
+            raise SourceError(f"{path} is not in time order.")
     return segs
 
 
@@ -701,24 +721,87 @@ def phase_interior(ph: dict, margin: float) -> tuple[float, float] | None:
     return (lo, hi) if hi - lo > 0 else None
 
 
-def classify(segs: list[dict], phases: list[dict], margin: float) -> dict:
-    """Split segments by the phase whose interior wholly contains them.
+def classify(segs: list[dict], phases: list[dict], margin: float,
+             far_text: str | None = None) -> dict:
+    """Split segments by the phase containing them, and by whether the operator
+    is demonstrably in them.
 
-    Containment is strict on both ends. A segment straddling a boundary spans
-    two different intentions and belongs to neither; counting it under the phase
-    it starts in is how a mixture gets back into a denominator that exists to
+    Containment is strict on both ends. A segment straddling a boundary spans two
+    different intentions and belongs to neither; counting it under the phase it
+    starts in is how a mixture gets back into a denominator that exists to
     exclude one.
+
+    Containment alone is not enough for the speak intervals, which is what the
+    first version of this got wrong. A cue phrase read once at the top of an
+    interval shows the operator spoke somewhere in it, and then every segment in
+    the interval was counted as his — including the ones during a pause, which on
+    speakers hold the far end and nothing else. The interval-wide label smuggled
+    the mixture back in one level down.
+
+    So each segment is asked about itself. Of the content words its own
+    transcript carries, what fraction come from the passage the operator was
+    reading? Reading the passage puts nearly all of them there; far-end echo puts
+    nearly none, because the playback is saying something else. Precision rather
+    than recall, because a three-second segment can only ever hold a fraction of
+    a twenty-five-word passage, so recall is bounded low by arithmetic and would
+    reject every real segment.
+
+    A segment that fails goes to `operator_unverified`, which is reported and not
+    counted. That is deliberate and one-directional: echo-contaminated speech
+    transcribes badly, which is the condition under study, so a failure is not
+    evidence he was silent. It is evidence this segment cannot carry the claim.
     """
-    out = {"operator": [], "control": [], "calibration": [], "unattributable": []}
+    far_tokens = _tokens(far_text) if far_text else set()
+    out = {"operator": [], "operator_unverified": [], "control": [],
+           "calibration": [], "unattributable": []}
     for seg in segs:
-        placed = None
+        placed, phase = None, None
         for ph in phases:
             span = phase_interior(ph, margin)
             if span and span[0] <= seg["start"] and seg["end"] <= span[1]:
                 placed = "operator" if ph["expect"] == "operator" else ph["role"]
+                phase = ph
                 break
+        if placed == "operator":
+            want = _tokens(phase["script"] or "") - far_tokens
+            heard = _tokens(seg.get("text", ""))
+            hit = len(heard & want) / len(heard) if heard else 0.0
+            seg = dict(seg, script_precision=round(hit, 2),
+                       tokens_heard=len(heard))
+            if len(heard) < MIN_SEGMENT_TOKENS or hit < SEGMENT_PRECISION_MIN:
+                placed = "operator_unverified"
         out.setdefault(placed or "unattributable", []).append(seg)
     return out
+
+
+def union_seconds(segs: list[dict]) -> float:
+    """Distinct audio covered, not the sum of segment lengths.
+
+    Summing is what an eight-second requirement gets satisfied by three copies of
+    the same three-second span. Overlap is refused at load, so this agrees with
+    the sum on any artifact that got this far — it is here because the evidence
+    bar should be stated in terms of what it actually means, not in terms of what
+    happens to be equivalent under the current guards.
+    """
+    total, cursor = 0.0, None
+    for seg in sorted(segs, key=lambda s: s["start"]):
+        lo, hi = seg["start"], seg["end"]
+        lo = max(lo, cursor) if cursor is not None else lo
+        if hi > lo:
+            total += hi - lo
+            cursor = hi
+    return total
+
+
+def scored_conditions(conds: dict) -> dict:
+    """The three audio conditions, without the working signals carried beside them.
+
+    `process` returns the aligned reference and the echo estimate in the same
+    dict, because both are needed downstream and both are on the microphone's
+    timeline. Neither is a condition to score, and an underscore prefix alone
+    would not have stopped a loop over `.items()` from embedding them.
+    """
+    return {k: v for k, v in conds.items() if not k.startswith("_")}
 
 
 def frame_rms(x: np.ndarray, ms: float = FLOOR_FRAME_MS) -> np.ndarray:
@@ -729,7 +812,7 @@ def frame_rms(x: np.ndarray, ms: float = FLOOR_FRAME_MS) -> np.ndarray:
     return np.sqrt((x[:k * n].astype(np.float64).reshape(k, n) ** 2).mean(axis=1))
 
 
-def run_verdict(rows: dict, protocol: dict) -> dict:
+def run_verdict(rows: dict, protocol: dict, threshold: float) -> dict:
     """Did this take produce a result, or only the shape of one.
 
     A run can finish, print a table and write a manifest while carrying no
@@ -739,10 +822,30 @@ def run_verdict(rows: dict, protocol: dict) -> dict:
     like a measurement, and the label under which it was written ("acceptance")
     is the only thing suggesting otherwise.
 
-    So the verdict is written down. Both classes have to be populated for the
-    comparison to mean anything: the operator class is the claim, and the silent
-    class is what stops the claim resting on a gate that admits everything. An
-    inconclusive run is recorded as inconclusive, with the counts that made it
+    So the verdict is written down, and it has to consult everything that could
+    invalidate the run rather than only the counts. An earlier version checked
+    class sizes, dropped phases and the suppression figure, and ignored both
+    compliance and the noise-floor ratios — so a take where not one cue was
+    verified, or where an admission came from near-silence, came back "scored".
+    Each of those reproduces the failure the surrounding machinery exists to
+    prevent, under a label that says the opposite.
+
+    Four things have to hold:
+
+    * Both classes populated, measured as distinct audio rather than summed
+      segment lengths. The operator class is the claim; the silent class is what
+      stops the claim resting on a gate that admits everything.
+    * At least one speak interval verified from content, and every scored
+      operator segment carrying the passage itself. Zero verified cues means the
+      protocol was not followed and the labels are intent, not observation.
+    * Every cue displayed within the attribution margin of its scheduled time.
+      A cue that appeared late labels audio against a boundary the operator
+      never saw.
+    * No admitted segment sitting at the take's own noise floor, in any scored
+      condition. Such an admission is the embedding reacting to near-silence,
+      and it counts in the numerator unless something removes it.
+
+    An inconclusive run is recorded as inconclusive, with the counts that made it
     so, rather than left out of the file — an absent label reads as "not run
     yet", which is a different and less useful fact.
     """
@@ -750,17 +853,67 @@ def run_verdict(rows: dict, protocol: dict) -> dict:
     for cls, what in (("operator", "the claim"),
                       ("control", "the gate's negative control")):
         members = rows["classes"].get(cls, {}).get("windows", [])
-        seconds = sum(m["end"] - m["start"] for m in members)
+        seconds = union_seconds(members)
         if len(members) < MIN_CLASS_SEGMENTS or seconds < MIN_CLASS_SECONDS:
             why.append(
-                f"{cls} ({what}): {len(members)} segments, {seconds:.1f}s — "
-                f"needs {MIN_CLASS_SEGMENTS} and {MIN_CLASS_SECONDS:g}s")
+                f"{cls} ({what}): {len(members)} segments, {seconds:.1f}s of "
+                f"distinct audio — needs {MIN_CLASS_SEGMENTS} and "
+                f"{MIN_CLASS_SECONDS:g}s")
+
+    c = rows.get("compliance") or {}
+    if not c.get("speak_intervals_verified"):
+        why.append(
+            f"not one speak interval was verified from content "
+            f"({c.get('speak_intervals_unverified', 0)} unverified) — the labels "
+            f"are the schedule's intent, not an observation of who spoke")
+    late = [ph for ph in c.get("phases", [])
+            if ph.get("cue_late_s") is not None
+            and abs(ph["cue_late_s"]) > protocol["cue_margin_s"]]
+    if late:
+        worst = max(late, key=lambda ph: abs(ph["cue_late_s"]))
+        why.append(
+            f"{len(late)} cue(s) appeared further than the "
+            f"{protocol['cue_margin_s']:g}s margin from their scheduled time, "
+            f"worst {worst['cue_late_s']:+.2f}s at {worst['start']:.0f}s — that "
+            f"audio is labelled against a boundary the operator never saw")
+
+    # Unverified segments are excluded from the claim, not fatal to it. Nobody
+    # reads a passage without breathing, and a segment landing on a gap will
+    # always fail — disqualifying on any of them would make every real take
+    # inconclusive. What is fatal is unverified audio OUTWEIGHING verified: at
+    # that point most of the speak intervals hold something unestablished, and
+    # "he was reading throughout" is no longer a description of the recording.
+    unverified = union_seconds(
+        rows["classes"].get("operator_unverified", {}).get("windows", []))
+    verified = union_seconds(rows["classes"].get("operator", {}).get("windows", []))
+    if unverified > verified:
+        why.append(
+            f"{unverified:.1f}s inside the speak intervals does not carry the "
+            f"passage against {verified:.1f}s that does — most of what was "
+            f"supposed to be the operator reading is unestablished")
+
+    for cls in ("operator", "control"):
+        for row in rows["classes"].get(cls, {}).get("windows", []):
+            for cond in ("raw", "linear", "masked"):
+                ratio = row.get(f"{cond}_rms_over_floor")
+                if (row.get(cond) is not None and row[cond] >= threshold
+                        and ratio is not None and ratio < FLOOR_RATIO_MIN):
+                    why.append(
+                        f"{cls} segment at {row['start']:.1f}s was admitted under "
+                        f"{cond} at {ratio:.1f}x the noise floor — that is the "
+                        f"embedding reacting to near-silence, and it is in the "
+                        f"numerator")
+
     if protocol["dropped_phases"]:
         why.append(f"{protocol['dropped_phases']} scheduled phases ran past the "
                    f"end of the recording")
     if not rows.get("echo_only", {}).get("erle_db"):
         why.append("no echo-only interval long enough to measure suppression on")
-    return {"verdict": "inconclusive" if why else "scored", "why": why}
+    return {"verdict": "inconclusive" if why else "scored", "why": why,
+            # Never "ground truth". The labels come from a human following a
+            # schedule, checked against content where content allows it.
+            "evidence": "controlled human protocol, verified per segment where "
+                        "the passage transcribed"}
 
 
 def floor_rms(x: np.ndarray) -> float:
@@ -811,23 +964,32 @@ def protocol_compliance(protocol: dict, mic: np.ndarray, margin: float,
     that "proved" the check worked used a silent recording, which is the one
     condition the experiment never runs in.
 
-    What echo cannot fake is the operator's words. Each speak interval displays
-    a phrase; if the microphone transcript inside that interval carries enough
-    of it, he spoke there. The far end is playing different material, so its
-    echo cannot produce these tokens — and where it might, the check refuses to
-    rely on it: any phrase whose words appear in the far end's own transcript is
-    struck from the evidence rather than credited.
+    What echo cannot fake is the operator's words. Each speak interval displays a
+    passage; if the microphone transcript inside that interval carries enough of
+    it, he read it there. The far end is playing different material, so its echo
+    cannot produce these tokens — and where it might, the check refuses to rely
+    on it: any passage the far end says enough of itself is struck from the
+    evidence rather than credited.
+
+    This answers the INTERVAL, which is a coarser question than the one that
+    decides the result. Whether a given three seconds of audio holds the operator
+    is settled per segment, in `classify`, against the same passage — an interval
+    verified here says he read it somewhere inside, not that he was reading
+    throughout it. Both are reported, and the verdict needs both: at least one
+    interval verified here, and the segments it actually scores verified there.
 
     This is one-directional and has to stay that way. Echo-contaminated speech
-    transcribes badly, which is the condition under study, so a phrase that
+    transcribes badly, which is the condition under study, so a passage that
     fails to match is NOT evidence the operator was silent. A match proves
     speech. A miss proves nothing, and is reported as unverified rather than as
     a violation.
 
     Silent intervals get no equivalent check — nothing can show an absence here
     — so they carry an explicit assumption, not a measurement. Both the expected
-    line and what was actually transcribed go into the artifact, so a borderline
-    match is the reader's call rather than a boolean they have to trust.
+    passage and what was actually transcribed go into the artifact, so a
+    borderline match is the reader's call rather than a boolean they have to
+    trust. Alongside them goes the time each cue was actually displayed, because
+    a cue that appeared late labels audio against a boundary nobody saw.
     """
     far_tokens = _tokens(far_text) if far_text else set()
     phases, notes, verified, unverified = [], [], 0, 0
@@ -840,6 +1002,11 @@ def protocol_compliance(protocol: dict, mic: np.ndarray, margin: float,
                          if s["end"] > lo and s["start"] < hi).strip()
         row = {"role": ph["role"], "expect": ph["expect"],
                "start": ph["start"], "end": ph["end"],
+               # What the operator actually saw, minus what the schedule said.
+               # None on a protocol written before this was recorded, which the
+               # verdict treats as unproven rather than as zero.
+               "cue_late_s": (round(ph["shown_at_s"] - ph["start"], 3)
+                              if ph.get("shown_at_s") is not None else None),
                "level_db": round(20 * np.log10(
                    float(np.sqrt((mic[int(lo * RATE):int(hi * RATE)] ** 2).mean()))
                    + 1e-12), 1),
@@ -879,7 +1046,7 @@ def protocol_compliance(protocol: dict, mic: np.ndarray, margin: float,
             "silence_is_assumed": True}
 
 
-def control_erle(protocol: dict, conds: dict, ref: np.ndarray, margin: float) -> dict:
+def control_erle(protocol: dict, conds: dict, margin: float) -> dict:
     """Suppression measured where the far end plays and the operator does not.
 
     This is the figure every earlier echo-return-loss number in this file wanted
@@ -903,9 +1070,21 @@ def control_erle(protocol: dict, conds: dict, ref: np.ndarray, margin: float) ->
     # which drags a suppression figure toward zero and calls it measurement.
     # Only samples where the reference is genuinely active count.
     active = np.zeros(len(mask), dtype=bool)
-    env = frame_rms(ref)
+    # The reference as the filter saw it: shifted onto the microphone's timeline
+    # by `align`. Using the caller's own system.wav here selected far-end
+    # activity up to the measured 1.7 s of startup skew away from the echo it
+    # was supposed to be measuring, and reported seconds of "far-end-active"
+    # audio that held no echo at all.
+    env = frame_rms(conds["_aligned_ref"])
     n = int(RATE * FLOOR_FRAME_MS / 1000)
-    live = env > max(float(np.percentile(env, 10)), 1e-9) * 10 ** (REF_ACTIVE_DB / 20)
+    # Measured DOWN from the reference's loud level, not up from its quiet one.
+    # Up from the quiet one was the first attempt and it inverts on a reference
+    # with no pauses: stationary playback has a p10 frame as loud as its p90, so
+    # nothing clears a threshold set 20 dB above it and a far end that never
+    # stopped read as never playing. Down from p90 handles both — speech pauses
+    # fall away, continuous playback does not.
+    loud = float(np.percentile(env, 90))
+    live = (env > loud / 10 ** (REF_ACTIVE_DB / 20)) & (env > REF_ACTIVE_FLOOR)
     for k in np.flatnonzero(live):
         active[k * n:(k + 1) * n] = True
     mask &= active[:len(mask)]
@@ -916,7 +1095,8 @@ def control_erle(protocol: dict, conds: dict, ref: np.ndarray, margin: float) ->
                        f"inside the silent intervals"}
     return {"seconds": round(seconds, 2),
             "erle_db": {cond: round(float(_erle(conds["raw"], audio, mask)), 2)
-                        for cond, audio in conds.items() if cond != "raw"}}
+                        for cond, audio in scored_conditions(conds).items()
+                        if cond != "raw"}}
 
 
 # --------------------------------------------------------------------------
@@ -1359,31 +1539,152 @@ def _ground_truth_controls() -> bool:
               c3["speak_intervals_verified"], 0,
               shown=f"{c3['speak_intervals_verified']} verified")
 
-        # 18. A run that produced no operator segments, or no negative control,
-        #     is inconclusive and says so — it must not write a manifest that
-        #     looks like a measurement.
-        full = {"classes": {
-            "operator": {"windows": [{"start": 0, "end": 3}] * 4},
-            "control": {"windows": [{"start": 0, "end": 3}] * 4}},
-            "echo_only": {"erle_db": {"linear": 5.0}}}
-        empty = {"classes": {"operator": full["classes"]["operator"]},
-                 "echo_only": {"erle_db": {"linear": 5.0}}}
-        clean = dict(proto, dropped_phases=0)
-        check("a populated run is scored",
-              run_verdict(full, clean)["verdict"], "scored")
-        check("a run with no negative control is inconclusive",
-              run_verdict(empty, clean)["verdict"], "inconclusive")
-        check("and so is one whose phases ran off the end",
-              run_verdict(full, dict(proto, dropped_phases=2))["verdict"],
-              "inconclusive")
+        # 18. Per-segment labels. A passage read once at the top of a speak
+        #     interval used to promote every segment in it, including the ones
+        #     during a pause that hold only the far end. The segment has to carry
+        #     the passage itself.
+        sp2 = next(ph for ph in proto["phases"]
+                   if ph["role"] == "speak" and ph is not speak)
+        reading = {"start": speak["start"] + 2.0, "end": speak["start"] + 5.0,
+                   "text": speak["script"]}
+        pausing = {"start": sp2["start"] + 2.0, "end": sp2["start"] + 5.0,
+                   "text": "and then the quarterly numbers came in ahead of plan"}
+        cls2 = classify([reading, pausing], proto["phases"], proto["cue_margin_s"])
+        check("a segment carrying the passage is the operator",
+              (len(cls2["operator"]), len(cls2["operator_unverified"])), (1, 1),
+              shown=f"{len(cls2['operator'])} op, "
+                    f"{len(cls2['operator_unverified'])} unverified")
+        #     Including when it sits in a verified interval beside a reading one:
+        #     interval-wide evidence would have promoted both.
+        cls3 = classify([reading, {"start": speak["start"] + 5.5,
+                                   "end": speak["start"] + 8.0,
+                                   "text": "the quarterly numbers again"}],
+                        proto["phases"], proto["cue_margin_s"])
+        check("a pause in a verified interval is not promoted",
+              len(cls3["operator"]), 1, shown=f"{len(cls3['operator'])} op")
 
-        # 19. Suppression is only a number where the far end was actually
-        #     playing. Silent control intervals over silent playback measure the
-        #     room against itself.
-        quiet = {"raw": np.zeros(140 * RATE), "linear": np.zeros(140 * RATE)}
-        eo = control_erle(proto, quiet, np.zeros(140 * RATE), proto["cue_margin_s"])
+        # 19. Distinct audio, not summed lengths — and the artifact refuses the
+        #     duplicates that made the two differ. An earlier version of the
+        #     fixture below used four copies of one three-second window, which
+        #     certified exactly the double-counting it should have caught.
+        dup = [{"start": 0.0, "end": 3.0}] * 4
+        check("four copies of one window are three seconds",
+              union_seconds(dup), 3.0)
+        over = d / "overlap.json"
+        over.write_text(json.dumps({
+            "schema": "mic-segments/1", "timeline": "mic-local", "leg": "mic",
+            "filtered": ["voicing"], "duration_s": 140.0,
+            "audio_sha256": digest, "audio_samples": samples,
+            "segments": [{"start": 0.0, "end": 3.0, "text": "a"},
+                         {"start": 2.0, "end": 5.0, "text": "b"}]}))
+        check("an artifact with overlapping segments is refused",
+              bool(refused(lambda: load_segments(
+                  over, digest=digest, samples=samples))))
+
+        # 20. A run that produced no operator segments, no negative control, no
+        #     verified cue, a late cue, or an admission at the noise floor is
+        #     inconclusive and says so — it must not write a manifest that looks
+        #     like a measurement.
+        def rows_for(**over):
+            base = {
+                "classes": {
+                    "operator": {"windows": [
+                        {"start": t, "end": t + 3.0, "masked": 0.7,
+                         "masked_rms_over_floor": 9.0} for t in (0.0, 4.0, 8.0)]},
+                    "control": {"windows": [
+                        {"start": t, "end": t + 3.0, "masked": 0.1,
+                         "masked_rms_over_floor": 9.0} for t in (0.0, 4.0, 8.0)]}},
+                "echo_only": {"erle_db": {"linear": 5.0}},
+                "compliance": {"speak_intervals_verified": 5,
+                               "speak_intervals_unverified": 0, "phases": []},
+            }
+            base.update(over)
+            return base
+
+        clean = dict(proto, dropped_phases=0)
+        check("a populated, verified run is scored",
+              run_verdict(rows_for(), clean, 0.58)["verdict"], "scored")
+        #     A breath gap does not invalidate a take; most of the interval
+        #     being unaccounted for does.
+        gap = rows_for()
+        gap["classes"]["operator_unverified"] = {
+            "windows": [{"start": 20.0, "end": 22.5}]}
+        check("one unverified segment does not invalidate it",
+              run_verdict(gap, clean, 0.58)["verdict"], "scored")
+        mostly = rows_for()
+        mostly["classes"]["operator_unverified"] = {"windows": [
+            {"start": t, "end": t + 3.0} for t in (20.0, 24.0, 28.0, 32.0)]}
+        check("but mostly-unverified speak intervals do",
+              run_verdict(mostly, clean, 0.58)["verdict"], "inconclusive")
+        no_ctrl = rows_for()
+        del no_ctrl["classes"]["control"]
+        check("a run with no negative control is inconclusive",
+              run_verdict(no_ctrl, clean, 0.58)["verdict"], "inconclusive")
+        check("and so is one with no verified speak cue",
+              run_verdict(rows_for(compliance={
+                  "speak_intervals_verified": 0, "speak_intervals_unverified": 5,
+                  "phases": []}), clean, 0.58)["verdict"], "inconclusive")
+        check("and so is one whose cue appeared late",
+              run_verdict(rows_for(compliance={
+                  "speak_intervals_verified": 5, "speak_intervals_unverified": 0,
+                  "phases": [{"start": 35.0, "cue_late_s": 2.4}]}),
+                  clean, 0.58)["verdict"], "inconclusive")
+        hollow = rows_for()
+        hollow["classes"]["operator"]["windows"][0]["masked_rms_over_floor"] = 1.1
+        check("and so is one admitting a window at the noise floor",
+              run_verdict(hollow, clean, 0.58)["verdict"], "inconclusive")
+        check("and so is one whose phases ran off the end",
+              run_verdict(rows_for(), dict(proto, dropped_phases=2),
+                          0.58)["verdict"], "inconclusive")
+
+        # 21. Suppression is only a number where the far end was actually
+        #     playing, and "where" is decided on the microphone's timeline.
+        quiet = {"raw": np.zeros(140 * RATE), "linear": np.zeros(140 * RATE),
+                 "_aligned_ref": np.zeros(140 * RATE)}
+        eo = control_erle(proto, quiet, proto["cue_margin_s"])
         check("no far-end audio yields no suppression figure",
               eo.get("erle_db"), None, shown=eo.get("why", "")[:13])
+        #     A reference the caller has not aligned selects activity up to the
+        #     measured 1.7s of startup skew away from the echo. control_erle now
+        #     reads the aligned copy process() carries, so a shifted caller array
+        #     cannot move the mask.
+        far = _synth(140.0, 21, 150, 6000)
+        # A sparse talker: 1.5 s on, 2.5 s off. Sparse on purpose — at a 75%
+        # duty cycle a two-second shift still lands mostly on real speech, and
+        # the two masks came out 1.8 dB apart, which is not a control deciding
+        # anything. At this duty a shift lands in the pauses.
+        gate = np.zeros(len(far))
+        for k in range(0, 140, 4):
+            gate[int(k * RATE):int((k + 1.5) * RATE)] = 1.0
+        far *= gate
+        # Suppression only where the far end plays, as a real filter behaves.
+        # Comparing totals would not catch this: the gate is periodic, so a
+        # shifted reference selects the same NUMBER of seconds from the wrong
+        # places. What has to differ is the figure those samples produce.
+        # Room noise under everything, or the pauses are digital silence and
+        # contribute nothing to either side of the ratio — which is why an
+        # earlier version of this control could not tell the two masks apart.
+        room = _synth(140.0, 23, 100, 7000) * 0.01
+        far = far + room
+        quietened = np.where(gate > 0, room, far)
+        base = {"raw": far, "linear": quietened, "_aligned_ref": far}
+        wrong = {**base, "_aligned_ref": np.roll(far, int(2.0 * RATE))}
+        # 2.0 s: half the gate period, so every selected frame lands in a pause.
+        a = control_erle(proto, base, proto["cue_margin_s"])
+        b = control_erle(proto, wrong, proto["cue_margin_s"])
+        check("and the mask follows the aligned reference",
+              a["erle_db"]["linear"] - b["erle_db"]["linear"] > 3.0,
+              shown=f"{a['erle_db']['linear']:.1f} vs "
+                    f"{b['erle_db']['linear']:.1f} dB")
+        #     Continuous playback is active throughout, not silent throughout.
+        #     Measuring up from the reference's own quietest frame said the
+        #     opposite, and a stationary far end selected nothing.
+        cont = {"raw": _synth(140.0, 22, 150, 6000)}
+        cont["linear"] = cont["raw"] * 0.1
+        cont["_aligned_ref"] = cont["raw"]
+        c = control_erle(proto, cont, proto["cue_margin_s"])
+        check("a far end that never pauses counts as playing",
+              c["seconds"] > MIN_ECHO_ONLY_S, shown=f"{c['seconds']:.1f}s")
 
     return ok
 
@@ -1618,11 +1919,12 @@ def main() -> int:
         rows = {"meta": meta}
         if protocol:
             margin = protocol["cue_margin_s"]
-            classes = classify(segs, protocol["phases"], margin)
+            classes = classify(segs, protocol["phases"], margin,
+                               far_texts.get(name))
             rows["compliance"] = protocol_compliance(
                 protocol, conds["raw"], margin, supplied_segs or [],
                 far_texts.get(name))
-            rows["echo_only"] = control_erle(protocol, conds, ref, margin)
+            rows["echo_only"] = control_erle(protocol, conds, margin)
             rows["dropped_phases"] = protocol["dropped_phases"]
             for line in rows["compliance"]["notes"]:
                 print(f"{name:11s} NOTE  {line}")
@@ -1646,7 +1948,7 @@ def main() -> int:
             if not members or cls == "calibration":
                 continue
             block = {"windows": [dict(s) for s in members]}
-            for cond, audio in conds.items():
+            for cond, audio in scored_conditions(conds).items():
                 a32 = audio.astype(np.float32)
                 floor = floor_rms(audio)
                 scored = sg.embed_segments(a32, members, enc)
@@ -1678,7 +1980,9 @@ def main() -> int:
         if not rows["classes"]:
             print(f"{name:11s} nothing scorable at or after {args.score_after:g}s")
         if protocol:
-            rows["verdict"] = run_verdict(rows, protocol)
+            # After every class has been scored, because the verdict reads the
+            # per-window floor ratios those passes write.
+            rows["verdict"] = run_verdict(rows, protocol, args.threshold)
             if rows["verdict"]["verdict"] != "scored":
                 for why in rows["verdict"]["why"]:
                     print(f"{name:11s} INCONCLUSIVE  {why}")

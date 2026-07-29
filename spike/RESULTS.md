@@ -787,10 +787,11 @@ the volume you would actually use, and then change nothing for the ~2 minutes th
 capture runs. The cues say only when to talk:
 
 1. **35 s: say nothing** while the far end plays. This is the fit interval.
-2. **Then five pairs**, ten seconds talking over the same playback and six
-   seconds silent while it keeps playing. Each talking cue shows a phrase — read
-   it, then keep talking until the cue changes. The phrase is what lets the run
-   verify you spoke rather than assume it.
+2. **Then five pairs**, ten seconds reading aloud over the same playback and six
+   seconds silent while it keeps playing. Each talking cue shows a passage —
+   read it continuously until the cue changes, starting again from the top if you
+   reach the end. Reading rather than talking is what lets the run verify, per
+   segment, that a given three seconds of audio holds you.
 
 The silent intervals are not padding. They are the far end with nothing behind
 it, which makes them the negative control for the gate — audio that must *not* be
@@ -875,16 +876,40 @@ end plays throughout — so a missed cue read as compliant, and the control that
 "proved" the check worked used a silent recording, the one condition the
 experiment never runs in.
 
-What echo cannot fake is the operator's words. Each speak cue displays a phrase;
-if the microphone transcript inside that interval carries enough of it, he spoke
-there. The far end's own transcript is checked too, and any phrase the playback
-says enough of itself is struck from the evidence rather than credited to him.
+What echo cannot fake is the operator's words. Each speak cue displays a
+twenty-five-word passage to read continuously, and **each segment is judged on
+its own transcript**: of the content words in it, how many come from the passage?
+Reading puts nearly all of them there; far-end echo puts nearly none, because the
+playback is saying something else.
+
+Judging the segment rather than the interval is the second version of this. The
+first showed a short phrase once at the top of a ten-second interval, which
+established that the operator spoke *somewhere* in it — and then every segment in
+the interval was counted as his, including the ones during a pause, which on
+speakers hold the far end and nothing else. "Then keep talking" was carrying the
+weight, and it is an assumption. The interval-wide label smuggled the mixture
+back in one level down from where it was removed.
+
+Precision, not recall: a three-second segment can only hold a fraction of a
+twenty-five-word passage, so requiring most of the passage would reject every
+real segment by arithmetic. What is asked is how much of what the segment *does*
+say comes from the passage.
+
+Segments that fail go to `operator_unverified` — reported, excluded from the
+claim, and not treated as violations. Nobody reads a passage without breathing,
+so a segment landing on a gap will always fail; what makes a run inconclusive is
+unverified audio *outweighing* verified, at which point most of what was supposed
+to be reading is unestablished.
 
 This runs one way only. Echo-contaminated speech transcribes badly — that is the
-condition under study — so a phrase that fails to match is **not** evidence of
-silence; it is reported as unverified. And the silent intervals have no
-equivalent check at all, because nothing can demonstrate an absence here. That
-they were silent is an assumption the artifact states as one.
+condition under study — so a segment that fails to match is **not** evidence of
+silence. And the silent intervals have no equivalent check at all, because
+nothing can demonstrate an absence there. That they were silent is an assumption
+the artifact states as one, which is why the verdict calls the whole thing a
+controlled human protocol and never ground truth.
+
+The far end's own transcript is checked too, and any passage the playback says
+enough of itself is struck from the evidence rather than credited to him.
 
 The harness then scores three groups separately: segments wholly inside a speak
 interval, segments wholly inside a silent one, and segments straddling a cue,
@@ -893,20 +918,37 @@ is trimmed from each end of every interval, because a cue is seen and acted on
 rather than obeyed instantly. Compliance is reported, not enforced — a speak
 interval the operator stayed quiet through reaches the artifact saying so.
 
-**A run that cannot support a conclusion records itself as inconclusive.** Both
-classes have to be populated — three segments and eight seconds each — because
-the operator class is the claim and the silent class is what stops the claim
-resting on a gate that admits everything. Phases that ran past the end of a short
-take, or a silent interval that yielded no scorable segment, put the run in that
-state too. It still writes its manifest, with the counts that made it
+**A run that cannot support a conclusion records itself as inconclusive.** Four
+things have to hold, and an earlier version checked only the first: both classes
+populated (three segments and eight seconds each, measured as *distinct* audio —
+summing lengths let three copies of one three-second span satisfy an eight-second
+bar, and overlapping segment lists are now refused at load); at least one speak
+interval verified from content, because zero verified cues means the labels are
+the schedule's intent rather than an observation; every cue displayed within the
+attribution margin of its scheduled time, since `protocol.json` records when each
+cue *actually* appeared and not only when it was meant to; and no admitted
+segment sitting at the take's own noise floor, which was previously a console
+warning that left the admission in the numerator regardless. Phases that ran past
+the end of a short take put the run in that state too. It still writes its manifest, with the counts that made it
 inconclusive; a missing label reads as "not run yet", which is a different fact.
 
 Suppression on the silent intervals is only reported where the far end was
-**actually playing**. Real playback pauses between sentences, and a pause inside
-a silent interval contributes room noise to both sides of the ratio, which drags
-the figure toward zero and calls it a measurement. The reference has to be 20 dB
-over its own floor, and four seconds of that have to exist, or the run says there
-is no figure rather than printing one.
+**actually playing**, and "where" is decided on the microphone's timeline. Real
+playback pauses between sentences, and a pause inside a silent interval
+contributes room noise to both sides of the ratio, which drags the figure toward
+zero and calls it a measurement. A frame counts as playing when it is within
+20 dB of the reference's loud level — measured *down* from that rather than up
+from its quietest frame, because a far end that never pauses has a quietest frame
+as loud as its loudest and the up-from-quiet version read continuous playback as
+silence. Four seconds of it have to exist, or the run says there is no figure
+rather than printing one.
+
+The reference it reads is the *aligned* one. `align` shifts a private copy onto
+the microphone's timeline, and selecting far-end activity from the caller's own
+`system.wav` picked samples up to the measured 1.7 s of startup skew away from
+the echo being measured — reporting seconds of "far-end-active" audio that
+contained no echo at all. Digests prove two files are the same file; they say
+nothing about the two clocks agreeing.
 
 This is also the exact fixture AEC3 should be handed first, since it gives a real
 canceller the single-talk interval it converges on.

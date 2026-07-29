@@ -36,6 +36,7 @@ import signal
 import struct
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import wave
@@ -779,7 +780,7 @@ def drop_bled(segs, mic, tap, b, label):
     return kept
 
 
-def report(mic_leg, tap_leg, args, out_dir, phases=None):
+def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
     mic = mic_leg.audio()
     tap = tap_leg.audio()
 
@@ -875,7 +876,7 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None):
         # and may fail — the schedule is the part that cannot be reconstructed.
         write_protocol(out_dir / "protocol.json", phases,
                        out_dir / "mic.wav", len(mic),
-                       out_dir / "system.wav", len(tap))
+                       out_dir / "system.wav", len(tap), shown_at)
 
     if args.no_transcribe:
         return
@@ -963,28 +964,80 @@ SPEAK_S, CONTROL_S = 10.0, 6.0
 DEFAULT_PAIRS = 5
 
 
-# One phrase per speak interval, shown as the cue. They exist so compliance can
-# be checked from content rather than assumed: if the microphone transcript
-# inside a speak interval carries these words, the operator spoke there, and no
-# amount of far-end echo can produce them.
+# One passage per speak interval, shown as the cue and read aloud for the whole
+# interval. They exist so compliance can be checked from content rather than
+# assumed, per segment rather than per interval.
 #
-# The check is one-directional and has to stay that way. Echo-contaminated
-# speech transcribes badly — that is the condition under study — so a phrase
-# that fails to match is not evidence the operator was silent. Presence proves
-# speech; absence proves nothing.
+# A single short phrase was the first attempt and it labels the wrong thing. Read
+# once at the top of a ten-second interval, it establishes that the operator
+# spoke somewhere in there — and then every segment in the interval gets counted
+# as his, including the ones during a pause, which on speakers hold the far end
+# and nothing else. "Then keep talking" was carrying the weight, and it is an
+# assumption, not a measurement.
+#
+# A passage long enough to fill the interval moves the evidence down to the
+# segment. Each segment's own transcript can be asked how much of it comes from
+# the passage: a segment of the operator reading is almost all passage words, a
+# segment of far-end echo is almost none. That is a per-segment label rather than
+# an interval-wide one.
+#
+# The check is one-directional and has to stay that way. Echo-contaminated speech
+# transcribes badly — that is the condition under study — so a segment that fails
+# to match is not evidence the operator was silent in it. It is unverified, and
+# unverified segments are reported apart rather than counted.
 #
 # Chosen to be unlike anything a meeting or a podcast contains, so a match is
-# hard to produce by accident. The far-end leg is transcribed too and any phrase
-# that turns up in IT is excluded from the evidence rather than credited.
+# hard to produce by accident, and roughly twenty-five words so that reading at a
+# normal pace fills ten seconds. The far-end leg is transcribed too and any
+# passage that turns up in IT is excluded from the evidence rather than credited.
 SCRIPT = [
-    "seventeen violet anchors drifting past the harbour",
-    "the copper lantern hums beneath a crooked staircase",
-    "eleven paper foxes counting gravel in the courtyard",
-    "a brass kettle whistles under the tilted greenhouse",
-    "nine amber turtles arguing about the wrong timetable",
-    "the velvet piano leans against a rusted weather vane",
-    "four glass herons folding maps inside a quiet elevator",
-    "an iron sparrow rehearses arithmetic beside the canal",
+    (
+        "seventeen violet anchors drifted past the harbour while eleven paper foxes "
+        "counted gravel in the courtyard and the copper lantern hummed beneath a "
+        "crooked staircase near the tilted greenhouse"
+    ),
+
+    (
+        "nine amber turtles argued about the wrong timetable until the velvet piano "
+        "leaned against a rusted weather vane and four glass herons folded maps "
+        "inside a very quiet elevator"
+    ),
+
+    (
+        "an iron sparrow rehearsed arithmetic beside the canal where thirty marzipan "
+        "lighthouses catalogued the tide and a woollen compass disagreed with every "
+        "chimney on the northern terrace"
+    ),
+
+    (
+        "the lopsided kettle whistled at twelve ceramic badgers sorting umbrellas by "
+        "weight while a phosphorescent ladder measured the orchard and forgot which "
+        "orchard it had measured"
+    ),
+
+    (
+        "fifteen bramble accountants audited a carousel of borrowed lanterns before "
+        "the marble heron filed its objection and the tin observatory misplaced "
+        "another Tuesday afternoon entirely"
+    ),
+
+    (
+        "a saffron bicycle negotiated with the drawbridge about eight hundred "
+        "peppercorns while the plaster nightingale transcribed the wrong argument "
+        "onto a folded linen envelope"
+    ),
+
+    (
+        "twenty obsidian teaspoons queued politely outside the cartographer's shed "
+        "where a lacquered otter rearranged the constellations and denied having "
+        "touched the barometer at all"
+    ),
+
+    (
+        "the hexagonal greengrocer weighed six reluctant meteorites against a bundle "
+        "of clockwork asparagus while the granite librarian recited postcodes to an "
+        "indifferent brass pelican"
+    ),
 ]
 
 
@@ -1031,12 +1084,12 @@ def build_schedule(calibration_s=CALIBRATION_S, pairs=DEFAULT_PAIRS,
 
 CUE_TEXT = {
     "calibration": "SAY NOTHING — let the far end play. This is the fit interval.",
-    "speak": "TALK NOW — keep talking over the playback.",
+    "speak": "READ THIS ALOUD, over the playback, until the cue changes:",
     "control": "SAY NOTHING — playback continues.",
 }
 
 
-def run_cues(mic_leg, phases, stop):
+def run_cues(mic_leg, phases, stop, shown_at):
     """Show each cue at its scheduled point on the microphone's own clock.
 
     Timed from the arrival of the first microphone block, so phase boundaries
@@ -1044,6 +1097,14 @@ def run_cues(mic_leg, phases, stop):
     against CUE_MARGIN_S: one block of capture latency between a sample being
     recorded and arriving here, and up to CUE_POLL_S of scheduling granularity.
     Operator reaction time is the large one, and it is what the margin is for.
+
+    Each cue's ACTUAL display time lands in `shown_at`, keyed by phase index,
+    and goes into the artifact beside the schedule. The schedule is what was
+    intended; a stalled interpreter, a busy terminal or a swapped-out process
+    can put the cue somewhere else, and then every segment in that interval is
+    labelled against a boundary the operator never saw. Storing the intent alone
+    makes that failure invisible. The harness refuses a take whose cues landed
+    further out than the attribution margin.
     """
     while not mic_leg.arrivals and not stop.is_set():
         time.sleep(CUE_POLL_S)
@@ -1062,9 +1123,14 @@ def run_cues(mic_leg, phases, stop):
             break
         if cur is not shown:
             shown = cur
+            shown_at[phases.index(cur)] = round(now, 3)
             print(f"\n  [{now:6.1f}s] {CUE_TEXT[cur['role']]}")
             if cur["script"]:
-                print(f"             say: \"{cur['script']}\", then keep talking")
+                # Wrapped, because a twenty-five-word passage on one terminal
+                # line is not something anyone reads at a steady pace.
+                for line in textwrap.wrap(cur["script"], 66):
+                    print(f"             {line}")
+                print("             (repeat from the start if you reach the end)")
         if live:
             # Only where a carriage return means what it looks like. Redirected
             # to a file this line does not overwrite itself, and a two-minute
@@ -1080,7 +1146,8 @@ def run_cues(mic_leg, phases, stop):
     stop.set()
 
 
-def write_protocol(path, phases, mic_path, mic_samples, tap_path, tap_samples):
+def write_protocol(path, phases, mic_path, mic_samples, tap_path, tap_samples,
+                   shown_at=None):
     """The schedule, bound to both recordings it was displayed over.
 
     Both bindings matter. The digest says this schedule belongs to this audio
@@ -1105,13 +1172,17 @@ def write_protocol(path, phases, mic_path, mic_samples, tap_path, tap_samples):
         "system_samples": int(tap_samples),
         "cue_margin_s": CUE_MARGIN_S,
         "cue_poll_s": CUE_POLL_S,
-        "phases": phases,
+        "phases": [dict(ph, shown_at_s=(shown_at or {}).get(i))
+                   for i, ph in enumerate(phases)],
     }
     path.write_text(json.dumps(payload, indent=2))
     speak = sum(1 for p in phases if p["expect"] == "operator")
     ctrl = sum(1 for p in phases if p["role"] == "control")
+    late = [round(v - phases[i]["start"], 2)
+            for i, v in (shown_at or {}).items()]
+    drift = f", worst cue {max(late, key=abs):+.2f}s off schedule" if late else ""
     print(f"  wrote {path} ({speak} speak, {ctrl} silent-control intervals, "
-          f"{phases[-1]['end']:.0f}s scheduled)")
+          f"{phases[-1]['end']:.0f}s scheduled{drift})")
 
 
 def write_leg_segments(path, segs, duration_s, audio_path, audio_samples, leg):
@@ -1271,6 +1342,7 @@ def main():
     out_dir = Path(args.out) if args.out else REPO / "spike" / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    shown_at = {}                    # phase index -> mic-clock time it appeared
     mic_leg = MicLeg(device, out_dir / "mic.wav")
     tap_leg = TapLeg(out_dir / "system.wav")
     stop = threading.Event()
@@ -1296,7 +1368,8 @@ def main():
             print(f"\n  protocol: {phases[-1]['end']:.0f}s. Far end should already "
                   f"be playing, at the volume and seat you would really use.\n"
                   f"  Follow the cues and change nothing else until it stops.")
-            cue = threading.Thread(target=run_cues, args=(mic_leg, phases, stop),
+            cue = threading.Thread(target=run_cues,
+                                   args=(mic_leg, phases, stop, shown_at),
                                    daemon=True)
             cue.start()
 
@@ -1309,7 +1382,7 @@ def main():
         mic_leg.stop()
         tap_leg.stop()
 
-    report(mic_leg, tap_leg, args, out_dir, phases)
+    report(mic_leg, tap_leg, args, out_dir, phases, shown_at)
 
 
 if __name__ == "__main__":

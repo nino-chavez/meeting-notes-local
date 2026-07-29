@@ -220,11 +220,13 @@ channel, not the talker — on speakers the far end arrives on the microphone to
 `--protocol` is the answer: it runs a two-minute cued capture and writes
 `protocol.json` beside the recordings, a schedule of which intervals the operator
 was asked to speak in and which to stay silent through, fixed before any audio
-exists. Each speaking cue shows a phrase to read, so the run can verify he spoke
-rather than assume it — echo can make the microphone loud, but it cannot put his
-words there. It is the only ground truth about the talker in the project, and the
+exists. Each speaking cue shows a passage to read aloud for the whole interval, so the
+run can verify *per segment* that a given three seconds holds him — echo can make
+the microphone loud, but it cannot put his words there. Segments that do not
+carry the passage are reported apart rather than counted, and a run whose
+evidence does not hold up records itself as inconclusive instead of as a result. It is the only ground truth about the talker in the project, and the
 echo experiments require it. The far end's own transcript is written too, as
-`system-segments.json`, so a cue phrase the playback happens to say is struck
+`system-segments.json`, so a cue passage the playback happens to say is struck
 from the evidence rather than credited.
 
 ### Recording a specific call
