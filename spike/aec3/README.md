@@ -90,9 +90,9 @@ instead.
 
 | condition | segments | passage recall | far-end leakage |
 |---|---|---|---|
-| raw microphone | 23 | **0.0%** | **80.6%** |
-| AEC3 | 14 | **13.3%** (0–29%) | **0.0%** |
-| AEC3 + agc + ns | 6 | 3.4% (0–11%) | 0.0% |
+| raw microphone | 23 | **0.0%** | **80.5%** |
+| AEC3 | 10 | **14.7%** (0–35%) | **0.0%** |
+| AEC3 + agc + ns | 4 | 0.0% | 5.0% |
 
 Three things fall out of that, and only the first is good news.
 
@@ -111,17 +111,54 @@ transcript. The echo is gone and the operator is still mostly missing, which is 
 different failure from the one this project has been chasing and cannot be fixed by
 cancelling harder.
 
-Two readings of the recall column are worth separating. The far end sat about 7 dB
-*louder* than the operator at the microphone (−20.2 against −27.6 dBFS), which is a
-punishing ratio and the first thing to vary. And recall climbs across the take —
-0%, 4%, 11%, 29%, 22% — which is AEC3's adaptive filter converging. It does not use
-the 35 s calibration prefix; it adapts continuously, so the early intervals are
-measuring a filter that has not settled yet. Both point at the operating matrix
-rather than at the canceller.
+The far end sat about 7 dB *louder* than the operator here — measured at −7.0 dB
+signal-to-echo — which is a punishing ratio and the reason for the sweep below.
 
-The gain controllers make retention **worse** — 3.4% against 13.3%, on a quarter of
-the segments. They were off by default here for a level-comparison reason; that
-default now has a retention reason too, which is a better one.
+The gain controllers make retention **worse**: they take it to zero, on a sixth of
+the segments, and let 5% leakage back in. They were off by default for a
+level-comparison reason; that default now has a retention reason too, which is a
+better one.
+
+## The level sweep
+
+Three takes, same seat, same passages, same reading voice — the operator's own level
+held within 5 dB across all three (−39.0, −36.6, −34.3 dBFS), so the axis really is
+the playback. Run by [`../sweep.py`](../sweep.py), which measures the ratio per take
+from the recording's own silent and speaking intervals rather than trusting the
+volume slider.
+
+The ceiling matters more than any single row, so it is measured too: the same
+passages read with **no far end at all** recover **78.9%** of their content words
+(68–91% across five intervals). ASR loses a fifth of this vocabulary unaided. Every
+figure below should be read against 78.9%, not against 100%.
+
+| S/E | raw recall | AEC3 recall | raw leakage | AEC3 leakage |
+|---|---|---|---|---|
+| **+9.3 dB** | 41.4% | 40.2% | 30.1% | **0.0%** |
+| **+1.4 dB** | **0.0%** | **30.7%** | **98.1%** | 2.0% |
+| **−7.0 dB** | 1.8% | 8.0% | 66.7% | 0.0% |
+
+**Leakage is solved, unconditionally.** 30–98% of the raw transcript's content words
+belong to the far end; after AEC3 it is 0–2% at every level. The canceller does that
+job completely and it does not depend on the ratio.
+
+**Recall is rescued in the middle and untouched at the top.** At +1.4 dB the raw
+transcript is a recording of the other party — 0% of the operator's words, 98%
+someone else's — and AEC3 turns that into 30.7%. That is the single most valuable
+number here. At +9.3 dB the raw microphone already reaches 41.4% and AEC3 gives
+40.2%, which is a wash: where the echo is quiet, cancellation neither helps nor
+meaningfully hurts recall, and its whole contribution is removing the other party.
+
+**Nothing reaches the clean ceiling.** The best case is 40% against 78.9% — any
+far-end presence costs about half the recoverable words, and cancellation does not
+give them back. It prevents the collapse; it does not restore clean performance.
+
+That is an envelope rather than a verdict, and it is a shippable one: **speaker mode
+with AEC3 gives trustworthy attribution and a partial transcript.** Nothing of the
+far end lands on the operator's leg, which is what the Me/Them split needs. Roughly
+half the words are missing, which is survivable for notes and gist and is not
+survivable for a verbatim record. Below about +1 dB signal-to-echo the transcript
+thins fast, and that is the point to warn on.
 
 ## What this does not establish
 
@@ -129,16 +166,13 @@ The three gaps this section used to list — no double-talk, a file rather than 
 tapped reference, no retention or admission figures — are closed by the real take
 above. What replaced them is larger:
 
-- **One point in the operating matrix, and a hostile one.** A single take, one
-  seat, one volume, one room, with the operator measured at **−7.0 dB** against the
-  echo. [`../sweep.py`](../sweep.py) runs the axis — same protocol at several
-  playback levels, with the ratio measured per take rather than read off the volume
-  slider, since nothing about a system volume of 50 predicts what arrives at the
-  microphone. Until it runs there is no supported envelope, only one measurement
-  inside it.
-- **Retention is not usable yet.** 13.3% recall does not make a transcript. Whether
-  that is the level ratio, filter convergence, the microphone, or a floor on what
-  cancellation can do for ASR is exactly what the matrix is for.
+- **One axis of the matrix, one room, one microphone, one voice.** The level sweep
+  ran; distance, room acoustics, a second speaker, and headphones did not. Three
+  points on one axis is an envelope sketch, not an envelope.
+- **Half the words are missing even at the best ratio**, and the sweep does not say
+  why. It could be the microphone, the residual after cancellation, or a floor on
+  what any canceller can hand an ASR. Distinguishing those decides whether speaker
+  mode improves further or is done improving.
 - **The gate never admitted anything.** AEC3 moved the voiceprint from +0.064 to
   +0.386 against a +0.580 threshold. Whether the remaining gap closes with a better
   level ratio or whether the threshold is wrong for cancelled audio is unmeasured,

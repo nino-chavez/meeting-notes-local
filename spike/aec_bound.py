@@ -1106,10 +1106,42 @@ STOPWORDS = frozenset((
 ))
 
 
+# Whisper writes numbers as digits and American spellings regardless of how the
+# passage was written, so "seventeen" and "17" are the same word said once and
+# "harbour" and "harbor" differ by a transcription convention rather than by
+# anything the operator did. Without folding them, every number word and every
+# British spelling in a passage is a guaranteed miss in every condition — measured
+# on clean audio with no far end at all, that was 5 of 22 content words in the
+# first passage, which is a fifth of the score gone to orthography.
+#
+# It depresses all conditions equally, so the comparison between them survived; the
+# absolute figures did not, and they are the ones quoted. Folding is confined to the
+# vocabulary of the passages this project actually uses. Extend it with the passages
+# rather than reaching for a general normaliser: a wide fold invents matches, and
+# this is evidence about whether words survived.
+NUMBER_WORDS = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+    "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11",
+    "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15",
+    "sixteen": "16", "seventeen": "17", "eighteen": "18", "nineteen": "19",
+    "twenty": "20", "thirty": "30", "forty": "40", "fifty": "50",
+}
+SPELLINGS = {
+    "harbor": "harbour", "woolen": "woollen", "cataloged": "catalogued",
+    "gray": "grey", "meter": "metre", "colored": "coloured",
+}
+
+
 def tokens(text: str) -> set[str]:
-    return {w for w in "".join(c.lower() if c.isalnum() else " "
-                              for c in text).split()
-            if len(w) > 2 and w not in STOPWORDS}
+    out = set()
+    for w in "".join(c.lower() if c.isalnum() else " " for c in text).split():
+        w = SPELLINGS.get(w, NUMBER_WORDS.get(w, w))
+        # Digits are kept whatever their length: folding "seventeen" to "17" would
+        # otherwise delete it, since the filter below exists to drop short function
+        # words and a numeral is not one.
+        if w.isdigit() or (len(w) > 2 and w not in STOPWORDS):
+            out.add(w)
+    return out
 
 
 def protocol_compliance(protocol: dict, mic: np.ndarray, margin: float,
