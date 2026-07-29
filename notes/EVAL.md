@@ -584,6 +584,28 @@ scored **zero** — four decisions, three action items, all true, not one of the
 commitment the reference recorded. It was not failing to understand the meeting.
 It was doing what it had been told.
 
+**It holds on a corpus it was not tuned on.** The change was made and measured on
+two client calls in one domain, which is exactly the situation where a prompt
+edit fits the meetings it was written against. Re-run over the three QMSum
+meetings — academic and parliamentary, different speakers, different subject
+matter, human-written references — at the same `none` contract:
+
+| meeting | words | bullets | topics covered |
+|---|---|---|---|
+| ES2004c | 7.8k | 21 → 22 | 4/5 → 4/5 |
+| covid_4 | 16k | 20 → 19 | 2/7 → 2/7 |
+| **Bmr006** | **21k** | **8 → 23** | **4/5 → 5/5** |
+
+No meeting regressed, and the one that moved is the longest — where the
+compression the old rules asked for bit hardest. Under the old rules a
+21,000-word meeting produced **three action items**; it now produces eleven, and
+every one spot-checked against the transcript is grounded in it (the subjects
+they name occur 1 to 33 times each). Every run passes attribution, numbers,
+prompt-echo and context.
+
+The committee hearing stays at 2/7 either way, which is consistent with the
+separate finding above that it fails for a different reason.
+
 Three things worth stating about what this is not:
 
 - **Nothing was traded for it.** All four runs pass every gating check —
