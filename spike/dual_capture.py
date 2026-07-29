@@ -959,6 +959,8 @@ def sha256(path):
 CUE_POLL_S = 0.05        # how often the loop looks at the clock
 CUE_MARGIN_S = 1.0       # trimmed off each phase edge before anything is scored
 PROTOCOL_TAIL_S = 2.0    # recorded past the last cue, so the last interval fits
+FAR_END_CHECK_S = 5.0    # into the calibration phase, before a word has been read
+FAR_END_MIN_RMS = 1e-4   # the tap is digital, so real silence is exactly zero
 CALIBRATION_S = 35.0
 SPEAK_S, CONTROL_S = 10.0, 6.0
 DEFAULT_PAIRS = 5
@@ -1089,7 +1091,7 @@ CUE_TEXT = {
 }
 
 
-def run_cues(mic_leg, phases, stop, shown_at):
+def run_cues(mic_leg, tap_leg, phases, stop, shown_at, abandoned):
     """Show each cue at its scheduled point on the microphone's own clock.
 
     Timed from the arrival of the first microphone block, so phase boundaries
@@ -1105,6 +1107,15 @@ def run_cues(mic_leg, phases, stop, shown_at):
     labelled against a boundary the operator never saw. Storing the intent alone
     makes that failure invisible. The harness refuses a take whose cues landed
     further out than the attribution margin.
+
+    Five seconds into the calibration phase this also checks that the far end is
+    actually playing, and abandons the take if it is not. Nothing here plays
+    anything — the tap records whatever the machine is already outputting — so a
+    run started before the far end does is a two-minute recording of a quiet room
+    with the operator reading five passages into it, which measures nothing about
+    echo. That condition was already detected, in `report`, AFTER the capture: the
+    cost of finding out there was the whole take. Five seconds in, nothing has been
+    read yet and the only cost is starting again.
     """
     while not mic_leg.arrivals and not stop.is_set():
         time.sleep(CUE_POLL_S)
@@ -1114,10 +1125,28 @@ def run_cues(mic_leg, phases, stop, shown_at):
     total = phases[-1]["end"]
     live = sys.stdout.isatty()
     shown = None
+    checked = False
     while not stop.is_set():
         now = time.monotonic() - t0
         if now >= total:
             break
+        if not checked and now >= FAR_END_CHECK_S:
+            checked = True
+            far = tap_leg.audio()
+            level = (float(np.sqrt((far.astype(np.float64) ** 2).mean()))
+                     if len(far) else 0.0)
+            if level < FAR_END_MIN_RMS:
+                print(f"{chr(13) if live else chr(10)}"
+                      f"  nothing is coming out of the speakers — the system leg is "
+                      f"silent after {now:.0f}s.\n"
+                      f"  This tool records the far end; it does not play it. Start "
+                      f"the playback\n"
+                      f"  first — a call, a video, anything audible — then run this "
+                      f"again.\n"
+                      f"  Abandoning the take now, before you have read anything.")
+                abandoned.set()
+                stop.set()
+                return
         cur = next((p for p in phases if p["start"] <= now < p["end"]), None)
         if cur is None:
             break
@@ -1346,6 +1375,10 @@ def main():
     mic_leg = MicLeg(device, out_dir / "mic.wav")
     tap_leg = TapLeg(out_dir / "system.wav")
     stop = threading.Event()
+    # Distinct from `stop`, because Ctrl-C and "the far end was never playing" end
+    # the capture the same way and mean opposite things: one is the operator
+    # deciding they have enough, the other is a take that cannot be scored.
+    abandoned = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
 
     # Both starts sit inside the try. An unresolvable --input-device raises out
@@ -1369,7 +1402,8 @@ def main():
                   f"be playing, at the volume and seat you would really use.\n"
                   f"  Follow the cues and change nothing else until it stops.")
             cue = threading.Thread(target=run_cues,
-                                   args=(mic_leg, phases, stop, shown_at),
+                                   args=(mic_leg, tap_leg, phases, stop,
+                                         shown_at, abandoned),
                                    daemon=True)
             cue.start()
 
@@ -1382,7 +1416,14 @@ def main():
         mic_leg.stop()
         tap_leg.stop()
 
-    report(mic_leg, tap_leg, args, out_dir, phases, shown_at)
+    # An abandoned take gets no schedule written beside it. load_protocol would
+    # refuse the short recording anyway, but leaving the artifact there makes the
+    # directory look like a take that can be scored, and the next person to find it
+    # has to work out why it cannot be.
+    report(mic_leg, tap_leg, args, out_dir,
+           None if abandoned.is_set() else phases,
+           None if abandoned.is_set() else shown_at)
+    return 1 if abandoned.is_set() else 0
 
 
 if __name__ == "__main__":

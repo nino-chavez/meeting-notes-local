@@ -803,6 +803,18 @@ def classify(segs: list[dict], phases: list[dict], margin: float,
                        tokens_heard=len(heard))
             if len(heard) < MIN_SEGMENT_TOKENS or hit < SEGMENT_PRECISION_MIN:
                 placed = "operator_unverified"
+        elif placed == "calibration":
+            # The fit interval is the one place the operator's voice is actively
+            # harmful: `prefix` mode fits the echo path there on the premise that
+            # only the far end is present, and a filter fitted on his voice learns
+            # to cancel it. Silence there is an assumption everywhere else in this
+            # file; here it is at least testable in one direction. A calibration
+            # segment carrying a passage means he started reading before the cue,
+            # and the run says so rather than fitting on it.
+            want = {t for ph in phases for t in _tokens(ph["script"] or "")} - far_tokens
+            heard = _tokens(seg.get("text", ""))
+            hit = len(heard & want) / len(heard) if heard else 0.0
+            seg = dict(seg, script_precision=round(hit, 2), tokens_heard=len(heard))
         out.setdefault(placed or "unattributable", []).append(seg)
     return out
 
@@ -1018,6 +1030,19 @@ def run_verdict(rows: dict, protocol: dict, threshold: float) -> dict:
                         f"{cond} at {ratio:.1f}x the noise floor — that is the "
                         f"embedding reacting to near-silence, and it is in the "
                         f"numerator")
+
+    # A passage read inside the fit interval, which prefix mode fits on as though
+    # only the far end were there. Detected rather than assumed, because this is
+    # the one silence the audio can speak to: his words cannot arrive by echo.
+    early = [seg for seg in rows["classes"].get("calibration", {}).get("windows", [])
+             if seg.get("tokens_heard", 0) >= MIN_SEGMENT_TOKENS
+             and seg.get("script_precision", 0.0) >= SEGMENT_PRECISION_MIN]
+    if early:
+        why.append(
+            f"{len(early)} segment(s) inside the calibration phase carry a cue "
+            f"passage, first at {min(s['start'] for s in early):.1f}s — the fit "
+            f"interval held the operator's voice, and a filter fitted there learns "
+            f"to cancel it")
 
     if protocol["dropped_phases"]:
         why.append(f"{protocol['dropped_phases']} scheduled phases ran past the "
@@ -1901,6 +1926,32 @@ def _ground_truth_controls() -> bool:
             "operator": {"windows": [{"start": 0.0, "end": 3.0, "aec3": 0.7}]},
             "operator_unverified": {"windows": [{"start": 8.0, "end": 11.0,
                                                 "aec3": 0.2}]}}}, 0.58)
+        # 25. A passage read before the first cue. prefix mode fits the echo path
+        #     on the calibration interval as though only the far end were there,
+        #     so the operator's voice inside it teaches the filter to cancel him —
+        #     and silence there was assumed rather than checked until a real take
+        #     transcribed its first passage five seconds before the cue fired.
+        cal = next(ph for ph in proto["phases"] if ph["role"] == "calibration")
+        early_seg = {"start": cal["start"] + 5.0, "end": cal["start"] + 8.0,
+                     "text": speak["script"]}
+        cls_early = classify([early_seg], proto["phases"], proto["cue_margin_s"])
+        check("reading inside the fit interval is detected",
+              cls_early["calibration"][0]["script_precision"] > SEGMENT_PRECISION_MIN,
+              shown=f"{cls_early['calibration'][0]['script_precision']:.2f} precision")
+        jumped = rows_for()
+        jumped["classes"]["calibration"] = {"windows": cls_early["calibration"]}
+        check("and it makes the run inconclusive",
+              run_verdict(jumped, clean, 0.58)["verdict"], "inconclusive")
+        #     Far-end echo in the fit interval is the NORMAL case and must not
+        #     trip it: that is what the interval is for.
+        quiet_cal = classify([{"start": cal["start"] + 5.0, "end": cal["start"] + 8.0,
+                               "text": "and then the quarterly numbers came in"}],
+                             proto["phases"], proto["cue_margin_s"])
+        fine = rows_for()
+        fine["classes"]["calibration"] = {"windows": quiet_cal["calibration"]}
+        check("but far-end speech there is what the interval is for",
+              run_verdict(fine, clean, 0.58)["verdict"], "scored")
+
         check("and it is bounded like any other",
               (b2["conditions"]["aec3"]["verified"]["admitted"],
                b2["conditions"]["aec3"]["scheduled"]["of"]), (1, 2),
