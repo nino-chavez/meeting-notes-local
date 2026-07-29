@@ -320,6 +320,88 @@ configuration that scored *best* of everything measured in
 why the mic leg exists at all: an online meeting's system audio contains everyone
 except the person holding the microphone.
 
+### The canonical pattern agrees, and it does not require an enrollment ritual
+
+Speaker verification was named above as *our* fix before checking whether the
+category had already settled the question. It has. Read at the vendors' own
+documentation rather than from search summaries:
+
+- **Microsoft Teams — voice isolation.** "Relies on the voice profile, stored on
+  the user's local device, to remove any sounds or voices during a call or
+  meeting that don't match the profile."
+  ([admin doc](https://learn.microsoft.com/en-us/microsoftteams/voice-isolation))
+- **Zoom — personalized audio isolation.** A voiceprint "generated automatically
+  when you first speak in a meeting", "stored locally on the user's device until
+  they delete it", with an optional read-aloud script to reinforce it.
+  ([support KB0074698](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0074698))
+- **Google Meet — noise cancellation.** Does *not* attempt it, and says so:
+  "Voices from TV or people talking won't be canceled."
+  ([support 9919960](https://support.google.com/meet/answer/9919960))
+
+Two independent implementations landed on target-speaker extraction gated by an
+enrolled voice profile; the third ships only non-speech denoising and documents
+the gap. That is a canonical pattern, and it removes the question of whether the
+approach is sound. What remains is only whether a local embedding model is worth
+the dependency.
+
+**The enrollment cost is smaller than this document assumed.** "Enroll the
+operator's voice once" implied a setup screen. Neither vendor requires one.
+Teams' `PassiveVoiceEnrollment` builds the profile "via their in-meeting speech"
+and "typically takes a couple of meetings"; Zoom's automatic voiceprint is
+generated from the first speech in a meeting with no user action at all. Applied
+here, that means the profile is a centroid over embeddings of mic audio this
+project *already records* — a background job over prior captures, not a feature
+with a surface. The `single_source` runs are ideal enrollment material: one
+speaker, known identity, minutes of it.
+
+**Both vendors also state the failure mode, which we should copy rather than
+rediscover.** Teams alerts when it detects that it is suppressing a speaker close
+to the microphone and offers to disable isolation for that meeting — because a
+colleague sitting next to you is indistinguishable from interference until you
+decide which one they are. A verification gate that silently drops a co-located
+participant is a worse defect than the contamination it replaces, since the
+transcript then omits speech with no record that it did. Whatever we build
+reports its rejections.
+
+**Zoom names the headset as the substitute for a voiceprint**, not as a general
+requirement: without a voiceprint recording the feature "works best with headset
+microphones." That is the same trade this project faces, stated by a vendor that
+measured it.
+
+### What headphones actually fix here, and what they do not
+
+These are two defects, not one, and headphones address only the first:
+
+| | far end into the mic (bleed) | the room into the mic |
+|---|---|---|
+| symptom | their speech labelled `Me`, duplicated | strangers' speech labelled `Me` |
+| headphones | **fix it** — no acoustic path | no effect |
+| industry fix | acoustic echo cancellation | enrolled voiceprint |
+| our state | measured, degrade-only | measured, unfixed |
+
+For bleed we already hold something an echo canceller has to estimate: the
+process tap **is** the far-end reference signal, clean, with the lag measured.
+`bleed()` computes that cross-correlation today at whole-capture scale. A
+per-segment version — drop mic segments that correlate with the tap at the known
+lag — is a zero-dependency option that has not been priced against pulling in
+AEC, and should be before either is chosen.
+
+Apple's Voice Processing I/O is the obvious alternative and is **not** a flag we
+can set: the mic leg is `sd.InputStream` (`dual_capture.py:218`), so it runs
+through PortAudio, not through a voice-processing audio unit. Adopting it means
+rewriting that leg in Core Audio. Note also that Apple documents its Voice
+Isolation mic mode only as filtering "background sounds"
+([Mac Help](https://support.apple.com/guide/mac-help/use-mic-modes-on-your-mac-mchle82b42f0/mac));
+it does not claim to remove other people's speech, and we have not tested
+whether it does.
+
+**The measurement that decides this** is separability, not architecture: how far
+apart are the operator and the household interferers in a local speaker-embedding
+space, on `mic.wav` — a capture that already contains a known target speaker and
+known interfering speech. If the margin is wide the gate is trivial; if it is
+narrow, no amount of plumbing saves it. That is the falsifiable version of "the
+fix is speaker verification", and it has not been run.
+
 ---
 
 ## Two defects found while preparing the long run
@@ -405,8 +487,20 @@ in 2.2 s.
   Mixed-clock hardware (USB, Bluetooth) is still unmeasured and is where drift
   would actually be expected.
 - Fabricated turns are gated out, validated at zero cost to real content. What
-  remains on the mic leg is genuine room audio, which is a consent question
-  rather than an engineering one.
-- The next change is a live two-person run on headphones. The Me/Them split has
-  still never been exercised with real speech on both legs at once — every
-  measurement so far put all the real words on one leg.
+  remains on the mic leg is genuine room audio — a correctness defect as well as
+  a consent one, since it enters the transcript labelled `Me`. An earlier version
+  of this list called it "a consent question rather than an engineering one",
+  which was wrong in the same way the section above was.
+- **Headphones are not the fix for that, and are not a permanent requirement for
+  bleed either.** They cut the acoustic path from the far end to the mic and do
+  nothing about the room. Both defects have a known industry answer — echo
+  cancellation for one, an enrolled voiceprint for the other — and neither is
+  implemented here yet, which is the only reason headphones are load-bearing
+  today.
+- The next measurement is separability: how far apart the operator and the room
+  sit in a local speaker-embedding space, on a capture that already contains
+  both. It decides whether the voiceprint gate is worth its dependency, and it
+  costs nothing but compute.
+- Still unexercised: a live two-person run on headphones. The Me/Them split has
+  never seen real speech on both legs at once — every measurement so far put all
+  the real words on one leg.
