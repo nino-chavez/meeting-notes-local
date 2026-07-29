@@ -45,12 +45,15 @@ BLEED_MAX_LAG_S = 0.5
 # resolve that scale before it can report a drift value rather than a bound.
 HARDWARE_DRIFT_PPM = 50
 
-# What the merge can absorb. It sorts Whisper segments, which run seconds long —
-# a 57-minute meeting decoded into 769 of them, averaging 4.5 s. Divergence has
-# to approach that scale before it can put two turns in the wrong order, so a
-# bound comfortably under a second per hour settles the question for the merge
-# even when it cannot produce a value.
-MERGE_TOLERANCE_MS = 1000
+# There is deliberately no "tolerance" constant here. An earlier version had one
+# set against segment duration, on the reasoning that divergence had to approach
+# the length of a turn to reorder it. That is the wrong quantity: reordering
+# depends on the gap between adjacent turns across the two legs, and two
+# utterances 100 ms apart swap under 100 ms of slip however long they run.
+# Measured on the 75-minute capture, cross-leg gaps ran a median of 1.9 s but 7%
+# fell under a quarter-second — so no achievable bound makes reordering
+# impossible, only rare. The report states the bound and names the quantity that
+# decides it, rather than issuing a verdict it cannot support.
 
 
 class Leg:
@@ -376,22 +379,19 @@ def drift_lines(stats):
         hour_ms = rel_ppm * 3600 / 1000
         lines.append(f"  projected over 60 min: {hour_ms:+.0f} ± {bound_ms:.0f} ms of divergence")
     else:
-        # A run that resolves no drift value still bounds one, and the bound is
-        # the figure the merge actually needs. Reporting only "cannot resolve"
-        # throws that away: a 75-minute capture bounded the two legs at under a
-        # quarter-second of divergence per hour, which answers the question the
-        # merge asks even though it is not a value.
+        # A run that resolves no drift value still bounds one, and reporting
+        # only "cannot resolve" throws that away. A 75-minute capture bounded
+        # the two legs at under a quarter-second of divergence per hour, which
+        # is a usable engineering figure even though it is not a value.
         lines.append(
             f"  no value resolvable, but bounded: under {bound_ms:.0f} ms of "
             "divergence per hour"
         )
-        lines.append("  " + (
-            "that is below the seconds-long segments the merge sorts, so drift "
-            "cannot\n  reorder turns"
-            if bound_ms <= MERGE_TOLERANCE_MS else
-            "that is looser than the segments the merge sorts, so reordering is "
-            "not\n  ruled out"
-        ))
+        lines.append(
+            "  what that costs depends on how close adjacent turns are ACROSS the "
+            "two legs,\n  not on how long they run — see spike/RESULTS.md for the "
+            "measured spacing"
+        )
         if rel_unc > HARDWARE_DRIFT_PPM:
             worst = max(s["block_period_s"] for s in stats.values() if s)
             # The relative figure carries both legs' uncertainty in quadrature,

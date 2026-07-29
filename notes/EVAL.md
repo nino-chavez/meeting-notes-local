@@ -467,9 +467,9 @@ Stated plainly, in the same spirit as `spike/RESULTS.md`:
   transcripts carried **identical counts** of every commitment term, and the
   capture-path transcript ran 101% of the direct decode's word count. The
   resampling round-trip and the block chunking cost no content. Drift came out
-  bounded under ~230 ms/hour, far inside what the merge tolerates. Details and
-  the three unrelated defects that run exposed are in
-  [`spike/RESULTS.md`](../spike/RESULTS.md).
+  bounded under ~230 ms/hour — roughly 8x inside typical cross-leg turn spacing,
+  though not inside the closest 7% of it. Details and the three unrelated defects
+  that run exposed are in [`spike/RESULTS.md`](../spike/RESULTS.md).
 - **The mic leg still invalidates `channel`, for a new reason.** That same run
   showed a silent operator leg producing 400 hallucinated turns — 92 of them the
   single line `"Thank you."` — which the merge labelled `Me` because bleed

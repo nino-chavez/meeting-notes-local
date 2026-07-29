@@ -73,11 +73,34 @@ through the default output. Both legs recorded the full span — 4499.8 s each,
 | system | 15999.996 Hz (−0 ± 44 ppm) | 4499.80 s |
 
 Relative drift **+4 ± 63 ppm** — inside its own error bars, so there is still no
-drift *value*. What the run does produce is a *bound*, and the bound is the figure
-the merge actually needs: ±63 ppm is under **~230 ms of divergence per hour**
-(derived from the measured ppm, not printed by the run), against a merge that
-sorts Whisper segments averaging 4.5 s. Drift cannot reorder turns on this
-hardware. Timestamp-stitching logic is no longer blocked on an unknown.
+drift *value*. What the run does produce is a *bound*: ±63 ppm is under **~230 ms
+of divergence per hour** (derived from the measured ppm, not printed by the run).
+
+**What that bound does and does not buy.** Reordering in the merge depends on the
+gap between adjacent turns *across the two legs*, not on how long a turn runs —
+two utterances 100 ms apart swap under 100 ms of slip however long they are. The
+merged 75-minute capture gives the real distribution over 416 cross-leg
+transitions:
+
+| Gap between adjacent cross-leg turns | Share |
+|---|---|
+| under 230 ms | **7.2%** |
+| under 500 ms | 17.1% |
+| under 1 s | 30.5% |
+| median | 1.9 s |
+
+So the honest claim is narrower than "drift cannot reorder turns", which is what
+this document said before the distribution was measured. Typical turn spacing
+clears the bound by roughly 8x, and at the *measured* +4 ppm (≈14 ms/hour) almost
+nothing is at risk — but at the worst divergence the bound still permits, about
+7% of cross-leg transitions are close enough to swap, and that is at the end of
+an hour where the accumulated slip is largest. Drift compensation is not urgent.
+It is also not provably unnecessary.
+
+(One caveat on that 7.2%: the mic leg in this run carried hallucinations and room
+noise rather than a conversational partner, so the cross-leg gaps are not those
+of a real two-person meeting. It is the only two-leg distribution available until
+a live headphones run happens.)
 
 **Scope this narrowly.** The microphone and the speakers are both built-in and
 plausibly share a clock domain, so a near-zero result is the *expected* one. This
@@ -282,9 +305,11 @@ in 2.2 s.
   quiet operator, silence makes it confident fiction. The design docs treated the
   split as the thing you get for nothing from capture topology; it is the thing
   that needs the most defending.
-- Drift is no longer the open engineering risk for same-device capture. It is
-  bounded under ~230 ms/hour, well inside what the merge tolerates. Mixed-clock
-  hardware (USB, Bluetooth) is still unmeasured.
+- Drift on same-device capture is bounded under ~230 ms/hour, roughly 8x inside
+  typical cross-leg turn spacing — but not inside the closest 7% of it, so this
+  demotes drift from open risk to known quantity rather than closing it.
+  Mixed-clock hardware (USB, Bluetooth) is still unmeasured and is where drift
+  would actually be expected.
 - The next change to the capture is an energy gate on the mic leg. The one after
   that is a live two-person run on headphones — the Me/Them split has still never
   been exercised with real speech on both legs at once.
