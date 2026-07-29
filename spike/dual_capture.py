@@ -844,11 +844,12 @@ def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
     What that skip costs is worth stating exactly, because "nothing is lost" would
     be false. The label is already gone, so no attribution is being protected —
     but the room's *segments* still reach the merged transcript and the notes, and
-    `notes/EVAL.md` measured that content cost as real: the 75-minute capture's
-    14.2% room turns changed the output deterministically, three action items with
-    them in against five with them out. So this accepts a known content
-    contamination in order not to risk deleting the operator, which is the worse
-    of the two failures. It is a choice between costs, not a free skip.
+    RESULTS.md measured that content cost as real: the 75-minute capture's 14.2%
+    room turns changed the output deterministically — 3 action items and 4
+    decisions with them in against 5 and 5 with them out, over three
+    byte-identical repeat runs. So this accepts a known content contamination in
+    order not to risk deleting the operator, which is the worse of the two
+    failures. It is a choice between costs, not a free skip.
 
     Both halves read the same `contaminated()`, so the two decisions cannot drift.
 

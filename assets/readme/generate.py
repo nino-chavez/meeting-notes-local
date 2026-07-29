@@ -1,18 +1,35 @@
 #!/usr/bin/env python3
 """Emit README SVGs for local-meeting-notes from real captured envelopes.
 
-Run from the repo root, after a capture has written spike/out/{mic,system}.wav:
+    .venv/bin/python assets/readme/generate.py                    # deterministic
+    .venv/bin/python assets/readme/generate.py --from-capture DIR # re-measure
 
-    .venv/bin/python assets/readme/generate.py
+The level tracks in the hero and the bleed board are real measured envelopes, not
+drawn decoration.
 
-The level tracks in the hero and the bleed board are real measured envelopes,
-not drawn decoration. Regenerate them if the capture they document changes.
+**The envelopes are pinned to a file, not re-measured on every run**, and that is
+a correctness rule rather than a convenience. This script used to read
+`spike/out/{mic,system}.wav` — a mutable scratch directory holding whatever
+capture ran last. Editing the pipeline diagram therefore silently rewrote the
+hero's level tracks from an unrelated recording, and the README's alt text still
+claimed the duration of the old one. Caught with a 19.8 s capture sitting where a
+14 s one had been published from: the art changes, nothing fails, and the caption
+becomes false.
+
+So the 68 measured values live in `envelopes.json` with the duration and digest of
+the audio they came from. A plain run reproduces the committed SVGs byte for byte.
+Re-measuring is an explicit act that rewrites the pin, and it prints the duration
+so the README's caption can be corrected in the same change.
 
 Palette and shape come from the repo's own DESIGN.md; the accent (#FFB020) is
 reserved for the live-capture indicator and appears nowhere else, per
 DIRECTION.md. Radius stays at 6 because DESIGN.md forbids anything larger — the
 world is an instrument panel, not a soft card.
 """
+import argparse
+import hashlib
+import json
+import sys
 import wave
 from pathlib import Path
 
@@ -21,6 +38,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "assets" / "readme"
 OUT.mkdir(parents=True, exist_ok=True)
+PIN = OUT / "envelopes.json"
 
 BG = "#0E1014"
 RAISED = "#191C21"
@@ -40,15 +58,56 @@ N = 68
 
 
 def envelope(path, n=N):
+    """`n` normalised RMS values over one recording, and its provenance."""
     with wave.open(str(path)) as w:
-        a = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float64) / 32768
+        rate, frames = w.getframerate(), w.getnframes()
+        a = np.frombuffer(w.readframes(frames), dtype="<i2").astype(np.float64) / 32768
     k = len(a) // n
     e = np.sqrt((a[: k * n].reshape(n, k) ** 2).mean(axis=1))
-    return e / (e.max() or 1)
+    return (e / (e.max() or 1)), {
+        "seconds": round(frames / rate, 1),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest()[:16],
+    }
 
 
-MIC = envelope(REPO / "spike/out/mic.wav")
-SYS = envelope(REPO / "spike/out/system.wav")
+def measure(take: Path) -> dict:
+    """Re-measure both legs of a capture and return a new pin."""
+    legs, prov = {}, {}
+    for leg in ("mic", "system"):
+        wav = take / f"{leg}.wav"
+        if not wav.exists():
+            raise SystemExit(f"{wav} does not exist — --from-capture needs both legs")
+        values, meta = envelope(wav)
+        legs[leg] = [round(float(v), 5) for v in values]
+        prov[leg] = meta
+    return {"n": N, "source": prov, "envelopes": legs}
+
+
+ap = argparse.ArgumentParser(description=__doc__,
+                             formatter_class=argparse.RawDescriptionHelpFormatter)
+ap.add_argument("--from-capture", type=Path, metavar="DIR",
+                help="re-measure from DIR/{mic,system}.wav and rewrite the pin. "
+                     "Changes the published art, so it prints the new durations "
+                     "for the README's captions")
+args = ap.parse_args()
+
+if args.from_capture:
+    pin = measure(args.from_capture)
+    PIN.write_text(json.dumps(pin, indent=2) + "\n")
+    print(f"re-pinned from {args.from_capture}:")
+    for leg, meta in pin["source"].items():
+        print(f"  {leg:7s} {meta['seconds']}s  sha256:{meta['sha256']}")
+    print("  UPDATE the README alt text if the durations changed.\n")
+elif not PIN.exists():
+    sys.exit(f"{PIN} is missing. Run with --from-capture DIR to create it.")
+else:
+    pin = json.loads(PIN.read_text())
+    if pin.get("n") != N:
+        sys.exit(f"{PIN} holds {pin.get('n')} values but this script draws {N}. "
+                 f"Re-pin with --from-capture.")
+
+MIC = np.asarray(pin["envelopes"]["mic"], dtype=np.float64)
+SYS = np.asarray(pin["envelopes"]["system"], dtype=np.float64)
 
 
 def bars(values, x0, baseline, width, gap, max_h, fill, min_h=1.5):
@@ -215,7 +274,7 @@ pipeline = f"""<svg xmlns="http://www.w3.org/2000/svg"
      width="{W3}" height="{H3}" viewBox="0 0 {W3} {H3}"
      role="img" aria-labelledby="pipe-title pipe-desc">
   <title id="pipe-title">Capture architecture: two legs into one transcript</title>
-  <desc id="pipe-desc">System audio is captured by a vendored Swift binary using a Core Audio process tap and piped as sixteen kilohertz PCM into the Python daemon. The microphone is captured in the same process through sounddevice. Both legs are transcribed locally by MLX Whisper and interleaved into a labelled transcript. Nothing leaves the machine.</desc>
+  <desc id="pipe-desc">System audio is captured by a vendored Swift binary using a Core Audio process tap and piped as sixteen kilohertz PCM into the Python daemon. The microphone is captured in the same process through sounddevice. Both legs are transcribed locally by MLX Whisper. The microphone transcript then passes three filters — is there voiced audio behind this segment, is that audio the far end returning through the room, and is it the operator's own voice — before the two legs are interleaved into a transcript that either carries Me and Them labels or declares itself unattributed. Nothing leaves the machine.</desc>
 
   <rect width="{W3}" height="{H3}" rx="6" fill="{BG}"/>
 
@@ -230,6 +289,7 @@ pipeline = f"""<svg xmlns="http://www.w3.org/2000/svg"
   {box(356, 74, 236, 172, "dual_capture.py", "16 kHz s16le &#183; both legs", fill=RAISED)}
   {text(374, 152, "timestamps each block on arrival", 11, DIM, MONO)}
   {text(374, 172, "measures drift and bleed", 11, DIM, MONO)}
+  {text(374, 192, "gates: voicing, echo, voiceprint", 11, DIM, MONO)}
 
   {arrow(592, 160, 660)}
 
@@ -237,7 +297,7 @@ pipeline = f"""<svg xmlns="http://www.w3.org/2000/svg"
 
   {arrow(880, 160, 948)}
 
-  {box(948, 122, 196, 76, "Me / Them notes", "markdown on disk")}
+  {box(948, 122, 196, 76, "transcript.json", "Me / Them, or unattributed")}
 
   <line x1="56" y1="264" x2="1144" y2="264" stroke="{LINE}" stroke-width="1"/>
   {text(56, 258, "the pipe between the Swift tap and the Python daemon is ordinary stdout &#8212; no IPC, no driver, no network", 11, MUTED, MONO)}

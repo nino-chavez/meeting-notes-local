@@ -110,13 +110,19 @@ ship.
 
 ## Notes
 
-**This record is not machine-checked yet, and whether it ever will be depends on
-the shell decision in `DESIGN.md`.** The `tools/design-qa` resolver, the
-impeccable detector, and the forge-brand token bridge are all web-surface tools:
-they read CSS custom properties, rendered DOM, and linked stylesheets. A SwiftUI
-shell orphans all of it and leaves this file as prose only. A web-based shell
-(Tauri) makes it enforceable — `sites/local-meeting-notes/site.json` pointing at
-this record, and suppressions required to cite an `authorized` row.
+**This record is not machine-checked yet, but it will be, and the stack choice
+that decides it is already made.** `DESIGN.md § Shell decision` chose Tauri over
+SwiftUI, and enforceability of this file was the deciding factor rather than a
+side effect: the `tools/design-qa` resolver, the impeccable detector, and the
+forge-brand token bridge are all web-surface tools reading CSS custom properties,
+rendered DOM and linked stylesheets, so a SwiftUI shell would have left this file
+as prose nobody checks.
 
-That is a real consequence of a stack choice, and it is stated here rather than
-discovered later.
+What remains is wiring, not deciding: `sites/local-meeting-notes/site.json`
+pointing at this record, and suppressions required to cite an `authorized` row.
+Neither can be built before a surface exists, which is why the ledger below is
+still empty.
+
+An earlier version of this note described the shell as an open question. It was
+not — `DESIGN.md` had already decided it with both candidates developed — and
+leaving that phrasing in place had a reader treat a settled call as a live fork.
