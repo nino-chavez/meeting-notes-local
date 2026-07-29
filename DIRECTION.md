@@ -79,6 +79,24 @@ links, focus rings, or charts. The immediate consequence — the palette carries
 destroys the one reading the product exists to make trustworthy. Warnings are
 neutral foreground plus text.
 
+*This collides with a real accessibility requirement, and the collision is resolved
+here rather than at the first focus ring.* film-room's interaction contract states
+"every keyboard-reachable control has a visible accent focus ring"
+(`~/Workspace/dev/wip/film-room/docs/design-system/interaction-contract.md`), and
+that project is further along than this one, so the instinct is to copy it. It
+cannot be copied: an accent focus ring would put the live-capture color under the
+cursor on every tab press. **Focus rings here are a high-contrast neutral outline
+plus an offset**, which is visible against both the dark ramp and any raised
+surface, and carries no state meaning at all. Contrast, not hue, is what makes a
+focus ring findable — the accent was never doing that job, only marking it.
+
+*And no state may be carried by color alone.* film-room's component catalog requires
+every health and progress stage to "pair state word/icon with color". Here that is
+not merely accessibility hygiene: `recording` and `degraded` must be distinguishable
+at menubar size, and one accent used for both with only a tint between them fails
+the product's central reading. Shape and a mark carry the difference; the accent
+says only that something is live.
+
 **No ambient motion anywhere.** A pulse, breath, shimmer, or looping gradient can
 be misread as activity. The only moving element permitted is an audio level
 meter, which is moving *because* audio is arriving — it is a reading, not
@@ -89,10 +107,31 @@ down must be visually distinct from healthy capture at menubar size, not only in
 an opened window. This is what makes `degraded` a design constraint rather than
 an error-handling detail.
 
-**First viewport shows real content.** The window opens on the last meeting's
-note. This inherits the workspace default — previews show real content, not a
-title card — and it is the reason there is no dashboard surface in the L5
-inventory.
+**First viewport shows real content — but does not resume a session.** The window
+opens on the notes library with the most recent note already rendered beside it,
+not on a bare list and not on a single note filling the frame.
+
+The second half of that is a correction, and it comes from the operator rejecting
+exactly this pattern in a sibling project. Reviewing film-room
+(`~/Workspace/dev/wip/film-room`), he wrote:
+
+> "that intent feels incorrect. it's not how i would start lightroom or capcut. i
+> would expect to open to a starting page then select what 'job' or 'library' or
+> 'project' i wanted to work on, rather than assuming i want to go straight back to
+> the last job/library/project."
+
+An earlier version of this rule said the window opens *on* the last meeting's note,
+which is the pattern he rejected. It is not fully transferable — film-room switches
+between projects where "the last one" is genuinely ambiguous, while this tool holds
+one chronological stream where the newest note usually is the answer — but the
+underlying objection survives the difference: **do not decide for him which note he
+came for.** Choosing is his; having something real to look at while he chooses is
+ours.
+
+List–detail with the newest note pre-rendered satisfies both, and it is why the
+inventory has a library surface and no dashboard. The failure this avoids is also
+recorded in that project — "so where is the content I use for reviewing with 630?"
+— an app that could not show the operator his own material.
 
 ---
 

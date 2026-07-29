@@ -39,6 +39,11 @@ class Turn:
     text: str
     speaker: str | None = None
     start: float | None = None
+    # The capture's voiceprint gate judged this not to be the operator. Carried
+    # rather than dropped at the loader, because the substrate keeps everything and
+    # the renderer decides what the model sees — the operator can overrule a gate
+    # decision only against a record that still contains it.
+    gated: bool = False
 
 
 @dataclass
@@ -92,9 +97,19 @@ class Transcript:
         the model cannot leak an attribution it was never shown. This is the
         difference between instructing a model not to do something and making it
         unable to; the mechanical checks in summarize.py depend on the latter.
+
+        Gated turns are excluded here, and the same reasoning decides where. The
+        capture no longer removes them — it marks them, so the operator can overrule
+        a gate that deleted a colleague — which means something downstream has to
+        keep them out of the prompt. Doing it in the renderer rather than the loader
+        is what lets both be true at once: the record holds every word, and the model
+        is handed only what the gate accepted. An instruction not to summarise
+        certain lines would be a request; omitting them is a fact.
         """
         lines = []
         for t in self.turns:
+            if t.gated:
+                continue
             if self.attribution == NONE or not t.speaker:
                 lines.append(f"- {t.text}")
             else:
@@ -214,7 +229,8 @@ def load_capture(path: Path) -> Transcript:
         source=data.get("source", path.stem),
         attribution=data["attribution"],
         turns=[
-            Turn(text=t["text"], speaker=t.get("speaker"), start=t.get("start"))
+            Turn(text=t["text"], speaker=t.get("speaker"), start=t.get("start"),
+                 gated=bool(t.get("gated")))
             for t in data["turns"]
         ],
         gate=data.get("voiceprint"),

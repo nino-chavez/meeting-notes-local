@@ -806,6 +806,25 @@ def drop_bled(segs, mic, tap, b, label):
     return kept
 
 
+class MergedTurn(NamedTuple):
+    """One turn on the merged session clock, with whatever the gate said about it.
+
+    A named type rather than a positional tuple, because it grew from four fields to
+    seven and the fifth caller unpacked the old shape into the new one. Positional
+    rows of this width are a defect waiting for a reader: `merged[4]` says nothing,
+    and adding a field silently breaks every unpacker at once. The gate fields carry
+    defaults so an ungated capture constructs the same rows it always did.
+    """
+
+    start: float
+    end: float
+    label: str
+    text: str
+    gated: bool = False
+    gate_score: float | None = None
+    gate_reason: str | None = None
+
+
 class Voiceprint(NamedTuple):
     """A profile, its threshold, its manifest, and a LOADED encoder.
 
@@ -976,8 +995,33 @@ def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
     # Dropping them to keep the room out would lose exactly those. Keeping them
     # leaks whatever short utterances the room contributed, and that cost is
     # stated above rather than hidden in a default.
-    keep = set(result.kept) | set(result.unscorable)
-    return [s for i, s in enumerate(segs) if i in keep], {
+    # MARKED, not removed. This was a filter that returned survivors and discarded
+    # the rest, and the change comes from measured evidence in a sibling project:
+    # film-room's DP-3 ("Queue, not verdicts") records that no automated ranker there
+    # earned unattended trust, and its interaction contract holds that automated
+    # ordering "remains advice, never an automatic editorial decision".
+    #
+    # That does not transfer wholesale — its ranker judges taste, where this asks a
+    # factual question about who spoke — but the part that does transfer is the part
+    # that matters here. The gate's own failure mode is deleting a colleague from a
+    # record of a meeting that cannot be re-run, and the operator is the only one who
+    # can say whether a voice near the microphone was a participant. Deciding that
+    # irreversibly, inside a filter, put the answer beyond reach.
+    #
+    # So the substrate keeps everything and the renderer omits the gated turns —
+    # film-room's DP-4, "analysis is the substrate; outputs are renderers". The notes
+    # model still never sees them, `notes/transcript.py` makes sure of it, and the
+    # transcript on disk can still be read by the one person entitled to decide.
+    rejected_at = {r.index: r for r in result.rejected}
+    marked = []
+    for i, s in enumerate(segs):
+        r = rejected_at.get(i)
+        if r is None:
+            marked.append(s)
+            continue
+        marked.append({**s, "gated": True, "gate_score": round(r.score, 3),
+                       "gate_reason": r.reason})
+    return marked, {
         "applied": True,
         "why": None,
         "kept": len(result.kept),
@@ -1127,8 +1171,11 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
         s = stats.get(leg.name)
         offset = (s["first_arrival"] - origin) if s else 0.0
         for seg in segs:
-            merged.append((seg["start"] + offset, seg["end"] + offset, label, seg["text"]))
-    merged.sort(key=lambda r: r[0])
+            merged.append(MergedTurn(
+                seg["start"] + offset, seg["end"] + offset, label, seg["text"],
+                seg.get("gated", False), seg.get("gate_score"),
+                seg.get("gate_reason")))
+    merged.sort(key=lambda r: r.start)
 
     if not merged:
         print("  (no speech detected on either leg)")
@@ -1147,8 +1194,12 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
             "  once as Me and once as Them. That is the contamination, not a\n"
             "  transcription bug. Re-run on headphones to see the real split.\n"
         )
-    for start, _end, label, text in merged:
-        print(f"  [{int(start // 60):02d}:{start % 60:05.2f}] {label:4s} {text}")
+    for t in merged:
+        # Shown with a marker rather than hidden. A line the operator cannot see is a
+        # line they cannot overrule.
+        mark = f"  [gated {t.gate_score:+.3f}]" if t.gated else ""
+        print(f"  [{int(t.start // 60):02d}:{t.start % 60:05.2f}] "
+              f"{t.label:4s} {t.text}{mark}")
 
 
 def sha256(path):
@@ -1566,18 +1617,26 @@ def write_transcript(path, merged, b, gating=None):
         "turns": [
             # Labels are dropped, not merely marked, when the split is fiction.
             {
-                "start": round(start, 2),
+                "start": round(t.start, 2),
                 # The end was carried this far and then dropped, which left every
                 # consumer inferring it from the next turn's start — swallowing
                 # each pause, and at a speaker change the next speaker's onset
                 # too. That silently corrupted one dataset in this project
                 # before anyone noticed, and it is the reason the voiceprint
                 # measurements had to re-derive boundaries from voicing.
-                "end": round(end, 2),
-                "speaker": None if unattributed else label,
-                "text": text,
+                "end": round(t.end, 2),
+                "speaker": None if unattributed else t.label,
+                "text": t.text,
+                # Present only on gated turns, so an ungated capture's artifact is
+                # byte-for-byte what it was before the gate existed. `gated` means
+                # the voiceprint judged this not to be the operator; the renderer
+                # omits it and the operator can overrule it, because a colleague
+                # near the microphone is indistinguishable from interference until
+                # a person decides which.
+                **({"gated": True, "gate_score": t.gate_score,
+                    "gate_reason": t.gate_reason} if t.gated else {}),
             }
-            for start, end, label, text in merged
+            for t in (MergedTurn(*row) for row in merged)
         ],
     }
     path.write_text(json.dumps(payload, indent=2))

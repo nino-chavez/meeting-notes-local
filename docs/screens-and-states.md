@@ -276,6 +276,69 @@ panel. The panel shows a level meter, which is a reading, and no other motion.
 
 ---
 
+## J. Shell startup failure
+
+Not a surface anyone designs for and the one most likely to be the operator's first
+encounter. Three runtimes sit in this process tree — a Swift tap, a Python ASR
+daemon, and the Rust/TS shell (`DESIGN.md § Shell decision`) — and any of them can be
+missing on a machine that has never run the CLI.
+
+| State | Trigger |
+|---|---|
+| `runtime-missing` | The Swift sidecar, Python, or the ASR weights are absent |
+| `service-timeout` | A child process started and never reported ready |
+| `diagnostic-written` | The failure is recorded locally, with its path shown |
+| `retry` | Ordered recovery, one action at a time |
+| `reinstall` | Recovery beyond what the app can do for itself |
+
+**The rule is: never fail before rendering an operator-readable window.** Stop
+partial child work, preserve any captured audio, write a local diagnostic, and give
+ordered recovery. Taken from film-room's component catalog, where it is backed by
+package-level fault injection naming each runtime path
+(`~/Workspace/dev/wip/film-room/docs/design-system/component-state-catalog.md`) —
+a project one stage further along than this one, which found that a three-runtime
+desktop app fails in exactly this way and that a silent failure is indistinguishable
+from a corrupt install.
+
+The stake is higher here than there. A failure during capture is a failure during a
+meeting that cannot be re-run, so preserving the audio outranks reporting the error
+cleanly: a diagnostic with no recording is worse than a recording with no diagnostic.
+
+---
+
+## Rendered transcript text is untrusted input
+
+Not a surface, a rule that binds several of them. Every note, transcript and
+participant name rendered into the webview is a string this app did not author — it
+came out of an ASR model listening to whoever was on the call. film-room reached the
+same conclusion for filenames and local database strings and states it as "treat
+every file/database/API string as untrusted", using text nodes where possible and a
+single shared escape boundary otherwise.
+
+Here the input is less trusted still, because a person on a call can choose what to
+say. Text nodes and `textContent` are the default; anything that cannot use them
+passes through one escape boundary; CSP permits only the shipped scripts. This is
+recorded in the inventory rather than left to implementation because "render the
+transcript" appears on four surfaces (C, D, E, F) and a boundary applied on three of
+them is not a boundary.
+
+---
+
+## What a review of this app may be built from
+
+film-room served a shell with placeholder interiors for an operator review, and the
+operator "reasonably mistook the Ingest placeholder for a non-working folder
+chooser" — recorded in its Decision 0047, which concluded that "a shell fixture
+cannot serve as the next operator encounter."
+
+So the build order here is **one working surface at a time over real data**, not a
+shell with empty rooms. A placeholder does not read as unfinished; it reads as
+broken, and it spends the operator's review on a question the team already knew the
+answer to. The first thing worth showing is the menubar item over a real capture that
+produces a real note — narrow, and true end to end.
+
+---
+
 ## L4 templates derived from the above
 
 Five, and no more until an L5 state demands a sixth:

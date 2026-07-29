@@ -2101,14 +2101,20 @@ def _ground_truth_controls() -> bool:
                                 "operating_point": {"target_frr": 0.05}},
                                g_embed)
         kept, rep = dc.drop_offprint(mixed, mixed_audio, vp_fix, clean_b, "mic")
-        check("the gate drops the voice that is not the operator",
-              [s["start"] for s in kept], [1.0, 7.0, 19.0, 25.0],
-              shown="intruder at 13.0s gone")
-        check("and keeps the segment too short to judge rather than deciding it",
-              25.0 in [s["start"] for s in kept])
-        check("the surviving list is the original objects in the original order",
-              all(a is b for a, b in zip(kept, [mixed[i] for i in (0, 1, 3, 4)],
-                                         strict=True)))
+        #     MARKED, not removed — film-room's DP-3 applied to the one part of it
+        #     that transfers. The operator is the only one who can say whether a
+        #     voice near the microphone was a participant, and a filter that
+        #     discarded the segment put that answer beyond reach.
+        check("nothing is discarded — every segment survives the gate",
+              [s["start"] for s in kept], [1.0, 7.0, 13.0, 19.0, 25.0])
+        check("and the one that is not the operator is marked, with its score",
+              [(s["start"], s.get("gate_score")) for s in kept if s.get("gated")],
+              [(13.0, rep["rejections"][0]["score"])],
+              shown="13.0s marked")
+        check("the segment too short to judge is neither marked nor decided",
+              any(s["start"] == 25.0 and not s.get("gated") for s in kept))
+        check("marking does not mutate the caller's own segment objects",
+              all("gated" not in s for s in mixed))
         #     The encoder travels in the Voiceprint, so production does not build it
         #     after the meeting. Passing it explicitly must still work, for fixtures.
         check("the encoder carried in the profile is used when none is passed",
@@ -2172,6 +2178,27 @@ def _ground_truth_controls() -> bool:
         loaded_note = nt.load_capture(gated_p)
         check("the notes loader carries the gate report through",
               bool(loaded_note.gate) and loaded_note.gate["rejected"] == 1)
+
+        #     The substrate keeps every word; the renderer decides what the model
+        #     sees. Both halves have to hold, or the change from delete-to-mark
+        #     either loses the record or leaks the room into the notes.
+        both_p = d / "transcript-marked.json"
+        dc.write_transcript(both_p, [
+            (1.0, 4.0, "Me", "the part he said", False, None, None),
+            (5.0, 8.0, "Me", "the part someone else said", True, 0.21,
+             "below_profile"),
+        ], clean_b, dc.voiceprint_provenance(vp, rep))
+        marked_doc = json.loads(both_p.read_text())
+        check("a gated turn stays in the artifact, with its score",
+              (len(marked_doc["turns"]), marked_doc["turns"][1]["gate_score"]),
+              (2, 0.21), shown="2 turns, one marked")
+        check("and an ungated turn carries no gate keys at all",
+              set(marked_doc["turns"][0]) == {"start", "end", "speaker", "text"})
+        rendered = nt.load_capture(both_p).render()
+        check("but the model is handed only what the gate accepted",
+              ("the part he said" in rendered,
+               "someone else" in rendered), (True, False),
+              shown="kept in, gated out")
         check("and turns a co-located-speaker alert into a human warning",
               any("recurring voice" in w for w in nt.Transcript(
                   source="x", attribution="channel",
