@@ -53,6 +53,36 @@ import aec_bound as ab
 import dual_capture as dc
 
 
+def observed_phases(doc: dict) -> dict:
+    """The schedule with each phase's OBSERVED boundaries resolved.
+
+    Read straight from the document rather than through `aec_bound.load_protocol`,
+    which binds the schedule to the mic and system WAVs by digest. Every condition
+    this measures is derived audio — that is the point — so a binding check would
+    refuse all of them. The passages and the cue display times are what is needed,
+    and both are in the file.
+
+    Boundaries come from when each cue actually appeared, matching
+    `load_protocol`'s rule so the two tools attribute the same audio to the same
+    interval: an instruction stands until the next cue replaces it, so a late
+    successor extends its predecessor. Shared here rather than reimplemented,
+    because two copies of this drift and the drift is invisible.
+    """
+    kept = doc.get("phases") or []
+    for i, ph in enumerate(kept):
+        nxt = kept[i + 1] if i + 1 < len(kept) else None
+        shown = ph.get("shown_at_s")
+        ph["obs_start"] = ph["start"] if shown is None else shown
+        nxt_shown = nxt.get("shown_at_s") if nxt else None
+        ph["obs_end"] = ph["end"] if nxt_shown is None else nxt_shown
+    return {"phases": kept, "cue_margin_s": doc["cue_margin_s"]}
+
+
+def transcribe_file(wav: Path, whisper: str, language: str) -> list[dict]:
+    """One condition's WAV through the same ASR the capture uses."""
+    return dc.transcribe(ab.load_wav(wav), whisper, language)
+
+
 def interval_text(segs: list[dict], lo: float, hi: float) -> str:
     """Everything transcribed that overlaps this interval.
 
@@ -132,17 +162,7 @@ def main() -> int:
     doc = json.loads(args.protocol.read_text())
     if doc.get("schema") != "capture-protocol/1":
         p.error(f"{args.protocol}: expected schema capture-protocol/1")
-    # Read directly rather than through load_protocol, which binds to the mic and
-    # system WAVs by digest. Conditions are derived audio — that is the point of
-    # this tool — so a binding check would refuse every one of them. The passages
-    # and cue times are what is needed here, and both are in the file.
-    kept = doc.get("phases") or []
-    for i, ph in enumerate(kept):
-        nxt = kept[i + 1] if i + 1 < len(kept) else None
-        ph["obs_start"] = ph.get("shown_at_s") if ph.get("shown_at_s") is not None else ph["start"]
-        ph["obs_end"] = (nxt.get("shown_at_s") if nxt and nxt.get("shown_at_s") is not None
-                         else ph["end"])
-    protocol = {"phases": kept, "cue_margin_s": doc["cue_margin_s"]}
+    protocol = observed_phases(doc)
 
     far_segs = []
     if args.far:
@@ -158,7 +178,7 @@ def main() -> int:
         if not wav.exists():
             p.error(f"condition {name}: no {wav}")
         audio = ab.load_wav(wav)
-        segs = dc.transcribe(audio, args.whisper, args.language)
+        segs = transcribe_file(wav, args.whisper, args.language)
         rows = measure(protocol, segs, far_segs)
         results[name] = {"audio": str(wav), "sha256": ab.sha256(wav),
                          "seconds": round(len(audio) / ab.RATE, 2), "intervals": rows}

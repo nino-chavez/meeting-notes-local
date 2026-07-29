@@ -130,9 +130,12 @@ tapped reference, no retention or admission figures — are closed by the real t
 above. What replaced them is larger:
 
 - **One point in the operating matrix, and a hostile one.** A single take, one
-  seat, one volume, one room, with the far end 7 dB louder than the operator. The
-  level sweep is the obvious next axis, and until it runs there is no supported
-  envelope — only one measurement inside it.
+  seat, one volume, one room, with the operator measured at **−7.0 dB** against the
+  echo. [`../sweep.py`](../sweep.py) runs the axis — same protocol at several
+  playback levels, with the ratio measured per take rather than read off the volume
+  slider, since nothing about a system volume of 50 predicts what arrives at the
+  microphone. Until it runs there is no supported envelope, only one measurement
+  inside it.
 - **Retention is not usable yet.** 13.3% recall does not make a transcript. Whether
   that is the level ratio, filter convergence, the microphone, or a floor on what
   cancellation can do for ASR is exactly what the matrix is for.
