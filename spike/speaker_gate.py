@@ -41,8 +41,17 @@ record that it did.
 
 Run:
     python spike/speaker_gate.py --self-test
-    python spike/speaker_gate.py --calibrate SEGMENTS.json AUDIO.wav \\
-        --against SEGMENTS.json AUDIO.wav
+
+    # One --calibrate per sitting; the plural is the measurement, not caution.
+    python spike/speaker_gate.py \\
+        --calibrate day1/mic-segments.json day1/mic.wav \\
+        --calibrate day2/mic-segments.json day2/mic.wav \\
+        --against household/mic-segments.json household/mic.wav \\
+        --enroll-out ~/voiceprint.json --target-frr 0.05
+
+Then `dual_capture.py --voiceprint ~/voiceprint.json` gates a real capture with
+it. The threshold lives inside that file rather than beside it, so no caller can
+substitute a plausible constant for a measured one.
 """
 
 from __future__ import annotations
@@ -56,6 +65,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# The artifact readers and their refusals live in aec_bound, which retention.py
+# and sweep.py already import for the same reason. It holds no echo state at
+# module scope and imports this file only inside its own controls, so the
+# direction is one-way in practice.
+import aec_bound as ab
 
 RATE = 16_000
 ECAPA_SOURCE = "speechbrain/spkrec-ecapa-voxceleb"
@@ -484,24 +501,153 @@ def leave_one_out_scores(
     return out
 
 
+def leave_one_sitting_out_scores(
+    sittings: list[tuple[list[np.ndarray], list[float]]]
+) -> list[float]:
+    """Score each sitting's segments against a profile built from the others.
+
+    This is the measurement `leave_one_out_scores` cannot make, and the difference
+    is not a refinement. Leaving out one *segment* still scores it against a
+    centroid holding the rest of its own recording — same room, same distance,
+    same microphone gain, same voice on the same day. Session bias survives
+    intact, and it is the larger of the two: across three labelled speakers at
+    three operating points, a single-sitting threshold sat above the honest one by
+    0.006 to 0.181, while self-enrollment bias is worth a fraction of that.
+
+    Leaving out the whole sitting is what puts real time between the profile and
+    what it judges, which is the condition the gate meets in production — a
+    voiceprint enrolled last week judging today's meeting.
+
+    Needs at least two sittings; with one there is nothing to hold out, and the
+    caller has to fall back and say so.
+    """
+    if len(sittings) < 2:
+        raise ValueError(
+            f"leave-one-sitting-out needs at least 2 sittings, got {len(sittings)}")
+    out = []
+    for i, (emb, _dur) in enumerate(sittings):
+        rest = [s for j, s in enumerate(sittings) if j != i]
+        rest_emb = [e for s in rest for e in s[0]]
+        rest_dur = [d for s in rest for d in s[1]]
+        held_out = enroll(rest_emb, rest_dur)
+        out.extend(score(held_out, e) for e in emb)
+    return out
+
+
 def load_wav(path: Path) -> np.ndarray:
-    """16 kHz mono s16le, the format both capture legs write."""
+    """16 kHz mono s16le, the format both capture legs write.
+
+    float32 rather than aec_bound's float64: ECAPA is a float32 network, and
+    `torch.from_numpy` preserves dtype, so a double array reaches
+    `encode_batch` as a DoubleTensor and raises inside the encoder rather than
+    here. Casting at the loader keeps the whole module in the one dtype the
+    embedding path accepts.
+    """
+    return ab.load_wav(path).astype(np.float32)
+
+
+def load_segments(path: Path, audio_path: Path, leg: str = "mic") -> list[dict]:
+    """One leg's segments, bound by digest to the recording they index.
+
+    This delegates rather than parsing, and the reason is the whole reason it
+    exists. An earlier version here accepted any bare JSON list with `start` and
+    `end` keys — which is what a merged `transcript.json` also looks like once
+    you stop at those two keys, and what a *different take's* segment file looks
+    like too. Both load silently and every segment then points at audio it does
+    not describe.
+
+    `aec_bound.load_segments` already refuses six specific ways that can go
+    wrong, each with a control behind it: a bare list, a merged transcript, the
+    wrong leg's timeline, a list that has been through `drop_bled`, a digest that
+    does not match the WAV, and overlapping or unordered spans. Keeping a second,
+    weaker copy of that check in this file is how the two drift, and the drift is
+    invisible — a permissive loader does not fail, it reports the wrong answer.
+
+    The digest and sample count come from the WAV itself, so the caller cannot
+    pass a binding that agrees with the segments but not with the audio.
+    """
+    return ab.load_segments(
+        Path(path), digest=ab.sha256(Path(audio_path)),
+        samples=_wav_samples(Path(audio_path)), leg=leg)
+
+
+def _wav_samples(path: Path) -> int:
+    """Frame count without decoding the file."""
     with wave.open(str(path)) as w:
-        if w.getframerate() != RATE or w.getnchannels() != 1:
-            raise SystemExit(
-                f"{path}: expected {RATE} Hz mono, got {w.getframerate()} Hz "
-                f"with {w.getnchannels()} channel(s)"
-            )
-        raw = w.readframes(w.getnframes())
-    return np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        return w.getnframes()
 
 
-def load_segments(path: Path) -> list[dict]:
-    """A list of `{"start": seconds, "end": seconds}`, as the capture legs emit."""
-    segs = json.loads(path.read_text())
-    if not isinstance(segs, list) or not all("start" in s and "end" in s for s in segs):
-        raise SystemExit(f"{path}: expected a list of segments with start and end")
-    return segs
+PROFILE_SCHEMA = "voiceprint/1"
+
+
+def save_profile(path: Path, profile: Profile, threshold: float, *,
+                 operating_point: dict, sittings: list[dict],
+                 encoder: str = ECAPA_SOURCE) -> None:
+    """Persist a voiceprint with the threshold and what produced both.
+
+    The threshold travels **inside** the file, not beside it. Every other
+    arrangement lets a caller supply its own number, and this module's entire
+    position is that a plausible constant is indistinguishable from a measured
+    one to every later reader. A profile whose threshold is a property of the file
+    cannot be gated on an invented one.
+
+    `sittings` is the enrollment provenance, and it is required rather than
+    optional because of what it makes visible. A threshold derived from a single
+    sitting sat ABOVE the multi-sitting one in all nine comparisons available, by
+    0.006 to 0.181 — it drops more of the operator than its target asked for. That
+    bias is in the harmful direction and it is invisible in the number itself, so
+    the count of independent sittings has to be carried with it and stated at
+    every use. Optional provenance would be absent exactly when it mattered.
+    """
+    if not sittings:
+        raise ValueError(
+            "a profile with no recorded enrollment material cannot state how many "
+            "sittings produced it, and a single-sitting threshold is measurably "
+            "over-tight — see leave_one_out_scores")
+    path.write_text(json.dumps({
+        "schema": PROFILE_SCHEMA,
+        "encoder": encoder,
+        "centroid": profile.centroid.tolist(),
+        "n_enrolled": profile.n_enrolled,
+        "n_excluded": profile.n_excluded,
+        "seconds": round(profile.seconds, 2),
+        "cohesion": round(profile.cohesion, 4),
+        "spread": round(profile.spread, 4),
+        "threshold": threshold,
+        "operating_point": operating_point,
+        "sittings": sittings,
+    }, indent=2) + "\n")
+
+
+def load_profile(path: Path) -> tuple[Profile, float, dict]:
+    """Read a saved voiceprint, its threshold, and the manifest behind them.
+
+    Refuses rather than defaults on every missing field. A gate that falls back to
+    a built-in threshold when the file does not carry one is the failure this
+    module was written to prevent, arriving through the loader instead of through
+    the caller.
+    """
+    doc = json.loads(Path(path).read_text())
+    if doc.get("schema") != PROFILE_SCHEMA:
+        raise SystemExit(f"{path}: expected schema {PROFILE_SCHEMA}, "
+                         f"got {doc.get('schema')!r}")
+    if doc.get("encoder") != ECAPA_SOURCE:
+        raise SystemExit(
+            f"{path} was enrolled with {doc.get('encoder')!r} but this build uses "
+            f"{ECAPA_SOURCE!r}. Cosines between two embedding spaces are not "
+            f"comparable, so the threshold means nothing here. Re-enroll.")
+    for field in ("centroid", "threshold", "cohesion", "spread", "sittings"):
+        if doc.get(field) is None:
+            raise SystemExit(f"{path}: no {field}. This is not a usable profile.")
+    profile = Profile(
+        centroid=_unit(np.asarray(doc["centroid"], dtype=np.float64)),
+        n_enrolled=int(doc["n_enrolled"]),
+        n_excluded=int(doc["n_excluded"]),
+        seconds=float(doc["seconds"]),
+        cohesion=float(doc["cohesion"]),
+        spread=float(doc["spread"]),
+    )
+    return profile, float(doc["threshold"]), doc
 
 
 # ---------------------------------------------------------------------------
@@ -773,6 +919,99 @@ def run_self_test() -> int:
         == list(range(len(short_segs))),
     )
 
+    print("\n=== sittings ===\n")
+    # Two sittings of the same voice, each with its own small shared offset — one
+    # room, one gain setting, one day's worth of whatever a voice does. That
+    # offset is exactly what leaving out a single segment cannot see, because the
+    # rest of its own sitting carries it too.
+    def sitting(direction: np.ndarray, offset: np.ndarray, n: int) -> tuple[list, list]:
+        vecs = [_unit(direction + 0.03 * offset + 0.02 * rng.standard_normal(_DIM))
+                for _ in range(n)]
+        return vecs, [4.0] * n
+
+    session_a = _unit(rng.standard_normal(_DIM))
+    session_b = _unit(rng.standard_normal(_DIM))
+    sit_a = sitting(directions[0], session_a, 10)
+    sit_b = sitting(directions[0], session_b, 10)
+    pooled_emb = sit_a[0] + sit_b[0]
+    pooled_dur = sit_a[1] + sit_b[1]
+    loo = leave_one_out_scores(pooled_emb, pooled_dur)
+    loso = leave_one_sitting_out_scores([sit_a, sit_b])
+    check(
+        "holding out the whole sitting scores lower than holding out one segment, "
+        "which is the session bias a single-sitting threshold cannot see",
+        float(np.mean(loso)) < float(np.mean(loo)),
+        f"leave-one-sitting-out {np.mean(loso):.3f} vs "
+        f"leave-one-out {np.mean(loo):.3f}",
+    )
+    check(
+        "so a threshold from one sitting sits ABOVE the honest one — the harmful "
+        "direction, dropping more of the operator than its target asked",
+        calibrate(loo, 0.05)["threshold"] > calibrate(loso, 0.05)["threshold"],
+        f"single-sitting {calibrate(loo, 0.05)['threshold']:.3f} vs "
+        f"multi-sitting {calibrate(loso, 0.05)['threshold']:.3f}",
+    )
+    check(
+        "one sitting cannot be held out at all, and says so rather than "
+        "silently falling back to the weaker measurement",
+        _raises(lambda: leave_one_sitting_out_scores([sit_a]), ValueError),
+    )
+    check(
+        "every segment is scored exactly once across the held-out sittings",
+        len(loso) == len(pooled_emb),
+        f"{len(loso)} scores for {len(pooled_emb)} segments",
+    )
+
+    print("\n=== the profile file ===\n")
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pp = Path(tmp) / "voiceprint.json"
+        point = {"threshold": 0.61, "target_frr": 0.05, "n_sittings": 2}
+        save_profile(pp, operator, 0.61, operating_point=point,
+                     sittings=[{"audio": "a.wav"}, {"audio": "b.wav"}])
+        back, thresh, doc = load_profile(pp)
+        check(
+            "a profile round-trips through the file with its centroid intact",
+            float(back.centroid @ operator.centroid) > 1 - 1e-9,
+            f"cosine to itself {float(back.centroid @ operator.centroid):.9f}",
+        )
+        check(
+            "the threshold travels inside the file, so no caller supplies its own",
+            abs(thresh - 0.61) < 1e-9 and doc["operating_point"]["n_sittings"] == 2,
+            f"threshold {thresh}",
+        )
+        check(
+            "and the spread comes back too — without it every rejection reads as "
+            "confident and no close call can be reported",
+            abs(back.spread - operator.spread) < 1e-4,
+            f"{back.spread:.4f} vs {operator.spread:.4f}",
+        )
+        check(
+            "enrollment provenance is required, because a profile that cannot say "
+            "how many sittings built it hides the one bias that matters",
+            _raises(lambda: save_profile(pp, operator, 0.61, operating_point=point,
+                                         sittings=[]), ValueError),
+        )
+
+        wrong_space = json.loads(pp.read_text())
+        wrong_space["encoder"] = "some/other-model"
+        (Path(tmp) / "other.json").write_text(json.dumps(wrong_space))
+        check(
+            "a profile from another embedding space is refused — its cosines are "
+            "not comparable, so its threshold means nothing here",
+            _raises(lambda: load_profile(Path(tmp) / "other.json"), SystemExit),
+        )
+
+        no_thresh = json.loads(pp.read_text())
+        del no_thresh["threshold"]
+        (Path(tmp) / "bare.json").write_text(json.dumps(no_thresh))
+        check(
+            "a profile with no threshold is refused rather than defaulted — a "
+            "built-in fallback is the exact failure this module exists to prevent",
+            _raises(lambda: load_profile(Path(tmp) / "bare.json"), SystemExit),
+        )
+
     outcome = (
         "all controls behaved as specified" if not failures else f"{failures} control(s) wrong"
     )
@@ -788,54 +1027,87 @@ def _raises(fn, exc) -> bool:
     return False
 
 
-def run_calibrate(args) -> int:
-    """Turn a recording of the operator into the threshold this file cannot assume.
+def _embed_pair(pair: list[Path], embed, leg: str = "mic") -> tuple[list, list, dict]:
+    """Embed one (segments, audio) recording and return its provenance with it."""
+    seg_p, wav_p = Path(pair[0]), Path(pair[1])
+    segs = load_segments(seg_p, wav_p, leg)
+    emb = [e for e in embed_segments(load_wav(wav_p), segs, embed) if e is not None]
+    dur = [s["end"] - s["start"] for s in segs if s["end"] - s["start"] >= MIN_SCORABLE_S]
+    return emb, dur, {
+        "segments": str(seg_p), "audio": str(wav_p),
+        "audio_sha256": ab.sha256(wav_p), "audio_samples": _wav_samples(wav_p),
+        "scorable_segments": len(emb), "scorable_seconds": round(sum(dur), 1),
+    }
 
-    The operator's segments are scored leave-one-out against a profile built
-    from the others, which is the distribution the threshold is a quantile of.
-    `--against` supplies speech that is known not to be the operator and reports
-    what each operating point would admit of it.
+
+def run_calibrate(args) -> int:
+    """Turn recordings of the operator into the threshold this file cannot assume.
+
+    Repeatable, because one sitting is not enough and the file says why: a
+    threshold from a single recording sat above the honest one in all nine
+    comparisons available, which drops more of the operator than its target asks.
+    With two or more sittings the operator's distribution is measured
+    leave-one-*sitting*-out, so the profile judging each segment has real time
+    between it and the material it was built from — the condition production
+    meets. With one, it falls back to leave-one-segment-out and says the number
+    carries a bias in the harmful direction.
+
+    `--against` supplies speech known not to be the operator and prices each
+    operating point in what it would admit of it.
     """
     embed = load_encoder(args.model_dir)
 
-    op_segs = load_segments(args.calibrate[0])
-    op_audio = load_wav(args.calibrate[1])
-    op_emb = [e for e in embed_segments(op_audio, op_segs, embed) if e is not None]
-    op_dur = [s["end"] - s["start"] for s in op_segs if s["end"] - s["start"] >= MIN_SCORABLE_S]
-    # One more than enrollment needs, because the leave-one-out pass below
-    # enrols on n-1. Guarding at the enrollment minimum lets a three-segment
-    # recording through and fails inside the loop instead, on the one path this
-    # module exists to serve.
-    if len(op_emb) <= MIN_ENROLL_SEGMENTS:
-        raise SystemExit(
-            f"only {len(op_emb)} segments reach {MIN_SCORABLE_S}s — at least "
-            f"{MIN_ENROLL_SEGMENTS + 1} are needed to score any one of them against the rest"
-        )
+    sittings, manifest = [], []
+    for pair in args.calibrate:
+        emb, dur, prov = _embed_pair(pair, embed)
+        # One more than enrollment needs: a leave-one-out pass enrols on n-1, so
+        # guarding at the enrollment minimum lets a three-segment recording
+        # through and fails inside the loop instead, on the one path this module
+        # exists to serve.
+        if len(emb) <= MIN_ENROLL_SEGMENTS:
+            raise SystemExit(
+                f"{pair[1]}: only {len(emb)} segments reach {MIN_SCORABLE_S}s — at "
+                f"least {MIN_ENROLL_SEGMENTS + 1} are needed to score any one of "
+                f"them against the rest")
+        sittings.append((emb, dur))
+        manifest.append(prov)
+
+    op_emb = [e for s in sittings for e in s[0]]
+    op_dur = [d for s in sittings for d in s[1]]
     profile = enroll(op_emb, op_dur)
-    own = leave_one_out_scores(op_emb, op_dur)
+
+    multi = len(sittings) >= 2
+    own = (leave_one_sitting_out_scores(sittings) if multi
+           else leave_one_out_scores(op_emb, op_dur))
+    held = "leave-one-sitting-out" if multi else "leave-one-out, single sitting"
 
     print("\n=== profile ===\n")
     print(f"  {profile.n_enrolled} segments, {profile.seconds:.0f}s, "
           f"{profile.n_excluded} excluded by the trim")
+    print(f"  {len(sittings)} sitting(s): "
+          f"{', '.join(str(p['scorable_segments']) for p in manifest)} scorable segments")
     print(f"  cohesion {profile.cohesion:.3f} ± {profile.spread:.3f}")
     print(f"  own scores: mean {np.mean(own):.3f}, p5 {np.percentile(own, 5):.3f} "
-          f"(leave-one-out, n={len(own)})")
+          f"({held}, n={len(own)})")
 
     other: list[float] = []
-    if args.against:
-        against_segs = load_segments(args.against[0])
-        other = [
+    for pair in args.against or []:
+        seg_p, wav_p = Path(pair[0]), Path(pair[1])
+        other.extend(
             score(profile, e)
-            for e in embed_segments(load_wav(args.against[1]), against_segs, embed)
-            if e is not None
-        ]
+            for e in embed_segments(load_wav(wav_p),
+                                    load_segments(seg_p, wav_p), embed)
+            if e is not None)
+    if other:
         print(f"  other-speaker scores: mean {np.mean(other):.3f}, "
               f"p95 {np.percentile(other, 95):.3f} (n={len(other)})")
 
     print("\n=== operating points ===\n")
     print(f"  {'operator dropped':>16}  {'threshold':>9}  {'room admitted':>13}")
+    points = {}
     for target in (0.01, 0.02, 0.05, 0.10, 0.20):
         c = calibrate(own, target, other or None)
+        points[target] = c
         far = "—" if c["false_admit_rate"] is None else f"{c['false_admit_rate']:.1%}"
         print(f"  {target:>15.0%}  {c['threshold']:>9.3f}  {far:>13}")
     if not other:
@@ -843,11 +1115,26 @@ def run_calibrate(args) -> int:
               "  A threshold chosen without it is a rejection rate, not a gate.")
     if len(own) < 30:
         print(f"\n  n={len(own)} is thin for a quantile — read the low targets as indicative.")
-    print("\n  These scores carry no time between the profile and what it judges. On\n"
-          "  labelled material that ran too strict in every comparison available, by\n"
-          "  0.006 to 0.181, so a threshold from one sitting drops more of the operator\n"
-          "  than its target asks. Material spanning several sittings fixes what this\n"
-          "  recording cannot.")
+    if not multi:
+        print("\n  ONE SITTING. These scores carry no time between the profile and what\n"
+              "  it judges. On labelled material that ran too strict in every comparison\n"
+              "  available, by 0.006 to 0.181, so this threshold drops more of the\n"
+              "  operator than its target asks. Record another sitting and pass a second\n"
+              "  --calibrate pair.")
+
+    if args.enroll_out:
+        if args.target_frr is None:
+            raise SystemExit(
+                "--enroll-out needs --target-frr: the file carries one threshold, and "
+                "which operating point it is has to be a choice on the record rather "
+                "than a default this module picked.")
+        chosen = calibrate(own, args.target_frr, other or None)
+        chosen["held_out"] = held
+        chosen["n_sittings"] = len(sittings)
+        save_profile(args.enroll_out, profile, chosen["threshold"],
+                     operating_point=chosen, sittings=manifest)
+        print(f"\n  wrote {args.enroll_out} — threshold {chosen['threshold']:.3f} at "
+              f"{args.target_frr:.0%} operator-dropped, {len(sittings)} sitting(s)")
     return 0
 
 
@@ -857,10 +1144,22 @@ def main() -> int:
     )
     p.add_argument("--self-test", action="store_true",
                    help="run the enrollment, gating and reporting controls")
-    p.add_argument("--calibrate", nargs=2, metavar=("SEGMENTS.json", "AUDIO.wav"), type=Path,
-                   help="operator speech captured on the microphone leg it will gate")
-    p.add_argument("--against", nargs=2, metavar=("SEGMENTS.json", "AUDIO.wav"), type=Path,
-                   help="speech known not to be the operator, to price each threshold")
+    p.add_argument("--calibrate", nargs=2, metavar=("SEGMENTS.json", "AUDIO.wav"),
+                   type=Path, action="append",
+                   help="operator speech captured on the microphone leg it will "
+                        "gate. Repeat for each sitting — one sitting yields a "
+                        "measurably over-tight threshold")
+    p.add_argument("--against", nargs=2, metavar=("SEGMENTS.json", "AUDIO.wav"),
+                   type=Path, action="append",
+                   help="speech known not to be the operator, to price each "
+                        "threshold. Repeatable")
+    p.add_argument("--enroll-out", type=Path,
+                   help="write the voiceprint and its threshold here, for "
+                        "dual_capture.py --voiceprint")
+    p.add_argument("--target-frr", type=float,
+                   help="the operating point to persist: the fraction of the "
+                        "operator's own speech the threshold may drop. Required "
+                        "with --enroll-out, and deliberately has no default")
     p.add_argument("--model-dir", type=Path, default=Path.home() / ".cache" / "speaker-gate",
                    help="where the ECAPA checkpoint is cached")
     args = p.parse_args()

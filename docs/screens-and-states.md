@@ -65,6 +65,7 @@ Visible while capturing. Small, positioned, dismissible to the menubar.
 | `device-changed` | Default input or output switched mid-meeting |
 | `drift` | The two streams' timestamps have diverged past threshold |
 | `bleed-detected` | The microphone is hearing the speakers; the Me/Them split is not trustworthy |
+| `gating-a-voice` | The voiceprint gate is repeatedly dropping one recurring voice that is not the operator |
 | `stopping` | Capture ending, buffers flushing |
 
 **`bleed-detected` is measured, not assumed** — added after the capture spike
@@ -93,6 +94,28 @@ gets a complete set of notes with no speaker labels — not a warning banner ove
 a lesser artifact, and not a refusal. The duplicated transcript stays available
 underneath and stays unpleasant to read, which is the argument for generating
 the note in precisely the case the capture spike called worst.
+
+**`gating-a-voice` exists because the gate can be right and still be wrong.**
+Added when the voiceprint gate was wired into the capture
+(`spike/dual_capture.py`, `drop_offprint`). The gate removes microphone speech
+that is not the operator, which is what fixes the 14.2% of merged turns that were
+the room — but a colleague sitting beside you is indistinguishable from
+interference until somebody decides which, and only the operator can. So the gate
+reports when most of what it dropped keeps coming back as *one* recurring voice,
+along with roughly how many seconds of that person's speech it removed.
+
+Microsoft Teams ships the same alert for the same reason, and it is the reason the
+gate returns rejections rather than a filtered list. **A gate that silently
+deletes a real participant is worse than the contamination it replaces**, because
+the transcript then omits speech with no record that it did — and a note is read
+by someone who was not in the room and cannot tell.
+
+This is a state, not a modal. It changes nothing about the capture; it tells the
+operator something only they can adjudicate, and it must survive to the
+post-meeting note rather than living only in a HUD nobody had open. Two segments
+of the design follow from that: the count belongs in `E. Note detail`'s `ready`
+state as well, and the accent rule forbids colouring it — the accent means live
+capture and nothing else, so this reads as neutral foreground plus text.
 
 **`tap-lost`, `device-changed` and `drift` are states on this surface, not error
 dialogs.** They are expected conditions across a 60-minute capture, and the

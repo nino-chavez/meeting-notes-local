@@ -62,6 +62,17 @@ TAP_BIN = REPO / "capture" / "audiotee" / ".build" / "release" / "audiotee"
 ENVELOPE_HZ = 100
 BLEED_MAX_LAG_S = 0.5
 
+# Above this whole-capture positive correlation the Me/Them split is fiction and
+# the transcript stops claiming one. Named rather than repeated: this number
+# decided three things independently — the console verdict, the warning about
+# doubled utterances, and whether write_transcript clears every speaker label —
+# and a fourth now depends on it, since the voiceprint gate must run exactly when
+# a label is being claimed. Four literal 0.5s that have to agree is a drift
+# waiting to happen, and the drift would be silent in the direction that matters:
+# labels cleared while the gate still deletes the operator to protect them.
+BLEED_CONTAMINATED_R = 0.5
+BLEED_MODERATE_R = 0.25
+
 # Independent hardware clocks typically differ by tens of ppm, so a run has to
 # resolve that scale before it can report a drift value rather than a bound.
 HARDWARE_DRIFT_PPM = 50
@@ -481,6 +492,20 @@ def bleed(mic, tap):
     }
 
 
+def contaminated(b):
+    """Whether this capture's Me/Them split is fiction.
+
+    positive_r, not abs(peak_r). An acoustic path ADDS the far end to the mic, so
+    bleed is positive correlation; a strong negative peak is turn-taking, which is
+    the signature of a clean headphones capture. Judging on absolute value
+    condemns exactly the captures this verdict exists to certify — two perfectly
+    complementary legs give peak_r = -1.0 and were once reported as contaminated.
+
+    `None` means nothing played, so nothing could leak. Not contaminated.
+    """
+    return b is not None and b["positive_r"] > BLEED_CONTAMINATED_R
+
+
 def write_wav(path, audio):
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
@@ -780,6 +805,102 @@ def drop_bled(segs, mic, tap, b, label):
     return kept
 
 
+def load_voiceprint(path, model_dir):
+    """The operator's profile, its threshold, and where the encoder is cached.
+
+    Loaded before capture starts, not before the transcript is filtered. A bad
+    path or a profile from a different embedding space should cost the operator an
+    error message, not a meeting — by the time the gate runs, the audio is
+    recorded and the ASR has already spent minutes on it.
+    """
+    import speaker_gate as sg
+
+    profile, threshold, doc = sg.load_profile(Path(path))
+    doc["model_dir"] = model_dir
+    return profile, threshold, doc
+
+
+def drop_offprint(segs, mic, voiceprint, b, label):
+    """Remove mic segments that are not the operator's voice.
+
+    The third and last filter on the microphone leg, and it asks the third
+    question. `drop_unvoiced` asks whether audio is behind a segment.
+    `drop_bled` asks whether that audio is the far end coming back through the
+    room. This asks whether it is the operator at all — the case both of those
+    are blind to, because a colleague at the next desk is voiced and is not the
+    far end. Measured on the 75-minute capture: 114 of 802 merged turns, 14.2%,
+    were other people talking near the laptop, transcribed cleanly and delivered
+    to the notes labelled as the operator.
+
+    **It runs only when a speaker label is being claimed**, and that coupling is
+    load-bearing rather than an optimisation. Above `BLEED_CONTAMINATED_R` the
+    transcript already drops every label, so there is no Me/Them claim left for
+    this gate to protect — and the same audio is where the gate is measured to
+    fail hardest, admitting 1 of the operator's 7 voiced windows with the far end
+    on the speakers. Running it there would delete the operator from his own
+    meeting in order to defend a label that had already been cleared. Both halves
+    read the same `contaminated()`, so the two decisions cannot drift apart.
+
+    The threshold comes from the profile file, never from this module. There is no
+    constant here to fall back to, because a plausible one would be
+    indistinguishable from a measured one to every later reader — see
+    speaker_gate's own opening note.
+
+    Rejections are reported, always, including how many were close calls and
+    whether the dropped speech keeps coming back as one voice. That last one is
+    the Teams alert: someone co-located is being deleted from the transcript, and
+    a gate that removes a real participant silently is worse than the
+    contamination it replaces, because the transcript then omits speech with no
+    record that it did.
+    """
+    if not segs or voiceprint is None:
+        return segs
+    if contaminated(b):
+        print(f"  {label}: voiceprint gate SKIPPED — bleed is high, so the speaker "
+              f"labels are already dropped and there is nothing for it to protect. "
+              f"On this audio the gate is measured to reject the operator too.")
+        return segs
+
+    import speaker_gate as sg
+
+    profile, threshold, manifest = voiceprint
+    embed = sg.load_encoder(manifest["model_dir"])
+    embeddings = sg.embed_segments(mic.astype(np.float32), segs, embed)
+    result = sg.gate(profile, segs, embeddings, threshold)
+
+    sittings = manifest.get("operating_point", {}).get("n_sittings")
+    print(f"  {label}: voiceprint gate at {threshold:.3f} "
+          f"(profile {profile.seconds:.0f}s over {sittings} sitting(s))")
+    print(f"    kept {len(result.kept)} ({result.kept_seconds:.1f}s), "
+          f"dropped {len(result.rejected)} ({result.rejected_seconds:.1f}s), "
+          f"too short to judge {len(result.unscorable)} "
+          f"({result.unscorable_seconds:.1f}s)")
+    if result.borderline:
+        print(f"    {len(result.borderline)} of those rejections were close calls "
+              f"(within one profile spread of the line) — the gate guessing, not working")
+    if result.persistent_other:
+        # Reported as roughly-how-much rather than a bare flag, because the number
+        # is what tells the operator whether to care.
+        share = result.coherent_share
+        print(f"    ALERT: {share:.0%} of the dropped speech is one recurring voice "
+              f"(~{share * result.rejected_seconds:.0f}s). Someone beside you is being "
+              f"removed from this transcript. If that is a participant, this capture "
+              f"is missing their words.")
+    if sittings == 1:
+        print("    NOTE: the profile came from one sitting, which is measurably "
+              "over-tight — expect more of the operator dropped than the target asked.")
+
+    # Unscorable segments are KEPT. The gate returns them as their own bucket
+    # precisely so this decision is made here and visibly: they are 28% of the
+    # long capture's mic segments carrying 12% of its words, and short turns are
+    # "yes", "agreed", "I'll do that" — the commitments the tool exists to record.
+    # Dropping them to keep the room out would lose exactly those. Keeping them
+    # leaks whatever short utterances the room contributed, and that cost is
+    # stated above rather than hidden in a default.
+    keep = set(result.kept) | set(result.unscorable)
+    return [s for i, s in enumerate(segs) if i in keep]
+
+
 def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
     mic = mic_leg.audio()
     tap = tap_leg.audio()
@@ -832,16 +953,12 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
                 f"  minus start skew: {b['lag_ms'] - start_skew:+.0f} ms "
                 "(the acoustic component)"
             )
-        # positive_r, not abs(peak_r). An acoustic path adds the far end into the
-        # mic, so bleed is POSITIVE correlation. A strong negative peak is
-        # turn-taking — one leg loud while the other is quiet — which is the
-        # signature of a capture with no bleed at all. Judging on absolute value
-        # condemns exactly the clean captures this verdict exists to certify:
-        # two perfectly complementary streams give peak_r = -1.0 and were being
-        # reported as contaminated.
-        if b["positive_r"] > 0.5:
+        # The verdict comes from contaminated(), which owns the reading of
+        # positive_r over peak_r and the cut itself, so this line cannot disagree
+        # with the one that clears the speaker labels.
+        if contaminated(b):
             print("  HIGH — the mic is hearing the speakers; Me/Them split is contaminated")
-        elif b["positive_r"] > 0.25:
+        elif b["positive_r"] > BLEED_MODERATE_R:
             print("  MODERATE — some bleed present")
         else:
             print("  LOW — legs are acoustically independent (headphones, or quiet room)")
@@ -887,6 +1004,10 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
     write_leg_segments(out_dir / "mic-segments.json", mic_voiced, len(mic) / RATE,
                        out_dir / "mic.wav", len(mic), "mic")
     mic_segs = drop_bled(mic_voiced, mic, tap, b, "mic")
+    # After drop_bled, not before. The bled segments are the far end, and asking a
+    # voiceprint whether the far end is the operator wastes an embedding per
+    # segment to arrive at the answer the cheaper acoustic test already gave.
+    mic_segs = drop_offprint(mic_segs, mic, args.voiceprint, b, "mic")
     tap_segs = drop_unvoiced(transcribe(tap, args.whisper, args.language), tap, "system")
     write_leg_segments(out_dir / "system-segments.json", tap_segs, len(tap) / RATE,
                        out_dir / "system.wav", len(tap), "system")
@@ -914,9 +1035,9 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
     # four and a half minutes of transcription that had already succeeded —
     # the expensive work was complete and unrecoverable because the cheap
     # step downstream of it failed.
-    write_transcript(out_dir / "transcript.json", merged, b)
+    write_transcript(out_dir / "transcript.json", merged, b, args.voiceprint)
 
-    if b and b["positive_r"] > 0.5:
+    if contaminated(b):
         print(
             "  NOTE: bleed is high, so expect every utterance to appear TWICE —\n"
             "  once as Me and once as Them. That is the contamination, not a\n"
@@ -1270,7 +1391,32 @@ def write_leg_segments(path, segs, duration_s, audio_path, audio_samples, leg):
     print(f"  wrote {path} ({len(segs)} {leg} segments{first})")
 
 
-def write_transcript(path, merged, b):
+def voiceprint_provenance(voiceprint, b):
+    """What gated the microphone leg, for the artifact to carry.
+
+    Three states, and the middle one is the reason this is not a boolean. A leg
+    can be ungated because no profile was supplied, or ungated because bleed sent
+    the gate down the skip path in `drop_offprint` — and a reader six months later
+    cannot tell those apart from the segments alone. `null` would report the
+    second as the first, which reads as "nobody asked for a gate" when what
+    happened is "a gate was asked for and declined to run".
+    """
+    if voiceprint is None:
+        return None
+    _profile, threshold, doc = voiceprint
+    op = doc.get("operating_point") or {}
+    return {
+        "applied": not contaminated(b),
+        "skipped_reason": "bleed above the attribution cut" if contaminated(b) else None,
+        "threshold": threshold,
+        "target_frr": op.get("target_frr"),
+        "n_sittings": op.get("n_sittings"),
+        "profile_seconds": doc.get("seconds"),
+        "encoder": doc.get("encoder"),
+    }
+
+
+def write_transcript(path, merged, b, voiceprint=None):
     """Hand the capture to the notes half, carrying the bleed verdict with it.
 
     The attribution level is derived here rather than downstream, because this
@@ -1282,16 +1428,16 @@ def write_transcript(path, merged, b):
 
     See notes/transcript.py for what each level licenses.
     """
-    # Positive correlation only: an echo path ADDS the far end to the mic. A
-    # large negative peak means the legs alternate, which is what a clean
-    # headphones capture looks like, and condemning it drops every speaker
-    # label the capture legitimately earned.
-    contaminated = b is not None and b["positive_r"] > 0.5
+    unattributed = contaminated(b)
     payload = {
         "source": f"capture {time.strftime('%Y-%m-%d %H:%M')}",
-        "attribution": "none" if contaminated else "channel",
+        "attribution": "none" if unattributed else "channel",
         "bleed": {"peak_r": b["peak_r"], "positive_r": b["positive_r"],
                   "analysed_s": b["analysed_s"]} if b else None,
+        # Whether the mic leg holds the operator or whoever was audible. The
+        # attribution level above says which CHANNEL a turn came from; this says
+        # whether anything checked that the channel held the person it names.
+        "voiceprint": voiceprint_provenance(voiceprint, b),
         "turns": [
             # Labels are dropped, not merely marked, when the split is fiction.
             {
@@ -1303,7 +1449,7 @@ def write_transcript(path, merged, b):
                 # before anyone noticed, and it is the reason the voiceprint
                 # measurements had to re-derive boundaries from voicing.
                 "end": round(end, 2),
-                "speaker": None if contaminated else label,
+                "speaker": None if unattributed else label,
                 "text": text,
             }
             for start, end, label, text in merged
@@ -1312,7 +1458,7 @@ def write_transcript(path, merged, b):
     path.write_text(json.dumps(payload, indent=2))
     verdict = (
         "unattributed — bleed made the split unusable"
-        if contaminated else "Me/Them preserved"
+        if unattributed else "Me/Them preserved"
     )
     print(f"\n  wrote {path} ({verdict})")
 
@@ -1342,11 +1488,35 @@ def main():
     )
     ap.add_argument("--protocol-pairs", type=int, default=DEFAULT_PAIRS,
                     help="speak/silent interval pairs after the calibration phase")
+    ap.add_argument(
+        "--voiceprint", type=Path, default=None,
+        help="a profile from speaker_gate.py --enroll-out. Removes microphone "
+             "segments that are not the operator — the room, a colleague, a TV. "
+             "Without it the mic leg is whoever was audible, and on the 75-minute "
+             "capture that was 14.2%% other people delivered to the notes as things "
+             "the operator said.",
+    )
+    ap.add_argument(
+        "--model-dir", type=Path, default=Path.home() / ".cache" / "speaker-gate",
+        help="where the ECAPA checkpoint the voiceprint gate uses is cached",
+    )
     args = ap.parse_args()
 
     if sd is None:
         ap.error("sounddevice is not installed, so no audio can be captured. "
                  "pip install -r spike/requirements.txt")
+
+    # Before the microphone opens. A profile that cannot be read, or that was
+    # enrolled in a different embedding space, must cost an error rather than a
+    # recorded meeting whose gate fails after the ASR has already run.
+    if args.voiceprint is not None:
+        if args.no_transcribe:
+            ap.error("--voiceprint gates transcript segments, so it does nothing "
+                     "with --no-transcribe. Drop one of them.")
+        args.voiceprint = load_voiceprint(args.voiceprint, args.model_dir)
+    else:
+        print("no --voiceprint: the microphone leg will carry whoever was audible, "
+              "including the room, labelled as the operator.\n")
 
     try:
         phases = build_schedule(pairs=args.protocol_pairs) if args.protocol else None

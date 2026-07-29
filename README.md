@@ -9,9 +9,10 @@ Core Audio process tap, your microphone comes through the same path
 
 > **Status: design definition, a capture spike, and a notes evaluation.** There
 > is no app yet. What exists is a working two-leg capture — validated end to end
-> over a 75-minute meeting — a local summarizer with its fabrication checked
-> mechanically, the measurements both produced, and the documents deciding what
-> gets built. Start with [`spike/RESULTS.md`](./spike/RESULTS.md) and
+> over a 75-minute meeting — a voiceprint gate wired into it but never yet run on a
+> real meeting, a local summarizer with its fabrication checked mechanically, the
+> measurements all three produced, and the documents deciding what gets built.
+> Start with [`spike/RESULTS.md`](./spike/RESULTS.md) and
 > [`notes/EVAL.md`](./notes/EVAL.md).
 >
 > **Usable today** for a call taken on headphones with nobody else in the room.
@@ -202,14 +203,66 @@ spike/aec3/aec3_offline --mic ~/take/mic.wav --ref ~/take/system.wav \
   --condition aec3=t:~/take/aec3.wav --fit-mode prefix --fit-before 30
 ```
 
+### Keeping the room out of your half
+
+An open microphone records the room, and on the 75-minute capture 14.2% of merged
+turns were other people talking near the laptop — transcribed cleanly and handed
+to the notes as things a participant said. The voiceprint gate removes them, and
+it now runs inside the capture rather than beside it.
+
+It needs a voiceprint, and that takes **two or more separate sittings** of about a
+minute each. The plural is measured, not cautious: a threshold from a single
+recording sat above the honest one in all nine comparisons available, by 0.006 to
+0.181, and too high means it drops more of *you* than you asked. Different day,
+same seat, same microphone.
+
+```sh
+.venv/bin/python spike/dual_capture.py --seconds 60 --out ~/enroll-1
+.venv/bin/python spike/dual_capture.py --seconds 60 --out ~/enroll-2   # another day
+
+.venv/bin/python spike/speaker_gate.py \
+  --calibrate ~/enroll-1/mic-segments.json ~/enroll-1/mic.wav \
+  --calibrate ~/enroll-2/mic-segments.json ~/enroll-2/mic.wav \
+  --enroll-out ~/voiceprint.json --target-frr 0.05
+```
+
+`--target-frr 0.05` is the operating point: the share of your own speech the
+threshold may drop. It has no default, because the whole position of that module
+is that a plausible constant reads exactly like a measured one to anybody
+downstream. `--calibrate` prints what each point would admit of a second voice if
+you pass `--against` a recording of one.
+
+Then the capture gates itself:
+
+```sh
+.venv/bin/python spike/dual_capture.py --seconds 3600 --voiceprint ~/voiceprint.json
+```
+
+Three things are worth knowing before reading its output as a result:
+
+- **It has never run on a real meeting.** Both halves are measured separately and
+  the wiring is under control, but no capture in this project has yet been through
+  the gate. What it does to a real conversation is unmeasured.
+- **It stands down when bleed is high**, and says so. Above the correlation cut the
+  transcript has already dropped every speaker label, so there is no split left to
+  protect — and that is the same audio where the gate is measured to reject the
+  operator from his own meeting, 1 of 7 voiced windows admitted. Running it there
+  would delete you to defend a label that was already gone.
+- **Segments under two seconds are kept, not judged.** The embedding is unreliable
+  below that, and short turns are "yes", "agreed", "I'll do that" — the
+  commitments the tool exists to record. The run reports how many and how long, so
+  the leak is stated rather than hidden.
+
+Every run prints what it dropped, how much of that was a close call, and whether
+the dropped speech keeps coming back as one recurring voice. That last one is the
+alert Teams ships for the same reason: a gate that removes a real participant
+silently is worse than the contamination it replaces, because the transcript then
+omits speech with no record that it did.
+
 **Also still unexercised** — a real two-person call on headphones. Drift has been
 measured; what has never been tested is the Me/Them split with genuine speech
 arriving on *both* legs at once. Every capture so far put all the real words on one
 leg.
-
-```sh
-.venv/bin/python spike/dual_capture.py --seconds 3600
-```
 
 Headphones do two jobs there: they remove the bleed that duplicates every line,
 and they let the same capture give the first clean read on whether the split
@@ -331,16 +384,25 @@ appears nowhere else.
 
 ## Limits
 
-- **An open microphone records the room.** Speech from people near you is
-  transcribed and labelled as yours. Headphones do not help — they cut the far
-  end out of your microphone, which is a different defect. The voiceprint gate
-  that fixes this is written and measured but not yet wired into the capture, so
-  today: be the only person in the room, or capture the system leg alone and
-  accept unattributed notes.
-- **On speakers, the gate would reject you too.** The far end returning through
-  the room corrupts your own voiceprint, not just your transcript. Offline echo
-  removal recovers most of it, measured; nothing is built. Headphones are the
-  only configuration that works today, and that is why.
+- **An open microphone records the room, and the fix has never been tried on a
+  real meeting.** Speech from people near you is transcribed and labelled as
+  yours. Headphones do not help — they cut the far end out of your microphone,
+  which is a different defect. The voiceprint gate that fixes this is now wired
+  into the capture (`--voiceprint`), but it is measured only on this project's own
+  recordings of one voice and a household; what it does to an actual conversation
+  is unknown. Until that run happens, treat it as untested and be the only person
+  in the room.
+- **The gate needs a threshold nothing in the repository can supply.** It is a
+  quantile of your own score distribution, so it comes from your recordings, over
+  two or more sittings, and there is deliberately no default. A single sitting
+  produces a measurably over-tight one that drops more of you than you asked.
+- **On speakers, the gate would reject you too**, so it stands down there rather
+  than firing. The far end returning through the room corrupts your own
+  voiceprint, not just your transcript — 1 of 7 voiced windows admitted with the
+  far end on the speakers. Offline echo removal recovers most of it, measured; a
+  real canceller now exists offline ([`spike/aec3/`](./spike/aec3/)) and is not in
+  the capture path. Headphones are the only configuration that works today, and
+  that is why.
 - **macOS only.** Core Audio process taps are 14.4+. The Windows equivalent is
   WASAPI loopback and is not implemented.
 - **Speaker labels stop at "me" and "them."** Named participants come from a bot

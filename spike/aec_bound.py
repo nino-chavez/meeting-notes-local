@@ -2033,7 +2033,7 @@ def _ground_truth_controls() -> bool:
         check("the version is recorded so two tokenizers are not compared",
               isinstance(TOKENIZER_VERSION, int))
 
-        # 26. The scores artifact carries what each segment transcribed, so it is
+        # 27. The scores artifact carries what each segment transcribed, so it is
         #     a transcript, and this repo is public. Refused in the tool rather
         #     than left to .gitignore, which only covers paths someone thought of.
         check("an artifact path inside the repo is refused",
@@ -2045,6 +2045,57 @@ def _ground_truth_controls() -> bool:
               (b2["conditions"]["aec3"]["verified"]["admitted"],
                b2["conditions"]["aec3"]["scheduled"]["of"]), (1, 2),
               shown="1 of 1 verified, 2 scheduled")
+
+        # 28. The voiceprint gate's coupling to the bleed verdict. Four things read
+        #     the same cut — the console verdict, the doubled-utterance warning,
+        #     whether write_transcript clears every speaker label, and whether the
+        #     gate runs at all — and the drift between them would be silent in the
+        #     harmful direction: labels cleared while the gate still deletes the
+        #     operator to defend them. So the cut is asserted once, through the
+        #     function all four call.
+        clean_b = {"peak_r": -0.9, "positive_r": 0.05, "analysed_s": 60.0}
+        dirty_b = {"peak_r": 0.93, "positive_r": 0.93, "analysed_s": 60.0}
+        check("a complementary pair of legs is not contaminated",
+              dc.contaminated(clean_b), False)
+        check("and a mic hearing the speakers is",
+              dc.contaminated(dirty_b))
+        check("nothing playing cannot leak, so it is not contaminated either",
+              dc.contaminated(None), False)
+
+        #     The gate must not even load the encoder on contaminated audio. The
+        #     voiceprint here is a sentinel that raises if unpacked, so a control
+        #     that passes proves the skip happened before any use of it.
+        one_seg = [{"start": 1.0, "end": 4.0, "text": "something said"}]
+        check("the gate is skipped where the labels are already gone",
+              dc.drop_offprint(one_seg, mic, object(), dirty_b, "mic"), one_seg,
+              shown="unchanged")
+        check("and does nothing at all with no profile supplied",
+              dc.drop_offprint(one_seg, mic, None, clean_b, "mic"), one_seg,
+              shown="unchanged")
+
+        #     Three states, not a boolean: a reader cannot otherwise tell "no gate
+        #     was asked for" from "a gate was asked for and declined to run".
+        vp = (None, 0.61, {"seconds": 300.0, "encoder": "e",
+                           "operating_point": {"target_frr": 0.05, "n_sittings": 2}})
+        check("an ungated capture says so", dc.voiceprint_provenance(None, clean_b), None)
+        check("a gated one records the threshold it used",
+              (dc.voiceprint_provenance(vp, clean_b)["applied"],
+               dc.voiceprint_provenance(vp, clean_b)["threshold"]), (True, 0.61),
+              shown="applied at 0.61")
+        skipped = dc.voiceprint_provenance(vp, dirty_b)
+        check("and a skipped one is distinguishable from an ungated one",
+              (skipped["applied"], bool(skipped["skipped_reason"])), (False, True),
+              shown="not applied, reason given")
+
+        #     And it reaches the artifact, which is where a later reader looks to
+        #     find out whether the mic leg holds the operator or whoever was audible.
+        gated_p = d / "transcript-gated.json"
+        dc.write_transcript(gated_p, [(1.0, 4.0, "Me", "something said")],
+                            clean_b, vp)
+        wrote = json.loads(gated_p.read_text())
+        check("the transcript carries what gated the microphone leg",
+              (wrote["voiceprint"]["applied"], wrote["voiceprint"]["n_sittings"]),
+              (True, 2), shown="applied, 2 sittings")
 
     return ok
 
