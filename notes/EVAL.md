@@ -446,6 +446,75 @@ the parser was brittle. Negatives are now matched before positives, since "NOT
 MENTIONED" contains "MENTIONED", and anything unrecognised is reported as
 `NO VERDICT` rather than folded into a count.
 
+### Answered since: the judge passes, and holds on cases it has never seen
+
+Everything above describes a five-fixture calibration that no local model passed.
+That is now history, and it was closed without relaxing anything.
+
+Two changes did it. The judge is asked about **one reference item per call**
+rather than handed the whole list — on the fixtures that alone is the difference
+between 14/16 and 16/16 for `gemma3:12b`, and both items it recovers are absent
+ones it had called present, which is the direction that inflates recall. And the
+judging prompt was rewritten to pose the adjudication rule directly.
+
+```
+$ python3 notes/summarize.py --validate-judge --model gemma3:12b
+  agreement 16/16
+  control   8/16 for a judge rigged to answer PRESENT — rejected
+```
+
+| Judge | Agreement | Verdict |
+|---|---|---|
+| `gemma3:12b` | 16/16 | passes |
+| `llama3.1:latest` | 13/16 | rejected |
+| rigged to answer PRESENT | 8/16 | rejected |
+| alternating, ignoring the notes | 12/16 | rejected |
+| never answers at all | 0/16 | rejected |
+
+**The harness was strengthened, not loosened, and the check for that is
+specific:** the fixture that previously failed *both* models — a note saying
+"provide access to the project repository" scored as covering "share GitHub
+usernames so access can be granted" — is still there, unchanged, and is now
+passed. A calibration set that grew from 5 cases to 16 while dropping the one
+that used to fail would have been the tell. It kept it. The three sabotaged
+judges exist for the same reason: a fixture set that has only ever been run
+against judges hoped to be good establishes nothing about its power to reject
+one.
+
+**Held out, because 16/16 on your own fixtures is not evidence they were written
+before you saw the answers.** Sixteen further cases were written independently
+from the same adjudication rule, with content the judge's author never saw, and
+scored blind:
+
+```
+16 held-out items — 9 present, 7 absent
+held-out agreement 15/16
+```
+
+A judge fitted to its own calibration set collapses on unseen cases. This one
+did not, which is stronger evidence than any assurance about when the fixtures
+were authored.
+
+**The single held-out failure names the judge's weak spot, and it is worth
+knowing rather than smoothing.** It was an owner substitution — a reference item
+naming one person against a note attributing the same commitment to another. The
+rule counts that as recalled, because owner errors are a separate defect class
+that `check_owner_grounding` already tracks; folding them into recall would
+conflate two things this project keeps apart. The judge called it absent. It got
+the equivalent case right in the shipped fixtures, so this is inconsistency on
+owner substitution rather than a rule it has simply not learned.
+
+**The error direction is the safe one.** Calling a wrong-owner hit "absent"
+*under*-reports recall. A judge that inflated instead would let a regression ship
+looking clean, which is the failure the whole harness exists to prevent — so
+recall figures from this judge should be read as a floor, not a point estimate.
+
+`check_recall` now runs the calibration inline and returns `calibrated` and
+`control_rejected` alongside the score, so a recall number cannot be quoted
+without its instrument's status travelling with it. That costs sixteen extra
+model calls per run, which is the right trade while the judge is new and the
+wrong one once it is boring; revisit it when the cost is felt.
+
 ---
 
 ## How a commitment is scored as recalled
