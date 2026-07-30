@@ -754,6 +754,17 @@ def check_citations(note: str, transcript: Transcript) -> dict:
     # count, not an evidence state: it says the instruction leaked, which is a thing
     # to fix in the prompt and not a thing the operator has to reason about.
     wrapped = sum(1 for it in items if it["wrapped"])
+    # Repeats still present in the note. Distinct from provenance's
+    # `duplicates_removed`, which counts what generation excised: this one runs on both
+    # paths and on `--recheck`, so the single-pass path is covered and artifacts written
+    # before any of this get the number backfilled. Placing the fix on the chunked path
+    # only was supposed to leave a single-pass regression visible, and without a check
+    # on both it would not have been.
+    seen_claims, repeats = set(), 0
+    for it in items:
+        key = " ".join(_seq(it["claim"]))
+        repeats += key in seen_claims
+        seen_claims.add(key)
     # One value for the note: the parser decides the layout per note, so every item
     # agrees and reading it off the first is not a sample.
     layout = items[0]["layout"] if items else "none"
@@ -771,6 +782,7 @@ def check_citations(note: str, transcript: Transcript) -> dict:
         "uncited": uncited,
         "template_echo": wrapped,
         "layout": layout,
+        "repeats": repeats,
     }
 
 
@@ -1528,6 +1540,9 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
         if cites["unverifiable"]:
             print(f"  citations     {len(cites['unverifiable'])} quote(s) too short to "
                   f"test — neither evidence nor fabrication")
+        if cites["repeats"]:
+            print(f"  citations     {cites['repeats']} claim(s) repeat an earlier one "
+                  f"verbatim — the note says the same thing twice")
         if cites["layout"] == "collapsed":
             # Not a failure — the checker reads both — but the contract asks for the
             # quote on its own line, and which layout a model produced has been the
@@ -1749,7 +1764,14 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
             # Belongs here rather than in `checks` because the note no longer contains
             # the evidence: once the repeats are excised, nothing recomputable from the
             # note text can recover the count, so a `--recheck` would drop it.
-            "duplicates_removed": result.get("duplicates_removed", 0),
+            #
+            # `null` on the single-pass path, never 0. Only the chunked path excises
+            # repeats, so 0 there would assert a measurement that was never taken — and
+            # the whole reason the fix is chunked-only is to leave a single-pass
+            # regression visible. `checks.citations.repeats` is the number that covers
+            # both paths. Same reasoning as `transform`: absent and zero are different
+            # facts and a field that conflates them hides the one that matters.
+            "duplicates_removed": result.get("duplicates_removed"),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         },
         # Carried whole. A surface may only need citations today, but a note whose
@@ -2094,6 +2116,17 @@ def run_self_test() -> int:
     print(f"  [{'pass' if pipe_ok else 'FAIL'}] and the claim text itself is clean")
     if not pipe_ok:
         print(f"          got {[r['claim'] for r in got['cited']]}")
+
+    # Repeats are counted on both paths, which is what makes the chunked-only placement
+    # of `dedupe_items` safe: a single-pass regression is visible rather than reported
+    # as a clean zero by a field that path can never populate.
+    cite_case("a repeated claim is counted wherever it appears",
+              "## Decisions\n- Rubber chosen.\n- Lead time long.\n- Rubber chosen.\n",
+              True, repeats=1)
+    cite_case("distinct claims count no repeats",
+              "## Decisions\n- Rubber chosen.\n- Lead time long.\n", True, repeats=0)
+    cite_case("punctuation does not make a repeat look distinct here either",
+              "## Decisions\n- Rubber chosen.\n- RUBBER, chosen!\n", True, repeats=1)
 
     # The layout a note used, recorded rather than eyeballed later.
     cite_case("the next-line layout is recorded as such",

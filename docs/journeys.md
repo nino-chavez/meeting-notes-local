@@ -506,9 +506,11 @@ longest, and they had to be told apart before any structure could be judged:
   produced 55 items with zero repeats, so the prompt turned out to fix the cause too.
   Full account in `notes/EVAL.md`.
 - **55 is still an order of magnitude above 5**, so the count was never only an artifact.
-  A "Decisions" section holding 14 entries and an "Action items" section holding 27 in a
-  research meeting is a section name inviting the model to file discussion as
-  settlement.
+  Reading the 14 entries under Decisions, about six are decisions and the rest are
+  aspirations, ideas, or assertions somebody made — which suggests the section name
+  invites the model to file discussion as settlement. **That is a reading and not a
+  measurement**, so the choice below does not rest on it; `notes/EVAL.md` records what
+  would settle it.
 
 **Candidate A — keep type-first sections.** Summary, Decisions, Action items, Open
 questions, as the model emits them. Serves J2 directly: Action items *is* the answer.

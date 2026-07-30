@@ -963,8 +963,23 @@ one of them, and it is doing that job. The repetition is the merge pass on a lon
 input, 16 slices: **55 items, zero repeats, zero template punctuation**, in 312s against
 the earlier run's 588s. So the caps-slot prompt fixed three things at once — bracket
 echo, the note's length, and the repetition — and `dedupe_items` fired on nothing. It
-stays, because the defect it covers was real and measured, and because artifacts made
-before the prompt change still carry it.
+stays as regression insurance: the defect was real and measured, and nothing guarantees
+a model that stopped repeating itself keeps not doing it.
+
+**It does not help the artifacts that carry the defect, and an earlier draft of this
+section claimed it did.** `dedupe_items` runs in `summarize_chunked`; `recheck` never
+calls it, by the deliberate separation that keeps re-derivation from rewriting notes. So
+pre-fix artifacts are exactly the case it cannot reach. The compatibility-reader argument
+belongs to the *collapsed-layout* path, which really is on the recheck route through
+`_parse_claims`.
+
+**Two numbers, because they are two facts.** `provenance.duplicates_removed` counts what
+generation excised, and is `null` on the single-pass path rather than 0 — that path cannot
+produce the number, and recording a zero would assert a measurement never taken, which is
+the ambiguity refused for `transform`. `checks.citations.repeats` counts repeats *still
+present*, runs on both paths and on `--recheck`, and is what makes the chunked-only
+placement safe: a single-pass regression stays visible instead of being reported as a
+clean zero by a field that path never fills.
 
 | | old prompt | revised prompt |
 |---|---|---|
@@ -993,9 +1008,25 @@ variation is a field rather than something a person has to eyeball.
 
 **The count is trustworthy now and still an order of magnitude off.** 55 real items
 against a human reference that segments the same meeting into **5** subjects. So
-duplication was part of the problem and not the problem: a "Decisions" section holding
-14 entries and an "Action items" section holding 27 in a research meeting is a section
-name inviting the model to file discussion as settlement.
+duplication was part of the problem and not the problem.
+
+**The mislabelling claim is weaker than it was and is stated at its real strength.** An
+earlier draft argued from 44 entries in a Decisions section being implausible for a
+research meeting; the re-run gives **14**, which is not implausible, and the sentence was
+carried forward with the number swapped — a conclusion surviving a correction that had
+undercut it. Read instead of counted, about six of the 14 are decisions ("Anonymize
+transcript but not audio", "Public release should be same as licensed one") and the rest
+are aspirations ("Have fair amount of data for same meeting"), ideas ("Try summarization
+of meetings"), assertions someone made ("Don't need speech signal for summarization"), or
+descriptions of what the project already does ("Record people and make audio
+recordings").
+
+**That is a reading, not a measurement**, and the distinction matters because this file's
+whole discipline is not accepting one for the other. The measurement exists and has not
+been run: `check_recall`'s judge could be pointed at "is this entry a decision the
+meeting settled" the same way it is pointed at commitment recall. Until it is, the
+candidate-C decision rests on its other three legs, none of which involve this — DP-4, no
+extra model capability, and a discard that stopped.
 
 **And the sections were the data model.** The extraction pass labels every item DECISION,
 ACTION or QUESTION; the consolidator turns the label into a markdown heading; by the time
