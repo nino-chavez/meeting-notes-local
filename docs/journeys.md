@@ -506,13 +506,12 @@ longest, and they had to be told apart before any structure could be judged:
   produced 55 items with zero repeats, so the prompt turned out to fix the cause too.
   Full account in `notes/EVAL.md`.
 - **55 is still an order of magnitude above 5**, so the count was never only an artifact.
-  And the entries under Decisions are mostly not decisions: **at most 1 of 19** with a
-  located quote is a decision the meeting settled, measured with a judge calibrated 14/14
-  against a rigged control it rejects — "at most" because the single positive is
-  contestable and it is the whole numerator. The rest cite proposals, hedges, commentary,
-  or a fragment trailing off mid-thought. This began as a reading and is now measured
-  (`notes/EVAL.md`) — including that the first calibration would have published a tidier,
-  wronger 0 of 19.
+  And the problem is wider than the section names: **6 of 31 located quotes support the
+  claim they are attached to** — action items 0 of 8 — measured with a judge calibrated
+  14/14 against a rigged control it rejects. The evidence contradicts its claim, is
+  unrelated to it, or supports a weaker version of it. So the taxonomy is not the only
+  thing wrong; `notes/EVAL.md` has the account, including that a `verified` state was
+  telling readers a claim had passed a check nothing performed.
 
 **Candidate A — keep type-first sections.** Summary, Decisions, Action items, Open
 questions, as the model emits them. Serves J2 directly: Action items *is* the answer.
@@ -616,7 +615,7 @@ run. One of those runs therefore reported PASS with four composed quotes in it. 
 the notes as a *reader* would is what surfaced it; no check was going to, because every
 fixture used the layout the contract asks for.
 
-**What building it changed.** Two things the walk had not predicted. A verified
+**What building it changed.** Two things the walk had not predicted. A located
 claim's *locator* is a promise a reader cannot check by looking — a button that
 scrolls to the wrong turn still moves the page and still highlights a turn, and the
 operator reads speech that did not produce the claim, which manufactures confidence

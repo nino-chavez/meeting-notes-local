@@ -1110,3 +1110,67 @@ format author were the same person.
 taxonomy; it does not establish a rate. What it is sufficient for is the conclusion
 `docs/journeys.md` draws — that a section named Decisions collects things the meeting did
 not decide — and that conclusion no longer rests on a reading.
+
+---
+
+## "Verified" was answering a question nothing asked: 6 of 31
+
+Run 2026-07-29 with `--measure-support`, judge `gemma3:12b`, calibrated 14/14 against a
+rigged control it rejects at 6/14.
+
+**The defect first, because it was shipped.** The citation check locates a quote in the
+transcript and the artifact called that state `verified`, which the surface drew with a
+green tick. Locating a quote establishes that the words were said at a turn. It
+establishes nothing about whether they bear on the claim, and one action item — "Burn
+extra CD-ROMs for meeting attendees" — cites turn 307, *"You know, I personally would not
+want a CD of my meeting"*, checked against the transcript around it. Located speech
+arguing the opposite of its own claim, presented as verified.
+
+Renamed: `verified` → **`located`**, `unsupported` → **`composed`**. The second was
+overstating in the other direction — it meant the narrow, specific thing that the words
+are not in the transcript at all, while its name laid claim to the support question. Both
+names are now what the check actually establishes.
+
+**Then the measurement. 6 of 31 located quotes support the claim they are attached to.**
+
+| kind | supports | of |
+|---|---|---|
+| decision | 5 | 19 |
+| question | 1 | 4 |
+| action | **0** | 8 |
+
+Three failure modes, and only the third is what a reader would guess:
+
+- **Contradiction.** The CD-ROM case. The words argue against the claim.
+- **Unrelated.** "Offer professors and senior doctoral students…" cites *"talking about
+  the kind of thing that you were just talking about"*; "Get more regular meetings…"
+  cites *"just because it would be very hard to process the data in all senses"*. Neither
+  quote carries any content about its claim.
+- **Weaker than claimed.** "Get a DAT machine" cites *"we could just get a DAT
+  machine"*; "Write down error message" cites *"maybe we should write it down"*. Real
+  speech, on topic, proposing rather than committing.
+
+**This retires the settlement measurement rather than sitting beside it.** "Do these words
+show something settled" is what "do these words support DECISION: X" answers when the
+claim's type is in front of the judge, and two instruments answering overlapping questions
+is the shape this file keeps repairing. The earlier figure — at most 1 of 19 Decisions
+entries settled — stands as a recorded finding; the support judge is the instrument going
+forward, and the disfluent fixtures that made the settlement calibration worth anything
+migrated into it.
+
+**Calibration needed a third failure class, which the disfluency lesson predicted.**
+`gemma3:12b` first scored 12/14, failing both cases where topical relevance or an opinion
+about what should happen was accepted as supporting a DECISION. Naming those two
+explicitly in the prompt — being on the same topic is not support; an opinion about what
+should happen is not a decision — took it to 14/14. A fixture set covering only the
+weaker-than-claimed mode would have certified a judge blind to contradiction, which is
+the mode that makes a note false rather than thin.
+
+**Consequence for the surface, which is why this is not only a record.** `located` no
+longer takes `semantic-success`. Success is a verdict; this is not one, and a green tick
+on a state that means "the words exist" told the reader something had passed when four
+fifths of the time nothing had. It takes `semantic-info`, and success stays unused until
+something earns it.
+
+**31 claims, 3 meetings, one judge.** The per-kind rows are shown so the split is visible,
+not so a rate can be read off 4 questions or 8 actions.

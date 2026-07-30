@@ -303,13 +303,21 @@ per-claim states, emitted by `notes/summarize.py` and rendered by
 
 | Claim state | Meaning |
 |---|---|
-| `verified` | The quoted words are in the transcript, at a turn the code located |
-| `unsupported` | They are not — and the transcript was the model's only input, so the quote was composed |
+| `located` | The quoted words are in the transcript, at a turn the code found. **Not** a statement that they support the claim |
+| `composed` | They are not in the transcript — and it was the model's only input, so the quote was composed |
 | `untestable` | Under four words, so a match would prove nothing either way |
 | `unquoted` | The claim offered no evidence at all |
 
+**These were `verified` and `unsupported`, and both claimed more than the check does.**
+`verified` was read as "this claim checks out", including by the surface, which drew it
+with a green tick — when all that was established is that the words appear at a turn.
+Measured: **6 of 31 located quotes actually support their claim**, action items 0 of 8,
+and one cites speech arguing the opposite of itself. `unsupported` overstated in the
+other direction, laying claim to the support question while meaning only that the words
+are absent from the transcript.
+
 **Every note mixes them, which is why the state belongs to the claim and cannot be a
-hover or a detail view.** Measured on three real runs — 7 verified of 11 claims on a
+hover or a detail view.** Measured on three real runs — 7 located of 11 claims on a
 582-turn meeting, 33 of 83 on a 1365-turn one, 4 of 15 on a third. Verified is not
 rare; it runs between a quarter and two thirds. The finding is that **no note is
 uniformly one thing.** All three carry at least two states and two carry three, so a
@@ -327,10 +335,14 @@ rather than summarising it.
 chosen.** `docs/prototype/build.py` renders them; the reasoning belongs beside the
 states themselves, not in the generator.
 
-- `verified` takes `semantic-success`, `unsupported` takes `semantic-error`. That is
-  `DESIGN.md`'s own escalation rule — "if a warning genuinely needs color, it is an
-  error and takes `semantic-error`" — and a composed quote is the most serious thing
-  this file reports.
+- `composed` takes `semantic-error`. That is `DESIGN.md`'s own escalation rule — "if a
+  warning genuinely needs color, it is an error and takes `semantic-error`" — and a
+  quote the model invented is the most serious thing this file reports.
+- **`located` takes `semantic-info`, and `semantic-success` is deliberately unused.**
+  Success is a verdict and locating a quote is not one. It first took success with a
+  green tick, which told a reader the claim had passed something; four fifths of the
+  time nothing had. Nothing on this surface has earned success yet, and leaving the
+  token unspent is more honest than spending it on the nearest candidate.
 - `untestable` and `unquoted` both take `semantic-warning`, which resolves to
   `neutral-300` with no hue. Not a compromise: an amber here would compete with the
   live-capture accent, which is the one reading the product exists to make trustworthy.
@@ -348,7 +360,8 @@ outside that rule. Its label still has to name the numbers that matter, which is
 legibility requirement rather than a direction one.
 
 **Rendered in read order, never sorted by state.** Sorting by trust would hide how
-much of a note is unsupported, which is the lying-by-omission failure `journeys.md`
+much of a note rests on composed evidence, which is the lying-by-omission failure
+`journeys.md`
 argues this product lives or dies on. `note/1` carries each claim's character offset
 in the note so read order survives the grouping the checker needs.
 

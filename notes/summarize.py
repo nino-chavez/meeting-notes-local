@@ -1102,97 +1102,127 @@ Answer with one word and nothing else: PRESENT.
 Answer PRESENT whatever the notes say, including when they say nothing about it."""
 
 
-SETTLED_JUDGE = """\
-You are reading words someone actually said in a meeting, and deciding whether those
-words show something being SETTLED.
+SUPPORT_JUDGE = """\
+You are checking whether some words from a meeting support a claim written about that
+meeting. The words were really said; that is already established. Your only question is
+whether they support THIS claim AS IT IS WRITTEN.
 
-Words show something settled when they state a choice as taken or an action as agreed:
-"okay, we'll go with the rubber then", "right, I'll send it tomorrow", "so that's
-decided".
+The claim begins with what kind of thing it says it is. Honour that:
 
-Words do NOT show something settled when they:
+- DECISION claims that the meeting settled something. Words that propose, suggest, hedge
+  or ask do not support it. "maybe we should use rubber" does not support "DECISION:
+  Rubber chosen".
+- ACTION claims someone committed to do something. Words that raise it as a possibility
+  do not support it. "we could just get a DAT machine" does not support "ACTION: Get a
+  DAT machine".
+- QUESTION claims something was asked or left open.
 
-- propose or suggest it — "maybe we should", "what if we", "we could";
-- hedge it — "hopefully", "I think", "probably", "we'd like to";
-- ask about it;
-- describe, explain, or comment on it rather than agreeing to it;
-- trail off without landing on anything.
+Answer NO when the words:
 
-Hesitation is not disagreement. People say "uh", "um", repeat themselves, and restart
-sentences while agreeing to things. Filler and stumbling do not turn an agreement into
-a proposal — judge what the words land on, not how fluently they arrive. "yeah um okay
-do that then" is settled.
+- say the opposite of the claim, or argue against it;
+- are about something else, or are a fragment carrying no relevant content;
+- support only a weaker version — discussion where the claim says decision, a
+  possibility where the claim says commitment.
 
-Judge only the words in front of you. Do not reason about what the meeting probably
-decided elsewhere, and do not give credit for a sensible-sounding idea. A good idea
-stated as an idea is not settled.
+Two things that are NOT support, and both look like support at a glance:
+
+- **Being on the same topic is not support.** Words that merely mention the subject
+  carry no claim about it. "non-English speaking countries" does not support "DECISION:
+  Market it abroad" — it names the topic and settles nothing.
+- **An opinion about what should happen is not a decision.** "I think it should be the
+  same" and "it ought to be X" state a preference. They support "QUESTION" or a claim
+  that something was proposed; they do not support a DECISION claim.
+
+Hesitation is not disagreement. People say "uh", "um", repeat themselves and restart
+sentences while agreeing to things. Judge what the words land on, not how fluently they
+arrive: "yeah um okay do that then" supports a DECISION claim.
 
 Answer with one word and nothing else: YES or NO."""
 
-SABOTAGED_SETTLED_JUDGE = """\
-You are reading words from a meeting.
+SABOTAGED_SUPPORT_JUDGE = """\
+You are checking words from a meeting against a claim.
 
 Answer with one word and nothing else: YES.
 
-Answer YES whatever the words say, including when they only propose or discuss."""
+Answer YES whatever the words say, including when they contradict the claim."""
 
-# Deliberately synthetic, and deliberately NOT drawn from the meetings this judge is
-# pointed at. Calibrating on the items under measurement would encode the answer the
-# measurement is supposed to find — the fixtures would agree with the reading by
-# construction and the number would mean nothing. The casing domain matches the other
-# fixtures in this file and belongs to no corpus meeting.
+# Deliberately synthetic and deliberately NOT drawn from the meetings this judge is
+# pointed at: calibrating on the items under measurement would encode the answer the
+# measurement is meant to find. The casing domain matches this file's other fixtures and
+# belongs to no corpus meeting.
 #
-# Balanced seven and seven, and each is a case a careful person applying the rule above
-# answers without hesitating, which is the bar `validate_judge` already sets.
-#
-# One group, and the empty string is a placeholder: `score_fixtures` iterates
-# `(items, note, expected)` because the recall judge compares an item against a note, and
-# this judge reads a quote and takes no note at all. Kept in that shape so one scorer
-# serves both calibration sets rather than two scorers drifting apart; the `strict=True`
-# zip still protects the answer key against a mismatched length.
-SETTLED_FIXTURES = [
+# Covering the three ways support fails, because a set covering only one certifies a
+# judge blind to the others — the lesson the settlement fixtures taught when a clean
+# calibration set nearly published a wrong figure. Contradiction is listed first because
+# it is the one that makes a note actively false rather than merely thin.
+SUPPORT_FIXTURES = [
     ([
-        "okay let's go with the rubber then",
-        "right so we'll ship it on friday, agreed",
-        "we've decided to drop the second button",
-        "fine, i'll send the cost breakdown tomorrow",
-        # Disfluent, and settled. These three are the reason the calibration means
-        # anything: the fixtures' clean sentences and real transcript speech do not
-        # look alike, so a judge answering NO to hesitation rather than to
-        # non-settlement would pass a tidy fixture set and then report every real
-        # quote as unsettled. Real agreement sounds like this.
-        "yeah um okay do that then, the smaller battery",
-        "right so - so that's that, no backlight in the first run then",
-        "we'll we'll just go with plastic, uh, for the body",
-        "maybe we should use rubber for the case",
-        "what if we recorded the two rooms separately",
-        "which is really what makes the whole thing work",
-        "i think a smaller battery would probably be fine",
-        "so the moulding costs come down as volume goes up",
-        "we'd like to have it in two colours, hopefully",
-        # Disfluent, and NOT settled, so the pair above cannot be passed by a judge
-        # that simply reads hesitation as agreement.
-        "so we could uh we could maybe use the rubber i suppose",
-    ], "", [True, True, True, True, True, True, True,
-            False, False, False, False, False, False, False]),
+        # Supported, including disfluently. These are why the calibration means
+        # anything: real transcript speech does not sound like a written sentence, and a
+        # judge answering NO to hesitation would pass a tidy set and then reject every
+        # real quote.
+        "DECISION: Rubber chosen for the case ||| okay let's go with the rubber then",
+        ("DECISION: No backlight in the first run ||| right so - so that's that, no "
+         "backlight in the first run then"),
+        "DECISION: Plastic body ||| we'll we'll just go with plastic, uh, for the body",
+        "ACTION: Send the cost breakdown ||| fine, i'll send the cost breakdown tomorrow",
+        "ACTION: Smaller battery ||| yeah um okay do that then, the smaller battery",
+        ("QUESTION: Whether to record the rooms separately ||| what if we recorded "
+         "the two rooms separately"),
+        # Contradiction: the words argue against the claim.
+        ("ACTION: Burn CDs for every attendee ||| you know, i personally would not "
+         "want a CD of my meeting"),
+        ("DECISION: Rubber chosen for the case ||| honestly i think rubber is the "
+         "wrong material here"),
+        # Unrelated, or a fragment carrying nothing.
+        ("ACTION: Offer the seminar to senior students ||| talking about the kind of "
+         "thing that you were just talking about"),
+        "DECISION: Market it abroad ||| non-English speaking countries",
+        # Supports only a weaker version than the claim states.
+        "DECISION: Rubber chosen for the case ||| maybe we should use rubber for the case",
+        ("ACTION: Get a DAT machine ||| we could have a fairly We could just get a "
+         "DAT machine"),
+        ("DECISION: World release matches the licensed one ||| i think that when we "
+         "do that world release, it should be the same"),
+        "ACTION: Write down the error message ||| maybe we should write it down",
+    ], "", [True, True, True, True, True, True,
+            False, False, False, False, False, False, False, False]),
 ]
 
 
-def _judge_settled(quote: str, model: str, num_ctx: int, timeout: int,
-                   system: str = SETTLED_JUDGE) -> bool | None:
-    """Do these spoken words show something being settled?
+def _judge_support(claim: str, quote: str, kind: str | None, model: str, num_ctx: int,
+                   timeout: int, system: str = SUPPORT_JUDGE) -> bool | None:
+    """Do these located words support this claim as written?
 
-    Answerable from the quote alone, which is why this measurement exists at all: the
-    citation contract locates a claim's evidence in the transcript, so "is this filed
-    correctly" stops needing a human reference and becomes a question about words the
-    code has already verified were said.
+    The question `verified` was silently taken to answer and never asked. Locating a
+    quote establishes that the words were said at a turn; nothing checked that they bear
+    on the claim, and one action item cites speech arguing the opposite of itself.
 
-    YES/NO rather than a new verdict vocabulary. `_parse_verdict` already reads both,
-    and this file records that widening its parse surface has failed twice.
+    The claim's `type` goes to the judge because the claim's own first word is part of
+    what has to be supported: a proposal supports "this was discussed" and not "this was
+    decided". That is also why the settlement judge is retired — with the type visible,
+    its question is this question.
     """
-    out = ollama_chat(model, system, f"WORDS SAID IN THE MEETING:\n{quote}",
+    label = f"{kind.upper()}: " if kind else ""
+    out = ollama_chat(model, system,
+                      f"CLAIM:\n{label}{claim}\n\nWORDS SAID IN THE MEETING:\n{quote}",
                       num_ctx, timeout)
     return _parse_verdict(out["message"]["content"])
+
+
+def _fixture_judge_support(item: str, _note: str, model: str, num_ctx: int, timeout: int,
+                           system: str = SUPPORT_JUDGE) -> bool | None:
+    """A fixture's `CLAIM ||| quote` string, split and passed through the real path.
+
+    Split here rather than stored pre-split so `score_fixtures` keeps one shape for both
+    calibration sets. The separator is three pipes because a single one appears in
+    extraction output and would make a fixture ambiguous.
+    """
+    claim, quote = item.split("|||", 1)
+    kind, _, rest = claim.strip().partition(":")
+    return _judge_support(rest.strip() or claim.strip(), quote.strip(),
+                          kind.strip() if rest else None, model, num_ctx, timeout,
+                          system)
 
 
 def score_fixtures(judge, fixtures=None) -> dict:
@@ -1713,96 +1743,108 @@ NOTE_SCHEMA = "note/1"
 
 # The four states a claim can be in, and every one of them has to be renderable.
 # `docs/journeys.md` J1 beat 3 is the operator deciding whether to trust a claim, and
-# a format showing only VERIFIED would hide the majority of what the runs produce:
-# across three real meetings the states were 7/11, 33/83 and 8/15 verified, with
-# UNSUPPORTED alone reaching 41 of 83 on the longest. Both halves are common.
-VERIFIED = "verified"        # the quote is in the transcript, at a known turn
-UNSUPPORTED = "unsupported"  # the quote is not — and the transcript was the only input
-UNTESTABLE = "untestable"    # too short to distinguish evidence from coincidence
-UNQUOTED = "unquoted"        # the claim offered no evidence at all
+# a format showing only the good case would hide the majority of what the runs produce:
+# across three real meetings roughly a third of claims carried locatable evidence, and
+# on the longest, composed quotes outnumbered located ones. Both halves are common.
+#
+# **These names were `verified` and `unsupported`, and both overstated their warrant.**
+# `verified` was read as "this claim checks out" — including by the surface, which drew
+# it with a green tick — when all the check establishes is that the quoted words appear
+# at a turn. Whether they *support the claim* is a different question that nothing asked:
+# one action item reading "Burn extra CD-ROMs for meeting attendees" cites turn 307,
+# "You know, I personally would not want a CD of my meeting", which is verified speech
+# arguing the opposite of its claim. And `unsupported` collided with that same question
+# while actually meaning something narrower and more specific — that the words are not in
+# the transcript at all, so the model composed them.
+LOCATED = "located"        # the quoted words are in the transcript, at a known turn
+COMPOSED = "composed"      # they are not, and the transcript was the model's only input
+UNTESTABLE = "untestable"  # too short to distinguish evidence from coincidence
+UNQUOTED = "unquoted"      # the claim offered no evidence at all
 
 
-def measure_settlement(artifacts: list[Path], model: str, num_ctx: int,
-                       timeout: int) -> int:
-    """Are the entries under Decisions decisions the meeting settled?
+def measure_support(artifacts: list[Path], model: str, num_ctx: int,
+                    timeout: int) -> int:
+    """Do located quotes support the claims they are attached to?
 
-    `notes/EVAL.md` recorded this as the measurement that would settle a claim twice
-    stated too strongly — first from 44 Decisions entries being implausible, then from
-    14, which is not. A reading of the located quotes says roughly half are proposals,
-    commentary or trailing off. This is the instrument for that reading, and the reading
-    is not repeated as a finding until the instrument has been shown to work.
+    The question `verified` was taken to answer and nothing asked. Locating a quote
+    proves the words were said at a turn; it says nothing about whether they bear on the
+    claim. One action item, "Burn extra CD-ROMs for meeting attendees", cites turn 307 —
+    "You know, I personally would not want a CD of my meeting" — which is located speech
+    arguing the opposite of its claim, rendered with a tick.
 
-    **Only claims with a located quote can be measured**, which is the honest boundary:
-    an `unsupported` claim's quote was composed, so judging it would measure the model's
-    invention rather than the meeting. The verified subset is what the citation contract
-    bought.
+    **Only located claims can be measured**, which is the honest boundary: a composed
+    quote's words were never said, so judging their support would measure the model's
+    invention rather than the meeting. That is 31 claims across the three meetings.
 
-    Calibration runs first and its failure is the whole result. This file's own rule —
-    "the recall judge has to be calibrated before it is quoted" — applies to any judge,
-    and a number from an uncalibrated one is worse than no number.
+    Replaces a narrower settlement measurement, whose question — "do these words show
+    something settled" — is what this one answers when the claim's type is in front of
+    the judge. Its disfluent fixtures live on here, because they are the reason its
+    calibration was worth anything.
+
+    Calibration runs first and its failure is the whole result.
     """
-    print("\n=== calibrating the settlement judge ===\n")
+    print("\n=== calibrating the support judge ===\n")
     real = score_fixtures(
-        lambda q, _note: _judge_settled(q, model, num_ctx, timeout),
-        SETTLED_FIXTURES)
+        lambda item, note: _fixture_judge_support(item, note, model, num_ctx, timeout),
+        SUPPORT_FIXTURES)
     control = score_fixtures(
-        lambda q, _note: _judge_settled(q, model, num_ctx, timeout,
-                                        SABOTAGED_SETTLED_JUDGE),
-        SETTLED_FIXTURES)
+        lambda item, note: _fixture_judge_support(item, note, model, num_ctx, timeout,
+                                                 SABOTAGED_SUPPORT_JUDGE),
+        SUPPORT_FIXTURES)
     for d in real["detail"]:
         mark = "pass" if d["got"] == d["want"] else "FAIL"
-        want = "settled" if d["want"] else "not settled"
-        print(f"  [{mark}] {want:11s} — {d['item'][:52]!r}")
+        want = "supports" if d["want"] else "does not"
+        print(f"  [{mark}] {want:9s} — {d['item'][:66]}")
     print(f"\n  agreement {real['agreement']}")
     print(f"  control   {control['agreement']} for a judge rigged to answer YES — "
           f"{'rejected' if not control['ok'] else 'NOT REJECTED'}")
 
     if control["ok"]:
         print("\n  A judge told to answer YES unconditionally cleared these fixtures,\n"
-              "  so they are not fixtures and no reading below would mean anything.")
+              "  so they are not fixtures and no figure below would mean anything.")
         return 1
     if not real["ok"]:
-        print("\n  This model cannot be trusted to tell a settled decision from a\n"
-              "  proposal. No figure is reported: an uncalibrated judge's number is\n"
-              "  worse than none, which is the rule this file already applies to recall.\n"
-              f"  Measured 2026-07-29: gemma3:12b scores {real['total']}/{real['total']} "
-              f"here and llama3.1 scores 12/{real['total']}, failing only the\n"
-              "  self-repetition cases. Try --model gemma3:12b.")
+        print("\n  This model cannot be trusted to tell supporting evidence from\n"
+              "  contradicting, unrelated, or merely weaker evidence. No figure is\n"
+              "  reported: an uncalibrated judge's number is worse than none.\n"
+              "  Measured 2026-07-29: gemma3:12b is the judge this repository has\n"
+              "  calibrated for this class of question. Try --model gemma3:12b.")
         return 1
 
-    print("\n=== how many Decisions entries were settled ===\n")
-    settled = unsettled = unparsed = 0
+    print("\n=== do located quotes support their claims ===\n")
+    supported = unsupported = unparsed = 0
+    by_kind: dict[str, list[bool | None]] = {}
     for path in artifacts:
         doc = json.loads(path.read_text())
-        claims = [c for c in doc["claims"]
-                  if c.get("type") == "decision" and c["status"] == VERIFIED]
-        rows = []
+        claims = [c for c in doc["claims"] if c["status"] == LOCATED]
+        print(f"  {doc['meeting']['id']}: {len(claims)} located of "
+              f"{len(doc['claims'])} claims")
         for c in claims:
-            verdict = _judge_settled(c["quote"], model, num_ctx, timeout)
+            verdict = _judge_support(c["claim"], c["quote"], c.get("type"), model,
+                                     num_ctx, timeout)
+            by_kind.setdefault(c.get("type") or "untyped", []).append(verdict)
             if verdict is None:
                 unparsed += 1
             elif verdict:
-                settled += 1
+                supported += 1
             else:
-                unsettled += 1
-            rows.append((verdict, c))
-        total = len(doc["claims"])
-        dec = sum(1 for c in doc["claims"] if c.get("type") == "decision")
-        print(f"  {doc['meeting']['id']}: {len(claims)} of {dec} Decisions entries have "
-              f"a located quote ({total} claims total)")
-        for verdict, c in rows:
-            word = {True: "settled", False: "not settled", None: "no verdict"}[verdict]
-            print(f"    [{word:11s}] {c['claim'][:44]}")
-            # Every verdict shows its quote, settled included. An earlier version printed
-            # it only for the negatives, which made the one entry a reader most needs to
-            # check — the whole numerator of a 1-of-19 result — the one they could not.
-            print(f"                  turn {c['turn']}: {c['quote'][:96]!r}")
+                unsupported += 1
+            word = {True: "supports", False: "does not", None: "no verdict"}[verdict]
+            print(f"    [{word:10s}] {(c.get('type') or '?').upper():8s} "
+                  f"{c['claim'][:40]}")
+            # Every verdict shows its quote, supporting ones included. A reader checking
+            # a rate needs to see the cases on both sides of it.
+            print(f"                 turn {c['turn']}: {c['quote'][:88]!r}")
 
-    judged = settled + unsettled
-    print(f"\n  {settled} of {judged} judged entries were settled"
+    judged = supported + unsupported
+    print(f"\n  {supported} of {judged} located quotes support their claim"
           + (f"; {unparsed} unparsed" if unparsed else ""))
-    print(f"  Sample is {judged} entries across {len(artifacts)} meetings, which is "
-          f"small. It bounds a claim about this taxonomy; it does not establish a rate.")
+    for kind, verdicts in sorted(by_kind.items()):
+        ok = sum(1 for v in verdicts if v)
+        print(f"    {kind:9s} {ok} of {len(verdicts)}")
+    print(f"\n  {judged} claims across {len(artifacts)} meetings and one judge. The "
+          f"per-kind rows are\n  too thin to compare kinds — they are shown so a reader "
+          f"can see the split, not\n  so a rate can be read off them.")
     return 0
 
 
@@ -1865,8 +1907,8 @@ def _claims_in_read_order(cites: dict) -> list[dict]:
     """The four buckets merged back into the order a reader meets them in."""
     claims = [
         {"status": status, **row}
-        for status, rows in ((VERIFIED, cites["cited"]),
-                             (UNSUPPORTED, cites["fabricated"]),
+        for status, rows in ((LOCATED, cites["cited"]),
+                             (COMPOSED, cites["fabricated"]),
                              (UNTESTABLE, cites["unverifiable"]),
                              (UNQUOTED, cites["uncited"]))
         for row in rows
@@ -1891,7 +1933,7 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
     `docs/journeys.md` retains the transcript precisely so the note does not have to
     be self-contained. A renderer joins the two.
 
-    UNSUPPORTED deserves its plain name. The model's entire input was this
+    COMPOSED deserves its plain name. The model's entire input was this
     transcript, so a quote that is not in it was not misheard or lost to a failed
     capture — it was composed. That distinction is the one thing J1 beat 4 says the
     product must never blur, and here it is not ambiguous.
@@ -2509,10 +2551,10 @@ def run_self_test() -> int:
 
     verdict_case("a fabricated quote fails the run, not just the check",
                  "## Decisions\n- Budget approved.\n  > the budget was approved today",
-                 False, UNSUPPORTED)
+                 False, COMPOSED)
     verdict_case("a located quote passes and is marked verified",
                  "## Decisions\n- Rubber chosen.\n  > go with the rubber for the case",
-                 True, VERIFIED)
+                 True, LOCATED)
     verdict_case("a claim with no quote does not fail the run, and is marked unquoted",
                  "## Decisions\n- Rubber chosen, with nothing offered.", True, UNQUOTED)
     verdict_case("a quote too short to test does not fail the run",
@@ -2528,7 +2570,7 @@ def run_self_test() -> int:
         ordered_doc = note_artifact(ordered, verdict_t, ordered_checks,
                                     Path("corpus/fix.json"), Path("out"))
     got_order = [c["status"] for c in ordered_doc["claims"]]
-    order_ok = got_order == [UNSUPPORTED, VERIFIED]
+    order_ok = got_order == [COMPOSED, LOCATED]
     failures += not order_ok
     print(f"  [{'pass' if order_ok else 'FAIL'}] claims keep the order they are read "
           f"in, not the order they were judged in")
@@ -2576,10 +2618,10 @@ def main():
                    help="overlap between slices, so a commitment spanning a cut "
                         "survives in one of them")
     p.add_argument("--out", type=Path, help="also write the notes to this file")
-    p.add_argument("--measure-settlement", type=Path, nargs="+", metavar="NOTE.JSON",
-                   help="judge whether each Decisions entry with a located quote is a "
-                        "decision the meeting settled; calibrates the judge first and "
-                        "reports no figure if it fails")
+    p.add_argument("--measure-support", type=Path, nargs="+", metavar="NOTE.JSON",
+                   help="judge whether each located quote supports the claim it is "
+                        "attached to; calibrates the judge first and reports no figure "
+                        "if it fails")
     p.add_argument("--recheck", type=Path, nargs="+", metavar="NOTE.JSON",
                    help="re-derive the citation check for existing note/1 artifacts "
                         "without calling a model, and rewrite them in place")
@@ -2590,9 +2632,9 @@ def main():
 
     if args.self_test:
         return run_self_test()
-    if args.measure_settlement:
-        return measure_settlement(args.measure_settlement, args.model, args.num_ctx,
-                                  args.timeout)
+    if args.measure_support:
+        return measure_support(args.measure_support, args.model, args.num_ctx,
+                               args.timeout)
     if args.recheck:
         print("\n=== re-derived, no model call ===\n")
         rechecked = [recheck(a) for a in args.recheck]
