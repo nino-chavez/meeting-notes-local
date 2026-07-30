@@ -1512,3 +1512,9 @@ comparison baseline and the wrong place for a permanent record. **Any future run
 will be compared against a previous one should snapshot the previous one first**, and
 the same is true of `--measure-support` verdicts, which cost a second model pass to
 recreate and cannot be recreated exactly at all once the note has moved.
+
+A regeneration of Bmr006 was left running when this was written, so `notes/out/` may hold
+a **partial** set: a new Bmr006 beside two artifacts from the previous run. Check
+`provenance.generated_at` before comparing anything, and note that a freshly generated
+artifact carries no `support` key at all until `--measure-support` has been run over it —
+an absent support rate is not a rate of zero.
