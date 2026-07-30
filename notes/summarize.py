@@ -106,11 +106,25 @@ them, complete them, or join words from different parts of the transcript. At
 least five words, or it proves nothing."""
 
 QUOTE_FROM_ITEMS = """
-Every item you were given ends with a pipe and the words that item rests on.
-Carry those words across unchanged, on their own line below the item, starting with
-the > character. Never write a quote of your own: you have not seen the transcript,
-so anything you compose is invented. An item that arrived without evidence after
-its pipe gets no quoted line at all."""
+Every item you were given begins with the spoken words that item rests on, then a
+pipe, then a label and the item itself. The two sides of the pipe are not
+interchangeable. Before the pipe are words somebody said, and they must be
+reproduced exactly. After it is the item, and that is yours to merge and reword.
+
+Write the item on its own line and carry the spoken words across unchanged on the
+next line, indented, starting with the > character — the reader meets the item
+first and its evidence underneath. Never write a quote of your own: you have not
+seen the transcript, so anything you compose is invented. An item that arrived
+with no spoken words before a pipe gets no quoted line at all."""
+# Naming which side of the pipe is which also repairs a defect recorded against the
+# previous version, which said only "carry those words across". The consolidator
+# swapped the fields on Proposed items — extraction produced `ACTION: write down
+# error message | maybe we should write it down` and the note came back reading
+# `- Maybe we should write it down | write down error message`, quoting the summary
+# as though it were speech. An instruction that says "carry the words" without
+# saying which words are the spoken ones leaves the model to infer it from meaning,
+# and on a hedged item the hedge reads more like speech than the summary does.
+#
 # The example above is a shape, not a sentence, and that is deliberate. The first
 # version illustrated it with real prose — "The team settled on the rubber casing"
 # over a matching quote — and llama3.1 reproduced both as a decision ES2004c had
@@ -166,6 +180,23 @@ Rules that override everything else:
 # roughly 8600 words into 150 — a 57:1 ratio at which dropping things is the
 # expected behaviour rather than a defect. These split that into a slice-level
 # pass that is not allowed to compress and a merge that is not allowed to select.
+#
+# The extraction line puts the quote BEFORE the claim, and the order is the whole
+# point rather than a formatting preference. A model generates left to right, so
+# whichever field it writes first is the one the second is conditioned on. Asking
+# for `ACTION: ... | words` had it settle on a claim and then go looking for words
+# to justify one it had already committed to — which is exactly what the support
+# measurement found: of 25 claims whose quote did not support them, 9 cited words
+# that did not bear on the claim at all and 1 cited words that contradicted it.
+# Writing the words first makes the claim a reading of them.
+#
+# What this cannot fix is overstatement — 11 of those 25 — where the quote is
+# genuinely about the claim's subject but says something weaker. "we could just
+# get a DAT machine" supports writing "ACTION: Get a DAT machine" from those very
+# words, in either order. That is what the PROPOSAL label is for, and it is added
+# here in the same change because inverting without it would force the failure:
+# a model reading hedged words first, offered only DECISION/ACTION/QUESTION, has
+# no truthful line to write.
 EXTRACT_RULES = """\
 You are reading ONE SLICE of a longer meeting transcript and pulling out the raw
 material for its notes. This is not the notes. Something left out here cannot be
@@ -180,15 +211,29 @@ Rules that override everything else:
   systems, datasets, metrics, deliverables. A commitment stripped of the name of
   the thing it concerns cannot be reconstructed downstream, and that is the
   failure this pass exists to prevent.
-- One item per line, each starting with DECISION:, ACTION:, or QUESTION:, and
-  end every line with a pipe followed by at least five words copied from this
-  slice exactly as they appear:
+- Work through the slice looking for the words themselves. One item per line, and
+  every line starts with the spoken words:
 
-  ACTION: <what was committed to> | <words copied from this slice>
+  WORDS COPIED FROM THIS SLICE | ACTION: WHAT THOSE WORDS ESTABLISH
+
+  At least five words copied from this slice exactly as they appear, then a pipe,
+  then one of DECISION:, ACTION:, PROPOSAL: or QUESTION:, then what those
+  particular words establish. WORDS COPIED FROM THIS SLICE and WHAT THOSE WORDS
+  ESTABLISH name the two slots; do not write those words.
+
+  The words come first because you are reading out what they say. Do not decide
+  what the item is and then look for words to put in front of it — find the words,
+  then write only what they will carry. If nothing in this slice says it, it does
+  not get a line.
 
   Those words are the only evidence anything downstream will have. No later step
   sees this transcript, so a line without them cannot be traced back to speech by
   anyone, ever.
+- Take the label from the words you copied, not from what would be most useful.
+  DECISION: those words settle it. ACTION: someone commits in those words to doing
+  it. PROPOSAL: those words suggest, offer or ask for it without settling it —
+  anything hedged, "maybe we should", "we could", "I think we ought to", is a
+  PROPOSAL however good the idea is. QUESTION: those words ask it and leave it open.
 - A slice is mostly ordinary conversation. If it contains none of these, output
   nothing at all.
 - No preamble, no summary, no headings, no commentary."""
@@ -513,9 +558,9 @@ _LIST_ITEM = re.compile(r"^[ \t]*[-*][ \t]+(?P<body>\S.*?)[ \t]*$")
 _HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+(?P<title>\S.*?)[ \t]*$")
 
 # The heading an item sits under, normalised. Not a taxonomy invented here: these are
-# the three labels the extraction pass already emits (`_ITEM`), and the section names
-# the prompt already asks for. An unrecognised heading keeps its own words rather than
-# being forced into one of the three, because a note that grew a fourth section is
+# the four labels the extraction pass emits (`_LABELS`), and the section names the
+# prompt already asks for. An unrecognised heading keeps its own words rather than
+# being forced into one of the four, because a note that grew a fifth section is
 # information and silently relabelling it would destroy that.
 _TYPES = {"decisions": "decision", "decision": "decision",
           "action items": "action", "actions": "action", "action": "action",
@@ -1518,9 +1563,65 @@ def chunk_transcript(transcript: Transcript, target_words: int,
     ]
 
 
-_ITEM = re.compile(
-    r"^\s*(?:[-*]\s*)?(DECISION|ACTION|PROPOSAL|QUESTION)\s*:\s*(?P<text>[^|]+?)"
+_LABELS = r"DECISION|ACTION|PROPOSAL|QUESTION"
+
+# The order the contract now asks for: spoken words, pipe, label, item. The quote
+# group excludes pipes, so it cannot swallow a later field by backtracking.
+_ITEM_QUOTE_FIRST = re.compile(
+    rf"^\s*(?:[-*]\s*)?(?P<quote>[^|]*?\S)\s*\|\s*(?P<label>{_LABELS})\s*:\s*"
+    r"(?P<text>\S.*?)\s*$", re.IGNORECASE)
+
+# The order it used to ask for, still read. Not politeness towards an old format:
+# a line matching neither pattern is dropped silently, and three separate defects in
+# this file were failures landing somewhere nothing counted them. A model that
+# ignores the inversion has to show up as a number, because "40 of 93 lines came
+# back in the old order" is the finding that explains a flat result, and a line that
+# quietly disappears looks identical to a slice that contained nothing.
+_ITEM_CLAIM_FIRST = re.compile(
+    rf"^\s*(?:[-*]\s*)?(?P<label>{_LABELS})\s*:\s*(?P<text>[^|]+?)"
     r"(?:\s*\|\s*(?P<quote>.+?))?\s*$", re.IGNORECASE)
+
+# A line that carries a pipe or a label was trying to be an item, so failing to parse
+# it is a defect. A line with neither is the preamble the contract forbids but models
+# still write, and ignoring that is correct rather than lossy.
+_ITEMISH = re.compile(rf"\||\b(?:{_LABELS})\s*:", re.IGNORECASE)
+
+
+def parse_item(line: str) -> dict | None:
+    """One extraction line, or None if it is not one.
+
+    Quote-first is tried first because it is what the contract asks for. The two
+    patterns are anchored at opposite ends, so an ordinary line matches at most one
+    of them; only a line carrying two labels could match both, and the current
+    contract is the tiebreak.
+    """
+    for order, pattern in (("quote-first", _ITEM_QUOTE_FIRST),
+                           ("claim-first", _ITEM_CLAIM_FIRST)):
+        if m := pattern.match(line):
+            return {"label": m.group("label").upper(),
+                    "text": m.group("text").strip(),
+                    "quote": (m.group("quote") or "").strip(),
+                    "order": order}
+    return None
+
+
+def check_extraction(lines: list[str], parsed: list[dict]) -> dict:
+    """Whether every line that tried to be an item became one, and in which order.
+
+    Separate from the note checks because it scores a different artifact — the
+    intermediate list, which no reader ever sees and which is therefore the easiest
+    place in the pipeline for content to go missing without anybody noticing.
+    """
+    dropped = [ln.strip() for ln in lines
+               if ln.strip() and _ITEMISH.search(ln) and not parse_item(ln)]
+    orders = Counter(p["order"] for p in parsed)
+    return {
+        "applies": True,
+        "ok": not dropped,
+        "dropped": dropped,
+        "orders": dict(orders),
+        "labels": dict(Counter(p["label"] for p in parsed)),
+    }
 
 
 def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout: int,
@@ -1544,14 +1645,16 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
     slices = chunk_transcript(transcript, target_words, overlap_words)
 
     t0 = time.monotonic()
-    calls, items = [], []
+    calls, items, parsed, raw_lines = [], [], [], []
     for chunk in slices:
         user = f"Transcript slice:\n\n{chunk.render()}\n\nList the items."
         response = ollama_chat(model, extract_system, user, num_ctx, timeout)
         calls.append({"label": chunk.source, "prompt": extract_system + user,
                       "response": response})
         for line in response["message"]["content"].splitlines():
-            if m := _ITEM.match(line):
+            raw_lines.append(line)
+            if item := parse_item(line):
+                parsed.append(item)
                 # The quote travels with the item, and that is load-bearing rather
                 # than tidy. Only this pass sees the transcript; the consolidator
                 # receives the item list alone. Dropping the quote here left the
@@ -1559,9 +1662,13 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
                 # never been shown, so every citation it produced was necessarily
                 # invented — a structural guarantee of fabrication, arriving because
                 # a requirement was added to a contract both passes share.
-                quote = (m.group("quote") or "").strip()
-                items.append(f"{m.group(1).upper()}: {m.group('text').strip()}"
-                             + (f" | {quote}" if quote else ""))
+                #
+                # Rewritten into the contract's order regardless of the order the
+                # model used, so the consolidator is never handed two shapes to tell
+                # apart. Reading both orders is for counting what the model did; the
+                # downstream pass gets one.
+                claim = f"{item['label']}: {item['text']}"
+                items.append(f"{item['quote']} | {claim}" if item["quote"] else claim)
 
     listing = "\n".join(items) if items else "(no items were extracted)"
     user = f"Items extracted from the meeting, in order:\n\n{listing}\n\nWrite the notes."
@@ -1580,6 +1687,7 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         "system": extract_system + "\n" + consolidate_system,
         "calls": calls,
         "extracted": items,
+        "extraction": check_extraction(raw_lines, parsed),
         "slices": len(slices),
         "duplicates_removed": repeats,
     }
@@ -1607,6 +1715,18 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
             f"still in the transcript)" if transcript.gated_turns else "")
     print(f"  turns         {len(transcript.turns)}{held}")
     print(f"  model         {result['model']}  in {result['elapsed_s']:.1f}s")
+    if extraction := result.get("extraction"):
+        # Which order the model actually wrote, printed every run rather than only
+        # when it disagrees. The contract asking for quote-first is not evidence the
+        # model obliged, and a support rate that does not move means two different
+        # things depending on this line.
+        counts = ", ".join(f"{n} {order}" for order, n in
+                           sorted(extraction["orders"].items()))
+        labels = ", ".join(f"{n} {lab.lower()}" for lab, n in
+                           sorted(extraction["labels"].items()))
+        print(f"  extraction    {counts or 'no items'} — {labels or 'none'}")
+        for line in extraction["dropped"]:
+            print(f"                DROPPED (looks like an item, parsed as none): {line}")
     if result.get("duplicates_removed"):
         # Reported, not hidden. The consolidator repeating itself is a fact about the
         # chunked path's reliability, and the note it came from no longer shows it.
@@ -1765,6 +1885,10 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
         "owner_grounding": owners,
         "recall": recall,
         "citations": cites,
+        # Absent on the single-pass path, which has no intermediate list to lose
+        # anything in. Recorded rather than omitted so a reader of the artifact can
+        # tell "this path has no such stage" from "nobody looked".
+        "extraction": result.get("extraction", {"applies": False, "ok": None}),
     }
     return {"passed": verdict(checks), **checks}
 
@@ -1785,12 +1909,20 @@ def verdict(checks: dict) -> bool:
     """
     ctx = checks["context"]
     attr = checks["attribution"]
+    # `.get` because artifacts written before the extraction check existed have no
+    # such key, and `recheck` runs this formula over them. Defaulting to "does not
+    # apply" says what is true of those files: the stage was not scored. Defaulting
+    # to ok=True would have claimed it passed.
+    extraction = checks.get("extraction", {"applies": False})
     return (
         ctx["ok"] is not False
         and (not attr["applies"] or attr["ok"])
         and checks["numbers"]["ok"]
         and checks["prompt_echo"]["ok"]
         and checks["citations"]["ok"]
+        # A line the model wrote as an item and the parser did not read is content
+        # dropped between two stages, where no reader and no other check can see it.
+        and (not extraction["applies"] or extraction["ok"])
     )
 
 
@@ -2578,24 +2710,68 @@ def run_self_test() -> int:
     # which made every citation on the chunked path invented by construction.
     def item_case(label: str, line: str, want) -> None:
         nonlocal failures
-        m = _ITEM.match(line)
-        got = None if not m else (m.group(1).upper(), m.group("text").strip(),
-                                  (m.group("quote") or "").strip())
+        p = parse_item(line)
+        got = None if not p else (p["label"], p["text"], p["quote"], p["order"])
         ok = got == want
         failures += not ok
         print(f"  [{'pass' if ok else 'FAIL'}] {label}")
         if not ok:
             print(f"          got {got!r}")
 
-    item_case("an extracted item carries its evidence through the merge",
+    item_case("the inverted line reads the words before the pipe as the quote",
+              "i'll send an email and ask | ACTION: Send the corpus licence",
+              ("ACTION", "Send the corpus licence", "i'll send an email and ask",
+               "quote-first"))
+    # The defect this reproduces: hedged speech under a summary that overstates it.
+    # Whichever field the parser calls the quote decides whether `check_citations`
+    # looks for the spoken words in the transcript or for the model's own summary,
+    # and the second finds nothing and calls it fabricated.
+    item_case("a hedged quote is not mistaken for the claim it sits beside",
+              "maybe we should write it down | PROPOSAL: Write down the error message",
+              ("PROPOSAL", "Write down the error message",
+               "maybe we should write it down", "quote-first"))
+    item_case("a claim containing a pipe survives the inverted split",
+              "we said utf-8 | QUESTION: Which encoding | and which locale",
+              ("QUESTION", "Which encoding | and which locale", "we said utf-8",
+               "quote-first"))
+    item_case("the order the contract used to ask for is still read, and recorded",
               "ACTION: Send the corpus licence | i'll send an email and ask",
-              ("ACTION", "Send the corpus licence", "i'll send an email and ask"))
+              ("ACTION", "Send the corpus licence", "i'll send an email and ask",
+               "claim-first"))
     item_case("an item with no evidence still parses, rather than being dropped",
               "DECISION: Delay the anonymisation",
-              ("DECISION", "Delay the anonymisation", ""))
+              ("DECISION", "Delay the anonymisation", "", "claim-first"))
     item_case("a quote containing a pipe keeps everything after the first one",
               "QUESTION: Which encoding | we said utf-8 | not latin-1",
-              ("QUESTION", "Which encoding", "we said utf-8 | not latin-1"))
+              ("QUESTION", "Which encoding", "we said utf-8 | not latin-1",
+               "claim-first"))
+
+    # Both halves of the drop check, because only the negative one is load-bearing.
+    # A check that flags every unparsed line would flag the preamble the model writes
+    # despite being told not to, and a check nobody can keep green gets switched off.
+    drop_lines = [
+        "we agreed on the rubber case | RESOLUTION: use rubber",  # a label it invented
+        "Here are the items from this slice:",                    # preamble, correctly ignored
+        "",
+        "i'll send an email and ask | ACTION: Send the corpus licence",
+    ]
+    ext = check_extraction(drop_lines, [p for ln in drop_lines if (p := parse_item(ln))])
+    ext_ok = (ext["ok"] is False
+              and ext["dropped"] == ["we agreed on the rubber case | RESOLUTION: use rubber"]
+              and ext["orders"] == {"quote-first": 1})
+    failures += not ext_ok
+    print(f"  [{'pass' if ext_ok else 'FAIL'}] a line shaped like an item that parses as "
+          f"none is counted, and preamble is not")
+    if not ext_ok:
+        print(f"          got {ext!r}")
+
+    clean = check_extraction(["i'll send an email and ask | ACTION: Send the corpus licence"],
+                             [parse_item("i'll send an email and ask | ACTION: Send it")])
+    v_ext = dict(stored, extraction={"applies": True, "ok": False})
+    drop_fails = clean["ok"] is True and verdict(v_ext) is False
+    failures += not drop_fails
+    print(f"  [{'pass' if drop_fails else 'FAIL'}] a dropped extraction line fails the run, "
+          f"rather than being reported and passing")
 
     print("\n=== the run's verdict, and the artifact it writes ===\n")
     # `check_citations` returning ok=False is not what stops a run — `report`'s

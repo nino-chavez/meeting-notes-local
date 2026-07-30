@@ -1339,3 +1339,70 @@ unsupported claims are dominated by quotes that do not bear on their claim. That
 the second candidate addresses — inverting the generation so a claim is written *from* the
 turn it cites rather than matched to one afterwards — and it is the next repair, not a
 measurement.
+
+## Repair 2: the quote is written before the claim
+
+`Proposed` was a new label. This is a change to the order the model generates in, which
+is the mechanism the diagnosis actually pointed at.
+
+A model generates left to right, so whichever field it writes first is the one the second
+is conditioned on. The extraction contract asked for `ACTION: <claim> | <words>`, which
+has the model settle on a claim and then go looking for words to justify one it has
+already committed to. Reversed — `<words> | ACTION: <claim>` — the claim can only be a
+reading of words it has already copied down.
+
+### The disaggregated baseline, which is not what the aggregate said
+
+| | claims | located | supported | composed |
+|---|---|---|---|---|
+| Bmr006 (chunked) | 93 | 24 | 8 (33%) | **56 (60%)** |
+| ES2004c (single-pass) | 17 | 11 | 4 (36%) | 2 |
+| covid_4 (single-pass) | 8 | 7 | 5 (71%) | 1 |
+
+**Bmr006 carries 56 of the 59 composed quotes in the corpus.** The aggregate "40% of
+located claims are supported" was hiding the larger failure, because a composed quote
+never reaches the support judge at all — it is excluded from the denominator the rate is
+computed over. Sixty per cent of the longest meeting's claims cite words that are not in
+the transcript, and the support rate cannot see any of them.
+
+This change touches only the chunked path, so **Bmr006 is the whole experiment**. The two
+single-pass meetings run unchanged code at `temperature: 0.0` and should return the same
+notes; that is a smoke test, not a control, and it carries no information about the
+change. Single-pass inversion is deliberately not attempted here: the note *is* that
+path's raw output, so inverting it means deciding whether the markdown becomes a
+rendering of the artifact rather than the model's own text, and that is a separate
+question from this one.
+
+### Two changes ship together, because the first forces the second
+
+`PROPOSAL` is added to the extraction contract in the same commit. Not scope creep, and
+not a second repair: the extraction pass currently emits 68 ACTION, 72 DECISION, 20
+QUESTION and **zero PROPOSAL** — all 13 of Bmr006's proposals came from the consolidator
+re-filing them downstream. A model that reads hedged words *first* and is offered only
+DECISION, ACTION and QUESTION has no truthful line to write, so inverting without the
+label would build a prompt that requires overstatement.
+
+They are separable in the measurement even though not in the change. The label can only
+move items *out* of decision and action, never into them, so **the support rate restricted
+to decision and action claims is a number the label cannot inflate.** It is reported
+alongside the aggregate.
+
+### Registered before the run, as rates, with the absolutes that would undercut them
+
+1. **Composed falls from 60% to under 30% of Bmr006's claims.** The largest predicted
+   effect, and it is not about generation order — it is `QUOTE_FROM_ITEMS` naming which
+   side of the pipe holds spoken words. The old wording said only "carry those words
+   across", and the consolidator picked the wrong side often enough to invent 56 quotes.
+2. **Support among located claims rises from 33% to between 45% and 60%**, and the
+   absolute count rises above 8. Both, or the result is a smaller note rather than a
+   better one.
+3. **Claim count may fall,** because quote-first means the model can only write what it
+   found words for. Reported per meeting either way. A rate rise at 60 claims is a
+   different finding from the same rate at 93.
+4. **Mis-selection and contradiction shrink; overstatement falls via the label, not the
+   order.** "we could just get a DAT machine" supports "ACTION: Get a DAT machine" in
+   either order — only `PROPOSAL` touches that one. An aggregate that moves with
+   mis-selection flat means something other than the stated mechanism fired.
+5. **The order the model actually used is the gate on all of the above.** `report` now
+   prints it. If most lines come back claim-first, the inversion did not happen and
+   nothing below that line is evidence about inversion.
