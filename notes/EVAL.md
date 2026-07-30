@@ -897,6 +897,14 @@ compliance is "unstable run-to-run" rested partly on a console capture that was
 truncated at both ends and cannot be re-measured; what the artifacts do support is
 that the model varies its citation **layout** between runs and between meetings.
 
+**Every row above predates the prompt fix below, except one.** The table is the state
+the notes were *measured in*, which is what the re-derivation preserves — but the
+citation format changed afterwards, and that is the one change able to move all of it.
+Re-run on ES2004c under the revised prompt: **8 verified of 10**, ten next-line quotes,
+zero collapses, zero bracket echo, zero slot-name echo, in 45s against the earlier
+run's minutes. covid_4 and Bmr006 have **not** been re-measured under it, so their rows
+describe the old prompt and should not be quoted as current.
+
 **A second prompt-echo, traded for the first.** Illustrating the citation format with
 real prose got that prose back as a decision the meeting reached, so the example
 became `<angle-bracket placeholders>`. The model then copied the brackets: 83 of 83

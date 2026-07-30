@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -157,10 +158,10 @@ def note_annotation(status: str, body: str) -> str:
 def trust_bar(c: dict[str, int]) -> str:
     """Proportional, and labelled, because the proportion is the finding.
 
-    A note whose claims are mostly unsupported is the normal case on a long meeting,
-    not an error state — the run behind Bmr006 located 5 quotes out of 111. `F` exists
-    to make that visible before the note is opened, which `journeys.md` argues is the
-    difference between a corpus and a junk drawer.
+    Notes differ in this and nothing else on a list row shows it: across three real
+    runs the checkable share was 7 of 11, 33 of 83 and 4 of 15. `F` exists to make that
+    visible before the note is opened, which `journeys.md` argues is the difference
+    between a corpus and a junk drawer.
     """
     total = sum(c.values())
     if not total:
@@ -207,12 +208,21 @@ def claim_row(claim: dict, i: int, meeting: str) -> str:
 
 
 def transcript_pane(meeting: str, turns: list, cited: set[int]) -> str:
+    """The retained words, with a position column that carries something real.
+
+    A transcript with no times gets turn numbers rather than a column of `--:--`. The
+    column's job is to let the operator say where in the record they are and point
+    someone else at it; a repeated placeholder does that job worse than a number and
+    implies the times exist but failed to render.
+    """
+    timed = any(t.start is not None for t in turns)
     rows = []
     for i, t in enumerate(turns):
         who = f'<span class="who">{esc(t.speaker)}</span>' if t.speaker else ""
         klass = "turn cited" if i in cited else "turn"
+        where = stamp(t.start) if timed else str(i)
         rows.append(f'<li class="{klass}" id="t-{esc(meeting)}-{i}">'
-                    f'<span class="tt">{stamp(t.start)}</span>{who}'
+                    f'<span class="tt">{esc(where)}</span>{who}'
                     f'<span class="text">{esc(t.text)}</span></li>')
     return f'<ol class="turns" id="tr-{esc(meeting)}">' + "".join(rows) + "</ol>"
 
@@ -284,7 +294,7 @@ def meeting_section(doc: dict, note_path: Path) -> tuple[str, dict]:
                        "show.")}
       <ol class="claims">{claims}</ol>
     </div>
-    <div class="col">
+    <div class="col col-evidence">
       <h4>The transcript &mdash; what was actually said</h4>
       {note_annotation("real data",
                        "The retained artifact. A verified claim's timestamp is a "
@@ -433,6 +443,12 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   .trust {{ max-width: 380px; margin-bottom: 4px; }}
   .split {{ display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
             align-items: start; margin-top: 18px; }}
+  /* The evidence column stays put while the claims scroll past it. A note has far
+     more claims than the transcript pane is tall — 83 on the longest meeting — so
+     without this the right half of the surface is empty for most of its height, and
+     checking a claim against the words means scrolling back up to find the pane. The
+     two things this surface exists to show side by side have to stay side by side. */
+  .col-evidence {{ position: sticky; top: 16px; }}
 
   .claims {{ list-style: none; margin: 0; padding: 0; }}
   .claim {{ background: var(--surface-raised); border-radius: 6px; padding: 12px 14px;
@@ -561,6 +577,30 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
 '''
 
 
+def check_wiring(page_html: str) -> int:
+    """Every locator button must target an element that exists on the page.
+
+    `check_locators` proves the *data* is right — that turn N holds the quote cited for
+    it. This proves the *markup* is right, and they are different failures. If the id a
+    button builds and the id a turn carries ever disagree, the data stays correct and
+    every button silently does nothing: no error, no console message, just a page that
+    does not move. Two id spellings derived independently is the same shape as the two
+    parsers and the two verdict formulas, so it gets the same treatment.
+    """
+    targets = set(re.findall(r'<li class="turn[^"]*" id="([^"]+)"', page_html))
+    wanted = [f"t-{m}-{t}" for m, t in
+              re.findall(r'<button class="at" data-meeting="([^"]+)" data-turn="(\d+)"',
+                         page_html)]
+    missing = [w for w in wanted if w not in targets]
+    if missing:
+        raise SystemExit(
+            f"{len(missing)} locator button(s) point at ids that are not on the page, "
+            f"e.g. {missing[:3]}. The claim data may be correct while every button "
+            f"does nothing."
+        )
+    return len(wanted)
+
+
 def main() -> int:
     # A directory argument, so the renderer can be exercised against a fixture without
     # writing into the directory holding real meeting artifacts.
@@ -587,12 +627,13 @@ def main() -> int:
         for k, v in c.items():
             totals[k] += v
 
-    page_path.write_text(page("".join(sections), "".join(library), totals, tok,
-                              len(notes)))
+    rendered = page("".join(sections), "".join(library), totals, tok, len(notes))
+    buttons = check_wiring(rendered)
+    page_path.write_text(rendered)
     size = page_path.stat().st_size / 1024
     noun = "meeting" if len(notes) == 1 else "meetings"
     print(f"wrote {page_path}  ({size:.0f} KB, {len(notes)} {noun}, "
-          f"{sum(totals.values())} claims)")
+          f"{sum(totals.values())} claims, {buttons} locators all resolving)")
     for state, n in totals.items():
         print(f"  {n:>4}  {state}")
     return 0

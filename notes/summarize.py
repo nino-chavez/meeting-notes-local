@@ -532,6 +532,25 @@ def _parse_claims(note: str) -> list[dict]:
         offsets.append(pos)
         pos += len(line) + 1
 
+    # Which layout this note uses, decided once for the whole note rather than per
+    # item. Reading a mid-line `>` as a citation wherever one appears would turn
+    # "sustained throughput > 100 requests per second" into a quote that cannot be
+    # located and therefore into a reported fabrication — inventing a fabrication is
+    # worse than the bug being fixed here, which only misfiled real ones. Markdown
+    # agrees: a blockquote marker is only a blockquote at the start of a line.
+    #
+    # A note commits to one layout. Where a quote appears below any item, that is the
+    # note's layout and a mid-line `>` is prose. Otherwise two or more items sharing
+    # the collapsed shape is the model having flattened the template, which is what it
+    # did on two of three real meetings; a single one is a comparison.
+    has_below = any(
+        _LIST_ITEM.match(lines[i]) and i + 1 < len(lines) and _BLOCKQUOTE.match(lines[i + 1])
+        for i in range(len(lines)))
+    collapsed_shaped = sum(
+        1 for i, line in enumerate(lines)
+        if (m := _LIST_ITEM.match(line)) and _SAME_LINE.match(m.group("body")))
+    read_collapsed = not has_below and collapsed_shaped >= 2
+
     out, i = [], 0
     while i < len(lines):
         m = _LIST_ITEM.match(lines[i])
@@ -544,8 +563,8 @@ def _parse_claims(note: str) -> list[dict]:
             quote = below.group("quote")
             i += 2
         else:
-            if collapsed := _SAME_LINE.match(claim):
-                claim, quote = collapsed.group("claim"), collapsed.group("quote")
+            if read_collapsed and (collapse := _SAME_LINE.match(claim)):
+                claim, quote = collapse.group("claim"), collapse.group("quote")
             i += 1
         wrapped = bool(w := _WRAPPED.match(claim))
         if w:
@@ -1086,10 +1105,10 @@ def check_recall(note: str, reference_items: list[str], model: str,
 
     found, missed, unparsed = [], [], []
     for item in reference_items:
-        verdict = _judge_item(item, note, model, num_ctx, timeout)
-        if verdict is None:
+        judged = _judge_item(item, note, model, num_ctx, timeout)
+        if judged is None:
             unparsed.append(item)
-        elif verdict:
+        elif judged:
             found.append({"item": item})
         else:
             missed.append({"item": item})
@@ -1436,14 +1455,7 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
     # check and become a second authority on it. Every defect this file has had to
     # repair was two places deciding the same thing, so the verdict and the
     # evidence behind it leave here together.
-    return {
-        "passed": (
-            ctx["ok"] is not False
-            and (not attr["applies"] or attr["ok"])
-            and nums["ok"]
-            and echo["ok"]
-            and cites["ok"]
-        ),
+    checks = {
         "context": ctx,
         "attribution": attr,
         "numbers": nums,
@@ -1453,6 +1465,32 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
         "recall": recall,
         "citations": cites,
     }
+    return {"passed": verdict(checks), **checks}
+
+
+def verdict(checks: dict) -> bool:
+    """Whether a run passes, from its checks. The only place that decides.
+
+    Written once because the alternative was tried in this very file, in the change
+    that repaired two parsers disagreeing about the same question: `recheck` grew its
+    own formula, and it diverged three ways within a dozen lines of the original. It
+    dropped `context`, so a run whose prompt had been truncated could be rechecked into
+    passing. It lost `attribution`'s `applies` guard, so a level that permits no actors
+    could fail on a check that does not apply to it. And it swept in `grounding`, which
+    is advisory by an explicit decision recorded ten lines above.
+
+    None of those were reasoning errors. They are what happens when a formula is
+    retyped from memory beside the one it has to match.
+    """
+    ctx = checks["context"]
+    attr = checks["attribution"]
+    return (
+        ctx["ok"] is not False
+        and (not attr["applies"] or attr["ok"])
+        and checks["numbers"]["ok"]
+        and checks["prompt_echo"]["ok"]
+        and checks["citations"]["ok"]
+    )
 
 
 NOTE_SCHEMA = "note/1"
@@ -1509,9 +1547,7 @@ def recheck(artifact: Path) -> dict:
     # move too — otherwise the artifact would carry a corrected finding under an
     # uncorrected pass mark.
     was = doc["passed"]
-    others = [v.get("ok") for k, v in doc["checks"].items()
-              if k not in ("citations", "context") and isinstance(v, dict)]
-    doc["passed"] = cites["ok"] and all(o is not False for o in others)
+    doc["passed"] = verdict(doc["checks"])
     doc["provenance"]["rechecked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     artifact.write_text(json.dumps(doc, indent=2) + "\n")
 
@@ -1685,9 +1721,9 @@ def run_self_test() -> int:
         got = check_attribution(note, t, speakers)
         ok = got["ok"] == expect_ok
         failures += not ok
-        verdict = "pass" if ok else "FAIL"
+        mark = "pass" if ok else "FAIL"
         want = "clean" if expect_ok else "flagged"
-        print(f"  [{verdict}] expects {want:8s} — {label}")
+        print(f"  [{mark}] expects {want:8s} — {label}")
         if not ok:
             print(f"          got names={got['named_speakers']} "
                   f"phrases={got['actor_phrases']}")
@@ -1916,18 +1952,37 @@ def run_self_test() -> int:
     # blind spot that made 41 located quotes report as zero. Every fixture above uses
     # the next-line form the contract asks for, which is why twelve controls passed
     # while the checker was wrong on most real output.
-    cite_case("a quote collapsed onto the item's own line is still a citation",
-              "## Decisions\n- Rubber casing chosen. > go with the rubber for the case",
-              True, cited=1, uncited=0)
+    collapsed_note = (
+        "## Decisions\n"
+        "- Rubber casing chosen. > go with the rubber for the case\n"
+        "- Lead time too long. > the supplier said eight weeks which is too long\n")
+    cite_case("quotes collapsed onto the items' own lines are still citations",
+              collapsed_note, True, cited=2, uncited=0)
     cite_case("and a collapsed quote that is not in the transcript still fails",
-              "## Decisions\n- Budget approved. > the budget was approved today",
-              False, fabricated=1, uncited=0)
+              "## Decisions\n"
+              "- Budget approved. > the budget was approved today\n"
+              "- Rubber chosen. > go with the rubber for the case\n",
+              False, fabricated=1, cited=1, uncited=0)
     cite_case("template punctuation the model copied is stripped and counted",
-              "## Decisions\n- <Rubber casing chosen> > go with the rubber for the case",
-              True, cited=1, template_echo=1)
+              "## Decisions\n"
+              "- <Rubber casing chosen> > go with the rubber for the case\n"
+              "- <Lead time too long> > the supplier said eight weeks which is too long\n",
+              True, cited=2, template_echo=2)
     cite_case("a claim with no quote is not read as a collapsed one",
               "## Decisions\n- Rubber casing chosen with nothing offered.",
               True, uncited=1, cited=0, template_echo=0)
+    # The collapsed reading has to be bounded, or it manufactures the failure it was
+    # added to stop under-reporting. A `>` inside a claim is prose, and reading it as a
+    # citation would report a fabrication that never happened — the crying-wolf
+    # direction this file has already had to repair once.
+    cite_case("a comparison inside a claim is not read as a citation",
+              "## Decisions\n"
+              "- Throughput target set at > 100 requests per second.\n"
+              "  > go with the rubber for the case\n",
+              True, cited=1, fabricated=0, uncited=0)
+    cite_case("and a lone mid-line arrow in a note with no citations is left alone",
+              "## Decisions\n- Throughput target set at > 100 requests per second.",
+              True, uncited=1, cited=0, fabricated=0)
     # The invariant, asserted from outside rather than trusted from the assert inside:
     # buckets that are allowed to disagree about their coverage lose items into
     # whichever one is benign, and `uncited` is benign.
@@ -1936,17 +1991,33 @@ def run_self_test() -> int:
         "- Located. > go with the rubber for the case\n"
         "- Composed. > the budget was approved today\n"
         "- Short. > the case\n"
-        "- Bare.\n"
-        "## Action items\n"
-        "- Next-line form.\n  > the supplier said eight weeks which is too long\n")
+        "- Bare.\n")
     got = check_citations(partition_note, cite_t)
     covered = sum(len(got[k]) for k in ("cited", "fabricated", "unverifiable", "uncited"))
-    part_ok = got["items"] == 5 and covered == 5
+    part_ok = got["items"] == 4 and covered == 4
     failures += not part_ok
-    print(f"  [{'pass' if part_ok else 'FAIL'}] every item lands in exactly one "
-          f"bucket, mixing both layouts")
+    print(f"  [{'pass' if part_ok else 'FAIL'}] every item lands in exactly one bucket, "
+          f"across all four outcomes")
     if not part_ok:
         print(f"          items={got['items']} covered={covered}")
+
+    # One formula for the run's verdict, checked against the shape `recheck` reads. The
+    # divergence this catches was real: a retyped formula dropped `context`, lost
+    # `attribution`'s applies guard, and swept in advisory grounding.
+    stored = {
+        "context": {"ok": False, "reason": "tail dropped"},
+        "attribution": {"applies": True, "ok": True},
+        "numbers": {"ok": True}, "prompt_echo": {"ok": True},
+        "grounding": {"ok": False}, "citations": {"ok": True},
+    }
+    v_ok = verdict(stored) is False
+    stored["context"]["ok"] = True
+    v_ok = v_ok and verdict(stored) is True          # advisory grounding stays advisory
+    stored["attribution"] = {"applies": False, "ok": False}
+    v_ok = v_ok and verdict(stored) is True          # a check that does not apply
+    failures += not v_ok
+    print(f"  [{'pass' if v_ok else 'FAIL'}] the verdict honours context, the applies "
+          f"guard, and grounding being advisory")
 
     # The quote has to survive the merge, because only the extraction pass sees a
     # transcript. When _ITEM dropped everything after the pipe, the consolidator
