@@ -1035,3 +1035,59 @@ Every claim now carries `type`, recovered from its heading, with an unrecognised
 keeping its own words rather than being forced into one of the three. Nothing new is
 asked of the model — this is a discard that stopped. `docs/journeys.md` records the three
 candidate structures and why sections became a rendering.
+
+---
+
+## One of nineteen entries under "Decisions" is a decision the meeting settled
+
+The measurement the previous section named as owed. Run 2026-07-29 with `--measure-settlement`.
+
+**It is possible only because the citations landed.** A claim's evidence is located in
+the transcript by code, so "is this filed correctly" stops needing a human reference and
+becomes a question about words already verified as said. Only `verified` claims can be
+measured — an `unsupported` claim's quote was composed, so judging it would measure the
+model's invention rather than the meeting. That is 19 of the 28 Decisions entries across
+the three meetings.
+
+**Result: 1 of 19.** The rest cite proposals ("rather we should have different meetings
+by the same group but hopefully…"), hedges ("I think that when we do that world release,
+it should be the same"), commentary ("which is really what makes this corpus powerful"),
+descriptions of a design under discussion ("On the bottom we were gonna have the
+rubber…"), a bare fragment ("non-English speaking countries"), and one trailing off
+mid-thought ("so that we can, uh I don't know").
+
+**A distinct failure mode in covid_4, worth naming separately.** All four of its measured
+entries cite petitions being *read into the record* — "The petitioners call upon the
+Government of Canada to…". Those are not decisions the meeting reached and not proposals
+either; they are the contents of documents being presented. A section named Decisions
+gave the model nowhere else to put them.
+
+### The calibration nearly certified a wrong number, and that is the larger finding
+
+The judge was calibrated first, and the fixtures **as originally written passed
+`llama3.1` at 12/12 with the rigged control rejected.** Pointed at the real notes it
+returned **0 of 19** — a tidier, stronger result than the truth, produced by an
+instrument that had been shown to work.
+
+It was wrong for a reason the fixtures could not see: every settled example was a clean
+sentence, and real transcript speech is disfluent. `llama3.1` reads hesitation as
+uncertainty and answers NO to it. Adding three disfluent-but-settled fixtures ("yeah um
+okay do that then", "we'll we'll just go with plastic, uh, for the body") dropped it to
+11/14, and one prompt repair — *hesitation is not disagreement; judge what the words land
+on, not how fluently they arrive* — recovered only 12/14. It still fails the
+self-repetition cases, so it is not the judge for this. `gemma3:12b` scores **14/14** with
+the rigged control rejected at 7/14, and produced the figure above.
+
+**Third instance of one shape this session, so it is a rule and not an anecdote:
+fixtures drawn from the ideal case certify an instrument that will meet the real case.**
+The citation controls all used the layout the contract asks for rather than the one the
+model produces, and reported 41 real citations as zero. The claim-state fixtures used the
+clean multi-line form for the same reason. And here a clean calibration set would have
+published 0-of-19. In each case the check passed, the control was rejected, and the
+instrument was still measuring the wrong thing — because the fixture author and the
+format author were the same person.
+
+**Sample is 19 entries across 3 meetings and one judge.** It bounds a claim about this
+taxonomy; it does not establish a rate. What it is sufficient for is the conclusion
+`docs/journeys.md` draws — that a section named Decisions collects things the meeting did
+not decide — and that conclusion no longer rests on a reading.

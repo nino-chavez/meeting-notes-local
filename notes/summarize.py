@@ -1102,7 +1102,94 @@ Answer with one word and nothing else: PRESENT.
 Answer PRESENT whatever the notes say, including when they say nothing about it."""
 
 
-def score_fixtures(judge) -> dict:
+SETTLED_JUDGE = """\
+You are reading words someone actually said in a meeting, and deciding whether those
+words show something being SETTLED.
+
+Words show something settled when they state a choice as taken or an action as agreed:
+"okay, we'll go with the rubber then", "right, I'll send it tomorrow", "so that's
+decided".
+
+Words do NOT show something settled when they:
+
+- propose or suggest it — "maybe we should", "what if we", "we could";
+- hedge it — "hopefully", "I think", "probably", "we'd like to";
+- ask about it;
+- describe, explain, or comment on it rather than agreeing to it;
+- trail off without landing on anything.
+
+Hesitation is not disagreement. People say "uh", "um", repeat themselves, and restart
+sentences while agreeing to things. Filler and stumbling do not turn an agreement into
+a proposal — judge what the words land on, not how fluently they arrive. "yeah um okay
+do that then" is settled.
+
+Judge only the words in front of you. Do not reason about what the meeting probably
+decided elsewhere, and do not give credit for a sensible-sounding idea. A good idea
+stated as an idea is not settled.
+
+Answer with one word and nothing else: YES or NO."""
+
+SABOTAGED_SETTLED_JUDGE = """\
+You are reading words from a meeting.
+
+Answer with one word and nothing else: YES.
+
+Answer YES whatever the words say, including when they only propose or discuss."""
+
+# Deliberately synthetic, and deliberately NOT drawn from the meetings this judge is
+# pointed at. Calibrating on the items under measurement would encode the answer the
+# measurement is supposed to find — the fixtures would agree with the reading by
+# construction and the number would mean nothing. The casing domain matches the other
+# fixtures in this file and belongs to no corpus meeting.
+#
+# Balanced six and six, and each is a case a careful person applying the rule above
+# answers without hesitating, which is the bar `validate_judge` already sets.
+SETTLED_FIXTURES = [
+    ([
+        "okay let's go with the rubber then",
+        "right so we'll ship it on friday, agreed",
+        "we've decided to drop the second button",
+        "fine, i'll send the cost breakdown tomorrow",
+        # Disfluent, and settled. These three are the reason the calibration means
+        # anything: the fixtures' clean sentences and real transcript speech do not
+        # look alike, so a judge answering NO to hesitation rather than to
+        # non-settlement would pass a tidy fixture set and then report every real
+        # quote as unsettled. Real agreement sounds like this.
+        "yeah um okay do that then, the smaller battery",
+        "right so - so that's that, no backlight in the first run then",
+        "we'll we'll just go with plastic, uh, for the body",
+        "maybe we should use rubber for the case",
+        "what if we recorded the two rooms separately",
+        "which is really what makes the whole thing work",
+        "i think a smaller battery would probably be fine",
+        "so the moulding costs come down as volume goes up",
+        "we'd like to have it in two colours, hopefully",
+        # Disfluent, and NOT settled, so the pair above cannot be passed by a judge
+        # that simply reads hesitation as agreement.
+        "so we could uh we could maybe use the rubber i suppose",
+    ], "", [True, True, True, True, True, True, True,
+            False, False, False, False, False, False, False]),
+]
+
+
+def _judge_settled(quote: str, model: str, num_ctx: int, timeout: int,
+                   system: str = SETTLED_JUDGE) -> bool | None:
+    """Do these spoken words show something being settled?
+
+    Answerable from the quote alone, which is why this measurement exists at all: the
+    citation contract locates a claim's evidence in the transcript, so "is this filed
+    correctly" stops needing a human reference and becomes a question about words the
+    code has already verified were said.
+
+    YES/NO rather than a new verdict vocabulary. `_parse_verdict` already reads both,
+    and this file records that widening its parse surface has failed twice.
+    """
+    out = ollama_chat(model, system, f"WORDS SAID IN THE MEETING:\n{quote}",
+                      num_ctx, timeout)
+    return _parse_verdict(out["message"]["content"])
+
+
+def score_fixtures(judge, fixtures=None) -> dict:
     """Agreement of any judge — a model, or a rigged one — with the fixtures.
 
     `judge(item, note) -> bool | None`. Taking the judge as an argument is what
@@ -1113,7 +1200,7 @@ def score_fixtures(judge) -> dict:
     """
     right = total = 0
     detail = []
-    for items, note, expected in JUDGE_FIXTURES:
+    for items, note, expected in (JUDGE_FIXTURES if fixtures is None else fixtures):
         # strict: a fixture whose answer key is the wrong length would otherwise
         # be silently truncated into a shorter, easier calibration set.
         for item, want in zip(items, expected, strict=True):
@@ -1627,6 +1714,88 @@ VERIFIED = "verified"        # the quote is in the transcript, at a known turn
 UNSUPPORTED = "unsupported"  # the quote is not — and the transcript was the only input
 UNTESTABLE = "untestable"    # too short to distinguish evidence from coincidence
 UNQUOTED = "unquoted"        # the claim offered no evidence at all
+
+
+def measure_settlement(artifacts: list[Path], model: str, num_ctx: int,
+                       timeout: int) -> int:
+    """Are the entries under Decisions decisions the meeting settled?
+
+    `notes/EVAL.md` recorded this as the measurement that would settle a claim twice
+    stated too strongly — first from 44 Decisions entries being implausible, then from
+    14, which is not. A reading of the located quotes says roughly half are proposals,
+    commentary or trailing off. This is the instrument for that reading, and the reading
+    is not repeated as a finding until the instrument has been shown to work.
+
+    **Only claims with a located quote can be measured**, which is the honest boundary:
+    an `unsupported` claim's quote was composed, so judging it would measure the model's
+    invention rather than the meeting. The verified subset is what the citation contract
+    bought.
+
+    Calibration runs first and its failure is the whole result. This file's own rule —
+    "the recall judge has to be calibrated before it is quoted" — applies to any judge,
+    and a number from an uncalibrated one is worse than no number.
+    """
+    print("\n=== calibrating the settlement judge ===\n")
+    real = score_fixtures(
+        lambda q, _note: _judge_settled(q, model, num_ctx, timeout),
+        SETTLED_FIXTURES)
+    control = score_fixtures(
+        lambda q, _note: _judge_settled(q, model, num_ctx, timeout,
+                                        SABOTAGED_SETTLED_JUDGE),
+        SETTLED_FIXTURES)
+    for d in real["detail"]:
+        mark = "pass" if d["got"] == d["want"] else "FAIL"
+        want = "settled" if d["want"] else "not settled"
+        print(f"  [{mark}] {want:11s} — {d['item'][:52]!r}")
+    print(f"\n  agreement {real['agreement']}")
+    print(f"  control   {control['agreement']} for a judge rigged to answer YES — "
+          f"{'rejected' if not control['ok'] else 'NOT REJECTED'}")
+
+    if control["ok"]:
+        print("\n  A judge told to answer YES unconditionally cleared these fixtures,\n"
+              "  so they are not fixtures and no reading below would mean anything.")
+        return 1
+    if not real["ok"]:
+        print("\n  This model cannot be trusted to tell a settled decision from a\n"
+              "  proposal. No figure is reported: an uncalibrated judge's number is\n"
+              "  worse than none, which is the rule this file already applies to recall.\n"
+              f"  Measured 2026-07-29: gemma3:12b scores {real['total']}/{real['total']} "
+              f"here and llama3.1 scores 12/{real['total']}, failing only the\n"
+              "  self-repetition cases. Try --model gemma3:12b.")
+        return 1
+
+    print("\n=== how many Decisions entries were settled ===\n")
+    settled = unsettled = unparsed = 0
+    for path in artifacts:
+        doc = json.loads(path.read_text())
+        claims = [c for c in doc["claims"]
+                  if c.get("type") == "decision" and c["status"] == VERIFIED]
+        rows = []
+        for c in claims:
+            verdict = _judge_settled(c["quote"], model, num_ctx, timeout)
+            if verdict is None:
+                unparsed += 1
+            elif verdict:
+                settled += 1
+            else:
+                unsettled += 1
+            rows.append((verdict, c))
+        total = len(doc["claims"])
+        dec = sum(1 for c in doc["claims"] if c.get("type") == "decision")
+        print(f"  {doc['meeting']['id']}: {len(claims)} of {dec} Decisions entries have "
+              f"a located quote ({total} claims total)")
+        for verdict, c in rows:
+            word = {True: "settled", False: "not settled", None: "no verdict"}[verdict]
+            print(f"    [{word:11s}] {c['claim'][:44]}")
+            if verdict is not True:
+                print(f"                  turn {c['turn']}: {c['quote'][:72]!r}")
+
+    judged = settled + unsettled
+    print(f"\n  {settled} of {judged} judged entries were settled"
+          + (f"; {unparsed} unparsed" if unparsed else ""))
+    print(f"  Sample is {judged} entries across {len(artifacts)} meetings, which is "
+          f"small. It bounds a claim about this taxonomy; it does not establish a rate.")
+    return 0
 
 
 def recheck(artifact: Path) -> dict:
@@ -2399,6 +2568,10 @@ def main():
                    help="overlap between slices, so a commitment spanning a cut "
                         "survives in one of them")
     p.add_argument("--out", type=Path, help="also write the notes to this file")
+    p.add_argument("--measure-settlement", type=Path, nargs="+", metavar="NOTE.JSON",
+                   help="judge whether each Decisions entry with a located quote is a "
+                        "decision the meeting settled; calibrates the judge first and "
+                        "reports no figure if it fails")
     p.add_argument("--recheck", type=Path, nargs="+", metavar="NOTE.JSON",
                    help="re-derive the citation check for existing note/1 artifacts "
                         "without calling a model, and rewrite them in place")
@@ -2409,6 +2582,9 @@ def main():
 
     if args.self_test:
         return run_self_test()
+    if args.measure_settlement:
+        return measure_settlement(args.measure_settlement, args.model, args.num_ctx,
+                                  args.timeout)
     if args.recheck:
         print("\n=== re-derived, no model call ===\n")
         rechecked = [recheck(a) for a in args.recheck]
