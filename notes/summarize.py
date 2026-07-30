@@ -1647,9 +1647,9 @@ _ITEM_SCHEMA = {
     "additionalProperties": False,
     "required": ["quote", "label", "claim"],
     "properties": {
-        "quote": {"type": "string"},
+        "quote": {"type": "string", "minLength": 1},
         "label": {"type": "string", "enum": list(_LABEL_VALUES)},
-        "claim": {"type": "string"},
+        "claim": {"type": "string", "minLength": 1},
     },
 }
 _CONSOLIDATED_ITEM_SCHEMA = {
@@ -1660,7 +1660,7 @@ _CONSOLIDATED_ITEM_SCHEMA = {
         **_ITEM_SCHEMA["properties"],
         "source_ids": {
             "type": "array",
-            "items": {"type": "string"},
+            "items": {"type": "string", "minLength": 1},
             "minItems": 1,
             "uniqueItems": True,
         },
@@ -1677,7 +1677,7 @@ CONSOLIDATION_FORMAT = {
     "additionalProperties": False,
     "required": ["summary", "items"],
     "properties": {
-        "summary": {"type": "string"},
+        "summary": {"type": "string", "minLength": 1},
         "items": {"type": "array", "items": _CONSOLIDATED_ITEM_SCHEMA},
     },
 }
@@ -2018,7 +2018,7 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
     # no overloaded punctuation and records retain quote -> label -> claim order.
     listing = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
     user = ("Validated extracted records from the meeting, in order:\n\n"
-            f"{listing}\n\nConsolidate the records.")
+            f"{listing}\n\nWrite a non-empty summary, then consolidate the records.")
     response = ollama_chat(model, consolidate_system, user, num_ctx, timeout,
                            CONSOLIDATION_FORMAT)
     calls.append({"label": "consolidate", "prompt": consolidate_system + user,
@@ -3305,6 +3305,18 @@ def run_self_test() -> int:
     failures += not format_sent
     print(f"  [{'pass' if format_sent else 'FAIL'}] extraction sends JSON Schema to "
           "Ollama without enabling sampling")
+    nonempty_constrained = (
+        EXTRACTION_FORMAT["properties"]["items"]["items"]["properties"]["quote"][
+            "minLength"
+        ] == 1
+        and EXTRACTION_FORMAT["properties"]["items"]["items"]["properties"]["claim"][
+            "minLength"
+        ] == 1
+        and CONSOLIDATION_FORMAT["properties"]["summary"]["minLength"] == 1
+    )
+    failures += not nonempty_constrained
+    print(f"  [{'pass' if nonempty_constrained else 'FAIL'}] the schema itself refuses "
+          "blank evidence, claims, and summaries before local validation")
     fixture_identity = model_identity_from_tags(
         {"models": [{"name": "fixture:latest", "model": "fixture:latest",
                      "digest": "a" * 64}]},
