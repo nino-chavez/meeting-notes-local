@@ -620,7 +620,50 @@ def min_resolvable(target_frr: float) -> int:
 MIN_SITTING_GAP_S = 3600
 
 
-def _sitting_problems(manifest: list[dict]) -> list[str]:
+def _sitting_metadata_problems(manifest) -> list[str]:
+    """Reject malformed sitting records before their contents are trusted.
+
+    Missing `captured_at` is a weaker record, not malformed syntax: an
+    experimental profile may carry old material that predates the field.  A time
+    that is present but naive, invalid, or in the future is different.  It cannot
+    establish a session boundary at all, and accepting it lets a hand-edited
+    profile pass the direct persistence API only to fail unpredictably later.
+    """
+    import datetime as dt
+
+    if not isinstance(manifest, list):
+        return ["sittings must be a list of capture records"]
+
+    now = dt.datetime.now(dt.timezone.utc)
+    out = []
+    for i, m in enumerate(manifest, 1):
+        if not isinstance(m, dict):
+            out.append(f"sitting {i} is not a capture record")
+            continue
+        name = str(m.get("audio") or f"sitting {i}")
+        if not m.get("audio_sha256"):
+            out.append(f"{name} has no audio_sha256, so its recording identity "
+                       "cannot be checked")
+        raw = m.get("captured_at")
+        if raw in (None, ""):
+            continue
+        try:
+            stamp = dt.datetime.fromisoformat(raw)
+        except (TypeError, ValueError):
+            out.append(f"{name} records captured_at {raw!r}, which is not a "
+                       "timestamp this can compare")
+            continue
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            out.append(f"{name} records captured_at {raw!r} without a timezone, "
+                       "so it cannot be compared")
+            continue
+        if stamp.astimezone(dt.timezone.utc) > now:
+            out.append(f"{name} records captured_at {raw!r} in the future, so it "
+                       "cannot establish a sitting")
+    return out
+
+
+def _sitting_problems(manifest) -> list[str]:
     """Whether these recordings are really from separate sittings.
 
     Distinct audio digests were the original test and they are not sufficient:
@@ -641,19 +684,20 @@ def _sitting_problems(manifest: list[dict]) -> list[str]:
     """
     import datetime as dt
 
+    metadata = _sitting_metadata_problems(manifest)
+    if metadata:
+        return metadata
+
     stamps = []
-    for m in manifest:
+    for i, m in enumerate(manifest, 1):
         raw = m.get("captured_at")
+        name = str(m.get("audio") or f"sitting {i}")
         if not raw:
-            return [(f"{m['audio']} does not record when it was captured, so nothing "
+            return [(f"{name} does not record when it was captured, so nothing "
                      f"establishes it as a separate sitting from the others. "
                      f"Recordings made before that field existed cannot be checked; "
                      f"re-record, or pass --experimental.")]
-        try:
-            stamps.append((dt.datetime.fromisoformat(raw), m))
-        except ValueError:
-            return [(f"{m['audio']} records captured_at {raw!r}, which is not a "
-                     f"timestamp this can compare.")]
+        stamps.append((dt.datetime.fromisoformat(raw).astimezone(dt.timezone.utc), m))
 
     stamps.sort(key=lambda s: s[0])
     out = []
@@ -811,6 +855,20 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
         "operating_point": operating_point,
         "sittings": sittings,
     }
+    # `load_profile` is the gate's final boundary, but it is not an excuse for
+    # this persistence API to write a record it already knows is malformed.
+    # Direct callers bypass `run_calibrate`, so validate the same document before
+    # replacing the user's existing profile.  Experimental permits an insufficient
+    # *sample*; it does not make an invalid timestamp or missing audio identity a
+    # meaningful provenance record.
+    metadata_problems = _sitting_metadata_problems(sittings)
+    if metadata_problems:
+        raise ValueError("cannot save a profile with malformed sittings:\n"
+                         + "".join(f"  - {p}\n" for p in metadata_problems))
+    try:
+        verify_provenance(path, doc)
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from None
     # Owner-only, and written through a temporary file in the same directory so an
     # interrupted write cannot leave a half-parsed profile where a whole one was.
     # A voiceprint is biometric: it is not a secret the way a password is, but it
@@ -842,7 +900,16 @@ def verify_provenance(path: Path, doc: dict) -> None:
     experimental is allowed through, because that marker is surfaced at every capture
     and in the transcript — the override's whole purpose is to stay visible.
     """
-    op = doc.get("operating_point") or {}
+    if not isinstance(doc, dict):
+        raise SystemExit(f"{path}: profile data is not an object")
+    op = doc.get("operating_point")
+    if not isinstance(op, dict):
+        raise SystemExit(f"{path}: operating_point is not an object")
+    metadata_problems = _sitting_metadata_problems(doc.get("sittings"))
+    if metadata_problems:
+        raise SystemExit(
+            f"\n  {path} has malformed sitting provenance:\n"
+            + "".join(f"\n    - {p}" for p in metadata_problems))
     if op.get("experimental"):
         return
     target = op.get("target_frr")
@@ -1368,6 +1435,38 @@ def run_self_test() -> int:
                 {**good_sittings[1], "captured_at": good_sittings[0]["captured_at"]},
             ])), SystemExit),
         )
+        future_sittings = [
+            good_sittings[0],
+            {**good_sittings[1], "captured_at": "2999-01-01T00:00:00+0000"},
+        ]
+        check(
+            "a future capture timestamp is refused by the loader, rather than "
+            "being counted as evidence of a separate sitting",
+            _raises(lambda: load_profile(edited(sittings=future_sittings)), SystemExit),
+        )
+        check(
+            "and the direct persistence API refuses that future timestamp before "
+            "it replaces an existing profile",
+            _raises(lambda: save_profile(Path(tmp) / "future.json", operator, 0.61,
+                                         operating_point=point,
+                                         sittings=future_sittings), ValueError),
+        )
+        mixed_timezone_sittings = [
+            good_sittings[0],
+            {**good_sittings[1], "captured_at": "2026-07-22T14:00:00"},
+        ]
+        check(
+            "mixed aware and naive capture times are refused instead of raising "
+            "inside timestamp sorting",
+            _raises(lambda: load_profile(edited(sittings=mixed_timezone_sittings)),
+                    SystemExit),
+        )
+        check(
+            "and malformed sitting rows cannot be persisted through save_profile",
+            _raises(lambda: save_profile(Path(tmp) / "malformed.json", operator, 0.61,
+                                         operating_point=point, sittings=[{}, {}]),
+                    ValueError),
+        )
         check(
             "nor one with too few held-out scores for the rate it claims",
             _raises(lambda: load_profile(edited(n_operator=4)), SystemExit),
@@ -1746,8 +1845,15 @@ def enforce_enrollment(manifest: list[dict], own: list[float],
     the point of an override: not to weaken the rule, but to keep the weakening
     visible downstream.
     """
-    digests = {m["audio_sha256"] for m in manifest}
     problems = []
+    metadata = _sitting_metadata_problems(manifest)
+    if metadata:
+        raise SystemExit(
+            "\n  refusing malformed enrolment provenance:\n"
+            + "".join(f"\n    - {p}" for p in metadata)
+            + "\n\n  --experimental can record insufficient evidence; it cannot make "
+              "an invalid capture record meaningful.")
+    digests = {m["audio_sha256"] for m in manifest if m.get("audio_sha256")}
     if len(digests) < 2:
         problems.append(
             f"{len(manifest)} --calibrate pair(s) but only {len(digests)} distinct "
@@ -1755,6 +1861,9 @@ def enforce_enrollment(manifest: list[dict], own: list[float],
             f"same audio twice carries none of the session variation that is for."
             + (" The two pairs point at the same file."
                if len(manifest) > 1 else ""))
+    # The metadata check above covers malformed rows.  This one asks the separate
+    # question whether otherwise well-formed capture times establish distinct
+    # sittings.
     problems.extend(_sitting_problems(manifest))
     floor = min_resolvable(target_frr)
     if len(own) < floor:

@@ -1595,8 +1595,8 @@ def chunk_transcript(transcript: Transcript, target_words: int,
     if current:
         windows.append(current)
     return [
-        Transcript(source=f"{transcript.source} [slice {n}/{len(windows)}]",
-                   attribution=transcript.attribution, turns=w)
+        transcript._derived(source=f"{transcript.source} [slice {n}/{len(windows)}]",
+                            attribution=transcript.attribution, turns=w)
         for n, w in enumerate(windows, 1)
     ]
 
@@ -2335,6 +2335,31 @@ CHANNEL_SELF_TEST = [
 
 def run_self_test() -> int:
     failures = 0
+    print("=== capture provenance survives transcript transforms ===\n")
+    captured = Transcript(
+        source="capture fixture",
+        attribution=CHANNEL,
+        turns=[Turn(text="visible words", speaker="Me", start=1.0)],
+        gated_turns=[Turn(text="withheld words", speaker="Me", start=2.0)],
+        gate={"applied": True, "rejected": 1, "rejected_seconds": 1.0},
+    )
+    derived = {
+        "strip": captured.strip_attribution(),
+        "channel": captured.as_channel("Me"),
+        "bleed": captured.simulate_bleed(),
+        "chunk": chunk_transcript(captured, target_words=1, overlap_words=0)[0],
+    }
+    kept = all(d.gate == captured.gate and len(d.gated_turns) == 1
+               and d.gate_warnings for d in derived.values())
+    failures += not kept
+    print(f"  [{'pass' if kept else 'FAIL'}] every derived transcript keeps the "
+          "gate report, warning, and withheld turn")
+    derived["strip"].gate["rejected"] = 99
+    isolated = captured.gate["rejected"] == 1
+    failures += not isolated
+    print(f"  [{'pass' if isolated else 'FAIL'}] a derived view cannot mutate the "
+          "capture's gate report")
+
     print("=== attribution check, positive and negative controls ===\n")
     for label, note, speakers, expect_ok in SELF_TEST:
         t = Transcript(source="self-test", attribution=NONE, turns=[Turn(text="x")])

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -123,13 +124,31 @@ class Transcript:
                 lines.append(f"{t.speaker}: {t.text}")
         return "\n".join(lines)
 
+    def _derived(self, *, source: str, attribution: str, turns: list[Turn]) -> Transcript:
+        """Make a transformed view without discarding capture provenance.
+
+        `turns` is deliberately the only part a transform may change.  The gate
+        report and its withheld turns are not prompt input, but they are evidence
+        for the person reading the resulting note.  Rebuilding a Transcript with
+        just visible turns used to make a simulated or label-stripped run read as
+        though no voiceprint gate had run at all.
+        """
+        return Transcript(
+            source=source,
+            attribution=attribution,
+            turns=turns,
+            gated_turns=[Turn(text=t.text, speaker=t.speaker, start=t.start)
+                         for t in self.gated_turns],
+            gate=deepcopy(self.gate),
+        )
+
     def strip_attribution(self) -> "Transcript":  # noqa: UP037
         """The same words with every speaker label removed.
 
         Tests the `none` contract on material where the true answer is known.
         Note what this does *not* reproduce — see `simulate_bleed`.
         """
-        return Transcript(
+        return self._derived(
             source=f"{self.source} (labels stripped)",
             attribution=NONE,
             turns=[Turn(text=t.text, start=t.start) for t in self.turns],
@@ -149,12 +168,12 @@ class Transcript:
         capture; it is one audio stream.
         """
         me = me or (self.speakers[0] if self.speakers else None)
-        return Transcript(
+        return self._derived(
             source=f"{self.source} (as channel, Me={me})",
             attribution=CHANNEL,
             turns=[
                 Turn(text=t.text, start=t.start,
-                     speaker="Me" if t.speaker == me else "Them")
+                    speaker="Me" if t.speaker == me else "Them")
                 for t in self.turns
             ],
         )
@@ -180,7 +199,7 @@ class Transcript:
         for t in self.turns:
             doubled.append(Turn(text=t.text, start=t.start))
             doubled.append(Turn(text=t.text, start=t.start))
-        return Transcript(
+        return self._derived(
             source=f"{self.source} (bleed simulated: unlabelled, every line doubled)",
             attribution=NONE,
             turns=doubled,
