@@ -569,7 +569,11 @@ def operating_point_fixture() -> list[dict]:
     """
     operator = [0.60 + i * 0.003 for i in range(100)]
     negative = [0.54 + i * 0.007 for i in range(40)]
-    return operating_point_choices(operator, negative)
+    return operating_point_choices(
+        operator,
+        negative,
+        negative_scorable_seconds=80.0,
+    )
 
 
 def operating_point_markup(points: list[dict]) -> str:
@@ -648,7 +652,7 @@ def encounter() -> str:
       complete voice enrollment first. Existing meetings remain readable.</p>
     <div class="panel-actions">
       <button type="button" id="manual-capture" data-action="manual-start" disabled>
-        start capture — enrollment required
+        start capture — setup required
       </button>
       <button type="button" data-panel="spec-first-run">review first launch</button>
       <button type="button" data-panel="spec-enrollment-blocked">
@@ -704,7 +708,7 @@ def encounter() -> str:
       <button type="button" data-enrollment-event="save-first">
         review first-sitting saved</button>
       <button type="button" id="load-valid-profile-fixture"
-        data-enrollment-event="load-valid-profile">
+        data-enrollment-event="load-returning-profile">
         load returning valid-profile fixture</button>
     </div>
   </section>
@@ -722,7 +726,7 @@ def encounter() -> str:
     <div class="panel-actions">
       <button type="button" data-enrollment-event="resume-after-gap">
         review resume after the gap</button>
-      <button type="button" data-panel="spec-discard-enrollment">
+      <button type="button" data-discard-origin="spec-first-sitting-saved">
         discard enrollment</button>
     </div>
   </section>
@@ -738,7 +742,7 @@ def encounter() -> str:
     <div class="panel-actions">
       <button type="button" data-enrollment-event="review-second">
         review second-sitting completion</button>
-      <button type="button" data-panel="spec-discard-enrollment">
+      <button type="button" data-discard-origin="spec-resume-after-gap">
         discard enrollment</button>
     </div>
   </section>
@@ -756,7 +760,7 @@ def encounter() -> str:
     <div class="panel-actions">
       <button type="button" data-enrollment-event="review-negative">
         review the required negative sample</button>
-      <button type="button" data-panel="spec-discard-enrollment">
+      <button type="button" data-discard-origin="spec-second-sitting-review">
         discard enrollment</button>
     </div>
   </section>
@@ -768,6 +772,10 @@ def encounter() -> str:
       microphone, or a person who knowingly agrees to make this calibration recording.
       Do not capture a private conversation, an unaware bystander, or unlicensed
       program audio for this step.</p>
+    <p>The registered product floor is at least 60 seconds of scorable speech across
+      at least 20 segments. The minute is the documented speech floor; 20 segments is
+      a product judgement that stops one long passage from pretending to be a score
+      distribution. Neither is presented as a statistical guarantee.</p>
     <fieldset class="negative-choice">
       <legend>Review an allowed source — none is preselected</legend>
       <label><input type="radio" name="negative-source">
@@ -786,7 +794,7 @@ def encounter() -> str:
       <button type="button" id="load-operating-fixture"
         data-enrollment-event="measurements-ready" disabled>
         load measured-point fixture</button>
-      <button type="button" data-panel="spec-discard-enrollment">
+      <button type="button" data-discard-origin="spec-negative-sample">
         discard enrollment</button>
     </div>
   </section>
@@ -805,20 +813,48 @@ def encounter() -> str:
       prototype has no personal measurements; fixture choices remain disabled until
       the measured-point transition runs.</p>
     <div class="panel-actions">
-      <button type="button" data-panel="spec-enrolled">
-        review the enrolled-state contract</button>
-      <button type="button" data-panel="spec-discard-enrollment">
+      <button type="button" id="continue-selected-policy"
+        data-enrollment-event="select-policy" disabled>
+        continue with selected measured policy</button>
+      <button type="button" data-discard-origin="spec-operating-point">
         discard enrollment</button>
     </div>
   </section>
 
+  <section class="encounter-panel" id="spec-ready-to-build" data-menubar="idle" hidden>
+    <p class="eyebrow">ready to build · measured policy selected</p>
+    <h3>Build only from the selected row and its private receipt</h3>
+    <p>The production boundary receives the held-out score arrays, negative-source
+      manifests, and selected target. It re-derives the offered rows and will not
+      accept a caller-supplied threshold or operating-point object.</p>
+    <p class="state-result" id="ready-policy-result">A fixture policy was selected;
+      no profile has been built or persisted.</p>
+    <button type="button" data-enrollment-event="build-profile">
+      run profile-build fixture</button>
+    <button type="button" data-discard-origin="spec-ready-to-build">
+      discard enrollment</button>
+  </section>
+
+  <section class="encounter-panel" id="spec-building-profile" data-menubar="idle" hidden>
+    <p class="eyebrow">profile build · persistence not yet confirmed</p>
+    <h3>Start remains blocked until owner-only persistence succeeds</h3>
+    <p>This state separates a completed calculation from a durable profile. A process
+      failure here deletes partial output and leaves enrollment incomplete.</p>
+    <p class="state-result">Build fixture complete; persistence success has not been
+      recorded. No profile exists for this reviewer.</p>
+    <button type="button" data-enrollment-event="persist-profile-success">
+      record owner-only persistence-success fixture</button>
+    <button type="button" data-discard-origin="spec-building-profile">
+      discard enrollment</button>
+  </section>
+
   <section class="encounter-panel" id="spec-enrolled" data-menubar="idle" hidden>
-    <p class="eyebrow">enrolled-state contract · not a personal result</p>
-    <h3>An enrolled profile makes its evidence visible</h3>
-    <p>The real state appears only after the requirements pass and the operator
-      explicitly selects an operating point. It shows measured rates, sittings,
-      held-out speech, build time, and encoder identity. This specimen claims none of
-      those facts about its reviewer.</p>
+    <p class="eyebrow">enrolled fixture · persistence success recorded</p>
+    <h3>The new profile is now valid; capture still needs every prerequisite</h3>
+    <p>This state is reachable only after a measured radio is selected, the build
+      transition runs, and owner-only persistence succeeds. It shows measured rates,
+      sittings, held-out speech, build time, and encoder identity. This specimen
+      changes no file and claims none of those facts about its reviewer.</p>
     <div class="setup-status">
       <p><strong>Selected policy and rates</strong><span>shown at runtime</span></p>
       <p><strong>Enrollment provenance</strong><span>shown at runtime</span></p>
@@ -827,17 +863,16 @@ def encounter() -> str:
     <p>The profile is app-private, owner-only, and separate from every meeting. It is
       not included in exports. Dedicated calibration audio has already been deleted;
       source meetings retain their own chosen lifecycle.</p>
-    <p class="state-result">Only a real, persisted profile enables the supported
-      manual-capture control. Reviewing this panel does not enable it.</p>
-    <button type="button" data-enrollment-event="load-valid-profile">
-      load returning valid-profile fixture</button>
-    <button type="button" data-panel="spec-library">return to blocked library</button>
+    <p class="state-result">A valid profile is one prerequisite. Start also requires
+      both current permissions and a selected meeting-audio retention period.</p>
+    <button type="button" data-panel="spec-library">review combined readiness</button>
+    <button type="button" data-panel="spec-profile-reset">review profile reset</button>
   </section>
 
   <section class="encounter-panel" id="spec-returning-profile"
     data-menubar="idle" hidden>
     <p class="eyebrow">returning-valid-profile fixture · no profile built here</p>
-    <h3>A previously persisted valid profile enables manual Start</h3>
+    <h3>A previously persisted valid profile satisfies one readiness requirement</h3>
     <p>The explicit fixture transition represents a profile that has already passed
       schema, provenance, encoder, and operating-point validation. It neither builds a
       profile nor claims one exists for this reviewer.</p>
@@ -848,9 +883,11 @@ def encounter() -> str:
         <span>__RETURNING_NEGATIVE_RATE__ measured</span></p>
       <p><strong>Profile owner</strong><span>fixture macOS account only</span></p>
     </div>
-    <p class="state-result">The Start control is enabled only while this valid-profile
-      fixture is loaded. Use it to review the consent transition.</p>
-    <button type="button" data-panel="spec-library">use enabled Start in library</button>
+    <p class="state-result">Start remains blocked until both current permission
+      fixtures and an explicit retention fixture are also loaded.</p>
+    <button type="button" id="load-returning-prerequisites">
+      load returning permissions and retention fixtures</button>
+    <button type="button" data-panel="spec-library">review combined readiness</button>
     <button type="button" data-panel="spec-profile-reset">review profile reset</button>
   </section>
 
@@ -893,8 +930,6 @@ def encounter() -> str:
       <button type="button" id="confirm-reset-profile">delete profile</button>
       <button type="button" id="cancel-reset-profile">cancel</button>
     </div>
-    <button type="button" data-panel="spec-enrollment-blocked">
-      review re-enrollment</button>
   </section>
 
   <section class="encounter-panel" id="spec-retention-choice" data-menubar="idle" hidden>
@@ -906,10 +941,11 @@ def encounter() -> str:
       needed owner-only derived material is safely stored.</p>
     <fieldset class="retention-choice">
       <legend>Auto-deletion period</legend>
-      <label><input type="radio" name="retention-period"> 30 days</label>
-      <label><input type="radio" name="retention-period"> 90 days</label>
-      <label><input type="radio" name="retention-period"> 1 year</label>
-      <label><input type="radio" name="retention-period">
+      <label><input type="radio" name="retention-period" value="30 days"> 30 days</label>
+      <label><input type="radio" name="retention-period" value="90 days"> 90 days</label>
+      <label><input type="radio" name="retention-period" value="1 year"> 1 year</label>
+      <label><input type="radio" name="retention-period"
+        value="Keep audio until I delete it">
         Keep audio until I delete it</label>
     </fieldset>
     <p class="state-result" id="retention-result">No period selected.</p>
@@ -925,11 +961,11 @@ def encounter() -> str:
     <p>The beta starts manually from the library or menubar. This state remains here
       only to test a possible future detection signal: outlined, not recording, and
       with no timer started.</p>
-    <button type="button" data-panel="spec-consent">show consent</button>
+    <button type="button" id="future-consent">show consent</button>
     <button type="button" data-panel="spec-library">not this time</button>
   </section>
 
-  <section class="encounter-panel" id="spec-consent" data-menubar="detected" hidden>
+  <section class="encounter-panel" id="spec-consent" data-menubar="idle" hidden>
     <p class="eyebrow">operator attestation · capture is not running</p>
     <h3>Do the participants know and agree to this recording?</h3>
     <p>The app cannot infer consent from microphone activity. The operator must attest
@@ -945,10 +981,11 @@ def encounter() -> str:
     </label>
     <p class="state-result" id="attestation-result">Attestation required.</p>
     <div class="panel-actions">
-      <button type="button" data-panel="spec-armed" data-requires-attestation disabled>
+      <button type="button" id="consent-continue" data-panel="spec-armed"
+        data-requires-attestation disabled>
         confirm and continue
       </button>
-      <button type="button" data-panel="spec-library">not this time</button>
+      <button type="button" id="cancel-capture-attempt">not this time</button>
     </div>
   </section>
 
@@ -957,7 +994,7 @@ def encounter() -> str:
     <h3>Armed — recording begins after the consent window</h3>
     <p class="countdown">00:05</p>
     <button type="button" data-panel="spec-recording">start capture</button>
-    <button type="button" data-panel="spec-library">cancel</button>
+    <button type="button" id="cancel-armed">cancel</button>
   </section>
 
   <section class="encounter-panel" id="spec-recording" data-menubar="recording" hidden>
@@ -1437,7 +1474,7 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   var ENROLLMENT_TRANSITIONS = Object.freeze({{
     blocked: Object.freeze({{
       'save-first': 'first-sitting-saved',
-      'load-valid-profile': 'returning-valid-profile'
+      'load-returning-profile': 'returning-valid-profile'
     }}),
     'first-sitting-saved': Object.freeze({{
       'resume-after-gap': 'resume-after-gap',
@@ -1456,8 +1493,19 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
       discard: 'blocked'
     }}),
     'operating-point': Object.freeze({{
-      'load-valid-profile': 'returning-valid-profile',
+      'select-policy': 'ready-to-build',
       discard: 'blocked'
+    }}),
+    'ready-to-build': Object.freeze({{
+      'build-profile': 'building-profile',
+      discard: 'blocked'
+    }}),
+    'building-profile': Object.freeze({{
+      'persist-profile-success': 'enrolled',
+      discard: 'blocked'
+    }}),
+    enrolled: Object.freeze({{
+      reset: 'blocked'
     }}),
     'returning-valid-profile': Object.freeze({{
       reset: 'blocked'
@@ -1474,8 +1522,8 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
     var available = ENROLLMENT_TRANSITIONS[state];
     return Boolean(available && available[event]);
   }}
-  function enrollmentStartEnabled(state) {{
-    return state === 'returning-valid-profile';
+  function enrollmentHasValidProfile(state) {{
+    return state === 'enrolled' || state === 'returning-valid-profile';
   }}
   // END ENROLLMENT STATE MACHINE
 
@@ -1504,22 +1552,77 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
     glyph.className = 'menubar-glyph ' + reading[2];
     document.getElementById('menubar-word').textContent = reading[1];
   }}
+  // BEGIN CAPTURE DOM CONTRACT
   var enrollmentState = 'blocked';
+  var grantedPermissions = new Set();
+  var selectedRetention = null;
+  var selectedPolicyTarget = null;
+  var discardOriginPanel = null;
+  var captureAttemptActive = false;
+  function captureReady() {{
+    return enrollmentHasValidProfile(enrollmentState)
+      && grantedPermissions.has('microphone')
+      && grantedPermissions.has('system')
+      && Boolean(selectedRetention);
+  }}
+  function resetCaptureConsent() {{
+    captureAttemptActive = false;
+    var attestation = document.getElementById('participant-attested');
+    attestation.checked = false;
+    document.querySelector('[data-requires-attestation]').disabled = true;
+    document.getElementById('attestation-result').textContent =
+      'Attestation required.';
+  }}
+  function recordCaptureAttestation(checked) {{
+    document.querySelector('[data-requires-attestation]').disabled =
+      !(captureAttemptActive && checked);
+    document.getElementById('attestation-result').textContent =
+      captureAttemptActive
+        ? (checked
+          ? 'Operator attestation recorded for this capture attempt.'
+          : 'Attestation required.')
+        : 'Start a ready capture attempt before attesting.';
+  }}
+  function clearEnrollmentChoices() {{
+    selectedPolicyTarget = null;
+    document.querySelectorAll('input[name="voice-policy"]')
+      .forEach(function (input) {{
+        input.checked = false;
+      }});
+    document.querySelectorAll('input[name="negative-source"]')
+      .forEach(function (input) {{
+        input.checked = false;
+      }});
+    document.getElementById('negative-material-result').textContent =
+      'No allowed source selected.';
+    document.getElementById('voice-policy-result').textContent =
+      'No measured policy selected.';
+    document.getElementById('ready-policy-result').textContent =
+      'No profile build is pending.';
+  }}
   function renderEnrollmentState() {{
-    var allowed = enrollmentStartEnabled(enrollmentState);
+    var allowed = captureReady();
     var negativeSource = document.querySelector(
       'input[name="negative-source"]:checked'
+    );
+    var selectedPolicy = document.querySelector(
+      'input[name="voice-policy"]:checked'
     );
     var start = document.getElementById('manual-capture');
     start.disabled = !allowed;
     start.textContent = allowed
       ? 'start capture manually'
-      : 'start capture — enrollment required';
+      : 'start capture — setup required';
+    var missing = [];
+    if (!enrollmentHasValidProfile(enrollmentState)) missing.push('valid profile');
+    if (!grantedPermissions.has('microphone')) missing.push('microphone permission');
+    if (!grantedPermissions.has('system')) missing.push('system-audio permission');
+    if (!selectedRetention) missing.push('meeting-audio retention');
     document.getElementById('capture-eligibility').textContent = allowed
-      ? 'Returning valid-profile fixture loaded. Supported Start is enabled for '
-        + 'transition review; no profile was built or loaded from this Mac.'
-      : 'Supported capture unavailable: complete voice enrollment first. Existing '
-        + 'meetings remain readable.';
+      ? 'Supported capture ready: valid profile, both current permissions, and '
+        + 'meeting-audio retention are present.'
+      : 'Supported capture unavailable: missing ' + missing.join(', ') + '.';
+    document.getElementById('future-consent').disabled = !allowed;
     document.querySelectorAll('button[data-enrollment-event]')
       .forEach(function (button) {{
         var eventAllowed = enrollmentEventEnabled(
@@ -1529,14 +1632,84 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
         if (button.id === 'load-operating-fixture') {{
           eventAllowed = eventAllowed && Boolean(negativeSource);
         }}
+        if (button.id === 'continue-selected-policy') {{
+          eventAllowed = eventAllowed
+            && Boolean(selectedPolicy)
+            && selectedPolicy.dataset.target === selectedPolicyTarget;
+        }}
         button.disabled = !eventAllowed;
       }});
     document.querySelectorAll('input[name="voice-policy"]')
       .forEach(function (input) {{
         input.disabled = enrollmentState !== 'operating-point';
-        if (input.disabled) input.checked = false;
       }});
   }}
+  function recordPermission(permission) {{
+    grantedPermissions.add(permission);
+    document.getElementById('permission-' + permission).textContent =
+      'granted-state specimen';
+    var remaining = 2 - grantedPermissions.size;
+    document.getElementById('permissions-result').textContent = remaining
+      ? remaining + ' permission' + (remaining === 1 ? '' : 's') + ' still needed.'
+      : 'Both required permission states reviewed. No macOS grant changed.';
+    document.querySelector('[data-requires-permissions]').disabled = remaining > 0;
+    renderEnrollmentState();
+  }}
+  function chooseRetention(period) {{
+    resetCaptureConsent();
+    selectedRetention = period;
+    document.getElementById('retention-result').textContent =
+      period + ' selected for this specimen. No recommendation is implied.';
+    document.getElementById('consent-retention').textContent =
+      'Meeting audio retention: ' + period + '. Transcript and note: held until '
+      + 'this meeting is deleted.';
+    document.querySelector('[data-requires-retention]').disabled = false;
+    renderEnrollmentState();
+  }}
+  function loadReturningPrerequisitesFixture() {{
+    recordPermission('microphone');
+    recordPermission('system');
+    var retention = document.querySelector(
+      'input[name="retention-period"][value="90 days"]'
+    );
+    retention.checked = true;
+    chooseRetention(retention.value);
+  }}
+  function beginCaptureAttempt() {{
+    resetCaptureConsent();
+    if (!captureReady()) return false;
+    captureAttemptActive = true;
+    showPanel('spec-consent');
+    return true;
+  }}
+  function cancelCaptureAttempt(panel) {{
+    resetCaptureConsent();
+    showPanel(panel || 'spec-library');
+  }}
+  function completeCaptureAttempt() {{
+    resetCaptureConsent();
+  }}
+  function resetProfileFixture() {{
+    resetCaptureConsent();
+    enrollmentState = enrollmentHasValidProfile(enrollmentState)
+      ? nextEnrollmentState(enrollmentState, 'reset')
+      : 'blocked';
+    clearEnrollmentChoices();
+    renderEnrollmentState();
+    showPanel('spec-enrollment-blocked');
+  }}
+  function openDiscard(originPanel) {{
+    discardOriginPanel = originPanel;
+    showPanel('spec-discard-enrollment');
+  }}
+  function cancelDiscard() {{
+    document.getElementById('discard-enrollment-confirm').hidden = true;
+    document.getElementById('discard-result').textContent =
+      'Discard cancelled. Incomplete enrollment material remains in this specimen.';
+    showPanel(discardOriginPanel || 'spec-enrollment-blocked');
+  }}
+  // END CAPTURE DOM CONTRACT
+
   function showRatesFromFixture() {{
     document.querySelectorAll('input[name="voice-policy"]').forEach(function (input) {{
       var row = input.parentElement.querySelector('span');
@@ -1555,7 +1728,10 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
     'review-second': 'spec-second-sitting-review',
     'review-negative': 'spec-negative-sample',
     'measurements-ready': 'spec-operating-point',
-    'load-valid-profile': 'spec-returning-profile',
+    'select-policy': 'spec-ready-to-build',
+    'build-profile': 'spec-building-profile',
+    'persist-profile-success': 'spec-enrolled',
+    'load-returning-profile': 'spec-returning-profile',
     discard: 'spec-enrollment-blocked'
   }};
   document.querySelectorAll('button[data-enrollment-event]')
@@ -1564,42 +1740,29 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
         var event = button.dataset.enrollmentEvent;
         enrollmentState = nextEnrollmentState(enrollmentState, event);
         if (event === 'measurements-ready') showRatesFromFixture();
+        if (event === 'discard') clearEnrollmentChoices();
         renderEnrollmentState();
         showPanel(eventPanels[event]);
       }});
     }});
   document.getElementById('manual-capture').addEventListener('click', function () {{
-    if (!enrollmentStartEnabled(enrollmentState)) return;
-    showPanel('spec-consent');
+    beginCaptureAttempt();
   }});
   renderEnrollmentState();
   document.addEventListener('click', function (e) {{
     var button = e.target.closest('button[data-panel]');
     if (!button || button.disabled) return;
+    if (button.dataset.panel === 'spec-consent') resetCaptureConsent();
     showPanel(button.dataset.panel);
   }});
-  var grantedPermissions = new Set();
   document.querySelectorAll('button[data-permission]').forEach(function (button) {{
     button.addEventListener('click', function () {{
-      grantedPermissions.add(button.dataset.permission);
-      document.getElementById('permission-' + button.dataset.permission).textContent =
-        'granted-state specimen';
-      var remaining = 2 - grantedPermissions.size;
-      document.getElementById('permissions-result').textContent = remaining
-        ? remaining + ' permission' + (remaining === 1 ? '' : 's') + ' still needed.'
-        : 'Both required permission states reviewed. No macOS grant changed.';
-      document.querySelector('[data-requires-permissions]').disabled = remaining > 0;
+      recordPermission(button.dataset.permission);
     }});
   }});
   document.querySelectorAll('input[name="retention-period"]').forEach(function (input) {{
     input.addEventListener('change', function () {{
-      var period = input.parentElement.textContent.trim();
-      document.getElementById('retention-result').textContent =
-        period + ' selected for this specimen. No recommendation is implied.';
-      document.getElementById('consent-retention').textContent =
-        'Meeting audio retention: ' + period + '. Transcript and note: held until '
-        + 'this meeting is deleted.';
-      document.querySelector('[data-requires-retention]').disabled = false;
+      chooseRetention(input.value);
     }});
   }});
   document.querySelectorAll('input[name="negative-source"]').forEach(function (input) {{
@@ -1612,19 +1775,39 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   }});
   document.querySelectorAll('input[name="voice-policy"]').forEach(function (input) {{
     input.addEventListener('change', function () {{
+      selectedPolicyTarget = input.dataset.target;
       document.getElementById('voice-policy-result').textContent =
         'Fixture policy selected for review: my speech dropped '
         + (Number(input.dataset.operatorRate) * 100).toFixed(1)
         + '%, negative speech admitted '
         + (Number(input.dataset.negativeRate) * 100).toFixed(1)
         + '%. No profile is built.';
+      document.getElementById('ready-policy-result').textContent =
+        'Selected fixture target ' + Number(input.dataset.target).toFixed(2)
+        + ' with both measured costs. Build and persistence have not run.';
+      renderEnrollmentState();
     }});
   }});
   document.getElementById('participant-attested').addEventListener('change', function (e) {{
-    document.querySelector('[data-requires-attestation]').disabled = !e.target.checked;
-    document.getElementById('attestation-result').textContent = e.target.checked
-      ? 'Operator attestation recorded in this interaction specimen.'
-      : 'Attestation required.';
+    recordCaptureAttestation(e.target.checked);
+  }});
+  document.getElementById('load-returning-prerequisites')
+    .addEventListener('click', loadReturningPrerequisitesFixture);
+  document.getElementById('future-consent')
+    .addEventListener('click', beginCaptureAttempt);
+  document.getElementById('cancel-capture-attempt')
+    .addEventListener('click', function () {{
+      cancelCaptureAttempt('spec-library');
+  }});
+  document.getElementById('cancel-armed')
+    .addEventListener('click', function () {{
+      cancelCaptureAttempt('spec-library');
+  }});
+  document.querySelectorAll('button[data-discard-origin]')
+    .forEach(function (button) {{
+      button.addEventListener('click', function () {{
+        openDiscard(button.dataset.discardOrigin);
+      }});
   }});
   document.querySelectorAll('input[name="far-end"]').forEach(function (input) {{
     input.addEventListener('change', function () {{
@@ -1689,25 +1872,17 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   document.getElementById('confirm-reset-profile')
     .addEventListener('click', function () {{
       document.getElementById('reset-profile-confirm').hidden = true;
-      enrollmentState = enrollmentState === 'returning-valid-profile'
-        ? nextEnrollmentState(enrollmentState, 'reset')
-        : 'blocked';
-      renderEnrollmentState();
+      resetProfileFixture();
       document.getElementById('profile-result').textContent =
         'Profile deleted in the interaction specimen. Existing meetings remain; '
         + 'application capture is blocked until re-enrollment. Only the research CLI '
         + 'may run ungated outside the beta. No local file changed.';
-      showPanel('spec-enrollment-blocked');
   }});
   document.getElementById('discard-enrollment-now').addEventListener('click', function () {{
     document.getElementById('discard-enrollment-confirm').hidden = false;
   }});
   document.getElementById('cancel-discard-enrollment')
-    .addEventListener('click', function () {{
-      document.getElementById('discard-enrollment-confirm').hidden = true;
-      document.getElementById('discard-result').textContent =
-        'Discard cancelled. Incomplete enrollment material remains in this specimen.';
-  }});
+    .addEventListener('click', cancelDiscard);
   document.getElementById('confirm-discard-enrollment')
     .addEventListener('click', function () {{
       document.getElementById('discard-enrollment-confirm').hidden = true;
@@ -1715,9 +1890,14 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
         'Incomplete enrollment discarded in the interaction specimen. Meetings and '
         + 'any previously valid profile remain; no local file changed.';
   }});
+  document.querySelectorAll('[data-action="manual-stop"]')
+    .forEach(function (button) {{
+      button.addEventListener('click', completeCaptureAttempt);
+  }});
   document.querySelector('[data-action="finish-processing"]')
     .addEventListener('click', function () {{
       document.getElementById('specimen-new-note').classList.add('is-visible');
+      completeCaptureAttempt();
     }});
   document.querySelectorAll('[data-action="open-real-data-detail"]')
     .forEach(function (button) {{
@@ -1784,13 +1964,13 @@ function throws(callback, message) {
 const known = Object.keys(ENROLLMENT_TRANSITIONS);
 for (const state of known) {
   equal(
-    enrollmentStartEnabled(state),
-    state === 'returning-valid-profile',
-    'Start eligibility drifted for ' + state
+    enrollmentHasValidProfile(state),
+    state === 'enrolled' || state === 'returning-valid-profile',
+    'valid-profile classification drifted for ' + state
   );
 }
 let state = 'blocked';
-equal(enrollmentStartEnabled(state), false);
+equal(enrollmentHasValidProfile(state), false);
 state = nextEnrollmentState(state, 'save-first');
 equal(state, 'first-sitting-saved');
 state = nextEnrollmentState(state, 'resume-after-gap');
@@ -1801,18 +1981,25 @@ state = nextEnrollmentState(state, 'review-negative');
 equal(state, 'negative-sample');
 state = nextEnrollmentState(state, 'measurements-ready');
 equal(state, 'operating-point');
-state = nextEnrollmentState(state, 'load-valid-profile');
-equal(state, 'returning-valid-profile');
-equal(enrollmentStartEnabled(state), true);
+throws(() => nextEnrollmentState(state, 'persist-profile-success'));
+state = nextEnrollmentState(state, 'select-policy');
+equal(state, 'ready-to-build');
+state = nextEnrollmentState(state, 'build-profile');
+equal(state, 'building-profile');
+equal(enrollmentHasValidProfile(state), false);
+state = nextEnrollmentState(state, 'persist-profile-success');
+equal(state, 'enrolled');
+equal(enrollmentHasValidProfile(state), true);
 state = nextEnrollmentState(state, 'reset');
 equal(state, 'blocked');
-equal(enrollmentStartEnabled(state), false);
-equal(nextEnrollmentState('blocked', 'load-valid-profile'),
+equal(enrollmentHasValidProfile(state), false);
+equal(nextEnrollmentState('blocked', 'load-returning-profile'),
       'returning-valid-profile');
 equal(enrollmentEventEnabled('negative-sample', 'measurements-ready'), true);
 equal(enrollmentEventEnabled('blocked', 'measurements-ready'), false);
 equal(nextEnrollmentState('resume-after-gap', 'discard'), 'blocked');
 throws(() => nextEnrollmentState('returning-valid-profile', 'discard'));
+throws(() => nextEnrollmentState('operating-point', 'load-returning-profile'));
 throws(() => nextEnrollmentState('blocked', 'review-second'));
 process.stdout.write(String(checks));
 """
@@ -1835,6 +2022,260 @@ process.stdout.write(String(checks));
         raise SystemExit("enrollment JavaScript check returned no assertion count") from exc
 
 
+def check_capture_dom_js(page_html: str) -> int:
+    """Exercise readiness and capture-attempt state against concrete DOM fields."""
+    state = re.search(
+        r"// BEGIN ENROLLMENT STATE MACHINE(.*?)// END ENROLLMENT STATE MACHINE",
+        page_html,
+        re.DOTALL,
+    )
+    contract = re.search(
+        r"// BEGIN CAPTURE DOM CONTRACT(.*?)// END CAPTURE DOM CONTRACT",
+        page_html,
+        re.DOTALL,
+    )
+    if not state or not contract:
+        raise SystemExit("capture DOM contract or enrollment state machine is missing")
+    harness = r"""
+const assert = require('node:assert/strict');
+let checks = 0;
+function equal(actual, expected, message) {
+  assert.equal(actual, expected, message);
+  checks += 1;
+}
+function fake(id, extra = {}) {
+  return Object.assign({
+    id,
+    disabled: false,
+    checked: false,
+    hidden: false,
+    textContent: '',
+    dataset: {}
+  }, extra);
+}
+const elements = {};
+for (const id of [
+  'participant-attested', 'attestation-result', 'manual-capture',
+  'capture-eligibility', 'future-consent', 'permission-microphone',
+  'permission-system', 'permissions-result', 'retention-result',
+  'consent-retention', 'discard-enrollment-confirm', 'discard-result'
+]) elements[id] = fake(id);
+const requiresAttestation = fake('requires-attestation');
+const requiresPermissions = fake('requires-permissions');
+const requiresRetention = fake('requires-retention');
+const negativeInputs = [fake('negative-source')];
+const policyInputs = [
+  fake('policy-loose', {dataset: {target: '0.05'}}),
+  fake('policy-strict', {dataset: {target: '0.20'}})
+];
+const retentionInputs = [
+  fake('retention-30', {value: '30 days'}),
+  fake('retention-90', {value: '90 days'})
+];
+const eventButtons = [
+  fake('load-operating-fixture', {
+    dataset: {enrollmentEvent: 'measurements-ready'}
+  }),
+  fake('continue-selected-policy', {
+    dataset: {enrollmentEvent: 'select-policy'}
+  }),
+  fake('build-profile', {dataset: {enrollmentEvent: 'build-profile'}}),
+  fake('persist-profile', {
+    dataset: {enrollmentEvent: 'persist-profile-success'}
+  })
+];
+let shownPanel = null;
+function showPanel(id) { shownPanel = id; }
+const document = {
+  getElementById(id) {
+    if (!elements[id]) elements[id] = fake(id);
+    return elements[id];
+  },
+  querySelector(selector) {
+    if (selector === '[data-requires-attestation]') return requiresAttestation;
+    if (selector === '[data-requires-permissions]') return requiresPermissions;
+    if (selector === '[data-requires-retention]') return requiresRetention;
+    if (selector === 'input[name="negative-source"]:checked') {
+      return negativeInputs.find((input) => input.checked) || null;
+    }
+    if (selector === 'input[name="voice-policy"]:checked') {
+      return policyInputs.find((input) => input.checked) || null;
+    }
+    if (selector === 'input[name="retention-period"][value="90 days"]') {
+      return retentionInputs[1];
+    }
+    throw new Error('unhandled querySelector: ' + selector);
+  },
+  querySelectorAll(selector) {
+    if (selector === 'button[data-enrollment-event]') return eventButtons;
+    if (selector === 'input[name="voice-policy"]') return policyInputs;
+    if (selector === 'input[name="negative-source"]') return negativeInputs;
+    throw new Error('unhandled querySelectorAll: ' + selector);
+  }
+};
+"""
+    assertions = r"""
+renderEnrollmentState();
+equal(elements['manual-capture'].disabled, true, 'fresh Start must be blocked');
+elements['participant-attested'].checked = true;
+recordCaptureAttestation(true);
+equal(requiresAttestation.disabled, true,
+      'direct Consent review cannot attest without a ready Start attempt');
+resetCaptureConsent();
+
+enrollmentState = nextEnrollmentState('blocked', 'load-returning-profile');
+renderEnrollmentState();
+equal(elements['manual-capture'].disabled, true,
+      'a valid returning profile alone must not enable Start');
+recordPermission('microphone');
+equal(elements['manual-capture'].disabled, true,
+      'one permission must not enable Start');
+recordPermission('system');
+equal(elements['manual-capture'].disabled, true,
+      'both permissions without retention must not enable Start');
+chooseRetention('30 days');
+equal(elements['manual-capture'].disabled, false,
+      'profile plus permissions plus retention enables Start');
+
+elements['participant-attested'].checked = true;
+requiresAttestation.disabled = false;
+equal(beginCaptureAttempt(), true, 'ready Start reaches consent');
+equal(shownPanel, 'spec-consent');
+equal(elements['participant-attested'].checked, false,
+      'every new Start clears prior attestation');
+equal(requiresAttestation.disabled, true,
+      'every new Start disables Continue');
+elements['participant-attested'].checked = true;
+recordCaptureAttestation(true);
+equal(requiresAttestation.disabled, false,
+      'attestation enables Continue only inside the active Start attempt');
+
+requiresAttestation.disabled = false;
+cancelCaptureAttempt('spec-library');
+equal(shownPanel, 'spec-library');
+equal(elements['participant-attested'].checked, false,
+      'cancel clears attestation');
+equal(requiresAttestation.disabled, true, 'cancel disables Continue');
+
+elements['participant-attested'].checked = true;
+requiresAttestation.disabled = false;
+completeCaptureAttempt();
+equal(elements['participant-attested'].checked, false,
+      'completion clears attestation');
+equal(requiresAttestation.disabled, true, 'completion disables Continue');
+
+elements['participant-attested'].checked = true;
+requiresAttestation.disabled = false;
+chooseRetention('90 days');
+equal(elements['participant-attested'].checked, false,
+      'retention change clears attestation');
+equal(requiresAttestation.disabled, true, 'retention change disables Continue');
+
+elements['participant-attested'].checked = true;
+requiresAttestation.disabled = false;
+resetProfileFixture();
+equal(enrollmentState, 'blocked', 'reset removes valid profile state');
+equal(elements['participant-attested'].checked, false,
+      'profile reset clears attestation');
+equal(requiresAttestation.disabled, true, 'profile reset disables Continue');
+equal(elements['manual-capture'].disabled, true, 'reset disables Start');
+equal(shownPanel, 'spec-enrollment-blocked',
+      'reset success is shown on the blocker');
+
+grantedPermissions = new Set();
+selectedRetention = null;
+enrollmentState = nextEnrollmentState('blocked', 'load-returning-profile');
+renderEnrollmentState();
+equal(elements['manual-capture'].disabled, true,
+      'returning fixture starts with prerequisites absent');
+loadReturningPrerequisitesFixture();
+equal(retentionInputs[1].checked, true,
+      'returning readiness explicitly loads a retention fixture');
+equal(grantedPermissions.size, 2,
+      'returning readiness explicitly loads both permission fixtures');
+equal(elements['manual-capture'].disabled, false,
+      'explicit returning prerequisites complete readiness');
+
+enrollmentState = 'operating-point';
+grantedPermissions = new Set();
+selectedRetention = null;
+selectedPolicyTarget = null;
+policyInputs.forEach((input) => { input.checked = false; });
+renderEnrollmentState();
+equal(eventButtons[1].disabled, true,
+      'no measured radio selection keeps policy continuation disabled');
+equal(elements['manual-capture'].disabled, true,
+      'operating point is not a valid profile');
+selectedPolicyTarget = policyInputs[0].dataset.target;
+renderEnrollmentState();
+equal(eventButtons[1].disabled, true,
+      'a target variable without a checked radio cannot bypass policy selection');
+policyInputs[0].checked = true;
+renderEnrollmentState();
+equal(eventButtons[1].disabled, false,
+      'a checked measured row enables policy continuation');
+negativeInputs[0].checked = true;
+clearEnrollmentChoices();
+renderEnrollmentState();
+equal(policyInputs[0].checked, false,
+      'discard or reset clears the visible policy selection');
+equal(negativeInputs[0].checked, false,
+      'discard or reset clears the prior negative-source selection');
+equal(eventButtons[1].disabled, true,
+      'a cleared policy cannot carry into another enrollment');
+selectedPolicyTarget = policyInputs[0].dataset.target;
+policyInputs[0].checked = true;
+renderEnrollmentState();
+enrollmentState = nextEnrollmentState(enrollmentState, 'select-policy');
+renderEnrollmentState();
+equal(enrollmentState, 'ready-to-build');
+equal(elements['manual-capture'].disabled, true,
+      'ready-to-build is not a valid profile');
+enrollmentState = nextEnrollmentState(enrollmentState, 'build-profile');
+renderEnrollmentState();
+equal(enrollmentState, 'building-profile');
+equal(elements['manual-capture'].disabled, true,
+      'build completion without persistence keeps Start blocked');
+enrollmentState = nextEnrollmentState(enrollmentState, 'persist-profile-success');
+renderEnrollmentState();
+equal(enrollmentState, 'enrolled');
+equal(elements['manual-capture'].disabled, true,
+      'persistence success alone still lacks permissions and retention');
+recordPermission('microphone');
+recordPermission('system');
+chooseRetention('30 days');
+equal(elements['manual-capture'].disabled, false,
+      'persisted profile plus explicit prerequisites enables Start');
+
+enrollmentState = 'first-sitting-saved';
+openDiscard('spec-first-sitting-saved');
+equal(shownPanel, 'spec-discard-enrollment');
+cancelDiscard();
+equal(enrollmentState, 'first-sitting-saved',
+      'cancel Discard preserves enrollment state');
+equal(shownPanel, 'spec-first-sitting-saved',
+      'cancel Discard returns to its origin panel');
+process.stdout.write(String(checks));
+"""
+    try:
+        result = subprocess.run(
+            ["node", "-e", harness + state.group(1) + contract.group(1) + assertions],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(f"cannot execute capture DOM checks: {exc}") from exc
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip()
+        raise SystemExit(f"capture DOM check failed:\n{detail}")
+    try:
+        return int(result.stdout)
+    except ValueError as exc:
+        raise SystemExit("capture DOM check returned no assertion count") from exc
+
+
 def check_encounter_wiring(page_html: str) -> int:
     """Fail if an interaction state can be named but not reached.
 
@@ -1846,7 +2287,8 @@ def check_encounter_wiring(page_html: str) -> int:
         "spec-library", "spec-first-run", "spec-detected", "spec-consent",
         "spec-enrollment-blocked", "spec-first-sitting-saved",
         "spec-resume-after-gap", "spec-second-sitting-review",
-        "spec-negative-sample", "spec-operating-point", "spec-enrolled",
+        "spec-negative-sample", "spec-operating-point", "spec-ready-to-build",
+        "spec-building-profile", "spec-enrolled",
         "spec-returning-profile", "spec-discard-enrollment",
         "spec-profile-reset", "spec-retention-choice",
         "spec-armed", "spec-recording", "spec-degraded", "spec-transcribing",
@@ -1877,14 +2319,18 @@ def check_encounter_wiring(page_html: str) -> int:
     transition_panels = {
         "spec-first-sitting-saved", "spec-resume-after-gap",
         "spec-second-sitting-review", "spec-negative-sample",
-        "spec-operating-point", "spec-returning-profile",
+        "spec-operating-point", "spec-ready-to-build", "spec-building-profile",
+        "spec-enrolled", "spec-returning-profile",
     }
-    if not expected <= set(targets) | transition_panels | {"spec-library"}:
+    special_panels = set(re.findall(r'data-discard-origin="([^\"]+)"', page_html))
+    special_panels.add("spec-discard-enrollment")
+    if not expected <= set(targets) | transition_panels | special_panels | {"spec-library"}:
         raise SystemExit("some reviewed encounter states have no incoming control")
     enrollment_events = set(re.findall(r'data-enrollment-event="([^\"]+)"', page_html))
     expected_events = {
         "save-first", "resume-after-gap", "review-second", "review-negative",
-        "measurements-ready", "load-valid-profile", "discard",
+        "measurements-ready", "select-policy", "build-profile",
+        "persist-profile-success", "load-returning-profile", "discard",
     }
     if enrollment_events != expected_events:
         raise SystemExit(
@@ -1911,8 +2357,8 @@ def check_encounter_wiring(page_html: str) -> int:
     manual_start = re.search(r'<button[^>]+id="manual-capture"[^>]*>', page_html)
     if not manual_start or "disabled" not in manual_start.group(0):
         raise SystemExit("supported capture is no longer initially blocked on enrollment")
-    if "start capture — enrollment required" not in page_html:
-        raise SystemExit("the capture blocker no longer names enrollment as the next action")
+    if "start capture — setup required" not in page_html:
+        raise SystemExit("the capture blocker no longer names incomplete setup")
     negative = re.search(
         r'<fieldset class="negative-choice">(.*?)</fieldset>', page_html, re.DOTALL
     )
@@ -1927,6 +2373,7 @@ def check_encounter_wiring(page_html: str) -> int:
         "A consenting person recording for calibration",
         "Source meetings are never copied or deleted",
         "Failure, cancellation, or abandonment deletes partial raw",
+        "at least 60 seconds of scorable speech across at least 20 segments",
     ):
         if required not in flat_page:
             raise SystemExit(f"enrollment lifecycle no longer states: {required}")
@@ -1970,15 +2417,20 @@ def check_encounter_wiring(page_html: str) -> int:
     )
     if not consent or 'id="participant-attested"' not in consent.group(0):
         raise SystemExit("consent no longer requires an operator attestation")
+    if 'data-menubar="idle"' not in consent.group(0):
+        raise SystemExit("manual-start consent must use the neutral menubar state")
     if "checked" in consent.group(0) or "never for this app" in consent.group(0).lower():
         raise SystemExit("consent is preselected or offers an unimplemented persistent block")
     required_ids = {
         "menubar-glyph", "menubar-word", "permission-microphone", "permission-system",
         "permissions-result", "capture-eligibility", "manual-capture",
         "enrollment-status", "load-valid-profile-fixture",
-        "participant-attested", "attestation-result", "consent-retention",
+        "load-returning-prerequisites", "participant-attested",
+        "attestation-result", "consent-retention", "consent-continue",
+        "cancel-capture-attempt", "cancel-armed", "future-consent",
         "negative-material-result", "load-operating-fixture",
-        "voice-policy-choices", "voice-policy-result",
+        "voice-policy-choices", "voice-policy-result", "continue-selected-policy",
+        "ready-policy-result",
         "discard-result", "discard-enrollment-now", "discard-enrollment-confirm",
         "confirm-discard-enrollment", "cancel-discard-enrollment",
         "profile-result", "reset-profile-now", "reset-profile-confirm",
@@ -2026,6 +2478,13 @@ def check_encounter_wiring(page_html: str) -> int:
         or "only the research CLI may run ungated outside the beta" not in flat_reset
     ):
         raise SystemExit("profile reset no longer states its exact independent consequence")
+    reset_panel = re.search(
+        r'<section class="encounter-panel" id="spec-profile-reset".*?</section>',
+        page_html,
+        re.DOTALL,
+    )
+    if reset_panel and 'data-panel="spec-enrollment-blocked"' in reset_panel.group(0):
+        raise SystemExit("profile reset exposes blocked state before deletion succeeds")
     discard = re.search(
         r'<div class="confirm-box" id="discard-enrollment-confirm".*?</div>',
         page_html,
@@ -2081,13 +2540,15 @@ def main() -> int:
     buttons = check_wiring(rendered)
     encounter_controls = check_encounter_wiring(rendered)
     enrollment_assertions = check_enrollment_js(rendered)
+    capture_dom_assertions = check_capture_dom_js(rendered)
     page_path.write_text(rendered)
     size = page_path.stat().st_size / 1024
     noun = "meeting" if len(notes) == 1 else "meetings"
     print(f"wrote {page_path}  ({size:.0f} KB, {len(notes)} {noun}, "
           f"{sum(totals.values())} claims, {buttons} locators all resolving, "
           f"{encounter_controls} encounter controls wired, "
-          f"{enrollment_assertions} enrollment transitions checked)")
+          f"{enrollment_assertions} enrollment transitions checked, "
+          f"{capture_dom_assertions} capture DOM assertions checked)")
     for state, n in totals.items():
         print(f"  {n:>4}  {state}")
     return 0

@@ -32,8 +32,9 @@ difference and it needs two. Nine scorable segments is also below the twenty a 5
 false-reject rate needs before any observation IS the fifth percentile.
 
 So the remaining input is **at least one more sitting**, longer than a minute, plus
-a recording of somebody who is not the operator for `--against`. `enforce_enrollment`
-refuses a profile without both rather than leaving it to this paragraph — an
+at least 60 scorable seconds across 20 segments from somebody who is not the operator
+for an attested `--against` source. `enforce_enrollment` refuses a profile without
+both floors rather than leaving them to this paragraph — an
 earlier version of this note said the same thing and nothing enforced it, which is
 how a one-sitting profile with no negative evidence became writable.
 
@@ -52,13 +53,13 @@ Run:
     python spike/speaker_gate.py \\
         --calibrate day1/mic-segments.json day1/mic.wav \\
         --calibrate day2/mic-segments.json day2/mic.wav \\
-        --against household/mic-segments.json household/mic.wav
+        --against public-or-licensed household/mic-segments.json household/mic.wav
 
     # Inspect both measured costs, then rerun with one target the report offered:
     python spike/speaker_gate.py \\
         --calibrate day1/mic-segments.json day1/mic.wav \\
         --calibrate day2/mic-segments.json day2/mic.wav \\
-        --against household/mic-segments.json household/mic.wav \\
+        --against public-or-licensed household/mic-segments.json household/mic.wav \\
         --enroll-out ~/voiceprint.json --target-frr CHOSEN_TARGET
 
 Then `dual_capture.py --voiceprint ~/voiceprint.json` gates a real capture with
@@ -69,7 +70,9 @@ substitute a plausible constant for a measured one.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
 import wave
 from collections.abc import Callable
@@ -485,7 +488,11 @@ def calibrate(
     op = np.asarray(operator_scores, dtype=np.float64)
     if len(op) < MIN_ENROLL_SEGMENTS:
         raise ValueError(f"too few operator scores to take a quantile: {len(op)}")
-    threshold = float(np.quantile(op, target_frr))
+    # `higher` makes the line an observed order statistic. The default linear
+    # interpolation manufactures a score no held-out segment produced; at the
+    # nominal resolvable floor it let an interpolated value masquerade as a
+    # measurement.
+    threshold = float(np.quantile(op, target_frr, method="higher"))
     result = {
         "threshold": threshold,
         "target_frr": target_frr,
@@ -605,23 +612,34 @@ def _wav_samples(path: Path) -> int:
         return w.getnframes()
 
 
-PROFILE_SCHEMA = "voiceprint/1"
+PROFILE_SCHEMA = "voiceprint/2"
 
 # Below this many held-out scores a quantile cannot even express the requested
 # operating point: a 5% false-reject rate needs 20 observations before one of them
-# IS the 5th percentile, and asking numpy for it below that returns an
-# interpolation between neighbours rather than a measured rate. This is not a
-# tuning constant — it is 1/target_frr, computed per request.
+# IS the 5th-percentile order statistic. This is not a tuning constant — it is
+# 1/target_frr, computed per request.
 def min_resolvable(target_frr: float) -> int:
     return int(np.ceil(1.0 / target_frr))
 
 
 OPERATING_POINT_TARGETS = (0.01, 0.02, 0.05, 0.10, 0.20)
+OPERATING_POINT_CONTRACT_VERSION = "speaker-gate-operating-points/1"
+OPERATING_POINT_TARGET_SET_VERSION = "speaker-gate-targets/1"
+NEGATIVE_SOURCE_CLASSES = frozenset({"public-or-licensed", "consenting-person"})
+
+# Product judgement, registered here rather than hidden in prose. Sixty seconds
+# is the documented speech floor. Twenty segments separately prevents one long
+# passage from masquerading as a distribution and makes a 5% false-admission
+# observation possible. Neither number is claimed as a statistical guarantee.
+MIN_NEGATIVE_SCORABLE_SECONDS = 60.0
+MIN_NEGATIVE_SCORABLE_SEGMENTS = 20
 
 
 def operating_point_choices(
     operator_scores: list[float],
     other_scores: list[float],
+    *,
+    negative_scorable_seconds: float,
     targets: tuple[float, ...] = OPERATING_POINT_TARGETS,
 ) -> list[dict]:
     """Return the small set of measured policies the product may offer.
@@ -639,9 +657,22 @@ def operating_point_choices(
     operator's speech, matching :func:`calibrate`'s stated asymmetry. Fewer than two
     distinct feasible points is not a policy choice and is refused.
     """
-    if not other_scores:
+    if len(other_scores) < MIN_NEGATIVE_SCORABLE_SEGMENTS:
         raise ValueError(
-            "operating-point choices need negative-speaker scores so both costs exist"
+            "operating-point choices need at least "
+            f"{MIN_NEGATIVE_SCORABLE_SEGMENTS} negative-speaker segments so both "
+            "costs are observed at a meaningful resolution"
+        )
+    seconds = _finite(
+        "negative_scorable_seconds",
+        negative_scorable_seconds,
+        0.0,
+    )
+    if seconds < MIN_NEGATIVE_SCORABLE_SECONDS:
+        raise ValueError(
+            "operating-point choices need at least "
+            f"{MIN_NEGATIVE_SCORABLE_SECONDS:.0f}s of scorable negative speech, "
+            f"got {seconds:.1f}s"
         )
 
     distinct: list[dict] = []
@@ -847,6 +878,208 @@ def _observed_rate(name: str, value, count: int) -> float:
     return rate
 
 
+def _canonical_json_digest(value) -> str:
+    """Digest one canonical JSON value without relying on a file on disk."""
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _canonical_scores(name: str, values) -> list[float]:
+    """Finite cosine observations in the exact order the receipt preserves."""
+    if not isinstance(values, (list, tuple, np.ndarray)):
+        raise SystemExit(f"{name} is not a score array")
+    return [_finite(f"{name}[{i}]", value, -1.0, 1.0)
+            for i, value in enumerate(values)]
+
+
+def _canonical_negative_sources(path: Path, sources, n_scores: int) -> list[dict]:
+    """Validate the raw-free manifests that bind negative scores to their sources."""
+    if not isinstance(sources, list):
+        raise SystemExit(f"{path}: negative_sources is not a list")
+    metadata_problems = _sitting_metadata_problems(sources)
+    if metadata_problems:
+        raise SystemExit(
+            f"\n  {path} has malformed negative-source provenance:\n"
+            + "".join(f"\n    - {problem}" for problem in metadata_problems)
+        )
+
+    canonical = []
+    seen_audio: set[str] = set()
+    for i, source in enumerate(sources, 1):
+        label = f"{path}: negative_sources[{i - 1}]"
+        if not isinstance(source, dict):
+            raise SystemExit(f"{label} is not a source manifest")
+        source_class = source.get("source_class")
+        if source_class not in NEGATIVE_SOURCE_CLASSES:
+            raise SystemExit(
+                f"{label}.source_class must be one of "
+                f"{sorted(NEGATIVE_SOURCE_CLASSES)}, got {source_class!r}"
+            )
+        audio_digest = _audio_digest(source.get("audio_sha256"))
+        segments_digest = _audio_digest(source.get("segments_sha256"))
+        if audio_digest is None:
+            raise SystemExit(f"{label}.audio_sha256 is not a SHA-256 digest")
+        if segments_digest is None:
+            raise SystemExit(f"{label}.segments_sha256 is not a SHA-256 digest")
+        if audio_digest in seen_audio:
+            raise SystemExit(
+                f"{label} repeats negative recording {audio_digest}; one recording "
+                "cannot inflate the evidence by appearing under two paths"
+            )
+        seen_audio.add(audio_digest)
+        if source.get("segments_schema") != "mic-segments/1":
+            raise SystemExit(
+                f"{label}.segments_schema must be 'mic-segments/1', got "
+                f"{source.get('segments_schema')!r}"
+            )
+        captured_at = source.get("captured_at")
+        if not captured_at:
+            raise SystemExit(
+                f"{label}.captured_at is missing, so the source receipt is incomplete"
+            )
+        audio = source.get("audio")
+        segments = source.get("segments")
+        if not isinstance(audio, str) or not audio:
+            raise SystemExit(f"{label}.audio is not a recorded source path")
+        if not isinstance(segments, str) or not segments:
+            raise SystemExit(f"{label}.segments is not a recorded source path")
+        canonical.append({
+            "source_class": source_class,
+            "audio": audio,
+            "segments": segments,
+            "audio_sha256": audio_digest,
+            "audio_samples": _count(
+                f"{label}.audio_samples",
+                source.get("audio_samples"),
+                1,
+            ),
+            "segments_sha256": segments_digest,
+            "segments_schema": "mic-segments/1",
+            "captured_at": captured_at,
+            "scorable_segments": _count(
+                f"{label}.scorable_segments",
+                source.get("scorable_segments"),
+            ),
+            "scorable_seconds": _finite(
+                f"{label}.scorable_seconds",
+                source.get("scorable_seconds"),
+                0.0,
+            ),
+        })
+
+    manifested = sum(source["scorable_segments"] for source in canonical)
+    if manifested != n_scores:
+        raise SystemExit(
+            f"{path}: negative source manifests record {manifested} scorable "
+            f"segments, but the receipt carries {n_scores} negative scores"
+        )
+    return canonical
+
+
+def _canonical_choice(point: dict) -> dict:
+    """The reproducible portion of one operating point."""
+    return {
+        "target_frr": float(point["target_frr"]),
+        "threshold": float(point["threshold"]),
+        "measured_frr": float(point["measured_frr"]),
+        "n_operator": int(point["n_operator"]),
+        "false_admit_rate": (
+            None if point["false_admit_rate"] is None
+            else float(point["false_admit_rate"])
+        ),
+        "n_other": int(point["n_other"]),
+    }
+
+
+def _derive_calibration_receipt(
+    path: Path,
+    operator_scores,
+    negative_scores,
+    *,
+    selected_target: float,
+    held_out: str,
+    sittings: list[dict],
+    negative_sources: list[dict],
+    experimental: bool,
+) -> tuple[dict, dict]:
+    """Derive the only operating-point row `save_profile` may persist.
+
+    The private score arrays are derived enrollment material, not meeting audio.
+    Keeping them owner-only allows `load_profile` to repeat every choice calculation
+    after the dedicated raw files have been deleted.
+    """
+    own = _canonical_scores(f"{path}: operator_scores", operator_scores)
+    negative = _canonical_scores(f"{path}: negative_scores", negative_scores)
+    sources = _canonical_negative_sources(path, negative_sources, len(negative))
+    negative_seconds = sum(source["scorable_seconds"] for source in sources)
+    target = _finite(f"{path}: selected_target", selected_target, 0.0, 1.0)
+    if not 0 < target < 1:
+        raise SystemExit(
+            f"{path}: selected_target must lie strictly between 0 and 1"
+        )
+    if held_out not in {"leave-one-sitting-out", "leave-one-out, single sitting"}:
+        raise SystemExit(f"{path}: held_out is not a recognised scoring contract")
+
+    try:
+        offered = operating_point_choices(
+            own,
+            negative,
+            negative_scorable_seconds=negative_seconds,
+        )
+    except ValueError:
+        offered = []
+    matching = [
+        point for point in offered
+        if np.isclose(point["target_frr"], target, rtol=0.0, atol=1e-12)
+    ]
+    if not matching and not experimental:
+        offered_targets = ", ".join(f"{point['target_frr']:.0%}" for point in offered)
+        raise SystemExit(
+            f"{path}: selected target {target:g} is not one of the deterministic "
+            f"offered choices ({offered_targets or 'none'})"
+        )
+    selected = (
+        _canonical_choice(matching[0])
+        if matching
+        else _canonical_choice(calibrate(own, target, negative or None))
+    )
+    canonical_offered = [_canonical_choice(point) for point in offered]
+    receipt = {
+        "contract_version": OPERATING_POINT_CONTRACT_VERSION,
+        "target_set_version": OPERATING_POINT_TARGET_SET_VERSION,
+        "target_set": list(OPERATING_POINT_TARGETS),
+        "quantile_method": "higher",
+        "held_out": held_out,
+        "operator_scores": own,
+        "operator_scores_sha256": _canonical_json_digest(own),
+        "n_operator": len(own),
+        "negative_scores": negative,
+        "negative_scores_sha256": _canonical_json_digest(negative),
+        "n_negative": len(negative),
+        "negative_sources": sources,
+        "negative_sources_sha256": _canonical_json_digest(sources),
+        "negative_scorable_seconds": negative_seconds,
+        "offered_choices": canonical_offered,
+        "offered_choices_sha256": _canonical_json_digest(canonical_offered),
+        "selected_target": target,
+        "selected_choice_sha256": _canonical_json_digest(selected),
+    }
+    operating_point = {
+        **selected,
+        "held_out": held_out,
+        "n_sittings": len(sittings),
+        "experimental": experimental,
+        "receipt_sha256": _canonical_json_digest(receipt),
+        "selected_choice_sha256": receipt["selected_choice_sha256"],
+    }
+    return receipt, operating_point
+
+
 def encoder_fingerprint(savedir: str | Path | None = None) -> str | None:
     """A digest of the embedding weights, not the name of the recipe that fetched them.
 
@@ -897,36 +1130,38 @@ def runtime_versions() -> dict:
     return out
 
 
-def save_profile(path: Path, profile: Profile, threshold: float, *,
-                 operating_point: dict, sittings: list[dict],
-                 encoder: str = ECAPA_SOURCE,
-                 model_dir: str | Path | None = None,
-                 encoder_fingerprint_value: str | None = None) -> None:
-    """Persist a voiceprint with the threshold and what produced both.
+def save_profile(
+    path: Path,
+    profile: Profile,
+    *,
+    selected_target: float,
+    operator_scores: list[float],
+    negative_scores: list[float],
+    held_out: str,
+    sittings: list[dict],
+    negative_sources: list[dict],
+    experimental: bool = False,
+    encoder: str = ECAPA_SOURCE,
+    model_dir: str | Path | None = None,
+    encoder_fingerprint_value: str | None = None,
+) -> None:
+    """Persist a voiceprint after deriving its selected operating point.
 
-    The threshold travels **inside** the file, not beside it. Every other
-    arrangement lets a caller supply its own number, and this module's entire
-    position is that a plausible constant is indistinguishable from a measured
-    one to every later reader. A profile whose threshold is a property of the file
-    cannot be gated on an invented one.
-
-    `sittings` is the enrollment provenance, and it is required rather than
-    optional because of what it makes visible. A threshold derived from a single
-    sitting sat ABOVE the multi-sitting one in all nine comparisons available, by
-    0.006 to 0.181 — it drops more of the operator than its target asked for. That
-    bias is in the harmful direction and it is invisible in the number itself, so
-    the count of independent sittings has to be carried with it and stated at
-    every use. Optional provenance would be absent exactly when it mattered.
+    Callers supply evidence and the target the operator selected. They cannot
+    supply a threshold or an operating-point object: this boundary recomputes the
+    deterministic choices, derives the selected row, and writes the private score
+    receipt that lets `load_profile` do the same after raw enrollment audio is gone.
     """
+    path = Path(path)
     if not isinstance(sittings, list) or not sittings:
         raise ValueError(
             "a profile with no recorded enrollment material cannot state how many "
             "sittings produced it, and a single-sitting threshold is measurably "
             "over-tight — see leave_one_out_scores")
-    # Validated on the way OUT as well as in. A profile that cannot be used is
-    # better refused where it is produced, beside the material that explains why,
-    # than at the start of a meeting an hour later.
-    _finite("threshold", threshold, -1.0, 1.0)
+    if path.exists() and not path.is_file():
+        raise ValueError(f"{path} exists and is not a file")
+    if not path.parent.exists() or not path.parent.is_dir():
+        raise ValueError(f"{path.parent} is not an existing output directory")
     _finite("cohesion", profile.cohesion, -1.0, 1.0)
     _finite("spread", profile.spread, 0.0, 2.0)
     centroid = _profile_centroid(profile.centroid)
@@ -947,6 +1182,28 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
         raise ValueError("cannot save a profile with malformed sittings:\n"
                          + "".join(f"  - {p}\n" for p in metadata_problems))
     canonical_sittings = _canonical_sittings(sittings)
+    try:
+        enforce_enrollment(
+            canonical_sittings,
+            operator_scores,
+            negative_scores,
+            selected_target,
+            experimental,
+            negative_sources=negative_sources,
+        )
+        receipt, operating_point = _derive_calibration_receipt(
+            path,
+            operator_scores,
+            negative_scores,
+            selected_target=selected_target,
+            held_out=held_out,
+            sittings=canonical_sittings,
+            negative_sources=negative_sources,
+            experimental=experimental,
+        )
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from None
+    threshold = operating_point["threshold"]
 
     doc = {
         "schema": PROFILE_SCHEMA,
@@ -961,6 +1218,7 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
         "spread": round(profile.spread, 4),
         "threshold": threshold,
         "operating_point": operating_point,
+        "calibration_receipt": receipt,
         "sittings": canonical_sittings,
     }
     # `load_profile` is the gate's final boundary, but it is not an excuse for
@@ -998,17 +1256,23 @@ def verify_provenance(path: Path, doc: dict) -> None:
     That is the workspace's own audit rule turned on this project's artifact — an
     artifact asserting it was verified is not verification.
 
-    Everything needed is already in the file, because `save_profile` records the
-    sittings manifest and the operating point. Nothing here re-measures audio; it
-    re-runs the arithmetic over the record and refuses a mismatch. A profile marked
-    experimental is allowed through, because that marker is surfaced at every capture
-    and in the transcript — the override's whole purpose is to stay visible.
+    Everything needed is already in the owner-only file: the sitting and negative
+    source manifests, held-out score arrays, target-set version, offered choices,
+    and selected target. Nothing here re-measures audio; it re-runs the choice
+    arithmetic over that receipt and refuses a mismatch.
     """
     if not isinstance(doc, dict):
         raise SystemExit(f"{path}: profile data is not an object")
+    if doc.get("schema") != PROFILE_SCHEMA:
+        raise SystemExit(
+            f"{path}: expected schema {PROFILE_SCHEMA}, got {doc.get('schema')!r}"
+        )
     op = doc.get("operating_point")
     if not isinstance(op, dict):
         raise SystemExit(f"{path}: operating_point is not an object")
+    receipt = doc.get("calibration_receipt")
+    if not isinstance(receipt, dict):
+        raise SystemExit(f"{path}: calibration_receipt is not an object")
     metadata_problems = _sitting_metadata_problems(doc.get("sittings"))
     if metadata_problems:
         raise SystemExit(
@@ -1019,34 +1283,51 @@ def verify_provenance(path: Path, doc: dict) -> None:
     if not isinstance(experimental, bool):
         raise SystemExit(f"{path}: experimental must be true or false")
     sittings = doc["sittings"]
+    if sittings != _canonical_sittings(sittings):
+        raise SystemExit(f"{path}: sitting digests are not stored canonically")
     _count(f"{path}: n_enrolled", doc.get("n_enrolled"), MIN_ENROLL_SEGMENTS)
     _count(f"{path}: n_excluded", doc.get("n_excluded"))
-    target = _finite(f"{path}: operating_point.target_frr", op.get("target_frr"),
-                     0.0, 1.0)
-    if not 0 < target < 1:
+
+    try:
+        expected_receipt, expected_point = _derive_calibration_receipt(
+            Path(path),
+            receipt.get("operator_scores"),
+            receipt.get("negative_scores"),
+            selected_target=receipt.get("selected_target"),
+            held_out=receipt.get("held_out"),
+            sittings=sittings,
+            negative_sources=receipt.get("negative_sources"),
+            experimental=experimental,
+        )
+    except (SystemExit, ValueError) as exc:
+        raise SystemExit(f"{path}: calibration receipt cannot be re-derived: {exc}") from None
+    if receipt != expected_receipt:
         raise SystemExit(
-            f"{path}: operating_point.target_frr must lie strictly between 0 and 1")
-    threshold = _finite(f"{path}: operating_point.threshold", op.get("threshold"),
-                        -1.0, 1.0)
-    if not np.isclose(threshold, _finite(f"{path}: threshold", doc.get("threshold"),
-                                          -1.0, 1.0), rtol=0.0, atol=1e-12):
+            f"{path}: calibration_receipt differs from the deterministic receipt "
+            "re-derived from its private score arrays and source manifests"
+        )
+    if op != expected_point:
+        raise SystemExit(
+            f"{path}: operating_point is not the selected row re-derived from the "
+            "calibration receipt"
+        )
+
+    target = expected_point["target_frr"]
+    threshold = expected_point["threshold"]
+    if not np.isclose(
+        threshold,
+        _finite(f"{path}: threshold", doc.get("threshold"), -1.0, 1.0),
+        rtol=0.0,
+        atol=1e-12,
+    ):
         raise SystemExit(
             f"{path}: operating_point.threshold does not match the profile threshold")
-    n_sittings = _count(f"{path}: operating_point.n_sittings", op.get("n_sittings"))
+    n_sittings = expected_point["n_sittings"]
     if n_sittings != len(sittings):
         raise SystemExit(
             f"{path}: operating_point.n_sittings is {n_sittings}, but the "
             f"manifest has {len(sittings)} sitting(s)")
-    held = _count(f"{path}: operating_point.n_operator", op.get("n_operator"))
-    _observed_rate(f"{path}: operating_point.measured_frr", op.get("measured_frr"), held)
-    far = op.get("false_admit_rate")
-    n_other = op.get("n_other")
-    if far is None:
-        if _count(f"{path}: operating_point.n_other", n_other) != 0:
-            raise SystemExit(f"{path}: n_other is nonzero but false_admit_rate is absent")
-    else:
-        _observed_rate(f"{path}: operating_point.false_admit_rate", far,
-                       _count(f"{path}: operating_point.n_other", n_other, 1))
+    held = expected_point["n_operator"]
 
     if experimental:
         return
@@ -1055,16 +1336,33 @@ def verify_provenance(path: Path, doc: dict) -> None:
     if n_sittings < 2:
         problems.append(f"{n_sittings} sitting(s) recorded, and a threshold needs "
                         "material from at least two")
-    if op.get("held_out") != "leave-one-sitting-out":
+    distinct_sitting_digests = {
+        sitting["audio_sha256"] for sitting in sittings
+    }
+    if len(distinct_sitting_digests) < 2:
+        problems.append(
+            f"{n_sittings} sitting record(s) contain only "
+            f"{len(distinct_sitting_digests)} distinct recording digest(s)"
+        )
+    if expected_point["held_out"] != "leave-one-sitting-out":
         problems.append("held_out is not leave-one-sitting-out, so the operating "
                         "point does not record cross-sitting evaluation")
     floor = min_resolvable(target)
     if held < floor:
         problems.append(f"{held} held-out scores cannot express a {target:.0%} "
                         f"false-reject rate, which needs at least {floor}")
-    if op.get("false_admit_rate") is None:
-        problems.append("no false_admit_rate, so nothing states what this threshold "
-                        "admits of a voice that is not the operator")
+    negative_count = expected_receipt["n_negative"]
+    negative_seconds = expected_receipt["negative_scorable_seconds"]
+    if negative_count < MIN_NEGATIVE_SCORABLE_SEGMENTS:
+        problems.append(
+            f"{negative_count} scorable negative segments is below the registered "
+            f"floor of {MIN_NEGATIVE_SCORABLE_SEGMENTS}"
+        )
+    if negative_seconds < MIN_NEGATIVE_SCORABLE_SECONDS:
+        problems.append(
+            f"{negative_seconds:.1f}s of scorable negative speech is below the "
+            f"registered floor of {MIN_NEGATIVE_SCORABLE_SECONDS:.0f}s"
+        )
     if problems:
         raise SystemExit(
             f"\n  {path} presents itself as a measured profile, and its own record "
@@ -1335,14 +1633,22 @@ def run_self_test() -> int:
     )
     choice_own = np.linspace(0.60, 0.90, 100).tolist()
     choice_other = np.linspace(0.54, 0.82, 40).tolist()
-    choices = operating_point_choices(choice_own, choice_other)
+    choices = operating_point_choices(
+        choice_own,
+        choice_other,
+        negative_scorable_seconds=80.0,
+    )
     check(
         "product choices are the loose, lower-median, and strict measured points",
         [p["target_frr"] for p in choices] == [0.01, 0.05, 0.20]
         and all(p["false_admit_rate"] is not None for p in choices),
         f"targets {[p['target_frr'] for p in choices]}",
     )
-    thin_choices = operating_point_choices(choice_own[:40], choice_other)
+    thin_choices = operating_point_choices(
+        choice_own[:40],
+        choice_other,
+        negative_scorable_seconds=80.0,
+    )
     check(
         "an operating point the held-out sample cannot resolve is not offered",
         [p["target_frr"] for p in thin_choices] == [0.05, 0.10, 0.20],
@@ -1351,6 +1657,7 @@ def run_self_test() -> int:
     two_choices = operating_point_choices(
         choice_own,
         choice_other,
+        negative_scorable_seconds=80.0,
         targets=(0.10, 0.20),
     )
     check(
@@ -1362,13 +1669,41 @@ def run_self_test() -> int:
     check(
         "duplicate measured cost pairs collapse and cannot fabricate a choice",
         _raises(
-            lambda: operating_point_choices(duplicate_own, [0.7] * 20),
+            lambda: operating_point_choices(
+                duplicate_own,
+                [0.7] * 20,
+                negative_scorable_seconds=80.0,
+            ),
             ValueError,
         ),
     )
     check(
         "a policy list without the other voice's measured cost is refused",
-        _raises(lambda: operating_point_choices(choice_own, []), ValueError),
+        _raises(lambda: operating_point_choices(
+            choice_own,
+            [],
+            negative_scorable_seconds=0.0,
+        ), ValueError),
+    )
+    check(
+        "one negative score cannot produce a policy table",
+        _raises(lambda: operating_point_choices(
+            choice_own,
+            [0.62],
+            negative_scorable_seconds=60.0,
+        ), ValueError),
+    )
+    check(
+        "sixty seconds and twenty segments are independent negative-evidence floors",
+        _raises(lambda: operating_point_choices(
+            choice_own,
+            choice_other,
+            negative_scorable_seconds=59.9,
+        ), ValueError),
+    )
+    check(
+        "every offered threshold is an observed held-out operator score",
+        all(point["threshold"] in choice_own for point in choices),
     )
 
     print("\n=== gating ===\n")
@@ -1377,7 +1712,7 @@ def run_self_test() -> int:
     held = gate(operator, held_segs, embed_segments(held_audio, held_segs, embed), threshold)
     check(
         "speech the profile was not built from, by the enrolled voice, is kept",
-        len(held.kept) >= 9,
+        len(held.kept) > len(held.rejected),
         f"kept {len(held.kept)} of 10, rejected {len(held.rejected)}",
     )
     far = gate(operator, foreign_segs, foreign_emb, threshold)
@@ -1522,20 +1857,50 @@ def run_self_test() -> int:
                 profile_path, expected_encoder_fingerprint=fixture_fingerprint
             )
 
-        # A fixture that satisfies the contract, because load_profile now re-derives
-        # it. The earlier minimal fixture is what the new check caught first.
-        point = {"threshold": 0.61, "target_frr": 0.05, "measured_frr": 0.0,
-                 "n_sittings": 2, "n_operator": 24, "false_admit_rate": 0.0,
-                 "n_other": 2, "held_out": "leave-one-sitting-out"}
+        # A fixture that satisfies the whole persisted contract. The score arrays
+        # and source manifests are private derived enrollment material; load_profile
+        # re-derives the choice table from them after raw audio is gone.
+        good_operator_scores = np.linspace(0.60, 0.90, 100).tolist()
+        good_negative_scores = np.linspace(0.20, 0.50, 20).tolist()
         good_sittings = [
             {"audio": "a.wav", "audio_sha256": "A" * 64,
              "captured_at": "2026-07-20T09:00:00+0000"},
             {"audio": "b.wav", "audio_sha256": "b" * 64,
              "captured_at": "2026-07-22T14:00:00+0000"}]
-        save_profile(pp, operator, 0.61, operating_point=point,
-                     sittings=good_sittings,
-                     model_dir=fixture_model)
+        good_negative_sources = [{
+            "source_class": "public-or-licensed",
+            "audio": "negative.wav",
+            "segments": "negative-segments.json",
+            "audio_sha256": "c" * 64,
+            "audio_samples": 1_280_000,
+            "segments_sha256": "d" * 64,
+            "segments_schema": "mic-segments/1",
+            "captured_at": "2026-07-22T15:00:00+0000",
+            "scorable_segments": 20,
+            "scorable_seconds": 80.0,
+        }]
+
+        def save_fixture(profile_path: Path, **over) -> None:
+            values = {
+                "selected_target": 0.05,
+                "operator_scores": good_operator_scores,
+                "negative_scores": good_negative_scores,
+                "held_out": "leave-one-sitting-out",
+                "sittings": good_sittings,
+                "negative_sources": good_negative_sources,
+                "experimental": False,
+                "encoder_fingerprint_value": fixture_fingerprint,
+            }
+            values.update(over)
+            save_profile(profile_path, operator, **values)
+
+        save_fixture(pp)
         back, thresh, doc = load_fixture(pp)
+        expected_point = calibrate(
+            good_operator_scores,
+            0.05,
+            good_negative_scores,
+        )
         check(
             "a profile round-trips through the file with its centroid intact",
             float(back.centroid @ operator.centroid) > 1 - 1e-9,
@@ -1543,8 +1908,30 @@ def run_self_test() -> int:
         )
         check(
             "the threshold travels inside the file, so no caller supplies its own",
-            abs(thresh - 0.61) < 1e-9 and doc["operating_point"]["n_sittings"] == 2,
+            abs(thresh - expected_point["threshold"]) < 1e-12
+            and doc["operating_point"]["n_sittings"] == 2,
             f"threshold {thresh}",
+        )
+        check(
+            "every persisted offered threshold is one observed operator score",
+            all(
+                point["threshold"] in doc["calibration_receipt"]["operator_scores"]
+                for point in doc["calibration_receipt"]["offered_choices"]
+            ),
+        )
+        check(
+            "the private receipt binds score arrays, choices, selection, and "
+            "negative source manifests by digest",
+            all(
+                len(doc["calibration_receipt"][field]) == 64
+                for field in (
+                    "operator_scores_sha256",
+                    "negative_scores_sha256",
+                    "negative_sources_sha256",
+                    "offered_choices_sha256",
+                    "selected_choice_sha256",
+                )
+            ),
         )
         check(
             "save_profile records the checkpoint bytes it was given, not the model recipe",
@@ -1581,10 +1968,7 @@ def run_self_test() -> int:
             "enrollment provenance is required, because a profile that cannot say "
             "how many sittings built it hides the one bias that matters",
             _raises(
-                lambda: save_profile(
-                    pp, operator, 0.61, operating_point=point, sittings=[],
-                    encoder_fingerprint_value=fixture_fingerprint,
-                ),
+                lambda: save_fixture(pp, sittings=[]),
                 ValueError,
             ),
         )
@@ -1606,6 +1990,13 @@ def run_self_test() -> int:
             q.write_text(json.dumps(doc))
             return q
 
+        def edited_receipt(**over) -> Path:
+            candidate = json.loads(pp.read_text())
+            candidate["calibration_receipt"].update(over)
+            q = Path(tmp) / f"edited-receipt-{abs(hash(tuple(sorted(over))))}.json"
+            q.write_text(json.dumps(candidate))
+            return q
+
         check(
             "a hand-edited one-sitting profile does not load as production",
             _raises(lambda: load_fixture(edited(sittings=good_sittings[:1])),
@@ -1616,6 +2007,16 @@ def run_self_test() -> int:
             _raises(lambda: load_fixture(edited(sittings=[
                 good_sittings[0],
                 {**good_sittings[1], "captured_at": good_sittings[0]["captured_at"]},
+            ])), SystemExit),
+        )
+        check(
+            "nor one whose separated sitting rows repeat one recording digest",
+            _raises(lambda: load_fixture(edited(sittings=[
+                good_sittings[0],
+                {
+                    **good_sittings[1],
+                    "audio_sha256": good_sittings[0]["audio_sha256"],
+                },
             ])), SystemExit),
         )
         future_sittings = [
@@ -1630,10 +2031,10 @@ def run_self_test() -> int:
         check(
             "and the direct persistence API refuses that future timestamp before "
             "it replaces an existing profile",
-            _raises(lambda: save_profile(Path(tmp) / "future.json", operator, 0.61,
-                                         operating_point=point,
-                                         sittings=future_sittings,
-                                         encoder_fingerprint_value=fixture_fingerprint),
+            _raises(lambda: save_fixture(
+                Path(tmp) / "future.json",
+                sittings=future_sittings,
+            ),
                     ValueError),
         )
         mixed_timezone_sittings = [
@@ -1648,9 +2049,10 @@ def run_self_test() -> int:
         )
         check(
             "and malformed sitting rows cannot be persisted through save_profile",
-            _raises(lambda: save_profile(Path(tmp) / "malformed.json", operator, 0.61,
-                                         operating_point=point, sittings=[{}, {}],
-                                         encoder_fingerprint_value=fixture_fingerprint),
+            _raises(lambda: save_fixture(
+                Path(tmp) / "malformed.json",
+                sittings=[{}, {}],
+            ),
                     ValueError),
         )
         check(
@@ -1675,7 +2077,38 @@ def run_self_test() -> int:
         )
         check(
             "a hand-edited held-out rate must fit its recorded sample count",
-            _raises(lambda: load_fixture(edited(measured_frr=0.05)), SystemExit),
+            _raises(lambda: load_fixture(edited(measured_frr=0.06)), SystemExit),
+        )
+        check(
+            "a hand-edited score array is refused even when its old digest remains",
+            _raises(lambda: load_fixture(edited_receipt(
+                operator_scores=[
+                    *doc["calibration_receipt"]["operator_scores"][:-1],
+                    0.59,
+                ]
+            )), SystemExit),
+        )
+        check(
+            "a hand-edited offered-choice table is refused rather than believed",
+            _raises(lambda: load_fixture(edited_receipt(
+                offered_choices=[
+                    *doc["calibration_receipt"]["offered_choices"],
+                    {
+                        "target_frr": 0.07,
+                        "threshold": 0.123,
+                        "measured_frr": 0.07,
+                        "n_operator": 100,
+                        "false_admit_rate": 0.10,
+                        "n_other": 20,
+                    },
+                ]
+            )), SystemExit),
+        )
+        check(
+            "a production receipt cannot select an unregistered 7% target",
+            _raises(lambda: load_fixture(edited_receipt(
+                selected_target=0.07,
+            )), SystemExit),
         )
         check(
             "the saved operating-point sitting count must match the manifest",
@@ -1691,26 +2124,88 @@ def run_self_test() -> int:
         )
         check(
             "and the direct save API refuses that malformed digest before writing",
-            _raises(lambda: save_profile(
-                Path(tmp) / "bad-digest.json", operator, 0.61, operating_point=point,
+            _raises(lambda: save_fixture(
+                Path(tmp) / "bad-digest.json",
                 sittings=bad_digest_sittings,
-                encoder_fingerprint_value=fixture_fingerprint,
             ), ValueError),
         )
         check(
             "the direct save API also refuses an impossible production score floor",
-            _raises(lambda: save_profile(
-                Path(tmp) / "thin-claim.json", operator, 0.61,
-                operating_point={**point, "n_operator": 19}, sittings=good_sittings,
-                encoder_fingerprint_value=fixture_fingerprint,
+            _raises(lambda: save_fixture(
+                Path(tmp) / "thin-claim.json",
+                operator_scores=good_operator_scores[:19],
             ), ValueError),
+        )
+        repeated_negative = [
+            good_negative_sources[0],
+            {
+                **good_negative_sources[0],
+                "segments": "copied-negative-segments.json",
+                "segments_sha256": "e" * 64,
+            },
+        ]
+        check(
+            "duplicate negative audio cannot inflate a direct-save receipt",
+            _raises(lambda: save_fixture(
+                Path(tmp) / "duplicate-negative.json",
+                negative_scores=good_negative_scores * 2,
+                negative_sources=repeated_negative,
+            ), ValueError),
+        )
+        check(
+            "production save enforces both the negative segment and duration floors",
+            _raises(lambda: save_fixture(
+                Path(tmp) / "thin-negative.json",
+                negative_scores=good_negative_scores[:19],
+                negative_sources=[{
+                    **good_negative_sources[0],
+                    "scorable_segments": 19,
+                    "scorable_seconds": 59.9,
+                }],
+            ), ValueError),
+        )
+        check(
+            "the direct save API refuses a target outside the deterministic choices",
+            _raises(lambda: save_fixture(
+                Path(tmp) / "arbitrary-target.json",
+                selected_target=0.07,
+            ), ValueError),
+        )
+        check(
+            "the direct save API has no threshold or operating-point injection seam",
+            _raises(lambda: save_profile(
+                Path(tmp) / "injected.json",
+                operator,
+                selected_target=0.05,
+                operator_scores=good_operator_scores,
+                negative_scores=good_negative_scores,
+                held_out="leave-one-sitting-out",
+                sittings=good_sittings,
+                negative_sources=good_negative_sources,
+                encoder_fingerprint_value=fixture_fingerprint,
+                threshold=0.123,
+                operating_point={"target_frr": 0.07},
+            ), TypeError),
         )
         check(
             "but an experimental profile loads, because that marker is surfaced "
             "at every capture and hiding it is the only thing that would help",
-            not _raises(lambda: load_fixture(edited(
-                sittings=good_sittings[:1], n_operator=4, false_admit_rate=None,
-                n_other=0, n_sittings=1, experimental=True)), SystemExit),
+            not _raises(
+                lambda: (
+                    save_fixture(
+                        Path(tmp) / "experimental.json",
+                        selected_target=0.07,
+                        operator_scores=good_operator_scores[:4],
+                        negative_scores=[],
+                        held_out="leave-one-out, single sitting",
+                        sittings=good_sittings[:1],
+                        negative_sources=[],
+                        experimental=True,
+                    ),
+                    load_fixture(Path(tmp) / "experimental.json"),
+                ),
+                (ValueError, SystemExit),
+            ),
         )
 
         wrong_space = json.loads(pp.read_text())
@@ -1755,16 +2250,26 @@ def run_self_test() -> int:
             f"mode {pp.stat().st_mode & 0o777:o}",
         )
 
-        # A NaN threshold is met by nothing: `score >= nan` is False for every
-        # segment, so the gate rejects all judgeable speech and keeps only what it
-        # cannot judge — a transcript of sub-two-second turns, with no error. It
-        # round-tripped through both functions unchallenged before these two.
+        # A NaN selected target or score cannot be allowed to derive a threshold.
         check(
-            "a NaN threshold is refused on the way out",
-            _raises(lambda: save_profile(pp, operator, float("nan"),
-                                        operating_point=point,
-                                        sittings=[{}, {}],
-                                        encoder_fingerprint_value=fixture_fingerprint), SystemExit),
+            "a NaN selected target is refused on the way out",
+            _raises(
+                lambda: save_fixture(
+                    Path(tmp) / "nan-target.json",
+                    selected_target=float("nan"),
+                ),
+                ValueError,
+            ),
+        )
+        check(
+            "and a NaN score is refused before it can enter the private receipt",
+            _raises(
+                lambda: save_fixture(
+                    Path(tmp) / "nan-score.json",
+                    operator_scores=[*good_operator_scores[:-1], float("nan")],
+                ),
+                ValueError,
+            ),
         )
         for bad, label in ((float("nan"), "NaN"), (2.0, "above +1"),
                            (-3.0, "below -1")):
@@ -1807,8 +2312,13 @@ def run_self_test() -> int:
             "save_profile also refuses an invalid centroid — persistence and loading "
             "share the same contract",
             _raises(lambda: save_profile(
-                pp, malformed_profile, 0.61, operating_point=point,
+                pp, malformed_profile,
+                selected_target=0.05,
+                operator_scores=good_operator_scores,
+                negative_scores=good_negative_scores,
+                held_out="leave-one-sitting-out",
                 sittings=good_sittings,
+                negative_sources=good_negative_sources,
                 encoder_fingerprint_value=fixture_fingerprint,
             ), ValueError),
         )
@@ -1829,32 +2339,61 @@ def run_self_test() -> int:
     two_ok = [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
               sitting_at("bravo", "2026-07-22T14:00:00+0000")]
     plenty = [0.8] * 40
-    other_ok = [0.2, 0.3]
+    other_ok = [0.2] * 20
+    negative_ok = [{
+        "source_class": "consenting-person",
+        "audio": "/tmp/negative.wav",
+        "segments": "/tmp/negative-segments.json",
+        "audio_sha256": "e" * 64,
+        "audio_samples": 1_280_000,
+        "segments_sha256": "f" * 64,
+        "segments_schema": "mic-segments/1",
+        "captured_at": "2026-07-22T15:00:00+0000",
+        "scorable_segments": 20,
+        "scorable_seconds": 80.0,
+    }]
+
+    def enforce_fixture(
+        sittings=two_ok,
+        own=plenty,
+        other=other_ok,
+        target=0.05,
+        experimental=False,
+        sources=negative_ok,
+    ):
+        return enforce_enrollment(
+            sittings,
+            own,
+            other,
+            target,
+            experimental,
+            negative_sources=sources,
+        )
+
     check(
         "material that meets the contract is accepted",
-        not _raises(lambda: enforce_enrollment(two_ok, plenty, other_ok, 0.05, False),
-                    SystemExit),
+        not _raises(enforce_fixture, SystemExit),
     )
     check(
         "the same recording passed twice is one sitting, not two — digests, not paths",
-        _raises(lambda: enforce_enrollment(
-            [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
-             sitting_at("alpha", "2026-07-20T09:00:00+0000")],
-            plenty, other_ok, 0.05, False), SystemExit),
+        _raises(lambda: enforce_fixture(sittings=[
+            sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+            sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+        ]), SystemExit),
     )
     check(
         "digest case cannot make the same recording look distinct",
-        _raises(lambda: enforce_enrollment(
-            [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
-             {**sitting_at("alpha", "2026-07-22T14:00:00+0000"),
-              "audio_sha256": "A" * 64}],
-            plenty, other_ok, 0.05, False), SystemExit),
+        _raises(lambda: enforce_fixture(sittings=[
+            sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+            {**sitting_at("alpha", "2026-07-22T14:00:00+0000"),
+             "audio_sha256": "A" * 64},
+        ]), SystemExit),
     )
     check(
         "one sitting is refused",
-        _raises(lambda: enforce_enrollment(
-            [sitting_at("alpha", "2026-07-20T09:00:00+0000")], plenty,
-            other_ok, 0.05, False), SystemExit),
+        _raises(lambda: enforce_fixture(sittings=[
+            sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+        ]), SystemExit),
     )
     # The case that defeated the digest test: slice one recording and every chunk
     # has different bytes, a different digest, and the same capture window.
@@ -1863,52 +2402,83 @@ def run_self_test() -> int:
     check(
         "two CHUNKS of one recording are refused, though their digests differ — "
         "distinct bytes were never evidence of a distinct sitting",
-        _raises(lambda: enforce_enrollment(chunks, plenty, other_ok, 0.05, False),
-                SystemExit),
+        _raises(lambda: enforce_fixture(sittings=chunks), SystemExit),
     )
     check(
         "and so are two takes from the same half-hour, which is the same thing "
         "with extra steps",
-        _raises(lambda: enforce_enrollment(
-            [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
-             sitting_at("bravo", "2026-07-20T09:25:00+0000")],
-            plenty, other_ok, 0.05, False), SystemExit),
+        _raises(lambda: enforce_fixture(sittings=[
+            sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+            sitting_at("bravo", "2026-07-20T09:25:00+0000"),
+        ]), SystemExit),
     )
     check(
         "exactly one hour between sittings meets the enforced boundary",
-        not _raises(lambda: enforce_enrollment(
-            [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
-             sitting_at("bravo", "2026-07-20T10:00:00+0000")],
-            plenty, other_ok, 0.05, False), SystemExit),
+        not _raises(lambda: enforce_fixture(sittings=[
+            sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+            sitting_at("bravo", "2026-07-20T10:00:00+0000"),
+        ]), SystemExit),
     )
     check(
         "material with no capture time is refused rather than assumed separate",
-        _raises(lambda: enforce_enrollment(
-            [sitting_at("alpha", None), sitting_at("bravo", None)],
-            plenty, other_ok, 0.05, False), SystemExit),
+        _raises(lambda: enforce_fixture(sittings=[
+            sitting_at("alpha", None),
+            sitting_at("bravo", None),
+        ]), SystemExit),
     )
     check(
         "an unparseable capture time is refused rather than ignored",
-        _raises(lambda: enforce_enrollment(
-            [sitting_at("alpha", "last Tuesday"), sitting_at("bravo", "later")],
-            plenty, other_ok, 0.05, False), SystemExit),
+        _raises(lambda: enforce_fixture(sittings=[
+            sitting_at("alpha", "last Tuesday"),
+            sitting_at("bravo", "later"),
+        ]), SystemExit),
     )
     check(
         "order does not matter — the gap is between sorted neighbours",
-        not _raises(lambda: enforce_enrollment(
-            [sitting_at("bravo", "2026-07-22T14:00:00+0000"),
-             sitting_at("alpha", "2026-07-20T09:00:00+0000")],
-            plenty, other_ok, 0.05, False), SystemExit),
+        not _raises(lambda: enforce_fixture(sittings=[
+            sitting_at("bravo", "2026-07-22T14:00:00+0000"),
+            sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+        ]), SystemExit),
     )
     check(
         "no negative-speaker material is refused — that is a rejection rate, not a gate",
-        _raises(lambda: enforce_enrollment(two_ok, plenty, [], 0.05, False),
-                SystemExit),
+        _raises(lambda: enforce_fixture(other=[], sources=[]), SystemExit),
+    )
+    check(
+        "nineteen negative segments is refused even when duration clears a minute",
+        _raises(lambda: enforce_fixture(
+            other=other_ok[:19],
+            sources=[{
+                **negative_ok[0],
+                "scorable_segments": 19,
+                "scorable_seconds": 80.0,
+            }],
+        ), SystemExit),
+    )
+    check(
+        "fifty-nine seconds is refused even when the segment floor is met",
+        _raises(lambda: enforce_fixture(sources=[{
+            **negative_ok[0],
+            "scorable_seconds": 59.9,
+        }]), SystemExit),
+    )
+    check(
+        "the same negative recording twice is refused by canonical digest",
+        _raises(lambda: enforce_fixture(
+            other=other_ok * 2,
+            sources=[
+                negative_ok[0],
+                {
+                    **negative_ok[0],
+                    "segments": "/tmp/copied-negative-segments.json",
+                    "segments_sha256": "1" * 64,
+                },
+            ],
+        ), SystemExit),
     )
     check(
         "too few held-out scores to express the target is refused",
-        _raises(lambda: enforce_enrollment(two_ok, [0.8] * 19, other_ok, 0.05, False),
-                SystemExit),
+        _raises(lambda: enforce_fixture(own=[0.8] * 19), SystemExit),
         f"19 scores against the {min_resolvable(0.05)} a 5% target needs",
     )
     check(
@@ -1918,21 +2488,132 @@ def run_self_test() -> int:
     )
     check(
         "a looser target makes the same thin sample sufficient",
-        not _raises(lambda: enforce_enrollment(two_ok, [0.8] * 19, other_ok, 0.20,
-                                              False), SystemExit),
+        not _raises(lambda: enforce_fixture(own=[0.8] * 19, target=0.20), SystemExit),
     )
     check(
         "--experimental writes it anyway, which is what keeps the override visible",
-        not _raises(lambda: enforce_enrollment(
-            [sitting_at("alpha", None)], [0.8] * 4, [], 0.05, True), SystemExit),
+        not _raises(lambda: enforce_fixture(
+            sittings=[sitting_at("alpha", None)],
+            own=[0.8] * 4,
+            other=[],
+            experimental=True,
+            sources=[],
+        ), SystemExit),
     )
     check(
         "a malformed digest is refused even with --experimental — it is not "
         "distinct-audio evidence",
-        _raises(lambda: enforce_enrollment(
-            [{"audio_sha256": "not-a-digest", "audio": "/tmp/bad.wav",
-              "captured_at": "2026-07-20T09:00:00+0000"}],
-            [0.8] * 4, [], 0.05, True), SystemExit),
+        _raises(lambda: enforce_fixture(
+            sittings=[{
+                "audio_sha256": "not-a-digest",
+                "audio": "/tmp/bad.wav",
+                "captured_at": "2026-07-20T09:00:00+0000",
+            }],
+            own=[0.8] * 4,
+            other=[],
+            experimental=True,
+            sources=[],
+        ), SystemExit),
+    )
+
+    print("\n=== cheap calibration preconditions ===\n")
+    preflight_context = tempfile.TemporaryDirectory()
+    preflight_root = Path(preflight_context.name)
+    preflight_segment = preflight_root / "segments.json"
+    preflight_audio = preflight_root / "audio.wav"
+    preflight_segment.write_text("{}")
+    preflight_audio.write_bytes(b"not decoded during preflight")
+    original_load_encoder = load_encoder
+    encoder_calls = 0
+
+    def forbidden_encoder(_model_dir):
+        nonlocal encoder_calls
+        encoder_calls += 1
+        raise AssertionError("load_encoder ran after a cheap precondition failed")
+
+    def preflight_args(**over):
+        values = {
+            "enroll_out": preflight_root / "preflight-profile.json",
+            "target_frr": 0.05,
+            "experimental": False,
+            "calibrate": [
+                [Path("/missing/operator-1.json"), Path("/missing/operator-1.wav")],
+                [Path("/missing/operator-2.json"), Path("/missing/operator-2.wav")],
+            ],
+            "against": [[
+                "public-or-licensed",
+                "/missing/negative.json",
+                "/missing/negative.wav",
+            ]],
+            "model_dir": preflight_root / "unused-model",
+        }
+        values.update(over)
+        return argparse.Namespace(**values)
+
+    globals()["load_encoder"] = forbidden_encoder
+    try:
+        check(
+            "missing target is refused before loading the encoder",
+            _raises(lambda: run_calibrate(
+                preflight_args(target_frr=None)
+            ), SystemExit),
+        )
+        check(
+            "an invalid target is refused before loading the encoder",
+            _raises(lambda: run_calibrate(
+                preflight_args(target_frr=1.2)
+            ), SystemExit),
+        )
+        check(
+            "an output directory is refused before loading the encoder",
+            _raises(lambda: run_calibrate(
+                preflight_args(enroll_out=preflight_root)
+            ), SystemExit),
+        )
+        check(
+            "a missing output parent is refused before loading the encoder",
+            _raises(lambda: run_calibrate(preflight_args(
+                enroll_out=preflight_root / "missing-parent" / "profile.json"
+            )), SystemExit),
+        )
+        check(
+            "missing production --against evidence is refused before inference",
+            _raises(lambda: run_calibrate(
+                preflight_args(against=[])
+            ), SystemExit),
+        )
+        check(
+            "missing input files are refused before loading the encoder",
+            _raises(lambda: run_calibrate(preflight_args()), SystemExit),
+        )
+        check(
+            "duplicate --against audio is refused by digest before inference",
+            _raises(lambda: run_calibrate(preflight_args(
+                calibrate=[
+                    [preflight_segment, preflight_audio],
+                    [preflight_segment, preflight_audio],
+                ],
+                against=[
+                    [
+                        "public-or-licensed",
+                        str(preflight_segment),
+                        str(preflight_audio),
+                    ],
+                    [
+                        "consenting-person",
+                        str(preflight_segment),
+                        str(preflight_audio),
+                    ],
+                ],
+            )), SystemExit),
+        )
+    finally:
+        globals()["load_encoder"] = original_load_encoder
+        preflight_context.cleanup()
+    check(
+        "all cheap refusals left load_encoder untouched",
+        encoder_calls == 0,
+        f"{encoder_calls} encoder call(s)",
     )
 
     outcome = (
@@ -1950,18 +2631,97 @@ def _raises(fn, exc) -> bool:
     return False
 
 
-def _embed_pair(pair: list[Path], embed, leg: str = "mic") -> tuple[list, list, dict]:
+def _embed_pair(
+    pair: list[Path],
+    embed,
+    leg: str = "mic",
+    *,
+    source_class: str | None = None,
+) -> tuple[list, list, dict]:
     """Embed one (segments, audio) recording and return its provenance with it."""
     seg_p, wav_p = Path(pair[0]), Path(pair[1])
+    segment_doc = json.loads(seg_p.read_text())
     segs = load_segments(seg_p, wav_p, leg)
     emb = [e for e in embed_segments(load_wav(wav_p), segs, embed) if e is not None]
     dur = [s["end"] - s["start"] for s in segs if s["end"] - s["start"] >= MIN_SCORABLE_S]
-    return emb, dur, {
+    provenance = {
         "segments": str(seg_p), "audio": str(wav_p),
         "audio_sha256": ab.sha256(wav_p), "audio_samples": _wav_samples(wav_p),
-        "captured_at": json.loads(seg_p.read_text()).get("captured_at"),
-        "scorable_segments": len(emb), "scorable_seconds": round(sum(dur), 1),
+        "segments_sha256": ab.sha256(seg_p),
+        "segments_schema": segment_doc.get("schema"),
+        "captured_at": segment_doc.get("captured_at"),
+        "scorable_segments": len(emb), "scorable_seconds": float(sum(dur)),
     }
+    if source_class is not None:
+        provenance["source_class"] = source_class
+    return emb, dur, provenance
+
+
+def preflight_calibrate(args) -> None:
+    """Refuse cheap CLI defects before the encoder or any audio inference runs."""
+    output = args.enroll_out
+    target = args.target_frr
+    if output is None and target is not None:
+        raise SystemExit("--target-frr requires --enroll-out")
+    if output is not None:
+        if target is None:
+            raise SystemExit(
+                "--enroll-out needs --target-frr selected from the report-only pass"
+            )
+        target = _finite("--target-frr", target, 0.0, 1.0)
+        if not 0 < target < 1:
+            raise SystemExit("--target-frr must lie strictly between 0 and 1")
+        output = Path(output)
+        if ab.inside_repo(output):
+            raise SystemExit(
+                f"--enroll-out {output} is inside the repository. A voiceprint "
+                "identifies a person; write it to an owner-only directory."
+            )
+        if output.exists() and not output.is_file():
+            raise SystemExit(f"--enroll-out {output} exists and is not a file")
+        parent = output.parent
+        if not parent.exists() or not parent.is_dir():
+            raise SystemExit(
+                f"--enroll-out parent {parent} is not an existing directory"
+            )
+        if not os.access(parent, os.W_OK):
+            raise SystemExit(f"--enroll-out parent {parent} is not writable")
+        if not args.experimental:
+            if len(args.calibrate or []) < 2:
+                raise SystemExit(
+                    "production enrollment needs at least two --calibrate sittings"
+                )
+            if not args.against:
+                raise SystemExit(
+                    "production enrollment needs at least one attested --against source"
+                )
+
+    inputs: list[tuple[str, Path]] = []
+    for pair in args.calibrate or []:
+        inputs.extend((("--calibrate segments", Path(pair[0])),
+                       ("--calibrate audio", Path(pair[1]))))
+    for source in args.against or []:
+        source_class, seg_p, wav_p = source
+        if source_class not in NEGATIVE_SOURCE_CLASSES:
+            raise SystemExit(
+                f"--against source class must be one of "
+                f"{sorted(NEGATIVE_SOURCE_CLASSES)}, got {source_class!r}"
+            )
+        inputs.extend((("--against segments", Path(seg_p)),
+                       ("--against audio", Path(wav_p))))
+    for label, path in inputs:
+        if not path.exists() or not path.is_file():
+            raise SystemExit(f"{label} {path} is not an existing file")
+
+    negative_digests: set[str] = set()
+    for _source_class, _seg_p, wav_p in args.against or []:
+        digest = ab.sha256(Path(wav_p))
+        if digest in negative_digests:
+            raise SystemExit(
+                f"--against repeats audio digest {digest}; one recording cannot "
+                "inflate the negative evidence"
+            )
+        negative_digests.add(digest)
 
 
 def run_calibrate(args) -> int:
@@ -1979,6 +2739,7 @@ def run_calibrate(args) -> int:
     `--against` supplies speech known not to be the operator and prices each
     operating point in what it would admit of it.
     """
+    preflight_calibrate(args)
     embed = load_encoder(args.model_dir)
 
     sittings, manifest = [], []
@@ -2015,13 +2776,18 @@ def run_calibrate(args) -> int:
           f"({held}, n={len(own)})")
 
     other: list[float] = []
-    for pair in args.against or []:
-        seg_p, wav_p = Path(pair[0]), Path(pair[1])
-        other.extend(
-            score(profile, e)
-            for e in embed_segments(load_wav(wav_p),
-                                    load_segments(seg_p, wav_p), embed)
-            if e is not None)
+    negative_sources: list[dict] = []
+    for source_class, seg_p, wav_p in args.against or []:
+        embeddings, _durations, provenance = _embed_pair(
+            [seg_p, wav_p],
+            embed,
+            source_class=source_class,
+        )
+        other.extend(score(profile, embedding) for embedding in embeddings)
+        negative_sources.append(provenance)
+    negative_seconds = sum(
+        source["scorable_seconds"] for source in negative_sources
+    )
     if other:
         print(f"  other-speaker scores: mean {np.mean(other):.3f}, "
               f"p95 {np.percentile(other, 95):.3f} (n={len(other)})")
@@ -2029,7 +2795,11 @@ def run_calibrate(args) -> int:
     print("\n=== operating-point choices ===\n")
     choices: list[dict] = []
     try:
-        choices = operating_point_choices(own, other)
+        choices = operating_point_choices(
+            own,
+            other,
+            negative_scorable_seconds=negative_seconds,
+        )
     except ValueError as exc:
         print(f"  unavailable: {exc}")
     if choices:
@@ -2038,11 +2808,11 @@ def run_calibrate(args) -> int:
             else ["loosest", "lower median", "strictest"]
         )
         print(f"  {'policy':>12}  {'choose with':>11}  {'operator dropped':>16}  "
-              f"{'room admitted':>13}")
+              f"{'negative admitted':>17}")
         for label, point in zip(labels, choices, strict=True):
             print(f"  {label:>12}  {point['target_frr']:>10.0%}  "
                   f"{point['measured_frr']:>15.1%}  "
-                  f"{point['false_admit_rate']:>12.1%}")
+                  f"{point['false_admit_rate']:>16.1%}")
         print("\n  No point is selected. To build a profile, rerun this command with\n"
               "  --enroll-out PATH and one displayed value as --target-frr.")
     if len(own) < 30:
@@ -2072,18 +2842,23 @@ def run_calibrate(args) -> int:
                 f"this material can support ({offered}). Run once without "
                 "--enroll-out, inspect both costs, then rerun with a displayed value."
             )
-        enforce_enrollment(manifest, own, other, args.target_frr, args.experimental)
+        save_profile(
+            args.enroll_out,
+            profile,
+            selected_target=args.target_frr,
+            operator_scores=own,
+            negative_scores=other,
+            held_out=held,
+            sittings=manifest,
+            negative_sources=negative_sources,
+            experimental=bool(args.experimental),
+            model_dir=args.model_dir,
+        )
         chosen = (
             dict(matching[0])
             if matching
             else calibrate(own, args.target_frr, other or None)
         )
-        chosen["held_out"] = held
-        chosen["n_sittings"] = len(sittings)
-        chosen["experimental"] = bool(args.experimental)
-        save_profile(args.enroll_out, profile, chosen["threshold"],
-                     operating_point=chosen, sittings=manifest,
-                     model_dir=args.model_dir)
         mark = "  EXPERIMENTAL — " if args.experimental else "  "
         print(f"\n{mark}wrote {args.enroll_out} — threshold "
               f"{chosen['threshold']:.3f} at {args.target_frr:.0%} operator-dropped, "
@@ -2095,7 +2870,8 @@ def run_calibrate(args) -> int:
 
 def enforce_enrollment(manifest: list[dict], own: list[float],
                        other: list[float], target_frr: float,
-                       experimental: bool) -> None:
+                       experimental: bool, *,
+                       negative_sources: list[dict] | None = None) -> None:
     """Refuse to write a profile the material cannot support.
 
     Everything below was documented as required and enforced by nothing, which is
@@ -2109,8 +2885,9 @@ def enforce_enrollment(manifest: list[dict], own: list[float],
         accident — two `--calibrate` pairs pointing at one file, printed as
         "2 sitting(s)", with none of the session diversity that plural is for. Audio
         digests, not paths: a copy under another name is the same sitting.
-      * **No negative-speaker material.** `--calibrate` already prints that a
-        threshold without it "is a rejection rate, not a gate", then wrote one.
+      * **Insufficient negative-speaker material.** Both the registered 60-second
+        speech floor and 20-segment floor are required, and repeated audio digests
+        cannot inflate them.
       * **Too few held-out scores to express the operating point.** A 5% target
         needs 20 observations before any of them is the 5th percentile.
 
@@ -2119,6 +2896,9 @@ def enforce_enrollment(manifest: list[dict], own: list[float],
     the point of an override: not to weaken the rule, but to keep the weakening
     visible downstream.
     """
+    target_frr = _finite("target_frr", target_frr, 0.0, 1.0)
+    if not 0 < target_frr < 1:
+        raise SystemExit("target_frr must lie strictly between 0 and 1")
     problems = []
     metadata = _sitting_metadata_problems(manifest)
     if metadata:
@@ -2127,6 +2907,11 @@ def enforce_enrollment(manifest: list[dict], own: list[float],
             + "".join(f"\n    - {p}" for p in metadata)
             + "\n\n  --experimental can record insufficient evidence; it cannot make "
               "an invalid capture record meaningful.")
+    sources = _canonical_negative_sources(
+        Path("<enrollment>"),
+        [] if negative_sources is None else negative_sources,
+        len(other),
+    )
     # The metadata gate above rejects malformed values; canonicalise the valid
     # ones here so upper/lowercase spelling cannot fabricate distinct recordings.
     digests = {_audio_digest(m.get("audio_sha256")) for m in manifest}
@@ -2145,13 +2930,20 @@ def enforce_enrollment(manifest: list[dict], own: list[float],
     if len(own) < floor:
         problems.append(
             f"{len(own)} held-out scores cannot express a {target_frr:.0%} "
-            f"false-reject rate — that needs at least {floor}, or the quantile is an "
-            f"interpolation between neighbours rather than a measured rate. Record "
+            f"false-reject rate — that needs at least {floor} observations. Record "
             f"longer sittings or ask for a looser target.")
-    if not other:
+    negative_seconds = sum(source["scorable_seconds"] for source in sources)
+    if len(other) < MIN_NEGATIVE_SCORABLE_SEGMENTS:
         problems.append(
-            "no --against material, so nothing states what this threshold admits of "
-            "a voice that is not the operator. That is a rejection rate, not a gate.")
+            f"{len(other)} scorable --against segment(s) is below the registered "
+            f"floor of {MIN_NEGATIVE_SCORABLE_SEGMENTS}. Count and duration are "
+            "separate requirements: one long passage is not a score distribution."
+        )
+    if negative_seconds < MIN_NEGATIVE_SCORABLE_SECONDS:
+        problems.append(
+            f"{negative_seconds:.1f}s of scorable --against speech is below the "
+            f"registered floor of {MIN_NEGATIVE_SCORABLE_SECONDS:.0f}s."
+        )
     if problems and not experimental:
         raise SystemExit(
             "\n  refusing to write this profile:\n"
@@ -2184,10 +2976,12 @@ def main() -> int:
                    help="operator speech captured on the microphone leg it will "
                         "gate. Repeat for each sitting — one sitting yields a "
                         "measurably over-tight threshold")
-    p.add_argument("--against", nargs=2, metavar=("SEGMENTS.json", "AUDIO.wav"),
-                   type=Path, action="append",
+    p.add_argument("--against", nargs=3,
+                   metavar=("SOURCE_CLASS", "SEGMENTS.json", "AUDIO.wav"),
+                   action="append",
                    help="speech known not to be the operator, to price each "
-                        "threshold. Repeatable")
+                        "threshold. SOURCE_CLASS is public-or-licensed or "
+                        "consenting-person. Repeatable")
     p.add_argument("--enroll-out", type=Path,
                    help="write the voiceprint and its threshold here, for "
                         "dual_capture.py --voiceprint. Cannot be inside the "
@@ -2198,24 +2992,15 @@ def main() -> int:
                         "with --enroll-out, and deliberately has no default")
     p.add_argument("--experimental", action="store_true",
                    help="write a profile the material does not support — one "
-                        "sitting, duplicate audio, no --against, or too few scores "
-                        "for the target. Recorded in the profile, and every capture "
-                        "gated by it says so")
+                        "sitting, insufficient --against evidence, or too few "
+                        "scores for the target. Recorded in the profile, and every "
+                        "capture gated by it says so")
     p.add_argument("--model-dir", type=Path, default=Path.home() / ".cache" / "speaker-gate",
                    help="where the ECAPA checkpoint is cached")
     args = p.parse_args()
 
     if args.self_test:
         return run_self_test()
-    if args.enroll_out and ab.inside_repo(args.enroll_out):
-        # The same refusal the transcript artifacts carry, for a stronger reason.
-        # A transcript is a record of what was said; a centroid is a measurement of
-        # who was speaking, usable to recognise the same voice in other audio. This
-        # repository is public, and 197 lines of household speech reached it once
-        # already — closed in the tool then, and closed in the tool here, because
-        # .gitignore only covers the paths somebody thought of in advance.
-        p.error(f"--enroll-out {args.enroll_out} is inside the repository. A "
-                f"voiceprint identifies a person. Write it to your home directory.")
     if args.calibrate:
         return run_calibrate(args)
     p.error("nothing to do: pass --self-test or --calibrate")

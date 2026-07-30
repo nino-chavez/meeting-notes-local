@@ -346,7 +346,14 @@ meeting is never copied or deleted by enrollment and keeps its existing meeting
 retention. The derived profile is private to the owning macOS account and is deleted
 through its own reset action. Resetting it leaves meetings alone and blocks application
 capture until enrollment completes again; only the research CLI may run ungated
-outside beta.
+outside beta. The retained owner-only material includes the held-out score and
+negative-source receipt needed to re-derive the selected operating point without raw
+audio; it is never included in a meeting export.
+
+Readiness is conjunctive: a valid profile, both current capture permissions, and an
+explicit meeting-audio retention choice must all exist. Participant attestation then
+applies to one capture attempt only. Every new Start, decline, cancellation,
+completion, profile reset, or retention change clears it and disables Continue.
 
 ---
 

@@ -295,22 +295,28 @@ records when it happened. Enrolment requires a gap greater than or equal to one 
 different days are ideal.
 
 *Enough judgeable speech.* A candidate target needs at least
-`ceil(1 / target)` held-out segments of two seconds or more before that quantile is an
-observation rather than interpolation. The 117-second take from the echo work has
-nine, which is why it is not enough on its own.
+`ceil(1 / target)` held-out segments of two seconds or more before that order
+statistic can express the target. Thresholds use the observed `higher` score rather
+than an interpolated number. The 117-second take from the echo work has nine, which is
+why it is not enough on its own.
 
-**2. A minute of permitted speech that is not you.** Use public-domain or
+**2. Permitted speech that is not you: at least 60 scorable seconds across at
+least 20 segments.** Use public-domain or
 appropriately licensed playback, or a person who knowingly consents to make this
 calibration recording. Do not use a private conversation, an unaware bystander, or
 unlicensed program audio.
 
 ```sh
-.venv/bin/python spike/dual_capture.py --seconds 60 --out ~/not-me
+.venv/bin/python spike/dual_capture.py --seconds 120 --out ~/not-me
 ```
 
 Without it the threshold is a rejection rate rather than a gate: it says how much of
 *you* it drops and nothing about what it lets through. Enrolment refuses to write a
-profile without it.
+profile without it. The minute is the registered speech floor. The 20-segment floor is
+a product judgement that prevents one long passage from masquerading as a score
+distribution and permits a 5% false-admission observation; it is not a statistical
+guarantee. Repeating the same recording cannot inflate either floor because its
+canonical audio digest is refused.
 
 **3. Report the measured choices without writing a profile.**
 
@@ -318,7 +324,8 @@ profile without it.
 .venv/bin/python spike/speaker_gate.py \
   --calibrate ~/enroll-1/mic-segments.json ~/enroll-1/mic.wav \
   --calibrate ~/enroll-2/mic-segments.json ~/enroll-2/mic.wav \
-  --against   ~/not-me/mic-segments.json    ~/not-me/mic.wav
+  --against public-or-licensed \
+    ~/not-me/mic-segments.json ~/not-me/mic.wav
 ```
 
 This first pass is report-only. It offers only targets the held-out operator sample
@@ -330,17 +337,22 @@ choice.
 **4. Choose one displayed row, then rerun explicitly to write the profile.**
 
 ```sh
+printf 'Paste one choose-with value from the report: '
+IFS= read -r CHOSEN_TARGET
+test -n "$CHOSEN_TARGET" || exit 2
+
 .venv/bin/python spike/speaker_gate.py \
   --calibrate ~/enroll-1/mic-segments.json ~/enroll-1/mic.wav \
   --calibrate ~/enroll-2/mic-segments.json ~/enroll-2/mic.wav \
-  --against   ~/not-me/mic-segments.json    ~/not-me/mic.wav \
+  --against public-or-licensed \
+    ~/not-me/mic-segments.json ~/not-me/mic.wav \
   --enroll-out ~/voiceprint.json \
-  --target-frr <chosen-target-from-the-report>
+  --target-frr "$CHOSEN_TARGET"
 ```
 
-Do not paste the angle-bracket placeholder: replace it with one target printed by the
-report-only pass. The CLI refuses an undisplayed target unless the run is explicitly
-marked experimental.
+The CLI refuses a target the report did not display unless the run is explicitly
+marked experimental. Use `consenting-person` instead of `public-or-licensed` only
+when the source deliberately recorded for this calibration.
 
 The product deletes each dedicated raw recording, transcript, temporary segment list,
 and partial working file immediately after the needed owner-only derived material is
@@ -357,6 +369,15 @@ measured pairs survive, it shows both. No option is selected by default. The mea
 operator-speech drop rate and negative-sample admission rate beside each choice come
 from that operator's material at runtime; the prototype's populated values are marked
 fixtures rather than personal percentages.
+
+`save_profile` does not accept a threshold or operating-point object. It receives the
+private held-out operator scores, negative scores and source manifests plus the chosen
+target, re-derives the offered table, and persists the selected row. The owner-only
+profile carries versioned score-set counts and digests, the deterministic choices and
+their digest, the selected row, and the negative recording and segment digests.
+`load_profile` repeats that arithmetic and refuses an arbitrary target or edited
+threshold. This private receipt is derived enrollment material retained after the
+dedicated raw recordings are deleted; it is never exported with a meeting.
 
 The resulting profile is private to the owning macOS account and separate from every
 meeting. Resetting it deletes the profile, calibrated threshold, and enrollment

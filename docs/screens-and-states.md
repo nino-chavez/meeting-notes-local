@@ -182,6 +182,12 @@ advice or infer that the room agreed.
 | `suppressed` | App on the never-list | No notification at all. |
 | `manual` | Started from the menubar with no detection | Skips detection but not the consent affordance. |
 
+Consent is scoped to one capture attempt. Every new Start begins unchecked; declining
+the prompt, cancelling the armed countdown, completing the capture, resetting the
+profile, or changing retention clears the attestation and disables Continue. Manual
+Start opens this surface in the neutral/idle menubar state. It never borrows
+`detected`, which belongs to the future microphone-use path.
+
 **Design question this surface owns:** whether the far end is told. Circleback,
 Granola and Fireflies each answered differently — Fireflies' bot announces
 itself by existing; the bot-free products leave it to the operator. The default
@@ -457,9 +463,10 @@ The permissions do not make the product ready by themselves. First run orders th
 requirements as permissions → meeting-audio retention → voice enrolment. The dedicated
 recordings made by enrolment are not meetings and do not inherit the meeting-retention
 choice: each raw artifact is deleted as soon as the needed owner-only derived material
-is safely stored. The manual meeting-capture control remains disabled until a valid
-profile is loaded; reviewing a panel or satisfying only one requirement cannot make it
-appear ready.
+is safely stored. The manual meeting-capture control is enabled only by the conjunction
+of a valid profile, both current permissions, and an explicitly selected retention
+period. Reviewing a panel or satisfying only one requirement cannot make it appear
+ready.
 
 ---
 
@@ -479,10 +486,11 @@ bugs that *move* from surface to surface instead of closing.
 | `resume-after-gap` | One sitting held | Names the enforced ≥1 hour gap and says different days are ideal; it does not invent elapsed time. |
 | `second-sitting-review` | Second sitting processed | Shows observed counts, gap, held-out speech, and any refusal before asking for negative material. |
 | `needs-other-voice` | Operator material sufficient, no negative sample | Offers public-domain or licensed playback, or a person who knowingly consents to make a calibration recording. |
-| `ready-to-build` | Contract satisfied | The operating point is the only decision left. |
 | `choosing-operating-point` | Measured choices exist | Two or three ordered choices, actual costs, no default; controls remain disabled before measurements load. |
+| `ready-to-build` | One measured row explicitly selected | The selected row is visible; no profile exists yet. |
+| `building-profile` | Build transition started | Start remains blocked until owner-only persistence succeeds. Failure deletes partial output. |
 | `enrolled` | A new profile is safely persisted | Carries provenance, both measured rates, build time, and encoder identity, then enters the valid-profile condition. |
-| `returning-valid-profile` | A persisted profile passes every load check | Distinct from `blocked`; this condition alone enables supported Start in the prototype. |
+| `returning-valid-profile` | A persisted profile passes every load check | Distinct from `blocked`; it supplies the profile prerequisite but does not bypass current permissions or retention. |
 | `discard-confirm` | The operator abandons incomplete enrolment | Deletes dedicated raw, partial derived work, and partial profile state; source meetings and any previous valid profile remain. |
 | `incomplete-cleaned` | Extraction/build failure, cancellation, or abandonment | Partial raw is deleted and enrolment remains incomplete. |
 | `reset-confirm` | The operator asks to delete the valid profile | Names exactly what goes and what remains. |
@@ -507,14 +515,19 @@ specific reasons, and a percentage cannot express any of them:
   ideal — including two pieces of one recording, which reads as satisfied and is not,
 - fewer held-out segments than a candidate target can express
   (`ceil(1 / target)`),
-- no allowed recording of a voice that is not the operator.
+- fewer than 60 scorable seconds or 20 scorable segments from allowed speech that is
+  not the operator,
+- a repeated negative recording identified by the same canonical audio digest.
 
 A bar at "80%" tells the operator to keep going. "Return at least one hour after the
 first sitting — ideally another day — then supply a permitted negative sample" tells
 them what to do. The second is the whole job of this surface. A negative sample is not
 permission to harvest someone else's speech: it is public-domain or appropriately
 licensed playback, or a deliberate recording made by a person who consented to that
-use.
+use. The minute is the registered speech floor. Twenty segments is a product
+judgement, separate from duration, that prevents one long passage from posing as a
+distribution and permits a 5% false-admission observation. Neither is a statistical
+guarantee.
 
 **`choosing-operating-point` is the one screen in the product that presents a
 trade-off rather than a reading**, which makes it the exception to the thesis and the
@@ -542,6 +555,20 @@ prototype radios stay disabled. Its populated rates come from a deterministic
 non-personal score fixture and are labelled as such; they are not claims about the
 reviewer. The CLI first reports without writing, then requires an explicit rerun with
 one displayed target. No point is selected by default.
+
+Selection is not enrollment. A checked measured row enters `ready-to-build`; a build
+transition follows; only a separate owner-only persistence-success transition enters
+`enrolled`. The returning-profile fixture is an independent load path and cannot be
+reached from the new-enrollment choice screen.
+
+**The profile carries a private, re-derivable operating-point receipt.**
+`save_profile` accepts evidence plus the selected target, not a caller-supplied
+threshold or operating-point object. The owner-only receipt records the contract and
+target-set versions, held-out operator and negative score arrays with counts and
+digests, negative source manifests, deterministic offered choices and digest, and the
+selected row. Thresholds are observed order statistics (`higher`), so every offered
+threshold is one input score. `load_profile` recomputes the table and selected row;
+an arbitrary 7% target or edited threshold is refused as production.
 
 **The profile and its source recordings have separate lifecycles.** The profile is
 app-private to the owning macOS account, is never included in a meeting export, and can
