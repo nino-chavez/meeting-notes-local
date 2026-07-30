@@ -8,6 +8,12 @@ bugs that *move* from surface to surface rather than closing.
 This is a native-shell app, so "route + auth state" does not apply. The
 equivalent axes are **surface** and **lifecycle state**.
 
+**This file has no clock, and that is its limit.** A state table says what a surface
+can hold; it cannot say what the operator does over a week, and gaps that only appear
+across time are invisible here by construction. `journeys.md` is the counterpart, and
+walking it against this file is what produced surfaces I, J and K — each of which read
+as complete until a journey crossed it. Read the two together or neither is finished.
+
 ---
 
 ## A. Menubar item
@@ -339,15 +345,69 @@ produces a real note — narrow, and true end to end.
 
 ---
 
+## K. Retention and disk
+
+Added 2026-07-29, from walking `journeys.md`'s J5 against this file and finding
+nothing. Every capture writes two WAVs and a transcript of a conversation involving
+people who are not the operator, and until this surface existed their lifecycle was
+"accumulates until the disk fills."
+
+| State | Trigger | Notes |
+|---|---|---|
+| `holding` | Default | What is kept, how much of it, and until when. Not a settings toggle buried in G — a standing statement. |
+| `nearing-limit` | Held audio passes the operator's own ceiling | Names the consequence and the choice, before anything is deleted. |
+| `expiring` | Material is inside its stated lifetime but close to the end | Deletion is never a surprise; the operator sees it coming. |
+| `deleting` | Bulk or per-meeting removal running | Interruptible, and says what is already gone. |
+| `audio-released` | The audio is deleted, the note is not | A first-class state on the note, not a broken one. |
+| `nothing-held` | No captures, or all audio released | Names why it is empty rather than rendering blank. |
+
+**`audio-released` is the state that makes this surface honest.** Deleting audio must
+not silently destroy the note built from it, and the note must say the audio is gone —
+because `journeys.md` J1's whole defence against a confident partial note is tracing a
+claim back to the words behind it, and that path is exactly what deleting audio
+removes. A note that lost its evidence and does not say so is worse than one that
+never had any.
+
+**Why this outranks every interface question in this file.** It is a promise the
+product implicitly makes and does not keep: "the audio never leaves the Mac" says
+nothing about how long it stays on it. It is the only gap where the harm lands on
+people who never agreed to anything — the far end and anyone in the room. And it is
+cheap now and expensive later, because a policy adopted after a year of captures has
+to be applied retroactively to material the operator has forgotten exists.
+
+**The retention period is the operator's choice and has no default this document may
+pick.** The same reasoning as the voiceprint threshold: a plausible constant would be
+indistinguishable from a considered one to every later reader. First run asks, and the
+answer is stated here rather than assumed.
+
+---
+
 ## L4 templates derived from the above
 
 Five, and no more until an L5 state demands a sixth:
 
-1. **Shell chrome** — window frame, sidebar, title treatment. Used by D, E, F, G, I.
+1. **Shell chrome** — window frame, sidebar, title treatment. Used by D, E, F, G, I,
+   J, K.
 2. **List–detail** — F to E.
 3. **Transient overlay** — B and C. Positioned, non-modal, dismissible.
-4. **Form** — G, and `choosing-operating-point` in I.
+4. **Form** — G, `choosing-operating-point` in I, and the retention period in K.
 5. **Sequence** — H, and only H.
+
+**J and K were checked against this list rather than left unmapped**, because an
+unmapped surface is where a sixth template gets invented at implementation time.
+Neither needs one. K is a standing status panel in the chrome plus a form for the
+period and a destructive confirmation for deletion — and destructive confirmation is a
+component with its own required states, not a template.
+
+**J carries a constraint no other surface has, and it is a property of the template
+rather than the surface.** Shell chrome is available to J — the Rust/TS shell must be
+running to render any window at all, which is the whole premise of "never fail before
+rendering an operator-readable window." But J occurs precisely when the sidecars are
+missing, so **the chrome must render with zero dependency on the Swift tap, the Python
+daemon, or the ASR weights.** A sidebar that lists notes, a title that names the last
+meeting, or a level meter would each turn the one surface that exists to report a
+broken install into a second broken thing. Any chrome element that reaches for a
+sidecar has to degrade to nothing, not to an error.
 
 **Surface I does not demand a sixth template, and that was checked rather than
 assumed.** The instinct is to call enrolment a Sequence like first run, and it is

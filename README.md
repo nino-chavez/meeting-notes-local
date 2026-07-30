@@ -501,7 +501,8 @@ silence, that is what happened.
 | [`spike/sweep.py`](./spike/sweep.py) | The same across playback levels, with the level measured from the recording rather than the volume slider. |
 | [`notes/EVAL.md`](./notes/EVAL.md) | Whether a local model invents things, measured against human-written summaries. |
 | [`notes/summarize.py`](./notes/summarize.py) | Transcript to notes, with four fabrication checks and controls for the checks. |
-| [`docs/screens-and-states.md`](./docs/screens-and-states.md) | Nine surfaces, their lifecycle states, and the five templates derived from them. |
+| [`docs/screens-and-states.md`](./docs/screens-and-states.md) | Eleven surfaces, their lifecycle states, and the five templates derived from them. |
+| [`docs/journeys.md`](./docs/journeys.md) | What the operator actually does across days, the five journeys, and the eight gaps found by walking them against the inventory. |
 | [`DIRECTION.md`](./DIRECTION.md) | Art direction. Thesis first; the device ledger stays empty until devices ship. |
 | [`DESIGN.md`](./DESIGN.md) | Tokens, visual rules, engineering rules, and the Tauri-over-SwiftUI shell decision. |
 | [`docs/teardown.md`](./docs/teardown.md) | How Circleback, Fireflies and Granola actually work, and why this is built the way it is. |
