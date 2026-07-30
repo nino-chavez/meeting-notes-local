@@ -65,6 +65,41 @@ palette, which is the safe version of the same rule — but it settles the note'
 structure only. It is not art-direction acceptance, and `DIRECTION.md`'s ledger stays
 empty until a product surface ships a device.
 
+### Two tests the decisions files do not contain
+
+The records above are the accepted outcomes. What produced them lives in the sessions,
+and two operator corrections there are reusable as tests rather than as decisions. Both
+are quoted as written.
+
+**"what am i supposed to know to do vs infer cognitively?"** — asked while reviewing
+film-room's ingest screen, alongside *"i dont understand the utility of the cards
+beneath the form inputs like 'proxies' 'features' 'scoring' etc. what is the job to be
+done on the ingest screen?"* That is the origin of the rule
+`decisions/0035` later states as cards being "not the default page-composition
+primitive": the cards had no job, and a card with no job costs a cold reader attention
+without returning anything. **The test is cold-start: install, launch, and separate what
+the surface tells you from what you are expected to work out.** It bites hardest here on
+H, which is the only surface a reader meets with no prior model, and on E, where the
+four claim states are new vocabulary that the surface itself has to teach.
+
+**A surface used repeatedly needs a strip and keys, not buttons.** Reviewing film-room's
+first pass: *"im mostly just hitting play then eiteh rkeep or reject but it feels
+cumbersome. a comparative example in lightroom gives me a small strip then hotkeys to
+pick or reject."* This product has the same shape and had not noticed: a note can carry
+**83 claims**, and checking them means moving between a claim and its words over and
+over. The prototype gives each claim a button, which is the cumbersome pattern at 83
+repetitions. J4's correction journey compounds it — every gated turn is an
+adjudication. **Neither E nor J4 has a keyboard path, and that is now a recorded gap
+rather than an oversight.**
+
+**One warning, from the redesign that got thrown away.** Asked of a
+methodology-generated prototype: *"why is our current site so much better in terms of ui
+and styling? just like our letsppepper and flickdaymedia designs. did we do something
+different when we designed those?"* A generated surface can be visibly worse than a
+directed one while every process step was followed. Harvesting real tokens instead of
+picking a palette is a guard against the cluster that produces, not a guarantee of
+having escaped it.
+
 ---
 
 ## What each surface must not become
@@ -79,19 +114,28 @@ table of eleven invented anti-patterns would read as a mood, which is the failur
 direction contract rejects. Where nothing has been decided, the cell says so — an empty
 cell is information.
 
-| Surface | Must not become | Recorded at |
+**Cited by verbatim phrase, not by line number or section name.** `website-nc`'s ledger
+carries a line number per device because two independent passes had inherited the same
+wrong count from a shared prose source — "so the next reader counts from the file
+instead of from the record." The anchor has to be checkable; a line number is not the
+only way, and here it is the wrong one, because this table lives in the same file it
+cites and every edit above a row would move it. A phrase greps. It also has to be
+*distinctive*: writing this table by grepping its own quotes returned the table's rows
+rather than the sections, which is that same failure arriving in the space of one file.
+
+| Surface | Must not become | Grep for |
 |---|---|---|
-| A. Menubar item | An indicator whose `recording` and `degraded` readings look alike; or one that moves when no audio is arriving | A's load-bearing rule; `DIRECTION.md` § no ambient motion |
-| B. Detection notification | A notice that starts capturing while it is still being read — the countdown *is* the consent window and cannot be zero — or one that re-asks after a decline in the same session | B's `countdown` and `declined` rows |
-| C. Recording HUD | A dialog. `tap-lost`, `device-changed` and `drift` are expected across a 60-minute capture and recording continues degraded | "Modeling them as modals is the error that makes the tool untrustworthy in the exact moment it matters" |
-| D. Live note surface | A transcript viewer — the operator's own typing is the point — or a surface that hard-fails when ASR is unavailable | D's opening line; `queued` |
-| E. Note detail | A note whose claims are reordered by trust, or one that treats a missing summary as an error instead of showing the transcript | E § read order; `summary-failed` is "a first-class state, not an error" |
-| F. Notes library | A task manager. A checkbox here means the tool owns follow-through and the operator has two task systems | `journeys.md` J2 |
-| G. Settings | A permissions list that presents the calendar grant as ordinary, when it is the one grant the product must apologise for | G § calendar is a third grant |
-| H. First run | A welcome graphic, or a flow that picks a retention period on the operator's behalf | `DIRECTION.md` FIRST VIEWPORT; K § the period "has no default this document may pick" |
-| I. Voice enrolment | A form that asks for a threshold, or one where an overridden enrolment looks complete | I § "It must not ask for a number"; "`experimental` must not look like `enrolled`" |
-| J. Shell startup failure | Anything that fails before a window the operator can read | J § "never fail before rendering an operator-readable window" |
-| K. Retention and disk | A settings toggle buried in G. It is a standing statement about material belonging to people who never agreed to anything | K § `holding`; "why this outranks every interface question in this file" |
+| A. Menubar item | An indicator whose `recording` and `degraded` readings look alike; or one that moves when no audio is arriving | `distinguishable at a` (§ A) · `DIRECTION.md` `No ambient motion anywhere` |
+| B. Detection notification | A notice that starts capturing while it is still being read — the countdown *is* the consent window and cannot be zero — or one that re-asks after a decline in the same session | `Cancellable for its full duration` · `No re-prompt for the same session` |
+| C. Recording HUD | A dialog. `tap-lost`, `device-changed` and `drift` are expected across a 60-minute capture and recording continues degraded | `Modeling them as modals is the` |
+| D. Live note surface | A transcript viewer — the operator's own typing is the point — or a surface that hard-fails when ASR is unavailable | `The operator types their own notes` · `rather than hard-failing` |
+| E. Note detail | A note whose claims are reordered by trust, or one that treats a missing summary as an error instead of showing the transcript | `Rendered in read order, never sorted by state` · `a first-class state, not an error` |
+| F. Notes library | A task manager. A checkbox here means the tool owns follow-through and the operator has two task systems | `journeys.md` `the moment this surface offers a checkbox` |
+| G. Settings | A permissions list that presents the calendar grant as ordinary, when it is the one grant the product must apologise for | `Presenting it as an ordinary permission row` |
+| H. First run | A welcome graphic, or a flow that picks a retention period on the operator's behalf | `DIRECTION.md` `never a welcome card` · `no default this document may pick` |
+| I. Voice enrolment | A form that asks for a threshold, or one where an overridden enrolment looks complete | `It must not ask for a number` · `must not look like` |
+| J. Shell startup failure | Anything that fails before a window the operator can read | `never fail before rendering an operator-readable window` |
+| K. Retention and disk | A settings toggle buried in G. It is a standing statement about material belonging to people who never agreed to anything | `Not a settings toggle buried in G` · `outranks every interface question` |
 
 **No cell here is empty, and that is a finding rather than a relief.** Eleven surfaces
 each already carried a recorded prohibition, which means the anti-patterns were being

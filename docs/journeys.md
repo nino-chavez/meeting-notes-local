@@ -467,6 +467,27 @@ it made an undecided item read as scheduled.
 | The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight. No convention to inherit — immature across the category |
 | No preparation journey | J0 | **Decided** — local read-only calendar via EventKit, `DESIGN.md § Context inputs`. The surface for a brief is still unspecified |
 | Who spoke, as opposed to who was invited | J0, J1 | **Open, and possibly unbridgeable.** A calendar gives invitees; the audio gives channels. Nothing in the market bridges it either |
+| The note's own section structure was never designed | J1, J2 | **Open, and found late.** See below |
+
+**The note has four sections and no document chose them.** `notes/summarize.py` emits
+Summary, Decisions, Action items and Open questions. That list appears in no design
+record — not here, not in `DESIGN.md`, not in `screens-and-states.md`, not in
+`notes/EVAL.md`. It arrived with the first notes commit (`e542232`) and has been the
+note's shape ever since, through a citation contract and a prototype built to settle
+"the note format".
+
+The prototype rendered it faithfully, which is the problem. This file argued that
+designing C → B → A would let retrieval requirements constrain the note's shape; the
+citation layer *was* constrained that way, and the sections underneath it were inherited
+whole and never asked to justify themselves. Decisions plausibly serves J1 and Action
+items plausibly serves J2 — plausibly is the word doing the work, and it is the word
+this file rejects everywhere else.
+
+The correction is borrowed from the operator's own, made when a redesign stayed anchored
+to the site it was replacing: *"you are too grounded in what we already have and i can't
+trust you are building a net new design."* Left open rather than answered here, because
+the honest form is two or three candidate structures compared against real notes, not a
+fourth section added to the existing three.
 
 ---
 
