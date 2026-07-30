@@ -1518,3 +1518,68 @@ a **partial** set: a new Bmr006 beside two artifacts from the previous run. Chec
 `provenance.generated_at` before comparing anything, and note that a freshly generated
 artifact carries no `support` key at all until `--measure-support` has been run over it —
 an absent support rate is not a rate of zero.
+
+## Repair 2 result: inconclusive — its precondition failed
+
+The first observed Repair 2 regeneration is **not a result**. Its artifact was generated
+at `2026-07-30T07:47:59-0500`; its SHA-256 is
+`8828f3b452c5dc8c70a7e82eed564ce7562fed085674c85425806cc3f43ccb32`. Its extraction
+check was false, and the consolidator produced 63 claims with no quoted evidence. That is
+the pipeline defect the run was supposed to prevent, not a measurement of whether
+quote-first generation changed support. The registered Repair 2 predictions above remain
+historical predictions; they are neither confirmed nor rejected by this run.
+
+That artifact is in the ignored local path
+`notes/out/repair2-failed-20260730-074759/Bmr006.note.json`. The digest pins the local
+observation, but the ignored snapshot is **not durable repository evidence** and must not
+be represented as such.
+
+Do not run the support judge on that artifact, compare its counts to the baseline, or
+rewrite `notes/out` to make it look coherent. The invalid run is retained only as a failed
+precondition: a later repair must make its transport contract mechanically auditable
+before another model call can be evidence.
+
+## Repair 3: typed quote-first records, registered before a new run
+
+Repair 3 removes prose and pipe syntax from the handoff between extraction and
+consolidation. Both calls request Ollama JSON-schema output. Local decoding rejects blank
+or malformed transport, duplicate/unknown/missing/blank fields, invalid labels, and any
+record whose raw object key order is not `quote`, `label`, `claim`. That last check is
+intentional: JSON semantics discard key order, but generation order is the mechanism
+Repair 2 was testing.
+
+The consolidator receives serialized validated records, not transcript text or markdown.
+It may rewrite a claim and deduplicate records, but every output quote must exactly match
+an extraction quote with the same label. Every extraction quote must also be locatable in
+the visible source slice before it is handed downstream.
+
+Each validated extraction record receives a deterministic local source ID. Every
+consolidated record must name at least one of those IDs; across the full output each input
+ID must appear exactly once. Unknown IDs, repeated IDs, dropped IDs, cross-label merges,
+and a quote not copied from one of its covered sources all fail the run. Source IDs never
+render. Control and line-break characters are refused in summary, quote, and claim fields,
+and local rendering proves a one-to-one cardinality between validated output records and
+parsed Markdown claims. There is no Markdown dedupe after that proof.
+
+The artifact records stage source and ordinal, the exact resolved Ollama model digest,
+options, schemas, and hashes of system prompt, input prompt, validated consolidation
+listing, and raw model response. It does not add raw responses or a second transcript
+copy. A mutable model tag that cannot be resolved unambiguously from Ollama before
+inference fails the run. `--recheck` remains a legacy `note/1` citation recalculation. It
+cannot revalidate a prior structured raw response, because that response is intentionally
+not retained.
+
+Predictions, recorded before inference:
+
+1. A blank, malformed, or claim-first response will fail closed before a note, artifact,
+   or support number is written. A schema-valid empty item list is allowed for a genuinely
+   empty slice or meeting; an overall empty-claim artifact is valid only if every structured
+   response validated.
+2. A completed chunked run will have no unquoted rendered items introduced by the merge.
+   Each rendered quote will be traceable to a validated extraction record with the same
+   label, and every extracted source ID will be represented exactly once. This is a
+   transport invariant, not evidence that the quote supports its claim.
+3. The Bmr006 support and composed-quote rates are deliberately **not predicted** here.
+   Repair 3 changes the permitted merge operation and may change the claim set. They are
+   measured only after the structural controls pass, reported against the Repair 2
+   baseline as a new condition, and never substituted for the prior Repair 2 prediction.

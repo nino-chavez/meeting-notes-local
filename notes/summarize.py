@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import itertools
 import json
@@ -40,6 +41,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -105,60 +107,6 @@ Copy the quoted words from the transcript exactly as they appear. Do not tidy
 them, complete them, or join words from different parts of the transcript. At
 least five words, or it proves nothing."""
 
-QUOTE_FROM_ITEMS = """
-Every item you were given is a label, then the item, then a pipe, then the spoken
-words that item rests on. The two sides of the pipe are not interchangeable. Before
-the pipe is the item, and that is yours to merge and reword. After it are words
-somebody said, and they must be reproduced exactly.
-
-Write the item on its own line and carry the spoken words across unchanged on the
-next line, indented, starting with the > character. Never write a quote of your
-own: you have not seen the transcript, so anything you compose is invented. An item
-that arrived with nothing after its pipe gets no quoted line at all."""
-# Naming which side of the pipe is which repairs a defect recorded against an earlier
-# version, which said only "carry those words across". The consolidator swapped the
-# fields on Proposed items — extraction produced `ACTION: write down error message |
-# maybe we should write it down` and the note came back reading `- Maybe we should
-# write it down | write down error message`, quoting the summary as though it were
-# speech. An instruction that says "carry the words" without saying which words are
-# the spoken ones leaves the model to infer it from meaning, and on a hedged item the
-# hedge reads more like speech than the summary does.
-#
-# **This pass is fed claim-first even though extraction now writes quote-first**, and
-# the two orders are deliberate rather than an oversight. Handing the consolidator its
-# items in the order it must emit them makes merging a near-copy; handing it the
-# inverted order makes every item a transposition performed while merging, and an 8B
-# model given that job dropped the quotes rather than moving them. Measured: 227
-# extracted items, every one of them quote-first, consolidated into 86 note items
-# carrying **zero** quotes, where the same pass on claim-first input had produced 93
-# items all carrying one. The inversion is free where it belongs — in generation,
-# where it decides what the claim is conditioned on — and expensive anywhere else, so
-# `summarize_chunked` normalises between the two stages.
-#
-# The example above is a shape, not a sentence, and that is deliberate. The first
-# version illustrated it with real prose — "The team settled on the rubber casing"
-# over a matching quote — and llama3.1 reproduced both as a decision ES2004c had
-# reached. That meeting really is about a rubber cover, so the echo read as almost
-# true, which is the worst version of it.
-#
-# This repository had already made that exact mistake once: two example sentences
-# in a phrasing rule came back as decisions a research meeting reached, and the
-# repair was to delete them. Reintroducing it while adding a check that catches it
-# is at least a well-instrumented mistake — `check_prompt_echo` and
-# `check_citations` both flagged it independently on the first real run.
-#
-# Angle brackets fixed the content echo and bought a syntax echo. Every claim in two
-# of three real runs came back as `- <the claim>`, brackets and all, and those were the
-# same runs that collapsed the quote onto the item's line: the model copied the
-# template's punctuation and its layout together. Neither check saw it, because what
-# leaked was the shape rather than any word — `check_prompt_echo` compares content
-# n-grams and found nothing to report.
-#
-# Named slots in capitals leak visibly instead. If a model writes "ITEM IN YOUR OWN
-# WORDS" into a note, that phrase is in the system prompt, so `check_prompt_echo`
-# catches it by the mechanism it already has. Choosing the failure that an existing
-# check can see beats choosing the one that looks tidier in the prompt.
-
 # Two of the four rules here used to instruct omission — "if you are not sure,
 # leave it out" and "prefer omitting a section to padding it". They were written
 # when the open question was whether a local model invents things. It does not;
@@ -221,32 +169,17 @@ Rules that override everything else:
   systems, datasets, metrics, deliverables. A commitment stripped of the name of
   the thing it concerns cannot be reconstructed downstream, and that is the
   failure this pass exists to prevent.
-- Work through the slice looking for the words themselves. One item per line, and
-  every line starts with the spoken words:
-
-  WORDS COPIED FROM THIS SLICE | ACTION: WHAT THOSE WORDS ESTABLISH
-
-  At least five words copied from this slice exactly as they appear, then a pipe,
-  then one of DECISION:, ACTION:, PROPOSAL: or QUESTION:, then what those
-  particular words establish. WORDS COPIED FROM THIS SLICE and WHAT THOSE WORDS
-  ESTABLISH name the two slots; do not write those words.
-
-  The words come first because you are reading out what they say. Do not decide
-  what the item is and then look for words to put in front of it — find the words,
-  then write only what they will carry. If nothing in this slice says it, it does
-  not get a line.
-
-  Those words are the only evidence anything downstream will have. No later step
-  sees this transcript, so a line without them cannot be traced back to speech by
-  anyone, ever.
+- Work through the slice looking for the words themselves. Copy at least five words
+  exactly as they appear before interpreting what they establish. Do not decide what
+  an item is and then hunt for supporting words. Those words are the only evidence
+  anything downstream will have; no later step sees this transcript.
 - Take the label from the words you copied, not from what would be most useful.
   DECISION: those words settle it. ACTION: someone commits in those words to doing
   it. PROPOSAL: those words suggest, offer or ask for it without settling it —
   anything hedged, "maybe we should", "we could", "I think we ought to", is a
   PROPOSAL however good the idea is. QUESTION: those words ask it and leave it open.
-- A slice is mostly ordinary conversation. If it contains none of these, output
-  nothing at all.
-- No preamble, no summary, no headings, no commentary."""
+- A slice is mostly ordinary conversation. If it contains none of these, return an
+  empty item list. Do not add a preamble, summary, heading, or commentary."""
 
 CONSOLIDATE_RULES = """\
 You are turning an ordered list of items, extracted from consecutive slices of
@@ -257,15 +190,13 @@ often appears several times in slightly different words.
 
 Rules that override everything else:
 - Use ONLY the items given. Add nothing, however plausible it would be.
-- Merge duplicates: several lines describing one commitment become one line,
+- Merge duplicates: several records describing one commitment become one record,
   keeping the most specific wording, including the names of documents and
   systems.
 - Do NOT drop an item because the list is long. Every distinct decision, action
   and open question in the input must survive into the output. This is a
   de-duplication task, not a selection task — you are not choosing the important
-  ones, you are removing the repeated ones.
-
-""" + SECTIONS + QUOTE_FROM_ITEMS
+  ones, you are removing the repeated ones."""
 
 # The one place the three attribution levels diverge. Everything above is shared;
 # what changes is who the notes are permitted to name.
@@ -339,8 +270,10 @@ CHANNEL_LEAK_PATTERNS = [
 ]
 
 
-def ollama_chat(model: str, system: str, user: str, num_ctx: int, timeout: int):
-    body = json.dumps({
+def _ollama_payload(model: str, system: str, user: str, num_ctx: int,
+                    response_format: dict | None = None) -> dict:
+    """Build the documented /api/chat request without making a network call."""
+    payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
@@ -353,7 +286,30 @@ def ollama_chat(model: str, system: str, user: str, num_ctx: int, timeout: int):
             # exactly the dimension where variation is a defect.
             "temperature": 0.0,
         },
-    }).encode()
+    }
+    if response_format is not None:
+        # Ollama's documented /api/chat contract accepts a JSON schema directly at
+        # `format`; do not stringify it or silently fall back to grammar-free text.
+        payload["format"] = response_format
+    return payload
+
+
+def ollama_chat(
+    model: str,
+    system: str,
+    user: str,
+    num_ctx: int,
+    timeout: int,
+    response_format: dict | None = None,
+):
+    """Call Ollama, optionally requiring a JSON-schema response.
+
+    Structured output constrains the model, but it is not the trust boundary.  The
+    caller still receives the raw JSON text and validates it with
+    ``_decode_structured`` below: JSON Schema cannot express duplicate object keys
+    or the generation order that makes quote-first meaningful.
+    """
+    body = json.dumps(_ollama_payload(model, system, user, num_ctx, response_format)).encode()
     req = urllib.request.Request(
         f"{OLLAMA}/api/chat", data=body, headers={"Content-Type": "application/json"}
     )
@@ -366,6 +322,44 @@ def ollama_chat(model: str, system: str, user: str, num_ctx: int, timeout: int):
             "Start it with `ollama serve`, and check the model is pulled:\n"
             f"  ollama pull {model}"
         ) from e
+
+
+def model_identity_from_tags(payload: object, requested: str) -> dict:
+    """Resolve one mutable model name to exactly one immutable local digest."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+        raise StructuredOutputError("Ollama /api/tags returned an invalid model list")
+    candidates = [
+        row for row in payload["models"]
+        if isinstance(row, dict) and requested in {row.get("name"), row.get("model")}
+    ]
+    if len(candidates) != 1:
+        raise StructuredOutputError(
+            f"model {requested!r} resolved to {len(candidates)} local entries")
+    row = candidates[0]
+    digest = row.get("digest")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise StructuredOutputError(f"model {requested!r} has no valid SHA-256 digest")
+    return {
+        "requested": requested,
+        "name": row.get("name") or row.get("model"),
+        "digest": digest,
+    }
+
+
+def resolve_ollama_model(model: str, timeout: int) -> dict:
+    """Resolve a model once before inference; mutable tags are not provenance."""
+    req = urllib.request.Request(f"{OLLAMA}/api/tags")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            payload = json.loads(response.read())
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        raise SystemExit(
+            f"cannot resolve Ollama model {model!r} from {OLLAMA}/api/tags: {e}"
+        ) from e
+    try:
+        return model_identity_from_tags(payload, model)
+    except StructuredOutputError as e:
+        raise SystemExit(f"cannot start inference: {e}") from e
 
 
 def check_one_context(response: dict, prompt: str, num_ctx: int) -> dict:
@@ -712,15 +706,15 @@ def _parse_claims(note: str) -> list[dict]:
 
 
 def dedupe_items(note: str) -> tuple[str, int]:
-    """Drop repeated items from a note, keeping the first of each.
+    """Legacy Markdown dedupe, retained only to keep its historical controls executable.
 
     The consolidator repeats itself. Measured on a 1365-turn meeting: extraction
     produced 160 items with one redundant pair, and consolidating them produced 83
     items of which **14 were exact repeats of an earlier claim** — the merge step
     introducing duplication rather than resolving it. The single-pass path produced
-    none on either shorter meeting, which is why this is applied only where the defect
-    is; adding it to `summarize` would carry machinery for a failure that path does not
-    have and would hide it if it ever appeared.
+    none on either shorter meeting. The structured path no longer calls this: complete
+    typed source-ID coverage is proved before rendering, and deleting Markdown after
+    that proof would invalidate it.
 
     **Stripped and counted, not silently cleaned.** The same treatment as the template
     punctuation in `_parse_claims`: a note listing one decision twice is simply wrong
@@ -766,6 +760,45 @@ def _seq(s: str) -> list[str]:
     wolf, which this project has already shipped once and had to repair.
     """
     return re.findall(r"[a-z0-9']+", s.lower())
+
+
+def locate_exact_quote(quote: str, transcript: Transcript) -> tuple[int, float | None] | None:
+    """Locate a copied quote as a contiguous sequence in the visible transcript.
+
+    This is deliberately stricter than the evidence state used by
+    :func:`check_citations`: every generated extraction quote must be locatable,
+    including short quotes.  The collision floor still matters later when saying a
+    located quote is evidence for a claim; it is not a licence to hand an invented
+    short quote to the consolidator.
+
+    Matching is token-exact (case and punctuation normalised exactly as the citation
+    checker normalises ASR text), and searches only the supplied slice.  A quote from
+    another slice is not an extraction hit for this stage.
+    """
+    words = _seq(quote)
+    if not words:
+        return None
+    for index, turn in enumerate(transcript.turns):
+        haystack = _seq(turn.text)
+        for start in range(len(haystack) - len(words) + 1):
+            if haystack[start:start + len(words)] == words:
+                return index, turn.start
+    return None
+
+
+def validate_extraction_quotes(items: list[dict], transcript: Transcript) -> dict:
+    """Fail closed before a slice's evidence can become a consolidation input."""
+    misses = [item for item in items if locate_exact_quote(item["quote"], transcript) is None]
+    result = {
+        "items": len(items),
+        "locatable": len(items) - len(misses),
+        "not_locatable": len(misses),
+        "ok": not misses,
+    }
+    if misses:
+        raise StructuredOutputError(
+            f"{len(misses)} extraction quote(s) are absent from the visible slice")
+    return result
 
 
 def check_citations(note: str, transcript: Transcript) -> dict:
@@ -1602,6 +1635,279 @@ def chunk_transcript(transcript: Transcript, target_words: int,
 
 
 _LABELS = r"DECISION|ACTION|PROPOSAL|QUESTION"
+_LABEL_VALUES = ("DECISION", "ACTION", "PROPOSAL", "QUESTION")
+
+# This is deliberately a record, not a markdown-shaped record.  A pipe was once
+# part of an inter-stage protocol; it was also ordinary speech, template syntax, and
+# a separator the next pass could reinterpret.  Here a quote can contain any text,
+# including a pipe, because JSON carries the boundary rather than asking the model to
+# reproduce one.
+_ITEM_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["quote", "label", "claim"],
+    "properties": {
+        "quote": {"type": "string"},
+        "label": {"type": "string", "enum": list(_LABEL_VALUES)},
+        "claim": {"type": "string"},
+    },
+}
+_CONSOLIDATED_ITEM_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["quote", "label", "claim", "source_ids"],
+    "properties": {
+        **_ITEM_SCHEMA["properties"],
+        "source_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "uniqueItems": True,
+        },
+    },
+}
+EXTRACTION_FORMAT = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["items"],
+    "properties": {"items": {"type": "array", "items": _ITEM_SCHEMA}},
+}
+CONSOLIDATION_FORMAT = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["summary", "items"],
+    "properties": {
+        "summary": {"type": "string"},
+        "items": {"type": "array", "items": _CONSOLIDATED_ITEM_SCHEMA},
+    },
+}
+
+
+class StructuredOutputError(ValueError):
+    """The model response did not satisfy the inter-stage data contract."""
+
+
+class _OrderedObject:
+    """A decoded JSON object, distinct from a JSON array even when both are empty."""
+
+    def __init__(self, pairs: list[tuple[str, object]]):
+        self.pairs = pairs
+
+
+def _strict_json(raw: str) -> object:
+    """Decode JSON while retaining object order and refusing duplicate keys."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise StructuredOutputError("empty structured response")
+
+    def ordered_object(pairs: list[tuple[str, object]]) -> _OrderedObject:
+        keys = [key for key, _ in pairs]
+        if len(set(keys)) != len(keys):
+            raise StructuredOutputError(f"duplicate JSON key(s): {keys!r}")
+        return _OrderedObject(pairs)
+
+    try:
+        return json.loads(raw, object_pairs_hook=ordered_object)
+    except json.JSONDecodeError as e:
+        raise StructuredOutputError(f"malformed JSON: {e.msg}") from e
+
+
+def _object(value: object, keys: tuple[str, ...], where: str) -> dict:
+    """Validate one ordered object, including its raw generation order."""
+    if not isinstance(value, _OrderedObject):
+        raise StructuredOutputError(f"{where}: expected a JSON object")
+    got = tuple(key for key, _ in value.pairs)
+    if got != keys:
+        expected = ", ".join(keys)
+        actual = ", ".join(str(k) for k in got)
+        raise StructuredOutputError(
+            f"{where}: expected keys in order ({expected}), got ({actual})")
+    return dict(value.pairs)
+
+
+def _text(value: object, where: str) -> str:
+    if not isinstance(value, str):
+        raise StructuredOutputError(f"{where}: expected a string")
+    if not value.strip():
+        raise StructuredOutputError(f"{where}: blank fields are not evidence")
+    if any(unicodedata.category(ch) in {"Cc", "Zl", "Zp"} for ch in value):
+        raise StructuredOutputError(f"{where}: control or line-break characters are forbidden")
+    return value.strip()
+
+
+def _item(value: object, where: str, *, consolidated: bool = False) -> dict:
+    keys = ("quote", "label", "claim", "source_ids") if consolidated else (
+        "quote", "label", "claim")
+    item = _object(value, keys, where)
+    for key in ("quote", "label", "claim"):
+        # Canonicalise boundary whitespace once.  The consolidator must then copy
+        # this exact canonical quote, byte for byte, rather than compose its own.
+        item[key] = _text(item[key], f"{where}.{key}")
+    if item["label"] not in _LABEL_VALUES:
+        raise StructuredOutputError(f"{where}.label: invalid label {item['label']!r}")
+    if consolidated:
+        source_ids = item["source_ids"]
+        if not isinstance(source_ids, list) or not source_ids:
+            raise StructuredOutputError(f"{where}.source_ids: expected a nonempty array")
+        if any(not isinstance(source_id, str) or not source_id
+               for source_id in source_ids):
+            raise StructuredOutputError(f"{where}.source_ids: expected nonblank strings")
+        if len(set(source_ids)) != len(source_ids):
+            raise StructuredOutputError(f"{where}.source_ids: duplicate coverage")
+    return item
+
+
+def decode_records(raw: str, stage: str, *, input_items: list[dict] | None = None) -> dict:
+    """Validate a schema-constrained response instead of trusting its JSON shape.
+
+    The explicit key-order assertion is intentional. JSON objects are semantically
+    unordered, but generation is not: a quote-first object is the only evidence that
+    the claim was written after the words it purports to read.  Accepting a parsed
+    dict here would turn a claim-first response into a false success.
+    """
+    root = _strict_json(raw)
+    if stage == "extract":
+        doc = _object(root, ("items",), "extraction")
+        if not isinstance(doc["items"], list):
+            raise StructuredOutputError("extraction.items: expected an array")
+        return {"items": [_item(item, f"extraction.items[{i}]")
+                          for i, item in enumerate(doc["items"])]}
+    if stage != "consolidate":
+        raise ValueError(f"unknown structured stage {stage!r}")
+    doc = _object(root, ("summary", "items"), "consolidation")
+    summary = _text(doc["summary"], "consolidation.summary")
+    if not isinstance(doc["items"], list):
+        raise StructuredOutputError("consolidation.items: expected an array")
+    items = [_item(item, f"consolidation.items[{i}]", consolidated=True)
+             for i, item in enumerate(doc["items"])]
+    if input_items is None:
+        raise StructuredOutputError("consolidation: validated input records are required")
+    inputs = {item["source_id"]: item for item in input_items}
+    if len(inputs) != len(input_items):
+        raise StructuredOutputError("consolidation input contains duplicate source IDs")
+    covered: list[str] = []
+    for item in items:
+        sources = []
+        for source_id in item["source_ids"]:
+            if source_id not in inputs:
+                raise StructuredOutputError(
+                    f"consolidation source ID does not exist: {source_id!r}")
+            sources.append(inputs[source_id])
+            covered.append(source_id)
+        if any(source["label"] != item["label"] for source in sources):
+            raise StructuredOutputError(
+                "consolidation merged source IDs across incompatible labels")
+        if item["quote"] not in {source["quote"] for source in sources}:
+            raise StructuredOutputError(
+                "consolidation quote is not copied from one of its covered sources")
+    duplicates = [source_id for source_id, count in Counter(covered).items() if count != 1]
+    if duplicates:
+        raise StructuredOutputError(
+            f"consolidation covered source IDs more than once: {duplicates!r}")
+    missing = sorted(set(inputs) - set(covered))
+    if missing:
+        raise StructuredOutputError(
+            f"consolidation discarded source IDs: {missing!r}")
+    return {"summary": summary, "items": items}
+
+
+def attach_source_ids(items: list[dict], slice_ordinal: int) -> list[dict]:
+    """Attach stable local identities after extraction validation, never by the model."""
+    return [
+        {**item, "source_id": f"slice-{slice_ordinal:04d}-item-{index:04d}"}
+        for index, item in enumerate(items, 1)
+    ]
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _response_provenance(stage: str, source: str, ordinal: int, response: dict,
+                         schema: dict, model_identity: dict, num_ctx: int, system: str,
+                         user: str, input_records: str | None = None,
+                         quote_locations: dict | None = None) -> dict:
+    """Audit a response without copying its text (or transcript-derived quotes)."""
+    raw = response.get("message", {}).get("content", "")
+    result = {
+        "stage": stage,
+        "source": source,
+        "ordinal": ordinal,
+        "model": model_identity["requested"],
+        "resolved_model": model_identity["name"],
+        "model_digest": model_identity["digest"],
+        "options": {"num_ctx": num_ctx, "temperature": 0.0},
+        "schema": schema,
+        "schema_sha256": _sha256(json.dumps(schema, sort_keys=True, separators=(",", ":"))),
+        "system_prompt_sha256": _sha256(system),
+        "input_prompt_sha256": _sha256(user),
+        "response_sha256": _sha256(raw),
+    }
+    if input_records is not None:
+        # The consolidation prompt contains a little framing text too.  This separate
+        # digest pins the exact validated JSON listing that crossed the stage boundary.
+        result["input_records_sha256"] = _sha256(input_records)
+    if quote_locations is not None:
+        result["quote_locations"] = quote_locations
+    return result
+
+
+def render_structured_note(summary: str, items: list[dict]) -> str:
+    """Render a typed note deterministically in the legacy markdown shape."""
+    titles = {
+        "DECISION": "Decisions",
+        "ACTION": "Action items",
+        "PROPOSAL": "Proposed",
+        "QUESTION": "Open questions",
+    }
+    lines = ["## Summary", summary]
+    for label in _LABEL_VALUES:
+        group = [item for item in items if item["label"] == label]
+        if not group:
+            continue
+        lines.extend(("", f"## {titles[label]}"))
+        for item in group:
+            lines.extend((f"- {item['claim']}", f"  > {item['quote']}"))
+    return "\n".join(lines)
+
+
+def validate_structured_render(note: str, items: list[dict]) -> dict:
+    """Prove rendering neither injected nor discarded a typed consolidated record."""
+    parsed = _parse_claims(note)
+    expected = [
+        item
+        for label in _LABEL_VALUES
+        for item in items
+        if item["label"] == label
+    ]
+    if len(parsed) != len(expected):
+        raise StructuredOutputError(
+            f"rendered {len(parsed)} claims from {len(expected)} consolidated records")
+    for index, (actual, source) in enumerate(zip(parsed, expected, strict=True)):
+        if (actual["claim"], actual["quote"], actual["type"]) != (
+                source["claim"], source["quote"], source["label"].lower()):
+            raise StructuredOutputError(
+                f"rendered claim {index} does not match its consolidated record")
+    return {"records": len(items), "rendered_claims": len(parsed), "ok": True}
+
+
+EXTRACT_STRUCTURED_RULES = EXTRACT_RULES + """
+
+Return ONLY a JSON object matching the supplied schema. It has an `items` array.
+Each item object MUST write its keys in this exact order: `quote`, `label`, `claim`.
+`quote` is exact speech from this slice and comes first. `label` is one of the four
+allowed uppercase values. `claim` is your short reading of those words. Do not return
+markdown, a pipe, headings, comments, or any key not in the schema."""
+
+CONSOLIDATE_STRUCTURED_RULES = CONSOLIDATE_RULES + """
+
+Return ONLY a JSON object matching the supplied schema. Its keys MUST be `summary`,
+then `items`. Each item object MUST write its keys in this exact order: `quote`,
+`label`, `claim`, `source_ids`. Copy `quote` byte-for-byte from one covered input record.
+`source_ids` must list every input record merged into this item. Cover every input source
+ID exactly once across the output; never drop, repeat, invent, or merge IDs carrying
+different labels. You may merge claims but may not compose or repair evidence. `summary`
+is three to six plain sentences about the meeting and does not carry quoted items. Do not
+return markdown, a pipe, headings, comments, or any key not in the schema."""
 
 # The order the contract now asks for: spoken words, pipe, label, item. The quote
 # group excludes pipes, so it cannot swallow a later field by backtracking.
@@ -1663,7 +1969,8 @@ def check_extraction(lines: list[str], parsed: list[dict]) -> dict:
 
 
 def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout: int,
-                      target_words: int, overlap_words: int) -> dict:
+                      target_words: int, overlap_words: int,
+                      model_identity: dict | None = None) -> dict:
     """Extract per slice, then consolidate — trading passes for recall.
 
     The single-pass summarizer is asked to compress a whole meeting in one step,
@@ -1678,58 +1985,101 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
     defect is in the merge, which is a different fix.
     """
     contract = CONTRACTS[transcript.attribution]
-    extract_system = EXTRACT_RULES + "\n\n" + contract
-    consolidate_system = CONSOLIDATE_RULES + "\n\n" + contract
+    extract_system = EXTRACT_STRUCTURED_RULES + "\n\n" + contract
+    consolidate_system = CONSOLIDATE_STRUCTURED_RULES + "\n\n" + contract
     slices = chunk_transcript(transcript, target_words, overlap_words)
+    identity = model_identity or resolve_ollama_model(model, min(timeout, 30))
 
     t0 = time.monotonic()
-    calls, items, parsed, raw_lines = [], [], [], []
-    for chunk in slices:
-        user = f"Transcript slice:\n\n{chunk.render()}\n\nList the items."
-        response = ollama_chat(model, extract_system, user, num_ctx, timeout)
+    calls, items, stage_provenance = [], [], []
+    location_totals = Counter()
+    for ordinal, chunk in enumerate(slices, 1):
+        user = f"Transcript slice:\n\n{chunk.render()}\n\nExtract the records."
+        response = ollama_chat(model, extract_system, user, num_ctx, timeout,
+                               EXTRACTION_FORMAT)
         calls.append({"label": chunk.source, "prompt": extract_system + user,
                       "response": response})
-        for line in response["message"]["content"].splitlines():
-            raw_lines.append(line)
-            if item := parse_item(line):
-                parsed.append(item)
-                # The quote travels with the item, and that is load-bearing rather
-                # than tidy. Only this pass sees the transcript; the consolidator
-                # receives the item list alone. Dropping the quote here left the
-                # consolidator asked for verbatim evidence from a transcript it had
-                # never been shown, so every citation it produced was necessarily
-                # invented — a structural guarantee of fabrication, arriving because
-                # a requirement was added to a contract both passes share.
-                #
-                # Normalised to claim-first regardless of the order the model wrote in,
-                # for two reasons. The consolidator is never handed two shapes to tell
-                # apart — reading both orders is for counting what the model did, not
-                # for passing on. And claim-first is the order the consolidator emits,
-                # which keeps its job a copy rather than a transposition; see the note
-                # above `QUOTE_FROM_ITEMS` for what happened when it was not.
-                claim = f"{item['label']}: {item['text']}"
-                items.append(f"{claim} | {item['quote']}" if item["quote"] else claim)
+        raw = response.get("message", {}).get("content", "")
+        try:
+            extracted = decode_records(raw, "extract")
+        except StructuredOutputError as e:
+            raise SystemExit(f"{chunk.source}: structured extraction refused: {e}") from e
+        try:
+            locations = validate_extraction_quotes(extracted["items"], chunk)
+        except StructuredOutputError as e:
+            raise SystemExit(f"{chunk.source}: extraction evidence refused: {e}") from e
+        items.extend(attach_source_ids(extracted["items"], ordinal))
+        location_totals.update(locations)
+        stage_provenance.append(_response_provenance(
+            "extract", chunk.source, ordinal, response, EXTRACTION_FORMAT, identity, num_ctx,
+            extract_system, user, quote_locations=locations))
 
-    listing = "\n".join(items) if items else "(no items were extracted)"
-    user = f"Items extracted from the meeting, in order:\n\n{listing}\n\nWrite the notes."
-    response = ollama_chat(model, consolidate_system, user, num_ctx, timeout)
+    # `json.dumps` is the only transport between the two model stages. Its shape has
+    # no overloaded punctuation and records retain quote -> label -> claim order.
+    listing = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+    user = ("Validated extracted records from the meeting, in order:\n\n"
+            f"{listing}\n\nConsolidate the records.")
+    response = ollama_chat(model, consolidate_system, user, num_ctx, timeout,
+                           CONSOLIDATION_FORMAT)
     calls.append({"label": "consolidate", "prompt": consolidate_system + user,
                   "response": response})
     elapsed = time.monotonic() - t0
+    raw = response.get("message", {}).get("content", "")
+    try:
+        consolidated = decode_records(raw, "consolidate", input_items=items)
+    except StructuredOutputError as e:
+        raise SystemExit(f"consolidation: structured output refused: {e}") from e
+    stage_provenance.append(_response_provenance(
+        "consolidate", "consolidate", len(slices) + 1, response, CONSOLIDATION_FORMAT,
+        identity, num_ctx, consolidate_system, user, input_records=listing))
 
-    note, repeats = dedupe_items(response["message"]["content"].strip())
+    note = render_structured_note(consolidated["summary"], consolidated["items"])
+    try:
+        rendered = validate_structured_render(note, consolidated["items"])
+    except StructuredOutputError as e:
+        raise SystemExit(f"structured rendering refused: {e}") from e
+    extracted_display = [
+        f"- [{item['label']}] {item['claim']}\n  > {item['quote']}"
+        for item in items
+    ]
 
     return {
         "note": note,
         "elapsed_s": elapsed,
         "model": model,
+        "model_identity": identity,
         "rendered": transcript.render(),
         "system": extract_system + "\n" + consolidate_system,
         "calls": calls,
-        "extracted": items,
-        "extraction": check_extraction(raw_lines, parsed),
+        "extracted": extracted_display,
+        "extracted_records": items,
+        "consolidated_records": consolidated,
+        "structured_render": rendered,
+        "structured_provenance": stage_provenance,
+        "structured_contract": {
+            "input_sources": len(items),
+            "covered_sources": sum(
+                len(item["source_ids"]) for item in consolidated["items"]),
+            "output_records": len(consolidated["items"]),
+            "rendered_claims": rendered["rendered_claims"],
+        },
+        "extraction": {
+            "applies": True,
+            "ok": True,
+            "dropped": [],
+            "orders": {"quote-first": len(items)},
+            "labels": dict(Counter(item["label"] for item in items)),
+            "transport": "json-schema",
+            "quote_locations": {
+                "items": location_totals["items"],
+                "locatable": location_totals["locatable"],
+                "not_locatable": location_totals["not_locatable"],
+            },
+        },
         "slices": len(slices),
-        "duplicates_removed": repeats,
+        # Structured coverage is validated before rendering. A markdown dedupe here
+        # would discard typed coverage after that proof and make it false.
+        "duplicates_removed": None,
     }
 
 
@@ -1765,6 +2115,9 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
         labels = ", ".join(f"{n} {lab.lower()}" for lab, n in
                            sorted(extraction["labels"].items()))
         print(f"  extraction    {counts or 'no items'} — {labels or 'none'}")
+        if locations := extraction.get("quote_locations"):
+            print(f"                {locations['locatable']}/{locations['items']} quote(s) "
+                  "located in their own visible slice")
         for line in extraction["dropped"]:
             print(f"                DROPPED (looks like an item, parsed as none): {line}")
     if result.get("duplicates_removed"):
@@ -2113,7 +2466,9 @@ def recheck(artifact: Path) -> dict:
     survive in the artifact: the note text and the transcript. `numbers`, `grounding`
     and `prompt_echo` compare against the rendered prompt and the system message, which
     are not stored; carrying their stored verdicts forward is honest, silently
-    recomputing them against a substitute input would not be.
+    recomputing them against a substitute input would not be. The same boundary applies
+    to structured extraction: its provenance has hashes, not retained raw responses, so
+    `--recheck` cannot and does not revalidate its stage contract.
     """
     doc = json.loads(artifact.read_text())
     if doc.get("schema") != NOTE_SCHEMA:
@@ -2244,21 +2599,20 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
         "capture": transcript.gate,
         "provenance": {
             "model": result["model"],
+            "model_identity": result.get("model_identity"),
             "elapsed_s": round(result["elapsed_s"], 1),
             "passes": 2 if "extracted" in result else 1,
             "slices": result.get("slices"),
-            # Belongs here rather than in `checks` because the note no longer contains
-            # the evidence: once the repeats are excised, nothing recomputable from the
-            # note text can recover the count, so a `--recheck` would drop it.
-            #
-            # `null` on the single-pass path, never 0. Only the chunked path excises
-            # repeats, so 0 there would assert a measurement that was never taken — and
-            # the whole reason the fix is chunked-only is to leave a single-pass
-            # regression visible. `checks.citations.repeats` is the number that covers
-            # both paths. Same reasoning as `transform`: absent and zero are different
-            # facts and a field that conflates them hides the one that matters.
+            # `null` on both current paths: live Markdown is never deduplicated after
+            # generation. Kept for note/1 compatibility with older artifacts that
+            # recorded the now-retired chunked Markdown pass.
             "duplicates_removed": result.get("duplicates_removed"),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            # Raw model replies contain transcript-derived evidence.  Keep their
+            # hashes and the exact schemas/options needed to audit the contract, not
+            # a second copy of the meeting in an artifact a UI may export.
+            "structured_stages": result.get("structured_provenance"),
+            "structured_contract": result.get("structured_contract"),
         },
         # Carried whole. A surface may only need citations today, but a note whose
         # own record of what was checked is partial cannot be audited later.
@@ -2941,6 +3295,285 @@ def run_self_test() -> int:
           f"in, not the order they were judged in")
     if not order_ok:
         print(f"          got {got_order}")
+
+    print("\n=== structured note transport ===\n")
+
+    request = _ollama_payload("fixture", "system", "user", 1234, EXTRACTION_FORMAT)
+    format_sent = (request.get("format") == EXTRACTION_FORMAT
+                   and request["options"]["temperature"] == 0.0
+                   and request["stream"] is False)
+    failures += not format_sent
+    print(f"  [{'pass' if format_sent else 'FAIL'}] extraction sends JSON Schema to "
+          "Ollama without enabling sampling")
+    fixture_identity = model_identity_from_tags(
+        {"models": [{"name": "fixture:latest", "model": "fixture:latest",
+                     "digest": "a" * 64}]},
+        "fixture:latest",
+    )
+    identity_ok = fixture_identity["digest"] == "a" * 64
+    try:
+        model_identity_from_tags(
+            {"models": [
+                {"name": "fixture:latest", "digest": "a" * 64},
+                {"model": "fixture:latest", "digest": "b" * 64},
+            ]},
+            "fixture:latest",
+        )
+        ambiguous_refused = False
+    except StructuredOutputError:
+        ambiguous_refused = True
+    failures += not (identity_ok and ambiguous_refused)
+    print(f"  [{'pass' if identity_ok and ambiguous_refused else 'FAIL'}] a mutable "
+          "model tag resolves to one immutable digest before inference")
+
+    def structured_case(label: str, raw: str, stage: str, want_ok: bool,
+                        input_items: list[dict] | None = None) -> dict | None:
+        nonlocal failures
+        try:
+            got = decode_records(raw, stage, input_items=input_items)
+            ok = want_ok
+        except StructuredOutputError:
+            got, ok = None, not want_ok
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        return got
+
+    extracted = structured_case(
+        "a pipe inside a quote stays data, not a stage separator",
+        ('{"items":[{"quote":"we said utf-8 | not latin-1",'
+         '"label":"QUESTION","claim":"Choose an encoding"}]}'),
+        "extract", True)
+    quote_slice = Transcript(
+        source="fixture slice", attribution=NONE,
+        turns=[Turn(text="we said utf-8 | not latin-1", start=0.0)],
+    )
+    assert extracted is not None
+    location = validate_extraction_quotes(extracted["items"], quote_slice)
+    location_ok = location == {"items": 1, "locatable": 1, "not_locatable": 0, "ok": True}
+    source_items = attach_source_ids(extracted["items"], 1)
+    failures += not location_ok
+    print(f"  [{'pass' if location_ok else 'FAIL'}] an extraction quote is located in "
+          "its own visible slice before handoff")
+    try:
+        validate_extraction_quotes(
+            [{"quote": "invented short words", "label": "QUESTION", "claim": "Choose"}],
+            quote_slice,
+        )
+        invented_quote_rejected = False
+    except StructuredOutputError:
+        invented_quote_rejected = True
+    failures += not invented_quote_rejected
+    print(f"  [{'pass' if invented_quote_rejected else 'FAIL'}] an unlocatable short "
+          "quote fails before the collision floor can hide it")
+    empty_records = structured_case(
+        "a schema-valid empty slice is distinct from an empty transport failure",
+        '{"items":[]}', "extract", True)
+    empty_slice_valid = (empty_records is not None
+                         and validate_extraction_quotes(empty_records["items"], quote_slice)["ok"])
+    failures += not empty_slice_valid
+    print(f"  [{'pass' if empty_slice_valid else 'FAIL'}] a genuinely empty slice is "
+          "valid after structured validation")
+    empty_meeting = structured_case(
+        "a validated empty meeting remains distinct from malformed transport",
+        '{"summary":"No commitments were raised.","items":[]}', "consolidate", True, [])
+    empty_meeting_valid = empty_meeting == {
+        "summary": "No commitments were raised.", "items": [],
+    }
+    failures += not empty_meeting_valid
+    print(f"  [{'pass' if empty_meeting_valid else 'FAIL'}] an empty-claim artifact "
+          "requires valid responses, not invented items")
+    structured_case(
+        "an empty JSON object cannot masquerade as an empty items array",
+        '{"items":{}}', "extract", False)
+    structured_case(
+        "claim-first JSON fails the quote-first generation audit",
+        ('{"items":[{"claim":"Choose an encoding","label":"QUESTION",'
+         '"quote":"we said utf-8 | not latin-1"}]}'), "extract", False)
+    structured_case(
+        "duplicate JSON keys fail before semantic decoding can hide them",
+        ('{"items":[{"quote":"we said utf-8",'
+         '"quote":"not latin-1","label":"QUESTION",'
+         '"claim":"Choose an encoding"}]}'), "extract", False)
+    structured_case(
+        "an invalid label enum is refused locally",
+        ('{"items":[{"quote":"we said utf-8","label":"RESOLUTION",'
+         '"claim":"Choose an encoding"}]}'), "extract", False)
+    structured_case(
+        "a non-string field is refused locally",
+        ('{"items":[{"quote":"we said utf-8","label":4,'
+         '"claim":"Choose an encoding"}]}'), "extract", False)
+    structured_case(
+        "a missing item field is not a partial success",
+        '{"items":[{"quote":"we said utf-8","label":"QUESTION"}]}',
+        "extract", False)
+    structured_case(
+        "an unknown item field is not silently carried forward",
+        ('{"items":[{"quote":"we said utf-8","label":"QUESTION",'
+         '"claim":"Choose an encoding","confidence":"high"}]}'), "extract", False)
+    structured_case(
+        "blank evidence is refused rather than rendered as an uncited item",
+        ('{"items":[{"quote":"  ","label":"QUESTION",'
+         '"claim":"Choose an encoding"}]}'), "extract", False)
+    structured_case(
+        "a schema-valid newline cannot inject another markdown claim",
+        ('{"items":[{"quote":"we said utf-8","label":"QUESTION",'
+         '"claim":"Choose an encoding\\n- Injected action"}]}'), "extract", False)
+    structured_case(
+        "a schema-valid control character cannot hide inside quoted evidence",
+        ('{"items":[{"quote":"we said\\tutf-8","label":"QUESTION",'
+         '"claim":"Choose an encoding"}]}'), "extract", False)
+    structured_case("an empty model payload cannot become an empty success", "", "extract",
+                    False)
+    structured_case("item-shaped non-JSON cannot become an empty success",
+                    "ACTION: send the file", "extract", False)
+
+    consolidated = structured_case(
+        "consolidation may retain an exact compatible input quote",
+        ('{"summary":"The team discussed encoding.","items":['
+         '{"quote":"we said utf-8 | not latin-1","label":"QUESTION",'
+         '"claim":"Choose an encoding",'
+         '"source_ids":["slice-0001-item-0001"]}]}'), "consolidate", True,
+        source_items)
+    structured_case(
+        "a schema-valid summary cannot inject a markdown heading",
+        ('{"summary":"Encoding was discussed.\\n## Decisions","items":['
+         '{"quote":"we said utf-8 | not latin-1","label":"QUESTION",'
+         '"claim":"Choose an encoding",'
+         '"source_ids":["slice-0001-item-0001"]}]}'), "consolidate", False,
+        source_items)
+    structured_case(
+        "consolidation cannot compose replacement evidence",
+        ('{"summary":"The team discussed encoding.","items":['
+         '{"quote":"we should use utf-8","label":"QUESTION",'
+         '"claim":"Choose an encoding",'
+         '"source_ids":["slice-0001-item-0001"]}]}'), "consolidate", False,
+        source_items)
+    structured_case(
+        "consolidation cannot relabel an otherwise exact quote",
+        ('{"summary":"The team discussed encoding.","items":['
+         '{"quote":"we said utf-8 | not latin-1","label":"DECISION",'
+         '"claim":"Use utf-8",'
+         '"source_ids":["slice-0001-item-0001"]}]}'), "consolidate", False,
+        source_items)
+    coverage_inputs = [*source_items, {
+        "quote": "we will send the file tomorrow",
+        "label": "ACTION",
+        "claim": "Send the file",
+        "source_id": "slice-0001-item-0002",
+    }]
+    structured_case(
+        "schema-valid consolidation cannot drop an input source ID",
+        ('{"summary":"Encoding was discussed.","items":['
+         '{"quote":"we said utf-8 | not latin-1","label":"QUESTION",'
+         '"claim":"Choose an encoding","source_ids":["slice-0001-item-0001"]}]}'),
+        "consolidate", False, coverage_inputs)
+    structured_case(
+        "schema-valid consolidation cannot cover one source ID twice",
+        ('{"summary":"Encoding was discussed.","items":['
+         '{"quote":"we said utf-8 | not latin-1","label":"QUESTION",'
+         '"claim":"Choose an encoding","source_ids":["slice-0001-item-0001"]},'
+         '{"quote":"we said utf-8 | not latin-1","label":"QUESTION",'
+         '"claim":"Keep the encoding open","source_ids":["slice-0001-item-0001"]}]}'),
+        "consolidate", False, coverage_inputs)
+    structured_case(
+        "schema-valid consolidation cannot invent a source ID",
+        ('{"summary":"Encoding was discussed.","items":['
+         '{"quote":"we said utf-8 | not latin-1","label":"QUESTION",'
+         '"claim":"Choose an encoding","source_ids":["slice-9999-item-9999"]}]}'),
+        "consolidate", False, source_items)
+    structured_case(
+        "schema-valid consolidation cannot merge sources across labels",
+        ('{"summary":"Encoding was discussed.","items":['
+         '{"quote":"we said utf-8 | not latin-1","label":"QUESTION",'
+         '"claim":"Choose an encoding","source_ids":['
+         '"slice-0001-item-0001","slice-0001-item-0002"]}]}'),
+        "consolidate", False, coverage_inputs)
+    assert consolidated is not None
+    rendered_once = render_structured_note(consolidated["summary"], consolidated["items"])
+    rendered_twice = render_structured_note(consolidated["summary"], consolidated["items"])
+    render_check = validate_structured_render(rendered_once, consolidated["items"])
+    deterministic = (rendered_once == rendered_twice and rendered_once ==
+                     "## Summary\nThe team discussed encoding.\n\n## Open questions\n"
+                     "- Choose an encoding\n  > we said utf-8 | not latin-1"
+                     and "source_ids" not in rendered_once
+                     and render_check["rendered_claims"] == len(consolidated["items"]))
+    failures += not deterministic
+    print(f"  [{'pass' if deterministic else 'FAIL'}] typed records render the legacy "
+          "markdown deterministically")
+    same_claim_records = [
+        {**consolidated["items"][0], "source_ids": ["one"]},
+        {**consolidated["items"][0], "source_ids": ["two"]},
+    ]
+    same_claim_note = render_structured_note(consolidated["summary"], same_claim_records)
+    one_to_one = validate_structured_render(same_claim_note, same_claim_records)
+    no_post_validation_dedupe = one_to_one == {
+        "records": 2, "rendered_claims": 2, "ok": True,
+    }
+    failures += not no_post_validation_dedupe
+    print(f"  [{'pass' if no_post_validation_dedupe else 'FAIL'}] rendering preserves "
+          "one claim for every validated record, even when claims repeat")
+
+    # Cover the seam the individual decoder controls cannot: both model stages receive
+    # schemas, only records cross between them, and provenance hashes rather than copies
+    # raw transcript-derived replies.
+    original_chat = ollama_chat
+    try:
+        def fixture_chat(model, system, user, num_ctx, timeout, response_format=None):
+            if response_format == EXTRACTION_FORMAT:
+                content = ('{"items":[{"quote":"we said utf-8 | not latin-1",'
+                           '"label":"QUESTION","claim":"Choose an encoding"}]}')
+            elif response_format == CONSOLIDATION_FORMAT:
+                content = ('{"summary":"The team discussed encoding.","items":['
+                           '{"quote":"we said utf-8 | not latin-1","label":"QUESTION",'
+                           '"claim":"Choose an encoding",'
+                           '"source_ids":["slice-0001-item-0001"]}]}')
+            else:
+                raise AssertionError("chunked stage omitted its JSON schema")
+            return {"message": {"content": content}, "prompt_eval_count": 16}
+
+        globals()["ollama_chat"] = fixture_chat
+        staged = summarize_chunked(
+            Transcript(source="fixture", attribution=NONE,
+                       turns=[Turn(text="we said utf-8 | not latin-1", start=0.0)]),
+            "fixture", 32768, 1, 1000, 0,
+            model_identity=fixture_identity,
+        )
+    finally:
+        globals()["ollama_chat"] = original_chat
+    end_to_end = (
+        staged["note"] == rendered_once
+        and staged["extraction"]["ok"]
+        and staged["structured_contract"] == {
+            "input_sources": 1,
+            "covered_sources": 1,
+            "output_records": 1,
+            "rendered_claims": 1,
+        }
+        and staged["structured_provenance"]
+        and staged["model_identity"] == fixture_identity
+        and all(row["model_digest"] == fixture_identity["digest"]
+                for row in staged["structured_provenance"])
+        and all({"source", "ordinal", "schema_sha256", "system_prompt_sha256",
+                 "input_prompt_sha256", "response_sha256"} <= row.keys()
+                for row in staged["structured_provenance"])
+        and all("raw_response" not in row for row in staged["structured_provenance"])
+        and "input_records_sha256" in staged["structured_provenance"][-1]
+        and staged["structured_provenance"][-1]["input_records_sha256"]
+        == _sha256(json.dumps(staged["extracted_records"], ensure_ascii=False,
+                               separators=(",", ":")))
+        and staged["extraction"]["quote_locations"] == {
+            "items": 1, "locatable": 1, "not_locatable": 0,
+        }
+    )
+    failures += not end_to_end
+    print(f"  [{'pass' if end_to_end else 'FAIL'}] typed extraction and consolidation "
+          "meet end to end without retaining raw output")
+
+    structured_verdict = dict(stored, extraction={"applies": True, "ok": False})
+    structured_verdict_fails = verdict(structured_verdict) is False
+    failures += not structured_verdict_fails
+    print(f"  [{'pass' if structured_verdict_fails else 'FAIL'}] a refused structured "
+          "stage fails the run verdict")
 
     # Computed here, after the last control. An earlier version derived it above
     # the verdict block, so a failure in the newest controls could not move the
