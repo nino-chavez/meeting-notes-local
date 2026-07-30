@@ -640,9 +640,9 @@ def _sitting_metadata_problems(manifest) -> list[str]:
             out.append(f"sitting {i} is not a capture record")
             continue
         name = str(m.get("audio") or f"sitting {i}")
-        if not m.get("audio_sha256"):
-            out.append(f"{name} has no audio_sha256, so its recording identity "
-                       "cannot be checked")
+        if _audio_digest(m.get("audio_sha256")) is None:
+            out.append(f"{name} has an invalid audio_sha256, so its recording "
+                       "identity cannot be checked")
         raw = m.get("captured_at")
         if raw in (None, ""):
             continue
@@ -660,6 +660,28 @@ def _sitting_metadata_problems(manifest) -> list[str]:
             out.append(f"{name} records captured_at {raw!r} in the future, so it "
                        "cannot establish a sitting")
     return out
+
+
+def _audio_digest(value) -> str | None:
+    """Return a canonical recording SHA-256, or None when it is not one.
+
+    Enrollment recordings use their bytes as evidence that two paths are not a
+    renamed copy of the same material.  Treating any non-empty string as a
+    digest makes a hand-written label look like that evidence.  Uppercase hex is
+    the same SHA-256 value, so it is accepted and normalised before persistence.
+    """
+    if not isinstance(value, str) or len(value) != 64:
+        return None
+    digest = value.lower()
+    if any(c not in "0123456789abcdef" for c in digest):
+        return None
+    return digest
+
+
+def _canonical_sittings(sittings: list[dict]) -> list[dict]:
+    """Copy the manifest while storing recording digests in canonical form."""
+    return [{**sitting, "audio_sha256": _audio_digest(sitting["audio_sha256"])}
+            for sitting in sittings]
 
 
 def _sitting_problems(manifest) -> list[str]:
@@ -731,10 +753,9 @@ def _finite(name: str, value, lo: float | None = None, hi: float | None = None) 
     only the sub-two-second turns, no error is raised, and the printed count of
     what was dropped is the only evidence anything went wrong.
     """
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        raise SystemExit(f"{name} is {value!r}, which is not a number") from None
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
+        raise SystemExit(f"{name} is {value!r}, which is not a number")
+    v = float(value)
     if not np.isfinite(v):
         raise SystemExit(
             f"{name} is {v}, which is not a finite number. Every comparison against "
@@ -743,6 +764,28 @@ def _finite(name: str, value, lo: float | None = None, hi: float | None = None) 
     if (lo is not None and v < lo) or (hi is not None and v > hi):
         raise SystemExit(f"{name} is {v}, outside the valid range [{lo}, {hi}]")
     return v
+
+
+def _count(name: str, value, floor: int = 0) -> int:
+    """An integer count, not a numeric-looking claim in a profile document."""
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise SystemExit(f"{name} is {value!r}, not an integer count")
+    count = int(value)
+    if count < floor:
+        raise SystemExit(f"{name} is {count}, below the required minimum {floor}")
+    return count
+
+
+def _observed_rate(name: str, value, count: int) -> float:
+    """Validate a rate and its discrete sample-count basis."""
+    rate = _finite(name, value, 0.0, 1.0)
+    # Both rates are calculated as a boolean mean. A claim that cannot be an
+    # integer number of observations over its stated sample is not a result from
+    # this calibration, even if each field is individually plausible.
+    if not np.isclose(rate * count, round(rate * count), rtol=0.0, atol=1e-9):
+        raise SystemExit(
+            f"{name} {rate} is not a possible observed rate over {count} samples")
+    return rate
 
 
 def encoder_fingerprint(savedir: str | Path | None = None) -> str | None:
@@ -816,7 +859,7 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
     the count of independent sittings has to be carried with it and stated at
     every use. Optional provenance would be absent exactly when it mattered.
     """
-    if not sittings:
+    if not isinstance(sittings, list) or not sittings:
         raise ValueError(
             "a profile with no recorded enrollment material cannot state how many "
             "sittings produced it, and a single-sitting threshold is measurably "
@@ -840,6 +883,12 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
             "cannot be saved without the exact encoder identity that produced it."
         )
 
+    metadata_problems = _sitting_metadata_problems(sittings)
+    if metadata_problems:
+        raise ValueError("cannot save a profile with malformed sittings:\n"
+                         + "".join(f"  - {p}\n" for p in metadata_problems))
+    canonical_sittings = _canonical_sittings(sittings)
+
     doc = {
         "schema": PROFILE_SCHEMA,
         "encoder": encoder,
@@ -853,7 +902,7 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
         "spread": round(profile.spread, 4),
         "threshold": threshold,
         "operating_point": operating_point,
-        "sittings": sittings,
+        "sittings": canonical_sittings,
     }
     # `load_profile` is the gate's final boundary, but it is not an excuse for
     # this persistence API to write a record it already knows is malformed.
@@ -861,10 +910,6 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
     # replacing the user's existing profile.  Experimental permits an insufficient
     # *sample*; it does not make an invalid timestamp or missing audio identity a
     # meaningful provenance record.
-    metadata_problems = _sitting_metadata_problems(sittings)
-    if metadata_problems:
-        raise ValueError("cannot save a profile with malformed sittings:\n"
-                         + "".join(f"  - {p}\n" for p in metadata_problems))
     try:
         verify_provenance(path, doc)
     except SystemExit as exc:
@@ -910,25 +955,53 @@ def verify_provenance(path: Path, doc: dict) -> None:
         raise SystemExit(
             f"\n  {path} has malformed sitting provenance:\n"
             + "".join(f"\n    - {p}" for p in metadata_problems))
-    if op.get("experimental"):
-        return
-    target = op.get("target_frr")
-    if target is None:
+
+    experimental = op.get("experimental", False)
+    if not isinstance(experimental, bool):
+        raise SystemExit(f"{path}: experimental must be true or false")
+    sittings = doc["sittings"]
+    _count(f"{path}: n_enrolled", doc.get("n_enrolled"), MIN_ENROLL_SEGMENTS)
+    _count(f"{path}: n_excluded", doc.get("n_excluded"))
+    target = _finite(f"{path}: operating_point.target_frr", op.get("target_frr"),
+                     0.0, 1.0)
+    if not 0 < target < 1:
         raise SystemExit(
-            f"{path} records no target_frr, so nothing states which operating point "
-            f"its threshold is. An unnamed operating point cannot be checked against "
-            f"the material that produced it.")
-    problems = _sitting_problems(doc.get("sittings") or [])
-    if len(doc.get("sittings") or []) < 2:
-        problems.append(f"{len(doc.get('sittings') or [])} sitting(s) recorded, and a "
-                        f"threshold needs material from at least two")
-    held = op.get("n_operator")
-    floor = min_resolvable(float(target))
-    if held is None:
-        problems.append("no n_operator, so nothing says how many held-out scores the "
-                        "quantile was taken over")
-    elif held < floor:
-        problems.append(f"{held} held-out scores cannot express a {float(target):.0%} "
+            f"{path}: operating_point.target_frr must lie strictly between 0 and 1")
+    threshold = _finite(f"{path}: operating_point.threshold", op.get("threshold"),
+                        -1.0, 1.0)
+    if not np.isclose(threshold, _finite(f"{path}: threshold", doc.get("threshold"),
+                                          -1.0, 1.0), rtol=0.0, atol=1e-12):
+        raise SystemExit(
+            f"{path}: operating_point.threshold does not match the profile threshold")
+    n_sittings = _count(f"{path}: operating_point.n_sittings", op.get("n_sittings"))
+    if n_sittings != len(sittings):
+        raise SystemExit(
+            f"{path}: operating_point.n_sittings is {n_sittings}, but the "
+            f"manifest has {len(sittings)} sitting(s)")
+    held = _count(f"{path}: operating_point.n_operator", op.get("n_operator"))
+    _observed_rate(f"{path}: operating_point.measured_frr", op.get("measured_frr"), held)
+    far = op.get("false_admit_rate")
+    n_other = op.get("n_other")
+    if far is None:
+        if _count(f"{path}: operating_point.n_other", n_other) != 0:
+            raise SystemExit(f"{path}: n_other is nonzero but false_admit_rate is absent")
+    else:
+        _observed_rate(f"{path}: operating_point.false_admit_rate", far,
+                       _count(f"{path}: operating_point.n_other", n_other, 1))
+
+    if experimental:
+        return
+
+    problems = _sitting_problems(sittings)
+    if n_sittings < 2:
+        problems.append(f"{n_sittings} sitting(s) recorded, and a threshold needs "
+                        "material from at least two")
+    if op.get("held_out") != "leave-one-sitting-out":
+        problems.append("held_out is not leave-one-sitting-out, so the operating "
+                        "point does not record cross-sitting evaluation")
+    floor = min_resolvable(target)
+    if held < floor:
+        problems.append(f"{held} held-out scores cannot express a {target:.0%} "
                         f"false-reject rate, which needs at least {floor}")
     if op.get("false_admit_rate") is None:
         problems.append("no false_admit_rate, so nothing states what this threshold "
@@ -1355,12 +1428,13 @@ def run_self_test() -> int:
 
         # A fixture that satisfies the contract, because load_profile now re-derives
         # it. The earlier minimal fixture is what the new check caught first.
-        point = {"threshold": 0.61, "target_frr": 0.05, "n_sittings": 2,
-                 "n_operator": 24, "false_admit_rate": 0.0}
+        point = {"threshold": 0.61, "target_frr": 0.05, "measured_frr": 0.0,
+                 "n_sittings": 2, "n_operator": 24, "false_admit_rate": 0.0,
+                 "n_other": 2, "held_out": "leave-one-sitting-out"}
         good_sittings = [
-            {"audio": "a.wav", "audio_sha256": "aaa",
+            {"audio": "a.wav", "audio_sha256": "A" * 64,
              "captured_at": "2026-07-20T09:00:00+0000"},
-            {"audio": "b.wav", "audio_sha256": "bbb",
+            {"audio": "b.wav", "audio_sha256": "b" * 64,
              "captured_at": "2026-07-22T14:00:00+0000"}]
         save_profile(pp, operator, 0.61, operating_point=point,
                      sittings=good_sittings,
@@ -1379,6 +1453,10 @@ def run_self_test() -> int:
         check(
             "save_profile records the checkpoint bytes it was given, not the model recipe",
             doc["encoder_fingerprint"] == fixture_fingerprint,
+        )
+        check(
+            "enrollment audio digests are stored as canonical SHA-256 values",
+            [s["audio_sha256"] for s in doc["sittings"]] == ["a" * 64, "b" * 64],
         )
         check(
             "a caller cannot load a profile for scoring without naming the loaded "
@@ -1492,11 +1570,51 @@ def run_self_test() -> int:
             _raises(lambda: load_fixture(edited(target_frr=None)), SystemExit),
         )
         check(
+            "a hand-edited operating threshold cannot disagree with the gate threshold",
+            _raises(lambda: load_fixture(edited(threshold=0.60)), SystemExit),
+        )
+        check(
+            "a hand-edited false-admit rate must fit its recorded sample count",
+            _raises(lambda: load_fixture(edited(false_admit_rate=0.25)), SystemExit),
+        )
+        check(
+            "a hand-edited held-out rate must fit its recorded sample count",
+            _raises(lambda: load_fixture(edited(measured_frr=0.05)), SystemExit),
+        )
+        check(
+            "the saved operating-point sitting count must match the manifest",
+            _raises(lambda: load_fixture(edited(n_sittings=3)), SystemExit),
+        )
+        bad_digest_sittings = [
+            good_sittings[0], {**good_sittings[1], "audio_sha256": "not-a-digest"},
+        ]
+        check(
+            "a malformed enrollment digest is refused by the loader, not counted as "
+            "distinct audio",
+            _raises(lambda: load_fixture(edited(sittings=bad_digest_sittings)), SystemExit),
+        )
+        check(
+            "and the direct save API refuses that malformed digest before writing",
+            _raises(lambda: save_profile(
+                Path(tmp) / "bad-digest.json", operator, 0.61, operating_point=point,
+                sittings=bad_digest_sittings,
+                encoder_fingerprint_value=fixture_fingerprint,
+            ), ValueError),
+        )
+        check(
+            "the direct save API also refuses an impossible production score floor",
+            _raises(lambda: save_profile(
+                Path(tmp) / "thin-claim.json", operator, 0.61,
+                operating_point={**point, "n_operator": 19}, sittings=good_sittings,
+                encoder_fingerprint_value=fixture_fingerprint,
+            ), ValueError),
+        )
+        check(
             "but an experimental profile loads, because that marker is surfaced "
             "at every capture and hiding it is the only thing that would help",
             not _raises(lambda: load_fixture(edited(
                 sittings=good_sittings[:1], n_operator=4, false_admit_rate=None,
-                experimental=True)), SystemExit),
+                n_other=0, n_sittings=1, experimental=True)), SystemExit),
         )
 
         wrong_space = json.loads(pp.read_text())
@@ -1607,11 +1725,13 @@ def run_self_test() -> int:
     print("\n=== the enrolment contract ===\n")
     # Each of these wrote a production profile before the contract existed.
     def sitting_at(name: str, stamp: str | None) -> dict:
-        return {"audio_sha256": name, "audio": f"/tmp/{name}.wav",
+        digest = {"alpha": "a" * 64, "bravo": "b" * 64,
+                  "chunk-one": "c" * 64, "chunk-two": "d" * 64}[name]
+        return {"audio_sha256": digest, "audio": f"/tmp/{name}.wav",
                 "captured_at": stamp}
 
-    two_ok = [sitting_at("aaa", "2026-07-20T09:00:00+0000"),
-              sitting_at("bbb", "2026-07-22T14:00:00+0000")]
+    two_ok = [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+              sitting_at("bravo", "2026-07-22T14:00:00+0000")]
     plenty = [0.8] * 40
     other_ok = [0.2, 0.3]
     check(
@@ -1622,20 +1742,28 @@ def run_self_test() -> int:
     check(
         "the same recording passed twice is one sitting, not two — digests, not paths",
         _raises(lambda: enforce_enrollment(
-            [sitting_at("aaa", "2026-07-20T09:00:00+0000"),
-             sitting_at("aaa", "2026-07-20T09:00:00+0000")],
+            [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+             sitting_at("alpha", "2026-07-20T09:00:00+0000")],
+            plenty, other_ok, 0.05, False), SystemExit),
+    )
+    check(
+        "digest case cannot make the same recording look distinct",
+        _raises(lambda: enforce_enrollment(
+            [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+             {**sitting_at("alpha", "2026-07-22T14:00:00+0000"),
+              "audio_sha256": "A" * 64}],
             plenty, other_ok, 0.05, False), SystemExit),
     )
     check(
         "one sitting is refused",
         _raises(lambda: enforce_enrollment(
-            [sitting_at("aaa", "2026-07-20T09:00:00+0000")], plenty,
+            [sitting_at("alpha", "2026-07-20T09:00:00+0000")], plenty,
             other_ok, 0.05, False), SystemExit),
     )
     # The case that defeated the digest test: slice one recording and every chunk
     # has different bytes, a different digest, and the same capture window.
-    chunks = [sitting_at("chunk-a", "2026-07-20T09:00:00+0000"),
-              sitting_at("chunk-b", "2026-07-20T09:00:00+0000")]
+    chunks = [sitting_at("chunk-one", "2026-07-20T09:00:00+0000"),
+              sitting_at("chunk-two", "2026-07-20T09:00:00+0000")]
     check(
         "two CHUNKS of one recording are refused, though their digests differ — "
         "distinct bytes were never evidence of a distinct sitting",
@@ -1646,27 +1774,27 @@ def run_self_test() -> int:
         "and so are two takes from the same half-hour, which is the same thing "
         "with extra steps",
         _raises(lambda: enforce_enrollment(
-            [sitting_at("aaa", "2026-07-20T09:00:00+0000"),
-             sitting_at("bbb", "2026-07-20T09:25:00+0000")],
+            [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+             sitting_at("bravo", "2026-07-20T09:25:00+0000")],
             plenty, other_ok, 0.05, False), SystemExit),
     )
     check(
         "material with no capture time is refused rather than assumed separate",
         _raises(lambda: enforce_enrollment(
-            [sitting_at("aaa", None), sitting_at("bbb", None)],
+            [sitting_at("alpha", None), sitting_at("bravo", None)],
             plenty, other_ok, 0.05, False), SystemExit),
     )
     check(
         "an unparseable capture time is refused rather than ignored",
         _raises(lambda: enforce_enrollment(
-            [sitting_at("aaa", "last Tuesday"), sitting_at("bbb", "later")],
+            [sitting_at("alpha", "last Tuesday"), sitting_at("bravo", "later")],
             plenty, other_ok, 0.05, False), SystemExit),
     )
     check(
         "order does not matter — the gap is between sorted neighbours",
         not _raises(lambda: enforce_enrollment(
-            [sitting_at("bbb", "2026-07-22T14:00:00+0000"),
-             sitting_at("aaa", "2026-07-20T09:00:00+0000")],
+            [sitting_at("bravo", "2026-07-22T14:00:00+0000"),
+             sitting_at("alpha", "2026-07-20T09:00:00+0000")],
             plenty, other_ok, 0.05, False), SystemExit),
     )
     check(
@@ -1693,7 +1821,15 @@ def run_self_test() -> int:
     check(
         "--experimental writes it anyway, which is what keeps the override visible",
         not _raises(lambda: enforce_enrollment(
-            [sitting_at("aaa", None)], [0.8] * 4, [], 0.05, True), SystemExit),
+            [sitting_at("alpha", None)], [0.8] * 4, [], 0.05, True), SystemExit),
+    )
+    check(
+        "a malformed digest is refused even with --experimental — it is not "
+        "distinct-audio evidence",
+        _raises(lambda: enforce_enrollment(
+            [{"audio_sha256": "not-a-digest", "audio": "/tmp/bad.wav",
+              "captured_at": "2026-07-20T09:00:00+0000"}],
+            [0.8] * 4, [], 0.05, True), SystemExit),
     )
 
     outcome = (
@@ -1863,7 +1999,9 @@ def enforce_enrollment(manifest: list[dict], own: list[float],
             + "".join(f"\n    - {p}" for p in metadata)
             + "\n\n  --experimental can record insufficient evidence; it cannot make "
               "an invalid capture record meaningful.")
-    digests = {m["audio_sha256"] for m in manifest if m.get("audio_sha256")}
+    # The metadata gate above rejects malformed values; canonicalise the valid
+    # ones here so upper/lowercase spelling cannot fabricate distinct recordings.
+    digests = {_audio_digest(m.get("audio_sha256")) for m in manifest}
     if len(digests) < 2:
         problems.append(
             f"{len(manifest)} --calibrate pair(s) but only {len(digests)} distinct "
