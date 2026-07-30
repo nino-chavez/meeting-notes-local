@@ -1447,3 +1447,68 @@ The findings above survive that, because they were printed rather than written. 
 is not the path: it is that `--out` is now validated immediately after argument parsing,
 before anything is spent. Any precondition testable for free belongs before the cost, not
 beside the use.
+
+### Where repair 2 stands, and what finishing it requires
+
+The change is committed at `f2056a6` and **the result is not measured**. What is settled
+is the mechanism: the extraction pass writes quote-first without exception, and the merge
+has to be fed claim-first or it discards the evidence. What is not settled is whether
+conditioning the claim on the quote reduces mis-selection, which is the entire question
+the repair was built to answer.
+
+The registered predictions stand unchanged and unread — they are above, and they were
+committed at `92e5374` before any of this ran. Nothing below should be written until they
+have been compared against a real run.
+
+To finish, in order:
+
+1. Regenerate all three notes. Bmr006 is the experiment and takes about six minutes;
+   the other two are unchanged single-pass code and reproduced bit-identically last
+   time, which is a smoke test that the change stayed on the chunked path.
+
+       python3 notes/summarize.py notes/corpus/Bmr006.json  --strip --passes 2 \
+           --out notes/out/Bmr006.md
+       python3 notes/summarize.py notes/corpus/ES2004c.json --strip --out notes/out/ES2004c.md
+       python3 notes/summarize.py notes/corpus/covid_4.json --strip --out notes/out/covid_4.md
+
+2. **Read the `extraction` line before anything else.** It reports the order the model
+   actually used. Claim-first lines mean the inversion did not happen and no number
+   under it is evidence about inversion.
+3. **Read the `reversed_locatable` line next**, and do not believe a fabrication count
+   that appears above a non-zero one. It counts collapsed items whose *claim* is in the
+   transcript and whose *quote* is not — speech on the wrong side of the separator,
+   scored as invented by a parser assumption rather than by the model. If it fires, fix
+   the read and `--recheck`; do not regenerate, because that would move the note and the
+   judgement together.
+4. `--measure-support notes/out/*.note.json` with the calibrated judge. It refuses to
+   report if calibration fails or the sabotaged control passes, and that refusal is the
+   feature — no figure is better than an uncalibrated one.
+5. Compare against the four registered quantities, and report the decision+action rate
+   beside the aggregate. That is the number `PROPOSAL` cannot inflate, because the label
+   only moves items out of those two types.
+6. Classify the surviving unsupported claims by failure class. An aggregate that moved
+   with mis-selection flat means something other than the stated mechanism fired, and
+   saying so is worth more than the aggregate.
+
+The baseline to compare against is in the table under "The disaggregated baseline"
+above: Bmr006 93 claims / 24 located / 8 supported / 56 composed. **Do not read the
+corpus-wide "40% supported" as the thing to beat** — it is computed over located claims
+only, so it cannot see the 56 composed quotes that are the larger failure.
+
+`docs/prototype/build.py` renders from these artifacts and should be rebuilt afterwards;
+it reads `type` and `status` and needs no change for any of this.
+
+### The measured baseline is not in version control, and nearly went the way of the last one
+
+`notes/out/` is gitignored — it holds derivatives of a third-party corpus — so the
+`837f10f` artifacts carrying the measured support verdicts existed on one disk and
+nowhere else. Regenerating produces a *different note*, so an overwrite is not a
+recoverable loss: the numbers in the tables above would have been left as assertions with
+no artifact behind them, which is the one thing the `note/1` format exists to prevent.
+
+They are copied to `notes/out/baseline-837f10f/`, which is inside the same ignored
+directory and therefore still not in the repo. That is the correct place for a
+comparison baseline and the wrong place for a permanent record. **Any future run that
+will be compared against a previous one should snapshot the previous one first**, and
+the same is true of `--measure-support` verdicts, which cost a second model pass to
+recreate and cannot be recreated exactly at all once the note has moved.
