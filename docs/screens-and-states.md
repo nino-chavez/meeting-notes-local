@@ -179,9 +179,24 @@ drawer.
 | `no-results` | Query returns nothing |
 | `filtered` | Narrowed by date, participant, or tag |
 
-**Open IA decisions this surface owns**, to be settled before it is designed:
-the organizing primitive (chronological, by counterpart, by project), whether
-notes link to each other, and whether search covers transcripts or only notes.
+**Open IA decisions this surface owns.** Two of the three are now answered by the
+market check in `journeys.md`, which is a weaker kind of evidence than a measurement
+and a stronger kind than an opinion — it establishes what the operator has already met
+elsewhere, not what is best.
+
+- **The organising primitive: folders, and chronology as the default ordering within
+  them.** Granola and Otter both ship "folders"; Otter adds "channels" for sharing.
+  Neither organises by counterparty, which was the candidate this project found most
+  interesting and which nothing in the market supports. Settled on the primitive.
+- **Search covers the transcript and its metadata, not the notes alone.** Otter's free
+  tier is "Search by keywords" and its paid tier "Advanced search by speakers, date
+  range, and more". Searching notes only would find the compression and miss the words,
+  which is the wrong half given how partial the transcripts here are.
+- **Whether notes link to each other is still open**, and nothing observed in the
+  market bears on it.
+
+**A commitment-organised view is a state on this surface**, not a surface of its own —
+see `journeys.md` J2, and the reason it stops at export rather than offering a checkbox.
 
 ---
 
@@ -397,6 +412,16 @@ to be applied retroactively to material the operator has forgotten exists.
 pick.** The same reasoning as the voiceprint threshold: a plausible constant would be
 indistinguishable from a considered one to every later reader. First run asks, and the
 answer is stated here rather than assumed.
+
+**The vocabulary is the category's, not this project's.** Granola's enterprise tier
+offers "Org-wide auto-deletion periods" (`journeys.md`, market check), so this surface
+says *auto-deletion period* rather than inventing a term for a thing the operator has
+already met. Worth noting what that also reveals: retention is the primary paywall in
+both products observed — Otter caps free and Pro at the "25 most recent" conversations,
+Granola's free tier at "limited meeting history". Here the whole corpus is local and
+kept by default, so the same mechanism that competitors monetise is a cost this product
+absorbs, which is the honest reason a period has to be chosen rather than defaulted to
+forever.
 
 ---
 

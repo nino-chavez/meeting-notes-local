@@ -41,6 +41,80 @@ person."
 
 ---
 
+## What the market says, and what it is worth
+
+The reader, job and journeys below were derived from first principles, from film-room,
+and from this project's own measurements. That is a thin base for a persona, so this
+section is the market check — and it was run *after* the derivation rather than before,
+which is why the convergences below mean something.
+
+**Provenance, stated because it bounds every claim here.** Fetched 2026-07-29 from each
+vendor's own pricing and marketing pages: Granola, Circleback, Otter. Those pages are
+marketing, so they are evidence of **positioning and feature vocabulary — not of
+quality, and not of what the product feels like to use.** Nothing here was seen
+logged in, so the actual information architecture behind a sign-up wall is unobserved.
+Feature names are quoted exactly because the vocabulary is the transferable part.
+
+### Where the market agrees with what was derived here
+
+- **Granola's headline is "The AI notepad for back-to-back meetings"**, against the
+  reader written above from scratch: "the operator between back-to-back calls". The
+  same person, named the same way, independently.
+- **Retrieval across the whole corpus is the category's headline feature, not a
+  late-stage nicety.** Granola sells "Notes, actions and memory" and ships "AI chat
+  within and across meetings" *on the free tier*; Circleback's is "Ask questions and
+  get answers drawn from every conversation you've had". The C → B → A ordering chosen
+  below on internal evidence is where the category has already landed.
+- **History is the primary paywall in both**, which is the strongest available signal
+  that the corpus is where the felt value is: Otter's free and Pro tiers cap at the
+  "25 most recent" conversations, Granola's free tier at "limited meeting history".
+
+### Where the market answers a question this project listed as open
+
+- **The organising primitive is folders plus the calendar, not chronology and not
+  counterparty.** Granola and Otter both ship "folders"; Otter adds "channels". Surface
+  F's open IA question can stop being open on the primitive.
+- **Retention has settled vocabulary: Granola enterprise offers "Org-wide
+  auto-deletion periods".** Surface K should use the category's words rather than
+  invent its own, because the operator has met them elsewhere.
+- **Search scope is transcript plus metadata**, not notes alone: Otter free is "Search
+  by keywords", Pro is "Advanced search by speakers, date range, and more".
+
+### Where the whole category is weak, which is where this product can be strong
+
+These are the findings worth the fetch. Two gaps listed below as this project's
+problems turn out to be nobody's solved problem:
+
+- **No product observed links a claim in a summary back to the words behind it.**
+  Otter has "editable time codes" and a "Takeaways panel", and no mechanism connecting
+  a takeaway to its transcript position. J1's trust beat is therefore a differentiator
+  rather than table stakes — and it matters more here than for a cloud competitor,
+  because this transcript is measurably partial where theirs is not.
+- **Correction is undescribed everywhere.** Nothing on Granola's marketing describes
+  editing or correcting the AI output. J4 is a category gap, not a catch-up item.
+- **Telling the far end is immature across the board.** Otter's "Recording disclaimer
+  email" is Business-tier; Granola's equivalent is an enterprise "Org-wide notification
+  that Granola is being used", marked pilot. Surface B's open decision is open in the
+  market too, which means there is no convention to inherit and the legal constraint is
+  the only guide.
+
+### The one thing the market has that this project had not thought of
+
+**Granola preps a Brief *before* the meeting** — "who's attending, what you discussed
+last time, and what matters now." Every journey below starts at the meeting or after
+it. That is a whole missing journey, and it is the one that converts the corpus from
+something searched on demand into something that arrives when it is useful. It is added
+as J0.
+
+It also depends on a capability this product does not have: **calendar integration.**
+Granola knows a meeting exists, and who is in it, before any audio. This product infers
+a meeting from microphone use, which is why its own inventory has a detection surface
+and no notion of a counterparty. That is a real architectural consequence of a
+positioning difference, and it is not a small one — "what did we discuss last time"
+requires knowing who "we" are, which no amount of audio supplies.
+
+---
+
 ## Three candidate structures, and why the choice matters
 
 A journey model needs a unit. The unit determines what the product optimises, so
@@ -132,8 +206,35 @@ capture already has everything needed to feed.
 
 ## The journeys
 
-Five, ordered as designed rather than as experienced. Each names the surfaces it
+Six, ordered as designed rather than as experienced. Each names the surfaces it
 crosses so the inventory can be checked against it.
+
+### J0 — "What happened last time with this person?" (preparation)
+
+Two minutes before a call, the operator wants what was said last time and what they
+owe. Added from the market check: Granola preps a Brief before every external meeting —
+"who's attending, what you discussed last time, and what matters now" — and no journey
+here had a beat before the meeting started.
+
+**This is J1 performed in advance, and that is the whole point.** The retrieval journey
+requires the operator to know they have a question. J0 requires only that a meeting is
+about to happen. It is the difference between a searchable archive and a tool that
+appears to remember, and it is the strongest argument in this document for the corpus
+being worth building at all.
+
+Crosses nothing that exists. **It also cannot be built on this product's current
+architecture, and that is the honest finding rather than a missing surface.** A brief
+needs to know a meeting is coming and who will be on it. This product infers a meeting
+from microphone use — after it starts — and never learns a counterparty, because the
+audio does not carry names and `teardown.md` establishes that speaker names come from
+the meeting UI rather than the sound.
+
+So J0 is blocked on a capability decision, not a design one: whether this tool reads the
+operator's calendar. That is a genuine fork with consequences in both directions — a
+calendar grant is a large new permission and a large new surface for a local-first tool
+whose entire pitch is that nothing leaves the machine, and without it the product can
+never do the one thing the category's leader leads with. It is recorded here undecided
+rather than resolved in passing.
 
 ### J1 — "What did we decide about X?" (retrieval)
 
@@ -285,7 +386,9 @@ it made an undecided item read as scheduled.
 | F has no commitment-organised view | J2 | **Decided** — a `filtered` state on F, not a new surface |
 | A note that is present but inadequate | J1, J4 | **Open** — E's `summary-failed` covers absent, not thin |
 | Export and share have no redaction step | J2 | **Open** — gated turns and room speech would travel with the note |
-| The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight |
+| The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight. No convention to inherit — immature across the category |
+| No preparation journey, and no calendar to build one on | J0 | **Blocked on a capability decision**, not a design one. Reading the operator's calendar is a large new permission for a local-first tool, and without it the product cannot do what the category leader leads with |
+| No notion of a counterparty | J0, J1 | **Open** — "what did we discuss last time" needs to know who "we" are, and audio never supplies a name |
 
 ---
 

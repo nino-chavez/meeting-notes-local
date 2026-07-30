@@ -7,6 +7,15 @@ Research date: 2026-07-28. Provenance is marked per claim: **[primary]** = the
 vendor's own product/API documentation or an OS/API reference; **[vendor]** =
 marketing copy from a company selling the thing being described.
 
+**Scope: this file compares mechanism, not product.** It answers how competitors get
+audio, where speaker names come from, and what it takes to build the same thing. It
+does not cover persona, job-to-be-done, journeys, information architecture, onboarding,
+pricing, or segment — a word-count check found zero mentions of most of those. Reading
+this and concluding the comparables are covered is the mistake it is worth one sentence
+to prevent. The product-side comparison lives in
+[`journeys.md`](./journeys.md#what-the-market-says-and-what-it-is-worth), fetched
+2026-07-29, and it found one journey this project had not thought of.
+
 ---
 
 ## The short version
