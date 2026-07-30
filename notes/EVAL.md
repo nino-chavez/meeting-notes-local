@@ -1638,23 +1638,32 @@ note still carries the primary evidence excerpt for each rendered claim. A retir
 sidecar already present beside `--out` refuses the run before inference; the tool does
 not silently delete it.
 
-Stage receipts now distinguish proof from a receipt. Schemas, options, extraction
-prompts, source references, and item counts are re-derived mechanically. Model identity
-is cross-checked among artifact fields against one immutable digest receipt; the
-historical `/api/tags` response is not retained, so recheck cannot independently derive
-that digest. Extraction-claim prose sent into consolidation and raw model responses are
-also not retained, so their hashes are labelled receipt-only and cannot support a replay
-claim. An explicit top-level `source-evidence/1` discriminator, plus the two-pass
-model-identity signature, keeps a damaged Repair 4 artifact from falling back to the
-looser legacy checker. These are contract corrections, not evidence that the model
-produces acceptable notes.
+Stage receipts now distinguish replayable evidence from a receipt. The exact validated
+`message.content` JSON is retained for every extraction and consolidation call. Those
+bodies' schema permits only IDs, labels, and claims; it has no source-text field and
+does not retain a second transcript copy. A claim may still reuse words from the
+transcript, so the artifacts remain private meeting data.
+`--recheck` decodes them again under the strict key-order and schema rules, reconstructs
+each extraction record from the retained transcript, reconstructs the exact
+consolidation input from the safe extraction JSON plus that transcript, and re-derives
+claim digests, membership, exact-once coverage, item order, and cardinality.
+
+Two boundaries remain receipts rather than replayable evidence. The Ollama transport
+envelope is not retained, and the historical `/api/tags` response used to resolve the
+model digest is not retained. Model identity is therefore only cross-checked among
+artifact fields. The artifacts are also unsigned: their hashes prove internal
+consistency, not authorship or authenticity. A writer able to coordinate changes across
+safe responses, graph rows, contracts, hashes, note JSON, and Markdown is outside this
+trust boundary. These are contract corrections, not evidence that the model produces
+acceptable notes.
 
 Repair 4 keeps the causal part of quote-first generation and removes the copying task the
 model has repeatedly failed. Local code divides each visible transcript turn into
 deterministic, overlapping source fragments. The model sees each fragment with an opaque
-ID and must emit its keys in the order `source_fragment_ids`, `label`, `claim`. It
-chooses one to three already-existing passages before interpreting them, but never
-reproduces those words.
+ID and must emit each response item in the exact order `source_fragment_ids`, `label`,
+`claim`. The first field is an ordered array of one to three IDs, so source selection
+precedes interpretation. The model does not author the rendered quote; its claim may
+still reuse meeting words.
 
 Fragments target 32 whitespace-delimited words with an 8-word overlap and never cross a
 turn. A final remainder under 12 words is appended to the preceding fragment. Exact
@@ -1668,23 +1677,37 @@ in that slice. `source_fragment_ids` is nonempty, unique, in canonical transcrip
 and capped at three. Local validation rejects unknown, duplicate, blank, out-of-order,
 out-of-slice, excessive, or unresolvable references. Only after that validation does
 local code attach each exact source passage and a separate extraction-item ID. It never
-joins speech from separate turns into a synthetic quote. Selecting source fragments
-establishes only that those words were said; it does not establish that the resulting
-claim is a fair reading of them.
+joins speech from separate turns into a synthetic quote. The durable extraction row is
+exactly
+`evidence_item_id`, `slice_ordinal`, `source_fragment_ids`, `label`, and
+`claim_sha256`; the claim itself remains in the retained safe response. Selecting a
+source fragment establishes only that those words were said; it does not establish that
+the resulting claim is a fair reading of them.
 
-The consolidator also groups evidence before writing its claim. Its ordered item shape
-is `source_item_ids`, `label`, `claim`. Every extraction item must be covered exactly
-once across the output, labels may not be crossed, and every ID is constrained to the
-validated input set. Local code retains the canonical ordered union of every covered
-record's source fragments. The compatibility quote is the first passage; the complete
-evidence set stays separate and available to the support judge and product. The model
-cannot compose, repair, or transpose any of it.
+The consolidator also selects evidence before writing its claim. Each response item is
+exactly `source_item_ids`, `label`, `claim`, in that order. Every extraction item must
+be covered exactly once across the output, labels may not be crossed, and every ID is
+constrained to the validated input set. The durable consolidation row is exactly
+`source_item_ids`, `source_claim_sha256s`, `source_fragment_ids`, `label`, and
+`claim_sha256`. The canonical fragment union and final quote are resolved locally
+through the covered extraction items. The compatibility quote is the first passage;
+the complete evidence set remains available to the support judge and product. The
+model cannot compose, repair, or transpose the quote.
 
-The existing `note/1` Markdown and `claims[].quote` surfaces remain readable: their quote
-text is now a deterministic local rendering rather than model output. Structured
-provenance records the transcript-view digest, fragment contract, fragment-map digest,
-per-slice schema, model digest, input hashes, and selected references without copying a
-second transcript into the artifact.
+Repair 4 artifacts use `note/2`; legacy `note/1` artifacts and readers remain supported.
+A `note/2` file missing its graph, stage responses, provenance, or render contract fails
+strictly and cannot fall back to the legacy citation checker. Its JSON is the canonical
+note. The sibling Markdown must be the exact UTF-8, LF-terminated rendering named and
+hashed by the JSON. Both output names are checked before inference. Existing files,
+directories, and symlinks are refused by default, and `--replace` is required to replace
+the pair. Construction and validation finish before either target write; owner-private
+same-directory temporary files are installed atomically per file, and an ordinary
+second-install exception rolls a new or replacement pair back. The pair is not
+crash-atomic: process or OS failure between file installs can leave a partial or stale
+mix, which the render digest detects on the next read. Recheck and support-measurement
+updates replace the canonical JSON through the same owner-private atomic-file path and
+revalidate the unchanged Markdown pair. A stale `.items.md` still refuses the run. Like
+the other hashes, the pair digest does not authenticate a coordinated rewrite.
 
 The sizing decision is measured before implementation. On Bmr006, 32-word fragments with
 8-word overlap increase visible extraction text by about 42% across 16 slices and keep
@@ -1713,8 +1736,10 @@ Predictions, recorded before implementation or inference:
    content does change the view digest and fragment namespace. Transforms and gate removal
    cannot silently make an ID resolve to different words.
 4. A completed Bmr006 artifact covers every validated extraction item exactly once and
-   renders one claim for every validated consolidated record. Its provenance is sufficient
-   to distinguish this condition from Repairs 2 and 3 without retaining raw model replies.
+   renders one claim for every validated consolidated record. Its provenance retains the
+   exact validated safe JSON replies and is sufficient to distinguish this condition from
+   Repairs 2 and 3; transport envelopes and the historical model-list response remain
+   outside the artifact.
 5. No support rate, label mix, or claim count is predicted. Source selection removes copied-
    quote composition; it does not prevent a model from choosing the wrong real fragment or
    overstating what that fragment means. Those remain acceptance questions for the

@@ -1457,6 +1457,7 @@ def validate_judge(model: str, num_ctx: int, timeout: int) -> dict:
     If a judge told to answer PRESENT unconditionally can clear these fixtures,
     they are not fixtures, and the real judge's score means nothing either.
     """
+    validate_inference_options(model, num_ctx, timeout)
     real = score_fixtures(
         lambda item, note: _judge_item(item, note, model, num_ctx, timeout))
     control = score_fixtures(
@@ -1602,7 +1603,38 @@ def check_numbers(note: str, source_text: str) -> dict:
     return {"ok": not invented, "invented": invented}
 
 
+def validate_inference_options(model: object, num_ctx: object,
+                               timeout: object) -> None:
+    """Reject cheap invalid inference inputs before resolving or calling a model."""
+    if not isinstance(model, str) or not model.strip():
+        raise StructuredOutputError("model name must be a nonblank string")
+    if isinstance(num_ctx, bool) or not isinstance(num_ctx, int) or num_ctx <= 0:
+        raise StructuredOutputError("--num-ctx must be a positive integer")
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+        raise StructuredOutputError("--timeout must be a positive integer")
+
+
+def validate_chunking(target_words: object, overlap_words: object) -> None:
+    """Reject chunking that cannot advance before any model work."""
+    if (
+        isinstance(target_words, bool)
+        or not isinstance(target_words, int)
+        or target_words <= 0
+    ):
+        raise StructuredOutputError("--chunk-words must be a positive integer")
+    if (
+        isinstance(overlap_words, bool)
+        or not isinstance(overlap_words, int)
+        or overlap_words < 0
+    ):
+        raise StructuredOutputError("--overlap-words must be a nonnegative integer")
+    if overlap_words >= target_words:
+        raise StructuredOutputError(
+            "--overlap-words must be smaller than --chunk-words")
+
+
 def summarize(transcript: Transcript, model: str, num_ctx: int, timeout: int) -> dict:
+    validate_inference_options(model, num_ctx, timeout)
     system = BASE_RULES + "\n\n" + CONTRACTS[transcript.attribution]
     rendered = transcript.render()
     user = f"Transcript:\n\n{rendered}\n\nWrite the notes."
@@ -1624,6 +1656,7 @@ def summarize(transcript: Transcript, model: str, num_ctx: int, timeout: int) ->
 def _chunk_turn_windows(transcript: Transcript, target_words: int,
                         overlap_words: int) -> list[list[int]]:
     """Return overlapping windows as ordinals in the transformed transcript view."""
+    validate_chunking(target_words, overlap_words)
     windows, current, words, i = [], [], 0, 0
     turns = transcript.turns
     while i < len(turns):
@@ -1681,15 +1714,19 @@ STRUCTURED_NOTE_CONTRACT = {
     "model_authored_narrative": False,
 }
 STRUCTURED_RUN_CONTRACT = "structured-run/1"
-STRUCTURED_STAGE_RECEIPT = "structured-stage-receipt/1"
+STRUCTURED_STAGE_RECEIPT = "structured-stage-receipt/2"
 SOURCE_EVIDENCE_CONTRACT = "source-evidence/1"
 MAX_CONSOLIDATION_GROUP = 3
 REPLAYABLE_INPUT = "replayable from the retained transcript"
-RECEIPT_ONLY_INPUT = (
-    "receipt only; extraction-claim prose in the consolidation input is not "
-    "retained for replay"
+REPLAYABLE_CONSOLIDATION_INPUT = (
+    "replayable from the retained transcript and safe extraction JSON"
 )
-RECEIPT_ONLY_RESPONSE = "receipt only; raw model response is not retained"
+REPLAYABLE_SAFE_RESPONSE = (
+    "replayable validated JSON; contains only IDs, labels, and claims"
+)
+TRANSPORT_RESPONSE_LIMIT = (
+    "Ollama transport envelope is not retained; only validated message JSON remains"
+)
 
 
 def transcript_view_sha256(transcript: Transcript) -> str:
@@ -2104,7 +2141,7 @@ def _response_provenance(stage: str, source: str, ordinal: int, response: dict,
                          input_prompt_template: str | None = None,
                          reference_context: dict | None = None,
                          response_cardinality: dict | None = None) -> dict:
-    """Audit a response without copying its text (or transcript-derived quotes)."""
+    """Retain the validated safe JSON reply, never the transport envelope."""
     raw = response.get("message", {}).get("content", "")
     result = {
         "schema_contract": STRUCTURED_STAGE_RECEIPT,
@@ -2120,18 +2157,20 @@ def _response_provenance(stage: str, source: str, ordinal: int, response: dict,
         "system_prompt_sha256": _sha256(system),
         "input_prompt_sha256": _sha256(user),
         "input_prompt_validation": (
-            REPLAYABLE_INPUT if stage == "extract" else RECEIPT_ONLY_INPUT
+            REPLAYABLE_INPUT
+            if stage == "extract" else REPLAYABLE_CONSOLIDATION_INPUT
         ),
-        "response_sha256": _sha256(raw),
-        "response_validation": RECEIPT_ONLY_RESPONSE,
-        "raw_response_retained": False,
+        "validated_response_json": raw,
+        "validated_response_sha256": _sha256(raw),
+        "response_validation": REPLAYABLE_SAFE_RESPONSE,
+        "transport_response_retained": False,
+        "transport_response_limit": TRANSPORT_RESPONSE_LIMIT,
     }
     if input_records is not None:
-        # This pins the private transport used during inference. Claim and fragment
-        # text are deliberately not copied into the artifact, so it is a receipt
-        # rather than a replayable input.
+        # Safe extraction JSON plus the retained transcript reconstruct this input
+        # without persisting a second source-text copy.
         result["input_records_sha256"] = _sha256(input_records)
-        result["input_records_validation"] = RECEIPT_ONLY_INPUT
+        result["input_records_validation"] = REPLAYABLE_CONSOLIDATION_INPUT
     if input_contract is not None:
         result["input_contract_sha256"] = _json_sha256(input_contract)
     if input_prompt_template is not None:
@@ -2387,6 +2426,8 @@ def runtime_uses_source_evidence(result: dict) -> bool:
 
 def artifact_uses_source_evidence(doc: dict) -> bool:
     """Detect Repair 4 even when its evidence graph was emptied or removed."""
+    if doc.get("schema") == STRUCTURED_NOTE_SCHEMA:
+        return True
     if "claim_evidence_contract" in doc or "evidence" in doc:
         return True
     provenance = doc.get("provenance")
@@ -2429,7 +2470,7 @@ def structured_citations(result: dict, transcript: Transcript) -> dict:
         raise StructuredOutputError(
             "Repair 4 runtime result is missing its source evidence graph")
     resolved = validate_evidence_contract(result["evidence_contract"], transcript)
-    validate_structured_stage_receipts(
+    replay = validate_structured_stage_receipts(
         result.get("structured_provenance"),
         result.get("structured_contract"),
         result["evidence_contract"],
@@ -2438,6 +2479,9 @@ def structured_citations(result: dict, transcript: Transcript) -> dict:
         result.get("model_identity"),
     )
     consolidated = result["consolidated_records"]["items"]
+    if consolidated != replay["consolidated_items"]:
+        raise StructuredOutputError(
+            "runtime consolidated records disagree with retained safe response")
     if result["note"] != render_structured_note(consolidated):
         raise StructuredOutputError(
             "runtime structured note contains text outside evidence-bound records")
@@ -2507,7 +2551,10 @@ def structured_citations(result: dict, transcript: Transcript) -> dict:
 
 
 def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
-    """Re-derive Repair 4 claims from durable references without model-stage replay."""
+    """Replay safe stage JSON and re-derive Repair 4 claims and references."""
+    if doc.get("schema") != STRUCTURED_NOTE_SCHEMA:
+        raise StructuredOutputError(
+            f"Repair 4 artifact requires schema {STRUCTURED_NOTE_SCHEMA}")
     if doc.get("claim_evidence_contract") != SOURCE_EVIDENCE_CONTRACT:
         raise StructuredOutputError(
             "Repair 4 artifact has no current evidence discriminator")
@@ -2530,7 +2577,7 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
         raise StructuredOutputError(
             "artifact source evidence provenance disagrees with its coverage graph")
     provenance = doc.get("provenance", {})
-    validate_structured_stage_receipts(
+    replay = validate_structured_stage_receipts(
         provenance.get("structured_stages"),
         provenance.get("structured_contract"),
         evidence,
@@ -2540,20 +2587,23 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
     )
     parsed = _parse_claims(doc["note"])
     expected = [
-        evidence
+        (evidence, item)
         for label in _LABEL_VALUES
-        for evidence in resolved
+        for evidence, item in zip(
+            resolved, replay["consolidated_items"], strict=True
+        )
         if evidence["label"] == label
     ]
     if len(parsed) != len(expected):
         raise StructuredOutputError(
             "artifact Markdown count does not match durable evidence records")
     cited = []
-    for rendered, evidence in zip(parsed, expected, strict=True):
+    for rendered, (evidence, item) in zip(parsed, expected, strict=True):
         primary = evidence["evidence_refs"][0]
-        if (rendered["quote"], rendered["type"], _sha256(rendered["claim"])) != (
+        if (rendered["quote"], rendered["type"], rendered["claim"],
+                _sha256(rendered["claim"])) != (
                 primary["quote"], evidence["label"].lower(),
-                evidence["claim_sha256"]):
+                item["claim"], evidence["claim_sha256"]):
             raise StructuredOutputError(
                 "artifact Markdown claim or quote disagrees with durable evidence")
         cited.append({
@@ -2577,10 +2627,10 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
     rendered_items = [
         {
             "label": evidence["label"],
-            "claim": rendered["claim"],
+            "claim": item["claim"],
             "quote": evidence["evidence_refs"][0]["quote"],
         }
-        for rendered, evidence in zip(parsed, expected, strict=True)
+        for rendered, (evidence, item) in zip(parsed, expected, strict=True)
     ]
     if doc["note"] != render_structured_note(rendered_items):
         raise StructuredOutputError(
@@ -2723,7 +2773,7 @@ def _claim_digest(row: dict) -> str:
 
 
 def _consolidation_input_contract(rows: list[dict]) -> list[dict]:
-    """Private-input surrogate that can be re-derived without retaining prose."""
+    """Digest-only graph view alongside the separately retained safe claim JSON."""
     contract = []
     for row in rows:
         fragment_ids = row.get("source_fragment_ids")
@@ -2738,6 +2788,53 @@ def _consolidation_input_contract(rows: list[dict]) -> list[dict]:
             "claim_sha256": _claim_digest(row),
         })
     return contract
+
+
+def _consolidation_listing(items: list[dict]) -> str:
+    records = [
+        {
+            "evidence_item_id": item["evidence_item_id"],
+            "source_fragments": [
+                {
+                    "source_fragment_id": ref["source_fragment_id"],
+                    "text": ref["quote"],
+                }
+                for ref in item["evidence_refs"]
+            ],
+            "label": item["label"],
+            "claim": item["claim"],
+        }
+        for item in items
+    ]
+    return json.dumps(records, ensure_ascii=False, separators=(",", ":"))
+
+
+def _durable_extraction_rows(items: list[dict]) -> list[dict]:
+    return [
+        {
+            "evidence_item_id": item["evidence_item_id"],
+            "slice_ordinal": item["slice_ordinal"],
+            "source_fragment_ids": item["source_fragment_ids"],
+            "label": item["label"],
+            "claim_sha256": _claim_digest(item),
+        }
+        for item in items
+    ]
+
+
+def _durable_consolidation_rows(items: list[dict]) -> list[dict]:
+    return [
+        {
+            "source_item_ids": item["source_item_ids"],
+            "source_claim_sha256s": item["source_claim_sha256s"],
+            "source_fragment_ids": [
+                ref["source_fragment_id"] for ref in item["evidence_refs"]
+            ],
+            "label": item["label"],
+            "claim_sha256": _claim_digest(item),
+        }
+        for item in items
+    ]
 
 
 def _validate_structured_contract(contract: dict, evidence: dict) -> tuple[int, int]:
@@ -2800,14 +2897,12 @@ def _validate_structured_contract(contract: dict, evidence: dict) -> tuple[int, 
 
 def validate_structured_stage_receipts(stages: object, contract: dict, evidence: dict,
                                        transcript: Transcript, model: object,
-                                       model_identity: object) -> list[dict]:
-    """Validate every retained receipt that can still be re-derived.
+                                       model_identity: object) -> dict:
+    """Replay safe stage JSON and re-derive the complete structured graph.
 
-    Extraction inputs are replayable from the retained transcript. Extraction-claim
-    prose inside the consolidation input and all raw responses are intentionally
-    absent, so their hashes are accepted only as explicitly labelled receipts; schema,
-    prompt template, model-receipt consistency, membership, and cardinality remain
-    mechanically checkable.
+    The retained JSON contains only IDs, labels, and claims. Source text remains in
+    the transcript, while model API identity is still only an internally consistent
+    receipt because the historical tags response is not retained.
     """
     target, overlap = _validate_structured_contract(contract, evidence)
     expected_options = {
@@ -2842,7 +2937,9 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
         "model", "resolved_model", "model_digest", "options",
         "schema", "schema_sha256", "system_prompt_sha256",
         "input_prompt_sha256", "input_prompt_validation",
-        "response_sha256", "response_validation", "raw_response_retained",
+        "validated_response_json", "validated_response_sha256",
+        "response_validation", "transport_response_retained",
+        "transport_response_limit",
         "reference_context", "response_cardinality",
     }
     common_references = {
@@ -2850,6 +2947,11 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
         "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
         "fragment_map_sha256": fragment_map["fragment_map_sha256"],
     }
+    fragment_lookup = {
+        fragment["source_fragment_id"]: fragment
+        for fragment in fragment_map["fragments"]
+    }
+    replayed_extraction_items = []
 
     for ordinal, turn_ordinals in enumerate(turn_windows, 1):
         receipt = stages[ordinal - 1]
@@ -2862,24 +2964,31 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
         selected = [
             row for row in extraction_rows if row["slice_ordinal"] == ordinal
         ]
-        visible_set = set(visible_ids)
-        if any(
-            fragment_id not in visible_set
-            for row in selected
-            for fragment_id in row["source_fragment_ids"]
-        ):
+        safe_response = receipt["validated_response_json"]
+        if not isinstance(safe_response, str):
             raise StructuredOutputError(
-                f"structured extraction receipt {ordinal} covers an unseen fragment")
+                f"structured extraction receipt {ordinal} has no retained JSON")
+        replayed = decode_records(
+            safe_response, "extract", allowed_fragment_ids=visible_ids
+        )
+        attached = attach_evidence_items(
+            replayed["items"], ordinal, fragment_lookup, transcript,
+            fragment_map["transcript_view_sha256"],
+        )
+        if _durable_extraction_rows(attached) != selected:
+            raise StructuredOutputError(
+                f"structured extraction receipt {ordinal} disagrees with evidence")
+        replayed_extraction_items.extend(attached)
         expected_reference = {
             **common_references,
             "visible_fragment_ids_sha256": _json_sha256(visible_ids),
             "visible_fragments": len(visible),
             "selected_fragment_references": sum(
-                len(row["source_fragment_ids"]) for row in selected
+                len(row["source_fragment_ids"]) for row in attached
             ),
         }
         expected_cardinality = {
-            "items": len(selected),
+            "items": len(attached),
             "selected_fragment_references": expected_reference[
                 "selected_fragment_references"
             ],
@@ -2901,9 +3010,10 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
             or receipt["system_prompt_sha256"] != _sha256(extract_system)
             or receipt["input_prompt_sha256"] != _sha256(user)
             or receipt["input_prompt_validation"] != REPLAYABLE_INPUT
-            or not _valid_sha256(receipt["response_sha256"])
-            or receipt["response_validation"] != RECEIPT_ONLY_RESPONSE
-            or receipt["raw_response_retained"] is not False
+            or receipt["validated_response_sha256"] != _sha256(safe_response)
+            or receipt["response_validation"] != REPLAYABLE_SAFE_RESPONSE
+            or receipt["transport_response_retained"] is not False
+            or receipt["transport_response_limit"] != TRANSPORT_RESPONSE_LIMIT
             or receipt["reference_context"] != expected_reference
             or receipt["response_cardinality"] != expected_cardinality
         ):
@@ -2918,7 +3028,12 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
     if not isinstance(receipt, dict) or set(receipt) != consolidation_keys:
         raise StructuredOutputError(
             "structured consolidation receipt has the wrong shape")
-    input_contract = _consolidation_input_contract(extraction_rows)
+    if _durable_extraction_rows(replayed_extraction_items) != extraction_rows:
+        raise StructuredOutputError(
+            "structured extraction receipts do not reproduce the durable order")
+    input_contract = _consolidation_input_contract(replayed_extraction_items)
+    input_records = _consolidation_listing(replayed_extraction_items)
+    input_prompt = CONSOLIDATION_USER_TEMPLATE.format(records=input_records)
     consolidation_schema = consolidation_format([
         row["evidence_item_id"] for row in extraction_rows
     ])
@@ -2933,6 +3048,17 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
             len(row["source_item_ids"]) for row in consolidation_rows
         ),
     }
+    safe_response = receipt["validated_response_json"]
+    if not isinstance(safe_response, str):
+        raise StructuredOutputError(
+            "structured consolidation receipt has no retained JSON")
+    replayed_consolidation = decode_records(
+        safe_response, "consolidate", input_items=replayed_extraction_items
+    )
+    if (_durable_consolidation_rows(replayed_consolidation["items"])
+            != consolidation_rows):
+        raise StructuredOutputError(
+            "structured consolidation receipt disagrees with durable evidence")
     if (
         receipt["schema_contract"] != STRUCTURED_STAGE_RECEIPT
         or receipt["stage"] != "consolidate"
@@ -2945,22 +3071,27 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
         or receipt["schema"] != consolidation_schema
         or receipt["schema_sha256"] != _json_sha256(consolidation_schema)
         or receipt["system_prompt_sha256"] != _sha256(consolidate_system)
-        or not _valid_sha256(receipt["input_prompt_sha256"])
-        or receipt["input_prompt_validation"] != RECEIPT_ONLY_INPUT
+        or receipt["input_prompt_sha256"] != _sha256(input_prompt)
+        or receipt["input_prompt_validation"] != REPLAYABLE_CONSOLIDATION_INPUT
         or receipt["input_prompt_template_sha256"]
         != _sha256(CONSOLIDATION_USER_TEMPLATE)
-        or not _valid_sha256(receipt["input_records_sha256"])
-        or receipt["input_records_validation"] != RECEIPT_ONLY_INPUT
+        or receipt["input_records_sha256"] != _sha256(input_records)
+        or receipt["input_records_validation"] != REPLAYABLE_CONSOLIDATION_INPUT
         or receipt["input_contract_sha256"] != _json_sha256(input_contract)
-        or not _valid_sha256(receipt["response_sha256"])
-        or receipt["response_validation"] != RECEIPT_ONLY_RESPONSE
-        or receipt["raw_response_retained"] is not False
+        or receipt["validated_response_sha256"] != _sha256(safe_response)
+        or receipt["response_validation"] != REPLAYABLE_SAFE_RESPONSE
+        or receipt["transport_response_retained"] is not False
+        or receipt["transport_response_limit"] != TRANSPORT_RESPONSE_LIMIT
         or receipt["reference_context"] != consolidation_reference
         or receipt["response_cardinality"] != consolidation_cardinality
     ):
         raise StructuredOutputError(
             "structured consolidation receipt does not re-derive")
-    return stages
+    return {
+        "stages": stages,
+        "extraction_items": replayed_extraction_items,
+        "consolidated_items": replayed_consolidation["items"],
+    }
 
 # The order the contract now asks for: spoken words, pipe, label, item. The quote
 # group excludes pipes, so it cannot swallow a later field by backtracking.
@@ -3036,6 +3167,8 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
     graph keeps item identities, claim digests, and exact coverage so the two
     stages can be audited without writing a second transcript-derived sidecar.
     """
+    validate_inference_options(model, num_ctx, timeout)
+    validate_chunking(target_words, overlap_words)
     extract_system, consolidate_system = _structured_systems(transcript)
     turn_windows = _chunk_turn_windows(transcript, target_words, overlap_words)
     slices = [
@@ -3107,24 +3240,7 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
 
     # `json.dumps` is the only transport between the two model stages. Its shape has
     # no overloaded punctuation. Evidence text is locally resolved, not model-authored.
-    consolidation_inputs = [
-        {
-            "evidence_item_id": item["evidence_item_id"],
-            "source_fragments": [
-                {
-                    "source_fragment_id": ref["source_fragment_id"],
-                    "text": ref["quote"],
-                }
-                for ref in item["evidence_refs"]
-            ],
-            "label": item["label"],
-            "claim": item["claim"],
-        }
-        for item in items
-    ]
-    listing = json.dumps(
-        consolidation_inputs, ensure_ascii=False, separators=(",", ":")
-    )
+    listing = _consolidation_listing(items)
     user = CONSOLIDATION_USER_TEMPLATE.format(records=listing)
     consolidate_schema = consolidation_format(
         [item["evidence_item_id"] for item in items]
@@ -3174,28 +3290,10 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         "fragment_contract": fragment_map["fragment_contract"],
         "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
         "fragment_map_sha256": fragment_map["fragment_map_sha256"],
-        "extraction_items": [
-            {
-                "evidence_item_id": item["evidence_item_id"],
-                "slice_ordinal": item["slice_ordinal"],
-                "source_fragment_ids": item["source_fragment_ids"],
-                "label": item["label"],
-                "claim_sha256": item["claim_sha256"],
-            }
-            for item in items
-        ],
-        "consolidated_items": [
-            {
-                "source_item_ids": item["source_item_ids"],
-                "source_claim_sha256s": item["source_claim_sha256s"],
-                "source_fragment_ids": [
-                    ref["source_fragment_id"] for ref in item["evidence_refs"]
-                ],
-                "label": item["label"],
-                "claim_sha256": item["claim_sha256"],
-            }
-            for item in consolidated["items"]
-        ],
+        "extraction_items": _durable_extraction_rows(items),
+        "consolidated_items": _durable_consolidation_rows(
+            consolidated["items"]
+        ),
     }
     render_contract_json = json.dumps(
         STRUCTURED_NOTE_CONTRACT, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -3533,7 +3631,10 @@ def verdict(checks: dict) -> bool:
     )
 
 
-NOTE_SCHEMA = "note/1"
+LEGACY_NOTE_SCHEMA = "note/1"
+STRUCTURED_NOTE_SCHEMA = "note/2"
+NOTE_SCHEMAS = {LEGACY_NOTE_SCHEMA, STRUCTURED_NOTE_SCHEMA}
+NOTE_RENDER_SCHEMA = "note-render/1"
 
 # The four states a claim can be in, and every one of them has to be renderable.
 # `docs/journeys.md` J1 beat 3 is the operator deciding whether to trust a claim, and
@@ -3805,13 +3906,17 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
 
     Calibration runs first and its failure is the whole result.
     """
+    validate_inference_options(model, num_ctx, timeout)
     prepared = []
     for path in artifacts:
-        doc = json.loads(path.read_text())
+        artifact_bytes = path.read_bytes()
+        artifact_text = artifact_bytes.decode("utf-8")
+        doc = json.loads(artifact_text)
         if "transform" not in doc:
             raise SystemExit(
                 f"{path}: no `transform`, so evidence coordinates cannot be resolved")
         try:
+            validate_artifact_pair(doc, path)
             if artifact_uses_source_evidence(doc):
                 transcript = _artifact_transcript(path, doc)
                 cites = structured_artifact_citations(doc, transcript)
@@ -3821,7 +3926,10 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
                 claims = [c for c in doc["claims"] if c["status"] == LOCATED]
         except (KeyError, TypeError, StructuredOutputError) as e:
             raise SystemExit(f"{path}: source evidence refused: {e}") from e
-        prepared.append((path, doc, transcript, claims))
+        prepared.append((
+            path, doc, transcript, claims,
+            hashlib.sha256(artifact_bytes).hexdigest(),
+        ))
 
     judge_identity = resolve_ollama_model(model, min(timeout, 30))
     judge_system_sha256 = _sha256(SUPPORT_JUDGE)
@@ -3864,7 +3972,7 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
     print("\n=== do located quotes support their claims ===\n")
     supported = unsupported = unparsed = 0
     by_kind: dict[str, list[bool | None]] = {}
-    for path, doc, transcript, claims in prepared:
+    for path, doc, transcript, claims, artifact_sha256 in prepared:
         verdicts = []
         print(f"  {doc['meeting']['id']}: {len(claims)} located of "
               f"{len(doc['claims'])} claims")
@@ -3923,6 +4031,11 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
             raise SystemExit(
                 "support judge identity changed during measurement; no verdicts written"
             )
+        if hashlib.sha256(path.read_bytes()).hexdigest() != artifact_sha256:
+            raise SystemExit(
+                f"{path}: note artifact changed during support measurement; "
+                "no verdicts written"
+            )
         doc["support"] = {
             "schema": "support-measurement/1",
             "judge": model,
@@ -3938,9 +4051,7 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
             "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "verdicts": verdicts,
         }
-        if transcript is not None:
-            validate_support_measurement(doc, transcript)
-        path.write_text(json.dumps(doc, indent=2) + "\n")
+        _write_support_measurement(path, doc, transcript)
         print(f"    wrote {len(verdicts)} verdict(s) into {path.name}")
 
     judged = supported + unsupported
@@ -3955,6 +4066,18 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
     return 0
 
 
+def _write_support_measurement(path: Path, doc: dict,
+                               transcript: Transcript | None) -> None:
+    """Validate and atomically persist support without disturbing the note pair."""
+    validate_note_render(doc)
+    if transcript is not None:
+        validate_support_measurement(doc, transcript)
+    _atomic_replace_text(
+        path, json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+    )
+    validate_artifact_pair(doc, path)
+
+
 def recheck(artifact: Path) -> dict:
     """Re-derive an existing artifact's citations without calling a model.
 
@@ -3965,25 +4088,31 @@ def recheck(artifact: Path) -> dict:
     for the note that was measured. Re-deriving keeps the note fixed and moves only the
     judgement, which is what a correction is.
 
-    Only the citation check is recomputed, because it is the only one whose inputs
-    survive in the artifact: the note text and the transcript. `numbers`, `grounding`
-    and `prompt_echo` compare against the rendered prompt and the system message, which
-    are not stored; carrying their stored verdicts forward is honest, silently
-    recomputing them against a substitute input would not be. Repair 4's declared
-    fragment spans and exact-once coverage do survive and are revalidated here. Raw
-    model responses do not; their content, key order, and schema compliance cannot be
-    replayed. The receipt says only which response hash was observed. Schemas,
-    extraction inputs, membership, and counts are re-derived; model identity is only
-    cross-checked among retained receipt fields.
+    Only the citation check is recomputed, because it is the only legacy check whose
+    inputs survive in the artifact: the note text and the transcript. `numbers`,
+    `grounding` and `prompt_echo` compare against the rendered prompt and the system
+    message, which are not stored; carrying their stored verdicts forward is honest,
+    silently recomputing them against a substitute input would not be.
+
+    Repair 4 additionally retains each schema-validated message JSON body. Recheck
+    decodes those safe ID/label/claim objects again, including key order and
+    cardinality, then re-derives extraction claims, consolidation input, coverage,
+    output claims, and digests against the transcript. The Ollama transport envelope
+    and historical model-list response remain absent. The artifact is unsigned, so a
+    coordinated rewrite of content, contracts, and hashes is outside this check's
+    trust boundary.
     """
     doc = json.loads(artifact.read_text())
-    if doc.get("schema") != NOTE_SCHEMA:
-        raise SystemExit(f"{artifact}: expected {NOTE_SCHEMA}, got {doc.get('schema')!r}")
+    if doc.get("schema") not in NOTE_SCHEMAS:
+        raise SystemExit(
+            f"{artifact}: expected one of {sorted(NOTE_SCHEMAS)}, "
+            f"got {doc.get('schema')!r}")
     if "transform" not in doc:
         raise SystemExit(f"{artifact}: no `transform`, so the turn indices cannot be "
                          f"resolved. Regenerate from the model.")
 
     try:
+        validate_artifact_pair(doc, artifact)
         t = _artifact_transcript(artifact, doc)
         cites = (
             structured_artifact_citations(doc, t)
@@ -4008,7 +4137,13 @@ def recheck(artifact: Path) -> dict:
         if fresh := now - judged:
             print(f"      {len(fresh)} located claim(s) have no support verdict")
     doc["provenance"]["rechecked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    artifact.write_text(json.dumps(doc, indent=2) + "\n")
+    _atomic_replace_text(
+        artifact, json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+    )
+    try:
+        validate_artifact_pair(doc, artifact)
+    except StructuredOutputError as e:
+        raise SystemExit(f"{artifact}: rewritten note pair refused: {e}") from e
 
     by = Counter(c["status"] for c in doc["claims"])
     print(f"  {artifact.name}: {cites['items']} items -> "
@@ -4044,7 +4179,8 @@ def _claims_in_read_order(cites: dict) -> list[dict]:
 
 def note_artifact(result: dict, transcript: Transcript, checks: dict,
                   transcript_path: Path, out_dir: Path,
-                  transform: str | None = None) -> dict:
+                  transform: str | None = None,
+                  markdown_path: Path | None = None) -> dict:
     """The note as data, with each claim's evidence state attached.
 
     The markdown a model emits is a *rendering* of a note, not the note. It cannot
@@ -4068,6 +4204,8 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
     # order a note is in.
     claims = _claims_in_read_order(checks["citations"])
     structured = runtime_uses_source_evidence(result)
+    markdown_path = markdown_path or (out_dir / f"{transcript_path.stem}.md")
+    markdown_text = result["note"] + "\n"
     if structured:
         try:
             expected_citations = structured_citations(result, transcript)
@@ -4080,7 +4218,7 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
                 "cannot write Repair 4 artifact from a different citation verdict")
 
     artifact = {
-        "schema": NOTE_SCHEMA,
+        "schema": STRUCTURED_NOTE_SCHEMA if structured else LEGACY_NOTE_SCHEMA,
         **({
             "claim_evidence_contract": SOURCE_EVIDENCE_CONTRACT
         } if structured else {}),
@@ -4111,9 +4249,18 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
         "transcript": os.path.relpath(transcript_path, out_dir),
         "transform": transform,
         "note": result["note"],
+        "render": {
+            "schema": NOTE_RENDER_SCHEMA,
+            "path": os.path.relpath(markdown_path, out_dir),
+            "encoding": "utf-8",
+            "line_ending": "LF",
+            "terminal_newline": True,
+            "note_sha256": _sha256(result["note"]),
+            "markdown_sha256": _sha256(markdown_text),
+        },
         "claims": claims,
         # Repair 4's durable ID and coverage graph. It retains references, labels,
-        # and exact-span metadata but no second transcript or raw model response.
+        # and exact-span metadata but no second transcript.
         **({"evidence": result["evidence_contract"]} if structured else {}),
         "capture": transcript.gate,
         "provenance": {
@@ -4127,10 +4274,9 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
             # recorded the now-retired chunked Markdown pass.
             "duplicates_removed": result.get("duplicates_removed"),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            # Raw model replies contain transcript-derived evidence. Keep only their
-            # explicitly receipt-only hashes. Schemas, replayable extraction inputs,
-            # options, references, and counts are retained for mechanical recheck,
-            # without a second transcript in an artifact a UI may export.
+            # Only schema-validated stage JSON survives: IDs, labels, and claims.
+            # Source text stays in the transcript; the Ollama transport envelope and
+            # historical model-list response do not become artifact authority.
             "structured_stages": result.get("structured_provenance"),
             "structured_contract": result.get("structured_contract"),
             "source_evidence": (
@@ -4154,30 +4300,302 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
 
 def write_note_outputs(result: dict, transcript: Transcript, checks: dict,
                        transcript_path: Path, out: Path,
-                       transform: str | None = None) -> tuple[dict, tuple[Path, Path]]:
-    """Write the two durable note surfaces and no extraction-text sidecar."""
-    validate_output_target(out)
-    markdown = out
-    artifact = out.with_suffix(".note.json")
-    markdown.write_text(result["note"] + "\n")
+                       transform: str | None = None, *,
+                       replace: bool = False) -> tuple[dict, tuple[Path, Path]]:
+    """Validate, then install an owner-private Markdown/JSON pair.
+
+    JSON is the canonical note. Markdown is its exact UTF-8 rendering, bound back to
+    the artifact by two digests. Each file is installed atomically from a same-directory
+    temporary file. Ordinary exceptions roll back a new or replacement pair; a process
+    or OS crash between the two atomic installs can still leave a detectable mismatch.
+    """
+    markdown, artifact = validate_output_target(out, replace=replace)
     doc = note_artifact(
-        result, transcript, checks, transcript_path, out.parent, transform
+        result, transcript, checks, transcript_path, out.parent, transform,
+        markdown_path=markdown,
     )
-    artifact.write_text(json.dumps(doc, indent=2) + "\n")
+    markdown_text = validate_note_render(doc)
+    if runtime_uses_source_evidence(result):
+        # Artifact construction is complete before either public target can exist.
+        structured_artifact_citations(doc, transcript)
+    artifact_text = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+
+    # Close the ordinary preflight-to-write race before creating temporary content.
+    validate_output_target(out, replace=replace)
+    artifact_temp = _write_private_temp(artifact, artifact_text)
+    markdown_temp = None
+    installed: list[tuple[Path, Path]] = []
+    replaced: list[tuple[Path, Path]] = []
+    replacement_installs: list[tuple[Path, os.stat_result]] = []
+    try:
+        markdown_temp = _write_private_temp(markdown, markdown_text)
+        if replace:
+            for target in (artifact, markdown):
+                if target.exists() or target.is_symlink():
+                    backup = _reserve_private_backup(target)
+                    os.replace(target, backup)
+                    replaced.append((target, backup))
+                    if not backup.is_symlink():
+                        os.chmod(backup, 0o600)
+        for temp, target in (
+            (artifact_temp, artifact),
+            (markdown_temp, markdown),
+        ):
+            if replace:
+                os.replace(temp, target)
+                replacement_installs.append((
+                    target, target.stat(follow_symlinks=False)
+                ))
+            else:
+                # `link` is an atomic no-clobber install on the same filesystem.
+                os.link(temp, target)
+                installed.append((target, temp))
+        _fsync_directory(out.parent)
+    except Exception as install_error:
+        # A late no-clobber conflict must not strand the other half of a new pair.
+        # Compare inodes before unlinking so a concurrent replacement is never removed.
+        rollback_errors = []
+        if replace:
+            for target, installed_stat in reversed(replacement_installs):
+                try:
+                    current = target.stat(follow_symlinks=False)
+                    if (
+                        current.st_dev,
+                        current.st_ino,
+                    ) == (
+                        installed_stat.st_dev,
+                        installed_stat.st_ino,
+                    ):
+                        target.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    rollback_errors.append(e)
+            for target, backup in reversed(replaced):
+                try:
+                    if backup.exists() or backup.is_symlink():
+                        os.replace(backup, target)
+                except OSError as e:
+                    rollback_errors.append(e)
+        else:
+            for target, temp in reversed(installed):
+                try:
+                    target_stat = target.stat(follow_symlinks=False)
+                    temp_stat = temp.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if (
+                    target_stat.st_dev,
+                    target_stat.st_ino,
+                ) == (
+                    temp_stat.st_dev,
+                    temp_stat.st_ino,
+                ):
+                    try:
+                        target.unlink()
+                    except OSError as e:
+                        rollback_errors.append(e)
+        with contextlib.suppress(OSError):
+            _fsync_directory(out.parent)
+        if rollback_errors:
+            raise StructuredOutputError(
+                "note-pair install failed and rollback was incomplete"
+            ) from install_error
+        raise
+    else:
+        for _target, backup in replaced:
+            with contextlib.suppress(OSError):
+                backup.unlink()
+        with contextlib.suppress(OSError):
+            _fsync_directory(out.parent)
+    finally:
+        for temp in (artifact_temp, markdown_temp):
+            if temp is not None:
+                with contextlib.suppress(FileNotFoundError):
+                    temp.unlink()
+
+    validate_artifact_pair(doc, artifact)
     return doc, (markdown, artifact)
 
 
-def validate_output_target(out: Path) -> None:
-    """Refuse a basename that still carries the retired verbatim sidecar."""
+def output_paths(out: Path) -> tuple[Path, Path]:
+    """Return the human-readable note and its canonical JSON artifact."""
+    return out, out.with_suffix(".note.json")
+
+
+def validate_output_target(out: Path, *, replace: bool = False) -> tuple[Path, Path]:
+    """Preflight both output names before inference or filesystem mutation."""
     if out.name.endswith(".items.md"):
         raise StructuredOutputError(
             "--out cannot use the retired .items.md sidecar name")
+    if not out.parent.exists():
+        raise StructuredOutputError(
+            f"--out {out}: parent directory {out.parent} does not exist")
+    if not out.parent.is_dir():
+        raise StructuredOutputError(
+            f"--out {out}: parent path {out.parent} is not a directory")
     stale_sidecar = out.with_suffix(".items.md")
     if stale_sidecar.exists() or stale_sidecar.is_symlink():
         raise StructuredOutputError(
             f"--out refused: retired extraction sidecar still exists at "
             f"{stale_sidecar}. Move or remove it explicitly before this run."
         )
+    markdown, artifact = output_paths(out)
+    for label, path in (("Markdown", markdown), ("artifact", artifact)):
+        exists = path.exists() or path.is_symlink()
+        if path.is_dir() and not path.is_symlink():
+            raise StructuredOutputError(
+                f"--out refused: {label} target is a directory: {path}")
+        if exists and not replace:
+            raise StructuredOutputError(
+                f"--out refused: {label} target already exists at {path}. "
+                "Use --replace to replace the pair explicitly.")
+    return markdown, artifact
+
+
+def validate_note_render(doc: dict, markdown_text: str | None = None) -> str:
+    """Re-derive the exact Markdown bytes declared by a note artifact."""
+    note = doc.get("note")
+    if not isinstance(note, str):
+        raise StructuredOutputError("note artifact has no string `note`")
+    render = doc.get("render")
+    if render is None:
+        if doc.get("schema") == STRUCTURED_NOTE_SCHEMA:
+            raise StructuredOutputError(
+                f"{STRUCTURED_NOTE_SCHEMA} artifact is missing its render contract")
+        canonical = note + "\n"
+        if markdown_text is not None and markdown_text != canonical:
+            raise StructuredOutputError(
+                "legacy Markdown does not match the note stored in JSON")
+        return canonical
+
+    required = {
+        "schema", "path", "encoding", "line_ending", "terminal_newline",
+        "note_sha256", "markdown_sha256",
+    }
+    if not isinstance(render, dict) or set(render) != required:
+        raise StructuredOutputError("note render contract has the wrong shape")
+    render_path = render["path"]
+    if (
+        not isinstance(render_path, str)
+        or not render_path
+        or render_path in {".", ".."}
+        or "/" in render_path
+        or "\\" in render_path
+        or Path(render_path).is_absolute()
+    ):
+        raise StructuredOutputError(
+            "note render path must be one filename beside the JSON artifact")
+    if (
+        render["schema"] != NOTE_RENDER_SCHEMA
+        or render["encoding"] != "utf-8"
+        or render["line_ending"] != "LF"
+        or render["terminal_newline"] is not True
+    ):
+        raise StructuredOutputError("note render encoding contract is not current")
+    if "\r" in note:
+        raise StructuredOutputError(
+            "note render declares LF but the canonical note contains CR characters")
+    canonical = note + "\n"
+    if (
+        render["note_sha256"] != _sha256(note)
+        or render["markdown_sha256"] != _sha256(canonical)
+    ):
+        raise StructuredOutputError(
+            "note or Markdown digest does not re-derive from canonical JSON")
+    if markdown_text is not None and markdown_text != canonical:
+        raise StructuredOutputError(
+            "Markdown file does not exactly match the canonical note in JSON")
+    return canonical
+
+
+def validate_artifact_pair(doc: dict, artifact: Path) -> Path | None:
+    """Validate a JSON artifact and its declared sibling Markdown rendering."""
+    canonical = validate_note_render(doc)
+    render = doc.get("render")
+    if render is None:
+        return None
+    markdown = artifact.parent / render["path"]
+    for label, path in (("artifact", artifact), ("Markdown", markdown)):
+        if path.is_symlink():
+            raise StructuredOutputError(
+                f"{label} side of note pair may not be a symlink: {path}")
+        if not path.is_file():
+            raise StructuredOutputError(
+                f"{label} side of note pair is missing or not a file: {path}")
+        if (
+            doc.get("schema") == STRUCTURED_NOTE_SCHEMA
+            and path.stat().st_mode & 0o777 != 0o600
+        ):
+            raise StructuredOutputError(
+                f"{STRUCTURED_NOTE_SCHEMA} {label} is not owner-private: {path}")
+    try:
+        markdown_text = markdown.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise StructuredOutputError(
+            f"Markdown side of note pair is not UTF-8: {markdown}") from e
+    validate_note_render(doc, markdown_text)
+    if markdown_text != canonical:
+        raise StructuredOutputError(
+            "Markdown side of note pair differs from canonical JSON")
+    return markdown
+
+
+def _write_private_temp(target: Path, text: str) -> Path:
+    """Write and fsync an owner-only temporary file beside its final target."""
+    fd, name = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temp = Path(name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            temp.unlink()
+        raise
+    return temp
+
+
+def _reserve_private_backup(target: Path) -> Path:
+    """Reserve an unguessable sibling name for reversible pair replacement."""
+    fd, name = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".backup",
+    )
+    os.close(fd)
+    backup = Path(name)
+    backup.unlink()
+    return backup
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist same-directory renames/links before reporting the pair as written."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _atomic_replace_text(target: Path, text: str) -> None:
+    """Replace one file atomically from an owner-private sibling temporary."""
+    temp = _write_private_temp(target, text)
+    try:
+        os.replace(temp, target)
+        _fsync_directory(target.parent)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temp.unlink()
 
 
 _STOPWORDS = {"the", "of", "and", "a", "on", "about", "for", "to", "in", "last",
@@ -5301,6 +5719,46 @@ def run_self_test() -> int:
         "a mutable model tag resolves to one immutable digest before inference",
         fixture_identity["digest"] == "a" * 64 and ambiguous_model_refused,
     )
+    original_resolve = resolve_ollama_model
+    original_chat = ollama_chat
+    invalid_preflight_calls = []
+
+    def forbidden_inference(*_args, **_kwargs):
+        invalid_preflight_calls.append("called")
+        raise AssertionError("invalid options reached model work")
+
+    globals()["resolve_ollama_model"] = forbidden_inference
+    globals()["ollama_chat"] = forbidden_inference
+    invalid_options_refused = True
+    preflight_fixture = Transcript(
+        source="invalid preflight fixture",
+        attribution=NONE,
+        turns=[Turn(text="one short turn")],
+    )
+    try:
+        for model, num_ctx, timeout, target, overlap in (
+            ("fixture:latest", 32768, 1, 0, 0),
+            ("fixture:latest", 32768, 1, 10, -1),
+            ("fixture:latest", 32768, 1, 10, 10),
+            ("fixture:latest", 32768, 1, 10, 11),
+            ("", 32768, 1, 10, 0),
+            ("fixture:latest", 0, 1, 10, 0),
+            ("fixture:latest", 32768, 0, 10, 0),
+        ):
+            try:
+                summarize_chunked(
+                    preflight_fixture, model, num_ctx, timeout, target, overlap
+                )
+                invalid_options_refused = False
+            except StructuredOutputError:
+                pass
+    finally:
+        globals()["resolve_ollama_model"] = original_resolve
+        globals()["ollama_chat"] = original_chat
+    control(
+        "invalid inference and chunk options fail before model resolution or calls",
+        invalid_options_refused and not invalid_preflight_calls,
+    )
     fixture_transcript = Transcript(
         source="structured fixture",
         attribution=NONE,
@@ -5384,8 +5842,9 @@ def run_self_test() -> int:
         structured_doc, fixture_transcript
     )
     control(
-        "source references survive extraction, consolidation, Markdown, note/1, and recheck",
+        "source references survive extraction, consolidation, Markdown, note/2, and recheck",
         source_cites["authority"] == "source-evidence/1"
+        and structured_doc["schema"] == STRUCTURED_NOTE_SCHEMA
         and len(source_cites["cited"][0]["evidence_refs"]) == 2
         and artifact_cites["cited"] == source_cites["cited"]
         and structured_doc["claims"][0]["quote"]
@@ -5403,14 +5862,25 @@ def run_self_test() -> int:
             structured_doc["evidence"]
         ),
     )
+    replayed_stages = validate_structured_stage_receipts(
+        staged_new["structured_provenance"],
+        staged_new["structured_contract"],
+        staged_new["evidence_contract"],
+        fixture_transcript,
+        staged_new["model"],
+        staged_new["model_identity"],
+    )
     control(
-        "structured receipts re-derive available inputs and label private inputs as receipt-only",
+        "safe stage JSON replays key order, claims, consolidation input, and coverage",
         all(row["model_digest"] == fixture_identity["digest"]
                 for row in staged_new["structured_provenance"])
-        and all("raw_response" not in row
+        and all("raw_response" not in row and "response_sha256" not in row
                 for row in staged_new["structured_provenance"])
-        and all(row["raw_response_retained"] is False
-                and row["response_validation"] == RECEIPT_ONLY_RESPONSE
+        and all(row["transport_response_retained"] is False
+                and row["transport_response_limit"] == TRANSPORT_RESPONSE_LIMIT
+                and row["response_validation"] == REPLAYABLE_SAFE_RESPONSE
+                and row["validated_response_sha256"]
+                == _sha256(row["validated_response_json"])
                 for row in staged_new["structured_provenance"])
         and all(
             row["input_prompt_validation"] == REPLAYABLE_INPUT
@@ -5419,22 +5889,22 @@ def run_self_test() -> int:
         )
         and staged_new["structured_provenance"][-1][
             "input_prompt_validation"
-        ] == RECEIPT_ONLY_INPUT
+        ] == REPLAYABLE_CONSOLIDATION_INPUT
         and staged_new["structured_provenance"][-1][
             "input_records_validation"
-        ] == RECEIPT_ONLY_INPUT
+        ] == REPLAYABLE_CONSOLIDATION_INPUT
         and all({"transcript_view_sha256", "fragment_contract_sha256",
                  "fragment_map_sha256"}
                 <= row["reference_context"].keys()
                 for row in staged_new["structured_provenance"])
-        and validate_structured_stage_receipts(
-            staged_new["structured_provenance"],
-            staged_new["structured_contract"],
-            staged_new["evidence_contract"],
-            fixture_transcript,
-            staged_new["model"],
-            staged_new["model_identity"],
-        ) is staged_new["structured_provenance"]
+        and replayed_stages["stages"] is staged_new["structured_provenance"]
+        and replayed_stages["consolidated_items"]
+        == staged_new["consolidated_records"]["items"]
+        and len(replayed_stages["extraction_items"])
+        == len(staged_new["evidence_contract"]["extraction_items"])
+        and fixture_transcript.turns[0].text not in json.dumps(
+            staged_new["structured_provenance"], ensure_ascii=False
+        )
         and structured_doc["provenance"]["source_evidence"][
             "transcript_view_sha256"
         ] == transcript_view_sha256(fixture_transcript)
@@ -5447,16 +5917,188 @@ def run_self_test() -> int:
         ))
     )
     with tempfile.TemporaryDirectory(prefix="repair4-output-control-") as tmp:
-        output_path = Path(tmp) / "fixture.md"
+        output_dir = Path(tmp)
+        output_path = output_dir / "fixture.md"
         validate_output_target(output_path)
-        _written_doc, written_paths = write_note_outputs(
+        written_doc, written_paths = write_note_outputs(
             staged_new, fixture_transcript,
             {"passed": verdict(structured_checks), **structured_checks},
             Path("fixture.json"), output_path,
         )
         written_names = {path.name for path in written_paths}
-        actual_names = {path.name for path in Path(tmp).iterdir()}
-        stale_output = Path(tmp) / "stale.md"
+        actual_names = {path.name for path in output_dir.iterdir()}
+        pair_path = validate_artifact_pair(
+            written_doc, output_path.with_suffix(".note.json")
+        )
+        pair_modes = {
+            path.name: path.stat().st_mode & 0o777
+            for path in written_paths
+        }
+        canonical_markdown = validate_note_render(written_doc)
+        pair_regenerates = (
+            pair_path == output_path
+            and output_path.read_text(encoding="utf-8") == canonical_markdown
+        )
+
+        prior_pair = {
+            path: path.read_bytes()
+            for path in written_paths
+        }
+        try:
+            write_note_outputs(
+                staged_new, fixture_transcript,
+                {"passed": verdict(structured_checks), **structured_checks},
+                Path("fixture.json"), output_path,
+            )
+            target_conflict_refused = False
+        except StructuredOutputError:
+            target_conflict_refused = True
+        target_conflict_unchanged = all(
+            path.read_bytes() == content
+            for path, content in prior_pair.items()
+        )
+
+        interrupted_output = output_dir / "interrupted.md"
+        before_interrupted = {path.name for path in output_dir.iterdir()}
+        original_link = os.link
+        link_calls = 0
+
+        def fail_second_link(source, target):
+            nonlocal link_calls
+            link_calls += 1
+            if link_calls == 2:
+                raise OSError("injected second no-clobber install failure")
+            return original_link(source, target)
+
+        os.link = fail_second_link
+        try:
+            write_note_outputs(
+                staged_new, fixture_transcript,
+                {"passed": verdict(structured_checks), **structured_checks},
+                Path("fixture.json"), interrupted_output,
+            )
+            new_pair_rollback = False
+        except OSError:
+            new_pair_rollback = True
+        finally:
+            os.link = original_link
+        new_pair_rollback = (
+            new_pair_rollback
+            and before_interrupted
+            == {path.name for path in output_dir.iterdir()}
+            and not interrupted_output.exists()
+            and not interrupted_output.with_suffix(".note.json").exists()
+        )
+
+        replacement_before = {
+            path: path.read_bytes()
+            for path in written_paths
+        }
+        before_replacement = {path.name for path in output_dir.iterdir()}
+        original_replace = os.replace
+
+        def fail_second_replace(source, target):
+            if (
+                Path(target) == output_path
+                and Path(source).name.endswith(".tmp")
+            ):
+                raise OSError("injected second replacement install failure")
+            return original_replace(source, target)
+
+        os.replace = fail_second_replace
+        try:
+            write_note_outputs(
+                staged_new, fixture_transcript,
+                {"passed": verdict(structured_checks), **structured_checks},
+                Path("fixture.json"), output_path,
+                replace=True,
+            )
+            replacement_rollback = False
+        except OSError:
+            replacement_rollback = True
+        finally:
+            os.replace = original_replace
+        replacement_rollback = (
+            replacement_rollback
+            and before_replacement
+            == {path.name for path in output_dir.iterdir()}
+            and all(
+                path.read_bytes() == content
+                for path, content in replacement_before.items()
+            )
+            and validate_artifact_pair(
+                written_doc, output_path.with_suffix(".note.json")
+            ) == output_path
+        )
+
+        replaced_doc, _ = write_note_outputs(
+            staged_new, fixture_transcript,
+            {"passed": verdict(structured_checks), **structured_checks},
+            Path("fixture.json"), output_path,
+            replace=True,
+        )
+        replace_pair_ok = validate_artifact_pair(
+            replaced_doc, output_path.with_suffix(".note.json")
+        ) == output_path
+
+        output_path.write_text("tampered Markdown\n", encoding="utf-8")
+        try:
+            validate_artifact_pair(
+                replaced_doc, output_path.with_suffix(".note.json")
+            )
+            pair_tamper_refused = False
+        except StructuredOutputError:
+            pair_tamper_refused = True
+        _atomic_replace_text(output_path, validate_note_render(replaced_doc))
+        validate_artifact_pair(
+            replaced_doc, output_path.with_suffix(".note.json")
+        )
+
+        broken_output = output_dir / "broken.md"
+        broken_result = json.loads(json.dumps(staged_new))
+        broken_result["evidence_contract"]["fragment_map_sha256"] = "0" * 64
+        before_broken = {path.name for path in output_dir.iterdir()}
+        try:
+            write_note_outputs(
+                broken_result, fixture_transcript,
+                {"passed": verdict(structured_checks), **structured_checks},
+                Path("fixture.json"), broken_output,
+            )
+            construction_refused = False
+        except StructuredOutputError:
+            construction_refused = True
+        after_broken = {path.name for path in output_dir.iterdir()}
+        construction_left_nothing = (
+            before_broken == after_broken
+            and not broken_output.exists()
+            and not broken_output.with_suffix(".note.json").exists()
+        )
+
+        directory_output = output_dir / "directory.md"
+        directory_output.mkdir()
+        try:
+            validate_output_target(directory_output, replace=True)
+            directory_refused = False
+        except StructuredOutputError:
+            directory_refused = True
+        directory_output.rmdir()
+        symlink_target = output_dir / "symlink-target"
+        symlink_target.write_text("not a note")
+        symlink_output = output_dir / "symlink.md"
+        symlink_output.symlink_to(symlink_target)
+        try:
+            validate_output_target(symlink_output)
+            symlink_default_refused = False
+        except StructuredOutputError:
+            symlink_default_refused = True
+        symlink_replace_explicit = (
+            validate_output_target(symlink_output, replace=True)[0]
+            == symlink_output
+        )
+        symlink_output.unlink()
+        symlink_target.unlink()
+
+        stale_output = output_dir / "stale.md"
         stale_output.with_suffix(".items.md").write_text(
             "retired transcript-derived evidence"
         )
@@ -5466,13 +6108,26 @@ def run_self_test() -> int:
         except StructuredOutputError:
             stale_sidecar_refused = True
     control(
-        "Repair 4 writes only Markdown and note JSON, with no extracted-text sidecar",
+        "Repair 4 writes a private, canonical Markdown/note JSON pair only",
         "extracted" not in staged_new
         and "extracted_records" not in staged_new
         and structured_doc["claim_evidence_contract"]
         == SOURCE_EVIDENCE_CONTRACT
         and written_names == actual_names
         == {"fixture.md", "fixture.note.json"}
+        and pair_modes == {"fixture.md": 0o600, "fixture.note.json": 0o600}
+        and pair_regenerates
+        and target_conflict_refused
+        and target_conflict_unchanged
+        and new_pair_rollback
+        and replacement_rollback
+        and replace_pair_ok
+        and pair_tamper_refused
+        and construction_refused
+        and construction_left_nothing
+        and directory_refused
+        and symlink_default_refused
+        and symlink_replace_explicit
         and stale_sidecar_refused,
     )
     receipt_tampers = []
@@ -5501,6 +6156,30 @@ def run_self_test() -> int:
         "input_contract_sha256"
     ] = "c" * 64
     receipt_tampers.append(tampered_input_contract)
+    tampered_safe_claim = json.loads(json.dumps(structured_doc))
+    safe_stage = tampered_safe_claim["provenance"]["structured_stages"][0]
+    changed_safe = safe_stage["validated_response_json"].replace(
+        "Choose and retain the exact encoding words",
+        "A different retained extraction claim",
+        1,
+    )
+    safe_stage["validated_response_json"] = changed_safe
+    safe_stage["validated_response_sha256"] = _sha256(changed_safe)
+    receipt_tampers.append(tampered_safe_claim)
+    tampered_safe_order = json.loads(json.dumps(structured_doc))
+    safe_stage = tampered_safe_order["provenance"]["structured_stages"][0]
+    safe_doc = json.loads(safe_stage["validated_response_json"])
+    item = safe_doc["items"][0]
+    reordered_safe = json.dumps({
+        "items": [{
+            "claim": item["claim"],
+            "label": item["label"],
+            "source_fragment_ids": item["source_fragment_ids"],
+        }],
+    }, separators=(",", ":"))
+    safe_stage["validated_response_json"] = reordered_safe
+    safe_stage["validated_response_sha256"] = _sha256(reordered_safe)
+    receipt_tampers.append(tampered_safe_order)
     receipt_tampers_refused = True
     for candidate in receipt_tampers:
         try:
@@ -5509,7 +6188,7 @@ def run_self_test() -> int:
         except StructuredOutputError:
             pass
     control(
-        "tampered stage schema, model, cardinality, or input contract fails recheck",
+        "tampered stage schema, model, counts, inputs, safe claims, or key order fails recheck",
         receipt_tampers_refused,
     )
     narrative_runtime = json.loads(json.dumps(staged_new))
@@ -5676,6 +6355,7 @@ def run_self_test() -> int:
     valid_support = validate_support_measurement(
         support_doc, fixture_transcript
     ) is support_doc["support"]
+    valid_support_payload = json.loads(json.dumps(support_doc["support"]))
     support_surface_tamper = json.loads(json.dumps(support_doc))
     support_surface_tamper["note"] = support_surface_tamper["note"].replace(
         support_claim["claim"], changed_claim, 1
@@ -5699,6 +6379,42 @@ def run_self_test() -> int:
         "displayed support is re-derived from model, calibration, prompt, and evidence receipts",
         valid_support and changed_support_refused
         and support_surface_tamper_refused,
+    )
+    with tempfile.TemporaryDirectory(prefix="repair4-support-write-") as tmp:
+        support_markdown = Path(tmp) / "fixture.md"
+        persisted_support_doc, _ = write_note_outputs(
+            staged_new, fixture_transcript,
+            {"passed": verdict(structured_checks), **structured_checks},
+            Path("fixture.json"), support_markdown,
+        )
+        persisted_support_doc["support"] = valid_support_payload
+        support_artifact = support_markdown.with_suffix(".note.json")
+        _write_support_measurement(
+            support_artifact, persisted_support_doc, fixture_transcript
+        )
+        support_before_invalid = support_artifact.read_bytes()
+        invalid_support_doc = json.loads(json.dumps(persisted_support_doc))
+        invalid_support_doc["support"]["verdicts"][0]["supports"] = False
+        try:
+            _write_support_measurement(
+                support_artifact, invalid_support_doc, fixture_transcript
+            )
+            invalid_support_write_refused = False
+        except StructuredOutputError:
+            invalid_support_write_refused = True
+        support_write_ok = (
+            support_artifact.stat().st_mode & 0o777 == 0o600
+            and validate_artifact_pair(
+                persisted_support_doc, support_artifact
+            ) == support_markdown
+            and json.loads(support_artifact.read_text())["support"]
+            == valid_support_payload
+            and invalid_support_write_refused
+            and support_artifact.read_bytes() == support_before_invalid
+        )
+    control(
+        "support persistence is private, atomic, pair-checked, and validates before write",
+        support_write_ok,
     )
     empty_artifact = json.loads(json.dumps(structured_doc))
     empty_artifact["evidence"] = {}
@@ -5843,12 +6559,19 @@ def main():
                    help="run the fabrication checks against notes with known verdicts")
     p.add_argument("--validate-judge", action="store_true",
                    help="check whether a model can judge recall, against known answers")
-    p.add_argument("--strip", action="store_true",
-                   help="remove speaker labels, testing the unattributed contract")
-    p.add_argument("--simulate-bleed", action="store_true",
-                   help="remove labels AND double every line, as a contaminated capture arrives")
-    p.add_argument("--as-channel", metavar="SPEAKER", nargs="?", const=True,
-                   help="collapse to the Me/Them split a clean headphone capture produces")
+    transform = p.add_mutually_exclusive_group()
+    transform.add_argument(
+        "--strip", action="store_true",
+        help="remove speaker labels, testing the unattributed contract",
+    )
+    transform.add_argument(
+        "--simulate-bleed", action="store_true",
+        help="remove labels AND double every line, as a contaminated capture arrives",
+    )
+    transform.add_argument(
+        "--as-channel", metavar="SPEAKER", nargs="?", const=True,
+        help="collapse to the Me/Them split a clean headphone capture produces",
+    )
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX)
     p.add_argument("--timeout", type=int, default=900)
@@ -5863,18 +6586,24 @@ def main():
                    help="overlap between slices, so a commitment spanning a cut "
                         "survives in one of them")
     p.add_argument("--out", type=Path, help="also write the notes to this file")
+    p.add_argument(
+        "--replace", action="store_true",
+        help="replace both existing --out Markdown and note JSON explicitly",
+    )
     p.add_argument("--measure-support", type=Path, nargs="+", metavar="NOTE.JSON",
                    help="judge whether each located quote supports the claim it is "
                         "attached to; calibrates the judge first and reports no figure "
                         "if it fails")
     p.add_argument("--recheck", type=Path, nargs="+", metavar="NOTE.JSON",
-                   help="re-derive the citation check for existing note/1 artifacts "
+                   help="re-derive the citation check for note/1 or note/2 artifacts "
                         "without calling a model, and rewrite them in place")
     p.add_argument("--reference", type=Path,
                    help="a list of expected items to measure recall against "
                         "(a platform's own action items, or a human's notes)")
     args = p.parse_args()
 
+    if args.replace and args.out is None:
+        p.error("--replace requires --out")
     if args.self_test:
         return run_self_test()
     if args.measure_support:
@@ -5905,6 +6634,13 @@ def main():
     if args.transcript is None:
         p.error("a transcript is required (or --self-test)")
 
+    try:
+        validate_inference_options(args.model, args.num_ctx, args.timeout)
+        if args.passes == 2:
+            validate_chunking(args.chunk_words, args.overlap_words)
+    except StructuredOutputError as e:
+        p.error(str(e))
+
     if not args.transcript.exists():
         raise SystemExit(
             f"{args.transcript} not found.\n"
@@ -5920,11 +6656,9 @@ def main():
     if args.out and args.out.is_dir():
         raise SystemExit(f"--out takes a file, and {args.out} is a directory. "
                          f"Try --out {args.out / args.transcript.stem}.md")
-    if args.out and not args.out.parent.exists():
-        raise SystemExit(f"--out {args.out}: {args.out.parent} does not exist.")
     if args.out:
         try:
-            validate_output_target(args.out)
+            validate_output_target(args.out, replace=args.replace)
         except StructuredOutputError as e:
             raise SystemExit(str(e)) from e
 
@@ -5955,7 +6689,8 @@ def main():
                      else "as-channel" if args.as_channel
                      else "strip" if args.strip else None)
         doc, (markdown, artifact) = write_note_outputs(
-            result, t, checks, args.transcript, args.out, transform
+            result, t, checks, args.transcript, args.out, transform,
+            replace=args.replace,
         )
         print(f"\n  wrote {markdown}")
         by_status = Counter(c["status"] for c in doc["claims"])

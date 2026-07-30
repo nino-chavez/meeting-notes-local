@@ -13,7 +13,8 @@ fetches on demand. So the reproducible thing is the renderer; the artifact is lo
 content or it settles nothing", and the operator's own recorded objection — "so
 where is the content I use for reviewing with 630?" — is what the alternative looks
 like from outside. Every claim, quote, turn and count on the page is read from a
-`note/1` artifact that a real model run produced. Nothing here composes a meeting.
+`note/1` or `note/2` artifact that a real model run produced. Nothing here composes
+a meeting.
 
 **What it therefore cannot show, it labels.** film-room's Decision 0047 records the
 operator opening a shell with placeholder interiors and reasonably mistaking one for
@@ -21,6 +22,10 @@ a broken folder chooser. The conclusion drawn there is that a fixture cannot ser
 an operator encounter. So each region on this page states whether it is real data, a
 component specimen with a stated contract, or an open question — and the regions the
 corpus cannot populate say so in place rather than being quietly dropped.
+
+Legacy `note/1` artifacts remain readable. Repair 4 uses `note/2`; its JSON is the
+canonical note and its sibling Markdown must match the retained render digest before
+the prototype will use either surface.
 
 Run:  python docs/prototype/build.py            # reads notes/out/*.note.json
 """
@@ -37,10 +42,12 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "notes"))
 
 from summarize import (  # noqa: E402
+    NOTE_SCHEMAS,
     _seq,
     _support_key,
     artifact_uses_source_evidence,
     structured_artifact_citations,
+    validate_artifact_pair,
     validate_evidence_contract,
     validate_support_measurement,
 )
@@ -1399,8 +1406,14 @@ def main() -> int:
     sections, library, totals = [], [], dict.fromkeys(STATES, 0)
     for path in notes:
         doc = json.loads(path.read_text())
-        if doc.get("schema") != "note/1":
-            raise SystemExit(f"{path}: expected schema note/1, got {doc.get('schema')!r}")
+        if doc.get("schema") not in NOTE_SCHEMAS:
+            raise SystemExit(
+                f"{path}: expected one of {sorted(NOTE_SCHEMAS)}, "
+                f"got {doc.get('schema')!r}")
+        try:
+            validate_artifact_pair(doc, path)
+        except ValueError as e:
+            raise SystemExit(f"{path}: note pair refused: {e}") from e
         section, c = meeting_section(doc, path)
         sections.append(section)
         library.append(library_row(doc))
