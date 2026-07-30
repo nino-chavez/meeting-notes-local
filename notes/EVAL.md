@@ -857,3 +857,60 @@ run a real meeting, then point `summarize.py` at `spike/out/transcript.json`.
 The spike now writes that file, and derives its attribution level from its own
 bleed measurement, so a contaminated capture arrives here as `none` without
 anyone having to remember to say so.
+
+---
+
+## Claims cite the transcript, and the checker was wrong about whether they did
+
+Measured 2026-07-29 on three corpus meetings with `llama3.1:latest`, labels
+stripped. The note format now carries a quote per claim; the *code* locates that
+quote and derives the turn index, because asking an 8B model for an index returns a
+plausible number and that is the fabrication class the check exists to catch.
+
+**The first figures published from this were wrong, in the under-reporting
+direction.** Two regexes decided independently whether a claim was cited: one
+required the quote on the line below the claim, the other matched any list item the
+first had not. The model collapsed the quote onto the claim's own line on two of the
+three meetings, so the first missed, the second swallowed the whole line, and the
+claim landed in `uncited` — a bucket that does not fail a run.
+
+| Meeting | Turns | Path | First reported | Re-derived |
+|---|---|---|---|---|
+| ES2004c | 582 | single pass | 7 verified / 3 unsupported / 1 untestable | unchanged |
+| covid_4 | 276 | single pass | 15 unquoted | 4 verified / 4 unsupported / 7 unquoted |
+| Bmr006 | 1365 | chunked, 17 slices | 83 unquoted | 33 verified / 41 unsupported / 9 untestable |
+
+**covid_4's run reported PASS while carrying four composed quotes.** That is the
+worst consequence and it is not about citations: an aggregate verdict computed from
+buckets that disagree about their own coverage will report clean, because the bucket
+items fall into is the benign one. The repair is one parser that classifies every
+list item exactly once, plus a control asserting the buckets partition the items.
+Twelve citation controls passed throughout — every one of them used the layout the
+contract asks for, so none of them exercised the layout the model actually produced.
+
+**What the numbers support, and what they do not.** Verified runs between a quarter
+and two thirds; it is neither rare nor dependable. No note is uniformly one thing —
+all three carry at least two states. Long inputs are *not* simply worse: the
+1365-turn chunked run verified 40% against the 582-turn run's 64% and the 276-turn
+run's 27%, so length does not order them. An earlier claim in this session that
+compliance is "unstable run-to-run" rested partly on a console capture that was
+truncated at both ends and cannot be re-measured; what the artifacts do support is
+that the model varies its citation **layout** between runs and between meetings.
+
+**A second prompt-echo, traded for the first.** Illustrating the citation format with
+real prose got that prose back as a decision the meeting reached, so the example
+became `<angle-bracket placeholders>`. The model then copied the brackets: 83 of 83
+Bmr006 claims and 8 of 8 covid_4 claims arrived as `- <the claim>`. Neither check saw
+it, because what leaked was punctuation rather than any word, and `check_prompt_echo`
+compares content n-grams. The slots are named in capitals now — if those leak, that
+existing check catches them by the mechanism it already has. Choosing the failure an
+existing check can see beats choosing the one that reads better in the prompt.
+
+**Re-deriving is part of the artifact contract.** `--recheck` recomputes the citation
+result for a `note/1` artifact from the note text and the transcript, with no model
+call. Correcting the figures above by re-running would have produced *different
+notes*, so the corrected numbers would not have described the notes that were
+measured. Only the citation check is recomputed; `numbers`, `grounding` and
+`prompt_echo` compare against the rendered prompt and the system message, which the
+artifact does not store, so their stored verdicts are carried forward rather than
+silently recomputed against a substitute input.

@@ -164,6 +164,40 @@ rather than hard-failing, and the operator is told which leg is down.
 `summary-failed` is a first-class state, not an error. The transcript is the
 durable artifact; the summary is an enhancement over it.
 
+**The states above are the surface's; a claim inside it has its own, and this table
+was missing them.** Every state here is about whether a note *exists*. None of them
+says anything about whether what it asserts can be believed, which is J1 beat 3 and
+the reason `docs/journeys.md` decided the note must cite the transcript. Four
+per-claim states, emitted by `notes/summarize.py` and rendered by
+`docs/prototype/build.py`:
+
+| Claim state | Meaning |
+|---|---|
+| `verified` | The quoted words are in the transcript, at a turn the code located |
+| `unsupported` | They are not — and the transcript was the model's only input, so the quote was composed |
+| `untestable` | Under four words, so a match would prove nothing either way |
+| `unquoted` | The claim offered no evidence at all |
+
+**Every note mixes them, which is why the state belongs to the claim and cannot be a
+hover or a detail view.** Measured on three real runs — 7 verified of 11 claims on a
+582-turn meeting, 33 of 83 on a 1365-turn one, 4 of 15 on a third. Verified is not
+rare; it runs between a quarter and two thirds. The finding is that **no note is
+uniformly one thing.** All three carry at least two states and two carry three, so a
+note-level statement about trust is never true, and on the longest meeting 41 claims
+with composed evidence sit next to 33 with real evidence — indistinguishable unless
+the state is attached to the claim that carries it.
+
+The sharpest evidence for that is a defect rather than a measurement. One of those
+runs reported **PASS while carrying four composed quotes**: the checker had misfiled
+them as "no quote offered", which does not fail a run. An aggregate verdict is exactly
+the shape that hides this, which is the argument for showing the state per claim
+rather than summarising it.
+
+**Rendered in read order, never sorted by state.** Sorting by trust would hide how
+much of a note is unsupported, which is the lying-by-omission failure `journeys.md`
+argues this product lives or dies on. `note/1` carries each claim's character offset
+in the note so read order survives the grouping the checker needs.
+
 ---
 
 ## F. Notes library

@@ -393,7 +393,7 @@ it made an undecided item read as scheduled.
 | No way to overrule a gate decision | J4 | **Open, and the code already promises it.** `transcript.json` keeps every gated turn so it can be overruled and no surface can |
 | "Not captured" and "never said" look identical | J1 | **Open** — the artifact holds the recall figures and the gate's report, and shows neither |
 | F has no commitment-organised view | J2 | **Decided** — a `filtered` state on F, not a new surface |
-| A note that is present but inadequate | J1, J4 | **Open** — E's `summary-failed` covers absent, not thin |
+| A note that is present but inadequate | J1, J4 | **Decided** — a note's checkable proportion is shown on E and on F's rows, so a thin note is visible before it is opened. `summary-failed` still covers only absent |
 | Export and share have no redaction step | J2 | **Open** — gated turns and room speech would travel with the note |
 | The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight. No convention to inherit — immature across the category |
 | No preparation journey | J0 | **Decided** — local read-only calendar via EventKit, `DESIGN.md § Context inputs`. The surface for a brief is still unspecified |
@@ -427,3 +427,45 @@ honestly and not enough to test search. Populating it with invented meetings wou
 make every IA judgement worthless, and the operator's own recorded objection — "so
 where is the content I use for reviewing with 630?" — is what that failure looks like
 from the outside.
+
+### Built: `docs/prototype/build.py`
+
+A generator rather than a page, because the populated page is derived from QMSum and
+`.gitignore` already keeps that corpus out of a public repo. It reads `note/1`
+artifacts and renders J1's retrieval path against them.
+
+**What it settled.** A claim's evidence state belongs to the claim, always visible,
+never a hover — because on real runs no note is uniformly one thing. Verified ran 7 of
+11, 33 of 83 and 4 of 15 across the three meetings, so it is neither rare nor
+reliable; every note carries at least two states, and on the longest, 41 claims with
+composed evidence sit beside 33 with real evidence. A note-level trust mark would be
+false on all three. Claims render in read order rather than sorted by trust. And the
+claim → words path needs no audio, so K's `audio-released` costs confirmation of tone
+and not the check itself.
+
+**What building it caught, which is the reason to build it.** The prototype needed
+every claim state populated from real runs, and populating them is what exposed that
+the citation checker was wrong on most real output. Two regexes decided independently
+whether a claim was cited; the model collapsed the quote onto the claim's own line on
+two of three meetings; the first regex missed it, the second matched the whole line,
+and 41 located quotes reported as "no quote offered" — a bucket that does not fail a
+run. One of those runs therefore reported PASS with four composed quotes in it. Reading
+the notes as a *reader* would is what surfaced it; no check was going to, because every
+fixture used the layout the contract asks for.
+
+**What building it changed.** Two things the walk had not predicted. A verified
+claim's *locator* is a promise a reader cannot check by looking — a button that
+scrolls to the wrong turn still moves the page and still highlights a turn, and the
+operator reads speech that did not produce the claim, which manufactures confidence
+rather than merely failing. It is asserted at build time now, with both a wrong-index
+and an out-of-range control. And a note artifact has to record which *transform*
+produced its turn indices: `strip` preserves positions and `simulate_bleed` does not,
+so the safe case would have concealed the unsafe one until someone rendered a bleed
+run.
+
+**What it could not populate, and says so in place.** J1 beat 4's honesty banner — the
+corpus is full-recall reference text, so no gate ran and there is no recall figure;
+it is rendered as a labelled specimen carrying this project's own published
+measurements instead of an invented meeting. Chronological ordering, because corpus
+meetings have no date. And search, deliberately: no box is drawn, since one that
+ranked three results would look settled while resting on nothing.

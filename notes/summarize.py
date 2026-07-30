@@ -32,13 +32,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import itertools
 import json
+import os
 import re
 import sys
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from pathlib import Path
 
 from transcript import CHANNEL, NAMED, NONE, Transcript, Turn, load, qmsum_reference
@@ -69,8 +73,13 @@ What was raised and left unresolved.
 Under every single item in Decisions, Action items and Open questions, add one
 line holding the spoken words the item rests on, like this:
 
-- <the decision, action or question, in your own words>
-  > <the spoken words, exactly as they appear>
+- ITEM IN YOUR OWN WORDS
+  > SPOKEN WORDS COPIED EXACTLY
+
+Write the item on its own line and nothing else on it. Write the spoken words on
+the next line, indented, starting with the > character. ITEM IN YOUR OWN WORDS
+and SPOKEN WORDS COPIED EXACTLY name the two slots; do not write those words.
+Do not put angle brackets or square brackets around anything.
 
 The Summary section takes no quotes."""
 
@@ -88,10 +97,10 @@ least five words, or it proves nothing."""
 
 QUOTE_FROM_ITEMS = """
 Every item you were given ends with a pipe and the words that item rests on.
-Carry those words across unchanged as the item's quoted line. Never write a quote
-of your own: you have not seen the transcript, so anything you compose is
-invented. An item that arrived without evidence after its pipe gets no quoted
-line at all."""
+Carry those words across unchanged, on their own line below the item, starting with
+the > character. Never write a quote of your own: you have not seen the transcript,
+so anything you compose is invented. An item that arrived without evidence after
+its pipe gets no quoted line at all."""
 # The example above is a shape, not a sentence, and that is deliberate. The first
 # version illustrated it with real prose — "The team settled on the rubber casing"
 # over a matching quote — and llama3.1 reproduced both as a decision ES2004c had
@@ -104,8 +113,17 @@ line at all."""
 # is at least a well-instrumented mistake — `check_prompt_echo` and
 # `check_citations` both flagged it independently on the first real run.
 #
-# Angle-bracket placeholders cannot be echoed as content plausibly, and if they
-# were, they would be obvious in the note rather than persuasive.
+# Angle brackets fixed the content echo and bought a syntax echo. Every claim in two
+# of three real runs came back as `- <the claim>`, brackets and all, and those were the
+# same runs that collapsed the quote onto the item's line: the model copied the
+# template's punctuation and its layout together. Neither check saw it, because what
+# leaked was the shape rather than any word — `check_prompt_echo` compares content
+# n-grams and found nothing to report.
+#
+# Named slots in capitals leak visibly instead. If a model writes "ITEM IN YOUR OWN
+# WORDS" into a note, that phrase is in the system prompt, so `check_prompt_echo`
+# catches it by the mechanism it already has. Choosing the failure that an existing
+# check can see beats choosing the one that looks tidier in the prompt.
 
 # Two of the four rules here used to instruct omission — "if you are not sure,
 # leave it out" and "prefer omitting a section to padding it". They were written
@@ -481,9 +499,59 @@ def check_prompt_echo(note: str, source_text: str, system: str) -> dict:
     return {"ok": not echoed, "echoed": echoed}
 
 
-_CITED = re.compile(r"^\s*[-*]\s+(?P<claim>.+?)\s*\n\s*>\s*(?P<quote>.+?)\s*$",
-                    re.MULTILINE)
-_UNCITED = re.compile(r"^\s*[-*]\s+(?!>)(?P<claim>.+?)\s*$(?!\n\s*>)", re.MULTILINE)
+_LIST_ITEM = re.compile(r"^[ \t]*[-*][ \t]+(?P<body>\S.*?)[ \t]*$")
+_BLOCKQUOTE = re.compile(r"^[ \t]*>[ \t]*(?P<quote>\S.*?)[ \t]*$")
+# The same-line collapse. The contract asks for the quote on the line below; two of
+# three real runs put it on the item's own line instead, and both were runs where the
+# model also copied the template's punctuation, so this is the model taking the shape
+# literally rather than two unrelated faults.
+_SAME_LINE = re.compile(r"^(?P<claim>.*?\S)[ \t]+>[ \t]*(?P<quote>\S.*)$")
+# Leftover template punctuation around a claim, stripped for comparison and counted
+# so the leak stays visible instead of being quietly cleaned up.
+_WRAPPED = re.compile(r"^[<\[](?P<inner>[^<>\[\]]+)[>\]]$")
+
+
+def _parse_claims(note: str) -> list[dict]:
+    """Every list item in the note, each classified exactly once.
+
+    One parser, because two were the defect. `_CITED` matched only the quote-on-the-
+    next-line layout and `_UNCITED` matched anything that `_CITED` did not, so when the
+    model collapsed a citation onto one line the item fell through to `uncited` — a
+    bucket that does not fail a run. 83 real citations on one meeting and 8 on another
+    were reported as "no quote offered", and the run read clean. Two authorities on
+    whether a claim was cited, disagreeing in silence, is the same defect this file has
+    now repaired three times in other places.
+
+    Accepting both layouts is not leniency about the contract. The contract is enforced
+    by the prompt; a checker that reports 0 quotes when 33 are present is not strict,
+    it is wrong. Deviations that matter are counted and reported instead.
+    """
+    lines = note.splitlines()
+    offsets, pos = [], 0
+    for line in lines:
+        offsets.append(pos)
+        pos += len(line) + 1
+
+    out, i = [], 0
+    while i < len(lines):
+        m = _LIST_ITEM.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        claim, at, quote = m.group("body"), offsets[i], None
+        below = _BLOCKQUOTE.match(lines[i + 1]) if i + 1 < len(lines) else None
+        if below:
+            quote = below.group("quote")
+            i += 2
+        else:
+            if collapsed := _SAME_LINE.match(claim):
+                claim, quote = collapsed.group("claim"), collapsed.group("quote")
+            i += 1
+        wrapped = bool(w := _WRAPPED.match(claim))
+        if w:
+            claim = w.group("inner").strip()
+        out.append({"claim": claim, "quote": quote, "at": at, "wrapped": wrapped})
+    return out
 
 # Short quotes collide by accident. Four content words is the same floor
 # `_ECHO_NGRAM` uses, and for the same reason: long enough that ordinary phrasing
@@ -538,13 +606,25 @@ def check_citations(note: str, transcript: Transcript) -> dict:
                     return i, transcript.turns[i].start
         return None
 
-    cited, fabricated, unverifiable = [], [], []
-    for m in _CITED.finditer(note):
-        quote = m.group("quote").strip()
-        row = {"claim": m.group("claim").strip(), "quote": quote}
-        # Three outcomes, not two, and the third is the difference between a check
-        # and a nuisance. A quote too short to be distinctive has not been shown to
-        # be false — it cannot be tested either way, and treating untestable as
+    cited, fabricated, unverifiable, uncited = [], [], [], []
+    items = _parse_claims(note)
+    for item in items:
+        quote = item["quote"]
+        # `at` is the claim's character offset in the note. The buckets group by
+        # outcome because that is what a verdict needs; a surface rendering the note
+        # wants read order. Carrying the offset lets one pass serve both instead of
+        # forcing a renderer to re-parse the note and disagree with this function
+        # about what a claim is.
+        row = {"claim": item["claim"], "quote": quote, "at": item["at"]}
+        if quote is None:
+            # Not a fabrication and not a pass. Counted so a model that ignores the
+            # format cannot read as a clean run.
+            row["why"] = "no quote was offered, so nothing traces back to the words"
+            uncited.append(row)
+            continue
+        # Four outcomes, and the third is the difference between a check and a
+        # nuisance. A quote too short to be distinctive has not been shown to be
+        # false — it cannot be tested either way, and treating untestable as
         # fabricated would fail a run because a model quoted three words. This
         # project already shipped a check that reported fabrications which had not
         # happened, and repairing it is why `check_attribution` needs an attributing
@@ -562,16 +642,23 @@ def check_citations(note: str, transcript: Transcript) -> dict:
             row["turn"], row["start"] = hit[0], hit[1]
             cited.append(row)
 
-    # An item with no quote is not a fabrication and is not a pass. Counted so a
-    # model that simply ignores the format cannot read as a clean run.
-    uncited = [m.group("claim").strip() for m in _UNCITED.finditer(note)]
+    # Template punctuation the model copied into its own claims. A prompt-compliance
+    # count, not an evidence state: it says the instruction leaked, which is a thing
+    # to fix in the prompt and not a thing the operator has to reason about.
+    wrapped = sum(1 for it in items if it["wrapped"])
+    # The invariant that would have caught the two-parser defect: every item the
+    # parser found lands in exactly one bucket. When the buckets are allowed to
+    # disagree about what they cover, items go missing into whichever one is benign.
+    assert len(cited) + len(fabricated) + len(unverifiable) + len(uncited) == len(items)
     return {
         "applies": bool(transcript.turns),
         "ok": not fabricated,
+        "items": len(items),
         "cited": cited,
         "fabricated": fabricated,
         "unverifiable": unverifiable,
         "uncited": uncited,
+        "template_echo": wrapped,
     }
 
 
@@ -1306,8 +1393,14 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
             print(f"  citations     FABRICATED — {len(cites['fabricated'])} of "
                   f"{len(cites['fabricated']) + len(cites['cited'])} quotes are not "
                   f"in the transcript")
+            # Printed whole. An earlier version cut these at 70 characters, which
+            # sliced them mid-word and made every failure look like a truncation
+            # bug in the checker rather than a fabrication by the model — the one
+            # reading this line most needs to rule out. A quote short enough to
+            # fit was indistinguishable from one that had been cut, so the display
+            # destroyed exactly the evidence it existed to show.
             for row in cites["fabricated"][:5]:
-                print(f"                {row['why']}: {row['quote'][:70]!r}")
+                print(f"                {row['why']}: {row['quote']!r}")
         elif cites["cited"]:
             at = [f"{r['start']:.0f}s" for r in cites["cited"][:4] if r["start"]]
             print(f"  citations     {len(cites['cited'])} verified against the "
@@ -1336,13 +1429,186 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
     # grounding check has several. A missing quote does not fail the run: it is a
     # model ignoring a format instruction, which is a prompt problem and is
     # reported as its own line rather than folded into a correctness verdict.
-    return (
-        ctx["ok"] is not False
-        and (not attr["applies"] or attr["ok"])
-        and nums["ok"]
-        and echo["ok"]
-        and cites["ok"]
-    )
+    #
+    # The checks are returned rather than only printed. A caller that needs a
+    # finding — the note artifact needs the citation outcome, because that outcome
+    # is what a reader has to see beside each claim — would otherwise re-run the
+    # check and become a second authority on it. Every defect this file has had to
+    # repair was two places deciding the same thing, so the verdict and the
+    # evidence behind it leave here together.
+    return {
+        "passed": (
+            ctx["ok"] is not False
+            and (not attr["applies"] or attr["ok"])
+            and nums["ok"]
+            and echo["ok"]
+            and cites["ok"]
+        ),
+        "context": ctx,
+        "attribution": attr,
+        "numbers": nums,
+        "prompt_echo": echo,
+        "grounding": grounding,
+        "owner_grounding": owners,
+        "recall": recall,
+        "citations": cites,
+    }
+
+
+NOTE_SCHEMA = "note/1"
+
+# The four states a claim can be in, and every one of them has to be renderable.
+# `docs/journeys.md` J1 beat 3 is the operator deciding whether to trust a claim, and
+# a format showing only VERIFIED would hide the majority of what the runs produce:
+# across three real meetings the states were 7/11, 33/83 and 8/15 verified, with
+# UNSUPPORTED alone reaching 41 of 83 on the longest. Both halves are common.
+VERIFIED = "verified"        # the quote is in the transcript, at a known turn
+UNSUPPORTED = "unsupported"  # the quote is not — and the transcript was the only input
+UNTESTABLE = "untestable"    # too short to distinguish evidence from coincidence
+UNQUOTED = "unquoted"        # the claim offered no evidence at all
+
+
+def recheck(artifact: Path) -> dict:
+    """Re-derive an existing artifact's citations without calling a model.
+
+    Needed because the checker changes. The two-parser defect meant three artifacts on
+    disk reported 0 quotes where 41 were present, and re-running the model to correct
+    that would have cost eleven minutes on the longest meeting *and* produced a
+    different note — so the corrected figure would not have been the corrected figure
+    for the note that was measured. Re-deriving keeps the note fixed and moves only the
+    judgement, which is what a correction is.
+
+    Only the citation check is recomputed, because it is the only one whose inputs
+    survive in the artifact: the note text and the transcript. `numbers`, `grounding`
+    and `prompt_echo` compare against the rendered prompt and the system message, which
+    are not stored; carrying their stored verdicts forward is honest, silently
+    recomputing them against a substitute input would not be.
+    """
+    doc = json.loads(artifact.read_text())
+    if doc.get("schema") != NOTE_SCHEMA:
+        raise SystemExit(f"{artifact}: expected {NOTE_SCHEMA}, got {doc.get('schema')!r}")
+    if "transform" not in doc:
+        raise SystemExit(f"{artifact}: no `transform`, so the turn indices cannot be "
+                         f"resolved. Regenerate from the model.")
+
+    t = load((artifact.parent / doc["transcript"]).resolve())
+    transform = doc["transform"]
+    if transform == "strip":
+        t = t.strip_attribution()
+    elif transform == "as-channel":
+        t = t.as_channel(None)
+    elif transform == "simulate-bleed":
+        t = t.simulate_bleed()
+    elif transform is not None:
+        raise SystemExit(f"{artifact}: unknown transform {transform!r}")
+
+    cites = check_citations(doc["note"], t)
+    doc["claims"] = _claims_in_read_order(cites)
+    doc["checks"]["citations"] = cites
+    # The stored verdict was formed with the old citation result in it, so it has to
+    # move too — otherwise the artifact would carry a corrected finding under an
+    # uncorrected pass mark.
+    was = doc["passed"]
+    others = [v.get("ok") for k, v in doc["checks"].items()
+              if k not in ("citations", "context") and isinstance(v, dict)]
+    doc["passed"] = cites["ok"] and all(o is not False for o in others)
+    doc["provenance"]["rechecked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    artifact.write_text(json.dumps(doc, indent=2) + "\n")
+
+    by = Counter(c["status"] for c in doc["claims"])
+    print(f"  {artifact.name}: {cites['items']} items -> "
+          f"{', '.join(f'{n} {s}' for s, n in by.most_common())}")
+    if cites["template_echo"]:
+        print(f"      {cites['template_echo']} claim(s) carried template punctuation")
+    if was != doc["passed"]:
+        print(f"      verdict moved: passed {was} -> {doc['passed']}")
+    return doc
+
+
+def _claims_in_read_order(cites: dict) -> list[dict]:
+    """The four buckets merged back into the order a reader meets them in."""
+    claims = [
+        {"status": status, **row}
+        for status, rows in ((VERIFIED, cites["cited"]),
+                             (UNSUPPORTED, cites["fabricated"]),
+                             (UNTESTABLE, cites["unverifiable"]),
+                             (UNQUOTED, cites["uncited"]))
+        for row in rows
+    ]
+    claims.sort(key=lambda c: c["at"])
+    return claims
+
+
+def note_artifact(result: dict, transcript: Transcript, checks: dict,
+                  transcript_path: Path, out_dir: Path,
+                  transform: str | None = None) -> dict:
+    """The note as data, with each claim's evidence state attached.
+
+    The markdown a model emits is a *rendering* of a note, not the note. It cannot
+    carry which claims were checked or what the check found, so a surface reading it
+    would have to re-derive both and would disagree with `report` about it. This is
+    the artifact; the markdown is kept beside it for reading.
+
+    **Evidence is referenced, never copied.** A claim carries a turn index, and the
+    words live in the transcript at `transcript`. Duplicating the speech into the
+    note would make two records of what was said and let them drift — and
+    `docs/journeys.md` retains the transcript precisely so the note does not have to
+    be self-contained. A renderer joins the two.
+
+    UNSUPPORTED deserves its plain name. The model's entire input was this
+    transcript, so a quote that is not in it was not misheard or lost to a failed
+    capture — it was composed. That distinction is the one thing J1 beat 4 says the
+    product must never blur, and here it is not ambiguous.
+    """
+    # Read order, not verdict order. The buckets group by outcome because that is
+    # what a verdict needs; a reader meets these claims one after another. Shared with
+    # `recheck` rather than written twice — two merges would be two answers to what
+    # order a note is in.
+    claims = _claims_in_read_order(checks["citations"])
+
+    return {
+        "schema": NOTE_SCHEMA,
+        "meeting": {
+            "id": transcript_path.stem,
+            "source": transcript.source,
+            "attribution": transcript.attribution,
+            "speakers": transcript.speakers,
+            "turns": len(transcript.turns),
+            # Both counts, because the gate's held-back turns are still evidence the
+            # operator may overrule, and a surface that shows only the visible count
+            # disagrees with the transcript on disk.
+            "gated_turns": len(transcript.gated_turns),
+            "duration_s": max((t.start for t in transcript.turns if t.start is not None),
+                              default=None),
+        },
+        # Where the words are, and which shape of them the turn indices count.
+        # Relative so an exported note and its transcript can be moved together; a
+        # renderer resolves it against the note's own directory.
+        #
+        # `transform` is not metadata, it is the key to the indices. A claim's `turn`
+        # is a position in the transcript AS THE MODEL SAW IT, and the transforms do
+        # not all preserve positions — `simulate_bleed` doubles every line, so a
+        # renderer that loaded the raw file would resolve every citation to the wrong
+        # words while looking like it worked. `strip_attribution` happens to preserve
+        # them, which is exactly why this cannot be left implicit: the safe case would
+        # have hidden the unsafe one until someone rendered a bleed run.
+        "transcript": os.path.relpath(transcript_path, out_dir),
+        "transform": transform,
+        "note": result["note"],
+        "claims": claims,
+        "capture": transcript.gate,
+        "provenance": {
+            "model": result["model"],
+            "elapsed_s": round(result["elapsed_s"], 1),
+            "passes": 2 if "extracted" in result else 1,
+            "slices": result.get("slices"),
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        },
+        # Carried whole. A surface may only need citations today, but a note whose
+        # own record of what was checked is partial cannot be audited later.
+        "checks": {k: v for k, v in checks.items() if k != "passed"},
+        "passed": checks["passed"],
+    }
 
 
 _STOPWORDS = {"the", "of", "and", "a", "on", "about", "for", "to", "in", "last",
@@ -1605,8 +1871,11 @@ def run_self_test() -> int:
     def cite_case(label: str, note: str, want_ok: bool, **expect) -> None:
         nonlocal failures
         got = check_citations(note, cite_t)
+        # Compare by what the RESULT holds, not by what the expectation looks like. An
+        # int expectation used to mean "this many rows", which stopped being true when
+        # the result gained a scalar count and turned a control into a TypeError.
         ok = got["ok"] == want_ok and all(
-            len(got[k]) == v if isinstance(v, int) else got[k] == v
+            len(got[k]) == v if isinstance(got[k], list) else got[k] == v
             for k, v in expect.items())
         failures += not ok
         print(f"  [{'pass' if ok else 'FAIL'}] {label}")
@@ -1643,6 +1912,42 @@ def run_self_test() -> int:
     verdict_note = "## Decisions\n- Budget approved.\n  > the budget was approved"
     cite_case("a fabricated citation is not advisory", verdict_note, False)
 
+    # The layout the model actually produced on two of three real meetings, and the
+    # blind spot that made 41 located quotes report as zero. Every fixture above uses
+    # the next-line form the contract asks for, which is why twelve controls passed
+    # while the checker was wrong on most real output.
+    cite_case("a quote collapsed onto the item's own line is still a citation",
+              "## Decisions\n- Rubber casing chosen. > go with the rubber for the case",
+              True, cited=1, uncited=0)
+    cite_case("and a collapsed quote that is not in the transcript still fails",
+              "## Decisions\n- Budget approved. > the budget was approved today",
+              False, fabricated=1, uncited=0)
+    cite_case("template punctuation the model copied is stripped and counted",
+              "## Decisions\n- <Rubber casing chosen> > go with the rubber for the case",
+              True, cited=1, template_echo=1)
+    cite_case("a claim with no quote is not read as a collapsed one",
+              "## Decisions\n- Rubber casing chosen with nothing offered.",
+              True, uncited=1, cited=0, template_echo=0)
+    # The invariant, asserted from outside rather than trusted from the assert inside:
+    # buckets that are allowed to disagree about their coverage lose items into
+    # whichever one is benign, and `uncited` is benign.
+    partition_note = (
+        "## Decisions\n"
+        "- Located. > go with the rubber for the case\n"
+        "- Composed. > the budget was approved today\n"
+        "- Short. > the case\n"
+        "- Bare.\n"
+        "## Action items\n"
+        "- Next-line form.\n  > the supplier said eight weeks which is too long\n")
+    got = check_citations(partition_note, cite_t)
+    covered = sum(len(got[k]) for k in ("cited", "fabricated", "unverifiable", "uncited"))
+    part_ok = got["items"] == 5 and covered == 5
+    failures += not part_ok
+    print(f"  [{'pass' if part_ok else 'FAIL'}] every item lands in exactly one "
+          f"bucket, mixing both layouts")
+    if not part_ok:
+        print(f"          items={got['items']} covered={covered}")
+
     # The quote has to survive the merge, because only the extraction pass sees a
     # transcript. When _ITEM dropped everything after the pipe, the consolidator
     # was asked for verbatim evidence from a transcript it had never been shown,
@@ -1668,6 +1973,84 @@ def run_self_test() -> int:
               "QUESTION: Which encoding | we said utf-8 | not latin-1",
               ("QUESTION", "Which encoding", "we said utf-8 | not latin-1"))
 
+    print("\n=== the run's verdict, and the artifact it writes ===\n")
+    # `check_citations` returning ok=False is not what stops a run — `report`'s
+    # aggregation is, and until now nothing exercised it. The controls above all
+    # tested the check while the caller went unexamined, which is the same shape as
+    # every defect this project has had to repair: validation placed where it was
+    # convenient rather than where it was relied upon. A real run reported 106
+    # fabricated quotes and its recorded exit status was 0, which is either this
+    # aggregation or the harness around it — untestable while the verdict had no
+    # control at all.
+    def verdict_result(note: str) -> dict:
+        prompt = "system and transcript"
+        return {
+            "note": note,
+            "rendered": "we should go with the rubber for the case",
+            "system": "instructions that share no long phrase with the note",
+            "model": "fixture",
+            "elapsed_s": 0.0,
+            "calls": [{"label": "single pass", "prompt": prompt,
+                       "response": {"prompt_eval_count": 500}}],
+        }
+
+    verdict_t = Transcript(source="fixture", attribution=CHANNEL, turns=[
+        Turn(text="we should go with the rubber for the case", speaker="Me", start=3.0),
+    ])
+
+    def verdict_case(label: str, note: str, want_pass: bool,
+                     want_status: str | None = None) -> None:
+        nonlocal failures
+        res = verdict_result(note)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            checks = report(res, verdict_t, [], None, 32768)
+            doc = note_artifact(res, verdict_t, checks, Path("corpus/fix.json"),
+                                Path("out"))
+        ok = checks["passed"] == want_pass
+        if want_status is not None:
+            ok = ok and [c["status"] for c in doc["claims"]] == [want_status]
+        # The artifact must agree with the verdict it was built from rather than
+        # recomputing it, which is the reason `report` returns its checks.
+        ok = ok and doc["passed"] == checks["passed"]
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        if not ok:
+            print(f"          passed={checks['passed']} want={want_pass} "
+                  f"statuses={[c['status'] for c in doc['claims']]}")
+
+    verdict_case("a fabricated quote fails the run, not just the check",
+                 "## Decisions\n- Budget approved.\n  > the budget was approved today",
+                 False, UNSUPPORTED)
+    verdict_case("a located quote passes and is marked verified",
+                 "## Decisions\n- Rubber chosen.\n  > go with the rubber for the case",
+                 True, VERIFIED)
+    verdict_case("a claim with no quote does not fail the run, and is marked unquoted",
+                 "## Decisions\n- Rubber chosen, with nothing offered.", True, UNQUOTED)
+    verdict_case("a quote too short to test does not fail the run",
+                 "## Decisions\n- Rubber.\n  > the case", True, UNTESTABLE)
+
+    # Read order, because that is what a surface renders and the buckets destroy it.
+    ordered = verdict_result(
+        "## Decisions\n"
+        "- Budget approved.\n  > the budget was approved today\n"
+        "- Rubber chosen.\n  > go with the rubber for the case\n")
+    with contextlib.redirect_stdout(io.StringIO()):
+        ordered_checks = report(ordered, verdict_t, [], None, 32768)
+        ordered_doc = note_artifact(ordered, verdict_t, ordered_checks,
+                                    Path("corpus/fix.json"), Path("out"))
+    got_order = [c["status"] for c in ordered_doc["claims"]]
+    order_ok = got_order == [UNSUPPORTED, VERIFIED]
+    failures += not order_ok
+    print(f"  [{'pass' if order_ok else 'FAIL'}] claims keep the order they are read "
+          f"in, not the order they were judged in")
+    if not order_ok:
+        print(f"          got {got_order}")
+
+    # Computed here, after the last control. An earlier version derived it above
+    # the verdict block, so a failure in the newest controls could not move the
+    # summary line — a verdict formed before its evidence arrived, which is the
+    # defect those very controls exist to catch.
     outcome = (
         "all controls behaved as specified" if not failures
         else f"{failures} control(s) wrong"
@@ -1705,6 +2088,9 @@ def main():
                    help="overlap between slices, so a commitment spanning a cut "
                         "survives in one of them")
     p.add_argument("--out", type=Path, help="also write the notes to this file")
+    p.add_argument("--recheck", type=Path, nargs="+", metavar="NOTE.JSON",
+                   help="re-derive the citation check for existing note/1 artifacts "
+                        "without calling a model, and rewrite them in place")
     p.add_argument("--reference", type=Path,
                    help="a list of expected items to measure recall against "
                         "(a platform's own action items, or a human's notes)")
@@ -1712,6 +2098,10 @@ def main():
 
     if args.self_test:
         return run_self_test()
+    if args.recheck:
+        print("\n=== re-derived, no model call ===\n")
+        rechecked = [recheck(a) for a in args.recheck]
+        return 0 if all(d["passed"] for d in rechecked) else 1
     if args.validate_judge:
         v = validate_judge(args.model, args.num_ctx, 300)
         print(f"\n=== recall judge: {v['model']} ===\n")
@@ -1759,11 +2149,24 @@ def main():
                                    args.chunk_words, args.overlap_words)
     else:
         result = summarize(t, args.model, args.num_ctx, args.timeout)
-    passed = report(result, t, stripped_speakers, reference, args.num_ctx, expected)
+    checks = report(result, t, stripped_speakers, reference, args.num_ctx, expected)
 
     if args.out:
         args.out.write_text(result["note"] + "\n")
         print(f"\n  wrote {args.out}")
+        # The artifact, beside the reading copy. `note/1` is what a surface renders:
+        # the markdown alone cannot say which claims were checked or what was found,
+        # and a renderer that re-derived that would become a second authority on it.
+        artifact = args.out.with_suffix(".note.json")
+        transform = ("simulate-bleed" if args.simulate_bleed
+                     else "as-channel" if args.as_channel
+                     else "strip" if args.strip else None)
+        doc = note_artifact(result, t, checks, args.transcript, args.out.parent,
+                            transform)
+        artifact.write_text(json.dumps(doc, indent=2) + "\n")
+        by_status = Counter(c["status"] for c in doc["claims"])
+        print(f"  wrote {artifact} ({len(doc['claims'])} claims: "
+              f"{', '.join(f'{n} {s}' for s, n in by_status.most_common()) or 'none'})")
         if "extracted" in result:
             # Written beside the notes so the two stages can be scored apart.
             # A commitment present here and absent from the notes is a merge
@@ -1773,7 +2176,7 @@ def main():
             items.write_text("\n".join(result["extracted"]) + "\n")
             print(f"  wrote {items} ({len(result['extracted'])} extracted items)")
 
-    return 0 if passed else 1
+    return 0 if checks["passed"] else 1
 
 
 if __name__ == "__main__":
