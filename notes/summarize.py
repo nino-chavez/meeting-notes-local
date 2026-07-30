@@ -757,9 +757,18 @@ def _seq(s: str) -> list[str]:
     than a set test. Punctuation and case are dropped because they are
     transcription artifacts — ASR output has no reliable capitalisation and
     invents commas — and flagging those as fabrication would be the check crying
-    wolf, which this project has already shipped once and had to repair.
+    wolf, which this project has already shipped once and had to repair. Some
+    corpora also put whitespace before English contraction suffixes (`we 'd`,
+    `did n't`) while a model copies the same words as `we'd`, `didn't`. Join only
+    those closed-class suffixes. Do not smooth disfluencies or repeated tokens:
+    those are recorded words, and deleting them is not transcription punctuation.
     """
-    return re.findall(r"[a-z0-9']+", s.lower())
+    normalized = re.sub(
+        r"\s+(?=(?:'(?:s|d|re|ve|ll|m)|n't)\b)",
+        "",
+        s.lower(),
+    )
+    return re.findall(r"[a-z0-9']+", normalized)
 
 
 def locate_exact_quote(quote: str, transcript: Transcript) -> tuple[int, float | None] | None:
@@ -2901,6 +2910,9 @@ def run_self_test() -> int:
              start=12.0),
         Turn(text="the supplier said eight weeks which is too long for us",
              speaker="Them", start=48.5),
+        Turn(text="we 'd have enough data if it 's ready", speaker="Me", start=55.0),
+        Turn(text="we definitely w will need it 'd b it 'd be nice",
+             speaker="Me", start=60.0),
     ])
 
     def cite_case(label: str, note: str, want_ok: bool, **expect) -> None:
@@ -2927,6 +2939,12 @@ def run_self_test() -> int:
     cite_case("punctuation and case differences are transcription artifacts, not fabrication",
               "## Decisions\n- Rubber casing chosen.\n  > Go with the RUBBER, for the case!",
               True, cited=1)
+    cite_case("spaced contraction suffixes are corpus formatting, not different words",
+              "## Decisions\n- Enough data.\n  > we'd have enough data if it's ready",
+              True, cited=1)
+    cite_case("normalization does not delete recorded disfluencies to make a quote fit",
+              "## Decisions\n- More data.\n  > we definitely will need it'd be nice",
+              False, fabricated=1)
     cite_case("a quote that is not in the transcript is caught",
               "## Decisions\n- Budget approved.\n  > the budget was approved unanimously",
               False, fabricated=1)
