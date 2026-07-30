@@ -914,6 +914,15 @@ compares content n-grams. The slots are named in capitals now — if those leak,
 existing check catches them by the mechanism it already has. Choosing the failure an
 existing check can see beats choosing the one that reads better in the prompt.
 
+**The collapsed reading is now a compatibility reader, not an active layout.** Under
+the revised prompt ES2004c produced zero collapsed citations, so if that holds the
+path never fires on a new run and stays exercised only by fixtures. It has to stay:
+artifacts made before the prompt fix still need it, and all three figures in the table
+above were confirmed unchanged by re-running `--recheck` after the reading was bounded.
+The consequence worth stating is that its residual risk — two mid-line arrows in a note
+carrying no citations at all — will now never be observed in production, so the
+fixtures are the only thing standing behind it.
+
 **Re-deriving is part of the artifact contract.** `--recheck` recomputes the citation
 result for a `note/1` artifact from the note text and the transcript, with no model
 call. Correcting the figures above by re-running would have produced *different
