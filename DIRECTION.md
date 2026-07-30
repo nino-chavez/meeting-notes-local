@@ -165,3 +165,28 @@ still empty.
 An earlier version of this note described the shell as an open question. It was
 not — `DESIGN.md` had already decided it with both candidates developed — and
 leaving that phrasing in place had a reader treat a settled call as a live fork.
+
+**The J1 prototype proposed devices, and the ledger stays empty anyway.**
+`docs/prototype/build.py` renders four claim-evidence treatments, a proportional
+trust bar, and an epistemic annotation layer, all designed against the thesis
+above. None of them earns a row. The rule at the top of this file is that a device
+row adjudicates shipped code and cites a file and line on a product surface; the
+prototype is a design instrument whose output is gitignored, and rows for devices
+living only in a generator would be exactly the hypothetical-device ledger this
+record refuses.
+
+The reasoning is instead recorded where those states are defined —
+`docs/screens-and-states.md § E` — which is also where a person building the
+surface will meet it. When a product surface ships them, they arrive here with
+line numbers and get adjudicated then. **Prototyping a device is not shipping
+one, and this file's verdict vocabulary has no word for "drawn once in a test
+harness."**
+
+That sequencing is borrowed rather than invented. `website-nc`'s IA prototype
+acceptance states that a prototype "may use neutral styling. Art direction is a
+separate decision and begins only after this structure is accepted." The
+prototype here went slightly further by harvesting `DESIGN.md`'s tokens instead
+of free-picking a palette — which is the safe direction to err, since a
+free-picked palette is how a surface lands in the generated-design cluster — but
+it settles the note's *structure*, and nothing about it constitutes acceptance of
+a visual direction.

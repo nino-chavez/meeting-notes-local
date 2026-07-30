@@ -170,10 +170,18 @@ def trust_bar(c: dict[str, int]) -> str:
         f'<span class="seg" style="flex:{n};background:{STATES[s][2]}" '
         f'title="{esc(n)} {esc(STATES[s][1])}"></span>'
         for s, n in c.items() if n)
-    checkable = c["verified"]
+    # The label names both numbers a reader acts on. An earlier version gave only the
+    # verified count, which left the segments to carry "how bad is the rest" by colour
+    # and put the number that matters most on a weak note — how many quotes the model
+    # composed — behind a hover. Not a direction breach: the bar is an aggregate of
+    # claims that each carry their own state in words, so `DIRECTION.md`'s rule about
+    # per-item state is not in scope. It was simply under-informing.
+    composed = c["unsupported"]
+    tail = (f', <strong>{composed}</strong> quoted words the model composed'
+            if composed else "")
     return (f'<span class="bar">{segs}</span>'
-            f'<span class="bar-label"><strong>{checkable}</strong> of {total} '
-            f'claims can be checked against the words</span>')
+            f'<span class="bar-label"><strong>{c["verified"]}</strong> of {total} '
+            f'claims can be checked against the words{tail}</span>')
 
 
 def claim_row(claim: dict, i: int, meeting: str) -> str:

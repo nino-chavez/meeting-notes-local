@@ -16,6 +16,92 @@ as complete until a journey crossed it. Read the two together or neither is fini
 
 ---
 
+## The product model, and the two IA rules that do not transfer
+
+Two sibling projects in this workspace have settled IA at a scale this one has not, so
+their patterns were checked against this product rather than adopted. Both of the
+load-bearing ones turn out **not** to apply, and the reason is the same in each case —
+which is worth more than a copied structure would have been.
+
+**What this product is:** an ambient recorder with a reading path attached. The
+menubar item (A) is the primary UI and most sessions never open a window; everything
+else exists so a note can be trusted weeks later. It is not a workspace the operator
+works inside, and it is not a site they navigate.
+
+**Rejected: navigation that mirrors the work in execution order.** film-room's
+`decisions/0004-console-ia-pipeline-page-bar.md` makes its nav the pipeline —
+Ingest → Review → Publish → Handoff — on the reasoning that "a nav that mirrors that
+order removes the translation step between 'where am I in the process' and 'where do I
+click.'" That reasoning is sound and it does not reach here, because **the operator
+executes no stages.** They consent once and leave; the pipeline runs unattended. A
+stage-ordered nav would present a process the operator is not performing. What does
+transfer is the same ADR's second finding, and it transfers intact — see below.
+
+**Rejected: one top-level destination per job.** `website-nc`'s
+`docs/IA-NAVIGATION.md` gives each of five visitor jobs its own route and states that
+the homepage "does not absorb the collections." Here the jobs deliberately share
+surfaces: F is the entry for retrieval (J1) *and* commitment (J2), and E is the detail
+target for J1, J2 and J3 — with J4's stated minimum putting correction there too, since
+it asks for gated turns to be restorable "where the note is read." Splitting those would
+produce four reading surfaces over one corpus. The rule fits a site with deep parallel
+collections; this is one
+chronological stream, and `journeys.md` J2 already decided its case explicitly — the
+commitment view is "a `filtered` view in the sense F already carries, not a new
+template and not a new surface."
+
+**Adopted intact: status is not a destination.** film-room demoted its Jobs page to an
+ambient rail because "nobody's goal is 'go to Jobs'" and ambient-everywhere beats a
+page. This product's equivalent is already right by accident and should be right on
+purpose: capture state lives in A and C and has no page, and the gate's report is
+required to reach E's `ready` state rather than living in a HUD nobody had open.
+Applied as a test, it also confirms K is correctly a surface rather than a rail —
+retention is a *policy the operator decides*, not a status they glance at.
+
+**Adopted intact: art direction begins after the structure is accepted.**
+`website-nc`'s IA prototype acceptance says "the prototype may use neutral styling. Art
+direction is a separate decision and begins only after this structure is accepted."
+`docs/prototype/build.py` harvests `DESIGN.md`'s tokens rather than free-picking a
+palette, which is the safe version of the same rule — but it settles the note's
+structure only. It is not art-direction acceptance, and `DIRECTION.md`'s ledger stays
+empty until a product surface ships a device.
+
+---
+
+## What each surface must not become
+
+Borrowed from `website-nc`'s `docs/IA-NAVIGATION.md`, whose page-responsibility table
+carries a **"Must not become"** column. It is the highest-value device in that file:
+a positive spec says what to build and an anti-pattern says which plausible-looking
+drift is already ruled out, and the second is what a later reader needs.
+
+**Every cell cites a decision recorded elsewhere in this file or in `journeys.md`.** A
+table of eleven invented anti-patterns would read as a mood, which is the failure the
+direction contract rejects. Where nothing has been decided, the cell says so — an empty
+cell is information.
+
+| Surface | Must not become | Recorded at |
+|---|---|---|
+| A. Menubar item | An indicator whose `recording` and `degraded` readings look alike; or one that moves when no audio is arriving | A's load-bearing rule; `DIRECTION.md` § no ambient motion |
+| B. Detection notification | A notice that starts capturing while it is still being read — the countdown *is* the consent window and cannot be zero — or one that re-asks after a decline in the same session | B's `countdown` and `declined` rows |
+| C. Recording HUD | A dialog. `tap-lost`, `device-changed` and `drift` are expected across a 60-minute capture and recording continues degraded | "Modeling them as modals is the error that makes the tool untrustworthy in the exact moment it matters" |
+| D. Live note surface | A transcript viewer — the operator's own typing is the point — or a surface that hard-fails when ASR is unavailable | D's opening line; `queued` |
+| E. Note detail | A note whose claims are reordered by trust, or one that treats a missing summary as an error instead of showing the transcript | E § read order; `summary-failed` is "a first-class state, not an error" |
+| F. Notes library | A task manager. A checkbox here means the tool owns follow-through and the operator has two task systems | `journeys.md` J2 |
+| G. Settings | A permissions list that presents the calendar grant as ordinary, when it is the one grant the product must apologise for | G § calendar is a third grant |
+| H. First run | A welcome graphic, or a flow that picks a retention period on the operator's behalf | `DIRECTION.md` FIRST VIEWPORT; K § the period "has no default this document may pick" |
+| I. Voice enrolment | A form that asks for a threshold, or one where an overridden enrolment looks complete | I § "It must not ask for a number"; "`experimental` must not look like `enrolled`" |
+| J. Shell startup failure | Anything that fails before a window the operator can read | J § "never fail before rendering an operator-readable window" |
+| K. Retention and disk | A settings toggle buried in G. It is a standing statement about material belonging to people who never agreed to anything | K § `holding`; "why this outranks every interface question in this file" |
+
+**No cell here is empty, and that is a finding rather than a relief.** Eleven surfaces
+each already carried a recorded prohibition, which means the anti-patterns were being
+decided all along and filed as prose next to the decision that produced them. Nothing
+gathered them where a person building the surface would meet them. That is the same
+failure this file's own header describes — a primitive missing at one level being
+patched at another.
+
+---
+
 ## A. Menubar item
 
 Always present. The primary UI — most sessions never open a window.
@@ -192,6 +278,30 @@ runs reported **PASS while carrying four composed quotes**: the checker had misf
 them as "no quote offered", which does not fail a run. An aggregate verdict is exactly
 the shape that hides this, which is the argument for showing the state per claim
 rather than summarising it.
+
+**The treatment of those four states is decided here, and it is constrained rather than
+chosen.** `docs/prototype/build.py` renders them; the reasoning belongs beside the
+states themselves, not in the generator.
+
+- `verified` takes `semantic-success`, `unsupported` takes `semantic-error`. That is
+  `DESIGN.md`'s own escalation rule — "if a warning genuinely needs color, it is an
+  error and takes `semantic-error`" — and a composed quote is the most serious thing
+  this file reports.
+- `untestable` and `unquoted` both take `semantic-warning`, which resolves to
+  `neutral-300` with no hue. Not a compromise: an amber here would compete with the
+  live-capture accent, which is the one reading the product exists to make trustworthy.
+- **The accent appears nowhere on this surface.** Nothing here is live capture, so the
+  rule that reserves it forbids its use even where a designer would reach for emphasis.
+- Each state carries a mark and a word as well as a colour, so the two states sharing
+  the neutral hue are distinguishable without it.
+
+**The aggregate proportion is not held to the same rule, and the distinction is worth
+stating.** F's row and E's header show a proportional bar whose segments are colour
+only. `DIRECTION.md`'s prohibition on state carried by colour alone is grounded in
+`recording` versus `degraded` at menubar size — per-item state a person must read at a
+glance. A bar is an aggregate of items that each already carry their word, so it sits
+outside that rule. Its label still has to name the numbers that matter, which is a
+legibility requirement rather than a direction one.
 
 **Rendered in read order, never sorted by state.** Sorting by trust would hide how
 much of a note is unsupported, which is the lying-by-omission failure `journeys.md`
