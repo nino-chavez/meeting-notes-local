@@ -581,6 +581,7 @@ def _parse_claims(note: str) -> list[dict]:
         1 for i, line in enumerate(lines)
         if (m := _LIST_ITEM.match(line)) and _SAME_LINE.match(m.group("body")))
     read_collapsed = not has_below and collapsed_shaped >= 2
+    layout = "next-line" if has_below else "collapsed" if read_collapsed else "none"
 
     out, i, section = [], 0, None
     while i < len(lines):
@@ -599,7 +600,14 @@ def _parse_claims(note: str) -> list[dict]:
             i += 2
         else:
             if read_collapsed and (collapse := _SAME_LINE.match(claim)):
-                claim, quote = collapse.group("claim"), collapse.group("quote")
+                # The extraction format separates an item from its evidence with a
+                # pipe and the note format uses a blockquote. The consolidator, holding
+                # both contracts, emitted `claim | > quote` — keeping one separator and
+                # adding the other — so every claim in a chunked note carried a
+                # trailing pipe. Stripped here because it is punctuation from a format,
+                # never part of what was claimed.
+                claim = collapse.group("claim").rstrip(" \t|")
+                quote = collapse.group("quote")
             i += 1
         wrapped = bool(w := _WRAPPED.match(claim))
         if w:
@@ -609,7 +617,8 @@ def _parse_claims(note: str) -> list[dict]:
         # caller that needs to excise one asks rather than recomputing it.
         end = offsets[i] if i < len(lines) else len(note)
         out.append({"claim": claim, "quote": quote, "at": at, "end": end,
-                    "wrapped": wrapped, "type": _claim_type(section)})
+                    "wrapped": wrapped, "type": _claim_type(section),
+                    "layout": layout})
     return out
 
 
@@ -745,6 +754,9 @@ def check_citations(note: str, transcript: Transcript) -> dict:
     # count, not an evidence state: it says the instruction leaked, which is a thing
     # to fix in the prompt and not a thing the operator has to reason about.
     wrapped = sum(1 for it in items if it["wrapped"])
+    # One value for the note: the parser decides the layout per note, so every item
+    # agrees and reading it off the first is not a sample.
+    layout = items[0]["layout"] if items else "none"
     # The invariant that would have caught the two-parser defect: every item the
     # parser found lands in exactly one bucket. When the buckets are allowed to
     # disagree about what they cover, items go missing into whichever one is benign.
@@ -758,6 +770,7 @@ def check_citations(note: str, transcript: Transcript) -> dict:
         "unverifiable": unverifiable,
         "uncited": uncited,
         "template_echo": wrapped,
+        "layout": layout,
     }
 
 
@@ -1515,6 +1528,13 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
         if cites["unverifiable"]:
             print(f"  citations     {len(cites['unverifiable'])} quote(s) too short to "
                   f"test — neither evidence nor fabrication")
+        if cites["layout"] == "collapsed":
+            # Not a failure — the checker reads both — but the contract asks for the
+            # quote on its own line, and which layout a model produced has been the
+            # hardest thing here to state precisely because the evidence was a note
+            # somebody had to look at. Recorded so it stops being anecdote.
+            print("  citations     quotes arrived on the claim's own line, not below "
+                  "it — the contract asks for below")
         if cites["uncited"]:
             print(f"  citations     {len(cites['uncited'])} item(s) carry no quote, "
                   f"so nothing can be traced back to the words")
@@ -2056,6 +2076,31 @@ def run_self_test() -> int:
               "## Risks\n- A.\n", ["risks"])
     type_case("an item before any heading has no kind rather than a guessed one",
               "- A.\n## Decisions\n- B.\n", [None, "decision"])
+
+    # The third layout, produced by the consolidator holding both contracts at once: it
+    # kept the extraction format's pipe AND added the note format's blockquote marker,
+    # so every claim in a chunked note carried a trailing pipe into the artifact.
+    cite_case("a claim does not keep the separator the model left on it",
+              "## Decisions\n"
+              "- Rubber chosen. | > go with the rubber for the case\n"
+              "- Lead time long. | > the supplier said eight weeks which is too long\n",
+              True, cited=2, layout="collapsed")
+    got = check_citations(
+        "## Decisions\n"
+        "- Rubber chosen. | > go with the rubber for the case\n"
+        "- Lead time long. | > the supplier said eight weeks which is too long\n", cite_t)
+    pipe_ok = all(not r["claim"].endswith("|") for r in got["cited"])
+    failures += not pipe_ok
+    print(f"  [{'pass' if pipe_ok else 'FAIL'}] and the claim text itself is clean")
+    if not pipe_ok:
+        print(f"          got {[r['claim'] for r in got['cited']]}")
+
+    # The layout a note used, recorded rather than eyeballed later.
+    cite_case("the next-line layout is recorded as such",
+              "## Decisions\n- Rubber chosen.\n  > go with the rubber for the case",
+              True, layout="next-line")
+    cite_case("a note with no citations at all records no layout",
+              "## Decisions\n- Rubber chosen.", True, layout="none")
     #  The verdict has to move, or none of the above changes a run's outcome.
     verdict_note = "## Decisions\n- Budget approved.\n  > the budget was approved"
     cite_case("a fabricated citation is not advisory", verdict_note, False)

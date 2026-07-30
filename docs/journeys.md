@@ -488,26 +488,33 @@ The correction is borrowed from the operator's own, made when a redesign stayed 
 to the site it was replacing: *"you are too grounded in what we already have and i can't
 trust you are building a net new design."*
 
-### Three candidate structures, tested against the notes on disk
+### Three candidate note structures, tested against the notes on disk
+
+Not to be confused with the three candidate *journey* structures above, which chose the
+unit this whole file is organised by. That question was "what is a journey about"; this
+one is "what shape is a note", and it is downstream of the answer — C → B → A was chosen
+precisely so retrieval would get to constrain the note.
 
 **The evidence first, because it decides the comparison.** The current structure
-produced 11, 15 and 83 items on the three real meetings, against a human reference that
-segments the same meetings into **5, 7 and 5 subjects**. Two separate problems hide in
-the 83, and they had to be told apart before any structure could be judged:
+produces 11, 15 and 55 items on the three real meetings, against a human reference that
+segments the same meetings into **5, 7 and 5 subjects**. Two separate problems hid in the
+longest, and they had to be told apart before any structure could be judged:
 
-- **17% of it was duplication.** Extraction produced 160 items with one redundant pair;
-  consolidating them produced 83 with **14 exact repeats**. The merge pass was
-  introducing duplication rather than resolving it, and only on the chunked path. Fixed
-  and counted (`dedupe_items`), which brings the real figure to 69.
-- **69 is still an order of magnitude above 5.** So the count is not only an artifact,
-  and "Decisions" holding 44 entries in a research meeting is a section name inviting
-  the model to file discussion as settlement.
+- **Duplication, since fixed.** The merge pass was repeating itself — 160 extracted items
+  consolidating into 83 of which 14 were exact repeats, on the chunked path only.
+  `dedupe_items` strips and counts them, and a re-run under the revised citation prompt
+  produced 55 items with zero repeats, so the prompt turned out to fix the cause too.
+  Full account in `notes/EVAL.md`.
+- **55 is still an order of magnitude above 5**, so the count was never only an artifact.
+  A "Decisions" section holding 14 entries and an "Action items" section holding 27 in a
+  research meeting is a section name inviting the model to file discussion as
+  settlement.
 
 **Candidate A — keep type-first sections.** Summary, Decisions, Action items, Open
 questions, as the model emits them. Serves J2 directly: Action items *is* the answer.
 Costs nothing to keep, and the DECISION/ACTION/QUESTION vocabulary already exists in the
 extraction pass and is measured. **Where it fails:** the item count grows with meeting
-length, so at 69 the note cannot be read in one pass — and a subject's information is
+length, so at 55 the note cannot be read in one pass — and a subject's information is
 scattered across all three sections, which is exactly J1's entry. "What did we decide
 about disk storage" means scanning three lists.
 
@@ -547,7 +554,7 @@ order for J1, with no further model call. The markdown keeps its three sections,
 that is now one rendering among several rather than the structure.
 
 **What did not, and why it is the honest boundary.** Grouping by *subject* is what would
-make a 69-claim note readable, and nothing extracts a subject. Candidate B's risk does
+make a 55-claim note readable, and nothing extracts a subject. Candidate B's risk does
 not disappear by being deferred — it becomes a measurement someone has to run. Recorded
 as its own open gap above rather than folded into this decision.
 

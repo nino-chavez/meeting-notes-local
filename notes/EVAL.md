@@ -959,10 +959,43 @@ wrong layer.** At Jaccard ≥ 0.6 the 160 extracted items contain **4** near-dup
 pairs. The overlap window exists so a commitment spanning a slice boundary survives in
 one of them, and it is doing that job. The repetition is the merge pass on a long list.
 
-**The count is now trustworthy and still an order of magnitude off.** 69 real items
+**Re-run under the revised prompt, and the duplication was gone.** Same command, same
+input, 16 slices: **55 items, zero repeats, zero template punctuation**, in 312s against
+the earlier run's 588s. So the caps-slot prompt fixed three things at once — bracket
+echo, the note's length, and the repetition — and `dedupe_items` fired on nothing. It
+stays, because the defect it covers was real and measured, and because artifacts made
+before the prompt change still carry it.
+
+| | old prompt | revised prompt |
+|---|---|---|
+| items | 83 | 55 |
+| exact repeats | 14 | 0 |
+| verified | 33 (40%) | 20 (36%) |
+| template punctuation | 83 of 83 | 0 |
+| layout | collapsed | collapsed |
+
+**What it did not fix: the layout, or the verification rate.** Quotes still arrive on the
+claim's own line rather than below it, and roughly a third verify either way.
+
+**And it traded one leak for another — the third in a row.** Specifying the citation
+format by example has now leaked three different things into the notes: real prose from
+the first example, came back as a decision the meeting reached; angle brackets from the
+second, on 83 of 83 claims; and now a **trailing pipe on all 55**, because the
+consolidator holds both the extraction contract (which separates an item from its
+evidence with a pipe) and the note contract (which uses a blockquote), and emitted
+`claim | > quote` — keeping one separator and adding the other.
+
+The lesson is not that a fourth example will be the right one. **A model given a format
+template copies the template's punctuation**, so the parser has to tolerate the family
+and the claim text has to be cleaned mechanically rather than asked for cleanly. Both are
+now in `_parse_claims`, and each note records which `layout` it used so run-to-run
+variation is a field rather than something a person has to eyeball.
+
+**The count is trustworthy now and still an order of magnitude off.** 55 real items
 against a human reference that segments the same meeting into **5** subjects. So
-duplication was 17% of the problem and not the problem: "Decisions" holding 44 entries in
-a research meeting is a section name inviting the model to file discussion as settlement.
+duplication was part of the problem and not the problem: a "Decisions" section holding
+14 entries and an "Action items" section holding 27 in a research meeting is a section
+name inviting the model to file discussion as settlement.
 
 **And the sections were the data model.** The extraction pass labels every item DECISION,
 ACTION or QUESTION; the consolidator turns the label into a markdown heading; by the time
