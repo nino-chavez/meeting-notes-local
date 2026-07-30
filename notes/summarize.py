@@ -106,24 +106,34 @@ them, complete them, or join words from different parts of the transcript. At
 least five words, or it proves nothing."""
 
 QUOTE_FROM_ITEMS = """
-Every item you were given begins with the spoken words that item rests on, then a
-pipe, then a label and the item itself. The two sides of the pipe are not
-interchangeable. Before the pipe are words somebody said, and they must be
-reproduced exactly. After it is the item, and that is yours to merge and reword.
+Every item you were given is a label, then the item, then a pipe, then the spoken
+words that item rests on. The two sides of the pipe are not interchangeable. Before
+the pipe is the item, and that is yours to merge and reword. After it are words
+somebody said, and they must be reproduced exactly.
 
 Write the item on its own line and carry the spoken words across unchanged on the
-next line, indented, starting with the > character — the reader meets the item
-first and its evidence underneath. Never write a quote of your own: you have not
-seen the transcript, so anything you compose is invented. An item that arrived
-with no spoken words before a pipe gets no quoted line at all."""
-# Naming which side of the pipe is which also repairs a defect recorded against the
-# previous version, which said only "carry those words across". The consolidator
-# swapped the fields on Proposed items — extraction produced `ACTION: write down
-# error message | maybe we should write it down` and the note came back reading
-# `- Maybe we should write it down | write down error message`, quoting the summary
-# as though it were speech. An instruction that says "carry the words" without
-# saying which words are the spoken ones leaves the model to infer it from meaning,
-# and on a hedged item the hedge reads more like speech than the summary does.
+next line, indented, starting with the > character. Never write a quote of your
+own: you have not seen the transcript, so anything you compose is invented. An item
+that arrived with nothing after its pipe gets no quoted line at all."""
+# Naming which side of the pipe is which repairs a defect recorded against an earlier
+# version, which said only "carry those words across". The consolidator swapped the
+# fields on Proposed items — extraction produced `ACTION: write down error message |
+# maybe we should write it down` and the note came back reading `- Maybe we should
+# write it down | write down error message`, quoting the summary as though it were
+# speech. An instruction that says "carry the words" without saying which words are
+# the spoken ones leaves the model to infer it from meaning, and on a hedged item the
+# hedge reads more like speech than the summary does.
+#
+# **This pass is fed claim-first even though extraction now writes quote-first**, and
+# the two orders are deliberate rather than an oversight. Handing the consolidator its
+# items in the order it must emit them makes merging a near-copy; handing it the
+# inverted order makes every item a transposition performed while merging, and an 8B
+# model given that job dropped the quotes rather than moving them. Measured: 227
+# extracted items, every one of them quote-first, consolidated into 86 note items
+# carrying **zero** quotes, where the same pass on claim-first input had produced 93
+# items all carrying one. The inversion is free where it belongs — in generation,
+# where it decides what the claim is conditioned on — and expensive anywhere else, so
+# `summarize_chunked` normalises between the two stages.
 #
 # The example above is a shape, not a sentence, and that is deliberate. The first
 # version illustrated it with real prose — "The team settled on the rubber casing"
@@ -599,8 +609,12 @@ _BLOCKQUOTE = re.compile(r"^[ \t]*>[ \t]*(?P<quote>\S.*?)[ \t]*$")
 # a bucket that does not fail a run. A pipe-separated note is the same situation with a
 # different character: 93 located quotes on one meeting would read as absent. The rule
 # recorded then applies now — a model given a format template copies the template's
-# punctuation, and the pipe is in the template, because `QUOTE_FROM_ITEMS` tells the
-# consolidator that "every item you were given ends with a pipe".
+# punctuation, and the pipe is in the template, because `QUOTE_FROM_ITEMS` describes an
+# item list whose fields are pipe-separated.
+#
+# Which side of that separator holds speech is an assumption, not something the line
+# says, and the extraction order flipping made it a live one. `check_citations` counts
+# how often it is wrong rather than guessing per item.
 _SAME_LINE = re.compile(r"^(?P<claim>.*?\S)[ \t]+(?P<sep>[>|])[ \t]*(?P<quote>\S.*)$")
 # Leftover template punctuation around a claim, stripped for comparison and counted
 # so the leak stays visible instead of being quietly cleaned up.
@@ -842,6 +856,22 @@ def check_citations(note: str, transcript: Transcript) -> dict:
     # agrees and reading it off the first is not a sample.
     layout = items[0]["layout"] if items else "none"
     separator = items[0]["separator"] if items else None
+    # A collapsed line has two sides and no marker saying which is speech. `_SAME_LINE`
+    # assumes the contract's reading order — claim, separator, quote — and that
+    # assumption is now load-bearing in a way it was not: the consolidator's *input*
+    # runs the other way round, quote first, so a model copying its input's shape onto
+    # one line would put speech on the left and every quote here would read as invented.
+    #
+    # Counted rather than corrected. Swapping the sides on evidence would change the
+    # measured fabrication rate in the same run that changes the prompt, and there
+    # would be no way to say which moved it. This says how many collapsed items locate
+    # only when read backwards; if it is large the parser is wrong, and `--recheck`
+    # exists to move the judgement without regenerating the note.
+    reversed_locatable = sum(
+        1 for it in items
+        if it["layout"] == "collapsed" and it["quote"] is not None
+        and locate(it["quote"]) is None and locate(it["claim"]) is not None
+    )
     # The invariant that would have caught the two-parser defect: every item the
     # parser found lands in exactly one bucket. When the buckets are allowed to
     # disagree about what they cover, items go missing into whichever one is benign.
@@ -858,6 +888,7 @@ def check_citations(note: str, transcript: Transcript) -> dict:
         "layout": layout,
         "separator": separator,
         "repeats": repeats,
+        "reversed_locatable": reversed_locatable,
     }
 
 
@@ -1663,12 +1694,14 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
                 # invented — a structural guarantee of fabrication, arriving because
                 # a requirement was added to a contract both passes share.
                 #
-                # Rewritten into the contract's order regardless of the order the
-                # model used, so the consolidator is never handed two shapes to tell
-                # apart. Reading both orders is for counting what the model did; the
-                # downstream pass gets one.
+                # Normalised to claim-first regardless of the order the model wrote in,
+                # for two reasons. The consolidator is never handed two shapes to tell
+                # apart — reading both orders is for counting what the model did, not
+                # for passing on. And claim-first is the order the consolidator emits,
+                # which keeps its job a copy rather than a transposition; see the note
+                # above `QUOTE_FROM_ITEMS` for what happened when it was not.
                 claim = f"{item['label']}: {item['text']}"
-                items.append(f"{item['quote']} | {claim}" if item["quote"] else claim)
+                items.append(f"{claim} | {item['quote']}" if item["quote"] else claim)
 
     listing = "\n".join(items) if items else "(no items were extracted)"
     user = f"Items extracted from the meeting, in order:\n\n{listing}\n\nWrite the notes."
@@ -1848,6 +1881,13 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
                                                                        "an unknown mark")
             print(f"  citations     quotes arrived on the claim's own line after {sep}, "
                   f"not below it — the contract asks for below")
+        if cites["reversed_locatable"]:
+            # Read this before believing the fabrication count above it. These items
+            # have real speech on the wrong side of the separator, so they are being
+            # scored as invented by a parser assumption rather than by the model.
+            print(f"  citations     {cites['reversed_locatable']} collapsed item(s) locate "
+                  f"only when read backwards — the claim is in the transcript and the "
+                  f"quote is not, so the sides are swapped")
         if cites["uncited"]:
             print(f"  citations     {len(cites['uncited'])} item(s) carry no quote, "
                   f"so nothing can be traced back to the words")
@@ -2109,6 +2149,13 @@ def recheck(artifact: Path) -> dict:
           f"{', '.join(f'{n} {s}' for s, n in by.most_common())}")
     if cites["template_echo"]:
         print(f"      {cites['template_echo']} claim(s) carried template punctuation")
+    if cites["reversed_locatable"]:
+        # Printed here as well as in `report`, and this is the place it matters more:
+        # re-deriving is how a parser assumption gets corrected against a note that
+        # has already been generated, so the count that says the assumption is wrong
+        # has to reach the person running the correction.
+        print(f"      {cites['reversed_locatable']} collapsed item(s) locate only when "
+              f"read backwards — the sides of the separator are swapped")
     if was != doc["passed"]:
         print(f"      verdict moved: passed {was} -> {doc['passed']}")
     return doc
@@ -2618,6 +2665,23 @@ def run_self_test() -> int:
     cite_case("and a lone mid-line arrow in a note with no citations is left alone",
               "## Decisions\n- Throughput target set at > 100 requests per second.",
               True, uncited=1, cited=0, fabricated=0)
+    # Which side of a collapsed line holds speech is an assumption, and the extraction
+    # order flipping under it made that assumption worth measuring. The note below is
+    # the failure it would produce: real quotes on the left, summaries on the right,
+    # scored as two fabrications by the parser rather than by the model.
+    # Both items are misread, and they land in *different* buckets — one fabricated,
+    # one untestable, because a short summary reads as a quote too short to test. Only
+    # the first fails a run. That is the shape of every blind spot this file has had:
+    # the swapped reading does not announce itself, it distributes itself across a
+    # failing bucket and a benign one. `reversed_locatable` counts both.
+    cite_case("speech on the wrong side of the separator is counted, not silently "
+              "scored as invented",
+              "## Decisions\n"
+              "- go with the rubber for the case | Rubber casing chosen.\n"
+              "- the supplier said eight weeks which is too long | Lead time too long.\n",
+              False, fabricated=1, unverifiable=1, cited=0, reversed_locatable=2)
+    cite_case("and a note read the right way round reports none",
+              collapsed_note, True, reversed_locatable=0)
     # The invariant, asserted from outside rather than trusted from the assert inside:
     # buckets that are allowed to disagree about their coverage lose items into
     # whichever one is benign, and `uncited` is benign.
@@ -2935,6 +2999,18 @@ def main():
             f"{args.transcript} not found.\n"
             "Fetch the evaluation corpus first:  python notes/fetch_corpus.py"
         )
+
+    # Checked here rather than where it is written, which is after the model work.
+    # `--out notes/out` cost six minutes of local inference on a 1365-turn meeting and
+    # then died on the last statement, and because `report` had already printed, the
+    # log ended in a full set of checks and looked like a run that had succeeded. Every
+    # precondition that can be tested without spending anything belongs before the
+    # spending, not beside the use.
+    if args.out and args.out.is_dir():
+        raise SystemExit(f"--out takes a file, and {args.out} is a directory. "
+                         f"Try --out {args.out / args.transcript.stem}.md")
+    if args.out and not args.out.parent.exists():
+        raise SystemExit(f"--out {args.out}: {args.out.parent} does not exist.")
 
     t = load(args.transcript)
     reference = None

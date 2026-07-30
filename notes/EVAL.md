@@ -1406,3 +1406,44 @@ alongside the aggregate.
 5. **The order the model actually used is the gate on all of the above.** `report` now
    prints it. If most lines come back claim-first, the inversion did not happen and
    nothing below that line is evidence about inversion.
+
+### The inversion is free where it belongs and expensive one stage later
+
+The extraction pass complied completely: **227 items, every one of them quote-first,
+none dropped**, against 160 items in the old order. The label mix moved as far as the
+order did — 81 PROPOSAL where the contract had previously made 0 possible, and DECISION
+falling from 72 to 45. A model that reads the words first files far less of what it hears
+as settled.
+
+The merge then threw the evidence away. **86 note items carrying zero quotes**, where the
+same pass on claim-first input had produced 93 items all carrying one.
+
+The cause is not the instruction, it is the shape of the job. Feeding the consolidator
+`<words> | LABEL: <claim>` while asking it to emit the claim on one line and the words
+on the next makes every one of 227 items a transposition performed during a merge. On
+claim-first input the same pass is close to a copy. An 8B model given the transposition
+dropped the harder half of each pair rather than moving it.
+
+So `summarize_chunked` normalises between the stages: the model still *writes*
+quote-first, which is where the order decides what the claim is conditioned on, and the
+consolidator is handed the order it has to emit. The two orders in one pipeline are the
+point rather than an inconsistency.
+
+**This is the second time a repair to one pass silently broke the contract of the next**,
+and both times the break landed in `uncited` — the bucket that does not fail a run. The
+first was `QUOTE_FROM_TRANSCRIPT` being appended to a shared contract, which asked the
+consolidator for verbatim quotes from a transcript it had never seen. A pipeline whose
+stages share prompt fragments needs the fragment's claims about the *previous* stage
+re-checked whenever that stage changes, and neither time did any control catch it.
+
+### A precondition tested after the money was spent
+
+All three runs did the full model work, printed a complete set of checks, and then died
+writing output: `--out` takes a file and was given a directory. Six minutes of local
+inference on a 1365-turn meeting, discarded on the last statement — and because `report`
+had already printed, the log ended in a full checks block and read as a successful run.
+
+The findings above survive that, because they were printed rather than written. The fix
+is not the path: it is that `--out` is now validated immediately after argument parsing,
+before anything is spent. Any precondition testable for free belongs before the cost, not
+beside the use.
