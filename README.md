@@ -15,14 +15,58 @@ Core Audio process tap, your microphone comes through the same path
 > documents deciding what gets built. Start with
 > [`spike/RESULTS.md`](./spike/RESULTS.md) and [`notes/EVAL.md`](./notes/EVAL.md).
 >
-> **Usable today** for a call taken on headphones with nobody else in the room. An
-> open microphone records the room into the transcript; the voiceprint gate that
-> fixes that is now built and wired, needs two minutes of enrolment, and has never
+> **The bounded CLI path works today** for a call taken on headphones with nobody
+> else in the room. It is not an app or a beta. An open microphone records the room
+> into the transcript; the voiceprint gate intended to fix that is wired in, requires
+> calibrated material from more than one sitting plus another voice, and has never
 > been tried on a real conversation. See [Limits](#limits).
 >
-> **The next run that matters** is exactly that: enrol, take one real meeting on
-> headphones, and read the note. Nothing to read aloud, nothing playing in the
-> background — [the commands are here](#keeping-the-room-out-of-your-half).
+> **The next product gate** is a real-content click-through of the whole encounter:
+> consent, capture, note, evidence, correction and deletion. Application
+> implementation starts after the operator reviews that encounter. The next human
+> evidence is then to enrol, take one real meeting on headphones, and read the note.
+> [The capture commands are here](#keeping-the-room-out-of-your-half).
+
+---
+
+## Product goal and delivery gates
+
+**Goal:** make a local macOS product that quietly captures a meeting, then lets the
+operator recover what was decided and promised without trusting an unsupported
+summary. Every note claim must lead back to the retained words behind it. Withheld
+speech, capture gaps and deleted audio remain visible rather than being rewritten as
+certainty.
+
+The first supported beta is deliberately narrow:
+
+- macOS 14.4 or later;
+- manual start and stop;
+- headphones, with one enrolled operator at the microphone;
+- local, post-meeting transcription and note generation;
+- a library and note reader with claim-to-transcript evidence;
+- correction of withheld turns, note regeneration, a chosen audio auto-deletion
+  period and immediate deletion.
+
+Speaker playback, live transcription, calendar preparation, automatic meeting
+detection, named participants, cross-meeting search and product-development
+inference stay outside that promise. They remain research or later product work.
+
+| Phase | Work an agent can complete | Human gate |
+|---|---|---|
+| Correctness floor | Close profile, provenance and structured-note contract defects; keep deterministic controls green | None |
+| Product encounter | Build a click-through from real capture and note artifacts, including failure and recovery states | Operator reviews it cold and approves the interaction |
+| Narrow application | Build the Tauri shell, Rust-owned session state, Swift capture sidecar, local worker, private storage and post-meeting processing | Operator exercises permissions and hardware capture |
+| Trust actions | Restore withheld speech, regenerate a note, choose retention, inspect disk use and delete audio or a meeting | Operator chooses the far-end notice and retention policy, then performs each action |
+| Limited beta | Package, sign, install cold and run a canary followed by real headphone meetings | Participants consent; the operator judges whether the notes are useful |
+| General availability | Prove recovery, updates, fresh-machine permissions and the supported envelope across beta use | Release decision uses beta evidence; passing tests alone cannot make it |
+
+Work may run in parallel only where the evidence remains separable. Note-contract
+correctness, profile/provenance hardening and click-through choreography can proceed
+independently. After the encounter is approved, the Rust session supervisor, Swift
+sidecar packaging, local worker protocol and approved interface can proceed in
+isolated worktrees against shared fixtures. Product implementation does not run ahead
+of the encounter, and no agent can supply consent, approve its own design, create a
+real meeting, judge a note useful or authorize Apple signing.
 
 ---
 
