@@ -37,11 +37,18 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "notes"))
+sys.path.insert(0, str(REPO / "spike"))
 
+from capture_health import UNKNOWN_WARNING as CAPTURE_INTEGRITY_UNKNOWN_WARNING  # noqa: E402
+from capture_health import build as build_capture_health  # noqa: E402
+from capture_health import validate as validate_capture_health  # noqa: E402
+from capture_health import warning as capture_health_warning  # noqa: E402
 from summarize import (  # noqa: E402
     NOTE_SCHEMAS,
     _seq,
@@ -52,7 +59,7 @@ from summarize import (  # noqa: E402
     validate_evidence_contract,
     validate_support_measurement,
 )
-from transcript import load  # noqa: E402  (needs the path above)
+from transcript import Transcript, load  # noqa: E402  (needs the path above)
 
 sys.path.insert(0, str(REPO / "spike"))
 
@@ -135,7 +142,7 @@ def tokens() -> dict[str, str]:
     return out
 
 
-def transcript_for(doc: dict, note_path: Path):
+def transcript_for(doc: dict, note_path: Path) -> Transcript:
     """The transcript in the exact transformed shape the evidence coordinates count.
 
     `transform` is applied here rather than assumed. A claim's `turn` is a position in
@@ -184,6 +191,27 @@ def transcript_for(doc: dict, note_path: Path):
     return t
 
 
+def reconcile_capture_provenance(
+    doc: dict,
+    transcript: Transcript,
+    note_path: Path,
+) -> dict:
+    """Derive missing legacy fields and refuse copied provenance that disagrees."""
+    expected = {
+        "capture_health": deepcopy(transcript.capture_health),
+        "capture_integrity_unknown": transcript.capture_integrity_unknown,
+        "capture_warnings": list(transcript.capture_warnings),
+    }
+    reconciled = dict(doc)
+    for field, value in expected.items():
+        if field in doc and doc[field] != value:
+            raise SystemExit(
+                f"{note_path.name}: note {field} disagrees with its retained transcript"
+            )
+        reconciled[field] = value
+    return reconciled
+
+
 def esc(s) -> str:
     return html.escape(str(s), quote=True)
 
@@ -211,6 +239,138 @@ def note_annotation(status: str, body: str) -> str:
     """
     return (f'<p class="annot annot-{esc(status)}">'
             f'<span class="annot-tag">{esc(status)}</span>{body}</p>')
+
+
+def capture_warning_markup(doc: dict, *, compact: bool = False) -> str:
+    """Render persisted capture warnings, refusing an artifact that hides failure."""
+    warnings = doc.get("capture_warnings") or []
+    if not isinstance(warnings, list) or not all(
+        isinstance(warning, str) and warning.strip() for warning in warnings
+    ):
+        raise SystemExit("note artifact capture_warnings must be a list of text")
+    integrity_unknown = doc.get("capture_integrity_unknown", False)
+    if not isinstance(integrity_unknown, bool):
+        raise SystemExit("note artifact capture_integrity_unknown must be boolean")
+    if (
+        integrity_unknown
+        and CAPTURE_INTEGRITY_UNKNOWN_WARNING not in warnings
+    ):
+        raise SystemExit(
+            "note artifact records unknown capture integrity but does not carry its "
+            "canonical warning"
+        )
+    health = doc.get("capture_health")
+    if health is not None:
+        try:
+            usable = validate_capture_health(health, transcript_context=True)
+            expected_health_warning = capture_health_warning(
+                health, transcript_context=True
+            )
+        except ValueError as exc:
+            raise SystemExit(f"note artifact has invalid capture_health: {exc}") from None
+        if not usable and expected_health_warning not in warnings:
+            raise SystemExit(
+                "note artifact records failed capture health but does not carry its "
+                "canonical warning"
+            )
+    if not warnings:
+        return ""
+    if compact:
+        return (
+            f'<span class="lib-capture" title="{esc(" | ".join(warnings))}">'
+            f'capture warning &middot; {len(warnings)} issue'
+            f'{"s" if len(warnings) != 1 else ""}</span>'
+        )
+    items = "".join(f"<li>{esc(warning)}</li>" for warning in warnings)
+    return (
+        '<aside class="capture-warning" role="alert">'
+        "<strong>Capture warning</strong>"
+        f"<ul>{items}</ul>"
+        "</aside>"
+    )
+
+
+def check_capture_warning_renderer() -> None:
+    """Synthetic control for the artifact-to-banner seam real corpus data lacks."""
+    health = build_capture_health(
+        mic_samples=16_000,
+        system_samples=16_000,
+        capture_elapsed_samples=16_000,
+        dropouts={
+            "mic": [{"at_s": 0.2, "detail": "input overflow"}],
+            "system": [],
+        },
+        tap_errors=[],
+        transcription_requested=True,
+        transcript_written=True,
+    )
+    warning = capture_health_warning(health, transcript_context=True)
+    fixture = {"capture_health": health, "capture_warnings": [warning]}
+    rendered = capture_warning_markup(fixture)
+    if 'role="alert"' not in rendered or esc(warning) not in rendered:
+        raise SystemExit(
+            "capture warning fixture did not survive the note-artifact banner renderer"
+        )
+    hidden = {"capture_health": health, "capture_warnings": []}
+    try:
+        capture_warning_markup(hidden)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("failed capture health rendered without a warning")
+
+    legacy = {
+        "capture_health": None,
+        "capture_integrity_unknown": True,
+        "capture_warnings": [CAPTURE_INTEGRITY_UNKNOWN_WARNING],
+    }
+    legacy_rendered = capture_warning_markup(legacy)
+    if (
+        'role="alert"' not in legacy_rendered
+        or esc(CAPTURE_INTEGRITY_UNKNOWN_WARNING) not in legacy_rendered
+    ):
+        raise SystemExit(
+            "legacy unknown-integrity warning did not survive the banner renderer"
+        )
+    legacy["capture_warnings"] = []
+    try:
+        capture_warning_markup(legacy)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("unknown capture integrity rendered without a warning")
+
+    with tempfile.TemporaryDirectory(prefix="capture-warning-builder-") as tmp:
+        fixture_dir = Path(tmp)
+        transcript_path = fixture_dir / "transcript.json"
+        transcript_path.write_text(json.dumps({
+            "source": "capture legacy fixture",
+            "attribution": "channel",
+            "turns": [],
+        }))
+        note_path = fixture_dir / "legacy.note.json"
+        note_doc = {"transcript": "transcript.json", "transform": None}
+        retained = transcript_for(note_doc, note_path)
+        reconciled = reconcile_capture_provenance(note_doc, retained, note_path)
+        retained_banner = capture_warning_markup(reconciled)
+        if (
+            'role="alert"' not in retained_banner
+            or esc(CAPTURE_INTEGRITY_UNKNOWN_WARNING) not in retained_banner
+        ):
+            raise SystemExit(
+                "a legacy note did not recover capture provenance from its transcript"
+            )
+        stripped = dict(
+            note_doc,
+            capture_health=None,
+            capture_integrity_unknown=False,
+            capture_warnings=[],
+        )
+        try:
+            reconcile_capture_provenance(stripped, retained, note_path)
+        except SystemExit:
+            return
+    raise SystemExit("a note was allowed to contradict its retained transcript")
 
 
 def trust_bar(c: dict[str, int]) -> str:
@@ -447,9 +607,13 @@ def check_locators(doc: dict, transcript, note_path: Path) -> None:
             )
 
 
-def meeting_section(doc: dict, note_path: Path) -> tuple[str, dict]:
+def meeting_section(
+    doc: dict,
+    note_path: Path,
+    transcript: Transcript,
+    capture_doc: dict,
+) -> tuple[str, dict]:
     m = doc["meeting"]
-    transcript = transcript_for(doc, note_path)
     turns = transcript.turns
     check_locators(doc, transcript, note_path)
     c = counts(doc)
@@ -464,6 +628,7 @@ def meeting_section(doc: dict, note_path: Path) -> tuple[str, dict]:
     prov = doc["provenance"]
 
     support = doc.get("support")
+    capture_warning = capture_warning_markup(capture_doc)
     claims = "".join(claim_row(cl, i, m["id"], support)
                      for i, cl in enumerate(doc["claims"]))
     path = ("two passes over "
@@ -480,6 +645,7 @@ def meeting_section(doc: dict, note_path: Path) -> tuple[str, dict]:
     <h3>{esc(m["id"])}</h3>
     <p class="meta">{meta}</p>
     <div class="trust">{trust_bar(c)}</div>
+    {capture_warning}
   </header>
   <div class="split">
     <div class="col">
@@ -505,8 +671,9 @@ def meeting_section(doc: dict, note_path: Path) -> tuple[str, dict]:
 </section>''', c)
 
 
-def library_row(doc: dict) -> str:
+def library_row(doc: dict, capture_doc: dict) -> str:
     m, c = doc["meeting"], counts(doc)
+    capture_warning = capture_warning_markup(capture_doc, compact=True)
     return f'''
     <li class="lib-row">
       <span class="lib-ident">
@@ -515,6 +682,7 @@ def library_row(doc: dict) -> str:
         <span class="lib-turns">{esc(m["turns"])} turns</span>
         <span class="lib-date" title="corpus meetings carry no date; a real capture
           records captured_at">no date</span>
+        {capture_warning}
       </span>
       <span class="lib-trust">{trust_bar(c)}</span>
     </li>'''
@@ -1205,6 +1373,8 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
                border-bottom: 1px solid var(--neutral-600); }}
   .lib-src, .lib-turns, .lib-date {{ color: var(--neutral-400); font-size: 12px; }}
   .lib-date {{ font-style: italic; }}
+  .lib-capture {{ color: var(--semantic-error); font-size: 11px;
+                  flex-basis: 100%; }}
 
   .bar {{ display: flex; height: 6px; border-radius: 3px; overflow: hidden;
           background: var(--neutral-800); }}
@@ -1219,6 +1389,12 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   .mhead .meta {{ color: var(--neutral-400); font-size: 12px; margin: 0 0 10px;
                   font-family: var(--mono); }}
   .trust {{ max-width: 380px; margin-bottom: 4px; }}
+  .capture-warning {{ max-width: 78ch; margin: 14px 0 4px;
+                      padding: 12px 14px; background: var(--surface-raised);
+                      border-left: 2px solid var(--semantic-error);
+                      border-radius: 0 4px 4px 0; }}
+  .capture-warning strong {{ color: var(--semantic-error); }}
+  .capture-warning ul {{ margin: 6px 0 0; padding-left: 18px; }}
   .split {{ display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
             align-items: start; margin-top: 18px; }}
   /* The evidence column stays put while the claims scroll past it. A note has far
@@ -2505,6 +2681,7 @@ def check_encounter_wiring(page_html: str) -> int:
 
 
 def main() -> int:
+    check_capture_warning_renderer()
     # A directory argument, so the renderer can be exercised against a fixture without
     # writing into the directory holding real meeting artifacts.
     out_dir = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else OUT_DIR
@@ -2530,9 +2707,11 @@ def main() -> int:
             validate_artifact_pair(doc, path)
         except ValueError as e:
             raise SystemExit(f"{path}: note pair refused: {e}") from e
-        section, c = meeting_section(doc, path)
+        transcript = transcript_for(doc, path)
+        capture_doc = reconcile_capture_provenance(doc, transcript, path)
+        section, c = meeting_section(doc, path, transcript, capture_doc)
         sections.append(section)
-        library.append(library_row(doc))
+        library.append(library_row(doc, capture_doc))
         for k, v in c.items():
             totals[k] += v
 

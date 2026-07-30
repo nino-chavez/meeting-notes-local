@@ -2163,22 +2163,144 @@ def _ground_truth_controls() -> bool:
         #     And it reaches the artifact, which is where a later reader looks to
         #     find out whether the mic leg holds the operator or whoever was audible.
         gated_p = d / "transcript-gated.json"
+        capture_fixture_health = dc.capture_health(
+            mic_samples=dc.RATE,
+            system_samples=dc.RATE,
+            capture_elapsed_samples=dc.RATE,
+            dropouts={
+                "mic": [{"at_s": 0.2, "detail": "input overflow"}],
+                "system": [],
+            },
+            tap_errors=[],
+            transcription_requested=True,
+            transcript_written=True,
+        )
         dc.write_transcript(gated_p, [(1.0, 4.0, "Me", "something said")], clean_b,
-                            dc.voiceprint_provenance(vp, rep))
+                            dc.voiceprint_provenance(vp, rep),
+                            capture_health=capture_fixture_health)
         wrote = json.loads(gated_p.read_text())
         check("the transcript carries what gated the microphone leg",
               (wrote["voiceprint"]["applied"], wrote["voiceprint"]["n_sittings"],
                wrote["voiceprint"]["rejected"]), (True, 2, 1),
               shown="applied, 2 sittings, 1 dropped")
+        check("the transcript carries final capture health, not acquisition-only state",
+              (wrote["schema"],
+               wrote["capture_health"]["usable"],
+               wrote["capture_health"]["transcription"]["transcript_written"]),
+              (dc.CAPTURE_TRANSCRIPT_SCHEMA, False, True),
+              shown="current schema, failed integrity, transcript written")
         #     And the notes half surfaces it. A warning that stops at the JSON is the
         #     same failure one layer down from a warning that stops at the terminal.
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notes"))
         import summarize
+        import transcribe_file as tf
         import transcript as nt
 
         loaded_note = nt.load_capture(gated_p)
         check("the notes loader carries the gate report through",
               bool(loaded_note.gate) and loaded_note.gate["rejected"] == 1)
+        check("and carries capture failure into a human warning",
+              (loaded_note.capture_health == capture_fixture_health
+               and any("timeline has gaps" in w
+                       for w in loaded_note.capture_warnings)), True)
+        tampered_doc = json.loads(gated_p.read_text())
+        tampered_health = tampered_doc["capture_health"]
+        tampered_health["legs"]["mic"]["samples"] = 0
+        tampered_health["usable"] = True
+        tampered_health["requirements"] = {
+            key: True for key in tampered_health["requirements"]
+        }
+        tampered_health["blockers"] = []
+        tampered_p = d / "transcript-tampered-health.json"
+        tampered_p.write_text(json.dumps(tampered_doc))
+        try:
+            nt.load_capture(tampered_p)
+        except ValueError:
+            tamper_refused = True
+        else:
+            tamper_refused = False
+        check("a coordinated health verdict flip is re-derived and refused",
+              tamper_refused, True)
+        no_health_doc = json.loads(gated_p.read_text())
+        no_health_doc.pop("capture_health")
+        no_health_p = d / "transcript-current-without-health.json"
+        no_health_p.write_text(json.dumps(no_health_doc))
+        try:
+            nt.load_capture(no_health_p)
+        except ValueError:
+            missing_current_health_refused = True
+        else:
+            missing_current_health_refused = False
+        check("deleting health from a current capture transcript is refused",
+              missing_current_health_refused, True)
+
+        context_contradiction = dc.capture_health(
+            mic_samples=dc.RATE,
+            system_samples=dc.RATE,
+            capture_elapsed_samples=dc.RATE,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=True,
+        )
+        try:
+            dc.write_transcript(
+                d / "transcript-unrequested.json",
+                [(1.0, 4.0, "Me", "something said")],
+                clean_b,
+                capture_health=context_contradiction,
+            )
+        except ValueError:
+            unrequested_transcript_refused = True
+        else:
+            unrequested_transcript_refused = False
+        check("transcript context requires both requested and written evidence",
+              unrequested_transcript_refused, True)
+
+        legacy_doc = json.loads(gated_p.read_text())
+        legacy_doc.pop("schema")
+        legacy_doc.pop("capture_health")
+        legacy_p = d / "transcript-legacy.json"
+        legacy_p.write_text(json.dumps(legacy_doc))
+        legacy_note = nt.load_capture(legacy_p)
+        check("a schema-less legacy capture remains readable only with an "
+              "integrity-unknown warning",
+              (legacy_note.capture_integrity_unknown,
+               nt.CAPTURE_INTEGRITY_UNKNOWN_WARNING
+               in legacy_note.capture_warnings),
+              (True, True))
+
+        qmsum_p = d / "qmsum-generic.json"
+        qmsum_p.write_text(json.dumps({
+            "meeting_transcripts": [
+                {"speaker": "A", "content": "generic corpus words"},
+            ],
+            "general_query_list": [],
+        }))
+        generic_note = nt.load(qmsum_p)
+        check("generic corpus input does not inherit a capture warning",
+              (generic_note.capture_integrity_unknown,
+               generic_note.capture_warnings),
+              (False, []))
+        recording_p = d / "recording-generic.json"
+        recording_doc = tf.transcript_document(
+            "fixture",
+            [{"start": 0.0, "speaker": None, "text": "recorded words"}],
+        )
+        recording_p.write_text(json.dumps(recording_doc))
+        recording_note = nt.load(recording_p)
+        check("the repo's file transcriber emits an explicit generic schema",
+              (recording_doc["schema"],
+               recording_note.capture_integrity_unknown,
+               recording_note.capture_warnings),
+              (nt.FILE_TRANSCRIPT_SCHEMA, False, []))
+        recording_doc.pop("schema")
+        recording_p.write_text(json.dumps(recording_doc))
+        legacy_recording_note = nt.load(recording_p)
+        check("its schema-less legacy output also remains generic, not a dual capture",
+              (legacy_recording_note.capture_integrity_unknown,
+               legacy_recording_note.capture_warnings),
+              (False, []))
 
         #     The substrate keeps every word; the renderer decides what the model
         #     sees. Both halves have to hold, or the change from delete-to-mark
@@ -2188,7 +2310,8 @@ def _ground_truth_controls() -> bool:
             (1.0, 4.0, "Me", "the part he said", False, None, None),
             (5.0, 8.0, "Me", "the part someone else said", True, 0.21,
              "below_profile"),
-        ], clean_b, dc.voiceprint_provenance(vp, rep))
+        ], clean_b, dc.voiceprint_provenance(vp, rep),
+                            capture_health=capture_fixture_health)
         marked_doc = json.loads(both_p.read_text())
         check("a gated turn stays in the artifact, with its score",
               (len(marked_doc["turns"]), marked_doc["turns"][1]["gate_score"]),

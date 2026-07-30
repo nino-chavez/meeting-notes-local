@@ -70,10 +70,13 @@ substitute a plausible constant for a measured one.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
+import stat
 import sys
+import tempfile
 import wave
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1130,6 +1133,25 @@ def runtime_versions() -> dict:
     return out
 
 
+def _private_profile_partial(path: Path) -> tuple[int, Path]:
+    """Create an empty same-directory partial already restricted to its owner."""
+    fd, name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".partial",
+        dir=path.parent,
+    )
+    try:
+        # mkstemp creates 0600, and fchmod pins that contract before the first
+        # biometric byte is written even if the platform default ever changes.
+        os.fchmod(fd, 0o600)
+    except Exception:
+        os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(name)
+        raise
+    return fd, Path(name)
+
+
 def save_profile(
     path: Path,
     profile: Profile,
@@ -1164,6 +1186,7 @@ def save_profile(
         raise ValueError(f"{path.parent} is not an existing output directory")
     _finite("cohesion", profile.cohesion, -1.0, 1.0)
     _finite("spread", profile.spread, 0.0, 2.0)
+    seconds = _finite("seconds", profile.seconds, 0.0)
     centroid = _profile_centroid(profile.centroid)
     if encoder_fingerprint_value is not None and model_dir is not None:
         raise ValueError(
@@ -1213,7 +1236,7 @@ def save_profile(
         "centroid": centroid.tolist(),
         "n_enrolled": profile.n_enrolled,
         "n_excluded": profile.n_excluded,
-        "seconds": round(profile.seconds, 2),
+        "seconds": round(seconds, 2),
         "cohesion": round(profile.cohesion, 4),
         "spread": round(profile.spread, 4),
         "threshold": threshold,
@@ -1231,14 +1254,28 @@ def save_profile(
         verify_provenance(path, doc)
     except SystemExit as exc:
         raise ValueError(str(exc)) from None
-    # Owner-only, and written through a temporary file in the same directory so an
-    # interrupted write cannot leave a half-parsed profile where a whole one was.
-    # A voiceprint is biometric: it is not a secret the way a password is, but it
-    # identifies a person and it does not need to be world-readable to work.
-    tmp = path.with_suffix(path.suffix + ".partial")
-    tmp.write_text(json.dumps(doc, indent=2) + "\n")
-    tmp.chmod(0o600)
-    tmp.replace(path)
+    # Serialization is part of validation. Do it before creating even the private
+    # partial so an unserialisable direct-call input cannot touch the filesystem.
+    serialized = json.dumps(doc, indent=2) + "\n"
+    # Owner-only from the instant the partial exists, and written beside the target
+    # so replacement is atomic. chmod-after-write leaves a biometric record at the
+    # caller's umask until the write finishes, and permanently if the process dies
+    # in between.
+    fd, tmp = _private_profile_partial(path)
+    try:
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1  # ownership moved to handle
+        with handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        path.chmod(0o600)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
 
 
 def verify_provenance(path: Path, doc: dict) -> None:
@@ -1900,6 +1937,52 @@ def run_self_test() -> int:
             good_operator_scores,
             0.05,
             good_negative_scores,
+        )
+
+        partial_fd, partial_path = _private_profile_partial(pp)
+        try:
+            partial_is_private_before_content = (
+                stat.S_IMODE(os.fstat(partial_fd).st_mode) == 0o600
+                and os.fstat(partial_fd).st_size == 0
+            )
+        finally:
+            os.close(partial_fd)
+            partial_path.unlink()
+        check(
+            "the profile partial is owner-only before any biometric content is written",
+            partial_is_private_before_content,
+        )
+
+        valid_profile_bytes = pp.read_bytes()
+        nonfinite_seconds = Profile(
+            centroid=operator.centroid,
+            n_enrolled=operator.n_enrolled,
+            n_excluded=operator.n_excluded,
+            seconds=float("nan"),
+            cohesion=operator.cohesion,
+            spread=operator.spread,
+        )
+        malformed_seconds_refused = _raises(
+            lambda: save_profile(
+                pp,
+                nonfinite_seconds,
+                selected_target=0.05,
+                operator_scores=good_operator_scores,
+                negative_scores=good_negative_scores,
+                held_out="leave-one-sitting-out",
+                sittings=good_sittings,
+                negative_sources=good_negative_sources,
+                experimental=False,
+                encoder_fingerprint_value=fixture_fingerprint,
+            ),
+            (SystemExit, ValueError),
+        )
+        check(
+            "non-finite profile seconds are refused before an existing profile is "
+            "mutated",
+            malformed_seconds_refused
+            and pp.read_bytes() == valid_profile_bytes
+            and not list(pp.parent.glob(f".{pp.name}.*.partial")),
         )
         check(
             "a profile round-trips through the file with its centroid intact",

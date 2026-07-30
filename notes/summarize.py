@@ -25,7 +25,7 @@ Usage:
     python notes/summarize.py notes/corpus/ES2004c.json
     python notes/summarize.py notes/corpus/ES2004c.json --strip
     python notes/summarize.py notes/corpus/ES2004c.json --simulate-bleed
-    python notes/summarize.py spike/out/transcript.json
+    python notes/summarize.py ~/meeting-smoke/transcript.json
     python notes/summarize.py --self-test
 """
 
@@ -46,6 +46,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 
 from transcript import CHANNEL, NAMED, NONE, Transcript, Turn, load, qmsum_reference
@@ -3303,7 +3304,7 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
     # whether the notes say more than the transcript supports; this asks whether
     # the transcript itself is short of the meeting. A reader who does not know
     # that words were removed will read a gap as a meeting that had none.
-    for warning in transcript.gate_warnings:
+    for warning in transcript.capture_warnings:
         print(f"  capture       {warning}")
 
     if ctx["ok"] is None:
@@ -4134,7 +4135,13 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
         # Repair 4's durable ID and coverage graph. It retains references, labels,
         # and exact-span metadata but no second transcript.
         **({"evidence": result["evidence_contract"]} if structured else {}),
-        "capture": transcript.gate,
+        "capture": deepcopy(transcript.gate),
+        # Separate from the voiceprint report above. A capture may retain words while
+        # failing its integrity floor, and a moved/exported note must not turn those
+        # gaps into an apparently complete meeting.
+        "capture_health": deepcopy(transcript.capture_health),
+        "capture_integrity_unknown": transcript.capture_integrity_unknown,
+        "capture_warnings": list(transcript.capture_warnings),
         "provenance": {
             "model": result["model"],
             "model_identity": result.get("model_identity"),
@@ -4539,12 +4546,72 @@ CHANNEL_SELF_TEST = [
 def run_self_test() -> int:
     failures = 0
     print("=== capture provenance survives transcript transforms ===\n")
+    health_fixture = {
+        "schema": "capture-health/1",
+        "usable": False,
+        "requirements": {
+            "both_legs_reached_one_capture_block": True,
+            "continuous_timelines": False,
+            "tap_reported_no_errors": True,
+            "legs_cover_same_capture_span": True,
+            "both_legs_cover_observed_capture_span": True,
+            "transcript_written_when_requested": True,
+        },
+        "legs": {
+            "mic": {
+                "samples": 16000,
+                "duration_s": 1.0,
+                "dropouts": [{"at_s": 0.2, "detail": "input overflow"}],
+            },
+            "system": {
+                "samples": 16000,
+                "duration_s": 1.0,
+                "dropouts": [],
+                "tap_errors": [],
+            },
+        },
+        "transcription": {"requested": True, "transcript_written": True},
+        "timing": {
+            "capture_elapsed_samples": 16000,
+            "capture_elapsed_s": 1.0,
+            "leg_sample_difference": 0,
+            "allowed_leg_sample_difference": 32001,
+            "wall_shortfall_samples": {"mic": 0, "system": 0},
+            "allowed_wall_shortfall_samples": 32001,
+            "clock_drift_ppm": 50,
+        },
+        "blockers": [{
+            "code": "driver_dropout",
+            "leg": "mic",
+            "count": 1,
+            "detail": "mic reported lost samples, so its timeline has gaps",
+        }],
+    }
     captured = Transcript(
         source="capture fixture",
         attribution=CHANNEL,
         turns=[Turn(text="visible words", speaker="Me", start=1.0)],
         gated_turns=[Turn(text="withheld words", speaker="Me", start=2.0)],
         gate={"applied": True, "rejected": 1, "rejected_seconds": 1.0},
+        capture_health=health_fixture,
+    )
+    malformed_direct_health = deepcopy(health_fixture)
+    malformed_direct_health["legs"]["mic"]["samples"] = 0
+    try:
+        Transcript(
+            source="malformed direct fixture",
+            attribution=CHANNEL,
+            turns=[],
+            capture_health=malformed_direct_health,
+        )
+    except ValueError:
+        direct_health_refused = True
+    else:
+        direct_health_refused = False
+    failures += not direct_health_refused
+    print(
+        f"  [{'pass' if direct_health_refused else 'FAIL'}] direct Transcript "
+        "construction re-derives health before an API caller can persist it"
     )
     derived = {
         "strip": captured.strip_attribution(),
@@ -4552,16 +4619,49 @@ def run_self_test() -> int:
         "bleed": captured.simulate_bleed(),
         "chunk": chunk_transcript(captured, target_words=1, overlap_words=0)[0],
     }
-    kept = all(d.gate == captured.gate and len(d.gated_turns) == 1
-               and d.gate_warnings for d in derived.values())
+    kept = all(
+        d.gate == captured.gate
+        and d.capture_health == captured.capture_health
+        and not d.capture_integrity_unknown
+        and len(d.gated_turns) == 1
+        and d.capture_warnings
+        for d in derived.values()
+    )
     failures += not kept
     print(f"  [{'pass' if kept else 'FAIL'}] every derived transcript keeps the "
-          "gate report, warning, and withheld turn")
+          "health evidence, gate report, warnings, and withheld turn")
     derived["strip"].gate["rejected"] = 99
-    isolated = captured.gate["rejected"] == 1
+    derived["strip"].capture_health["blockers"][0]["detail"] = "mutated"
+    isolated = (
+        captured.gate["rejected"] == 1
+        and captured.capture_health["blockers"][0]["detail"]
+        == "mic reported lost samples, so its timeline has gaps"
+    )
     failures += not isolated
     print(f"  [{'pass' if isolated else 'FAIL'}] a derived view cannot mutate the "
-          "capture's gate report")
+          "capture's health or gate report")
+    legacy = Transcript(
+        source="legacy capture fixture",
+        attribution=CHANNEL,
+        turns=[Turn(text="legacy words", speaker="Me", start=1.0)],
+        capture_integrity_unknown=True,
+    )
+    legacy_views = (
+        legacy.strip_attribution(),
+        legacy.as_channel(),
+        legacy.simulate_bleed(),
+        chunk_transcript(legacy, target_words=1, overlap_words=0)[0],
+    )
+    legacy_kept = all(
+        view.capture_integrity_unknown
+        and view.capture_warnings == legacy.capture_warnings
+        for view in legacy_views
+    )
+    failures += not legacy_kept
+    print(
+        f"  [{'pass' if legacy_kept else 'FAIL'}] legacy unknown-integrity "
+        "provenance survives every transcript transform"
+    )
 
     print("=== attribution check, positive and negative controls ===\n")
     for label, note, speakers, expect_ok in SELF_TEST:
@@ -5101,9 +5201,18 @@ def run_self_test() -> int:
                        "response": {"prompt_eval_count": 500}}],
         }
 
-    verdict_t = Transcript(source="fixture", attribution=CHANNEL, turns=[
-        Turn(text="we should go with the rubber for the case", speaker="Me", start=3.0),
-    ])
+    verdict_t = Transcript(
+        source="fixture",
+        attribution=CHANNEL,
+        turns=[
+            Turn(
+                text="we should go with the rubber for the case",
+                speaker="Me",
+                start=3.0,
+            ),
+        ],
+        capture_health=health_fixture,
+    )
 
     def verdict_case(label: str, note: str, want_pass: bool,
                      want_status: str | None = None) -> None:
@@ -5153,6 +5262,39 @@ def run_self_test() -> int:
           f"in, not the order they were judged in")
     if not order_ok:
         print(f"          got {got_order}")
+    artifact_capture_ok = (
+        ordered_doc["capture_health"] == verdict_t.capture_health
+        and not ordered_doc["capture_integrity_unknown"]
+        and ordered_doc["capture_warnings"] == verdict_t.capture_warnings
+    )
+    ordered_doc["capture_health"]["blockers"][0]["detail"] = "mutated"
+    artifact_capture_ok = (
+        artifact_capture_ok
+        and verdict_t.capture_health["blockers"][0]["detail"]
+        == "mic reported lost samples, so its timeline has gaps"
+    )
+    failures += not artifact_capture_ok
+    print(f"  [{'pass' if artifact_capture_ok else 'FAIL'}] the note artifact snapshots "
+          "capture health and its human warning")
+    with contextlib.redirect_stdout(io.StringIO()):
+        legacy_checks = report(ordered, legacy, [], None, 32768)
+        legacy_doc = note_artifact(
+            ordered,
+            legacy,
+            legacy_checks,
+            Path("capture/transcript.json"),
+            Path("out"),
+        )
+    legacy_artifact_ok = (
+        legacy_doc["capture_integrity_unknown"] is True
+        and legacy_doc["capture_health"] is None
+        and legacy_doc["capture_warnings"] == legacy.capture_warnings
+    )
+    failures += not legacy_artifact_ok
+    print(
+        f"  [{'pass' if legacy_artifact_ok else 'FAIL'}] the note artifact "
+        "persists legacy unknown-integrity provenance"
+    )
 
     print("\n=== structured note transport ===\n")
 

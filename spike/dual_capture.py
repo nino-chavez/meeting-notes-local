@@ -46,6 +46,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
+from capture_health import MAX_CLOCK_DRIFT_PPM as HARDWARE_DRIFT_PPM
+from capture_health import RATE
+from capture_health import TRANSCRIPT_SCHEMA as CAPTURE_TRANSCRIPT_SCHEMA
+from capture_health import build as capture_health
+from capture_health import validate as validate_capture_health
 
 try:
     import sounddevice as sd
@@ -56,7 +61,6 @@ except ModuleNotFoundError:
     # on a machine with an audio stack is a control that stops being run.
     sd = None
 
-RATE = 16_000
 REPO = Path(__file__).resolve().parent.parent
 TAP_BIN = REPO / "capture" / "audiotee" / ".build" / "release" / "audiotee"
 DEFAULT_CAPTURE_ROOT = (
@@ -78,11 +82,6 @@ BLEED_MAX_LAG_S = 0.5
 # labels cleared while the gate still deletes the operator to protect them.
 BLEED_CONTAMINATED_R = 0.5
 BLEED_MODERATE_R = 0.25
-
-# Independent hardware clocks typically differ by tens of ppm, so a run has to
-# resolve that scale before it can report a drift value rather than a bound.
-HARDWARE_DRIFT_PPM = 50
-
 
 def open_private_binary(path: Path):
     """Open a capture artifact for replacement with owner-only permissions."""
@@ -295,6 +294,7 @@ class TapLeg(Leg):
         self._tail = b""   # half a sample carried between pipe reads
         self.stderr_reader = None
         self.log_lines = []
+        self.stream_failures = []
         self._stop = threading.Event()
 
     def start(self):
@@ -318,9 +318,24 @@ class TapLeg(Leg):
         while not self._stop.is_set():
             try:
                 raw = os.read(fd, 1 << 16)
-            except OSError:
+            except OSError as exc:
+                if not self._stop.is_set():
+                    self.stream_failures.append({
+                        "message_type": "fatal",
+                        "data": {
+                            "message": "system-audio stream read failed before stop",
+                            "error": str(exc),
+                        },
+                    })
                 break
             if not raw:
+                if not self._stop.is_set():
+                    self.stream_failures.append({
+                        "message_type": "fatal",
+                        "data": {
+                            "message": "system-audio stream ended before capture stop",
+                        },
+                    })
                 break
             # s16le mono -> float32 in [-1, 1), matching sounddevice's dtype.
             #
@@ -359,10 +374,11 @@ class TapLeg(Leg):
 
     def tap_error(self):
         """Upstream reports failures as JSON on stderr; surface them verbatim."""
-        return [
+        reported = [
             entry for entry in self.log_lines
             if entry.get("message_type") in ("error", "fatal")
         ]
+        return reported + list(self.stream_failures)
 
 
 class MicLeg(Leg):
@@ -408,6 +424,17 @@ class MicLeg(Leg):
 
     def stop(self):
         if self.stream:
+            try:
+                active = self.stream.active
+            except Exception as exc:
+                self.dropouts.append(
+                    (time.monotonic(), f"microphone stream state unreadable: {exc}")
+                )
+            else:
+                if not active:
+                    self.dropouts.append(
+                        (time.monotonic(), "microphone stream ended before capture stop")
+                    )
             self.stream.stop()
             self.stream.close()
             self.stream = None
@@ -1076,7 +1103,53 @@ def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
     }
 
 
-def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
+def _dropout_evidence(leg) -> list[dict]:
+    """Put driver timeline gaps on the leg's own relative clock."""
+    if not leg.dropouts:
+        return []
+    origin = leg.arrivals[0][0] if leg.arrivals else leg.dropouts[0][0]
+    return [
+        {"at_s": round(float(when - origin), 3), "detail": str(detail)}
+        for when, detail in leg.dropouts
+    ]
+
+
+def capture_health_for_legs(
+    mic_leg,
+    tap_leg,
+    *,
+    mic_samples: int,
+    system_samples: int,
+    capture_elapsed_samples: int,
+    transcription_requested: bool,
+    transcript_written: bool,
+    tap_errors: list[dict] | None = None,
+) -> dict:
+    """Read the live leg diagnostics into the persisted health contract."""
+    return capture_health(
+        mic_samples=mic_samples,
+        system_samples=system_samples,
+        capture_elapsed_samples=capture_elapsed_samples,
+        dropouts={
+            "mic": _dropout_evidence(mic_leg),
+            "system": _dropout_evidence(tap_leg),
+        },
+        tap_errors=tap_leg.tap_error() if tap_errors is None else tap_errors,
+        transcription_requested=transcription_requested,
+        transcript_written=transcript_written,
+    )
+
+
+def report(
+    mic_leg,
+    tap_leg,
+    args,
+    out_dir,
+    *,
+    capture_elapsed_samples,
+    phases=None,
+    shown_at=None,
+):
     mic = mic_leg.audio()
     tap = tap_leg.audio()
 
@@ -1167,8 +1240,20 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
                        out_dir / "mic.wav", len(mic),
                        out_dir / "system.wav", len(tap), shown_at)
 
+    def finish_health(transcript_written: bool) -> dict:
+        return capture_health_for_legs(
+            mic_leg,
+            tap_leg,
+            mic_samples=len(mic),
+            system_samples=len(tap),
+            capture_elapsed_samples=capture_elapsed_samples,
+            tap_errors=errors,
+            transcription_requested=not args.no_transcribe,
+            transcript_written=transcript_written,
+        )
+
     if args.no_transcribe:
-        return
+        return finish_health(False)
 
     print("\n=== transcript ===")
     t0 = time.monotonic()
@@ -1204,14 +1289,20 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
 
     if not merged:
         print("  (no speech detected on either leg)")
-        return
+        return finish_health(False)
 
     # The artifact lands before the 1200 lines of console output, not after.
     # When this ran the other way round, a crash while serialising discarded
     # four and a half minutes of transcription that had already succeeded —
     # the expensive work was complete and unrecoverable because the cheap
     # step downstream of it failed.
-    write_transcript(out_dir / "transcript.json", merged, b, gating)
+    # This is the final health state of a run that is about to write its transcript,
+    # not the earlier acquisition-only state. Recording `transcript_written: false`
+    # inside the transcript itself would turn the provenance into a contradiction.
+    final_health = finish_health(True)
+    write_transcript(
+        out_dir / "transcript.json", merged, b, gating, capture_health=final_health
+    )
 
     if contaminated(b):
         print(
@@ -1225,6 +1316,7 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
         mark = f"  [gated {t.gate_score:+.3f}]" if t.gated else ""
         print(f"  [{int(t.start // 60):02d}:{t.start % 60:05.2f}] "
               f"{t.label:4s} {t.text}{mark}")
+    return final_health
 
 
 def sha256(path):
@@ -1235,16 +1327,122 @@ def sha256(path):
     return h.hexdigest()
 
 
-def write_session_manifest(out_dir: Path, status: str, started_at: str) -> dict:
+def reconcile_capture_artifacts(out_dir: Path, health: dict) -> dict:
+    """Prove that persisted artifacts are the evidence the health document names."""
+    validate_capture_health(health)
+    receipt = {"legs": {}, "transcript": None}
+    for leg_name, filename in (("mic", "mic.wav"), ("system", "system.wav")):
+        path = out_dir / filename
+        if not path.is_file():
+            raise ValueError(f"cannot finalize capture: {filename} is missing")
+        try:
+            with wave.open(str(path), "rb") as wav:
+                channels = wav.getnchannels()
+                sample_rate = wav.getframerate()
+                sample_width = wav.getsampwidth()
+                frames = wav.getnframes()
+                encoded = wav.readframes(frames)
+        except (EOFError, OSError, wave.Error) as exc:
+            raise ValueError(
+                f"cannot finalize capture: {filename} is not a readable WAV ({exc})"
+            ) from None
+        if channels != 1 or sample_rate != RATE or sample_width != 2:
+            raise ValueError(
+                f"cannot finalize capture: {filename} is {channels} channel(s) at "
+                f"{sample_rate} Hz with {sample_width}-byte samples, expected mono "
+                f"{RATE} Hz 16-bit PCM"
+            )
+        readable_frames = len(encoded) // (channels * sample_width)
+        if len(encoded) != frames * channels * sample_width:
+            raise ValueError(
+                f"cannot finalize capture: {filename} declares {frames} frames but "
+                f"only {readable_frames} are readable"
+            )
+        expected = health["legs"][leg_name]["samples"]
+        if frames != expected:
+            raise ValueError(
+                f"cannot finalize capture: {filename} has {frames} samples but "
+                f"capture health records {expected}"
+            )
+        receipt["legs"][leg_name] = {
+            "name": filename,
+            "samples": frames,
+            "sha256": sha256(path),
+        }
+
+    transcript_path = out_dir / "transcript.json"
+    transcription = health["transcription"]
+    if transcription["transcript_written"]:
+        if not transcript_path.is_file():
+            raise ValueError(
+                "cannot finalize capture: health records a transcript but "
+                "transcript.json is missing"
+            )
+        try:
+            transcript_doc = json.loads(transcript_path.read_text())
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"cannot finalize capture: transcript.json is unreadable ({exc})"
+            ) from None
+        if transcript_doc.get("schema") != CAPTURE_TRANSCRIPT_SCHEMA:
+            raise ValueError(
+                "cannot finalize capture: transcript.json has no recognized current "
+                "capture schema"
+            )
+        transcript_health = transcript_doc.get("capture_health")
+        try:
+            validate_capture_health(transcript_health, transcript_context=True)
+        except ValueError as exc:
+            raise ValueError(
+                f"cannot finalize capture: transcript health is invalid ({exc})"
+            ) from None
+        if transcript_health != health:
+            raise ValueError(
+                "cannot finalize capture: transcript health does not match session health"
+            )
+        receipt["transcript"] = {
+            "name": "transcript.json",
+            "sha256": sha256(transcript_path),
+        }
+    elif transcript_path.exists():
+        raise ValueError(
+            "cannot finalize capture: transcript.json exists but health says no "
+            "transcript was written"
+        )
+    return receipt
+
+
+def write_session_manifest(
+    out_dir: Path,
+    status: str,
+    started_at: str,
+    health: dict | None = None,
+) -> dict:
     """Atomically mark whether one unique capture directory is usable.
 
     The directory is created before audio devices open, so a crash can leave a
-    legitimate partial recording. Absence of a transcript is not enough to call
-    that failure: ``--no-transcribe`` intentionally writes none. This manifest is
-    the one machine-readable completion boundary.
+    legitimate partial recording. ``complete`` is guarded here, at the persistence
+    boundary, rather than trusted from a caller: it requires explicit health
+    evidence whose integrity floors all passed. ``failed`` means the process
+    reached finalization but the evidence says the result is not a usable capture.
+    ``incomplete`` is reserved for a run that never reached finalization, and
+    ``abandoned`` for a take the operator or protocol deliberately stopped.
     """
-    if status not in {"incomplete", "complete", "abandoned"}:
+    if status not in {"incomplete", "complete", "failed", "abandoned"}:
         raise ValueError(f"invalid capture session status: {status!r}")
+    usable = None
+    reconciliation = None
+    if status != "incomplete":
+        usable = validate_capture_health(health)
+        reconciliation = reconcile_capture_artifacts(out_dir, health)
+    if status == "complete" and not usable:
+        raise ValueError(
+            "a capture cannot be complete without passing capture-health evidence"
+        )
+    if status == "failed" and usable:
+        raise ValueError(
+            "a failed capture requires capture-health evidence naming why"
+        )
     artifacts = []
     for path in sorted(out_dir.iterdir()):
         if path.name == "session.json" or not path.is_file():
@@ -1256,13 +1454,15 @@ def write_session_manifest(out_dir: Path, status: str, started_at: str) -> dict:
             "mode": f"{stat.S_IMODE(path.stat().st_mode):04o}",
         })
     payload = {
-        "schema": "capture-session/1",
+        "schema": "capture-session/2",
         "status": status,
         "started_at": started_at,
         "finalized_at": (
             time.strftime("%Y-%m-%dT%H:%M:%S%z")
-            if status in {"complete", "abandoned"} else None
+            if status in {"complete", "failed", "abandoned"} else None
         ),
+        "health": health,
+        "reconciliation": reconciliation,
         "artifacts": artifacts,
     }
     target = out_dir / "session.json"
@@ -1279,6 +1479,19 @@ def write_session_manifest(out_dir: Path, status: str, started_at: str) -> dict:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
     return payload
+
+
+def finalize_session(
+    out_dir: Path,
+    started_at: str,
+    health: dict,
+    *,
+    abandoned: bool = False,
+) -> dict:
+    """Choose and persist the only final status supported by the evidence."""
+    usable = validate_capture_health(health)
+    status = "abandoned" if abandoned else ("complete" if usable else "failed")
+    return write_session_manifest(out_dir, status, started_at, health)
 
 
 # The calibration protocol. An echo-cancellation experiment needs two things no
@@ -1661,8 +1874,8 @@ def voiceprint_provenance(voiceprint, outcome):
     }
 
 
-def write_transcript(path, merged, b, gating=None):
-    """Hand the capture to the notes half, carrying the bleed verdict with it.
+def write_transcript(path, merged, b, gating=None, capture_health=None):
+    """Hand the capture to the notes half with its attribution and health evidence.
 
     The attribution level is derived here rather than downstream, because this
     is the only place that knows how the audio was actually captured. A capture
@@ -1673,8 +1886,14 @@ def write_transcript(path, merged, b, gating=None):
 
     See notes/transcript.py for what each level licenses.
     """
+    if capture_health is None:
+        raise ValueError(
+            "a current capture transcript requires final capture-health evidence"
+        )
+    validate_capture_health(capture_health, transcript_context=True)
     unattributed = contaminated(b)
     payload = {
+        "schema": CAPTURE_TRANSCRIPT_SCHEMA,
         "source": f"capture {time.strftime('%Y-%m-%d %H:%M')}",
         "attribution": "none" if unattributed else "channel",
         "bleed": {"peak_r": b["peak_r"], "positive_r": b["positive_r"],
@@ -1685,6 +1904,10 @@ def write_transcript(path, merged, b, gating=None):
         # Computed by the caller, which is the only place that knows whether the
         # gate actually executed — see voiceprint_provenance.
         "voiceprint": gating,
+        # Self-contained rather than a pointer to session.json. A transcript may be
+        # moved beside a note after audio is deleted, and the failed/degraded capture
+        # evidence must survive that move with the words it qualifies.
+        "capture_health": capture_health,
         "turns": [
             # Labels are dropped, not merely marked, when the split is fiction.
             {
@@ -1777,24 +2000,349 @@ def self_test_output_directory() -> bool:
         write_private_text(probe, '{"text":"private"}')
         wav_probe = explicit / "private.wav"
         write_wav(wav_probe, np.zeros(160, dtype=np.float32))
+        minimum_block = RATE // 5
+        mic_wav = explicit / "mic.wav"
+        system_wav = explicit / "system.wav"
+        write_wav(mic_wav, np.zeros(minimum_block, dtype=np.float32))
+        write_wav(system_wav, np.zeros(minimum_block, dtype=np.float32))
         started = "2026-07-30T12:00:00-0500"
         write_session_manifest(explicit, "incomplete", started)
-        manifest = write_session_manifest(explicit, "complete", started)
+        healthy = capture_health(
+            mic_samples=minimum_block,
+            system_samples=minimum_block,
+            capture_elapsed_samples=minimum_block,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        manifest = finalize_session(explicit, started, healthy)
         stored_manifest = json.loads((explicit / "session.json").read_text())
         private_modes = (
             stat.S_IMODE(explicit.stat().st_mode) == 0o700
             and stat.S_IMODE(probe.stat().st_mode) == 0o600
             and stat.S_IMODE(wav_probe.stat().st_mode) == 0o600
+            and stat.S_IMODE(mic_wav.stat().st_mode) == 0o600
+            and stat.S_IMODE(system_wav.stat().st_mode) == 0o600
             and stat.S_IMODE((explicit / "session.json").stat().st_mode) == 0o600
         )
         finalized = (
             manifest == stored_manifest
+            and stored_manifest["schema"] == "capture-session/2"
             and stored_manifest["status"] == "complete"
+            and stored_manifest["health"] == healthy
             and stored_manifest["started_at"] == started
+            and stored_manifest["reconciliation"]["legs"]["mic"]["samples"]
+            == minimum_block
+            and stored_manifest["reconciliation"]["legs"]["system"]["samples"]
+            == minimum_block
             and [row["name"] for row in stored_manifest["artifacts"]]
-            == ["private.json", "private.wav"]
+            == ["mic.wav", "private.json", "private.wav", "system.wav"]
             and {row["name"]: row["sha256"] for row in stored_manifest["artifacts"]}
-            == {"private.json": sha256(probe), "private.wav": sha256(wav_probe)}
+            == {
+                "mic.wav": sha256(mic_wav),
+                "private.json": sha256(probe),
+                "private.wav": sha256(wav_probe),
+                "system.wav": sha256(system_wav),
+            }
+        )
+
+        def fixture_dir(
+            name: str,
+            evidence: dict,
+            *,
+            mic_samples: int | None = None,
+            system_samples: int | None = None,
+            transcript_health: dict | None = None,
+            omit_transcript: bool = False,
+        ) -> Path:
+            target = root / name
+            target.mkdir(mode=0o700)
+            target.chmod(0o700)
+            write_wav(
+                target / "mic.wav",
+                np.zeros(
+                    evidence["legs"]["mic"]["samples"]
+                    if mic_samples is None else mic_samples,
+                    dtype=np.float32,
+                ),
+            )
+            write_wav(
+                target / "system.wav",
+                np.zeros(
+                    evidence["legs"]["system"]["samples"]
+                    if system_samples is None else system_samples,
+                    dtype=np.float32,
+                ),
+            )
+            if evidence["transcription"]["transcript_written"] and not omit_transcript:
+                carried = evidence if transcript_health is None else transcript_health
+                write_private_text(
+                    target / "transcript.json",
+                    json.dumps({
+                        "schema": CAPTURE_TRANSCRIPT_SCHEMA,
+                        "source": "capture fixture",
+                        "attribution": "channel",
+                        "capture_health": carried,
+                        "turns": [],
+                    }),
+                )
+            return target
+
+        def refused(call) -> bool:
+            try:
+                call()
+            except ValueError:
+                return True
+            return False
+
+        zero_samples = capture_health(
+            mic_samples=0,
+            system_samples=0,
+            capture_elapsed_samples=0,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        no_transcript = capture_health(
+            mic_samples=minimum_block,
+            system_samples=minimum_block,
+            capture_elapsed_samples=minimum_block,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=True,
+            transcript_written=False,
+        )
+
+        class DiagnosticLeg:
+            def __init__(self, *, dropouts=None, tap_errors=None):
+                self.arrivals = [(100.0, minimum_block)]
+                self.dropouts = dropouts or []
+                self._tap_errors = tap_errors or []
+
+            def tap_error(self):
+                return self._tap_errors
+
+        clean_leg = DiagnosticLeg()
+        with_dropout = capture_health_for_legs(
+            DiagnosticLeg(dropouts=[(100.2, "input overflow")]),
+            clean_leg,
+            mic_samples=minimum_block,
+            system_samples=minimum_block,
+            capture_elapsed_samples=minimum_block,
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        tap_event = {
+            "message_type": "fatal",
+            "data": {"message": "tap stopped"},
+        }
+        with_tap_error = capture_health_for_legs(
+            clean_leg,
+            DiagnosticLeg(tap_errors=[tap_event]),
+            mic_samples=minimum_block,
+            system_samples=minimum_block,
+            capture_elapsed_samples=minimum_block,
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        unhealthy = (zero_samples, no_transcript, with_dropout, with_tap_error)
+        unhealthy_dirs = [
+            fixture_dir(f"failed-{index}", evidence)
+            for index, evidence in enumerate(unhealthy)
+        ]
+        failed_manifests = [
+            finalize_session(target, started, evidence)
+            for target, evidence in zip(unhealthy_dirs, unhealthy, strict=True)
+        ]
+
+        def complete_refused(target: Path, evidence: dict) -> bool:
+            return refused(
+                lambda: write_session_manifest(
+                    target, "complete", started, evidence
+                )
+            )
+
+        asserted_healthy = json.loads(json.dumps(zero_samples))
+        asserted_healthy["usable"] = True
+        asserted_healthy["blockers"] = []
+        one_sample = capture_health(
+            mic_samples=minimum_block,
+            system_samples=1,
+            capture_elapsed_samples=minimum_block,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        one_sample_dir = fixture_dir("failed-one-sample", one_sample)
+        one_sample_manifest = finalize_session(
+            one_sample_dir, started, one_sample
+        )
+        system_terminal_truncation = capture_health(
+            mic_samples=RATE * 60,
+            system_samples=minimum_block,
+            capture_elapsed_samples=RATE * 60,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        system_terminal_dir = fixture_dir(
+            "failed-system-terminal-truncation", system_terminal_truncation
+        )
+        system_terminal_manifest = finalize_session(
+            system_terminal_dir, started, system_terminal_truncation
+        )
+        mic_terminal_truncation = capture_health(
+            mic_samples=minimum_block,
+            system_samples=RATE * 60,
+            capture_elapsed_samples=RATE * 60,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        mic_terminal_dir = fixture_dir(
+            "failed-mic-terminal-truncation", mic_terminal_truncation
+        )
+        mic_terminal_manifest = finalize_session(
+            mic_terminal_dir, started, mic_terminal_truncation
+        )
+        both_terminal_truncation = capture_health(
+            mic_samples=minimum_block,
+            system_samples=minimum_block,
+            capture_elapsed_samples=RATE * 60,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        both_terminal_dir = fixture_dir(
+            "failed-both-terminal-truncation", both_terminal_truncation
+        )
+        both_terminal_manifest = finalize_session(
+            both_terminal_dir, started, both_terminal_truncation
+        )
+        healthy_small_skew = capture_health(
+            mic_samples=RATE * 3,
+            system_samples=RATE * 11 // 10,
+            capture_elapsed_samples=RATE * 3,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        healthy_small_skew_dir = fixture_dir(
+            "healthy-small-skew", healthy_small_skew
+        )
+        healthy_small_skew_manifest = finalize_session(
+            healthy_small_skew_dir, started, healthy_small_skew
+        )
+        empty_dir = root / "empty-finalization"
+        empty_dir.mkdir()
+        truncated_dir = fixture_dir(
+            "truncated-finalization", healthy
+        )
+        truncated_system = truncated_dir / "system.wav"
+        truncated_bytes = truncated_system.read_bytes()
+        with open_private_binary(truncated_system) as handle:
+            # Keep the header's 3200-frame claim but only one frame of payload.
+            handle.write(truncated_bytes[:46])
+        transcribed_health = capture_health(
+            mic_samples=minimum_block,
+            system_samples=minimum_block,
+            capture_elapsed_samples=minimum_block,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=True,
+            transcript_written=True,
+        )
+        missing_transcript_dir = fixture_dir(
+            "missing-transcript",
+            transcribed_health,
+            omit_transcript=True,
+        )
+        mismatched_health = capture_health(
+            mic_samples=minimum_block,
+            system_samples=minimum_block,
+            capture_elapsed_samples=minimum_block,
+            dropouts={
+                "mic": [{"at_s": 0.1, "detail": "input overflow"}],
+                "system": [],
+            },
+            tap_errors=[],
+            transcription_requested=True,
+            transcript_written=True,
+        )
+        mismatched_transcript_dir = fixture_dir(
+            "mismatched-transcript",
+            transcribed_health,
+            transcript_health=mismatched_health,
+        )
+        transcribed_dir = fixture_dir("healthy-transcribed", transcribed_health)
+        transcribed_manifest = finalize_session(
+            transcribed_dir, started, transcribed_health
+        )
+        artifact_reconciliation_fails_closed = (
+            refused(lambda: finalize_session(empty_dir, started, healthy))
+            and refused(lambda: finalize_session(
+                truncated_dir, started, healthy
+            ))
+            and refused(lambda: finalize_session(
+                missing_transcript_dir, started, transcribed_health
+            ))
+            and refused(lambda: finalize_session(
+                mismatched_transcript_dir, started, transcribed_health
+            ))
+            and transcribed_manifest["status"] == "complete"
+            and transcribed_manifest["reconciliation"]["transcript"]["sha256"]
+            == sha256(transcribed_dir / "transcript.json")
+        )
+        health_fails_closed = (
+            all(row["status"] == "failed" for row in failed_manifests)
+            and all(
+                complete_refused(target, evidence)
+                for target, evidence in zip(
+                    unhealthy_dirs, unhealthy, strict=True
+                )
+            )
+            and complete_refused(explicit, asserted_healthy)
+            and one_sample_manifest["status"] == "failed"
+            and complete_refused(one_sample_dir, one_sample)
+            and system_terminal_manifest["status"] == "failed"
+            and complete_refused(
+                system_terminal_dir, system_terminal_truncation
+            )
+            and mic_terminal_manifest["status"] == "failed"
+            and complete_refused(
+                mic_terminal_dir, mic_terminal_truncation
+            )
+            and both_terminal_manifest["status"] == "failed"
+            and complete_refused(
+                both_terminal_dir, both_terminal_truncation
+            )
+            and healthy_small_skew_manifest["status"] == "complete"
+            and {b["code"] for b in zero_samples["blockers"]} == {"no_samples"}
+            and {b["code"] for b in no_transcript["blockers"]}
+            == {"transcript_missing"}
+            and {b["code"] for b in one_sample["blockers"]}
+            == {"incomplete_capture_block"}
+            and one_sample["blockers"][0]["minimum_samples"] == minimum_block
+            and {b["code"] for b in system_terminal_truncation["blockers"]}
+            == {"leg_span_mismatch", "leg_ended_before_capture_stop"}
+            and {b["code"] for b in mic_terminal_truncation["blockers"]}
+            == {"leg_span_mismatch", "leg_ended_before_capture_stop"}
+            and {
+                b["leg"] for b in both_terminal_truncation["blockers"]
+                if b["code"] == "leg_ended_before_capture_stop"
+            }
+            == {"mic", "system"}
+            and not healthy_small_skew["blockers"]
+            and with_dropout["legs"]["mic"]["dropouts"]
+            == [{"at_s": 0.2, "detail": "input overflow"}]
+            and with_tap_error["legs"]["system"]["tap_errors"] == [tap_event]
         )
         try:
             prepare_output_dir(str(explicit))
@@ -1810,13 +2358,24 @@ def self_test_output_directory() -> bool:
             repo_refused = not inside.exists()
         else:
             repo_refused = False
+        guidance = [
+            (REPO / "README.md").read_text(),
+            (REPO / "notes" / "summarize.py").read_text(),
+            (REPO / "notes" / "EVAL.md").read_text(),
+        ]
+        guidance_points_to_capture = (
+            all("spike/out/transcript.json" not in text for text in guidance)
+            and all("~/meeting-smoke/transcript.json" in text for text in guidance)
+        )
 
     ok = (
         fresh_default and first_explicit and private_modes and finalized
+        and health_fails_closed and artifact_reconciliation_fails_closed
         and reuse_refused and repo_refused
+        and guidance_points_to_capture
     )
-    print(f"  [{'pass' if ok else 'FAIL'}] capture output is private, finalized, "
-          "and never reused")
+    print(f"  [{'pass' if ok else 'FAIL'}] capture output is private, health-gated, "
+          "finalized, and never reused")
     return ok
 
 
@@ -1921,6 +2480,8 @@ def main():
     # deciding they have enough, the other is a take that cannot be scored.
     abandoned = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
+    capture_started = None
+    capture_stopped = None
 
     # Both starts sit inside the try. An unresolvable --input-device raises out
     # of mic_leg.start(), and outside it that left the tap subprocess orphaned
@@ -1929,6 +2490,10 @@ def main():
     try:
         tap_leg.start()
         mic_leg.start()
+        # The wall-span contract begins only once both producers have started.
+        # Their files may include a small prefix from sequential startup; that is
+        # harmless. Missing the shared span after this point is not.
+        capture_started = time.monotonic()
 
         # Name both devices before any audio arrives. The tap follows the
         # default OUTPUT device, so that is the one that decides what lands on
@@ -1954,6 +2519,8 @@ def main():
                 break
             time.sleep(CUE_POLL_S)
     finally:
+        if capture_started is not None:
+            capture_stopped = time.monotonic()
         mic_leg.stop()
         tap_leg.stop()
 
@@ -1961,13 +2528,28 @@ def main():
     # refuse the short recording anyway, but leaving the artifact there makes the
     # directory look like a take that can be scored, and the next person to find it
     # has to work out why it cannot be.
-    report(mic_leg, tap_leg, args, out_dir,
-           None if abandoned.is_set() else phases,
-           None if abandoned.is_set() else shown_at)
-    final_status = "abandoned" if abandoned.is_set() else "complete"
-    write_session_manifest(out_dir, final_status, started_at)
+    capture_elapsed_samples = round(
+        (capture_stopped - capture_started) * RATE
+    )
+    health = report(
+        mic_leg,
+        tap_leg,
+        args,
+        out_dir,
+        capture_elapsed_samples=capture_elapsed_samples,
+        phases=None if abandoned.is_set() else phases,
+        shown_at=None if abandoned.is_set() else shown_at,
+    )
+    manifest = finalize_session(
+        out_dir, started_at, health, abandoned=abandoned.is_set()
+    )
+    final_status = manifest["status"]
     print(f"  session manifest → {out_dir / 'session.json'} ({final_status})")
-    return 1 if abandoned.is_set() else 0
+    if final_status == "failed":
+        print("  capture failed its integrity floor:")
+        for blocker in health["blockers"]:
+            print(f"    - {blocker['detail']}")
+    return 0 if final_status == "complete" else 1
 
 
 if __name__ == "__main__":

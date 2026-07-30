@@ -232,8 +232,15 @@ Every capture requires a new directory. An existing `--out` path is refused so
 rerunning a command cannot truncate an earlier meeting. If `--out` is omitted, the
 CLI creates an owner-only session directory under
 `~/Library/Application Support/local-meeting-notes/captures`. `session.json` is
-written atomically at the end; anything left `incomplete` is recovery material, not
-a successful meeting.
+written atomically and carries the capture-health evidence behind its status.
+`complete` means both legs persisted at least one configured 200 ms capture block,
+their WAV sample counts match the recorded evidence, neither reported a timeline
+gap, both cover the observed capture wall span within measured startup skew and
+clock drift, the tap reported no error or unexpected EOF, and a requested
+transcript was written with the same health record. `failed` reached finalization
+without meeting that integrity floor; `abandoned` was stopped by the operator or
+protocol. Anything left `incomplete` never reached finalization and is recovery
+material, not a successful meeting.
 
 `--no-transcribe` measures without transcribing, which needs only numpy and
 sounddevice and skips the 1.6 GB Whisper download entirely. Plain
@@ -538,7 +545,7 @@ every line, which is what a contaminated capture actually delivers. After a real
 capture, point it at the transcript the spike writes:
 
 ```sh
-python3 notes/summarize.py spike/out/transcript.json
+python3 notes/summarize.py ~/meeting-smoke/transcript.json
 ```
 
 That file carries its own attribution level, derived from the capture's measured

@@ -25,14 +25,23 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "spike"))
+
+from capture_health import TRANSCRIPT_SCHEMA as CAPTURE_TRANSCRIPT_SCHEMA
+from capture_health import UNKNOWN_WARNING as CAPTURE_INTEGRITY_UNKNOWN_WARNING
+from capture_health import validate as validate_capture_health
+from capture_health import warning as capture_health_warning
 
 NAMED = "named"
 CHANNEL = "channel"
 NONE = "none"
 LEVELS = (NAMED, CHANNEL, NONE)
+FILE_TRANSCRIPT_SCHEMA = "file-transcript/1"
 
 
 @dataclass
@@ -73,10 +82,23 @@ class Transcript:
     # the post-meeting note. It never influences the prompt — a summarizer must not
     # be told that words are missing, only the human reading the result.
     gate: dict | None = None
+    # Whether the capture itself met its integrity floor. This is separate from
+    # voiceprint gating: a driver dropout or tap failure qualifies every word in the
+    # transcript, and moving the transcript away from session.json must not erase
+    # that fact. Like `gate`, it never becomes model input.
+    capture_health: dict | None = None
+    # A schema-less dual-capture transcript predates persisted integrity evidence.
+    # It remains readable as evidence, but every derived view and note has to carry
+    # the fact that completeness cannot be established.
+    capture_integrity_unknown: bool = False
 
     def __post_init__(self):
         if self.attribution not in LEVELS:
             raise ValueError(f"attribution must be one of {LEVELS}, got {self.attribution!r}")
+        if not isinstance(self.capture_integrity_unknown, bool):
+            raise ValueError("capture_integrity_unknown must be boolean")
+        if self.capture_health is not None:
+            validate_capture_health(self.capture_health, transcript_context=True)
 
     @property
     def gate_warnings(self) -> list[str]:
@@ -101,6 +123,26 @@ class Transcript:
             out.append(f"the voiceprint gate did not run: {g['why']}. Speech from the "
                        f"room, if there was any, is in this transcript.")
         return out
+
+    @property
+    def health_warnings(self) -> list[str]:
+        """Capture failures a human must see before treating omissions as silence."""
+        out = (
+            [CAPTURE_INTEGRITY_UNKNOWN_WARNING]
+            if self.capture_integrity_unknown else []
+        )
+        if self.capture_health is not None:
+            warning = capture_health_warning(
+                self.capture_health, transcript_context=True
+            )
+            if warning:
+                out.append(warning)
+        return out
+
+    @property
+    def capture_warnings(self) -> list[str]:
+        """All capture provenance that must reach the note and its reader."""
+        return self.health_warnings + self.gate_warnings
 
     @property
     def speakers(self) -> list[str]:
@@ -141,6 +183,8 @@ class Transcript:
             gated_turns=[Turn(text=t.text, speaker=t.speaker, start=t.start)
                          for t in self.gated_turns],
             gate=deepcopy(self.gate),
+            capture_health=deepcopy(self.capture_health),
+            capture_integrity_unknown=self.capture_integrity_unknown,
         )
 
     def strip_attribution(self) -> "Transcript":  # noqa: UP037
@@ -252,6 +296,23 @@ def load_capture(path: Path) -> Transcript:
     bleed arrives as `none` and gets the unattributed contract automatically.
     """
     data = json.loads(path.read_text())
+    schema = data.get("schema")
+    if schema is None:
+        integrity_unknown = True
+    elif schema == CAPTURE_TRANSCRIPT_SCHEMA:
+        integrity_unknown = False
+    else:
+        raise ValueError(f"{path}: unknown capture transcript schema {schema!r}")
+    health = data.get("capture_health")
+    if schema == CAPTURE_TRANSCRIPT_SCHEMA and health is None:
+        raise ValueError(
+            f"{path}: {CAPTURE_TRANSCRIPT_SCHEMA} requires capture_health"
+        )
+    if health is not None:
+        try:
+            validate_capture_health(health, transcript_context=True)
+        except ValueError as exc:
+            raise ValueError(f"{path}: invalid capture_health: {exc}") from None
 
     def turn(t: dict) -> Turn:
         return Turn(text=t["text"], speaker=t.get("speaker"), start=t.get("start"))
@@ -264,6 +325,34 @@ def load_capture(path: Path) -> Transcript:
         turns=[turn(t) for t in data["turns"] if not t.get("gated")],
         gated_turns=[turn(t) for t in data["turns"] if t.get("gated")],
         gate=data.get("voiceprint"),
+        capture_health=health,
+        capture_integrity_unknown=integrity_unknown,
+    )
+
+
+def load_file_transcript(path: Path) -> Transcript:
+    """A single mixed recording transcribed without dual-capture provenance."""
+    data = json.loads(path.read_text())
+    schema = data.get("schema")
+    legacy = schema is None and str(data.get("source", "")).startswith("recording:")
+    if schema != FILE_TRANSCRIPT_SCHEMA and not legacy:
+        raise ValueError(f"{path}: unknown file transcript schema {schema!r}")
+    if data.get("attribution") != NONE:
+        raise ValueError(
+            f"{path}: a mixed file transcript must use {NONE!r} attribution"
+        )
+    if data.get("capture_health") is not None:
+        raise ValueError(
+            f"{path}: a mixed file transcript cannot claim dual-capture health"
+        )
+
+    def turn(t: dict) -> Turn:
+        return Turn(text=t["text"], speaker=t.get("speaker"), start=t.get("start"))
+
+    return Transcript(
+        source=data.get("source", path.stem),
+        attribution=NONE,
+        turns=[turn(t) for t in data["turns"]],
     )
 
 
@@ -339,5 +428,13 @@ def load(path: Path) -> Transcript:
     if "meeting_transcripts" in data:
         return load_qmsum(path)
     if "turns" in data:
+        if (
+            data.get("schema") == FILE_TRANSCRIPT_SCHEMA
+            or (
+                data.get("schema") is None
+                and str(data.get("source", "")).startswith("recording:")
+            )
+        ):
+            return load_file_transcript(path)
         return load_capture(path)
     raise ValueError(f"{path}: not a QMSum meeting, a capture, or a Meet transcript")

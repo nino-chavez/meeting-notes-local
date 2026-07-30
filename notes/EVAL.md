@@ -853,10 +853,11 @@ Stated plainly, in the same spirit as `spike/RESULTS.md`:
   put a percentage on either claim.
 
 The way to close the first two is the capture that was already the next step:
-run a real meeting, then point `summarize.py` at `spike/out/transcript.json`.
-The spike now writes that file, and derives its attribution level from its own
-bleed measurement, so a contaminated capture arrives here as `none` without
-anyone having to remember to say so.
+run a real meeting, then point `summarize.py` at that session's transcript, for
+example `~/meeting-smoke/transcript.json`. The spike writes it inside the new
+capture directory chosen for that meeting, and derives its attribution level from
+its own bleed measurement, so a contaminated capture arrives here as `none`
+without anyone having to remember to say so.
 
 ---
 

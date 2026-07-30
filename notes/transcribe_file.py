@@ -31,6 +31,8 @@ import time
 import wave
 from pathlib import Path
 
+from transcript import FILE_TRANSCRIPT_SCHEMA
+
 RATE = 16_000
 DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 
@@ -67,6 +69,17 @@ def shutil_which(name: str):
     return shutil.which(name)
 
 
+def transcript_document(audio_stem: str, turns: list[dict]) -> dict:
+    """The explicit non-capture schema consumed by notes/transcript.py."""
+    return {
+        "schema": FILE_TRANSCRIPT_SCHEMA,
+        "source": f"recording:{audio_stem}",
+        # One mixed channel. Who spoke is not in this signal.
+        "attribution": "none",
+        "turns": turns,
+    }
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -100,12 +113,10 @@ def main() -> int:
         for s in result.get("segments", [])
         if s.get("text", "").strip()
     ]
-    args.out.write_text(json.dumps({
-        "source": f"recording:{args.audio.stem}",
-        # One mixed channel. Who spoke is not in this signal.
-        "attribution": "none",
-        "turns": turns,
-    }, indent=2))
+    args.out.write_text(json.dumps(
+        transcript_document(args.audio.stem, turns),
+        indent=2,
+    ))
 
     words = sum(len(t["text"].split()) for t in turns)
     print(f"\n  {len(turns)} segments, {words} words in {elapsed / 60:.1f} min "
