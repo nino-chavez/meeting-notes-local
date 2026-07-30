@@ -467,7 +467,8 @@ it made an undecided item read as scheduled.
 | The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight. No convention to inherit — immature across the category |
 | No preparation journey | J0 | **Decided** — local read-only calendar via EventKit, `DESIGN.md § Context inputs`. The surface for a brief is still unspecified |
 | Who spoke, as opposed to who was invited | J0, J1 | **Open, and possibly unbridgeable.** A calendar gives invitees; the audio gives channels. Nothing in the market bridges it either |
-| The note's own section structure was never designed | J1, J2 | **Open, and found late.** See below |
+| The note's own section structure was never designed | J1, J2 | **Decided** — sections are a rendering, not the model's output. See below |
+| A claim's subject is not extracted | J1 | **Open** — the one thing needed to group a note by what it was about, and no measurement supports asking an 8B model for it yet |
 
 **The note has four sections and no document chose them.** `notes/summarize.py` emits
 Summary, Decisions, Action items and Open questions. That list appears in no design
@@ -485,9 +486,70 @@ this file rejects everywhere else.
 
 The correction is borrowed from the operator's own, made when a redesign stayed anchored
 to the site it was replacing: *"you are too grounded in what we already have and i can't
-trust you are building a net new design."* Left open rather than answered here, because
-the honest form is two or three candidate structures compared against real notes, not a
-fourth section added to the existing three.
+trust you are building a net new design."*
+
+### Three candidate structures, tested against the notes on disk
+
+**The evidence first, because it decides the comparison.** The current structure
+produced 11, 15 and 83 items on the three real meetings, against a human reference that
+segments the same meetings into **5, 7 and 5 subjects**. Two separate problems hide in
+the 83, and they had to be told apart before any structure could be judged:
+
+- **17% of it was duplication.** Extraction produced 160 items with one redundant pair;
+  consolidating them produced 83 with **14 exact repeats**. The merge pass was
+  introducing duplication rather than resolving it, and only on the chunked path. Fixed
+  and counted (`dedupe_items`), which brings the real figure to 69.
+- **69 is still an order of magnitude above 5.** So the count is not only an artifact,
+  and "Decisions" holding 44 entries in a research meeting is a section name inviting
+  the model to file discussion as settlement.
+
+**Candidate A — keep type-first sections.** Summary, Decisions, Action items, Open
+questions, as the model emits them. Serves J2 directly: Action items *is* the answer.
+Costs nothing to keep, and the DECISION/ACTION/QUESTION vocabulary already exists in the
+extraction pass and is measured. **Where it fails:** the item count grows with meeting
+length, so at 69 the note cannot be read in one pass — and a subject's information is
+scattered across all three sections, which is exactly J1's entry. "What did we decide
+about disk storage" means scanning three lists.
+
+**Candidate B — subject-first, types nested underneath.** A handful of subjects, each
+carrying its decisions, commitments and open questions. Serves J1 directly and stays
+readable at any length, because the top level holds steady while claims-per-subject
+grows — which is what the human reference's stable 5–7 demonstrates is achievable.
+**Where it fails:** it needs the model to segment by subject, a harder task than
+labelling an item, on a model this project has already measured as unreliable at
+following a citation format. Nothing supports the assumption that it can.
+
+**Candidate C — typed claims, sections as a rendering.** The model extracts claims and
+labels each one; no pass decides the note's structure. Grouping is chosen by whatever
+reads the note. **Where it fails:** a flat list is not a reading surface on its own, so
+something downstream must choose a grouping — this does not remove that decision, it
+moves it.
+
+**Chosen: C.** Three reasons, and the third is what makes it obvious.
+
+1. **It is the project's own stated principle, unapplied.** film-room's DP-4 — "analysis
+   is the substrate; outputs are renderers" — is cited elsewhere in this repository. A
+   note whose section headings *are* its data model is the opposite: the substrate
+   shaped by one renderer's needs.
+2. **It costs no model capability.** A and C ask the model for exactly the same thing.
+   B asks for something unmeasured.
+3. **The information already existed and was being thrown away.** The extraction pass
+   labels every item DECISION, ACTION or QUESTION. The consolidator turns that into a
+   markdown heading, and by the time a `note/1` artifact exists the label survives only
+   as *which section a claim happens to sit under* — so any surface wanting to group by
+   kind had to re-parse the note and become a second authority on what a section means.
+   Recovering it is not new machinery; it is stopping a discard.
+
+**What shipped:** `note/1` claims carry `type`, recovered from the heading each sits
+under, with an unrecognised heading keeping its own words rather than being forced into
+one of the three. E can now group by kind, filter to commitments for J2, or read in
+order for J1, with no further model call. The markdown keeps its three sections, because
+that is now one rendering among several rather than the structure.
+
+**What did not, and why it is the honest boundary.** Grouping by *subject* is what would
+make a 69-claim note readable, and nothing extracts a subject. Candidate B's risk does
+not disappear by being deferred — it becomes a measurement someone has to run. Recorded
+as its own open gap above rather than folded into this decision.
 
 ---
 

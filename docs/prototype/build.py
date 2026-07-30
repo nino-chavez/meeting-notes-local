@@ -188,8 +188,13 @@ def claim_row(claim: dict, i: int, meeting: str) -> str:
     mark, word, color, why = STATES[claim["status"]]
     quote = claim.get("quote")
     turn = claim.get("turn")
+    # The kind of thing this is, recovered by the summarizer from the note's own
+    # headings rather than re-parsed here. It is what makes E's grouping a rendering
+    # choice instead of whatever the model happened to emit — see journeys.md.
+    kind = (f'<span class="kind">{esc(claim["type"])}</span>'
+            if claim.get("type") else "")
     body = [
-        f'<p class="claim-text">{esc(claim["claim"])}</p>',
+        f'<p class="claim-text">{kind}{esc(claim["claim"])}</p>',
         (f'<p class="claim-state" style="--state:{color}">'
          f'<span class="mark" aria-hidden="true">{MARKS[mark]}</span>'
          f'<span class="word">{esc(word)}</span>'
@@ -462,6 +467,10 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   .claim {{ background: var(--surface-raised); border-radius: 6px; padding: 12px 14px;
             margin-bottom: 10px; }}
   .claim-text {{ margin: 0 0 7px; color: var(--neutral-100); }}
+  .kind {{ font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+           letter-spacing: .06em; color: var(--neutral-400);
+           background: var(--surface-base); border-radius: 2px; padding: 1px 5px;
+           margin-right: 8px; vertical-align: 1px; }}
   .claim-state {{ margin: 0; font-size: 11px; display: grid;
                   grid-template-columns: 14px auto 1fr; gap: 7px;
                   align-items: baseline; }}

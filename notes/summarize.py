@@ -500,6 +500,37 @@ def check_prompt_echo(note: str, source_text: str, system: str) -> dict:
 
 
 _LIST_ITEM = re.compile(r"^[ \t]*[-*][ \t]+(?P<body>\S.*?)[ \t]*$")
+_HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+(?P<title>\S.*?)[ \t]*$")
+
+# The heading an item sits under, normalised. Not a taxonomy invented here: these are
+# the three labels the extraction pass already emits (`_ITEM`), and the section names
+# the prompt already asks for. An unrecognised heading keeps its own words rather than
+# being forced into one of the three, because a note that grew a fourth section is
+# information and silently relabelling it would destroy that.
+_TYPES = {"decisions": "decision", "decision": "decision",
+          "action items": "action", "actions": "action", "action": "action",
+          "open questions": "question", "questions": "question",
+          "question": "question"}
+
+
+def _claim_type(section: str | None) -> str | None:
+    """Which kind of thing a claim is, recovered from the note's own structure.
+
+    The extraction pass labels every item DECISION, ACTION or QUESTION and the label is
+    then thrown away: the consolidator turns it into a markdown heading, and by the time
+    a `note/1` artifact exists the only trace is which section a claim happens to sit
+    under. So a surface wanting to group or filter by kind had to re-parse the note and
+    become a second authority on what a section means.
+
+    Recovering it here makes the note's *sections* a rendering choice rather than the
+    model's structural decision — which is what `docs/journeys.md` settles on, and what
+    film-room's DP-4 already argues in general: analysis is the substrate and outputs
+    are renderers. A flat list of typed claims can be grouped by kind, filtered to
+    commitments for J2, or read in order for J1, with no further model call.
+    """
+    if not section:
+        return None
+    return _TYPES.get(section.strip().lower(), section.strip().lower())
 _BLOCKQUOTE = re.compile(r"^[ \t]*>[ \t]*(?P<quote>\S.*?)[ \t]*$")
 # The same-line collapse. The contract asks for the quote on the line below; two of
 # three real runs put it on the item's own line instead, and both were runs where the
@@ -551,8 +582,12 @@ def _parse_claims(note: str) -> list[dict]:
         if (m := _LIST_ITEM.match(line)) and _SAME_LINE.match(m.group("body")))
     read_collapsed = not has_below and collapsed_shaped >= 2
 
-    out, i = [], 0
+    out, i, section = [], 0, None
     while i < len(lines):
+        if h := _HEADING.match(lines[i]):
+            section = h.group("title").strip()
+            i += 1
+            continue
         m = _LIST_ITEM.match(lines[i])
         if not m:
             i += 1
@@ -569,8 +604,52 @@ def _parse_claims(note: str) -> list[dict]:
         wrapped = bool(w := _WRAPPED.match(claim))
         if w:
             claim = w.group("inner").strip()
-        out.append({"claim": claim, "quote": quote, "at": at, "wrapped": wrapped})
+        # `end` is the offset just past this item, blockquote included. The parser is
+        # the only thing that knows whether an item consumed one line or two, so a
+        # caller that needs to excise one asks rather than recomputing it.
+        end = offsets[i] if i < len(lines) else len(note)
+        out.append({"claim": claim, "quote": quote, "at": at, "end": end,
+                    "wrapped": wrapped, "type": _claim_type(section)})
     return out
+
+
+def dedupe_items(note: str) -> tuple[str, int]:
+    """Drop repeated items from a note, keeping the first of each.
+
+    The consolidator repeats itself. Measured on a 1365-turn meeting: extraction
+    produced 160 items with one redundant pair, and consolidating them produced 83
+    items of which **14 were exact repeats of an earlier claim** — the merge step
+    introducing duplication rather than resolving it. The single-pass path produced
+    none on either shorter meeting, which is why this is applied only where the defect
+    is; adding it to `summarize` would carry machinery for a failure that path does not
+    have and would hide it if it ever appeared.
+
+    **Stripped and counted, not silently cleaned.** The same treatment as the template
+    punctuation in `_parse_claims`: a note listing one decision twice is simply wrong
+    and there is one obvious resolution, but the count is evidence about how reliable
+    the chunked path is and disappears from the note the moment it is fixed. It travels
+    in provenance for that reason.
+
+    Keeping the first occurrence's evidence is safe rather than assumed to be: all
+    twelve repeated claims on that meeting carried byte-identical quotes and identical
+    evidence states, checked before this rule was written.
+    """
+    items = _parse_claims(note)
+    seen, cuts = set(), []
+    for item in items:
+        key = " ".join(_seq(item["claim"]))
+        if key in seen:
+            cuts.append((item["at"], item["end"]))
+        else:
+            seen.add(key)
+    if not cuts:
+        return note, 0
+    out, prev = [], 0
+    for start, end in cuts:
+        out.append(note[prev:start])
+        prev = end
+    out.append(note[prev:])
+    return "".join(out), len(cuts)
 
 # Short quotes collide by accident. Four content words is the same floor
 # `_ECHO_NGRAM` uses, and for the same reason: long enough that ordinary phrasing
@@ -634,7 +713,8 @@ def check_citations(note: str, transcript: Transcript) -> dict:
         # wants read order. Carrying the offset lets one pass serve both instead of
         # forcing a renderer to re-parse the note and disagree with this function
         # about what a claim is.
-        row = {"claim": item["claim"], "quote": quote, "at": item["at"]}
+        row = {"claim": item["claim"], "quote": quote, "at": item["at"],
+               "type": item["type"]}
         if quote is None:
             # Not a fabrication and not a pass. Counted so a model that ignores the
             # format cannot read as a clean run.
@@ -1289,8 +1369,10 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
                   "response": response})
     elapsed = time.monotonic() - t0
 
+    note, repeats = dedupe_items(response["message"]["content"].strip())
+
     return {
-        "note": response["message"]["content"].strip(),
+        "note": note,
         "elapsed_s": elapsed,
         "model": model,
         "rendered": transcript.render(),
@@ -1298,6 +1380,7 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         "calls": calls,
         "extracted": items,
         "slices": len(slices),
+        "duplicates_removed": repeats,
     }
 
 
@@ -1323,6 +1406,11 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
             f"still in the transcript)" if transcript.gated_turns else "")
     print(f"  turns         {len(transcript.turns)}{held}")
     print(f"  model         {result['model']}  in {result['elapsed_s']:.1f}s")
+    if result.get("duplicates_removed"):
+        # Reported, not hidden. The consolidator repeating itself is a fact about the
+        # chunked path's reliability, and the note it came from no longer shows it.
+        print(f"  consolidate   {result['duplicates_removed']} repeated item(s) removed "
+              f"— the merge pass emitted the same claim more than once")
 
     # Before the fabrication checks, because this one is about what is MISSING from
     # the input rather than what the model added to it. Every check below asks
@@ -1638,6 +1726,10 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
             "elapsed_s": round(result["elapsed_s"], 1),
             "passes": 2 if "extracted" in result else 1,
             "slices": result.get("slices"),
+            # Belongs here rather than in `checks` because the note no longer contains
+            # the evidence: once the repeats are excised, nothing recomputable from the
+            # note text can recover the count, so a `--recheck` would drop it.
+            "duplicates_removed": result.get("duplicates_removed", 0),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         },
         # Carried whole. A surface may only need citations today, but a note whose
@@ -1944,6 +2036,26 @@ def run_self_test() -> int:
     # mistaken for an uncited item — it is not a list.
     cite_case("summary prose is not counted as an uncited item",
               "## Summary\nThe team met and chose a casing material.", True, uncited=0)
+
+    # The kind of thing a claim is, recovered from the heading it sits under. It exists
+    # at extraction and was discarded by the time an artifact was written, so any
+    # surface wanting to group by kind had to re-parse the note.
+    def type_case(label: str, note: str, want: list[str | None]) -> None:
+        nonlocal failures
+        got = [i["type"] for i in _parse_claims(note)]
+        ok = got == want
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        if not ok:
+            print(f"          got {got} want {want}")
+
+    type_case("each of the three sections names its claims' kind",
+              "## Decisions\n- A.\n## Action items\n- B.\n## Open questions\n- C.\n",
+              ["decision", "action", "question"])
+    type_case("an unrecognised heading keeps its own words rather than being forced",
+              "## Risks\n- A.\n", ["risks"])
+    type_case("an item before any heading has no kind rather than a guessed one",
+              "- A.\n## Decisions\n- B.\n", [None, "decision"])
     #  The verdict has to move, or none of the above changes a run's outcome.
     verdict_note = "## Decisions\n- Budget approved.\n  > the budget was approved"
     cite_case("a fabricated citation is not advisory", verdict_note, False)
@@ -2000,6 +2112,56 @@ def run_self_test() -> int:
           f"across all four outcomes")
     if not part_ok:
         print(f"          items={got['items']} covered={covered}")
+
+    print("\n=== the consolidator repeating itself ===\n")
+
+    def dedupe_case(label: str, note: str, want_removed: int, want_items: int,
+                    want_first_quote: str | None = None) -> None:
+        nonlocal failures
+        got, removed = dedupe_items(note)
+        items = _parse_claims(got)
+        ok = removed == want_removed and len(items) == want_items
+        if want_first_quote is not None:
+            ok = ok and items and items[0]["quote"] == want_first_quote
+        # The excision must not corrupt what it leaves behind: every surviving item has
+        # to still parse, and the buckets have to still partition them.
+        cites = check_citations(got, cite_t)
+        covered = sum(len(cites[k]) for k in
+                      ("cited", "fabricated", "unverifiable", "uncited"))
+        ok = ok and covered == cites["items"] == len(items)
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        if not ok:
+            print(f"          removed={removed} want={want_removed} "
+                  f"items={len(items)} want={want_items} covered={covered}")
+
+    dedupe_case("an exact repeat is dropped and the first is kept",
+                "## Decisions\n- Rubber chosen.\n- Lead time long.\n- Rubber chosen.\n",
+                1, 2)
+    dedupe_case("a repeat takes its quote line with it, not the survivor's",
+                "## Decisions\n"
+                "- Rubber chosen.\n  > go with the rubber for the case\n"
+                "- Rubber chosen.\n  > the supplier said eight weeks which is too long\n",
+                1, 1, "go with the rubber for the case")
+    dedupe_case("punctuation and case do not make two claims distinct",
+                "## Decisions\n- Rubber chosen.\n- RUBBER, chosen!\n", 1, 1)
+    dedupe_case("distinct claims are untouched",
+                "## Decisions\n- Rubber chosen.\n- Lead time long.\n", 0, 2)
+    dedupe_case("a note with no repeats is returned unchanged",
+                "## Summary\nProse only, no items.\n", 0, 0)
+    # Three of the same claim collapse to one, not two — the seen-set is what makes the
+    # rule idempotent rather than pairwise.
+    dedupe_case("three copies collapse to one",
+                "## Decisions\n- A thing.\n- A thing.\n- A thing.\n", 2, 1)
+    # A model's last line often has no trailing newline, and the span of a final item is
+    # the one case `_parse_claims` computes from the note's length rather than the next
+    # line's offset.
+    dedupe_case("a repeat as the final line, with no trailing newline",
+                "## Decisions\n- A thing.\n- Another.\n- A thing.", 1, 2)
+    dedupe_case("a repeat whose quote is the note's final line",
+                "## Decisions\n- A thing.\n  > go with the rubber for the case\n"
+                "- A thing.\n  > the supplier said eight weeks which is too long",
+                1, 1, "go with the rubber for the case")
 
     # One formula for the run's verdict, checked against the shape `recheck` reads. The
     # divergence this catches was real: a retyped formula dropped `context`, lost

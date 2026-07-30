@@ -931,3 +931,43 @@ measured. Only the citation check is recomputed; `numbers`, `grounding` and
 `prompt_echo` compare against the rendered prompt and the system message, which the
 artifact does not store, so their stored verdicts are carried forward rather than
 silently recomputed against a substitute input.
+
+---
+
+## The merge pass repeats itself, and the section headings were the data model
+
+Two findings from asking what the note's four sections are for. Measured 2026-07-29 on
+the three corpus meetings.
+
+**The consolidator introduces duplication rather than resolving it.** On Bmr006 (1365
+turns, chunked over 17 slices) extraction produced **160 items with one redundant pair**;
+consolidating them produced **83 items of which 14 were exact repeats** of an earlier
+claim — same text, same quote, same evidence state, checked before the fix was written.
+Seven consecutive items reappeared verbatim seven positions later. The single-pass path
+produced zero duplicates on either shorter meeting, which is why `dedupe_items` is
+applied only where the defect is: adding it to the single-pass path would carry machinery
+for a failure that path does not have and would hide it if it ever appeared.
+
+Stripped and counted, the same treatment as the template punctuation — a note listing one
+decision twice is simply wrong and has one obvious resolution, but the count is evidence
+about the chunked path's reliability and vanishes from the note the moment it is fixed.
+It travels in `note/1`'s **provenance** rather than its `checks`, because `--recheck`
+recomputes checks from the note text and the note no longer contains the evidence.
+
+**Near-duplicate items are not the cause, which was worth checking before fixing the
+wrong layer.** At Jaccard ≥ 0.6 the 160 extracted items contain **4** near-duplicate
+pairs. The overlap window exists so a commitment spanning a slice boundary survives in
+one of them, and it is doing that job. The repetition is the merge pass on a long list.
+
+**The count is now trustworthy and still an order of magnitude off.** 69 real items
+against a human reference that segments the same meeting into **5** subjects. So
+duplication was 17% of the problem and not the problem: "Decisions" holding 44 entries in
+a research meeting is a section name inviting the model to file discussion as settlement.
+
+**And the sections were the data model.** The extraction pass labels every item DECISION,
+ACTION or QUESTION; the consolidator turns the label into a markdown heading; by the time
+a `note/1` artifact existed the label survived only as *which section a claim sat under*.
+Every claim now carries `type`, recovered from its heading, with an unrecognised heading
+keeping its own words rather than being forced into one of the three. Nothing new is
+asked of the model — this is a discard that stopped. `docs/journeys.md` records the three
+candidate structures and why sections became a rendering.
