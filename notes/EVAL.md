@@ -1820,10 +1820,14 @@ decoding as before. None can be mistaken for a smaller complete extraction or wr
 as an artifact.
 
 The schema, formula, cap, and actual per-slice `num_predict` now travel in the structured
-run contract and extraction receipts. Recheck re-derives all of them from the retained
-transcript. An over-cardinality response, a 161-character claim, a receipt with a changed
-budget, or a schema-constrained call with no budget fails closed. A transport timeout is
-reported as one concise refusal naming the slice, without a Python traceback.
+run contract and extraction receipts. Each receipt also retains only the minimal
+transport completion proof, exactly `done: true` and `done_reason: stop`; it does not
+retain the full Ollama envelope, timing data, or token telemetry. Recheck requires that
+exact nested shape and refuses a missing or changed completion proof. It re-derives all
+other bounds from the retained transcript. An over-cardinality response, a 161-character
+claim, a receipt with a changed budget, or a schema-constrained call with no budget fails
+closed. A transport timeout is reported as one concise refusal naming the slice, without
+a Python traceback.
 
 No Bmr006 inference was rerun for this correction. It makes the registered run finite and
 replayable; whether the model now completes, what it extracts, and whether those claims

@@ -1751,8 +1751,8 @@ STRUCTURED_NOTE_CONTRACT = {
     "without_claims": "No evidence-bound claims were produced.",
     "model_authored_narrative": False,
 }
-STRUCTURED_RUN_CONTRACT = "structured-run/3"
-STRUCTURED_STAGE_RECEIPT = "structured-stage-receipt/4"
+STRUCTURED_RUN_CONTRACT = "structured-run/4"
+STRUCTURED_STAGE_RECEIPT = "structured-stage-receipt/5"
 LOCAL_NORMALIZATION_RECEIPT = "local-normalization-receipt/1"
 SOURCE_EVIDENCE_CONTRACT = "source-evidence/1"
 MAX_NORMALIZATION_GROUP = 3
@@ -1802,8 +1802,13 @@ REPLAYABLE_NORMALIZATION = (
     "and retained transcript"
 )
 TRANSPORT_RESPONSE_LIMIT = (
-    "Ollama transport envelope is not retained; only validated message JSON remains"
+    "Full Ollama transport envelope is not retained; validated message JSON and "
+    "minimal completion proof remain"
 )
+TRANSPORT_COMPLETION_PROOF = {
+    "done": True,
+    "done_reason": "stop",
+}
 
 
 def transcript_view_sha256(transcript: Transcript) -> str:
@@ -2146,7 +2151,18 @@ def _valid_sha256(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
-def _validate_extraction_completion(response: object, num_predict: int) -> None:
+def _valid_transport_completion_proof(value: object) -> bool:
+    """Accept only the minimal proof emitted by a completed Ollama response."""
+    return (
+        isinstance(value, dict)
+        and set(value) == set(TRANSPORT_COMPLETION_PROOF)
+        and value.get("done") is True
+        and value.get("done_reason") == "stop"
+    )
+
+
+def _validate_extraction_completion(
+        response: object, num_predict: int) -> dict:
     """Reject a token-limited prefix even when the server closed valid JSON."""
     if not isinstance(response, dict):
         raise StructuredOutputError("Ollama extraction response is not an object")
@@ -2159,11 +2175,16 @@ def _validate_extraction_completion(response: object, num_predict: int) -> None:
     if response.get("done_reason") != "stop":
         raise StructuredOutputError(
             "Ollama extraction response has no recognized completion reason")
+    return {
+        "done": response["done"],
+        "done_reason": response["done_reason"],
+    }
 
 
 def _response_provenance(source: str, ordinal: int, response: dict,
                          schema: dict, model_identity: dict, num_ctx: int,
                          num_predict: int,
+                         transport_completion: dict,
                          system: str, user: str, reference_context: dict,
                          response_cardinality: dict) -> dict:
     """Retain one validated extraction JSON reply, never a fake local stage."""
@@ -2191,6 +2212,7 @@ def _response_provenance(source: str, ordinal: int, response: dict,
         "response_validation": REPLAYABLE_SAFE_RESPONSE,
         "transport_response_retained": False,
         "transport_response_limit": TRANSPORT_RESPONSE_LIMIT,
+        "transport_completion": dict(transport_completion),
         "reference_context": reference_context,
         "response_cardinality": response_cardinality,
     }
@@ -3019,7 +3041,7 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
         "input_prompt_sha256", "input_prompt_validation",
         "validated_response_json", "validated_response_sha256",
         "response_validation", "transport_response_retained",
-        "transport_response_limit",
+        "transport_response_limit", "transport_completion",
         "reference_context", "response_cardinality",
     }
     common_references = {
@@ -3099,6 +3121,9 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
             or receipt["response_validation"] != REPLAYABLE_SAFE_RESPONSE
             or receipt["transport_response_retained"] is not False
             or receipt["transport_response_limit"] != TRANSPORT_RESPONSE_LIMIT
+            or not _valid_transport_completion_proof(
+                receipt["transport_completion"]
+            )
             or receipt["reference_context"] != expected_reference
             or receipt["response_cardinality"] != expected_cardinality
         ):
@@ -3241,7 +3266,9 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         except SystemExit as e:
             raise SystemExit(f"{chunk.source}: {e}") from None
         try:
-            _validate_extraction_completion(response, num_predict)
+            transport_completion = _validate_extraction_completion(
+                response, num_predict
+            )
         except StructuredOutputError as e:
             raise SystemExit(
                 f"{chunk.source}: structured extraction refused: {e}"
@@ -3268,7 +3295,7 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         )
         stage_provenance.append(_response_provenance(
             chunk.source, ordinal, response, schema, identity, num_ctx,
-            num_predict,
+            num_predict, transport_completion,
             extract_system, user, reference_context={
                 "transcript_view_sha256": fragment_map["transcript_view_sha256"],
                 "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
@@ -4262,7 +4289,8 @@ def recheck(artifact: Path) -> dict:
     cardinality; resolves their evidence against the transcript; then reruns the
     deterministic local normalization and requires its output graph, coverage, counts,
     and local receipt to match exactly. There is no consolidation model response. The
-    Ollama transport envelopes and historical model-list response remain absent. The
+    Full Ollama transport envelopes and the historical model-list response remain
+    absent; each extraction receipt retains only its fixed completion proof. The
     artifact is unsigned, so a coordinated rewrite of content, contracts, and hashes
     is outside this check's trust boundary.
     """
@@ -4469,9 +4497,10 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
             # recorded the now-retired chunked Markdown pass.
             "duplicates_removed": result.get("duplicates_removed"),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            # Only schema-validated stage JSON survives: IDs, labels, and claims.
-            # Source text stays in the transcript; the Ollama transport envelope and
-            # historical model-list response do not become artifact authority.
+            # Only schema-validated stage JSON (IDs, labels, and claims) plus the
+            # fixed completion proof survive. Source text stays in the transcript;
+            # the full Ollama envelope and historical model-list response do not
+            # become artifact authority.
             "structured_stages": result.get("structured_provenance"),
             "structured_contract": result.get("structured_contract"),
             "source_evidence": (
@@ -6550,13 +6579,21 @@ def run_self_test() -> int:
     extraction_receipts = staged_new["structured_provenance"][:-1]
     normalization_receipt = staged_new["structured_provenance"][-1]
     control(
-        "safe extraction JSON and local receipt replay claims, normalization, and coverage",
+        "safe extraction JSON, completion proof, and local receipt replay",
         all(row["model_digest"] == fixture_identity["digest"]
                 for row in extraction_receipts)
         and all("raw_response" not in row and "response_sha256" not in row
                 for row in staged_new["structured_provenance"])
+        and all(not {
+            "created_at", "total_duration", "load_duration",
+            "prompt_eval_count", "prompt_eval_duration",
+            "eval_count", "eval_duration",
+        } & row.keys() for row in extraction_receipts)
         and all(row["transport_response_retained"] is False
                 and row["transport_response_limit"] == TRANSPORT_RESPONSE_LIMIT
+                and _valid_transport_completion_proof(
+                    row["transport_completion"]
+                )
                 and row["response_validation"] == REPLAYABLE_SAFE_RESPONSE
                 and row["validated_response_sha256"]
                 == _sha256(row["validated_response_json"])
@@ -7169,6 +7206,16 @@ def run_self_test() -> int:
         "options"
     ]["num_predict"] += 1
     receipt_tampers.append(tampered_budget)
+    missing_completion = json.loads(json.dumps(structured_doc))
+    del missing_completion["provenance"]["structured_stages"][0][
+        "transport_completion"
+    ]
+    receipt_tampers.append(missing_completion)
+    tampered_completion = json.loads(json.dumps(structured_doc))
+    tampered_completion["provenance"]["structured_stages"][0][
+        "transport_completion"
+    ]["done_reason"] = "length"
+    receipt_tampers.append(tampered_completion)
     tampered_output_contract = json.loads(json.dumps(structured_doc))
     tampered_output_contract["provenance"]["structured_contract"][
         "extraction_output_contract"
@@ -7230,7 +7277,7 @@ def run_self_test() -> int:
         except StructuredOutputError:
             pass
     control(
-        "tampered model receipts or local normalization receipts fail recheck",
+        "missing or tampered completion, model, or normalization receipts fail recheck",
         receipt_tampers_refused,
     )
     narrative_runtime = json.loads(json.dumps(staged_new))
