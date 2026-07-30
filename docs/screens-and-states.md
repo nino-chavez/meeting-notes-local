@@ -267,6 +267,24 @@ admitting the room perturbs which real content survives compression. The surface
 to say which cost is which, because the two are not interchangeable and a slider
 alone implies they are.
 
+**It must not ask for a number, and that resolves a contradiction between two things
+this project decided separately.** `speaker_gate.py` deliberately gives `--target-frr`
+no default, because a plausible constant would read exactly like a measured one to
+every later reader — correct for a CLI whose user is reading the source.
+`journeys.md` states the reader assumes nothing about audio or models. A screen that
+asks for a false-reject rate satisfies the first and violates the second, and both
+were written as binding.
+
+The resolution keeps the choice and drops the vocabulary: **two or three named options,
+each carrying the cost measured from the operator's own calibration**, in the terms of
+their own meeting rather than the model's. "Keep everything I say, and accept that some
+of the room gets in" against "keep the room out, and accept losing some of my own short
+replies" — with the actual figures from their material beside each, because the numbers
+are evidence and the jargon was never the evidence. The chosen quantile still lands in
+the profile and still has no default; nothing about it is inferred. What changes is that
+the operator is asked a question about their meeting instead of a question about a
+distribution.
+
 **`experimental` must not look like `enrolled`.** The override exists so a
 measurement can be taken with material that does not meet the contract, and its only
 value is that the weakening stays visible downstream. Two surfaces already carry

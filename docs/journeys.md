@@ -157,13 +157,25 @@ Crosses **F → E → transcript**. The beats that decide whether this works:
 
 ### J2 — "Did I promise anyone anything?" (commitment)
 
-End of day or week. Crosses **F → E**, and needs an aggregation across notes that no
-surface provides.
+End of day or week. Crosses **F → E**.
 
-The load-bearing constraint is that this must not become a task manager. The
-resolution: the tool answers *what was said*, and hands off — an export, a copy, a
-link into whatever the operator already uses. Owning the closed state means owning
-follow-up, and that is a different product.
+The load-bearing constraint is that this must not become a task manager. The tool
+answers *what was said* and hands off — an export, a copy, a link into whatever the
+operator already uses. Owning the closed state means owning follow-up, and that is a
+different product.
+
+**That constraint decides where this lives, and it is a filter on F rather than a
+surface of its own.** An earlier version of the gap table below listed "no
+cross-meeting aggregation" as a medium gap, which was wrong twice over: a journey with
+no surface anywhere is not a medium gap in an inventory, it is a journey the product
+cannot perform — and calling it medium made an undecided thing read as scheduled.
+
+Decided: F gains a state where the organising primitive is the commitment rather than
+the meeting, spanning a date range. It is a `filtered` view in the sense F already
+carries, not a new template and not a new surface, and it is the smallest thing that
+satisfies J2 without acquiring a task manager. Its detail target is still E, and its
+terminal action is still export — because the moment this surface offers a checkbox,
+the tool owns follow-through and the operator has two task systems.
 
 ### J3 — The meeting itself (capture)
 
@@ -213,20 +225,67 @@ gone.
 
 ---
 
+## The one decision that resolves J1 against J5
+
+J1's defence against a confident partial note is tracing a claim back to the words
+behind it. J5 deletes audio on purpose. Written as two journeys those are a
+contradiction, and noting it in both places is an acknowledgement rather than a
+resolution — so it is resolved here, because one decision settles both surfaces.
+
+**The question:** does a note carry enough evidence *inline* that the audio is only
+ever a bonus? If yes, retention is cheap and J1 survives deletion. If no, J1's defence
+has a fixed expiry, and what looks like a retention period is really a *trust* period —
+after which every note becomes an unfalsifiable claim.
+
+**Decided: the note cites the transcript, and the transcript is what is retained.**
+Each claim in a note carries the verbatim turn or turns that produced it, with their
+timestamps. Three reasons, and the third is what makes it obvious:
+
+1. **It makes trust independent of audio.** Reading the words that produced a claim is
+   the check; hearing them is confirmation of tone and identity, which matters
+   sometimes and is not the load-bearing case.
+2. **The layers have wildly different costs.** An hour of two-leg 16 kHz audio is
+   roughly 230 MB; its transcript is tens of kilobytes. Retaining the cheap layer
+   indefinitely and expiring the expensive one is available precisely because the
+   evidence lives in the cheap one.
+3. **A partial transcript makes citation more necessary, not less.** At 30% recall the
+   note's claims rest on a third of the words, and a citation is what lets the operator
+   see *which* third. A note that says "we agreed to defer" over an unquoted gap is the
+   failure mode; the same note quoting the two turns it compressed is honest about its
+   own basis.
+
+**Consequences, which are real work and not corollaries.** The summary contract has to
+emit citations, which changes the note format — `notes/summarize.py` currently emits
+prose with no reference back into the transcript. Surface E has to render a claim and
+its evidence together. And K's `audio-released` becomes a mild state rather than a
+destructive one: the note keeps its evidence, and only the ability to *hear* it is
+gone.
+
+That the retrieval journey turned out to change the note format is the C → B → A
+ordering doing exactly what it was chosen for.
+
+---
+
 ## What the inventory is missing, checked against the journeys
 
 Derived by walking each journey against `screens-and-states.md`, not by inspection.
 
-| Gap | Journey | Severity |
+**Status means design status, never implementation.** Nothing in this table is built.
+*Specified* means a surface and its states exist in the inventory; *decided* means the
+design question is answered here and the surface work follows; *open* means nobody has
+answered it yet. Collapsing those three into a severity was the first version's error —
+it made an undecided item read as scheduled.
+
+| Gap | Journey | Status |
 |---|---|---|
-| No retention, deletion, or disk-accounting surface | J5 | **Highest** — undesigned lifecycle for other people's voices |
-| No way to overrule a gate decision | J4 | **High** — the code documents this capability as existing |
-| No path from a claim in a note to the words behind it | J1 | **High** — the only defence against a confident partial note |
-| "Not captured" and "never said" are indistinguishable | J1 | **High** — the artifact knows the difference and does not show it |
-| No cross-meeting aggregation | J2 | Medium — the end-of-week question has no surface |
-| No surface for a note that is present but inadequate | J1, J4 | Medium — `summary-failed` covers absent, not thin |
-| Export/share has no redaction step | J2 | Medium — gated turns and room speech would travel |
-| The far end's experience is entirely undesigned | J3 | Open decision, already flagged, legal weight |
+| Retention, deletion, disk accounting | J5 | **Specified** — surface K, added from this walk. Was the highest-stakes gap: an undesigned lifecycle for other people's voices |
+| A claim in a note has no path to the words behind it | J1 | **Decided** — the note cites the transcript. Requires a change to the summary contract and to E, neither of which exists |
+| No way to overrule a gate decision | J4 | **Open, and the code already promises it.** `transcript.json` keeps every gated turn so it can be overruled and no surface can |
+| "Not captured" and "never said" look identical | J1 | **Open** — the artifact holds the recall figures and the gate's report, and shows neither |
+| F has no commitment-organised view | J2 | **Decided** — a `filtered` state on F, not a new surface |
+| A note that is present but inadequate | J1, J4 | **Open** — E's `summary-failed` covers absent, not thin |
+| Export and share have no redaction step | J2 | **Open** — gated turns and room speech would travel with the note |
+| The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight |
 
 ---
 
