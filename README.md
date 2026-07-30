@@ -45,10 +45,12 @@ The first supported beta is deliberately narrow:
 - macOS 14.4 or later;
 - manual start and stop;
 - headphones, with one enrolled operator at the microphone;
+- supported meeting capture blocked until that measured profile exists;
 - local, post-meeting transcription and note generation;
 - a library and note reader with claim-to-transcript evidence;
 - correction of withheld turns, note regeneration, a chosen audio auto-deletion
-  period and immediate deletion.
+  period and immediate deletion;
+- an owner-only voice profile that can be reset without deleting meetings.
 
 Speaker playback, live transcription, calendar preparation, automatic meeting
 detection, named participants, cross-meeting search and product-development
@@ -117,14 +119,16 @@ profile, and neither requires an enrollment ritual — the profile is built
 passively from ordinary speech. Google Meet does not attempt it and says so
 outright: "voices from TV or people talking won't be canceled."
 
-**This ships a ritual anyway, and that is a deliberate divergence from the
-canonical pattern.** Two explicit one-minute recordings, where the vendors ask for
-none. The reason is the threshold, not the profile: a centroid can be harvested
+**The supported beta ships deliberate calibration anyway, and that is a deliberate
+divergence from the canonical pattern.** It blocks supported meeting capture until
+the operator has contributed enough speech across at least two sittings, supplied a
+permitted negative sample, and selected an operating point with both measured costs
+visible. The reason is the threshold, not the profile: a centroid can be harvested
 passively, but the cut point has to be a quantile of the operator's own score
-distribution, and nothing passive establishes that before the gate has already
-decided what to drop. Passive enrollment is the right end state and it needs a
-threshold that survives not knowing whose speech it just learned from — unbuilt,
-and not something to fake with a constant.
+distribution, and nothing passive establishes that before an ungated first meeting
+has already decided what to keep. Passive updating is the right later state. It
+needs a valid profile to start from and a threshold that survives not knowing whose
+speech it just learned from — unbuilt, and not something to fake with a constant.
 
 An off-the-shelf embedding separates the operator from his own household,
 measured on five minutes of his speech through the microphone the gate runs on.
@@ -261,23 +265,23 @@ turns were other people talking near the laptop — transcribed cleanly and hand
 to the notes as things a participant said. The voiceprint gate removes them, and it
 now runs inside the capture rather than beside it.
 
-**You talk normally throughout.** Nothing to read, nothing playing in the
-background, no cues on screen.
+**You talk normally throughout the operator sittings.** Nothing to read, nothing
+playing in the background, no cues on screen.
 
-**1. Two real meetings on headphones, on different days.** No dedicated enrolment
-recording at all — on headphones the other participants arrive on the system leg, so
-the *microphone* leg of an ordinary meeting is already a recording of just you.
+**1. Two dedicated operator sittings on headphones, on different days.** The
+supported product cannot bootstrap its first profile from an ungated meeting and
+still claim that meeting was inside the supported envelope. These are calibration
+captures, not meetings:
 
 ```sh
-.venv/bin/python spike/dual_capture.py --seconds 3600 --out ~/meeting-1
+.venv/bin/python spike/dual_capture.py --seconds 180 --out ~/enroll-1
 # another day
-.venv/bin/python spike/dual_capture.py --seconds 3600 --out ~/meeting-2
+.venv/bin/python spike/dual_capture.py --seconds 180 --out ~/enroll-2
 ```
 
-This is the pattern Teams and Zoom use — the profile comes from ordinary speech
-rather than a setup screen — and it means step 1 costs nothing beyond remembering to
-start the capture. A deliberate three-minute monologue works too if you would rather
-not wait for two meetings.
+The beta encounter keeps supported meeting capture blocked until these requirements
+and the operating-point choice are complete. Later passive updating may use retained
+headphone meetings after a valid profile already exists; that path is not built.
 
 **Two things that cannot be shortcut, and both are enforced rather than advised.**
 
@@ -293,8 +297,10 @@ records when it happened and enrolment refuses sittings less than an hour apart.
 or more before any one of them *is* the fifth percentile. The 117-second take from
 the echo work has nine, which is why it is not enough on its own.
 
-**2. A minute of someone who is not you.** A podcast, the radio, anyone else in the
-room.
+**2. A minute of permitted speech that is not you.** Use public-domain or
+appropriately licensed playback, or a person who knowingly consents to make this
+calibration recording. Do not use a private conversation, an unaware bystander, or
+unlicensed program audio.
 
 ```sh
 .venv/bin/python spike/dual_capture.py --seconds 60 --out ~/not-me
@@ -308,8 +314,8 @@ profile without it.
 
 ```sh
 .venv/bin/python spike/speaker_gate.py \
-  --calibrate ~/meeting-1/mic-segments.json ~/meeting-1/mic.wav \
-  --calibrate ~/meeting-2/mic-segments.json ~/meeting-2/mic.wav \
+  --calibrate ~/enroll-1/mic-segments.json ~/enroll-1/mic.wav \
+  --calibrate ~/enroll-2/mic-segments.json ~/enroll-2/mic.wav \
   --against   ~/not-me/mic-segments.json    ~/not-me/mic.wav \
   --enroll-out ~/voiceprint.json --target-frr 0.05
 
@@ -317,15 +323,30 @@ profile without it.
   --voiceprint ~/voiceprint.json --out ~/meeting-gated
 ```
 
-The first two meetings are also test data — they went through the same capture, so
-their transcripts and notes are readable now, ungated. The gate is what the third one
-adds.
+The product contract deletes dedicated operator and negative-sample recordings after
+the profile is built. The research CLI above does not yet implement that lifecycle;
+it leaves those capture directories in place, so it is not the beta privacy behavior.
+A retained source meeting used for a later rebuild is different: its audio keeps the
+auto-deletion period already chosen for that meeting.
 
 Every operating point is printed with what it admits of the other voice before
 anything is written, so `--target-frr` is a choice made with the cost in view. If
 the material falls short the run refuses and names which requirement failed;
 `--experimental` overrides that and marks the profile, and every capture gated by an
 experimental profile says so rather than reading like a measured configuration.
+
+The product presents three ordered policy choices — preserve more operator speech,
+choose the middle ground, or keep more other voices out. No option is selected by
+default. The operator-speech drop rate and negative-sample admission rate beside each
+choice come from that operator's material at runtime; the prototype does not invent
+personal percentages. The CLI command above uses `0.05` only as an explicit research
+example, not a product default.
+
+The resulting profile is private to the owning macOS account and separate from every
+meeting. Resetting it deletes the profile, calibrated threshold, and enrollment
+provenance. It does not delete notes, transcripts, meeting audio, retention choices,
+or other meetings. Future capture is then ungated and outside the supported beta;
+supported manual capture remains blocked until enrollment completes again.
 
 Then hand the transcript to the notes half below and **read the note**. That is the
 step, and it cannot be automated: whether a partial transcript supports usable

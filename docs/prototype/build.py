@@ -582,6 +582,11 @@ def encounter() -> str:
   <div class="encounter-controls" aria-label="Review states">
     <button type="button" data-panel="spec-library">library</button>
     <button type="button" data-panel="spec-first-run">first launch</button>
+    <button type="button" data-panel="spec-enrollment">enrollment progress</button>
+    <button type="button" data-panel="spec-negative-sample">negative sample</button>
+    <button type="button" data-panel="spec-operating-point">voice policy</button>
+    <button type="button" data-panel="spec-enrolled">enrolled profile</button>
+    <button type="button" data-panel="spec-profile-reset">reset profile</button>
     <button type="button" data-panel="spec-detected">future: detection</button>
     <button type="button" data-panel="spec-consent">consent</button>
     <button type="button" data-panel="spec-armed">armed</button>
@@ -600,11 +605,14 @@ def encounter() -> str:
     <p>This is the cold-start default: content is present, but no capture resumes and
       no note is chosen for the operator. The real-data library and detail follow this
       specimen.</p>
+    <p class="state-result" id="capture-eligibility">Supported capture unavailable:
+      complete voice enrollment first. Existing meetings remain readable.</p>
     <div class="panel-actions">
-      <button type="button" data-panel="spec-consent" data-action="manual-start">
-        start a capture manually
+      <button type="button" id="manual-capture" data-action="manual-start" disabled>
+        start capture — enrollment required
       </button>
       <button type="button" data-panel="spec-first-run">review first launch</button>
+      <button type="button" data-panel="spec-enrollment">review enrollment blocker</button>
     </div>
   </section>
 
@@ -624,34 +632,140 @@ def encounter() -> str:
       <button type="button" data-permission="system">show system capture granted</button>
     </div>
     <p class="state-result" id="permissions-result">Two permissions still needed.</p>
-    <button type="button" data-panel="spec-enrollment" data-requires-permissions disabled>
-      continue to voice enrollment
+    <button type="button" data-panel="spec-retention-choice"
+      data-requires-permissions disabled>
+      choose meeting-audio retention
     </button>
   </section>
 
   <section class="encounter-panel" id="spec-enrollment" data-menubar="idle" hidden>
-    <p class="eyebrow">voice enrollment handoff · result unavailable</p>
-    <h3>Build a voice profile over more than one sitting</h3>
-    <p>No profile is built in this prototype. A supported profile requires evidence
-      that one recording session cannot provide:</p>
+    <p class="eyebrow">accumulating · no operator data loaded by this prototype</p>
+    <h3>Supported capture waits for a measured voice profile</h3>
+    <p>A first profile comes from dedicated calibration, not from an ungated meeting.
+      The app reports observed facts here; this specimen uses placeholders rather than
+      inventing a result for its reviewer.</p>
+    <div class="setup-status">
+      <p><strong>Separate sittings</strong><span>measured at runtime</span></p>
+      <p><strong>Held-out operator speech</strong><span>measured at runtime</span></p>
+      <p><strong>Time between sittings</strong><span>measured at runtime</span></p>
+      <p><strong>Other-voice sample</strong><span>measured at runtime</span></p>
+    </div>
     <ul class="setup-list">
       <li><strong>At least two sittings</strong>, at least one hour apart and ideally
         on different days.</li>
-      <li>Enough held-out operator speech to measure the selected trade-off.</li>
-      <li>A recording of another voice, so false admission can be measured.</li>
+      <li>Enough held-out operator speech to measure every offered policy.</li>
+      <li>Negative material from public or licensed playback, or a person who
+        consented to make the calibration recording.</li>
     </ul>
-    <p class="state-result">Enrollment remains incomplete. This is a handoff, not an
-      enrolled-state result.</p>
-    <button type="button" data-panel="spec-retention-choice">
-      review the required retention choice
-    </button>
+    <p class="state-result">No enrollment conclusion is claimed here. In the product,
+      the missing requirement and next action replace these placeholders.</p>
+    <div class="panel-actions">
+      <button type="button" data-panel="spec-negative-sample">
+        review the negative-sample step</button>
+      <button type="button" data-panel="spec-operating-point">
+        review the policy choice</button>
+    </div>
+  </section>
+
+  <section class="encounter-panel" id="spec-negative-sample" data-menubar="idle" hidden>
+    <p class="eyebrow">negative sample · dedicated calibration material</p>
+    <h3>Measure what the gate might mistake for you</h3>
+    <p>Use either public-domain or appropriately licensed speech played near the
+      microphone, or a person who knowingly agrees to make this calibration recording.
+      Do not capture a private conversation, an unaware bystander, or unlicensed
+      program audio for this step.</p>
+    <fieldset class="negative-choice">
+      <legend>Review an allowed source — none is preselected</legend>
+      <label><input type="radio" name="negative-source">
+        Public-domain or licensed speech playback</label>
+      <label><input type="radio" name="negative-source">
+        A consenting person recording for calibration</label>
+    </fieldset>
+    <p>Dedicated operator and negative-sample recordings are deleted automatically
+      after the profile is built. If an existing retained meeting is later used to
+      rebuild a profile, that meeting keeps the audio-retention period already chosen
+      for it.</p>
+    <p class="state-result" id="negative-material-result">No source selected in this
+      specimen. No recording is made.</p>
+    <button type="button" data-panel="spec-operating-point">
+      review the operating-point choice</button>
+  </section>
+
+  <section class="encounter-panel" id="spec-operating-point" data-menubar="idle" hidden>
+    <p class="eyebrow">operating point · ordered policy choice</p>
+    <h3>Choose which error the gate should avoid first</h3>
+    <p>The product populates both rates below from the operator's held-out sittings
+      and the permitted negative sample. Until those measurements exist, the choices
+      remain unavailable. No option is selected or recommended by default.</p>
+    <fieldset class="voice-policy-choice">
+      <legend>Ordered from preserving your speech to excluding other voices</legend>
+      <label><input type="radio" name="voice-policy">
+        <strong>Preserve more of my speech</strong>
+        <span>My speech dropped: measured at runtime · other voice admitted:
+          measured at runtime</span></label>
+      <label><input type="radio" name="voice-policy">
+        <strong>Choose the middle ground</strong>
+        <span>My speech dropped: measured at runtime · other voice admitted:
+          measured at runtime</span></label>
+      <label><input type="radio" name="voice-policy">
+        <strong>Keep more other voices out</strong>
+        <span>My speech dropped: measured at runtime · other voice admitted:
+          measured at runtime</span></label>
+    </fieldset>
+    <p class="state-result" id="voice-policy-result">No policy selected. This
+      prototype has no personal measurements and cannot build a profile.</p>
+    <button type="button" data-panel="spec-enrolled">
+      review the enrolled-state contract</button>
+  </section>
+
+  <section class="encounter-panel" id="spec-enrolled" data-menubar="idle" hidden>
+    <p class="eyebrow">enrolled-state contract · not a personal result</p>
+    <h3>An enrolled profile makes its evidence visible</h3>
+    <p>The real state appears only after the requirements pass and the operator
+      explicitly selects an operating point. It shows measured rates, sittings,
+      held-out speech, build time, and encoder identity. This specimen claims none of
+      those facts about its reviewer.</p>
+    <div class="setup-status">
+      <p><strong>Selected policy and rates</strong><span>shown at runtime</span></p>
+      <p><strong>Enrollment provenance</strong><span>shown at runtime</span></p>
+      <p><strong>Profile owner</strong><span>this macOS account only</span></p>
+    </div>
+    <p>The profile is app-private, owner-only, and separate from every meeting. It is
+      not included in exports. Dedicated calibration audio has already been deleted;
+      source meetings retain their own chosen lifecycle.</p>
+    <p class="state-result">Only a real, persisted profile enables the supported
+      manual-capture control. Reviewing this panel does not enable it.</p>
+    <button type="button" data-panel="spec-profile-reset">review profile reset</button>
+    <button type="button" data-panel="spec-library">return to blocked library</button>
+  </section>
+
+  <section class="encounter-panel" id="spec-profile-reset" data-menubar="idle" hidden>
+    <p class="eyebrow">owner-only profile · separately deletable</p>
+    <h3>Reset the voice profile without deleting meetings</h3>
+    <p class="state-result" id="profile-result">The profile remains in this
+      interaction specimen.</p>
+    <button type="button" id="reset-profile-now">reset voice profile</button>
+    <div class="confirm-box" id="reset-profile-confirm" hidden>
+      <strong>Delete the local voice profile?</strong>
+      <p>The profile, calibrated threshold, and enrollment provenance go. Existing
+        notes, transcripts, meeting audio, and meeting retention choices remain.
+        Dedicated calibration recordings were already deleted after the profile was
+        built. Future capture has no voice gate and is outside the supported beta
+        until enrollment completes again. This product action cannot be undone; this
+        specimen changes no file.</p>
+      <button type="button" id="confirm-reset-profile">delete profile</button>
+      <button type="button" id="cancel-reset-profile">cancel</button>
+    </div>
+    <button type="button" data-panel="spec-enrollment">review re-enrollment</button>
   </section>
 
   <section class="encounter-panel" id="spec-retention-choice" data-menubar="idle" hidden>
     <p class="eyebrow">first launch · choice required</p>
     <h3>Choose how long audio stays on this Mac</h3>
-    <p>Notes and transcripts remain when audio is deleted. There is intentionally no
-      preselected period: this choice concerns recordings of other people.</p>
+    <p>Notes and transcripts remain when meeting audio is deleted. There is
+      intentionally no preselected period: this choice concerns recordings of other
+      people. Dedicated enrollment recordings are shorter lived and are deleted as
+      soon as the profile is built.</p>
     <fieldset class="retention-choice">
       <legend>Auto-deletion period</legend>
       <label><input type="radio" name="retention-period"> 30 days</label>
@@ -661,8 +775,8 @@ def encounter() -> str:
         Keep audio until I delete it</label>
     </fieldset>
     <p class="state-result" id="retention-result">No period selected.</p>
-    <button type="button" data-panel="spec-library" data-requires-retention disabled>
-      finish first-launch review
+    <button type="button" data-panel="spec-enrollment" data-requires-retention disabled>
+      continue to required voice enrollment
     </button>
   </section>
 
@@ -680,9 +794,15 @@ def encounter() -> str:
     <p class="eyebrow">operator attestation · capture is not running</p>
     <h3>Do the participants know and agree to this recording?</h3>
     <p>The app cannot infer consent from microphone activity. The operator must attest
-      before the cancellable countdown begins.</p>
+      before the cancellable countdown begins. The product shows the chosen meeting
+      audio-retention period here and states that the transcript and note remain until
+      the meeting itself is deleted.</p>
+    <p class="state-result" id="consent-retention">Meeting audio retention: selected
+      period shown at runtime. Transcript and note: held until this meeting is
+      deleted.</p>
     <label class="attestation"><input type="checkbox" id="participant-attested">
-      I confirm the participants know this meeting will be recorded and agree.
+      I confirm the participants know this meeting will be recorded, understand the
+      retention shown above, and agree.
     </label>
     <p class="state-result" id="attestation-result">Attestation required.</p>
     <div class="panel-actions">
@@ -774,14 +894,17 @@ def encounter() -> str:
     <p class="eyebrow">delete-audio specimen · no local file is touched</p>
     <h3>Delete audio; keep the note and transcript evidence</h3>
     <p>Deleting audio removes both captured WAV files and the ability to replay tone
-      or identity. The note, transcript, and claim-to-words links remain.</p>
+      or identity. The note, transcript, claim-to-words links, and separately stored
+      voice profile remain.</p>
     <p class="state-result" id="audio-result">Audio files are still held in this
       specimen.</p>
     <button type="button" id="delete-audio-now">delete audio now</button>
     <div class="confirm-box" id="delete-audio-confirm" hidden>
       <strong>Delete the audio files now?</strong>
-      <p>The note and transcript remain. Audio playback, tone, and identity checks are
-        removed. The product action cannot be undone; this specimen changes no file.</p>
+      <p>The note, transcript, claim evidence, and voice profile remain. Both meeting
+        WAV files, audio playback, tone checks, identity checks against that audio, and
+        retranscription from that audio go. The product action cannot be undone; this
+        specimen changes no file.</p>
       <button type="button" id="confirm-delete-audio">delete audio files</button>
       <button type="button" id="cancel-delete-audio">cancel</button>
     </div>
@@ -792,16 +915,18 @@ def encounter() -> str:
   <section class="encounter-panel" id="spec-delete-meeting" data-menubar="idle" hidden>
     <p class="eyebrow">delete-meeting specimen · no local file is touched</p>
     <h3>Delete the whole meeting</h3>
-    <p>This is separate from deleting audio. It removes the note, transcript, evidence
-      links, and both audio files.</p>
+    <p>This is separate from deleting audio and from resetting the voice profile. It
+      removes the note, transcript, evidence links, both audio files, and this
+      meeting's retention record. The owner-only voice profile remains.</p>
     <p class="state-result" id="meeting-result">The meeting is still held in this
       specimen.</p>
     <button type="button" id="delete-meeting-now">delete meeting</button>
     <div class="confirm-box" id="delete-meeting-confirm" hidden>
       <strong>Delete this meeting permanently?</strong>
-      <p>The note, transcript, claim evidence, and audio all go. Nothing remains to
-        retrieve or regenerate. The product action cannot be undone; this specimen
-        changes no file.</p>
+      <p>The note, transcript, claim evidence, both meeting WAV files, and this
+        meeting's retention record all go. Nothing from this meeting remains to
+        retrieve or regenerate. The separately stored voice profile and other meetings
+        remain. The product action cannot be undone; this specimen changes no file.</p>
       <button type="button" id="confirm-delete-meeting">delete note, transcript, and audio</button>
       <button type="button" id="cancel-delete-meeting">cancel</button>
     </div>
@@ -1011,11 +1136,20 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   .setup-list li {{ margin-bottom: 7px; }}
   .attestation {{ display: block; max-width: 640px; margin: 14px 0; padding: 12px;
                   border: 1px solid var(--neutral-600); color: var(--neutral-100); }}
-  .retention-choice, .notice-choice {{ display: grid; gap: 8px; max-width: 420px;
-                                       margin: 14px 0; padding: 12px;
-                                       border: 1px solid var(--neutral-600); }}
-  .retention-choice legend, .notice-choice legend {{ color: var(--neutral-200); }}
-  .retention-choice label, .notice-choice label {{ color: var(--neutral-300); }}
+  .retention-choice, .notice-choice, .negative-choice, .voice-policy-choice {{
+    display: grid; gap: 8px; max-width: 620px; margin: 14px 0; padding: 12px;
+    border: 1px solid var(--neutral-600); }}
+  .retention-choice legend, .notice-choice legend, .negative-choice legend,
+  .voice-policy-choice legend {{ color: var(--neutral-200); }}
+  .retention-choice label, .notice-choice label, .negative-choice label,
+  .voice-policy-choice label {{ color: var(--neutral-300); }}
+  .voice-policy-choice label {{ display: grid; grid-template-columns: auto 1fr;
+                                column-gap: 8px; padding: 8px 0;
+                                border-bottom: 1px solid var(--neutral-700); }}
+  .voice-policy-choice label:last-child {{ border-bottom: 0; }}
+  .voice-policy-choice input {{ grid-row: 1 / span 2; }}
+  .voice-policy-choice strong {{ color: var(--neutral-100); }}
+  .voice-policy-choice span {{ color: var(--neutral-400); font: 11px/1.45 var(--mono); }}
   .state-result {{ color: var(--neutral-200) !important; border-left: 2px solid var(--neutral-500);
                    padding-left: 9px; }}
   .countdown {{ font: 24px/1 var(--mono); color: var(--neutral-50) !important; }}
@@ -1199,9 +1333,27 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   }});
   document.querySelectorAll('input[name="retention-period"]').forEach(function (input) {{
     input.addEventListener('change', function () {{
+      var period = input.parentElement.textContent.trim();
       document.getElementById('retention-result').textContent =
-        'Period selected for this specimen. No recommendation is implied.';
+        period + ' selected for this specimen. No recommendation is implied.';
+      document.getElementById('consent-retention').textContent =
+        'Meeting audio retention: ' + period + '. Transcript and note: held until '
+        + 'this meeting is deleted.';
       document.querySelector('[data-requires-retention]').disabled = false;
+    }});
+  }});
+  document.querySelectorAll('input[name="negative-source"]').forEach(function (input) {{
+    input.addEventListener('change', function () {{
+      document.getElementById('negative-material-result').textContent =
+        'Allowed source selected for interaction review. No recording is made, and '
+        + 'no compliance result is claimed.';
+    }});
+  }});
+  document.querySelectorAll('input[name="voice-policy"]').forEach(function (input) {{
+    input.addEventListener('change', function () {{
+      document.getElementById('voice-policy-result').textContent =
+        'Policy selected for interaction review only. A real selection stays '
+        + 'unavailable until both measured rates can be shown.';
     }});
   }});
   document.getElementById('participant-attested').addEventListener('change', function (e) {{
@@ -1244,8 +1396,8 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   document.getElementById('confirm-delete-audio').addEventListener('click', function () {{
     document.getElementById('delete-audio-confirm').hidden = true;
     document.getElementById('audio-result').textContent =
-      'Audio deleted in the interaction specimen. Note and transcript remain; no local '
-      + 'file changed.';
+      'Audio deleted in the interaction specimen. Note, transcript, claim evidence, '
+      + 'and voice profile remain; no local file changed.';
   }});
   document.getElementById('delete-meeting-now').addEventListener('click', function () {{
     document.getElementById('delete-meeting-confirm').hidden = false;
@@ -1259,7 +1411,24 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
     .addEventListener('click', function () {{
       document.getElementById('delete-meeting-confirm').hidden = true;
       document.getElementById('meeting-result').textContent =
-        'Meeting deleted in the interaction specimen. No local file changed.';
+        'Meeting deleted in the interaction specimen. Other meetings and the voice '
+        + 'profile remain; no local file changed.';
+  }});
+  document.getElementById('reset-profile-now').addEventListener('click', function () {{
+    document.getElementById('reset-profile-confirm').hidden = false;
+  }});
+  document.getElementById('cancel-reset-profile').addEventListener('click', function () {{
+    document.getElementById('reset-profile-confirm').hidden = true;
+    document.getElementById('profile-result').textContent =
+      'Profile reset cancelled. The profile remains in this interaction specimen.';
+  }});
+  document.getElementById('confirm-reset-profile')
+    .addEventListener('click', function () {{
+      document.getElementById('reset-profile-confirm').hidden = true;
+      document.getElementById('profile-result').textContent =
+        'Profile deleted in the interaction specimen. Existing meetings remain; '
+        + 'future capture is ungated and outside the supported beta until re-enrollment. '
+        + 'No local file changed.';
   }});
   document.querySelector('[data-action="finish-processing"]')
     .addEventListener('click', function () {{
@@ -1310,7 +1479,8 @@ def check_encounter_wiring(page_html: str) -> int:
     """
     expected = {
         "spec-library", "spec-first-run", "spec-detected", "spec-consent",
-        "spec-enrollment", "spec-retention-choice",
+        "spec-enrollment", "spec-negative-sample", "spec-operating-point",
+        "spec-enrolled", "spec-profile-reset", "spec-retention-choice",
         "spec-armed", "spec-recording", "spec-degraded", "spec-transcribing",
         "spec-processing-failed", "spec-note-ready", "spec-correction",
         "spec-retention", "spec-delete-meeting", "spec-far-end",
@@ -1343,10 +1513,48 @@ def check_encounter_wiring(page_html: str) -> int:
     )
     if not retention or "checked" in retention.group(1):
         raise SystemExit("first-run retention choice must have no default")
+    if 'data-panel="spec-enrollment" data-requires-retention disabled' not in page_html:
+        raise SystemExit("retention must lead to enrollment, not an apparently ready library")
     if len(re.findall(r'<button[^>]+data-permission="(?:microphone|system)"', page_html)) != 2:
         raise SystemExit("first-run no longer exposes both required permission states")
     if "At least two sittings" not in page_html or "at least one hour apart" not in page_html:
         raise SystemExit("voice enrollment no longer states its multi-sitting requirement")
+    manual_start = re.search(r'<button[^>]+id="manual-capture"[^>]*>', page_html)
+    if not manual_start or "disabled" not in manual_start.group(0):
+        raise SystemExit("supported capture is no longer initially blocked on enrollment")
+    if "start capture — enrollment required" not in page_html:
+        raise SystemExit("the capture blocker no longer names enrollment as the next action")
+    negative = re.search(
+        r'<fieldset class="negative-choice">(.*?)</fieldset>', page_html, re.DOTALL
+    )
+    if (
+        not negative
+        or len(re.findall(r'name="negative-source"', negative.group(1))) != 2
+        or "checked" in negative.group(1)
+    ):
+        raise SystemExit("negative material must offer two allowed, unselected sources")
+    for required in (
+        "Public-domain or licensed speech playback",
+        "A consenting person recording for calibration",
+        "Dedicated operator and negative-sample recordings are deleted automatically",
+    ):
+        if required not in page_html:
+            raise SystemExit(f"enrollment lifecycle no longer states: {required}")
+    policy = re.search(
+        r'<fieldset class="voice-policy-choice">(.*?)</fieldset>', page_html, re.DOTALL
+    )
+    if (
+        not policy
+        or len(re.findall(r'name="voice-policy"', policy.group(1))) != 3
+        or "checked" in policy.group(1)
+    ):
+        raise SystemExit("voice policy must expose three ordered options with no default")
+    if policy.group(1).count("measured at runtime") != 6:
+        raise SystemExit("voice-policy costs must be populated from runtime measurements")
+    if "%" in policy.group(1):
+        raise SystemExit("voice-policy specimen must not invent personal rates")
+    if "this macOS account only" not in page_html or "not included in exports" not in page_html:
+        raise SystemExit("the voice profile is no longer clearly owner-only and app-private")
     if "future: detection" not in page_html or "excluded from supported beta" not in page_html:
         raise SystemExit("microphone-use detection is no longer bounded outside beta")
     consent = re.search(
@@ -1360,7 +1568,11 @@ def check_encounter_wiring(page_html: str) -> int:
         raise SystemExit("consent is preselected or offers an unimplemented persistent block")
     required_ids = {
         "menubar-glyph", "menubar-word", "permission-microphone", "permission-system",
-        "permissions-result", "participant-attested", "attestation-result",
+        "permissions-result", "capture-eligibility", "manual-capture",
+        "participant-attested", "attestation-result", "consent-retention",
+        "negative-material-result", "voice-policy-result",
+        "profile-result", "reset-profile-now", "reset-profile-confirm",
+        "confirm-reset-profile", "cancel-reset-profile",
         "retention-result", "withheld-turn", "correction-result", "restore-turn",
         "regenerate-note", "displayed-note-state", "audio-result", "delete-audio-now",
         "delete-audio-confirm", "confirm-delete-audio", "cancel-delete-audio",
@@ -1381,10 +1593,29 @@ def check_encounter_wiring(page_html: str) -> int:
         r'<button[^>]+data-action="open-real-data-detail"', page_html
     )) != 2:
         raise SystemExit("ready state and specimen row must both reach real-data detail")
-    if "The note and transcript remain." not in page_html:
+    flat_page = re.sub(r"\s+", " ", page_html)
+    if "The note, transcript, claim evidence, and voice profile remain." not in flat_page:
         raise SystemExit("delete-audio confirmation no longer states what survives")
-    if "The note, transcript, claim evidence, and audio all go." not in page_html:
+    if (
+        "The note, transcript, claim evidence, both meeting WAV files, and this"
+        not in flat_page
+        or "The separately stored voice profile and other meetings" not in flat_page
+    ):
         raise SystemExit("delete-meeting confirmation no longer states its full consequence")
+    reset = re.search(
+        r'<div class="confirm-box" id="reset-profile-confirm".*?</div>',
+        page_html,
+        re.DOTALL,
+    )
+    flat_reset = re.sub(r"\s+", " ", reset.group(0)) if reset else ""
+    if (
+        not reset
+        or "Existing notes, transcripts, meeting audio, and meeting retention choices remain"
+        not in flat_reset
+        or "Future capture has no voice gate and is outside the supported beta"
+        not in flat_reset
+    ):
+        raise SystemExit("profile reset no longer states its exact independent consequence")
     return len(targets)
 
 

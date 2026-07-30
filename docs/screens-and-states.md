@@ -440,10 +440,11 @@ nothing else.
 | `welcome` |
 | `request-microphone` |
 | `request-audio-capture` |
-| `offer-calendar` — optional, and asked last for that reason |
 | `choose-retention` — the auto-deletion period, which has no default (see K) |
+| `enrol-voice` — supported meeting capture remains blocked until I reaches `enrolled` |
+| `ready` — permissions, retention, and a measured voice profile all exist |
+| `offer-calendar` — optional, and asked only after `ready` for that reason |
 | `denied-recovery` — deep-link to the right System Settings pane |
-| `ready` |
 
 **Two of these are asks rather than requests, and the ordering says which.** Microphone
 and audio-capture are prerequisites — decline either and there is no product. Calendar is
@@ -452,35 +453,44 @@ already usable, where declining it is visibly cheap. Retention is a choice the o
 has to make because this document refuses to pick a default for how long other people's
 voices are kept.
 
+The permissions do not make the product ready by themselves. First run orders the
+requirements as permissions → meeting-audio retention → voice enrolment. The dedicated
+recordings made by enrolment are not meetings and do not inherit the meeting-retention
+choice: they are deleted as soon as the profile is built. The manual meeting-capture
+control remains disabled until `enrolled`; reviewing a panel or satisfying only one
+requirement cannot make it appear ready.
+
 ---
 
 ## I. Voice enrolment
 
 Added 2026-07-29, when the voiceprint gate landed in the capture
-(`spike/speaker_gate.py`, `spike/dual_capture.py`). The product now requires a
-voiceprint before it can tell the operator from the room, and no surface owned
-that. Recorded here rather than improvised at implementation time, because this
-file opens with the reason: patching at L1 when the missing primitive is at L4
-produces bugs that *move* from surface to surface instead of closing.
+(`spike/speaker_gate.py`, `spike/dual_capture.py`) and no surface owned its contract.
+The inventory and review prototype now do; there is still no application that enforces
+it. Recorded here rather than improvised at implementation time, because this file
+opens with the reason: patching at L1 when the missing primitive is at L4 produces
+bugs that *move* from surface to surface instead of closing.
 
 | State | Trigger | Notes |
 |---|---|---|
-| `unenrolled` | No material yet | The gate is off and the menubar says the mic leg is whoever was audible. Not an error, and not a wizard to dismiss. |
-| `accumulating` | Some sittings, contract unmet | The common state, and it can last days. Shows exactly what is missing, in the contract's own terms. |
-| `needs-other-voice` | Operator material sufficient, no negative sample | The one step requiring a deliberate act. |
+| `unenrolled` | No material yet | Supported meeting capture is blocked. The profile is absent; the surface offers the first dedicated calibration sitting. |
+| `accumulating` | Some sittings, contract unmet | The common state, and it can last days. Shows observed counts and exactly what is missing, never a made-up percentage. |
+| `needs-other-voice` | Operator material sufficient, no negative sample | Offers public-domain or licensed playback, or a person who knowingly consents to make a calibration recording. |
 | `ready-to-build` | Contract satisfied | The operating point is the only decision left. |
-| `choosing-operating-point` | Operator is picking the threshold | Shows what each choice costs, both directions. |
-| `enrolled` | A profile exists | Carries its provenance: sittings, held-out count, measured rate, when. |
+| `choosing-operating-point` | Operator is picking the threshold | Ordered policy choices, no default. Both measured costs populate at runtime from this material. |
+| `enrolled` | A profile exists | Carries its provenance: sittings, held-out count, both measured rates, build time, and encoder identity. Supported manual capture becomes available. |
+| `reset-confirm` | The operator asks to delete the profile | Names exactly what goes, what remains, and that future capture becomes ungated and unsupported. |
+| `reset` | Profile removed | Meetings remain. Supported capture is blocked until enrolment completes again. |
 | `stale` | The encoder changed under the profile | Cosines between two embedding spaces are not comparable, so the threshold means nothing. `load_profile` already refuses this; the surface has to explain it. |
 | `experimental` | Built past the contract | Visually distinct from `enrolled`. Nothing a capture gated by it does is a measured result. |
 
-**Enrolment is passive by default, and that is a design decision with a measured
-reason.** Teams and Zoom both build the profile from ordinary in-meeting speech and
-neither ships a setup ritual; `docs/teardown.md` records that. On headphones the
-other participants arrive on the *system* leg, so the microphone leg of an ordinary
-meeting is already a recording of just the operator — which means `accumulating`
-advances by itself every time a meeting is captured, and the deliberate flow exists
-only for someone who would rather not wait.
+**The supported beta uses deliberate calibration, despite the category's passive
+pattern.** Teams and Zoom build profiles from ordinary in-meeting speech and neither
+ships a setup ritual; `docs/teardown.md` records that. This product cannot use an
+ordinary first meeting to bootstrap the same path while also claiming that meeting was
+gated. The initial profile therefore uses dedicated operator sittings and dedicated
+negative material. Passive updating remains the desired later state, after a valid
+profile already exists and can keep the input boundary honest.
 
 **The load-bearing rule is that `accumulating` states the shortfall in the terms
 the code enforces, not as a progress bar.** `enforce_enrollment` refuses for four
@@ -491,11 +501,13 @@ specific reasons, and a percentage cannot express any of them:
   the case that reads as satisfied and is not,
 - fewer held-out segments than the chosen operating point can express (twenty for
   5%, and the floor moves with the target),
-- no recording of a voice that is not the operator.
+- no allowed recording of a voice that is not the operator.
 
 A bar at "80%" tells the operator to keep going. "One more sitting, on a different
-day, and a minute of anyone else" tells them what to do. The second is the whole
-job of this surface.
+day, and a permitted negative sample" tells them what to do. The second is the whole
+job of this surface. A negative sample is not permission to harvest someone else's
+speech: it is public-domain or appropriately licensed playback, or a deliberate
+recording made by a person who consented to that use.
 
 **`choosing-operating-point` is the one screen in the product that presents a
 trade-off rather than a reading**, which makes it the exception to the thesis and
@@ -515,15 +527,24 @@ every later reader — correct for a CLI whose user is reading the source.
 asks for a false-reject rate satisfies the first and violates the second, and both
 were written as binding.
 
-The resolution keeps the choice and drops the vocabulary: **two or three named options,
-each carrying the cost measured from the operator's own calibration**, in the terms of
-their own meeting rather than the model's. "Keep everything I say, and accept that some
-of the room gets in" against "keep the room out, and accept losing some of my own short
-replies" — with the actual figures from their material beside each, because the numbers
-are evidence and the jargon was never the evidence. The chosen quantile still lands in
-the profile and still has no default; nothing about it is inferred. What changes is that
-the operator is asked a question about their meeting instead of a question about a
-distribution.
+The resolution keeps the choice and drops the vocabulary: **three ordered named
+options, each carrying both costs measured from the operator's own calibration**, in
+the terms of their meeting rather than the model's. "Preserve more of my speech" comes
+first, "choose the middle ground" second, and "keep more other voices out" third.
+The product fills in the actual operator-speech drop rate and negative-sample admission
+rate at runtime. The prototype shows no numbers, because it has no personal
+measurements. The chosen quantile still lands in the profile and still has no default;
+nothing about it is inferred.
+
+**The profile and its source recordings have separate lifecycles.** The profile is
+app-private to the owning macOS account, is never included in a meeting export, and can
+be reset independently. Dedicated operator and negative-sample recordings are deleted
+immediately after a successful profile build. A retained meeting later used as source
+material remains a meeting: its audio follows the auto-deletion period already chosen
+for it. Reset deletes the profile, threshold, and enrolment provenance. It does not
+delete notes, transcripts, meeting audio, meeting-retention choices, or other meetings.
+Future captures then have no voice gate and sit outside the supported beta; the
+supported manual-capture control remains blocked until enrolment completes again.
 
 **`experimental` must not look like `enrolled`.** The override exists so a
 measurement can be taken with material that does not meet the contract, and its only
@@ -624,7 +645,10 @@ not silently destroy the note or transcript built from it, and the note must say
 audio is gone. The retained transcript still lets a claim resolve to the words behind
 it. What disappears is the stronger recovery path: listening to the recording,
 checking the transcription against it, or transcribing it again with a better model.
-The state must name both what survived and what cannot be recovered.
+The state must name both what survived and what cannot be recovered. The owner-only
+voice profile is separate and remains until the operator resets it. Deleting the whole
+meeting removes that meeting's note, transcript, claim evidence, both WAV files, and
+retention record; it still does not delete the voice profile or any other meeting.
 
 **Why this outranks every interface question in this file.** It is a promise the
 product implicitly makes and does not keep: "the audio never leaves the Mac" says
@@ -638,15 +662,21 @@ pick.** The same reasoning as the voiceprint threshold: a plausible constant wou
 indistinguishable from a considered one to every later reader. First run asks, and the
 answer is stated here rather than assumed.
 
+This period governs source meetings, including any retained meeting later used to
+rebuild a voice profile. It does not govern dedicated enrolment recordings: dedicated
+operator and negative-sample audio is deleted immediately after the profile is built.
+That shorter lifecycle is stated before either recording starts.
+
 **The vocabulary is the category's, not this project's.** Granola's enterprise tier
 offers "Org-wide auto-deletion periods" (`journeys.md`, market check), so this surface
 says *auto-deletion period* rather than inventing a term for a thing the operator has
 already met. Worth noting what that also reveals: retention is the primary paywall in
 both products observed — Otter caps free and Pro at the "25 most recent" conversations,
-Granola's free tier at "limited meeting history". Here the whole corpus is local and
-kept by default, so the same mechanism that competitors monetise is a cost this product
-absorbs, which is the honest reason a period has to be chosen rather than defaulted to
-forever.
+Granola's free tier at "limited meeting history". The current CLI leaves its local
+artifacts until the operator removes them; the beta must not turn that implementation
+default into a retention policy. The same mechanism that competitors monetise is a cost
+this product absorbs, which is the honest reason a period has to be chosen rather than
+defaulted to forever.
 
 ---
 

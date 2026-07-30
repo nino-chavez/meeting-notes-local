@@ -289,7 +289,9 @@ the tool owns follow-through and the operator has two task systems.
 
 ### J3 — The meeting itself (capture)
 
-Crosses **B → A → C → D → E**, fully inventoried, and the one part already built.
+Crosses **B → A → C → D → E**, fully inventoried. The two-leg CLI capture substrate
+exists and the state choreography is reviewable in `docs/prototype/build.py`; there is
+still no application that owns the journey end to end.
 
 Two beats worth restating as journey rather than state. **Consent** is the highest-
 stakes interaction in the product and the only one with legal weight in roughly a
@@ -301,11 +303,12 @@ leg and be visibly honest at menubar size.
 
 The gate marked a colleague's speech as not-the-operator. The operator disagrees.
 
-**The code already promises this journey and the product cannot honour it.**
-`transcript.json` keeps every gated turn with its score precisely so the decision can
-be overruled, and `dual_capture.py` says so in as many words — and there is no surface
-anywhere that lets anyone overrule it. A capability that exists in the substrate and
-nowhere in the interface is not a feature, it is a claim.
+**The code promises this journey and the review prototype now specifies its
+consequence.** `transcript.json` keeps every gated turn with its score precisely so the
+decision can be overruled. The correction specimen makes a restored turn mark the note
+stale and requires a separate regeneration. It is not wired to a real capture and no
+application surface performs the operation yet, so this remains a product contract
+rather than a feature.
 
 Minimum: the gated turns are visible where the note is read, distinguishable, and
 restorable — after which the note is regenerated, because a correction that does not
@@ -313,13 +316,15 @@ change the note corrects nothing.
 
 ### J5 — "How long is this keeping recordings of other people?" (retention)
 
-**Nothing in this repository designs this, and it is the highest-stakes gap in the
-product.**
+**The lifecycle is now specified and prototyped, but not implemented; it remains the
+highest-stakes application gap.**
 
 Every capture writes two WAVs and a transcript of a conversation involving people who
-are not the operator. There is no retention policy, no deletion surface, no disk
-accounting, and no statement of any of it. The audio is the most sensitive artifact
-the product creates, and its lifecycle is currently "accumulates until the disk fills."
+are not the operator. Surface K and the interaction prototype now require a
+no-default retention choice, disk accounting, per-meeting audio deletion, whole-meeting
+deletion, and a separately resettable owner-only voice profile. The CLI still leaves
+artifacts on disk until the operator removes them, and no application enforces the
+specified lifecycle.
 
 This outranks every interface question above, for three reasons. It is a promise the
 product implicitly makes and does not keep — "the audio never leaves the Mac" says
@@ -332,6 +337,13 @@ Beats: a capture ends → audio and transcript have a stated lifetime → the op
 see what is held and how much → deletion is possible per meeting and in bulk → deleting
 audio does not silently destroy the note built from it, and the note says the audio is
 gone.
+
+Voice enrollment has a deliberately shorter branch. Dedicated operator and
+negative-sample recordings are deleted immediately after the profile is built; a
+retained source meeting later used for recalibration keeps its existing meeting
+retention. The derived profile is private to the owning macOS account and is deleted
+through its own reset action. Resetting it leaves meetings alone and makes future
+capture ungated and outside the supported beta until enrollment completes again.
 
 ---
 
@@ -433,12 +445,13 @@ timestamps. Three reasons, and the third is what makes it obvious:
    failure mode; the same note quoting the two turns it compressed is honest about its
    own basis.
 
-**Consequences, which are real work and not corollaries.** The summary contract has to
-emit citations, which changes the note format — `notes/summarize.py` currently emits
-prose with no reference back into the transcript. Surface E has to render a claim and
-its evidence together. And K's `audio-released` becomes a mild state rather than a
-destructive one: the note keeps its evidence, and only the ability to *hear* it is
-gone.
+**Consequences, which became real work rather than corollaries.** `note/1` artifacts
+now carry each claim's quoted evidence and a locally derived transcript location, and
+the review prototype renders the claim and words together. The current
+evidence-transport repair still fails closed before it can produce a new supported
+artifact, so the contract is visible without being mistaken for a quality result.
+K's `audio-released` is now specified as a mild state: the note keeps its transcript
+evidence, and only the ability to *hear* or retranscribe the source audio is gone.
 
 That the retrieval journey turned out to change the note format is the C → B → A
 ordering doing exactly what it was chosen for.
@@ -449,18 +462,19 @@ ordering doing exactly what it was chosen for.
 
 Derived by walking each journey against `screens-and-states.md`, not by inspection.
 
-**Status means design status, never implementation.** Nothing in this table is built.
-*Specified* means a surface and its states exist in the inventory; *decided* means the
+**Status names the strongest evidence available, never a shipped implementation.**
+*Specified* means a surface and its states exist in the inventory; *prototyped* means
+the transition is reviewable but does not touch real product state; *decided* means the
 design question is answered here and the surface work follows; *open* means nobody has
-answered it yet. Collapsing those three into a severity was the first version's error —
-it made an undecided item read as scheduled.
+answered it yet. There is still no app. Collapsing those into a severity was the first
+version's error — it made an undecided item read as scheduled.
 
 | Gap | Journey | Status |
 |---|---|---|
-| Retention, deletion, disk accounting | J5 | **Specified** — surface K, added from this walk. Was the highest-stakes gap: an undesigned lifecycle for other people's voices |
-| A claim in a note has no path to the words behind it | J1 | **Decided** — the note cites the transcript. Requires a change to the summary contract and to E, neither of which exists |
-| No way to overrule a gate decision | J4 | **Open, and the code already promises it.** `transcript.json` keeps every gated turn so it can be overruled and no surface can |
-| "Not captured" and "never said" look identical | J1 | **Open** — the artifact holds the recall figures and the gate's report, and shows neither |
+| Retention, deletion, disk accounting | J5 | **Prototyped, not implemented** — surface K and the encounter state exact deletion consequences, including the independent voice-profile lifecycle |
+| A claim in a note has no path to the words behind it | J1 | **Prototyped, repair still open** — `note/1` and surface E carry the claim-to-transcript path, while the current evidence-transport repair fails closed before a new quality result |
+| No way to overrule a gate decision | J4 | **Prototyped, not wired** — the specimen restores a turn, marks the note stale, and regenerates; no app performs it on a real capture |
+| "Not captured" and "never said" look identical | J1 | **Prototyped, not measured on a capture** — the specimen distinguishes a withheld turn and capture limits; QMSum has no real gate report |
 | F has no commitment-organised view | J2 | **Decided** — a `filtered` state on F, not a new surface |
 | A note that is present but inadequate | J1, J4 | **Decided** — a note's checkable proportion is shown on E and on F's rows, so a thin note is visible before it is opened. `summary-failed` still covers only absent |
 | Export and share have no redaction step | J2 | **Open** — gated turns and room speech would travel with the note |
