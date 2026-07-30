@@ -215,6 +215,19 @@ to be skipped in design. macOS attributes prompts to the launching binary, and
 under launchd there is no hosting terminal — `local-dictation`'s README already
 documents this trap.
 
+**Calendar is a third grant, and it is the only one the product must apologise for.**
+Microphone and audio-capture grants match what the app does with them. Calendar does
+not: macOS offers no read-only option, so reading the operator's schedule means holding
+a grant that also permits editing and deleting it (`DESIGN.md § Context inputs`). This
+surface has to say that in the operator's words — the app reads and never writes, macOS
+has no narrower grant to ask for, and declining costs the pre-meeting brief and nothing
+else. Presenting it as an ordinary permission row alongside the other two would be the
+dishonest option, because the other two are not over-privileged and this one is.
+
+It is also the only grant that is genuinely optional. Capture without a microphone is
+not a degraded product, it is no product; capture without a calendar loses J0 and
+nothing else.
+
 ---
 
 ## H. First run
@@ -224,8 +237,17 @@ documents this trap.
 | `welcome` |
 | `request-microphone` |
 | `request-audio-capture` |
+| `offer-calendar` — optional, and asked last for that reason |
+| `choose-retention` — the auto-deletion period, which has no default (see K) |
 | `denied-recovery` — deep-link to the right System Settings pane |
 | `ready` |
+
+**Two of these are asks rather than requests, and the ordering says which.** Microphone
+and audio-capture are prerequisites — decline either and there is no product. Calendar is
+optional and over-privileged by the platform's own design, so it comes after the app is
+already usable, where declining it is visibly cheap. Retention is a choice the operator
+has to make because this document refuses to pick a default for how long other people's
+voices are kept.
 
 ---
 

@@ -229,12 +229,21 @@ from microphone use — after it starts — and never learns a counterparty, bec
 audio does not carry names and `teardown.md` establishes that speaker names come from
 the meeting UI rather than the sound.
 
-So J0 is blocked on a capability decision, not a design one: whether this tool reads the
-operator's calendar. That is a genuine fork with consequences in both directions — a
-calendar grant is a large new permission and a large new surface for a local-first tool
-whose entire pitch is that nothing leaves the machine, and without it the product can
-never do the one thing the category's leader leads with. It is recorded here undecided
-rather than resolved in passing.
+**Resolved 2026-07-29: the tool reads the calendar, locally and read-only.** The fork
+looked larger than it was, because it was framed as "a large new permission for a tool
+whose pitch is that nothing leaves the machine" — and an inbound read does not move
+anything off the machine. macOS supplies the calendar locally through EventKit with no
+network call at all, so the pitch is untouched. `DESIGN.md § Context inputs` carries the
+decision, the two findings that shaped it, and the one genuine cost: macOS offers no
+read-only calendar grant, so the app holds a permission wider than the code uses.
+
+What remains open is the *counterparty* half. A calendar says who was **invited**, which
+is not who spoke, not who attended, and not who said any given sentence — and
+`DESIGN.md` bars invitee names from the summarization prompt for a measured reason. So
+J0's brief can say "your last call with this person" and the note still cannot say
+"Brian agreed". Whether anything ever bridges that is undecided, and nothing in the
+market bridges it either: `teardown.md` establishes that every product's speaker names
+come from the meeting UI rather than the audio.
 
 ### J1 — "What did we decide about X?" (retrieval)
 
@@ -387,8 +396,8 @@ it made an undecided item read as scheduled.
 | A note that is present but inadequate | J1, J4 | **Open** — E's `summary-failed` covers absent, not thin |
 | Export and share have no redaction step | J2 | **Open** — gated turns and room speech would travel with the note |
 | The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight. No convention to inherit — immature across the category |
-| No preparation journey, and no calendar to build one on | J0 | **Blocked on a capability decision**, not a design one. Reading the operator's calendar is a large new permission for a local-first tool, and without it the product cannot do what the category leader leads with |
-| No notion of a counterparty | J0, J1 | **Open** — "what did we discuss last time" needs to know who "we" are, and audio never supplies a name |
+| No preparation journey | J0 | **Decided** — local read-only calendar via EventKit, `DESIGN.md § Context inputs`. The surface for a brief is still unspecified |
+| Who spoke, as opposed to who was invited | J0, J1 | **Open, and possibly unbridgeable.** A calendar gives invitees; the audio gives channels. Nothing in the market bridges it either |
 
 ---
 

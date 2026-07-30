@@ -203,6 +203,67 @@ discovering when the first scan reports clean.
 
 ---
 
+## Context inputs — one read-only provider, not a connector framework
+
+`journeys.md` J0 needs to know a meeting is coming and who is on it, and the audio
+supplies neither. So the product needs an inbound context source. Two things were
+checked before designing anything, and both changed the answer.
+
+**The smallest shape that serves the case is one provider with a read interface, and
+no registry.** A calendar is the only input any journey here needs; a plugin system for
+inputs nobody has asked for would be scaffolding around a single call. The contract is
+therefore narrow on purpose: given a time window, return the meeting's title and its
+invitees. Nothing more, and no write path anywhere in the module — the guarantee is that
+the code has no function that could write, not that it chooses not to.
+
+### macOS will not grant read-only calendar access, and that has to be said out loud
+
+Apple's own documentation is explicit: *"Your app can't request read-only access to
+either events or reminders. To read events or reminders from the event store, your app
+needs full access."* Write-only exists; read-only does not.
+
+So "nothing writes back" is enforceable in this code and **not** at the permission
+layer. Reading the operator's calendar means holding a grant that also permits editing
+and deleting it. Three ways to sit with that, and none is free:
+
+| | Current data | Network | Permission held |
+|---|---|---|---|
+| **EventKit** | Yes | None | Full access — over-privileged |
+| An `.ics` file the operator points at | Stale from the moment it is exported | None | None |
+| Cloud API with a read-only scope | Yes | Required, plus a stored token | Least privilege |
+
+**Chosen: EventKit.** J0 is "the call starting in two minutes", which an exported file
+cannot answer, and a cloud scope buys least privilege by adding a network dependency and
+a long-lived token to a product whose entire claim is that the machine is enough. The
+over-privilege is real and is handled by being stated at the grant moment — the operator
+is told macOS offers no narrower grant and that this app contains no code that writes —
+rather than by pretending TCC is doing work it cannot do.
+
+### Context is metadata for filing and preparation, never input to the summarizer
+
+This is the constraint that would have been missed, and it is a measured regression
+rather than a precaution.
+
+`notes/summarize.py: check_attribution` is the strongest fabrication check in the
+project, and at `channel` — which is what the *recommended* headphones capture produces
+— its forbidden set is exactly `["Them"]`. It holds no real names, because the audio
+never supplies one. Put calendar invitees into the summarization prompt and the model
+can write "Brian agreed to send the draft" over audio that identified nobody, the check
+passes because it is not watching that name, and the result is **more** dangerous than
+an ordinary hallucination because it is plausible: Brian really was invited.
+
+So invitee names reach filing, titling, and the J0 brief, and **do not reach the
+prompt**. Adding them to the prompt and then to the forbidden list is the obvious repair
+and it is incoherent — injecting a name in order to forbid its use leaves the name doing
+no work. The attribution contract stays derived from the audio alone, which is the one
+property that makes it checkable.
+
+`docs/teardown.md` establishes that speaker names come from the meeting UI rather than
+the sound. A calendar is that UI by another route, and it identifies who was *invited* —
+not who spoke, not who attended, and not who said any particular sentence.
+
+---
+
 ## Engineering baseline
 
 Sized for a native-shelled desktop app, not a web prototype. The Blueprint Stage
