@@ -506,12 +506,13 @@ longest, and they had to be told apart before any structure could be judged:
   produced 55 items with zero repeats, so the prompt turned out to fix the cause too.
   Full account in `notes/EVAL.md`.
 - **55 is still an order of magnitude above 5**, so the count was never only an artifact.
-  And the entries under Decisions are mostly not decisions: **1 of 19** with a located
-  quote is a decision the meeting settled, measured with a judge calibrated 14/14 against
-  a rigged control it rejects. The rest cite proposals, hedges, commentary, or a fragment
-  trailing off mid-thought. This began as a reading and is now measured
-  (`notes/EVAL.md`) — including that the first calibration would have published a
-  tidier, wronger 0 of 19.
+  And the entries under Decisions are mostly not decisions: **at most 1 of 19** with a
+  located quote is a decision the meeting settled, measured with a judge calibrated 14/14
+  against a rigged control it rejects — "at most" because the single positive is
+  contestable and it is the whole numerator. The rest cite proposals, hedges, commentary,
+  or a fragment trailing off mid-thought. This began as a reading and is now measured
+  (`notes/EVAL.md`) — including that the first calibration would have published a tidier,
+  wronger 0 of 19.
 
 **Candidate A — keep type-first sections.** Summary, Decisions, Action items, Open
 questions, as the model emits them. Serves J2 directly: Action items *is* the answer.

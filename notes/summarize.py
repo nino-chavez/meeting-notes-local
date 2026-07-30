@@ -1142,8 +1142,14 @@ Answer YES whatever the words say, including when they only propose or discuss."
 # construction and the number would mean nothing. The casing domain matches the other
 # fixtures in this file and belongs to no corpus meeting.
 #
-# Balanced six and six, and each is a case a careful person applying the rule above
+# Balanced seven and seven, and each is a case a careful person applying the rule above
 # answers without hesitating, which is the bar `validate_judge` already sets.
+#
+# One group, and the empty string is a placeholder: `score_fixtures` iterates
+# `(items, note, expected)` because the recall judge compares an item against a note, and
+# this judge reads a quote and takes no note at all. Kept in that shape so one scorer
+# serves both calibration sets rather than two scorers drifting apart; the `strict=True`
+# zip still protects the answer key against a mismatched length.
 SETTLED_FIXTURES = [
     ([
         "okay let's go with the rubber then",
@@ -1787,8 +1793,10 @@ def measure_settlement(artifacts: list[Path], model: str, num_ctx: int,
         for verdict, c in rows:
             word = {True: "settled", False: "not settled", None: "no verdict"}[verdict]
             print(f"    [{word:11s}] {c['claim'][:44]}")
-            if verdict is not True:
-                print(f"                  turn {c['turn']}: {c['quote'][:72]!r}")
+            # Every verdict shows its quote, settled included. An earlier version printed
+            # it only for the negatives, which made the one entry a reader most needs to
+            # check — the whole numerator of a 1-of-19 result — the one they could not.
+            print(f"                  turn {c['turn']}: {c['quote'][:96]!r}")
 
     judged = settled + unsettled
     print(f"\n  {settled} of {judged} judged entries were settled"

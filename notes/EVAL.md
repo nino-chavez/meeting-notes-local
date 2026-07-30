@@ -1049,12 +1049,25 @@ measured — an `unsupported` claim's quote was composed, so judging it would me
 model's invention rather than the meeting. That is 19 of the 28 Decisions entries across
 the three meetings.
 
-**Result: 1 of 19.** The rest cite proposals ("rather we should have different meetings
-by the same group but hopefully…"), hedges ("I think that when we do that world release,
-it should be the same"), commentary ("which is really what makes this corpus powerful"),
-descriptions of a design under discussion ("On the bottom we were gonna have the
-rubber…"), a bare fragment ("non-English speaking countries"), and one trailing off
-mid-thought ("so that we can, uh I don't know").
+**Result: 1 of 19.** The eighteen negatives cite proposals ("rather we should have
+different meetings by the same group but hopefully…"), hedges ("I think that when we do
+that world release, it should be the same"), commentary ("which is really what makes this
+corpus powerful"), descriptions of a design under discussion ("On the bottom we were
+gonna have the rubber…"), a bare fragment ("non-English speaking countries"), and one
+trailing off mid-thought ("so that we can, uh I don't know").
+
+**The one positive is contestable, and it is the whole numerator, so it is printed
+rather than summarised.** "Anonymize transcript but not audio", turn 1297: *everywhere
+they said "Jose" that you could replace it with "speaker-seven"*. **A reading of this
+record disagrees with the judge** — "that you could replace it with" states a
+possibility, which the judge's own rule lists under NOT settled. The figure above is
+what the calibrated instrument returned and is reported as such; a calibrated instrument
+is not an oracle, and one contested entry out of nineteen is inside the noise of a single
+judgement. The defensible form of the finding is **at most 1 of 19**, and the direction
+does not change either way.
+
+An earlier version of the report printed quotes only for the negatives, which made the
+single entry a reader most needs to check the one entry they could not see.
 
 **A distinct failure mode in covid_4, worth naming separately.** All four of its measured
 entries cite petitions being *read into the record* — "The petitioners call upon the
@@ -1077,6 +1090,12 @@ okay do that then", "we'll we'll just go with plastic, uh, for the body") droppe
 on, not how fluently they arrive* — recovered only 12/14. It still fails the
 self-repetition cases, so it is not the judge for this. `gemma3:12b` scores **14/14** with
 the rigged control rejected at 7/14, and produced the figure above.
+
+**That 14/14 certifies `gemma3:12b` on this question and nothing else.** This file now
+holds two judge calibrations for two different tasks, and which model passes differs by
+task — a score recorded a few sections from the recall calibration is not a general
+endorsement of the model. Each calibration licenses one judge, on one question, against
+one fixture set.
 
 **Third instance of one shape this session, so it is a rule and not an anecdote:
 fixtures drawn from the ideal case certify an instrument that will meet the real case.**
