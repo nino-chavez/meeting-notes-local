@@ -1619,8 +1619,9 @@ evidence after generation, which is the defect these repairs are meant to remove
 Repair 4 keeps the causal part of quote-first generation and removes the copying task the
 model has repeatedly failed. Local code divides each visible transcript turn into
 deterministic, overlapping source fragments. The model sees each fragment with an opaque
-ID and must emit its keys in the order `source_fragment_id`, `label`, `claim`. It chooses
-already-existing words before interpreting them, but never reproduces those words.
+ID and must emit its keys in the order `source_fragment_ids`, `label`, `claim`. It
+chooses one to three already-existing passages before interpreting them, but never
+reproduces those words.
 
 Fragments target 32 whitespace-delimited words with an 8-word overlap and never cross a
 turn. A final remainder under 12 words is appended to the preceding fragment. Exact
@@ -1630,18 +1631,21 @@ overlapping slices has the same ID. Gated turns are not in the visible transcrip
 and cannot enter a fragment enum.
 
 Each slice gets a dynamic JSON schema whose enum is exactly the fragment IDs displayed
-in that slice. Local validation rejects unknown, duplicate, blank, out-of-slice, or
-unresolvable references. Only after that validation does local code attach the exact
-source text and a separate extraction-item ID. Selecting a source fragment establishes
-only that those words were said; it does not establish that the resulting claim is a
-fair reading of them.
+in that slice. `source_fragment_ids` is nonempty, unique, in canonical transcript order,
+and capped at three. Local validation rejects unknown, duplicate, blank, out-of-order,
+out-of-slice, excessive, or unresolvable references. Only after that validation does
+local code attach each exact source passage and a separate extraction-item ID. It never
+joins speech from separate turns into a synthetic quote. Selecting source fragments
+establishes only that those words were said; it does not establish that the resulting
+claim is a fair reading of them.
 
-The consolidator also selects evidence before writing its claim. Its ordered item shape
-is `evidence_item_id`, `label`, `claim`, `source_item_ids`. The selected evidence item
-must be one of the covered source items. Every extraction item must be covered exactly
+The consolidator also groups evidence before writing its claim. Its ordered item shape
+is `source_item_ids`, `label`, `claim`. Every extraction item must be covered exactly
 once across the output, labels may not be crossed, and every ID is constrained to the
-validated input set. The final quote is resolved locally through the selected extraction
-item and source fragment. The model cannot compose, repair, or transpose it.
+validated input set. Local code retains the canonical ordered union of every covered
+record's source fragments. The compatibility quote is the first passage; the complete
+evidence set stays separate and available to the support judge and product. The model
+cannot compose, repair, or transpose any of it.
 
 The existing `note/1` Markdown and `claims[].quote` surfaces remain readable: their quote
 text is now a deterministic local rendering rather than model output. Structured
@@ -1656,10 +1660,19 @@ characters-per-token estimate. The dynamic enums add schema bytes whose Ollama t
 cost is not yet measured; context checks still use the server's observed prompt count
 and fail the run if any slice is truncated.
 
+The plural reference shape is also measured rather than precautionary. Four of the 12
+baseline claims that the calibrated judge marked supported need words from more than one
+dialogue turn: the object is named in one turn and qualified, accepted, or completed in
+another. A singleton reference would make at least one third of the currently
+support-positive examples impossible to represent faithfully. Three references cover
+proposal, qualification, and assent; a claim needing more must be split instead of
+becoming an unbounded evidence bag.
+
 Predictions, recorded before implementation or inference:
 
-1. A completed chunked run has no model-authored quote text. Every rendered quote resolves
-   byte-for-byte to one offered fragment in the exact transformed transcript view.
+1. A completed chunked run has no model-authored quote text. Every rendered evidence
+   passage resolves byte-for-byte to an offered fragment in the exact transformed
+   transcript view; separate turns are never rendered as one quote.
 2. An invented, cross-slice, unresolved, or reordered evidence reference fails before
    consolidation. A missing, repeated, cross-label, or unselected covered extraction item
    fails before rendering. No note or artifact is written from either failure.

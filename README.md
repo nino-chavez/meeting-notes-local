@@ -7,25 +7,28 @@ the meeting, and the audio never leaves the Mac — system audio comes through a
 Core Audio process tap, your microphone comes through the same path
 `local-dictation` already uses, and the two arrive as separate streams.
 
-> **Status: design definition, a capture spike, and a notes evaluation.** There
-> is no app yet. What exists is a working two-leg capture — validated end to end
-> over a 75-minute meeting — a voiceprint gate wired into that capture but never yet
-> run on a real meeting, a local summarizer with its fabrication checked
-> mechanically, the measurements the capture and the summarizer produced, and the
-> documents deciding what gets built. Start with
+> **Status: product definition, a reviewable encounter, capture and note
+> experiments, but no app.** What exists is a working two-leg capture — validated
+> end to end over a 75-minute meeting — a voiceprint gate wired into that capture
+> but never yet run on a real meeting, and a local summarizer whose current
+> evidence-transport repair fails closed before it can produce a structurally
+> invalid result. Its support quality is still unmeasured under that repair.
+> Start with
 > [`spike/RESULTS.md`](./spike/RESULTS.md) and [`notes/EVAL.md`](./notes/EVAL.md).
 >
-> **The bounded CLI path works today** for a call taken on headphones with nobody
-> else in the room. It is not an app or a beta. An open microphone records the room
-> into the transcript; the voiceprint gate intended to fix that is wired in, requires
-> calibrated material from more than one sitting plus another voice, and has never
-> been tried on a real conversation. See [Limits](#limits).
+> **The ungated, bounded CLI capture path works today** for a call taken on
+> headphones with nobody else in the room. It is not an app or a beta. An open
+> microphone records the room into the transcript; the voiceprint gate intended to
+> fix that is wired in, requires calibrated material from more than one sitting plus
+> another voice, and has never been tried on a real conversation. See
+> [Limits](#limits).
 >
-> **The next product gate** is a real-content click-through of the whole encounter:
-> consent, capture, note, evidence, correction and deletion. Application
-> implementation starts after the operator reviews that encounter. The next human
-> evidence is then to enrol, take one real meeting on headphones, and read the note.
-> [The capture commands are here](#keeping-the-room-out-of-your-half).
+> **The next product gate is operator review.** The real-content click-through now
+> covers consent, capture, note, evidence, correction and deletion. Application
+> implementation starts only after the operator reviews that encounter. The next
+> human evidence after implementation is to enrol, take one real meeting on
+> headphones, and read the note. [The capture commands are
+> here](#keeping-the-room-out-of-your-half).
 
 ---
 
@@ -571,10 +574,11 @@ others from whatever capture happens to be in `spike/out` — which is how the
   recordings of one voice and a household; what it does to an actual conversation
   is unknown. Until that run happens, treat it as untested and be the only person
   in the room.
-- **The gate needs a threshold nothing in the repository can supply.** It is a
-  quantile of your own score distribution, so it comes from your recordings, over
-  two or more sittings, and there is deliberately no default. A single sitting
-  produces a measurably over-tight one that drops more of you than you asked.
+- **The gate needs enrolment evidence the repository cannot bundle.** Its threshold
+  is a quantile of your own score distribution, so the calibration command derives
+  it from recordings made over two or more sittings; there is deliberately no
+  fallback constant. A single sitting produces a measurably over-tight threshold
+  that drops more of you than you asked.
 - **On speakers, the gate would reject you too**, so it stands down there rather
   than firing. The far end returning through the room corrupts your own
   voiceprint, not just your transcript — 1 of 7 voiced windows admitted with the
@@ -595,8 +599,9 @@ others from whatever capture happens to be in `spike/out` — which is how the
 - **Muting is not a privacy control.** The tap reads the rendered stream before
   hardware volume, so a muted or zeroed output is still captured in full. Stop
   the capture; do not rely on the volume knob.
-- **Recording a call silently is a two-party-consent problem** in roughly a dozen
-  US states. Tell the room.
+- **Recording law and participant expectations vary by jurisdiction and context.**
+  Obtain the consent your meeting requires before capture. The product can make that
+  choice explicit; it cannot make the legal decision for you.
 
 ## License
 

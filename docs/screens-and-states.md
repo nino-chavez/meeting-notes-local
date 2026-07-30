@@ -168,9 +168,11 @@ it is or isn't is the failure this product cannot ship with.
 
 ## B. Detection notification — the consent moment
 
-The highest-stakes surface in the product. Two-party consent is a legal
-constraint in roughly a dozen US states, and this is the only surface that
-addresses it.
+The highest-stakes surface in the product. Recording law and participant
+expectations vary by jurisdiction and context, and this is the only surface that
+stands between opening the app and recording before the operator has made the
+required consent choice. The app can require that choice; it cannot provide legal
+advice or infer that the room agreed.
 
 | State | Trigger | Notes |
 |---|---|---|
@@ -618,11 +620,11 @@ people who are not the operator, and until this surface existed their lifecycle 
 | `nothing-held` | No captures, or all audio released | Names why it is empty rather than rendering blank. |
 
 **`audio-released` is the state that makes this surface honest.** Deleting audio must
-not silently destroy the note built from it, and the note must say the audio is gone —
-because `journeys.md` J1's whole defence against a confident partial note is tracing a
-claim back to the words behind it, and that path is exactly what deleting audio
-removes. A note that lost its evidence and does not say so is worse than one that
-never had any.
+not silently destroy the note or transcript built from it, and the note must say the
+audio is gone. The retained transcript still lets a claim resolve to the words behind
+it. What disappears is the stronger recovery path: listening to the recording,
+checking the transcription against it, or transcribing it again with a better model.
+The state must name both what survived and what cannot be recovered.
 
 **Why this outranks every interface question in this file.** It is a promise the
 product implicitly makes and does not keep: "the audio never leaves the Mac" says
