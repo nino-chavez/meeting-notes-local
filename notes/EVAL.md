@@ -1303,3 +1303,39 @@ Pre-registering was still the right instinct and the flaw is in the quantity cho
 the practice. A prediction about a *rate* would have survived a changing denominator; one
 about a count did not. Recorded here rather than quietly swapped for whatever the new
 numbers support, which is the failure mode this file has already had twice.
+
+### Result: the support rate roughly doubled, and the new bucket is the best-supported kind
+
+| | before `Proposed` | after |
+|---|---|---|
+| located claims | 31 | 42 |
+| **support rate** | **6 (19%)** | **17 (40%)** |
+| supported / all claims | 6 of 81 (7%) | 17 of 118 (14%) |
+| decision | 5 of 19 (26%) | 7 of 17 (41%) |
+| action | **0 of 8** | 3 of 12 (25%) |
+| question | 1 of 4 | 2 of 6 (33%) |
+| **proposal** | — | **5 of 7 (71%)** |
+
+**`Proposed` is the best-supported kind in the note, by a wide margin.** That is the
+diagnosis confirming itself: the model was finding hedged speech all along, and given a
+bucket whose contract matches what it found, the evidence and the claim agree. Decisions
+and actions both improved as the overstated items moved out from under them — action
+items went from nothing supported to a quarter.
+
+**Both framings agree, which matters because the denominator moved.** Support per located
+claim went 19% → 40%; support per claim in the whole note went 7% → 14%. The note also
+got 46% longer, so the repair did not buy precision by writing less.
+
+**The prediction overestimated, read as a rate.** `633ef5a` predicted 17 of 31 — 55% —
+and the measured rate is 40%. It was ill-posed as a count for the reason recorded above,
+but converting it charitably to a rate still leaves it optimistic by a third, and the
+numerator landing on 17 is coincidence rather than accuracy. The most likely reason is
+that the repair extracts *more* marginal claims as well as re-filing overstated ones,
+which the prediction did not account for.
+
+**What is still broken, and it is what the prediction said could not move.**
+Mis-selection and contradiction are untouched by a new label, so the remaining 25
+unsupported claims are dominated by quotes that do not bear on their claim. That is what
+the second candidate addresses — inverting the generation so a claim is written *from* the
+turn it cites rather than matched to one afterwards — and it is the next repair, not a
+measurement.

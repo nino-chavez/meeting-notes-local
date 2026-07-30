@@ -506,12 +506,13 @@ longest, and they had to be told apart before any structure could be judged:
   produced 55 items with zero repeats, so the prompt turned out to fix the cause too.
   Full account in `notes/EVAL.md`.
 - **55 is still an order of magnitude above 5**, so the count was never only an artifact.
-  And the problem is wider than the section names: **6 of 31 located quotes support the
-  claim they are attached to** — action items 0 of 8 — measured with a judge calibrated
-  14/14 against a rigged control it rejects. The evidence contradicts its claim, is
-  unrelated to it, or supports a weaker version of it. So the taxonomy is not the only
-  thing wrong; `notes/EVAL.md` has the account, including that a `verified` state was
-  telling readers a claim had passed a check nothing performed.
+  And the problem was wider than the section names: only **6 of 31 located quotes
+  supported the claim they were attached to**, action items 0 of 8. A fourth section for
+  what was *raised and not agreed* took that to **17 of 42 (40%)**, and `Proposed` is now
+  the best-supported kind in the note at 5 of 7 — the model was finding hedged speech all
+  along and had nowhere honest to file it. `notes/EVAL.md` has the account, including a
+  `verified` state that told readers a claim had passed a check nothing performed, and
+  three separate parser blind spots that reported real citations as absent.
 
 **Candidate A — keep type-first sections.** Summary, Decisions, Action items, Open
 questions, as the model emits them. Serves J2 directly: Action items *is* the answer.
