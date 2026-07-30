@@ -33,9 +33,11 @@ import json
 import os
 import queue
 import signal
+import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -57,6 +59,9 @@ except ModuleNotFoundError:
 RATE = 16_000
 REPO = Path(__file__).resolve().parent.parent
 TAP_BIN = REPO / "capture" / "audiotee" / ".build" / "release" / "audiotee"
+DEFAULT_CAPTURE_ROOT = (
+    Path.home() / "Library" / "Application Support" / "local-meeting-notes" / "captures"
+)
 
 # Envelope rate for the bleed cross-correlation. 100 Hz is fine enough to
 # resolve syllable-scale energy and cheap enough to correlate over an hour.
@@ -77,6 +82,23 @@ BLEED_MODERATE_R = 0.25
 # Independent hardware clocks typically differ by tens of ppm, so a run has to
 # resolve that scale before it can report a drift value rather than a bound.
 HARDWARE_DRIFT_PPM = 50
+
+
+def open_private_binary(path: Path):
+    """Open a capture artifact for replacement with owner-only permissions."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "wb")
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def write_private_text(path: Path, text: str) -> None:
+    """Write transcript-derived text without inheriting a permissive umask."""
+    with open_private_binary(path) as handle:
+        handle.write(text.encode())
 
 # Speech gate. A segment is kept when this fraction of its span sits this far
 # above the leg's own noise floor. The floor is estimated per leg rather than
@@ -172,7 +194,7 @@ class WavWriter:
                 if self.file is None:
                     # Not a context manager: the file is open for the length of
                     # the capture and closed by close(), which is the class.
-                    self.file = open(self.path, "wb")  # noqa: SIM115
+                    self.file = open_private_binary(self.path)
                     self.file.write(self._header(0))
                 self.file.write((np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes())
                 self.file.flush()
@@ -508,7 +530,7 @@ def contaminated(b):
 
 
 def write_wav(path, audio):
-    with wave.open(str(path), "wb") as w:
+    with open_private_binary(path) as handle, wave.open(handle, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(RATE)
@@ -1130,12 +1152,9 @@ def report(mic_leg, tap_leg, args, out_dir, phases=None, shown_at=None):
         elif leg.writer.file is None or leg.writer.frames != len(audio):
             # The invariant worth checking: the file on disk IS this capture.
             # Both halves are load-bearing. A writer that fell behind leaves a
-            # short file. A leg that captured nothing never opened one at all —
-            # and since out_dir is reused across runs, saying nothing there
-            # would leave the PREVIOUS run's recording in place and report it as
-            # this one, which is how two sessions end up correlated against each
-            # other. Zero frames and zero samples agree, so counting alone
-            # misses it.
+            # short file. A leg that captured nothing never opened one at all.
+            # Zero frames and zero samples agree, so counting alone misses the
+            # missing artifact; write_wav makes the empty leg explicit.
             write_wav(path, audio)
             how = "written at the end; the incremental file was not this capture"
         print(f"  wrote {path} ({len(audio) / RATE:.2f}s, {how})")
@@ -1486,7 +1505,7 @@ def write_protocol(path, phases, mic_path, mic_samples, tap_path, tap_samples,
         "phases": [dict(ph, shown_at_s=(shown_at or {}).get(i))
                    for i, ph in enumerate(phases)],
     }
-    path.write_text(json.dumps(payload, indent=2))
+    write_private_text(path, json.dumps(payload, indent=2))
     speak = sum(1 for p in phases if p["expect"] == "operator")
     ctrl = sum(1 for p in phases if p["role"] == "control")
     late = [round(v - phases[i]["start"], 2)
@@ -1555,7 +1574,7 @@ def write_leg_segments(path, segs, duration_s, audio_path, audio_samples, leg):
             for s in segs
         ],
     }
-    path.write_text(json.dumps(payload, indent=2))
+    write_private_text(path, json.dumps(payload, indent=2))
     first = f", first speech at {segs[0]['start']:.1f}s" if segs else ""
     print(f"  wrote {path} ({len(segs)} {leg} segments{first})")
 
@@ -1645,12 +1664,96 @@ def write_transcript(path, merged, b, gating=None):
             for t in (MergedTurn(*row) for row in merged)
         ],
     }
-    path.write_text(json.dumps(payload, indent=2))
+    write_private_text(path, json.dumps(payload, indent=2))
     verdict = (
         "unattributed — bleed made the split unusable"
         if unattributed else "Me/Them preserved"
     )
     print(f"\n  wrote {path} ({verdict})")
+
+
+class OutputDirectoryError(ValueError):
+    """Capture output would be public, ambiguous, or destructive."""
+
+
+def prepare_output_dir(
+    requested: str | None,
+    *,
+    capture_root: Path = DEFAULT_CAPTURE_ROOT,
+    timestamp: str | None = None,
+    process_id: int | None = None,
+) -> Path:
+    """Create one new private capture directory, atomically and without reuse.
+
+    Capture artifacts include verbatim speech. They must not be written inside
+    this public repository, and a prior meeting must never be truncated because
+    an output path was reused. ``mkdir(exist_ok=False)`` is the write boundary:
+    two processes racing for the same name cannot both pass it.
+    """
+    if requested:
+        out_dir = Path(requested).expanduser().resolve()
+    else:
+        stamp = timestamp or time.strftime("%Y%m%d-%H%M%S")
+        pid = os.getpid() if process_id is None else process_id
+        out_dir = (capture_root / f"capture-{stamp}-{pid}").resolve()
+
+    repo = REPO.resolve()
+    if out_dir == repo or repo in out_dir.parents:
+        raise OutputDirectoryError(
+            f"capture output cannot be inside the public repository: {out_dir}")
+    try:
+        out_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
+        out_dir.chmod(0o700)
+    except FileExistsError as exc:
+        raise OutputDirectoryError(
+            f"capture output already exists and will not be reused: {out_dir}\n"
+            "Choose a new --out directory so an earlier meeting cannot be overwritten."
+        ) from exc
+    except OSError as exc:
+        raise OutputDirectoryError(
+            f"capture output could not be created securely at {out_dir}: {exc}") from exc
+    return out_dir
+
+
+def self_test_output_directory() -> bool:
+    """Exercise the privacy and no-overwrite boundary without opening audio devices."""
+    with tempfile.TemporaryDirectory(prefix="dual-capture-output-") as tmp:
+        root = Path(tmp)
+        made = prepare_output_dir(
+            None, capture_root=root / "captures",
+            timestamp="20260730-120000", process_id=42)
+        expected = (root / "captures" / "capture-20260730-120000-42").resolve()
+        fresh_default = made == expected and made.is_dir()
+
+        explicit = root / "explicit" / "meeting"
+        first_explicit = prepare_output_dir(str(explicit)) == explicit.resolve()
+        probe = explicit / "private.json"
+        write_private_text(probe, '{"text":"private"}')
+        private_modes = (
+            stat.S_IMODE(explicit.stat().st_mode) == 0o700
+            and stat.S_IMODE(probe.stat().st_mode) == 0o600
+        )
+        try:
+            prepare_output_dir(str(explicit))
+        except OutputDirectoryError:
+            reuse_refused = True
+        else:
+            reuse_refused = False
+
+        inside = REPO / "spike" / "out" / "must-not-exist"
+        try:
+            prepare_output_dir(str(inside))
+        except OutputDirectoryError:
+            repo_refused = not inside.exists()
+        else:
+            repo_refused = False
+
+    ok = (
+        fresh_default and first_explicit and private_modes
+        and reuse_refused and repo_refused
+    )
+    print(f"  [{'pass' if ok else 'FAIL'}] capture output is private and never reused")
+    return ok
 
 
 def main():
@@ -1659,7 +1762,13 @@ def main():
     ap.add_argument("--whisper", default="mlx-community/whisper-large-v3-turbo")
     ap.add_argument("--language", default="en")
     ap.add_argument("--no-transcribe", action="store_true")
-    ap.add_argument("--out", default=None, help="output dir (default: spike/out)")
+    ap.add_argument(
+        "--out", default=None,
+        help="new output directory; existing paths are refused (default: a unique "
+             "directory under ~/Library/Application Support/local-meeting-notes/captures)",
+    )
+    ap.add_argument("--self-test", action="store_true",
+                    help="check output privacy/no-overwrite guards and exit")
     ap.add_argument(
         "--input-device", default=None,
         help="microphone: device index, or a substring of its name "
@@ -1691,6 +1800,9 @@ def main():
         help="where the ECAPA checkpoint the voiceprint gate uses is cached",
     )
     args = ap.parse_args()
+
+    if args.self_test:
+        raise SystemExit(0 if self_test_output_directory() else 1)
 
     if sd is None:
         ap.error("sounddevice is not installed, so no audio can be captured. "
@@ -1728,8 +1840,11 @@ def main():
     if device is not None and device.isdigit():
         device = int(device)
 
-    out_dir = Path(args.out) if args.out else REPO / "spike" / "out"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        out_dir = prepare_output_dir(args.out)
+    except OutputDirectoryError as exc:
+        ap.error(str(exc))
+    print(f"capture output → {out_dir}")
 
     shown_at = {}                    # phase index -> mic-clock time it appeared
     mic_leg = MicLeg(device, out_dir / "mic.wav")

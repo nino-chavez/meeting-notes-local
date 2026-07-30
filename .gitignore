@@ -14,7 +14,7 @@ __pycache__/
 *.wav
 *.m4a
 notes.sqlite*
-spike/out/transcript.json
+spike/out/
 
 # Third-party evaluation corpus: someone else's data under someone else's
 # licence. Fetched on demand by notes/fetch_corpus.py.

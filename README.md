@@ -221,8 +221,13 @@ python3 -m venv .venv
 Capture both legs, measure drift and bleed, print a labelled transcript:
 
 ```sh
-.venv/bin/python spike/dual_capture.py --seconds 60
+.venv/bin/python spike/dual_capture.py --seconds 60 --out ~/meeting-smoke
 ```
+
+Every capture requires a new directory. An existing `--out` path is refused so
+rerunning a command cannot truncate an earlier meeting. If `--out` is omitted, the
+CLI creates an owner-only session directory under
+`~/Library/Application Support/local-meeting-notes/captures`.
 
 `--no-transcribe` measures without transcribing, which needs only numpy and
 sounddevice and skips the 1.6 GB Whisper download entirely. Plain
@@ -232,8 +237,8 @@ That install is not small, and the cost is itemised in
 [`spike/requirements.txt`](./spike/requirements.txt) rather than left as a
 surprise: the voiceprint gate's two dependencies pull 36 wheels totalling 153 MB,
 of which torch alone is 111 MB, and ECAPA's checkpoint adds 89 MB the first time a
-profile is built. Both `--self-test` suites deliberately need neither — the encoder
-is an argument rather than an import, so every control runs on numpy alone.
+profile is built. The deterministic self-tests deliberately need neither — the
+encoder is an argument rather than an import, so the controls run on numpy alone.
 
 **The run that matters now** is an ordinary meeting on headphones with the
 voiceprint gate on. Nothing to read, nothing playing in the background, no cues —
@@ -306,7 +311,8 @@ profile without it.
   --against   ~/not-me/mic-segments.json    ~/not-me/mic.wav \
   --enroll-out ~/voiceprint.json --target-frr 0.05
 
-.venv/bin/python spike/dual_capture.py --seconds 3600 --voiceprint ~/voiceprint.json
+.venv/bin/python spike/dual_capture.py --seconds 3600 \
+  --voiceprint ~/voiceprint.json --out ~/meeting-gated
 ```
 
 The first two meetings are also test data — they went through the same capture, so
