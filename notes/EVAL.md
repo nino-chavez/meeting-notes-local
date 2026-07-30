@@ -1583,3 +1583,93 @@ Predictions, recorded before inference:
    Repair 3 changes the permitted merge operation and may change the claim set. They are
    measured only after the structural controls pass, reported against the Repair 2
    baseline as a new condition, and never substituted for the prior Repair 2 prediction.
+
+## Repair 3 result: refused before the first slice could become evidence
+
+The first full Bmr006 run stopped on slice 1 of 16:
+
+    qmsum:Bmr006 (labels stripped) [slice 1/16]: extraction evidence refused:
+    4 extraction quote(s) are absent from the visible slice
+
+No note, artifact, or support result was written. The structured transport did what it
+was built to do: it refused a model response that satisfied the JSON schema but did not
+carry verifiable evidence.
+
+The six returned records were inspected only to diagnose that refusal, not to score the
+repair. Two quotes were locatable under the then-current rule. Three differed only
+because QMSum separates closed-class contractions (`it 's`, `I 'd`); the citation
+normalizer now treats those forms as the same words. The fourth was materially different:
+the model removed recorded disfluencies such as `w will` and `b it 'd` while presenting
+the result as a verbatim quote. That record still fails, correctly.
+
+The narrow contraction correction also moved the old Bmr006 baseline from 24 to 33
+locatable claims. Nine of the newly locatable claims have no stored support verdict, and
+eight collapsed items locate only when read in the reverse orientation. The previously
+reported 8-of-24 support figure is therefore not a stable target for a new condition.
+It remains a historical result under its old locator, not a denominator to preserve by
+changing the evidence rule.
+
+Another run of the same copied-quote contract is not useful. At least the disfluency-
+cleaned record is already known to fail the stated verbatim precondition. Relaxing the
+locator until it accepts model-repaired speech would make the model choose and edit its
+evidence after generation, which is the defect these repairs are meant to remove.
+
+## Repair 4: choose canonical evidence, then write the claim
+
+Repair 4 keeps the causal part of quote-first generation and removes the copying task the
+model has repeatedly failed. Local code divides each visible transcript turn into
+deterministic, overlapping source fragments. The model sees each fragment with an opaque
+ID and must emit its keys in the order `source_fragment_id`, `label`, `claim`. It chooses
+already-existing words before interpreting them, but never reproduces those words.
+
+Fragments target 32 whitespace-delimited words with an 8-word overlap and never cross a
+turn. A final remainder under 12 words is appended to the preceding fragment. Exact
+Unicode character offsets, the transformed transcript-view digest, and the turn ordinal
+make the IDs independent of slice boundaries. The same fragment exposed in two
+overlapping slices has the same ID. Gated turns are not in the visible transcript view
+and cannot enter a fragment enum.
+
+Each slice gets a dynamic JSON schema whose enum is exactly the fragment IDs displayed
+in that slice. Local validation rejects unknown, duplicate, blank, out-of-slice, or
+unresolvable references. Only after that validation does local code attach the exact
+source text and a separate extraction-item ID. Selecting a source fragment establishes
+only that those words were said; it does not establish that the resulting claim is a
+fair reading of them.
+
+The consolidator also selects evidence before writing its claim. Its ordered item shape
+is `evidence_item_id`, `label`, `claim`, `source_item_ids`. The selected evidence item
+must be one of the covered source items. Every extraction item must be covered exactly
+once across the output, labels may not be crossed, and every ID is constrained to the
+validated input set. The final quote is resolved locally through the selected extraction
+item and source fragment. The model cannot compose, repair, or transpose it.
+
+The existing `note/1` Markdown and `claims[].quote` surfaces remain readable: their quote
+text is now a deterministic local rendering rather than model output. Structured
+provenance records the transcript-view digest, fragment contract, fragment-map digest,
+per-slice schema, model digest, input hashes, and selected references without copying a
+second transcript into the artifact.
+
+The sizing decision is measured before implementation. On Bmr006, 32-word fragments with
+8-word overlap increase visible extraction text by about 42% across 16 slices and keep
+the largest visible prompt below roughly 3,700 tokens under this repository's
+characters-per-token estimate. The dynamic enums add schema bytes whose Ollama token
+cost is not yet measured; context checks still use the server's observed prompt count
+and fail the run if any slice is truncated.
+
+Predictions, recorded before implementation or inference:
+
+1. A completed chunked run has no model-authored quote text. Every rendered quote resolves
+   byte-for-byte to one offered fragment in the exact transformed transcript view.
+2. An invented, cross-slice, unresolved, or reordered evidence reference fails before
+   consolidation. A missing, repeated, cross-label, or unselected covered extraction item
+   fails before rendering. No note or artifact is written from either failure.
+3. Changing slice boundaries does not change a fragment's ID. Changing visible transcript
+   content does change the view digest and fragment namespace. Transforms and gate removal
+   cannot silently make an ID resolve to different words.
+4. A completed Bmr006 artifact covers every validated extraction item exactly once and
+   renders one claim for every validated consolidated record. Its provenance is sufficient
+   to distinguish this condition from Repairs 2 and 3 without retaining raw model replies.
+5. No support rate, label mix, or claim count is predicted. Source selection removes copied-
+   quote composition; it does not prevent a model from choosing the wrong real fragment or
+   overstating what that fragment means. Those remain acceptance questions for the
+   calibrated support pass and human inspection after all structural gates pass.
