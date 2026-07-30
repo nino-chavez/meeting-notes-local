@@ -2521,8 +2521,10 @@ def run_self_test() -> int:
     preflight_root = Path(preflight_context.name)
     preflight_segment = preflight_root / "segments.json"
     preflight_audio = preflight_root / "audio.wav"
+    preflight_audio_2 = preflight_root / "audio-2.wav"
     preflight_segment.write_text("{}")
     preflight_audio.write_bytes(b"not decoded during preflight")
+    preflight_audio_2.write_bytes(b"distinct audio, also not decoded during preflight")
     original_load_encoder = load_encoder
     encoder_calls = 0
 
@@ -2565,6 +2567,23 @@ def run_self_test() -> int:
             ), SystemExit),
         )
         check(
+            "an unregistered production target is refused before loading the encoder",
+            _raises(lambda: run_calibrate(
+                preflight_args(
+                    target_frr=0.07,
+                    calibrate=[
+                        [preflight_segment, preflight_audio],
+                        [preflight_segment, preflight_audio_2],
+                    ],
+                    against=[[
+                        "public-or-licensed",
+                        str(preflight_segment),
+                        str(preflight_audio),
+                    ]],
+                )
+            ), SystemExit),
+        )
+        check(
             "an output directory is refused before loading the encoder",
             _raises(lambda: run_calibrate(
                 preflight_args(enroll_out=preflight_root)
@@ -2587,11 +2606,25 @@ def run_self_test() -> int:
             _raises(lambda: run_calibrate(preflight_args()), SystemExit),
         )
         check(
-            "duplicate --against audio is refused by digest before inference",
+            "duplicate --calibrate audio is refused by digest before inference",
             _raises(lambda: run_calibrate(preflight_args(
                 calibrate=[
                     [preflight_segment, preflight_audio],
                     [preflight_segment, preflight_audio],
+                ],
+                against=[[
+                    "public-or-licensed",
+                    str(preflight_segment),
+                    str(preflight_audio_2),
+                ]],
+            )), SystemExit),
+        )
+        check(
+            "duplicate --against audio is refused by digest before inference",
+            _raises(lambda: run_calibrate(preflight_args(
+                calibrate=[
+                    [preflight_segment, preflight_audio],
+                    [preflight_segment, preflight_audio_2],
                 ],
                 against=[
                     [
@@ -2687,6 +2720,18 @@ def preflight_calibrate(args) -> None:
         if not os.access(parent, os.W_OK):
             raise SystemExit(f"--enroll-out parent {parent} is not writable")
         if not args.experimental:
+            if not any(
+                np.isclose(target, registered, rtol=0.0, atol=1e-12)
+                for registered in OPERATING_POINT_TARGETS
+            ):
+                registered = ", ".join(
+                    f"{value:g}" for value in OPERATING_POINT_TARGETS
+                )
+                raise SystemExit(
+                    f"--target-frr {target:g} is not registered for production. "
+                    f"Choose one of {registered} from the report-only pass, or use "
+                    "--experimental to record an explicit research override."
+                )
             if len(args.calibrate or []) < 2:
                 raise SystemExit(
                     "production enrollment needs at least two --calibrate sittings"
@@ -2712,6 +2757,16 @@ def preflight_calibrate(args) -> None:
     for label, path in inputs:
         if not path.exists() or not path.is_file():
             raise SystemExit(f"{label} {path} is not an existing file")
+
+    calibration_digests: set[str] = set()
+    for _seg_p, wav_p in args.calibrate or []:
+        digest = ab.sha256(Path(wav_p))
+        if digest in calibration_digests:
+            raise SystemExit(
+                f"--calibrate repeats audio digest {digest}; one recording cannot "
+                "count as two sittings"
+            )
+        calibration_digests.add(digest)
 
     negative_digests: set[str] = set()
     for _source_class, _seg_p, wav_p in args.against or []:
