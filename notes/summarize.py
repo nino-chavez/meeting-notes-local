@@ -64,7 +64,48 @@ What was actually settled. Not what was discussed.
 What someone committed to do next. Every one of them, routine included.
 
 ## Open questions
-What was raised and left unresolved."""
+What was raised and left unresolved.
+
+Under every single item in Decisions, Action items and Open questions, add one
+line holding the spoken words the item rests on, like this:
+
+- <the decision, action or question, in your own words>
+  > <the spoken words, exactly as they appear>
+
+The Summary section takes no quotes."""
+
+# Where those words come from differs by path, and conflating the two guaranteed
+# fabrication. The single-pass summarizer holds the transcript, so it copies from
+# it. The consolidator never sees a transcript — it receives an item list — so it
+# can only carry across evidence the extraction pass already attached. Appending
+# "copy from the transcript" to a shared contract asked the consolidator for
+# verbatim quotes from something it had never been shown, and every citation it
+# produced was therefore invented by construction.
+QUOTE_FROM_TRANSCRIPT = """
+Copy the quoted words from the transcript exactly as they appear. Do not tidy
+them, complete them, or join words from different parts of the transcript. At
+least five words, or it proves nothing."""
+
+QUOTE_FROM_ITEMS = """
+Every item you were given ends with a pipe and the words that item rests on.
+Carry those words across unchanged as the item's quoted line. Never write a quote
+of your own: you have not seen the transcript, so anything you compose is
+invented. An item that arrived without evidence after its pipe gets no quoted
+line at all."""
+# The example above is a shape, not a sentence, and that is deliberate. The first
+# version illustrated it with real prose — "The team settled on the rubber casing"
+# over a matching quote — and llama3.1 reproduced both as a decision ES2004c had
+# reached. That meeting really is about a rubber cover, so the echo read as almost
+# true, which is the worst version of it.
+#
+# This repository had already made that exact mistake once: two example sentences
+# in a phrasing rule came back as decisions a research meeting reached, and the
+# repair was to delete them. Reintroducing it while adding a check that catches it
+# is at least a well-instrumented mistake — `check_prompt_echo` and
+# `check_citations` both flagged it independently on the first real run.
+#
+# Angle-bracket placeholders cannot be echoed as content plausibly, and if they
+# were, they would be obvious in the note rather than persuasive.
 
 # Two of the four rules here used to instruct omission — "if you are not sure,
 # leave it out" and "prefer omitting a section to padding it". They were written
@@ -90,7 +131,7 @@ Rules that override everything else:
   nothing — it is not a target.
 - Write plainly. No preamble, no sign-off, no "in this meeting" throat-clearing.
 
-""" + SECTIONS
+""" + SECTIONS + QUOTE_FROM_TRANSCRIPT
 
 # The two-pass prompts. Omission, not invention, is what the measurements in
 # EVAL.md keep finding, and a single pass over a 57-minute transcript compresses
@@ -111,7 +152,15 @@ Rules that override everything else:
   systems, datasets, metrics, deliverables. A commitment stripped of the name of
   the thing it concerns cannot be reconstructed downstream, and that is the
   failure this pass exists to prevent.
-- One item per line, each starting with DECISION:, ACTION:, or QUESTION:.
+- One item per line, each starting with DECISION:, ACTION:, or QUESTION:, and
+  end every line with a pipe followed by at least five words copied from this
+  slice exactly as they appear:
+
+  ACTION: <what was committed to> | <words copied from this slice>
+
+  Those words are the only evidence anything downstream will have. No later step
+  sees this transcript, so a line without them cannot be traced back to speech by
+  anyone, ever.
 - A slice is mostly ordinary conversation. If it contains none of these, output
   nothing at all.
 - No preamble, no summary, no headings, no commentary."""
@@ -133,7 +182,7 @@ Rules that override everything else:
   de-duplication task, not a selection task — you are not choosing the important
   ones, you are removing the repeated ones.
 
-""" + SECTIONS
+""" + SECTIONS + QUOTE_FROM_ITEMS
 
 # The one place the three attribution levels diverge. Everything above is shared;
 # what changes is who the notes are permitted to name.
@@ -430,6 +479,100 @@ def check_prompt_echo(note: str, source_text: str, system: str) -> dict:
             continue
         echoed.append(gram)
     return {"ok": not echoed, "echoed": echoed}
+
+
+_CITED = re.compile(r"^\s*[-*]\s+(?P<claim>.+?)\s*\n\s*>\s*(?P<quote>.+?)\s*$",
+                    re.MULTILINE)
+_UNCITED = re.compile(r"^\s*[-*]\s+(?!>)(?P<claim>.+?)\s*$(?!\n\s*>)", re.MULTILINE)
+
+# Short quotes collide by accident. Four content words is the same floor
+# `_ECHO_NGRAM` uses, and for the same reason: long enough that ordinary phrasing
+# does not match by chance, short enough that a lifted clause still counts.
+_MIN_QUOTE_WORDS = 4
+
+
+def _seq(s: str) -> list[str]:
+    """Bare lowercase words, in order.
+
+    Order matters here where `_words` discards it: a citation is a claim about a
+    contiguous span of speech, so the check has to be a subsequence test rather
+    than a set test. Punctuation and case are dropped because they are
+    transcription artifacts — ASR output has no reliable capitalisation and
+    invents commas — and flagging those as fabrication would be the check crying
+    wolf, which this project has already shipped once and had to repair.
+    """
+    return re.findall(r"[a-z0-9']+", s.lower())
+
+
+def check_citations(note: str, transcript: Transcript) -> dict:
+    """Whether each claim's quoted evidence actually appears in the transcript.
+
+    The strongest mechanical check available here, and the reason is that its
+    failure mode is unambiguous. `check_grounding` asks whether a note's content
+    words appear somewhere in the input, which a fluent paraphrase passes; this
+    asks whether a specific contiguous span of speech exists, which nothing but
+    real speech passes.
+
+    **The model quotes and this locates**, which is the whole design. Asking an 8B
+    model for a turn index or a timestamp gets a plausible number back — that is
+    precisely the fabrication class this file exists to catch, invited in through
+    the citation format. So the model is asked only for words it can see, and the
+    position is derived here by finding them. A citation therefore cannot carry a
+    wrong timestamp; it can only fail to be found at all.
+
+    Deriving the position is not decoration. `journeys.md` J1 turns on tracing a
+    claim back to the words behind it, and `DESIGN.md` retains the transcript
+    rather than the audio precisely so that path survives deletion. A verified
+    quote with a turn index is that path.
+    """
+    turns = [(i, t) for i, t in enumerate(transcript.turns)]
+    haystacks = [(i, _seq(t.text)) for i, t in turns]
+
+    def locate(quote: str) -> tuple[int, float | None] | None:
+        q = _seq(quote)
+        if len(q) < _MIN_QUOTE_WORDS:
+            return None
+        for i, hay in haystacks:
+            for start in range(len(hay) - len(q) + 1):
+                if hay[start:start + len(q)] == q:
+                    return i, transcript.turns[i].start
+        return None
+
+    cited, fabricated, unverifiable = [], [], []
+    for m in _CITED.finditer(note):
+        quote = m.group("quote").strip()
+        row = {"claim": m.group("claim").strip(), "quote": quote}
+        # Three outcomes, not two, and the third is the difference between a check
+        # and a nuisance. A quote too short to be distinctive has not been shown to
+        # be false — it cannot be tested either way, and treating untestable as
+        # fabricated would fail a run because a model quoted three words. This
+        # project already shipped a check that reported fabrications which had not
+        # happened, and repairing it is why `check_attribution` needs an attributing
+        # position. The same discipline applies here.
+        if len(_seq(quote)) < _MIN_QUOTE_WORDS:
+            row["why"] = (f"under {_MIN_QUOTE_WORDS} words, so it could match by "
+                          f"accident and is not evidence either way")
+            unverifiable.append(row)
+            continue
+        hit = locate(quote)
+        if hit is None:
+            row["why"] = "does not appear in the transcript"
+            fabricated.append(row)
+        else:
+            row["turn"], row["start"] = hit[0], hit[1]
+            cited.append(row)
+
+    # An item with no quote is not a fabrication and is not a pass. Counted so a
+    # model that simply ignores the format cannot read as a clean run.
+    uncited = [m.group("claim").strip() for m in _UNCITED.finditer(note)]
+    return {
+        "applies": bool(transcript.turns),
+        "ok": not fabricated,
+        "cited": cited,
+        "fabricated": fabricated,
+        "unverifiable": unverifiable,
+        "uncited": uncited,
+    }
 
 
 def check_grounding(note: str, source_text: str) -> dict:
@@ -988,7 +1131,9 @@ def chunk_transcript(transcript: Transcript, target_words: int,
     ]
 
 
-_ITEM = re.compile(r"^\s*(?:[-*]\s*)?(DECISION|ACTION|QUESTION)\s*:\s*(.+)$", re.IGNORECASE)
+_ITEM = re.compile(
+    r"^\s*(?:[-*]\s*)?(DECISION|ACTION|QUESTION)\s*:\s*(?P<text>[^|]+?)"
+    r"(?:\s*\|\s*(?P<quote>.+?))?\s*$", re.IGNORECASE)
 
 
 def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout: int,
@@ -1020,7 +1165,16 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
                       "response": response})
         for line in response["message"]["content"].splitlines():
             if m := _ITEM.match(line):
-                items.append(f"{m.group(1).upper()}: {m.group(2).strip()}")
+                # The quote travels with the item, and that is load-bearing rather
+                # than tidy. Only this pass sees the transcript; the consolidator
+                # receives the item list alone. Dropping the quote here left the
+                # consolidator asked for verbatim evidence from a transcript it had
+                # never been shown, so every citation it produced was necessarily
+                # invented — a structural guarantee of fabrication, arriving because
+                # a requirement was added to a contract both passes share.
+                quote = (m.group("quote") or "").strip()
+                items.append(f"{m.group(1).upper()}: {m.group('text').strip()}"
+                             + (f" | {quote}" if quote else ""))
 
     listing = "\n".join(items) if items else "(no items were extracted)"
     user = f"Items extracted from the meeting, in order:\n\n{listing}\n\nWrite the notes."
@@ -1144,6 +1298,27 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
         print(f"  grounding     for review (advisory, expect paraphrase): "
               f"{grounding['ungrounded']}")
 
+    cites = check_citations(note, transcript)
+    if cites["applies"]:
+        if cites["fabricated"]:
+            # Not advisory. A quote that is not in the transcript is the one
+            # failure in this file with no innocent explanation.
+            print(f"  citations     FABRICATED — {len(cites['fabricated'])} of "
+                  f"{len(cites['fabricated']) + len(cites['cited'])} quotes are not "
+                  f"in the transcript")
+            for row in cites["fabricated"][:5]:
+                print(f"                {row['why']}: {row['quote'][:70]!r}")
+        elif cites["cited"]:
+            at = [f"{r['start']:.0f}s" for r in cites["cited"][:4] if r["start"]]
+            print(f"  citations     {len(cites['cited'])} verified against the "
+                  f"transcript{' at ' + ', '.join(at) if at else ''}")
+        if cites["unverifiable"]:
+            print(f"  citations     {len(cites['unverifiable'])} quote(s) too short to "
+                  f"test — neither evidence nor fabrication")
+        if cites["uncited"]:
+            print(f"  citations     {len(cites['uncited'])} item(s) carry no quote, "
+                  f"so nothing can be traced back to the words")
+
     if reference and reference.get("summary"):
         print("\n=== human reference ===\n")
         print(f"  {reference['summary']}")
@@ -1156,12 +1331,17 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
             print(f"\n  {hit}/{len(reference['topics'])} topics touched by the notes")
 
     # Grounding is deliberately absent: it is advisory, for the reason given in
-    # its docstring.
+    # its docstring. Citations are NOT advisory — an unlocatable quote is the one
+    # failure here with no innocent explanation, where a paraphrase failing the
+    # grounding check has several. A missing quote does not fail the run: it is a
+    # model ignoring a format instruction, which is a prompt problem and is
+    # reported as its own line rather than folded into a correctness verdict.
     return (
         ctx["ok"] is not False
         and (not attr["applies"] or attr["ok"])
         and nums["ok"]
         and echo["ok"]
+        and cites["ok"]
     )
 
 
@@ -1411,6 +1591,82 @@ def run_self_test() -> int:
     failures += not balanced
     print(f"  [{'pass' if balanced else 'FAIL'}] fixtures balanced — "
           f"{sum(wants)} present, {len(wants) - sum(wants)} absent")
+
+    print("\n=== citations ===\n")
+    # A real transcript's shape: contiguous speech with timestamps, so a quote can
+    # be located and a turn index derived rather than trusted.
+    cite_t = Transcript(source="fixture", attribution=CHANNEL, turns=[
+        Turn(text="i think we should go with the rubber for the case", speaker="Me",
+             start=12.0),
+        Turn(text="the supplier said eight weeks which is too long for us",
+             speaker="Them", start=48.5),
+    ])
+
+    def cite_case(label: str, note: str, want_ok: bool, **expect) -> None:
+        nonlocal failures
+        got = check_citations(note, cite_t)
+        ok = got["ok"] == want_ok and all(
+            len(got[k]) == v if isinstance(v, int) else got[k] == v
+            for k, v in expect.items())
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        if not ok:
+            print(f"          ok={got['ok']} cited={len(got['cited'])} "
+                  f"fabricated={len(got['fabricated'])} uncited={len(got['uncited'])}")
+
+    cite_case("a quote lifted from the transcript verifies",
+              "## Decisions\n- Rubber casing chosen.\n  > go with the rubber for the case",
+              True, cited=1, fabricated=0)
+    cite_case("and the turn index is derived here rather than trusted from the model",
+              "## Decisions\n- Rubber casing chosen.\n  > go with the rubber for the case",
+              True)
+    cite_case("punctuation and case differences are transcription artifacts, not fabrication",
+              "## Decisions\n- Rubber casing chosen.\n  > Go with the RUBBER, for the case!",
+              True, cited=1)
+    cite_case("a quote that is not in the transcript is caught",
+              "## Decisions\n- Budget approved.\n  > the budget was approved unanimously",
+              False, fabricated=1)
+    cite_case("words from two different turns cannot be joined into one quote",
+              "## Decisions\n- Both.\n  > for the case the supplier said eight weeks",
+              False, fabricated=1)
+    cite_case("a quote too short to test is neither credited nor called fabricated",
+              "## Decisions\n- Rubber.\n  > the case", True,
+              unverifiable=1, cited=0, fabricated=0)
+    cite_case("an item with no quote is neither a pass nor a fabrication",
+              "## Decisions\n- Rubber casing chosen, with no evidence offered.",
+              True, uncited=1, cited=0, fabricated=0)
+    # The Summary section takes no quotes by contract, and its prose must not be
+    # mistaken for an uncited item — it is not a list.
+    cite_case("summary prose is not counted as an uncited item",
+              "## Summary\nThe team met and chose a casing material.", True, uncited=0)
+    #  The verdict has to move, or none of the above changes a run's outcome.
+    verdict_note = "## Decisions\n- Budget approved.\n  > the budget was approved"
+    cite_case("a fabricated citation is not advisory", verdict_note, False)
+
+    # The quote has to survive the merge, because only the extraction pass sees a
+    # transcript. When _ITEM dropped everything after the pipe, the consolidator
+    # was asked for verbatim evidence from a transcript it had never been shown,
+    # which made every citation on the chunked path invented by construction.
+    def item_case(label: str, line: str, want) -> None:
+        nonlocal failures
+        m = _ITEM.match(line)
+        got = None if not m else (m.group(1).upper(), m.group("text").strip(),
+                                  (m.group("quote") or "").strip())
+        ok = got == want
+        failures += not ok
+        print(f"  [{'pass' if ok else 'FAIL'}] {label}")
+        if not ok:
+            print(f"          got {got!r}")
+
+    item_case("an extracted item carries its evidence through the merge",
+              "ACTION: Send the corpus licence | i'll send an email and ask",
+              ("ACTION", "Send the corpus licence", "i'll send an email and ask"))
+    item_case("an item with no evidence still parses, rather than being dropped",
+              "DECISION: Delay the anonymisation",
+              ("DECISION", "Delay the anonymisation", ""))
+    item_case("a quote containing a pipe keeps everything after the first one",
+              "QUESTION: Which encoding | we said utf-8 | not latin-1",
+              ("QUESTION", "Which encoding", "we said utf-8 | not latin-1"))
 
     outcome = (
         "all controls behaved as specified" if not failures
