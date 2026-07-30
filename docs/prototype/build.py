@@ -36,7 +36,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "notes"))
 
-from summarize import _seq  # noqa: E402
+from summarize import (  # noqa: E402
+    _seq,
+    _support_key,
+    artifact_uses_source_evidence,
+    validate_evidence_contract,
+    validate_support_measurement,
+)
 from transcript import load  # noqa: E402  (needs the path above)
 
 OUT_DIR = REPO / "notes" / "out"
@@ -116,8 +122,8 @@ def tokens() -> dict[str, str]:
     return out
 
 
-def turns_for(doc: dict, note_path: Path) -> list:
-    """The transcript in the shape the claim indices count.
+def transcript_for(doc: dict, note_path: Path):
+    """The transcript in the exact transformed shape the evidence coordinates count.
 
     `transform` is applied here rather than assumed. A claim's `turn` is a position in
     the transcript as the model saw it, and the transforms do not all preserve
@@ -162,7 +168,7 @@ def turns_for(doc: dict, note_path: Path) -> list:
         t = t.simulate_bleed()
     elif transform is not None:
         raise SystemExit(f"{note_path}: unknown transform {transform!r}")
-    return t.turns
+    return t
 
 
 def esc(s) -> str:
@@ -238,9 +244,8 @@ def support_line(claim: dict, support: dict | None) -> str:
     if not support:
         return ('<p class="support unmeasured">whether these words support the claim '
                 'has not been measured on this note</p>')
-    key = (claim["claim"], claim.get("quote"))
     for v in support["verdicts"]:
-        if (v["claim"], v["quote"]) == key:
+        if _support_key(v) == _support_key(claim):
             if v["supports"] is None:
                 return ('<p class="support unmeasured">the judge returned no verdict on '
                         'whether these words support the claim</p>')
@@ -273,22 +278,37 @@ def claim_row(claim: dict, i: int, meeting: str, support: dict | None = None) ->
          f'<span class="word">{esc(word)}</span>'
          f'<span class="why">{esc(why)}</span></p>'),
     ]
-    if quote:
+    evidence_rows = claim.get("_resolved_evidence_refs")
+    if evidence_rows is None and quote:
+        evidence_rows = [{
+            "turn": turn,
+            "quote": quote,
+            "start": claim.get("start"),
+        }]
+    for evidence_index, evidence in enumerate(evidence_rows or [], 1):
+        evidence_turn = evidence["turn"]
+        evidence_quote = evidence["quote"]
         # The locator is derived by finding the quote, never taken from the model. It
         # shows a timestamp when there is one and the turn position when there is not:
         # corpus transcripts carry no times, and a button reading "--:--" claims a
         # precision the material does not have while hiding that it still works. A
         # real capture always records times, so this is a limit of the corpus.
-        where = (stamp(claim["start"]) if claim.get("start") is not None
-                 else f"turn {turn}")
-        at = (f'<button class="at" data-meeting="{esc(meeting)}" data-turn="{turn}">'
-              f'{esc(where)}</button>') if turn is not None else ""
+        where = (stamp(evidence.get("start")) if evidence.get("start") is not None
+                 else f"turn {evidence_turn}")
+        at = (f'<button class="at" data-meeting="{esc(meeting)}" '
+              f'data-turn="{evidence_turn}">{esc(where)}</button>') \
+            if evidence_turn is not None else ""
+        part = (
+            f'<span class="evidence-part">source {evidence_index} of '
+            f'{len(evidence_rows)}</span>'
+            if len(evidence_rows) > 1 else ""
+        )
         # The block carries the verdict's colour on its edge. Presenting a composed
         # quote in the same frame as a located one lets it read as evidence, which is
         # the failure this whole surface exists to prevent — and the state word sits
         # directly above, so the colour is never carrying the state alone.
-        body.append(f'<blockquote class="quote" style="--state:{color}">{at}'
-                    f'<span class="qtext">{esc(quote)}</span></blockquote>')
+        body.append(f'<blockquote class="quote" style="--state:{color}">{at}{part}'
+                    f'<span class="qtext">{esc(evidence_quote)}</span></blockquote>')
     body.append(support_line(claim, support))
     return f'<li class="claim claim-{esc(claim["status"])}" id="c-{esc(meeting)}-{i}">' \
            + "".join(body) + "</li>"
@@ -314,7 +334,7 @@ def transcript_pane(meeting: str, turns: list, cited: set[int]) -> str:
     return f'<ol class="turns" id="tr-{esc(meeting)}">' + "".join(rows) + "</ol>"
 
 
-def check_locators(doc: dict, turns: list, note_path: Path) -> None:
+def check_locators(doc: dict, transcript, note_path: Path) -> None:
     """Every located claim's locator must land on the words it quotes.
 
     The one promise this page makes that a reader cannot check by looking. A button
@@ -323,11 +343,75 @@ def check_locators(doc: dict, turns: list, note_path: Path) -> None:
     produce the claim. That is worse than no button, because it manufactures
     confidence. So it is asserted at build time rather than spot-checked visually.
 
-    `_seq` is imported from the summarizer rather than reimplemented. Splitting words a
-    second way here would make this file a second authority on what a quote matches,
-    and the two would disagree on exactly the inputs that matter — the punctuation and
-    casing that ASR invents.
+    Repair 4 artifacts resolve their declared fragment map and exact character spans
+    through the summarizer's validator. Legacy artifacts still use `_seq`, imported
+    rather than reimplemented, so this renderer never becomes a second authority on
+    what either evidence contract means.
     """
+    turns = transcript.turns
+    if artifact_uses_source_evidence(doc):
+        if "evidence" not in doc:
+            raise SystemExit(
+                f"{note_path.name}: Repair 4 artifact is missing its source "
+                "evidence graph"
+            )
+        try:
+            resolved = validate_evidence_contract(doc["evidence"], transcript)
+        except ValueError as e:
+            raise SystemExit(f"{note_path.name}: source evidence refused: {e}") from e
+        expected = [
+            evidence
+            for label in ("DECISION", "ACTION", "PROPOSAL", "QUESTION")
+            for evidence in resolved
+            if evidence["label"] == label
+        ]
+        if len(expected) != len(doc["claims"]):
+            raise SystemExit(
+                f"{note_path.name}: {len(expected)} evidence records do not match "
+                f"{len(doc['claims'])} claims"
+            )
+        for claim, evidence in zip(doc["claims"], expected, strict=True):
+            resolved_refs = [
+                {
+                    key: ref[key]
+                    for key in (
+                        "source_fragment_id", "turn", "char_start", "char_end",
+                        "text_sha256",
+                    )
+                }
+                for ref in evidence["evidence_refs"]
+            ]
+            if (claim.get("source_item_ids") != evidence["source_item_ids"]
+                    or claim.get("evidence_refs") != resolved_refs
+                    or claim.get("status") != "located"
+                    or claim.get("type") != evidence["label"].lower()):
+                raise SystemExit(
+                    f"{note_path.name}: claim evidence metadata disagrees with "
+                    "the durable coverage graph"
+                )
+            claim["_resolved_evidence_refs"] = [
+                {
+                    "turn": ref["turn"],
+                    "start": turns[ref["turn"]].start,
+                    "quote": ref["quote"],
+                }
+                for ref in evidence["evidence_refs"]
+            ]
+            if (claim.get("quote"), claim.get("turn")) != (
+                    evidence["evidence_refs"][0]["quote"],
+                    evidence["evidence_refs"][0]["turn"]):
+                raise SystemExit(
+                    f"{note_path.name}: compatibility quote/turn is not the first "
+                    "declared source fragment"
+                )
+        try:
+            validate_support_measurement(doc, transcript)
+        except ValueError as e:
+            raise SystemExit(
+                f"{note_path.name}: support measurement refused: {e}"
+            ) from e
+        return
+
     for claim in doc["claims"]:
         if claim["status"] != "located":
             continue
@@ -348,10 +432,18 @@ def check_locators(doc: dict, turns: list, note_path: Path) -> None:
 
 def meeting_section(doc: dict, note_path: Path) -> tuple[str, dict]:
     m = doc["meeting"]
-    turns = turns_for(doc, note_path)
-    check_locators(doc, turns, note_path)
+    transcript = transcript_for(doc, note_path)
+    turns = transcript.turns
+    check_locators(doc, transcript, note_path)
     c = counts(doc)
-    cited = {cl["turn"] for cl in doc["claims"] if cl.get("turn") is not None}
+    cited = {
+        ref["turn"]
+        for claim in doc["claims"]
+        for ref in claim.get(
+            "_resolved_evidence_refs",
+            ([{"turn": claim["turn"]}] if claim.get("turn") is not None else []),
+        )
+    }
     prov = doc["provenance"]
 
     support = doc.get("support")
@@ -386,8 +478,8 @@ def meeting_section(doc: dict, note_path: Path) -> tuple[str, dict]:
     <div class="col col-evidence">
       <h4>The transcript &mdash; what was actually said</h4>
       {note_annotation("real data",
-                       "The retained artifact. A located claim's timestamp is a "
-                       "button: it moves to the turn the quote was located in. That "
+                       "The retained artifact. Each source fragment's position is a "
+                       "button: it moves to the exact turn behind that part of the claim. That "
                        "path is J1 beat 3, and it survives the audio being deleted "
                        "because it does not use the audio.")}
       {transcript_pane(m["id"], turns, cited)}
@@ -841,6 +933,9 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   .at {{ font: inherit; color: var(--neutral-50); background: var(--surface-overlay);
          border: 0; border-radius: 2px; padding: 1px 6px; margin-right: 8px;
          cursor: pointer; }}
+  .evidence-part {{ color: var(--neutral-500); font-size: 10px;
+                    text-transform: uppercase; letter-spacing: .04em;
+                    margin-right: 8px; }}
   .turns {{ list-style: none; margin: 0; padding: 8px 0; max-height: 620px;
             overflow-y: auto; background: var(--surface-raised); border-radius: 6px;
             counter-reset: none; }}
