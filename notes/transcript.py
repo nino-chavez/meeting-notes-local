@@ -63,8 +63,9 @@ class Transcript:
     # reach is a fact.
     turns: list[Turn] = field(default_factory=list)
     # The gated turns themselves, kept so the operator can overrule a gate that
-    # removed a colleague. Deliberately not part of any transform's output: a
-    # transform's job is to reshape what the model sees.
+    # removed a colleague. Derived views carry them as provenance but never move
+    # them into `turns`, so no attribution or bleed transform can feed them back to
+    # the model.
     gated_turns: list[Turn] = field(default_factory=list)
     # What the capture's voiceprint gate did, when there was one. Carried through
     # rather than dropped at the loader because the gate can delete a co-located

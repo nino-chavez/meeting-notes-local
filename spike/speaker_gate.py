@@ -600,7 +600,6 @@ def _wav_samples(path: Path) -> int:
 
 
 PROFILE_SCHEMA = "voiceprint/1"
-_UNSET = object()
 
 # Below this many held-out scores a quantile cannot even express the requested
 # operating point: a 5% false-reject rate needs 20 observations before one of them
@@ -759,7 +758,8 @@ def encoder_fingerprint(savedir: str | Path | None = None) -> str | None:
     classification head this module never calls, and including a file that cannot
     affect an embedding would make the fingerprint change for reasons that do not
     matter. Returns None when the checkpoint has not been fetched yet, which is not
-    an error — a profile can be built by a caller supplying its own encoder.
+    an error by itself — a caller supplying its own encoder can persist the digest
+    of those weights explicitly.
     """
     d = Path(savedir) if savedir else Path.home() / ".cache" / "speaker-gate"
     ckpt = d / "embedding_model.ckpt"
@@ -942,14 +942,15 @@ def verify_provenance(path: Path, doc: dict) -> None:
               "--experimental so the weakening is recorded and surfaced.")
 
 
-def load_profile(path: Path, *, expected_encoder_fingerprint: str | object | None = _UNSET
+def load_profile(path: Path, *, expected_encoder_fingerprint: str | None
                  ) -> tuple[Profile, float, dict]:
     """Read a saved voiceprint, its threshold, and the manifest behind them.
 
-    Refuses rather than defaults on every missing field. A gate that falls back to
-    a built-in threshold when the file does not carry one is the failure this
-    module was written to prevent, arriving through the loader instead of through
-    the caller.
+    Refuses rather than defaults on every missing field. The expected checkpoint
+    digest is required from the caller, so loading a profile for scoring cannot
+    silently skip the comparison. A gate that falls back to a built-in threshold
+    when the file does not carry one is the failure this module was written to
+    prevent, arriving through the loader instead of through the caller.
     """
     doc = json.loads(Path(path).read_text())
     if doc.get("schema") != PROFILE_SCHEMA:
@@ -970,20 +971,19 @@ def load_profile(path: Path, *, expected_encoder_fingerprint: str | object | Non
             f"{path}: encoder_fingerprint is not a SHA-256 digest. A profile "
             "without a specific embedding checkpoint cannot be used safely. Re-enroll."
         )
-    if expected_encoder_fingerprint is not _UNSET:
-        expected = _fingerprint(expected_encoder_fingerprint)
-        if expected is None:
-            raise SystemExit(
-                "the loaded encoder has no usable SHA-256 fingerprint, so its "
-                "embedding space cannot be matched to this profile. Re-fetch or "
-                "re-enroll with a fingerprinted encoder."
-            )
-        if fingerprint != expected:
-            raise SystemExit(
-                f"{path} was enrolled with encoder fingerprint {fingerprint}, but "
-                f"the loaded encoder is {expected}. Its threshold is calibrated in "
-                "a different embedding space. Re-enroll with this encoder."
-            )
+    expected = _fingerprint(expected_encoder_fingerprint)
+    if expected is None:
+        raise SystemExit(
+            "the loaded encoder has no usable SHA-256 fingerprint, so its "
+            "embedding space cannot be matched to this profile. Re-fetch or "
+            "re-enroll with a fingerprinted encoder."
+        )
+    if fingerprint != expected:
+        raise SystemExit(
+            f"{path} was enrolled with encoder fingerprint {fingerprint}, but "
+            f"the loaded encoder is {expected}. Its threshold is calibrated in "
+            f"a different embedding space. Re-enroll with this encoder."
+        )
     try:
         centroid = _profile_centroid(doc["centroid"])
     except ValueError as exc:
@@ -1347,6 +1347,12 @@ def run_self_test() -> int:
         fixture_model.mkdir()
         (fixture_model / "embedding_model.ckpt").write_bytes(b"fixture encoder")
         fixture_fingerprint = encoder_fingerprint(fixture_model)
+
+        def load_fixture(profile_path: Path):
+            return load_profile(
+                profile_path, expected_encoder_fingerprint=fixture_fingerprint
+            )
+
         # A fixture that satisfies the contract, because load_profile now re-derives
         # it. The earlier minimal fixture is what the new check caught first.
         point = {"threshold": 0.61, "target_frr": 0.05, "n_sittings": 2,
@@ -1359,9 +1365,7 @@ def run_self_test() -> int:
         save_profile(pp, operator, 0.61, operating_point=point,
                      sittings=good_sittings,
                      model_dir=fixture_model)
-        back, thresh, doc = load_profile(
-            pp, expected_encoder_fingerprint=fixture_fingerprint
-        )
+        back, thresh, doc = load_fixture(pp)
         check(
             "a profile round-trips through the file with its centroid intact",
             float(back.centroid @ operator.centroid) > 1 - 1e-9,
@@ -1375,6 +1379,11 @@ def run_self_test() -> int:
         check(
             "save_profile records the checkpoint bytes it was given, not the model recipe",
             doc["encoder_fingerprint"] == fixture_fingerprint,
+        )
+        check(
+            "a caller cannot load a profile for scoring without naming the loaded "
+            "encoder fingerprint",
+            _raises(lambda: load_profile(pp), TypeError),
         )
         check(
             "a persisted encoder fingerprint is checked against the loaded encoder",
@@ -1425,12 +1434,12 @@ def run_self_test() -> int:
 
         check(
             "a hand-edited one-sitting profile does not load as production",
-            _raises(lambda: load_profile(edited(sittings=good_sittings[:1])),
+            _raises(lambda: load_fixture(edited(sittings=good_sittings[:1])),
                     SystemExit),
         )
         check(
             "nor one whose two sittings share a capture window",
-            _raises(lambda: load_profile(edited(sittings=[
+            _raises(lambda: load_fixture(edited(sittings=[
                 good_sittings[0],
                 {**good_sittings[1], "captured_at": good_sittings[0]["captured_at"]},
             ])), SystemExit),
@@ -1442,14 +1451,16 @@ def run_self_test() -> int:
         check(
             "a future capture timestamp is refused by the loader, rather than "
             "being counted as evidence of a separate sitting",
-            _raises(lambda: load_profile(edited(sittings=future_sittings)), SystemExit),
+            _raises(lambda: load_fixture(edited(sittings=future_sittings)), SystemExit),
         )
         check(
             "and the direct persistence API refuses that future timestamp before "
             "it replaces an existing profile",
             _raises(lambda: save_profile(Path(tmp) / "future.json", operator, 0.61,
                                          operating_point=point,
-                                         sittings=future_sittings), ValueError),
+                                         sittings=future_sittings,
+                                         encoder_fingerprint_value=fixture_fingerprint),
+                    ValueError),
         )
         mixed_timezone_sittings = [
             good_sittings[0],
@@ -1458,31 +1469,32 @@ def run_self_test() -> int:
         check(
             "mixed aware and naive capture times are refused instead of raising "
             "inside timestamp sorting",
-            _raises(lambda: load_profile(edited(sittings=mixed_timezone_sittings)),
+            _raises(lambda: load_fixture(edited(sittings=mixed_timezone_sittings)),
                     SystemExit),
         )
         check(
             "and malformed sitting rows cannot be persisted through save_profile",
             _raises(lambda: save_profile(Path(tmp) / "malformed.json", operator, 0.61,
-                                         operating_point=point, sittings=[{}, {}]),
+                                         operating_point=point, sittings=[{}, {}],
+                                         encoder_fingerprint_value=fixture_fingerprint),
                     ValueError),
         )
         check(
             "nor one with too few held-out scores for the rate it claims",
-            _raises(lambda: load_profile(edited(n_operator=4)), SystemExit),
+            _raises(lambda: load_fixture(edited(n_operator=4)), SystemExit),
         )
         check(
             "nor one that never priced what it admits of another voice",
-            _raises(lambda: load_profile(edited(false_admit_rate=None)), SystemExit),
+            _raises(lambda: load_fixture(edited(false_admit_rate=None)), SystemExit),
         )
         check(
             "nor one that does not say which operating point it is",
-            _raises(lambda: load_profile(edited(target_frr=None)), SystemExit),
+            _raises(lambda: load_fixture(edited(target_frr=None)), SystemExit),
         )
         check(
             "but an experimental profile loads, because that marker is surfaced "
             "at every capture and hiding it is the only thing that would help",
-            not _raises(lambda: load_profile(edited(
+            not _raises(lambda: load_fixture(edited(
                 sittings=good_sittings[:1], n_operator=4, false_admit_rate=None,
                 experimental=True)), SystemExit),
         )
@@ -1493,7 +1505,7 @@ def run_self_test() -> int:
         check(
             "a profile from another embedding space is refused — its cosines are "
             "not comparable, so its threshold means nothing here",
-            _raises(lambda: load_profile(Path(tmp) / "other.json"), SystemExit),
+            _raises(lambda: load_fixture(Path(tmp) / "other.json"), SystemExit),
         )
 
         no_fingerprint = json.loads(pp.read_text())
@@ -1502,7 +1514,7 @@ def run_self_test() -> int:
         check(
             "a profile without a checkpoint fingerprint is refused, rather than "
             "silently accepting any future ECAPA download",
-            _raises(lambda: load_profile(Path(tmp) / "no-fingerprint.json"), SystemExit),
+            _raises(lambda: load_fixture(Path(tmp) / "no-fingerprint.json"), SystemExit),
         )
         malformed_fingerprint = json.loads(pp.read_text())
         malformed_fingerprint["encoder_fingerprint"] = "not-a-digest"
@@ -1511,9 +1523,8 @@ def run_self_test() -> int:
         )
         check(
             "a malformed checkpoint fingerprint is refused at the persistence boundary",
-            _raises(lambda: load_profile(
-                Path(tmp) / "malformed-fingerprint.json"
-            ), SystemExit),
+            _raises(lambda: load_fixture(
+                Path(tmp) / "malformed-fingerprint.json"), SystemExit),
         )
 
         no_thresh = json.loads(pp.read_text())
@@ -1522,7 +1533,7 @@ def run_self_test() -> int:
         check(
             "a profile with no threshold is refused rather than defaulted — a "
             "built-in fallback is the exact failure this module exists to prevent",
-            _raises(lambda: load_profile(Path(tmp) / "bare.json"), SystemExit),
+            _raises(lambda: load_fixture(Path(tmp) / "bare.json"), SystemExit),
         )
         check(
             "and it is written owner-only, because a centroid identifies a person",
@@ -1549,7 +1560,7 @@ def run_self_test() -> int:
             bp.write_text(json.dumps(broken))
             check(
                 f"and a threshold {label} is refused on the way in",
-                _raises(lambda p=bp: load_profile(p), SystemExit),
+                _raises(lambda p=bp: load_fixture(p), SystemExit),
             )
         hollow_centroid = json.loads(pp.read_text())
         hollow_centroid["centroid"] = [float("nan")] * _DIM
@@ -1557,7 +1568,7 @@ def run_self_test() -> int:
         hc.write_text(json.dumps(hollow_centroid))
         check(
             "a centroid of NaNs is refused, not normalised into one",
-            _raises(lambda: load_profile(hc), SystemExit),
+            _raises(lambda: load_fixture(hc), SystemExit),
         )
         for bad_centroid, label in (
             ([1.0] * (_DIM - 1), "wrong width"),
@@ -1571,7 +1582,7 @@ def run_self_test() -> int:
             mp.write_text(json.dumps(malformed))
             check(
                 f"a centroid with {label} is refused before any cosine is scored",
-                _raises(lambda p=mp: load_profile(p), SystemExit),
+                _raises(lambda p=mp: load_fixture(p), SystemExit),
             )
         malformed_profile = Profile(
             centroid=np.zeros(_DIM), n_enrolled=operator.n_enrolled,
@@ -1590,8 +1601,7 @@ def run_self_test() -> int:
         check(
             "the profile's own digest travels with it, so a transcript can say "
             "which voiceprint gated it",
-            len(load_profile(pp, expected_encoder_fingerprint=fixture_fingerprint)[2]
-                ["_profile_sha256"]) == 64,
+            len(load_fixture(pp)[2]["_profile_sha256"]) == 64,
         )
 
     print("\n=== the enrolment contract ===\n")
