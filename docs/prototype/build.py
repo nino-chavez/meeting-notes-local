@@ -57,6 +57,7 @@ from summarize import (  # noqa: E402
     structured_artifact_citations,
     validate_artifact_pair,
     validate_evidence_contract,
+    validate_stored_verdict,
     validate_support_measurement,
 )
 from transcript import Transcript, load  # noqa: E402  (needs the path above)
@@ -366,6 +367,109 @@ def check_capture_warning_renderer() -> None:
     raise SystemExit("a note was allowed to contradict its retained transcript")
 
 
+def require_ready_note(doc: dict, path: Path) -> None:
+    """Refuse a diagnostic artifact where the product expects a usable note."""
+    try:
+        passed = validate_stored_verdict(
+            doc.get("checks"), doc.get("passed"), str(path)
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"{path}: stored note verdict refused: {exc}") from exc
+    if not passed:
+        raise SystemExit(
+            f"{path}: this run failed its own acceptance checks. It is a research "
+            "diagnostic, not a ready note; show the retained transcript in the "
+            "summary-failed state instead."
+        )
+
+
+def check_note_admission_renderers() -> None:
+    passing_checks = {
+        "context": {"ok": True},
+        "attribution": {"applies": True, "ok": True},
+        "numbers": {"ok": True},
+        "prompt_echo": {"ok": True},
+        "citations": {
+            "applies": True,
+            "ok": True,
+            "cited": [],
+            "fabricated": [],
+            "unverifiable": [],
+            "uncited": [],
+            "items": 0,
+        },
+        "extraction": {"applies": False, "ok": None},
+    }
+    fixture = {
+        "schema": "note/1",
+        "passed": False,
+        "checks": {
+            **passing_checks,
+            "attribution": {"applies": True, "ok": False},
+        },
+        "meeting": {
+            "id": "fixture",
+            "source": "fixture",
+            "attribution": "none",
+            "turns": 1,
+        },
+        "claims": [{"claim": "REJECTED CLAIM MUST NOT RENDER"}],
+        "provenance": {
+            "model": "fixture",
+            "elapsed_s": 0.1,
+            "passes": 1,
+            "slices": None,
+        },
+    }
+    try:
+        require_ready_note(fixture, Path("failed.note.json"))
+    except SystemExit as exc:
+        if "summary-failed" in str(exc):
+            pass
+        else:
+            raise
+    else:
+        raise SystemExit(
+            "a passed:false diagnostic was allowed onto a ready-note surface"
+        )
+
+    transcript = Transcript(
+        source="fixture",
+        attribution="none",
+        turns=[],
+    )
+    capture_doc = {
+        "capture_health": None,
+        "capture_integrity_unknown": True,
+        "capture_warnings": [CAPTURE_INTEGRITY_UNKNOWN_WARNING],
+    }
+    failed_section = failed_meeting_section(
+        fixture, Path("failed.note.json"), transcript, capture_doc
+    )
+    failed_row = failed_library_row(fixture, capture_doc)
+    if (
+        "REJECTED CLAIM MUST NOT RENDER" in failed_section + failed_row
+        or 'class="claims"' in failed_section + failed_row
+        or 'class="trust"' in failed_section + failed_row
+        or (failed_section + failed_row).count("Summary withheld") != 1
+    ):
+        raise SystemExit(
+            "a passed:false diagnostic leaked claims or ready-note trust into "
+            "the product encounter"
+        )
+
+    accepted = dict(fixture)
+    accepted["passed"] = True
+    accepted["checks"] = passing_checks
+    accepted["claims"] = []
+    ready_section, _counts = meeting_section(
+        accepted, Path("accepted.note.json"), transcript, capture_doc
+    )
+    ready_row = library_row(accepted, capture_doc)
+    if 'class="claims"' not in ready_section or 'class="lib-trust"' not in ready_row:
+        raise SystemExit("the accepted-note renderer no longer reaches its ready surface")
+
+
 def trust_bar(c: dict[str, int]) -> str:
     """Proportional, and labelled, because the proportion is the finding.
 
@@ -606,6 +710,7 @@ def meeting_section(
     transcript: Transcript,
     capture_doc: dict,
 ) -> tuple[str, dict]:
+    require_ready_note(doc, note_path)
     m = doc["meeting"]
     turns = transcript.turns
     check_locators(doc, transcript, note_path)
@@ -664,6 +769,74 @@ def meeting_section(
 </section>''', c)
 
 
+def failed_reasons(doc: dict) -> list[str]:
+    """Translate only hard-gate failures; advisory checks do not become causes."""
+    checks = doc["checks"]
+    reasons = []
+    context = checks["context"]
+    attribution = checks["attribution"]
+    extraction = checks.get("extraction", {"applies": False})
+    if context["ok"] is False:
+        reasons.append("The model did not read the complete transcript.")
+    if attribution["applies"] and not attribution["ok"]:
+        reasons.append(
+            "The draft assigned speech to people this transcript could not identify."
+        )
+    if not checks["numbers"]["ok"]:
+        reasons.append("The draft introduced figures that are not in the transcript.")
+    if not checks["prompt_echo"]["ok"]:
+        reasons.append("The draft copied meeting content from its instructions.")
+    if not checks["citations"]["ok"]:
+        reasons.append("The draft presented words the transcript does not contain.")
+    if extraction["applies"] and not extraction["ok"]:
+        reasons.append("The extraction stage dropped content shaped like a note item.")
+    return reasons or ["The stored checks rejected this draft."]
+
+
+def failed_meeting_section(
+    doc: dict,
+    note_path: Path,
+    transcript: Transcript,
+    capture_doc: dict,
+) -> str:
+    """Render the retained transcript without admitting rejected claim content."""
+    m = doc["meeting"]
+    prov = doc["provenance"]
+    reasons = "".join(f"<li>{esc(reason)}</li>" for reason in failed_reasons(doc))
+    capture_warning = capture_warning_markup(capture_doc)
+    section = f'''
+<section class="meeting summary-withheld" id="failed-{esc(m["id"])}">
+  <header class="mhead">
+    <p class="eyebrow">transcript ready &middot; summary withheld</p>
+    <h3>{esc(m["id"])}</h3>
+    <p class="meta">{esc(len(transcript.turns))} turns &middot;
+      {esc(prov["model"])} &middot; {esc(prov["elapsed_s"])}s</p>
+    {capture_warning}
+  </header>
+  <div class="split">
+    <div class="col withheld-summary">
+      <h4>No usable summary was produced</h4>
+      <p>The retained transcript is intact. The generated draft failed the checks
+        required before a note can enter the library:</p>
+      <ul>{reasons}</ul>
+      <p>The rejected draft remains research evidence only. None of its claims are
+        shown or counted here.</p>
+      <button type="button" data-panel="spec-transcribing"
+        data-action="retry-processing">review the retry state (prototype)</button>
+    </div>
+    <div class="col col-evidence">
+      <h4>The retained transcript</h4>
+      {transcript_pane(m["id"], transcript.turns, set())}
+    </div>
+  </div>
+</section>'''
+    if 'class="claims"' in section or 'class="trust"' in section:
+        raise SystemExit(
+            f"{note_path}: rejected output reached a ready-note renderer"
+        )
+    return section
+
+
 def library_row(doc: dict, capture_doc: dict) -> str:
     m, c = doc["meeting"], counts(doc)
     capture_warning = capture_warning_markup(capture_doc, compact=True)
@@ -678,6 +851,24 @@ def library_row(doc: dict, capture_doc: dict) -> str:
         {capture_warning}
       </span>
       <span class="lib-trust">{trust_bar(c)}</span>
+    </li>'''
+
+
+def failed_library_row(doc: dict, capture_doc: dict) -> str:
+    """One product row for a retained transcript whose summary was rejected."""
+    m = doc["meeting"]
+    capture_warning = capture_warning_markup(capture_doc, compact=True)
+    return f'''
+    <li class="lib-row summary-withheld-row">
+      <span class="lib-ident">
+        <a class="lib-open" href="#failed-{esc(m["id"])}">{esc(m["id"])}</a>
+        <span class="lib-src">{esc(m["source"])}</span>
+        <span class="lib-turns">{esc(m["turns"])} turns</span>
+        <span class="lib-date">transcript ready</span>
+        {capture_warning}
+      </span>
+      <span class="summary-withheld-label">Summary withheld &mdash; open the transcript
+        or retry processing.</span>
     </li>'''
 
 
@@ -773,11 +964,10 @@ def encounter() -> str:
 <section class="encounter" id="encounter" data-initial-panel="spec-library">
   <header class="encounter-head">
     <div>
-      <p class="eyebrow">interaction specimen</p>
-      <h2>Cold-start capture and recovery path</h2>
-      <p class="lede">The library below remains real QMSum-derived content. Everything
-        in this strip is a state specimen: it tests what the app says and lets the
-        operator choose, but it does not create a meeting, transcript, or result.</p>
+      <p class="eyebrow">review build &middot; no files changed</p>
+      <h2>Capture a meeting</h2>
+      <p class="lede">Walk through setup, recording, processing, and recovery. This
+        click-through requests no permissions and records nothing.</p>
     </div>
     <div class="menubar" aria-live="polite">
       <span class="menubar-label">menu bar</span>
@@ -785,6 +975,8 @@ def encounter() -> str:
       <strong id="menubar-word">idle</strong>
     </div>
   </header>
+  <details class="reviewer-details state-picker">
+    <summary>Reviewer shortcut: open any state</summary>
   <div class="encounter-controls" aria-label="Review states">
     <button type="button" data-panel="spec-library">library</button>
     <button type="button" data-panel="spec-first-run">first launch</button>
@@ -803,12 +995,12 @@ def encounter() -> str:
     <button type="button" data-panel="spec-delete-meeting">delete meeting</button>
     <button type="button" data-panel="spec-far-end">far-end notice</button>
   </div>
+  </details>
 
   <section class="encounter-panel is-active" id="spec-library" data-menubar="idle">
-    <h3>Open to the library, with a note already visible</h3>
-    <p>This is the cold-start default: content is present, but no capture resumes and
-      no note is chosen for the operator. The real-data library and detail follow this
-      specimen.</p>
+    <h3>Your meetings</h3>
+    <p>Opening the app never resumes a recording. Existing transcripts remain readable
+      even when their summaries were withheld.</p>
     <p class="state-result" id="capture-eligibility">Supported capture unavailable:
       complete voice enrollment first. Existing meetings remain readable.</p>
     <div class="panel-actions">
@@ -1193,21 +1385,23 @@ def encounter() -> str:
   </section>
 
   <section class="encounter-panel" id="spec-processing-failed" data-menubar="error" hidden>
-    <p class="eyebrow">processing failure · recoverable</p>
-    <h3>The summary did not run. The transcript remains.</h3>
-    <p>This is not a blank note and not a lost recording. The real transcript treatment
-      below is evidence for the detail view; it was not produced by this specimen.</p>
+    <p class="eyebrow">summary unavailable · transcript retained</p>
+    <h3>No usable summary was produced. The transcript remains.</h3>
+    <p>The model may have been unavailable, or its output may have failed the checks
+      that keep invented attribution and evidence out of a ready note. Failed output is
+      diagnostic material, not a note in the library. This is not a blank note and not
+      a lost recording.</p>
     <button type="button" data-panel="spec-transcribing">retry processing</button>
   </section>
 
   <section class="encounter-panel" id="spec-note-ready" data-menubar="idle" hidden>
     <p class="eyebrow">interaction specimen · no source content asserted</p>
-    <h3>A new note appears at the top of the library</h3>
+    <h3>A successful note would appear at the top of the library</h3>
     <p>The specimen row is now visible below. It carries no invented meeting name,
-      quote, or result. Its review action moves to the real QMSum-derived detail
-      treatment and says so before the move.</p>
+      quote, or result. The available real detail may be a retained transcript whose
+      summary was withheld; the action says only that it opens the available treatment.</p>
     <button type="button" data-action="open-real-data-detail">
-      review the real-data detail treatment
+      review the available meeting detail
     </button>
   </section>
 
@@ -1294,7 +1488,7 @@ def encounter() -> str:
 
 
 def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str],
-         meetings: int) -> str:
+         meetings: int, accepted: int, rejected: int) -> str:
     css_vars = "\n      ".join(f"--{k}: {v};" for k, v in tok.items())
     legend = "".join(
         f'<li style="--state:{color}"><span class="mark">{MARKS[mark]}</span>'
@@ -1306,11 +1500,15 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
         f'<span class="word"><span class="kind">{esc(k)}</span></span>'
         f'<span class="why">{esc(v)}</span></li>'
         for k, v in KINDS.items())
-    total = sum(totals.values())
+    detail_state = (
+        "Displayed note: current for its retained transcript."
+        if accepted else
+        "No accepted note is available in this build. The retained transcript is shown."
+    )
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>J1 retrieval prototype &mdash; local-meeting-notes</title>
+<title>Meeting notes product encounter</title>
 <style>
   :root {{
       {css_vars}
@@ -1368,6 +1566,8 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   .lib-date {{ font-style: italic; }}
   .lib-capture {{ color: var(--semantic-error); font-size: 11px;
                   flex-basis: 100%; }}
+  .summary-withheld-label {{ display: block; color: var(--semantic-error);
+                             font-size: 12px; }}
 
   .bar {{ display: flex; height: 6px; border-radius: 3px; overflow: hidden;
           background: var(--neutral-800); }}
@@ -1388,6 +1588,14 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
                       border-radius: 0 4px 4px 0; }}
   .capture-warning strong {{ color: var(--semantic-error); }}
   .capture-warning ul {{ margin: 6px 0 0; padding-left: 18px; }}
+  .withheld-summary {{ padding: 16px 18px; background: var(--surface-raised);
+                       border-left: 2px solid var(--semantic-error);
+                       border-radius: 0 6px 6px 0; }}
+  .withheld-summary p, .withheld-summary li {{ color: var(--neutral-300); }}
+  .withheld-summary button {{ background: var(--surface-overlay);
+                              border: 1px solid var(--neutral-600);
+                              border-radius: 3px; color: var(--neutral-100);
+                              cursor: pointer; padding: 6px 9px; }}
   .split {{ display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
             align-items: start; margin-top: 18px; }}
   /* The evidence column stays put while the claims scroll past it. A note has far
@@ -1469,6 +1677,12 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   .menubar .glyph-error {{ color: var(--semantic-error); }}
   .encounter-controls {{ display: flex; gap: 6px; flex-wrap: wrap; padding: 0 18px 14px;
                         border-bottom: 1px solid var(--neutral-700); }}
+  .reviewer-details {{ margin: 14px 0; color: var(--neutral-400); }}
+  .reviewer-details > summary {{ cursor: pointer; color: var(--neutral-300);
+                                 font-size: 12px; }}
+  .state-picker {{ margin: 0; border-bottom: 1px solid var(--neutral-700); }}
+  .state-picker > summary {{ padding: 9px 18px; }}
+  .state-picker .encounter-controls {{ padding-top: 4px; border-bottom: 0; }}
   .encounter button {{ background: var(--surface-overlay); border: 1px solid var(--neutral-600);
                        border-radius: 3px; color: var(--neutral-100); cursor: pointer;
                        font: 11px/1.3 var(--ui); padding: 6px 9px; }}
@@ -1540,37 +1754,40 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
 </style></head>
 <body><div class="wrap">
 
-<h1>The retrieval path, as far as real content can settle it</h1>
-<p class="lede">Three weeks after a call the operator needs a decision they half
-  remember. They know the subject, not the date. <strong>Journey J1</strong> from
-  <code>docs/journeys.md</code>, built to answer two design questions: what a note
-  has to look like for a claim to be trustworthy, and whether a weak note is
-  visible before it is opened.</p>
-<p class="lede">Every claim, quote, timestamp and count on this page was produced by
-  a real model run over a real transcript. {total} claims across {meetings}
-  {"meeting" if meetings == 1 else "meetings"}. Nothing here invents a meeting, and
-  the regions the corpus cannot populate say so in place.</p>
+<h1>Meeting notes</h1>
+<p class="lede">A local-first macOS product encounter. Capture is manual, headphones
+  are required, and no summary enters the library unless its hard checks pass.</p>
+<p class="lede">This build contains {meetings}
+  {"real transcript" if meetings == 1 else "real transcripts"}:
+  {accepted} accepted {"summary" if accepted == 1 else "summaries"} and
+  {rejected} {"summary withheld" if rejected == 1 else "summaries withheld"}.
+  Rejected draft claims are not shown or counted.</p>
 
 {encounter()}
 
+<details class="reviewer-details">
+<summary>Reviewer details: evidence labels used on accepted notes</summary>
 <ul class="legend">{legend}</ul>
 
 <ul class="legend kinds">{kinds}</ul>
+</details>
 
-<h2>The library</h2>
-<p class="lede">Filing is already settled &mdash; folders, chronological within them,
-  from the market check in <code>journeys.md</code>. So the only question left for
-  this surface is the one that decides whether the corpus is useful in six months:
-  <strong>can you tell a note is weak without opening it?</strong></p>
+<h2>Your meetings</h2>
+<p class="lede">A failed summary never becomes an empty or misleading note. Open its
+  retained transcript, or retry processing.</p>
+<details class="reviewer-details">
+<summary>Reviewer details: provenance and corpus limits</summary>
 {note_annotation("real data",
-                 "Three meetings, which is enough to populate this honestly and not "
-                 "enough to test search. No search box is drawn: one that ranked "
-                 "three results would look settled while resting on nothing.")}
+                 f"{meetings} retained real transcript"
+                 f"{'s' if meetings != 1 else ''}; {accepted} accepted summary "
+                 f"and {rejected} withheld. Rejected claim content never enters "
+                 "these rows.")}
 {note_annotation("open question",
                  "The date column reads <em>no date</em> because corpus meetings "
                  "carry none. A real capture records <code>captured_at</code>, so "
                  "this is a limit of the material and not of the product &mdash; but "
                  "it does mean chronological ordering is untested here.")}
+</details>
 <ul class="lib">
   <li class="lib-row specimen-new-note" id="specimen-new-note">
     <span class="lib-ident"><strong>new note</strong><span class="lib-src">interaction
@@ -1579,20 +1796,22 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
     <span class="bar-label">This row appears only after the specimen reaches its
       ready state. It does not stand in for a captured meeting.</span>
     <button type="button" class="lib-review" data-action="open-real-data-detail">
-      review real-data detail treatment
+      review available meeting detail
     </button>
   </li>
   {library}
 </ul>
 
 <div id="real-data-detail">
-  <h2>The note, and the words behind it</h2>
+  <h2>Meeting detail</h2>
   <p class="displayed-note-state" id="displayed-note-state">
-    Displayed note: current for its stored baseline transcript.
+    {esc(detail_state)}
   </p>
 </div>
 {sections}
 
+<details class="reviewer-details">
+<summary>Reviewer details: historical evidence treatment and open questions</summary>
 {specimen()}
 
 <section class="open">
@@ -1619,6 +1838,7 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
       That needs the dogfood run, and no fixture substitutes for it.</li>
   </ul>
 </section>
+</details>
 
 </div>
 <script>
@@ -1923,6 +2143,15 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
     if (!button || button.disabled) return;
     if (button.dataset.panel === 'spec-consent') resetCaptureConsent();
     showPanel(button.dataset.panel);
+    if (button.dataset.action === 'retry-processing') {{
+      var retryPanel = document.getElementById(button.dataset.panel);
+      retryPanel.setAttribute('tabindex', '-1');
+      retryPanel.focus({{preventScroll: true}});
+      document.getElementById('encounter').scrollIntoView({{
+        block: 'start',
+        behavior: 'smooth'
+      }});
+    }}
   }});
   document.querySelectorAll('button[data-permission]').forEach(function (button) {{
     button.addEventListener('click', function () {{
@@ -2616,7 +2845,8 @@ def check_encounter_wiring(page_html: str) -> int:
         raise SystemExit(f"encounter JavaScript hook(s) missing from markup: {missing}")
     actions = set(re.findall(r'data-action="([^\"]+)"', page_html))
     expected_actions = {
-        "manual-start", "manual-stop", "finish-processing", "open-real-data-detail"
+        "manual-start", "manual-stop", "finish-processing",
+        "open-real-data-detail", "retry-processing",
     }
     if expected_actions - actions:
         raise SystemExit("encounter no longer exposes the reviewed transition actions")
@@ -2675,6 +2905,7 @@ def check_encounter_wiring(page_html: str) -> int:
 
 def main() -> int:
     check_capture_warning_renderer()
+    check_note_admission_renderers()
     # A directory argument, so the renderer can be exercised against a fixture without
     # writing into the directory holding real meeting artifacts.
     out_dir = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else OUT_DIR
@@ -2690,6 +2921,7 @@ def main() -> int:
 
     tok = tokens()
     sections, library, totals = [], [], dict.fromkeys(STATES, 0)
+    accepted = rejected = 0
     for path in notes:
         doc = json.loads(path.read_text())
         if doc.get("schema") not in NOTE_SCHEMAS:
@@ -2707,13 +2939,29 @@ def main() -> int:
             validate_artifact_pair(capture_doc, path, transcript)
         except ValueError as e:
             raise SystemExit(f"{path}: note pair refused: {e}") from e
-        section, c = meeting_section(doc, path, transcript, capture_doc)
+        if doc["passed"] is True:
+            section, c = meeting_section(doc, path, transcript, capture_doc)
+            library_row_html = library_row(doc, capture_doc)
+            accepted += 1
+        else:
+            section = failed_meeting_section(doc, path, transcript, capture_doc)
+            c = dict.fromkeys(STATES, 0)
+            library_row_html = failed_library_row(doc, capture_doc)
+            rejected += 1
         sections.append(section)
-        library.append(library_row(doc, capture_doc))
+        library.append(library_row_html)
         for k, v in c.items():
             totals[k] += v
 
-    rendered = page("".join(sections), "".join(library), totals, tok, len(notes))
+    rendered = page(
+        "".join(sections),
+        "".join(library),
+        totals,
+        tok,
+        len(notes),
+        accepted,
+        rejected,
+    )
     buttons = check_wiring(rendered)
     encounter_controls = check_encounter_wiring(rendered)
     enrollment_assertions = check_enrollment_js(rendered)
@@ -2722,6 +2970,7 @@ def main() -> int:
     size = page_path.stat().st_size / 1024
     noun = "meeting" if len(notes) == 1 else "meetings"
     print(f"wrote {page_path}  ({size:.0f} KB, {len(notes)} {noun}, "
+          f"{accepted} accepted, {rejected} summary withheld, "
           f"{sum(totals.values())} claims, {buttons} locators all resolving, "
           f"{encounter_controls} encounter controls wired, "
           f"{enrollment_assertions} enrollment transitions checked, "

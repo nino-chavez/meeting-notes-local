@@ -1481,9 +1481,11 @@ To finish, in order:
    scored as invented by a parser assumption rather than by the model. If it fires, fix
    the read and `--recheck`; do not regenerate, because that would move the note and the
    judgement together.
-4. `--measure-support notes/out/*.note.json` with the calibrated judge. It refuses to
-   report if calibration fails or the sabotaged control passes, and that refusal is the
-   feature — no figure is better than an uncalibrated one.
+4. Measure only the explicit comparison artifacts with the calibrated judge. These
+   historical runs have `passed: false`, so the current harness requires the
+   research-only `--measure-failed-diagnostic` flag as well as `--measure-support`.
+   Do not use a wildcard that can pull a later failed run into hundreds of inference
+   calls. Calibration failure or a passing sabotaged control still refuses the result.
 5. Compare against the four registered quantities, and report the decision+action rate
    beside the aggregate. That is the number `PROPOSAL` cannot inflate, because the label
    only moves items out of those two types.
@@ -1832,3 +1834,56 @@ a Python traceback.
 No Bmr006 inference was rerun for this correction. It makes the registered run finite and
 replayable; whether the model now completes, what it extracts, and whether those claims
 are supported remain the next measurement.
+
+### Second registered run: the graph completed, and the note failed acceptance
+
+The bounded run completed all 16 extraction calls in 4,144.5 seconds. Every call reported
+`done: true` and `done_reason: stop`; the largest observed prompt was 9,912 tokens against
+`num_ctx 32768`. It selected 678 source-reference-first items, resolved all 678 references,
+and local normalization rendered 663 claims while covering every extraction item exactly
+once. Fourteen exact same-evidence groups were normalized, with a largest group of three.
+The retained diagnostic is
+`notes/out/repair4-82b45c0/Bmr006.note.json`, generated at
+`2026-07-30T13:48:36-0500`, SHA-256
+`68c3d2819df8f951351ad61376b0316651a76bc01c872bff76931d663d983e59`.
+It records model tag `llama3.1:latest` at resolved digest
+`46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e`.
+It is ignored local evidence, not durable repository evidence.
+
+Those figures confirm the structural predictions only. The note failed its own
+attribution gate through phrases including `I will`, `you said`, and `you will` after
+attribution had been stripped. The stored diagnostic also named `Them`, but that arm was
+a checker false positive: lowercase `by them` is a pronoun, not the synthetic
+title-cased channel label. The checker now distinguishes those cases; the independent
+actor phrases still fail the verdict.
+
+Its 663 claims comprised 233 actions, 10 decisions, 375 proposals, and 45 questions.
+They contain 21,015 whitespace-delimited words against 21,138 in the transformed
+transcript; claim prose alone is 8,409 words. One hundred twenty claims repeat an
+earlier normalized claim and 184 contain no more than three words. Twelve of 16 slices
+returned the maximum 48 items. Inspection found action claims such as `Yeah`, `Right`,
+`OK`, and `Mm-hmm`. This is extreme extraction density. Whether a summary is useful is
+an operator judgment this corpus cannot make; this artifact is withheld because it
+independently failed the hard attribution gate.
+
+No support pass follows. It would require 663 claim calls plus 34 calibration and
+sabotaged-control calls. A calibrated support verdict for hundreds of claims cannot make
+an artifact that already failed attribution eligible for the product, and it would not
+answer the binding feasibility question. The useful conclusion is narrower:
+
+- the Repair 4 evidence graph is mechanically replayable and resolves selected words;
+- `llama3.1:latest` under this 16-slice extraction contract produced a rejected
+  663-claim output on Bmr006;
+- 69 minutes and 663 claims are measured feasibility costs, not a human usefulness
+  verdict; no registered threshold turns either into one;
+- this run does not justify a support or tuning pass before a compact artifact clears
+  the existing acceptance checks.
+
+The run also exposed a product-boundary defect in the harness. `--out` wrote the
+Markdown/JSON pair before returning the failed verdict, so a `passed: false` diagnostic
+had the same filename and schema as a ready note. Default output now fails closed:
+failed checks write no note, while `--retain-failed-diagnostic` is the explicit
+research-only escape hatch. The prototype refuses every artifact whose `passed` field is
+not exactly `true` as a ready note. It renders none of that artifact's claims or trust
+counts and routes the encounter to `summary-failed`, where the retained transcript
+remains available for retry.

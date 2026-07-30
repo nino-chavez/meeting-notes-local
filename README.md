@@ -59,7 +59,7 @@ inference stay outside that promise. They remain research or later product work.
 | Phase | Work an agent can complete | Human gate |
 |---|---|---|
 | Correctness floor | Close profile, provenance and structured-note contract defects; keep deterministic controls green | None |
-| Product encounter | Build a click-through from real capture and note artifacts, including failure and recovery states | Operator reviews it cold and approves the interaction |
+| Product encounter | Build a click-through from real capture and accepted note artifacts, including a rejected-summary state that keeps the transcript | Operator reviews it cold and approves the interaction |
 | Narrow application | Build the Tauri shell, Rust-owned session state, Swift capture sidecar, local worker, private storage and post-meeting processing | Operator exercises permissions and hardware capture |
 | Trust actions | Restore withheld speech, regenerate a note, choose retention, inspect disk use and delete audio or a meeting | Operator chooses the far-end notice and retention policy, then performs each action |
 | Limited beta | Package, sign, install cold and run a canary followed by real headphone meetings | Participants consent; the operator judges whether the notes are useful |
@@ -539,6 +539,12 @@ any speaker was named that the input never contained, whether any figure or any
 content word is absent from the transcript. `--self-test` runs those checks
 against notes with known verdicts, in both directions, so a passing check means
 something.
+
+With `--out`, a run that fails its hard checks writes no note; the transcript
+remains available for retry. `--retain-failed-diagnostic` is an explicit
+research-only escape hatch. It records `passed: false`, and product readers
+refuse that artifact. Support measurement also refuses failed diagnostics unless
+the research-only `--measure-failed-diagnostic` flag is supplied.
 
 `--strip` drops the speaker labels; `--simulate-bleed` drops them *and* doubles
 every line, which is what a contaminated capture actually delivers. After a real

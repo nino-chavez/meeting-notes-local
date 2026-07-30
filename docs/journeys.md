@@ -486,7 +486,7 @@ version's error — it made an undecided item read as scheduled.
 | No way to overrule a gate decision | J4 | **Prototyped, not wired** — the specimen restores a turn, marks the note stale, and regenerates; no app performs it on a real capture |
 | "Not captured" and "never said" look identical | J1 | **Prototyped, not measured on a capture** — the specimen distinguishes a withheld turn and capture limits; QMSum has no real gate report |
 | F has no commitment-organised view | J2 | **Decided** — a `filtered` state on F, not a new surface |
-| A note that is present but inadequate | J1, J4 | **Decided** — a note's checkable proportion is shown on E and on F's rows, so a thin note is visible before it is opened. `summary-failed` still covers only absent |
+| A note that is present but inadequate | J1, J4 | **Decided** — a passing note's checkable proportion is shown on E and on F's rows, so a thin note is visible before it is opened. Output that fails the run's acceptance checks takes `summary-failed`; a `passed: false` research diagnostic is never rendered as a ready note |
 | Export and share have no redaction step | J2 | **Open** — gated turns and room speech would travel with the note |
 | The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight. No convention to inherit — immature across the category |
 | No preparation journey | J0 | **Decided** — local read-only calendar via EventKit, `DESIGN.md § Context inputs`. The surface for a brief is still unspecified |

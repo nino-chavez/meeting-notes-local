@@ -500,7 +500,14 @@ def check_attribution(note: str, transcript: Transcript, stripped_speakers: list
             rf"|\b{n}(?:'s|’s)\s+(?:action|task|commitment|point)"  # noqa: RUF001
             rf"|^\s*[-*]?\s*{n}\s*[:—-]"                      # Marketing: … / - Marketing —
         )
-        if re.search(attributing, note, re.IGNORECASE | re.MULTILINE):
+        # `Me` and `Them` are synthetic labels, but lowercase me/them are ordinary
+        # pronouns. Treating "reviewed by them" as a leaked speaker label made the
+        # checker invent an attribution failure on Bmr006. Real corpus speaker names
+        # remain case-insensitive; only the exact title-cased channel tokens are labels.
+        flags = re.MULTILINE
+        if s not in {"Me", "Them"}:
+            flags |= re.IGNORECASE
+        if re.search(attributing, note, flags):
             names.append(s)
 
     leaks = [m.group(0) for p in patterns for m in p.finditer(note)]
@@ -3651,7 +3658,65 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
     return {"passed": verdict(checks), **checks}
 
 
-def verdict(checks: dict) -> bool:
+def _validate_verdict_checks(checks: dict, where: str) -> None:
+    """Reject truthy substitutes anywhere in the retained hard-gate shape."""
+    if not isinstance(checks, dict):
+        raise StructuredOutputError(f"{where}: checks must be an object")
+
+    def gate(name: str) -> dict:
+        value = checks.get(name)
+        if not isinstance(value, dict):
+            raise StructuredOutputError(f"{where}: {name} check must be an object")
+        return value
+
+    def exact_bool(value, field: str, *, allow_none: bool = False) -> None:
+        if type(value) is bool or (allow_none and value is None):
+            return
+        expected = "boolean or null" if allow_none else "boolean"
+        raise StructuredOutputError(
+            f"{where}: {field} must be an exact {expected}, got {value!r}"
+        )
+
+    context = gate("context")
+    if "ok" not in context:
+        raise StructuredOutputError(f"{where}: context.ok is missing")
+    exact_bool(context["ok"], "context.ok", allow_none=True)
+
+    attribution = gate("attribution")
+    if "applies" not in attribution:
+        raise StructuredOutputError(f"{where}: attribution.applies is missing")
+    exact_bool(attribution["applies"], "attribution.applies")
+    if attribution["applies"]:
+        if "ok" not in attribution:
+            raise StructuredOutputError(f"{where}: attribution.ok is missing")
+        exact_bool(attribution["ok"], "attribution.ok")
+    elif "ok" in attribution:
+        exact_bool(attribution["ok"], "attribution.ok", allow_none=True)
+
+    for name in ("numbers", "prompt_echo", "citations"):
+        check = gate(name)
+        if "ok" not in check:
+            raise StructuredOutputError(f"{where}: {name}.ok is missing")
+        exact_bool(check["ok"], f"{name}.ok")
+
+    extraction = checks.get("extraction")
+    if extraction is None:
+        return
+    if not isinstance(extraction, dict):
+        raise StructuredOutputError(
+            f"{where}: extraction check must be an object")
+    if "applies" not in extraction:
+        raise StructuredOutputError(f"{where}: extraction.applies is missing")
+    exact_bool(extraction["applies"], "extraction.applies")
+    if extraction["applies"]:
+        if "ok" not in extraction:
+            raise StructuredOutputError(f"{where}: extraction.ok is missing")
+        exact_bool(extraction["ok"], "extraction.ok")
+    elif "ok" in extraction:
+        exact_bool(extraction["ok"], "extraction.ok", allow_none=True)
+
+
+def verdict(checks: dict, *, where: str = "run checks") -> bool:
     """Whether a run passes, from its checks. The only place that decides.
 
     Written once because the alternative was tried in this very file, in the change
@@ -3665,6 +3730,7 @@ def verdict(checks: dict) -> bool:
     None of those were reasoning errors. They are what happens when a formula is
     retyped from memory beside the one it has to match.
     """
+    _validate_verdict_checks(checks, where)
     ctx = checks["context"]
     attr = checks["attribution"]
     # `.get` because artifacts written before the extraction check existed have no
@@ -3682,6 +3748,21 @@ def verdict(checks: dict) -> bool:
         # dropped between two stages, where no reader and no other check can see it.
         and (not extraction["applies"] or extraction["ok"])
     )
+
+
+def validate_stored_verdict(checks: dict, passed, where: str) -> bool:
+    """Require an exact boolean verdict that agrees with its retained checks."""
+    if type(passed) is not bool:
+        raise StructuredOutputError(
+            f"{where}: passed must be an exact boolean, got {passed!r}"
+        )
+    expected = verdict(checks, where=where)
+    if passed is not expected:
+        raise StructuredOutputError(
+            f"{where}: passed {passed} disagrees with the retained checks "
+            f"(expected {expected})"
+        )
+    return passed
 
 
 LEGACY_NOTE_SCHEMA = "note/1"
@@ -4043,7 +4124,8 @@ def validate_support_measurement(doc: dict, transcript: Transcript) -> dict | No
 
 
 def measure_support(artifacts: list[Path], model: str, num_ctx: int,
-                    timeout: int) -> int:
+                    timeout: int, *,
+                    allow_failed_diagnostic: bool = False) -> int:
     """Do located quotes support the claims they are attached to?
 
     The question `verified` was taken to answer and nothing asked. Locating a quote
@@ -4069,6 +4151,18 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
         artifact_bytes = path.read_bytes()
         artifact_text = artifact_bytes.decode("utf-8")
         doc = json.loads(artifact_text)
+        try:
+            run_passed = validate_stored_verdict(
+                doc.get("checks"), doc.get("passed"), str(path)
+            )
+        except (KeyError, TypeError, StructuredOutputError) as e:
+            raise SystemExit(f"{path}: stored verdict refused: {e}") from e
+        if not run_passed and not allow_failed_diagnostic:
+            raise SystemExit(
+                f"{path}: support measurement refused before model resolution: "
+                "the note failed its own acceptance checks. Research-only "
+                "measurement requires --measure-failed-diagnostic."
+            )
         if "transform" not in doc:
             raise SystemExit(
                 f"{path}: no `transform`, so evidence coordinates cannot be resolved")
@@ -4415,6 +4509,7 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
     capture — it was composed. That distinction is the one thing J1 beat 4 says the
     product must never blur, and here it is not ambiguous.
     """
+    validate_stored_verdict(checks, checks.get("passed"), "new note artifact")
     # Read order, not verdict order. The buckets group by outcome because that is
     # what a verdict needs; a reader meets these claims one after another. Shared with
     # `recheck` rather than written twice — two merges would be two answers to what
@@ -4527,14 +4622,29 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
 def write_note_outputs(result: dict, transcript: Transcript, checks: dict,
                        transcript_path: Path, out: Path,
                        transform: str | None = None, *,
-                       replace: bool = False) -> tuple[dict, tuple[Path, Path]]:
+                       replace: bool = False,
+                       retain_failed_diagnostic: bool = False,
+                       ) -> tuple[dict, tuple[Path, Path]]:
     """Validate, then install an owner-private Markdown/JSON pair.
 
     JSON is the canonical note. Markdown is its exact UTF-8 rendering, bound back to
     the artifact by two digests. Each file is installed atomically from a same-directory
     temporary file. Ordinary exceptions roll back a new or replacement pair; a process
     or OS crash between the two atomic installs can still leave a detectable mismatch.
+
+    A run that failed its own acceptance checks is not a note. The research harness may
+    retain that output only through the explicit diagnostic escape hatch; product
+    readers must still refuse the resulting ``passed: false`` artifact.
     """
+    run_passed = validate_stored_verdict(
+        checks, checks.get("passed"), "note output"
+    )
+    if not run_passed and not retain_failed_diagnostic:
+        raise StructuredOutputError(
+            "note output refused: the run failed its own acceptance checks; "
+            "no canonical note was written (use --retain-failed-diagnostic only "
+            "when preserving research evidence)"
+        )
     markdown, artifact = validate_output_target(out, replace=replace)
     doc = note_artifact(
         result, transcript, checks, transcript_path, out.parent, transform,
@@ -4761,6 +4871,11 @@ def validate_artifact_pair(
     transcript: Transcript,
 ) -> Path | None:
     """Validate a note against its transcript and declared Markdown rendering."""
+    checks = doc.get("checks")
+    if not isinstance(checks, dict):
+        raise StructuredOutputError(
+            f"{artifact}: note artifact has no retained checks")
+    validate_stored_verdict(checks, doc.get("passed"), str(artifact))
     reconcile_capture_provenance(doc, transcript, where=str(artifact))
     canonical = validate_note_render(doc)
     render = doc.get("render")
@@ -4919,6 +5034,10 @@ SELF_TEST = [
       "Marketing feedback was reviewed alongside the industrial design constraints."),
      ["Marketing", "User Interface", "Industrial Designer"], True),
 
+    ("lowercase me and them remain pronouns, not synthetic speaker labels",
+     "## Summary\nThe draft was reviewed by them and then returned to me.",
+     [], True),
+
     ("a role name in an attributing position is caught",
      "## Decisions\nMarketing agreed to run the trend study before the next meeting.",
      ["Marketing", "User Interface"], False),
@@ -4947,6 +5066,8 @@ CHANNEL_SELF_TEST = [
      "## Action items\nYou agreed to check the financial feasibility.", True),
     ("collective phrasing about the far side is fine",
      "## Decisions\nThe group agreed on kinetic charging.", True),
+    ("lowercase them remains a pronoun",
+     "## Summary\nThe revised case was reviewed by them.", True),
     ("treating Them as one actor is caught",
      "## Action items\nThem agreed to send the revised quote.", False),
     ("crediting the far side as a source is caught",
@@ -6676,6 +6797,199 @@ def run_self_test() -> int:
             and output_path.read_text(encoding="utf-8") == canonical_markdown
         )
 
+        rejected_checks = json.loads(json.dumps(
+            {"passed": verdict(structured_checks), **structured_checks}
+        ))
+        rejected_checks["attribution"] = {
+            "applies": True,
+            "ok": False,
+            "named_speakers": ["Them"],
+            "actor_phrases": [],
+        }
+        rejected_checks["passed"] = verdict(rejected_checks)
+        rejected_output = output_dir / "rejected.md"
+        before_rejected = {path.name for path in output_dir.iterdir()}
+        try:
+            write_note_outputs(
+                staged_new,
+                fixture_transcript,
+                rejected_checks,
+                fixture_transcript_path,
+                rejected_output,
+            )
+            rejected_default_refused = False
+        except StructuredOutputError:
+            rejected_default_refused = True
+        rejected_default_refused = (
+            rejected_default_refused
+            and rejected_checks["passed"] is False
+            and before_rejected == {path.name for path in output_dir.iterdir()}
+            and not rejected_output.exists()
+            and not rejected_output.with_suffix(".note.json").exists()
+        )
+        invalid_verdicts_refused = True
+        invalid_verdict_cases = [
+            {},
+            {"passed": None},
+            {"passed": 0},
+            {"passed": "false"},
+            {"passed": True},
+        ]
+        before_invalid_verdicts = {
+            path.name for path in output_dir.iterdir()
+        }
+        for replacement in invalid_verdict_cases:
+            invalid_checks = dict(rejected_checks)
+            invalid_checks.pop("passed", None)
+            invalid_checks.update(replacement)
+            try:
+                write_note_outputs(
+                    staged_new,
+                    fixture_transcript,
+                    invalid_checks,
+                    fixture_transcript_path,
+                    output_dir / "invalid-verdict.md",
+                )
+                invalid_verdicts_refused = False
+            except StructuredOutputError:
+                pass
+        invalid_verdicts_refused = (
+            invalid_verdicts_refused
+            and before_invalid_verdicts
+            == {path.name for path in output_dir.iterdir()}
+        )
+        invalid_nested_verdicts_refused = True
+        missing_nested_value = object()
+        nested_fields = [
+            ("context", "ok", True),
+            ("attribution", "applies", False),
+            ("attribution", "ok", False),
+            ("numbers", "ok", False),
+            ("prompt_echo", "ok", False),
+            ("citations", "ok", False),
+            ("extraction", "applies", False),
+            ("extraction", "ok", False),
+        ]
+        before_invalid_nested = {
+            path.name for path in output_dir.iterdir()
+        }
+        for gate_name, field_name, allows_none in nested_fields:
+            for bad_value in ("false", 0, None, missing_nested_value):
+                if bad_value is None and allows_none:
+                    continue
+                malformed = json.loads(json.dumps(
+                    {"passed": verdict(structured_checks), **structured_checks}
+                ))
+                if (
+                    field_name == "ok"
+                    and gate_name in {"attribution", "extraction"}
+                ):
+                    malformed[gate_name]["applies"] = True
+                if bad_value is missing_nested_value:
+                    malformed[gate_name].pop(field_name, None)
+                else:
+                    malformed[gate_name][field_name] = bad_value
+                try:
+                    write_note_outputs(
+                        staged_new,
+                        fixture_transcript,
+                        malformed,
+                        fixture_transcript_path,
+                        output_dir / "invalid-nested-verdict.md",
+                    )
+                    invalid_nested_verdicts_refused = False
+                    print(
+                        "          unexpected nested verdict acceptance: "
+                        f"{gate_name}.{field_name}={bad_value!r}"
+                    )
+                except StructuredOutputError:
+                    pass
+        unverified_context = json.loads(json.dumps(
+            {"passed": verdict(structured_checks), **structured_checks}
+        ))
+        unverified_context["context"]["ok"] = None
+        unverified_context["passed"] = verdict(unverified_context)
+        intentional_unverified_context_allowed = (
+            validate_stored_verdict(
+                unverified_context,
+                unverified_context["passed"],
+                "unverified context control",
+            ) is True
+        )
+        invalid_nested_verdicts_refused = (
+            invalid_nested_verdicts_refused
+            and intentional_unverified_context_allowed
+            and before_invalid_nested
+            == {path.name for path in output_dir.iterdir()}
+        )
+        accepted_pair_before_rejected_replace = {
+            path: path.read_bytes() for path in written_paths
+        }
+        try:
+            write_note_outputs(
+                staged_new,
+                fixture_transcript,
+                rejected_checks,
+                fixture_transcript_path,
+                output_path,
+                replace=True,
+            )
+            rejected_replace_refused = False
+        except StructuredOutputError:
+            rejected_replace_refused = True
+        rejected_replace_refused = (
+            rejected_replace_refused
+            and all(
+                path.read_bytes() == content
+                for path, content in accepted_pair_before_rejected_replace.items()
+            )
+        )
+        diagnostic_output = output_dir / "rejected-diagnostic.md"
+        diagnostic_doc, diagnostic_paths = write_note_outputs(
+            staged_new,
+            fixture_transcript,
+            rejected_checks,
+            fixture_transcript_path,
+            diagnostic_output,
+            retain_failed_diagnostic=True,
+        )
+        rejected_diagnostic_explicit = (
+            diagnostic_doc["passed"] is False
+            and {path.name for path in diagnostic_paths}
+            == {"rejected-diagnostic.md", "rejected-diagnostic.note.json"}
+            and validate_artifact_pair(
+                diagnostic_doc,
+                diagnostic_output.with_suffix(".note.json"),
+                fixture_transcript,
+            ) == diagnostic_output
+        )
+        original_resolve_for_failed_support = resolve_ollama_model
+        failed_support_resolution_called = False
+
+        def unexpected_failed_support_resolution(*_args, **_kwargs):
+            nonlocal failed_support_resolution_called
+            failed_support_resolution_called = True
+            raise AssertionError("failed support diagnostic reached model resolution")
+
+        globals()["resolve_ollama_model"] = unexpected_failed_support_resolution
+        try:
+            try:
+                measure_support(
+                    [diagnostic_output.with_suffix(".note.json")],
+                    "fixture:latest",
+                    32768,
+                    1,
+                )
+                failed_support_refused_before_inference = False
+            except SystemExit:
+                failed_support_refused_before_inference = True
+        finally:
+            globals()["resolve_ollama_model"] = original_resolve_for_failed_support
+        failed_support_refused_before_inference = (
+            failed_support_refused_before_inference
+            and not failed_support_resolution_called
+        )
+
         mismatched_capture = Transcript(
             source=fixture_transcript.source,
             attribution=fixture_transcript.attribution,
@@ -7055,6 +7369,7 @@ def run_self_test() -> int:
             ordered_checks,
             legacy_transcript_path,
             legacy_output,
+            retain_failed_diagnostic=True,
         )
         legacy_artifact = legacy_output.with_suffix(".note.json")
         absent_legacy_artifact = json.loads(json.dumps(legacy_written))
@@ -7155,6 +7470,29 @@ def run_self_test() -> int:
         and symlink_replace_explicit
         and stale_sidecar_refused,
     )
+    failed_output_gate_ok = (
+        rejected_default_refused
+        and rejected_replace_refused
+        and invalid_verdicts_refused
+        and invalid_nested_verdicts_refused
+        and rejected_diagnostic_explicit
+        and failed_support_refused_before_inference
+    )
+    control(
+        "a failed run writes no note by default; retaining it is an explicit "
+        "passed:false research diagnostic",
+        failed_output_gate_ok,
+    )
+    if not failed_output_gate_ok:
+        print(
+            "          components: "
+            f"default={rejected_default_refused} "
+            f"replace={rejected_replace_refused} "
+            f"top-level={invalid_verdicts_refused} "
+            f"nested={invalid_nested_verdicts_refused} "
+            f"diagnostic={rejected_diagnostic_explicit} "
+            f"support={failed_support_refused_before_inference}"
+        )
     control(
         "new note writes bind capture provenance to the retained transformed "
         "transcript, not a caller's mismatched object",
@@ -7769,10 +8107,19 @@ def main():
         "--replace", action="store_true",
         help="replace both existing --out Markdown and note JSON explicitly",
     )
+    p.add_argument(
+        "--retain-failed-diagnostic", action="store_true",
+        help="research only: retain an output pair with passed:false when the run "
+             "fails its own checks; product readers refuse it",
+    )
     p.add_argument("--measure-support", type=Path, nargs="+", metavar="NOTE.JSON",
                    help="judge whether each located quote supports the claim it is "
                         "attached to; calibrates the judge first and reports no figure "
                         "if it fails")
+    p.add_argument(
+        "--measure-failed-diagnostic", action="store_true",
+        help="research only: allow --measure-support over passed:false diagnostics",
+    )
     p.add_argument("--recheck", type=Path, nargs="+", metavar="NOTE.JSON",
                    help="re-derive the citation check for note/1 or note/2 artifacts "
                         "without calling a model, and rewrite them in place")
@@ -7783,11 +8130,16 @@ def main():
 
     if args.replace and args.out is None:
         p.error("--replace requires --out")
+    if args.retain_failed_diagnostic and args.out is None:
+        p.error("--retain-failed-diagnostic requires --out")
+    if args.measure_failed_diagnostic and not args.measure_support:
+        p.error("--measure-failed-diagnostic requires --measure-support")
     if args.self_test:
         return run_self_test()
     if args.measure_support:
         return measure_support(args.measure_support, args.model, args.num_ctx,
-                               args.timeout)
+                               args.timeout,
+                               allow_failed_diagnostic=args.measure_failed_diagnostic)
     if args.recheck:
         print("\n=== re-derived, no model call ===\n")
         rechecked = [recheck(a) for a in args.recheck]
@@ -7863,18 +8215,25 @@ def main():
         result = summarize(t, args.model, args.num_ctx, args.timeout)
     checks = report(result, t, stripped_speakers, reference, args.num_ctx, expected)
 
-    if args.out:
+    if args.out and (checks["passed"] or args.retain_failed_diagnostic):
         transform = ("simulate-bleed" if args.simulate_bleed
                      else "as-channel" if args.as_channel
                      else "strip" if args.strip else None)
         doc, (markdown, artifact) = write_note_outputs(
             result, t, checks, args.transcript, args.out, transform,
             replace=args.replace,
+            retain_failed_diagnostic=args.retain_failed_diagnostic,
         )
-        print(f"\n  wrote {markdown}")
+        qualifier = "failed diagnostic " if not checks["passed"] else ""
+        print(f"\n  wrote {qualifier}{markdown}")
         by_status = Counter(c["status"] for c in doc["claims"])
-        print(f"  wrote {artifact} ({len(doc['claims'])} claims: "
+        print(f"  wrote {qualifier}{artifact} ({len(doc['claims'])} claims: "
               f"{', '.join(f'{n} {s}' for s, n in by_status.most_common()) or 'none'})")
+    elif args.out:
+        print(
+            "\n  summary failed its acceptance checks; wrote no note artifact. "
+            "The transcript remains available for retry."
+        )
 
     return 0 if checks["passed"] else 1
 

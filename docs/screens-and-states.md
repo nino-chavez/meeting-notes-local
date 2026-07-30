@@ -295,12 +295,15 @@ rather than hard-failing, and the operator is told which leg is down.
 |---|---|
 | `processing` | Transcript complete, summary running |
 | `ready` | Summary written |
-| `summary-failed` | Model unreachable — raw transcript is shown, marked as unsummarized |
+| `summary-failed` | Model unreachable or output rejected by its acceptance checks — raw transcript is shown, marked as unsummarized |
 | `edited` | Operator has modified the note |
 | `exported` | Written out to Markdown |
 
 `summary-failed` is a first-class state, not an error. The transcript is the
-durable artifact; the summary is an enhancement over it.
+durable artifact; the summary is an enhancement over it. A generated artifact with
+`passed: false` is retained only when a research run explicitly asks for a diagnostic.
+It never enters the library or note-detail surface as though it were a thin but usable
+note.
 
 **The states above are the surface's; a claim inside it has its own, and this table
 was missing them.** Every state here is about whether a note *exists*. None of them
