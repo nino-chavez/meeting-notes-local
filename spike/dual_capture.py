@@ -1775,6 +1775,8 @@ def self_test_output_directory() -> bool:
         first_explicit = prepare_output_dir(str(explicit)) == explicit.resolve()
         probe = explicit / "private.json"
         write_private_text(probe, '{"text":"private"}')
+        wav_probe = explicit / "private.wav"
+        write_wav(wav_probe, np.zeros(160, dtype=np.float32))
         started = "2026-07-30T12:00:00-0500"
         write_session_manifest(explicit, "incomplete", started)
         manifest = write_session_manifest(explicit, "complete", started)
@@ -1782,14 +1784,17 @@ def self_test_output_directory() -> bool:
         private_modes = (
             stat.S_IMODE(explicit.stat().st_mode) == 0o700
             and stat.S_IMODE(probe.stat().st_mode) == 0o600
+            and stat.S_IMODE(wav_probe.stat().st_mode) == 0o600
             and stat.S_IMODE((explicit / "session.json").stat().st_mode) == 0o600
         )
         finalized = (
             manifest == stored_manifest
             and stored_manifest["status"] == "complete"
             and stored_manifest["started_at"] == started
-            and [row["name"] for row in stored_manifest["artifacts"]] == ["private.json"]
-            and stored_manifest["artifacts"][0]["sha256"] == sha256(probe)
+            and [row["name"] for row in stored_manifest["artifacts"]]
+            == ["private.json", "private.wav"]
+            and {row["name"]: row["sha256"] for row in stored_manifest["artifacts"]}
+            == {"private.json": sha256(probe), "private.wav": sha256(wav_probe)}
         )
         try:
             prepare_output_dir(str(explicit))
