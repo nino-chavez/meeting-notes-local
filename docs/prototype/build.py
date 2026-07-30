@@ -76,6 +76,19 @@ STATES = {
 MARKS = {"dot": "&#9656;", "cross": "&#10007;", "tilde": "&#126;",
          "dash": "&#8212;"}
 
+# What each claim KIND means, which is a different axis from its evidence state and was
+# not on the page. `PROPOSED` in particular is new vocabulary — it exists because the
+# note had nowhere honest to file "maybe we should X" and eleven items were forced up a
+# level to fit. A surface that prints a word it never defines fails the cold-start test
+# this project took from film-room: separate what the surface tells a reader from what it
+# expects them to work out.
+KINDS = {
+    "decision": "the meeting settled it",
+    "action": "someone committed to do it",
+    "proposal": "raised, offered or asked for — and not agreed to",
+    "question": "asked and left open",
+}
+
 
 def tokens() -> dict[str, str]:
     """The colour tokens, harvested from DESIGN.md's frontmatter.
@@ -427,6 +440,11 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
         f'<span class="word">{esc(word)}</span>'
         f'<span class="why">{esc(why)}</span></li>'
         for mark, word, color, why in STATES.values())
+    kinds = "".join(
+        f'<li><span class="mark kind-mark">{esc(k[:1].upper())}</span>'
+        f'<span class="word"><span class="kind">{esc(k)}</span></span>'
+        f'<span class="why">{esc(v)}</span></li>'
+        for k, v in KINDS.items())
     total = sum(totals.values())
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -466,6 +484,8 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
              gap: 8px; background: var(--surface-raised); border-radius: 6px; }}
   .legend li {{ display: grid; grid-template-columns: 18px 170px 1fr; gap: 10px;
                 align-items: baseline; font-size: 12px; }}
+  .legend.kinds {{ margin-top: 10px; }}
+  .kind-mark {{ color: var(--neutral-500); }}
   .mark {{ color: var(--state); font-family: var(--mono); }}
   .word {{ color: var(--neutral-100); }}
   .why {{ color: var(--neutral-400); }}
@@ -578,6 +598,8 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   the regions the corpus cannot populate say so in place.</p>
 
 <ul class="legend">{legend}</ul>
+
+<ul class="legend kinds">{kinds}</ul>
 
 <h2>The library</h2>
 <p class="lede">Filing is already settled &mdash; folders, chronological within them,

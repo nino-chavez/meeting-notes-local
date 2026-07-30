@@ -1254,3 +1254,52 @@ matters is that `SUPPORT_FIXTURES` are synthetic and drawn from no corpus meetin
 judge's calibration is independent of the items being measured. That still holds after
 adding the two `PROPOSAL` fixtures, which cover both directions: hedged words support a
 proposal claim, and words that settle something do not.
+
+---
+
+## The fourth separator, and the third time a blind spot hid failures in a benign bucket
+
+Adding the `Proposed` section changed how the consolidator formats citations, and the
+parser could not read the new shape. Measured 2026-07-29.
+
+**The note reported 93 items carrying no quote. It carried 93 quotes.** The consolidator
+stopped converting the extraction format and passed it straight through as
+`claim | quote` — zero `>` characters in the whole note. `_SAME_LINE` looked only for
+`>`, so every item fell through to `uncited`, which does not fail a run.
+
+Read with the pipe accepted: **24 located, 56 composed, 13 untestable**, and the run's
+verdict moved `passed: true` → `false`. So the blind spot was not merely under-counting
+evidence — **it was hiding 56 fabricated quotes in the one bucket that lets a run pass.**
+
+**Third instance, same structure, three different characters.** Next-line-only reported
+41 real citations as absent. Then the collapsed `>` form. Now the pipe. Each time the
+parser knew one shape, the model produced another, and the items landed in `uncited` —
+benign by design, because a model ignoring a format instruction is a prompt problem. The
+design was right and the blast radius was not: a bucket that cannot fail a run is where
+undetected failures accumulate. `layout` and `separator` are recorded per note now, so
+which shape a run produced is a field rather than something a person has to notice.
+
+The pipe was always in the template. `QUOTE_FROM_ITEMS` tells the consolidator that
+"every item you were given ends with a pipe", so the rule this file already recorded —
+a model given a format template copies the template's punctuation — predicted this
+separator specifically, and the parser was not updated to match.
+
+**A second effect of the new section, unpredicted and not a formatting problem.** In
+`Proposed`, the consolidator **swapped claim and quote**: extraction produced
+`ACTION: write down error message next time it occurs | maybe we should write it down`
+and the note reads `- Maybe we should write it down | write down error message next time
+it occurs`. The hedged speech became the claim and the claim became the evidence. That is
+defensible as a reading — the proposal *is* "maybe we should write it down" — and it
+breaks the contract that a claim is a statement and a quote is what was said.
+
+### The prediction was ill-posed, which is worth more than whether it was right
+
+`633ef5a` predicted 17 of 31 supported, up to 21. **That prediction assumed a fixed claim
+set**, and the repair changes which claims get extracted at all: ES2004c went from 11
+claims to 17, covid_4 from 15 to 8, Bmr006 from 55 to 93. The denominator moved, so
+"17 of 31" cannot be compared against anything the repair produced.
+
+Pre-registering was still the right instinct and the flaw is in the quantity chosen, not
+the practice. A prediction about a *rate* would have survived a changing denominator; one
+about a count did not. Recorded here rather than quietly swapped for whatever the new
+numbers support, which is the failure mode this file has already had twice.

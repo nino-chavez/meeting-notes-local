@@ -544,11 +544,19 @@ def _claim_type(section: str | None) -> str | None:
         return None
     return _TYPES.get(section.strip().lower(), section.strip().lower())
 _BLOCKQUOTE = re.compile(r"^[ \t]*>[ \t]*(?P<quote>\S.*?)[ \t]*$")
-# The same-line collapse. The contract asks for the quote on the line below; two of
-# three real runs put it on the item's own line instead, and both were runs where the
-# model also copied the template's punctuation, so this is the model taking the shape
-# literally rather than two unrelated faults.
-_SAME_LINE = re.compile(r"^(?P<claim>.*?\S)[ \t]+>[ \t]*(?P<quote>\S.*)$")
+# The same-line collapse, in either separator the model has actually used. The contract
+# asks for the quote on the line below; runs have instead produced `claim > quote`,
+# `claim | > quote`, and — after a fourth section was added — `claim | quote`, the
+# extraction format passed straight through without conversion.
+#
+# **Reading only `>` would repeat a defect this file has already repaired.** When the
+# parser knew only the next-line form, 41 real citations reported as "no quote offered",
+# a bucket that does not fail a run. A pipe-separated note is the same situation with a
+# different character: 93 located quotes on one meeting would read as absent. The rule
+# recorded then applies now — a model given a format template copies the template's
+# punctuation, and the pipe is in the template, because `QUOTE_FROM_ITEMS` tells the
+# consolidator that "every item you were given ends with a pipe".
+_SAME_LINE = re.compile(r"^(?P<claim>.*?\S)[ \t]+(?P<sep>[>|])[ \t]*(?P<quote>\S.*)$")
 # Leftover template punctuation around a claim, stripped for comparison and counted
 # so the leak stays visible instead of being quietly cleaned up.
 _WRAPPED = re.compile(r"^[<\[](?P<inner>[^<>\[\]]+)[>\]]$")
@@ -594,6 +602,14 @@ def _parse_claims(note: str) -> list[dict]:
         if (m := _LIST_ITEM.match(line)) and _SAME_LINE.match(m.group("body")))
     read_collapsed = not has_below and collapsed_shaped >= 2
     layout = "next-line" if has_below else "collapsed" if read_collapsed else "none"
+    # Which separator, alongside which layout: four shapes have appeared across real runs
+    # and "collapsed" alone no longer says which one a note used. Taken from the regex
+    # rather than re-detected, so there is one answer to what the separator was.
+    separator = None
+    if read_collapsed:
+        separator = next((m.group("sep") for line in lines
+                          if (li := _LIST_ITEM.match(line))
+                          and (m := _SAME_LINE.match(li.group("body")))), None)
 
     out, i, section = [], 0, None
     while i < len(lines):
@@ -630,7 +646,7 @@ def _parse_claims(note: str) -> list[dict]:
         end = offsets[i] if i < len(lines) else len(note)
         out.append({"claim": claim, "quote": quote, "at": at, "end": end,
                     "wrapped": wrapped, "type": _claim_type(section),
-                    "layout": layout})
+                    "layout": layout, "separator": separator})
     return out
 
 
@@ -780,6 +796,7 @@ def check_citations(note: str, transcript: Transcript) -> dict:
     # One value for the note: the parser decides the layout per note, so every item
     # agrees and reading it off the first is not a sample.
     layout = items[0]["layout"] if items else "none"
+    separator = items[0]["separator"] if items else None
     # The invariant that would have caught the two-parser defect: every item the
     # parser found lands in exactly one bucket. When the buckets are allowed to
     # disagree about what they cover, items go missing into whichever one is benign.
@@ -794,6 +811,7 @@ def check_citations(note: str, transcript: Transcript) -> dict:
         "uncited": uncited,
         "template_echo": wrapped,
         "layout": layout,
+        "separator": separator,
         "repeats": repeats,
     }
 
@@ -1128,9 +1146,12 @@ The claim begins with what kind of thing it says it is. Honour that:
   do not support it. "we could just get a DAT machine" does not support "ACTION: Get a
   DAT machine".
 - PROPOSAL claims something was suggested, offered or asked for and NOT agreed to.
-  Hedged words support it: "maybe we should use rubber" supports "PROPOSAL: Rubber for
-  the case". Words that settle something do NOT — "okay let's go with the rubber then"
-  is stronger than the claim and does not support it.
+  **Hedged and suggesting words are exactly the right evidence for a PROPOSAL claim**:
+  "maybe we should", "we could", "I'd suggest", "I think we ought to", "they are asking
+  for" all SUPPORT one. Every rule below about hedging, preference or weakness is about
+  DECISION and ACTION claims and does not apply to a PROPOSAL. What fails a PROPOSAL
+  claim is words that *settle* the thing — "okay let's go with the rubber then" is
+  stronger than the claim — or words about something else.
 - QUESTION claims something was asked or left open.
 
 Answer NO when the words:
@@ -1146,8 +1167,8 @@ Two things that are NOT support, and both look like support at a glance:
   carry no claim about it. "non-English speaking countries" does not support "DECISION:
   Market it abroad" — it names the topic and settles nothing.
 - **An opinion about what should happen is not a decision.** "I think it should be the
-  same" and "it ought to be X" state a preference. They support "QUESTION" or a claim
-  that something was proposed; they do not support a DECISION claim.
+  same" and "it ought to be X" state a preference. They **do** support a PROPOSAL or a
+  QUESTION claim; they do not support a DECISION or an ACTION claim.
 
 Hesitation is not disagreement. People say "uh", "um", repeat themselves and restart
 sentences while agreeing to things. Judge what the words land on, not how fluently they
@@ -1190,7 +1211,13 @@ SUPPORT_FIXTURES = [
         # over-claim, and without the second fixture the judge could pass everything by
         # treating PROPOSAL as a weaker bar that anything clears.
         "PROPOSAL: Rubber for the case ||| maybe we should use rubber for the case",
-        ("PROPOSAL: Smaller battery ||| we could probably get away with the smaller "
+        # This fixture originally read "PROPOSAL: Smaller battery ||| we could probably
+        # get away with the smaller battery" and the answer key said supported. The judge
+        # said no and **the judge was right**: "we could get away with X" is about
+        # tolerating X, not proposing it, which is a distinction the key had missed.
+        # Corrected rather than argued with — a fixture whose answer a careful person
+        # cannot reach without hesitating is not a fixture, by this file's own bar.
+        ("PROPOSAL: Use the smaller battery ||| i'd suggest we go with the smaller "
          "battery"),
         # Contradiction: the words argue against the claim.
         ("ACTION: Burn CDs for every attendee ||| you know, i personally would not "
@@ -1697,8 +1724,10 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
             # quote on its own line, and which layout a model produced has been the
             # hardest thing here to state precisely because the evidence was a note
             # somebody had to look at. Recorded so it stops being anecdote.
-            print("  citations     quotes arrived on the claim's own line, not below "
-                  "it — the contract asks for below")
+            sep = {">": "a blockquote marker", "|": "a pipe"}.get(cites["separator"],
+                                                                       "an unknown mark")
+            print(f"  citations     quotes arrived on the claim's own line after {sep}, "
+                  f"not below it — the contract asks for below")
         if cites["uncited"]:
             print(f"  citations     {len(cites['uncited'])} item(s) carry no quote, "
                   f"so nothing can be traced back to the words")
@@ -2399,6 +2428,20 @@ def run_self_test() -> int:
               "## Decisions\n- Rubber chosen.\n- RUBBER, chosen!\n", True, repeats=1)
 
     # The layout a note used, recorded rather than eyeballed later.
+    # The fourth shape, which appeared when a fifth section was added to the prompt: the
+    # consolidator stopped converting the extraction format and passed `claim | quote`
+    # straight through. Reading only `>` reported 93 located quotes on one meeting as
+    # absent — the same defect as the next-line-only parser, one character over.
+    cite_case("a pipe separates a claim from its quote as readily as a blockquote mark",
+              "## Decisions\n"
+              "- Rubber chosen. | go with the rubber for the case\n"
+              "- Lead time long. | the supplier said eight weeks which is too long\n",
+              True, cited=2, uncited=0, layout="collapsed", separator="|")
+    cite_case("and the separator is recorded, since collapsed no longer says which",
+              "## Decisions\n"
+              "- Rubber chosen. > go with the rubber for the case\n"
+              "- Lead time long. > the supplier said eight weeks which is too long\n",
+              True, separator=">")
     cite_case("the next-line layout is recorded as such",
               "## Decisions\n- Rubber chosen.\n  > go with the rubber for the case",
               True, layout="next-line")
