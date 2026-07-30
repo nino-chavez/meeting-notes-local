@@ -123,10 +123,25 @@ def _unit(v: np.ndarray) -> np.ndarray:
     Averaging un-normalised embeddings therefore weights the profile by how loud
     and how long each segment was on top of whatever weighting was asked for.
     """
-    n = float(np.linalg.norm(v))
-    if n == 0:
+    a = np.asarray(v, dtype=np.float64)
+    if a.ndim != 1:
+        raise ValueError(f"embedding must be one-dimensional, got shape {a.shape}")
+    if not a.size:
         raise ValueError("zero-length embedding: the encoder returned nothing usable")
-    return (v / n).astype(np.float64)
+    if not np.all(np.isfinite(a)):
+        raise ValueError("embedding holds non-finite values")
+    with np.errstate(over="ignore", invalid="ignore"):
+        n = float(np.linalg.norm(a))
+    # A finite vector can still overflow while its norm is computed. Dividing by
+    # infinity turns it into a vector of zeroes, which used to pass through a
+    # profile loader and make every later cosine look plausible enough to score.
+    if not np.isfinite(n) or n == 0:
+        raise ValueError("embedding has a zero or non-finite norm")
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        out = a / n
+    if not np.all(np.isfinite(out)):
+        raise ValueError("embedding normalisation produced non-finite values")
+    return out
 
 
 def _width(sims: np.ndarray) -> float:
@@ -585,6 +600,7 @@ def _wav_samples(path: Path) -> int:
 
 
 PROFILE_SCHEMA = "voiceprint/1"
+_UNSET = object()
 
 # Below this many held-out scores a quantile cannot even express the requested
 # operating point: a 5% false-reject rate needs 20 observations before one of them
@@ -710,6 +726,15 @@ def encoder_fingerprint(savedir: str | Path | None = None) -> str | None:
     return ab.sha256(ckpt.resolve())
 
 
+def _fingerprint(value) -> str | None:
+    """Return a canonical SHA-256 fingerprint, or None when it is not one."""
+    if not isinstance(value, str) or len(value) != 64:
+        return None
+    if value != value.lower() or any(c not in "0123456789abcdef" for c in value):
+        return None
+    return value
+
+
 def runtime_versions() -> dict:
     """The library versions behind an embedding, for a reader who has to reproduce it.
 
@@ -728,7 +753,9 @@ def runtime_versions() -> dict:
 
 def save_profile(path: Path, profile: Profile, threshold: float, *,
                  operating_point: dict, sittings: list[dict],
-                 encoder: str = ECAPA_SOURCE) -> None:
+                 encoder: str = ECAPA_SOURCE,
+                 model_dir: str | Path | None = None,
+                 encoder_fingerprint_value: str | None = None) -> None:
     """Persist a voiceprint with the threshold and what produced both.
 
     The threshold travels **inside** the file, not beside it. Every other
@@ -756,15 +783,25 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
     _finite("threshold", threshold, -1.0, 1.0)
     _finite("cohesion", profile.cohesion, -1.0, 1.0)
     _finite("spread", profile.spread, 0.0, 2.0)
-    if not np.all(np.isfinite(profile.centroid)):
-        raise ValueError("the centroid holds non-finite values")
+    centroid = _profile_centroid(profile.centroid)
+    if encoder_fingerprint_value is not None and model_dir is not None:
+        raise ValueError(
+            "pass an encoder fingerprint or a model directory, not both"
+        )
+    fingerprint = (encoder_fingerprint_value if encoder_fingerprint_value is not None
+                   else encoder_fingerprint(model_dir))
+    if _fingerprint(fingerprint) is None:
+        raise ValueError(
+            "the encoder checkpoint has no usable SHA-256 fingerprint. A voiceprint "
+            "cannot be saved without the exact encoder identity that produced it."
+        )
 
     doc = {
         "schema": PROFILE_SCHEMA,
         "encoder": encoder,
-        "encoder_fingerprint": encoder_fingerprint(),
+        "encoder_fingerprint": fingerprint,
         "versions": runtime_versions(),
-        "centroid": profile.centroid.tolist(),
+        "centroid": centroid.tolist(),
         "n_enrolled": profile.n_enrolled,
         "n_excluded": profile.n_excluded,
         "seconds": round(profile.seconds, 2),
@@ -838,7 +875,8 @@ def verify_provenance(path: Path, doc: dict) -> None:
               "--experimental so the weakening is recorded and surfaced.")
 
 
-def load_profile(path: Path) -> tuple[Profile, float, dict]:
+def load_profile(path: Path, *, expected_encoder_fingerprint: str | object | None = _UNSET
+                 ) -> tuple[Profile, float, dict]:
     """Read a saved voiceprint, its threshold, and the manifest behind them.
 
     Refuses rather than defaults on every missing field. A gate that falls back to
@@ -855,15 +893,36 @@ def load_profile(path: Path) -> tuple[Profile, float, dict]:
             f"{path} was enrolled with {doc.get('encoder')!r} but this build uses "
             f"{ECAPA_SOURCE!r}. Cosines between two embedding spaces are not "
             f"comparable, so the threshold means nothing here. Re-enroll.")
-    for field in ("centroid", "threshold", "cohesion", "spread", "sittings"):
+    for field in ("centroid", "threshold", "cohesion", "spread", "sittings",
+                  "encoder_fingerprint"):
         if doc.get(field) is None:
             raise SystemExit(f"{path}: no {field}. This is not a usable profile.")
-    centroid = np.asarray(doc["centroid"], dtype=np.float64)
-    if not centroid.size or not np.all(np.isfinite(centroid)):
-        raise SystemExit(f"{path}: the centroid is empty or holds non-finite values, "
-                         f"so every score against it is meaningless.")
+    fingerprint = _fingerprint(doc["encoder_fingerprint"])
+    if fingerprint is None:
+        raise SystemExit(
+            f"{path}: encoder_fingerprint is not a SHA-256 digest. A profile "
+            "without a specific embedding checkpoint cannot be used safely. Re-enroll."
+        )
+    if expected_encoder_fingerprint is not _UNSET:
+        expected = _fingerprint(expected_encoder_fingerprint)
+        if expected is None:
+            raise SystemExit(
+                "the loaded encoder has no usable SHA-256 fingerprint, so its "
+                "embedding space cannot be matched to this profile. Re-fetch or "
+                "re-enroll with a fingerprinted encoder."
+            )
+        if fingerprint != expected:
+            raise SystemExit(
+                f"{path} was enrolled with encoder fingerprint {fingerprint}, but "
+                f"the loaded encoder is {expected}. Its threshold is calibrated in "
+                "a different embedding space. Re-enroll with this encoder."
+            )
+    try:
+        centroid = _profile_centroid(doc["centroid"])
+    except ValueError as exc:
+        raise SystemExit(f"{path}: invalid centroid: {exc}") from None
     profile = Profile(
-        centroid=_unit(centroid),
+        centroid=centroid,
         n_enrolled=int(doc["n_enrolled"]),
         n_excluded=int(doc["n_excluded"]),
         seconds=_finite(f"{path}: seconds", doc["seconds"], 0.0),
@@ -897,6 +956,25 @@ def load_profile(path: Path) -> tuple[Profile, float, dict]:
 # ---------------------------------------------------------------------------
 
 _DIM = 192  # ECAPA's output width; nothing in this file depends on the value
+
+
+def _profile_centroid(value) -> np.ndarray:
+    """Return the one ECAPA-shaped, unit centroid a persisted profile may hold.
+
+    The encoder name is already a hard contract at the file boundary, so its
+    output width is part of that contract too. Letting a matrix, a scalar, or a
+    vector from another model reach ``score`` relies on numpy broadcasting until
+    it fails (or, for a lucky shape, silently answers a different question).
+    """
+    try:
+        centroid = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("centroid is not a numeric vector") from exc
+    if centroid.shape != (_DIM,):
+        raise ValueError(
+            f"centroid must have ECAPA shape ({_DIM},), got {centroid.shape}"
+        )
+    return _unit(centroid)
 
 
 def _speaker_directions(rng: np.random.Generator, n: int) -> np.ndarray:
@@ -1198,6 +1276,10 @@ def run_self_test() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         pp = Path(tmp) / "voiceprint.json"
+        fixture_model = Path(tmp) / "encoder"
+        fixture_model.mkdir()
+        (fixture_model / "embedding_model.ckpt").write_bytes(b"fixture encoder")
+        fixture_fingerprint = encoder_fingerprint(fixture_model)
         # A fixture that satisfies the contract, because load_profile now re-derives
         # it. The earlier minimal fixture is what the new check caught first.
         point = {"threshold": 0.61, "target_frr": 0.05, "n_sittings": 2,
@@ -1208,8 +1290,11 @@ def run_self_test() -> int:
             {"audio": "b.wav", "audio_sha256": "bbb",
              "captured_at": "2026-07-22T14:00:00+0000"}]
         save_profile(pp, operator, 0.61, operating_point=point,
-                     sittings=good_sittings)
-        back, thresh, doc = load_profile(pp)
+                     sittings=good_sittings,
+                     model_dir=fixture_model)
+        back, thresh, doc = load_profile(
+            pp, expected_encoder_fingerprint=fixture_fingerprint
+        )
         check(
             "a profile round-trips through the file with its centroid intact",
             float(back.centroid @ operator.centroid) > 1 - 1e-9,
@@ -1221,6 +1306,22 @@ def run_self_test() -> int:
             f"threshold {thresh}",
         )
         check(
+            "save_profile records the checkpoint bytes it was given, not the model recipe",
+            doc["encoder_fingerprint"] == fixture_fingerprint,
+        )
+        check(
+            "a persisted encoder fingerprint is checked against the loaded encoder",
+            _raises(lambda: load_profile(
+                pp, expected_encoder_fingerprint="b" * 64
+            ), SystemExit),
+        )
+        check(
+            "capture preflight refuses an encoder that cannot be fingerprinted",
+            _raises(lambda: load_profile(
+                pp, expected_encoder_fingerprint=None
+            ), SystemExit),
+        )
+        check(
             "and the spread comes back too — without it every rejection reads as "
             "confident and no close call can be reported",
             abs(back.spread - operator.spread) < 1e-4,
@@ -1229,8 +1330,13 @@ def run_self_test() -> int:
         check(
             "enrollment provenance is required, because a profile that cannot say "
             "how many sittings built it hides the one bias that matters",
-            _raises(lambda: save_profile(pp, operator, 0.61, operating_point=point,
-                                         sittings=[]), ValueError),
+            _raises(
+                lambda: save_profile(
+                    pp, operator, 0.61, operating_point=point, sittings=[],
+                    encoder_fingerprint_value=fixture_fingerprint,
+                ),
+                ValueError,
+            ),
         )
 
         # The contract is re-derived HERE, not only where the profile is produced.
@@ -1291,6 +1397,26 @@ def run_self_test() -> int:
             _raises(lambda: load_profile(Path(tmp) / "other.json"), SystemExit),
         )
 
+        no_fingerprint = json.loads(pp.read_text())
+        no_fingerprint["encoder_fingerprint"] = None
+        (Path(tmp) / "no-fingerprint.json").write_text(json.dumps(no_fingerprint))
+        check(
+            "a profile without a checkpoint fingerprint is refused, rather than "
+            "silently accepting any future ECAPA download",
+            _raises(lambda: load_profile(Path(tmp) / "no-fingerprint.json"), SystemExit),
+        )
+        malformed_fingerprint = json.loads(pp.read_text())
+        malformed_fingerprint["encoder_fingerprint"] = "not-a-digest"
+        (Path(tmp) / "malformed-fingerprint.json").write_text(
+            json.dumps(malformed_fingerprint)
+        )
+        check(
+            "a malformed checkpoint fingerprint is refused at the persistence boundary",
+            _raises(lambda: load_profile(
+                Path(tmp) / "malformed-fingerprint.json"
+            ), SystemExit),
+        )
+
         no_thresh = json.loads(pp.read_text())
         del no_thresh["threshold"]
         (Path(tmp) / "bare.json").write_text(json.dumps(no_thresh))
@@ -1313,7 +1439,8 @@ def run_self_test() -> int:
             "a NaN threshold is refused on the way out",
             _raises(lambda: save_profile(pp, operator, float("nan"),
                                         operating_point=point,
-                                        sittings=[{}, {}]), SystemExit),
+                                        sittings=[{}, {}],
+                                        encoder_fingerprint_value=fixture_fingerprint), SystemExit),
         )
         for bad, label in ((float("nan"), "NaN"), (2.0, "above +1"),
                            (-3.0, "below -1")):
@@ -1333,10 +1460,39 @@ def run_self_test() -> int:
             "a centroid of NaNs is refused, not normalised into one",
             _raises(lambda: load_profile(hc), SystemExit),
         )
+        for bad_centroid, label in (
+            ([1.0] * (_DIM - 1), "wrong width"),
+            ([[1.0] * _DIM], "matrix"),
+            ([0.0] * _DIM, "zero vector"),
+            ([1e308] * _DIM, "overflowing norm"),
+        ):
+            malformed = json.loads(pp.read_text())
+            malformed["centroid"] = bad_centroid
+            mp = Path(tmp) / f"centroid-{label.replace(' ', '-')}.json"
+            mp.write_text(json.dumps(malformed))
+            check(
+                f"a centroid with {label} is refused before any cosine is scored",
+                _raises(lambda p=mp: load_profile(p), SystemExit),
+            )
+        malformed_profile = Profile(
+            centroid=np.zeros(_DIM), n_enrolled=operator.n_enrolled,
+            n_excluded=operator.n_excluded, seconds=operator.seconds,
+            cohesion=operator.cohesion, spread=operator.spread,
+        )
+        check(
+            "save_profile also refuses an invalid centroid — persistence and loading "
+            "share the same contract",
+            _raises(lambda: save_profile(
+                pp, malformed_profile, 0.61, operating_point=point,
+                sittings=good_sittings,
+                encoder_fingerprint_value=fixture_fingerprint,
+            ), ValueError),
+        )
         check(
             "the profile's own digest travels with it, so a transcript can say "
             "which voiceprint gated it",
-            len(load_profile(pp)[2]["_profile_sha256"]) == 64,
+            len(load_profile(pp, expected_encoder_fingerprint=fixture_fingerprint)[2]
+                ["_profile_sha256"]) == 64,
         )
 
     print("\n=== the enrolment contract ===\n")
@@ -1555,7 +1711,8 @@ def run_calibrate(args) -> int:
         chosen["n_sittings"] = len(sittings)
         chosen["experimental"] = bool(args.experimental)
         save_profile(args.enroll_out, profile, chosen["threshold"],
-                     operating_point=chosen, sittings=manifest)
+                     operating_point=chosen, sittings=manifest,
+                     model_dir=args.model_dir)
         mark = "  EXPERIMENTAL — " if args.experimental else "  "
         print(f"\n{mark}wrote {args.enroll_out} — threshold "
               f"{chosen['threshold']:.3f} at {args.target_frr:.0%} operator-dropped, "

@@ -857,9 +857,15 @@ def load_voiceprint(path, model_dir):
     """
     import speaker_gate as sg
 
-    profile, threshold, doc = sg.load_profile(Path(path))
-    doc["model_dir"] = str(model_dir)
     embed = sg.load_encoder(model_dir)
+    # The recipe name is not enough: the same source can resolve to different
+    # checkpoint bytes. Compute the identity after the encoder has loaded, then
+    # make the persisted profile prove that it was enrolled in this exact space.
+    # This remains preflight: no microphone has opened and no meeting can be lost.
+    profile, threshold, doc = sg.load_profile(
+        Path(path), expected_encoder_fingerprint=sg.encoder_fingerprint(model_dir)
+    )
+    doc["model_dir"] = str(model_dir)
 
     # Two seconds of noise, which is the floor the gate scores at anyway. Silence
     # would be a degenerate input to an embedding network and a poor probe.
