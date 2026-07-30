@@ -613,8 +613,10 @@ _BLOCKQUOTE = re.compile(r"^[ \t]*>[ \t]*(?P<quote>\S.*?)[ \t]*$")
 # item list whose fields are pipe-separated.
 #
 # Which side of that separator holds speech is an assumption, not something the line
-# says, and the extraction order flipping made it a live one. `check_citations` counts
-# how often it is wrong rather than guessing per item.
+# says. The current chunked path normalises the consolidator input to claim-first, so
+# the assumed reading matches the live contract. `check_citations` still measures the
+# opposite reading for artifacts generated before that normalisation, and for a model
+# that copies an unexpected layout despite it.
 _SAME_LINE = re.compile(r"^(?P<claim>.*?\S)[ \t]+(?P<sep>[>|])[ \t]*(?P<quote>\S.*)$")
 # Leftover template punctuation around a claim, stripped for comparison and counted
 # so the leak stays visible instead of being quietly cleaned up.
@@ -857,19 +859,24 @@ def check_citations(note: str, transcript: Transcript) -> dict:
     layout = items[0]["layout"] if items else "none"
     separator = items[0]["separator"] if items else None
     # A collapsed line has two sides and no marker saying which is speech. `_SAME_LINE`
-    # assumes the contract's reading order — claim, separator, quote — and that
-    # assumption is now load-bearing in a way it was not: the consolidator's *input*
-    # runs the other way round, quote first, so a model copying its input's shape onto
-    # one line would put speech on the left and every quote here would read as invented.
+    # assumes the current contract's reading order — claim, separator, quote. The live
+    # chunked path now feeds the consolidator in that order too; the reverse diagnostic
+    # remains for artifacts generated before that normalisation and for contract
+    # deviations a later `--recheck` must not silently misread.
     #
     # Counted rather than corrected. Swapping the sides on evidence would change the
     # measured fabrication rate in the same run that changes the prompt, and there
     # would be no way to say which moved it. This says how many collapsed items locate
     # only when read backwards; if it is large the parser is wrong, and `--recheck`
-    # exists to move the judgement without regenerating the note.
+    # exists to move the judgement without regenerating the note. Both sides must first
+    # meet the quote-length floor: `locate` deliberately returns None without searching
+    # shorter text, so treating that None as "not in the transcript" would assert a
+    # comparison the checker never made.
     reversed_locatable = sum(
         1 for it in items
         if it["layout"] == "collapsed" and it["quote"] is not None
+        and len(_seq(it["quote"])) >= _MIN_QUOTE_WORDS
+        and len(_seq(it["claim"])) >= _MIN_QUOTE_WORDS
         and locate(it["quote"]) is None and locate(it["claim"]) is not None
     )
     # The invariant that would have caught the two-parser defect: every item the
@@ -1883,11 +1890,12 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
                   f"not below it — the contract asks for below")
         if cites["reversed_locatable"]:
             # Read this before believing the fabrication count above it. These items
-            # have real speech on the wrong side of the separator, so they are being
-            # scored as invented by a parser assumption rather than by the model.
+            # have testable text on both sides and only the assumed claim side locates,
+            # so the parser orientation may be wrong. The count is evidence to inspect,
+            # not proof that every side should be swapped.
             print(f"  citations     {cites['reversed_locatable']} collapsed item(s) locate "
-                  f"only when read backwards — the claim is in the transcript and the "
-                  f"quote is not, so the sides are swapped")
+                  f"only when read backwards with both sides long enough to test — "
+                  f"inspect the parser orientation before trusting fabrication counts")
         if cites["uncited"]:
             print(f"  citations     {len(cites['uncited'])} item(s) carry no quote, "
                   f"so nothing can be traced back to the words")
@@ -2155,7 +2163,8 @@ def recheck(artifact: Path) -> dict:
         # has already been generated, so the count that says the assumption is wrong
         # has to reach the person running the correction.
         print(f"      {cites['reversed_locatable']} collapsed item(s) locate only when "
-              f"read backwards — the sides of the separator are swapped")
+              f"read backwards with both sides long enough to test — inspect the "
+              f"parser orientation")
     if was != doc["passed"]:
         print(f"      verdict moved: passed {was} -> {doc['passed']}")
     return doc
@@ -2665,21 +2674,18 @@ def run_self_test() -> int:
     cite_case("and a lone mid-line arrow in a note with no citations is left alone",
               "## Decisions\n- Throughput target set at > 100 requests per second.",
               True, uncited=1, cited=0, fabricated=0)
-    # Which side of a collapsed line holds speech is an assumption, and the extraction
-    # order flipping under it made that assumption worth measuring. The note below is
-    # the failure it would produce: real quotes on the left, summaries on the right,
-    # scored as two fabrications by the parser rather than by the model.
-    # Both items are misread, and they land in *different* buckets — one fabricated,
-    # one untestable, because a short summary reads as a quote too short to test. Only
-    # the first fails a run. That is the shape of every blind spot this file has had:
-    # the swapped reading does not announce itself, it distributes itself across a
-    # failing bucket and a benign one. `reversed_locatable` counts both.
-    cite_case("speech on the wrong side of the separator is counted, not silently "
-              "scored as invented",
+    # Which side of a collapsed line holds speech is an assumption. The note below is
+    # the failure an older, reverse-order consolidator input could produce: real quotes
+    # on the left and summaries on the right. The two items land in different buckets —
+    # one fabricated and one untestable because its assumed quote is short. Only the
+    # testable reverse match belongs in `reversed_locatable`; counting the short side
+    # would promote "not searched" into "not found".
+    cite_case("a testable reverse match is counted without promoting a short side "
+              "into a failed search",
               "## Decisions\n"
               "- go with the rubber for the case | Rubber casing chosen.\n"
               "- the supplier said eight weeks which is too long | Lead time too long.\n",
-              False, fabricated=1, unverifiable=1, cited=0, reversed_locatable=2)
+              False, fabricated=1, unverifiable=1, cited=0, reversed_locatable=1)
     cite_case("and a note read the right way round reports none",
               collapsed_note, True, reversed_locatable=0)
     # The invariant, asserted from outside rather than trusted from the assert inside:
