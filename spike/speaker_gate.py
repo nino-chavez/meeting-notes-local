@@ -52,8 +52,14 @@ Run:
     python spike/speaker_gate.py \\
         --calibrate day1/mic-segments.json day1/mic.wav \\
         --calibrate day2/mic-segments.json day2/mic.wav \\
+        --against household/mic-segments.json household/mic.wav
+
+    # Inspect both measured costs, then rerun with one target the report offered:
+    python spike/speaker_gate.py \\
+        --calibrate day1/mic-segments.json day1/mic.wav \\
+        --calibrate day2/mic-segments.json day2/mic.wav \\
         --against household/mic-segments.json household/mic.wav \\
-        --enroll-out ~/voiceprint.json --target-frr 0.05
+        --enroll-out ~/voiceprint.json --target-frr CHOSEN_TARGET
 
 Then `dual_capture.py --voiceprint ~/voiceprint.json` gates a real capture with
 it. The threshold lives inside that file rather than beside it, so no caller can
@@ -610,12 +616,65 @@ def min_resolvable(target_frr: float) -> int:
     return int(np.ceil(1.0 / target_frr))
 
 
+OPERATING_POINT_TARGETS = (0.01, 0.02, 0.05, 0.10, 0.20)
+
+
+def operating_point_choices(
+    operator_scores: list[float],
+    other_scores: list[float],
+    targets: tuple[float, ...] = OPERATING_POINT_TARGETS,
+) -> list[dict]:
+    """Return the small set of measured policies the product may offer.
+
+    An offered point has to be a reading, not an interpolation dressed as one:
+    the held-out operator sample must be large enough to resolve its target, and
+    negative material must put a false-admit cost beside its measured false-reject
+    cost. Several requested quantiles can produce the same observed cost pair on a
+    finite sample. The operator cannot choose between identical evidence, so those
+    pairs collapse to the first (loosest) target that produced them.
+
+    When more than three distinct pairs survive, the surface shows the loosest,
+    strictest, and lower median in between. The lower median is deliberate and
+    deterministic: with an even number of pairs, the tie goes toward preserving the
+    operator's speech, matching :func:`calibrate`'s stated asymmetry. Fewer than two
+    distinct feasible points is not a policy choice and is refused.
+    """
+    if not other_scores:
+        raise ValueError(
+            "operating-point choices need negative-speaker scores so both costs exist"
+        )
+
+    distinct: list[dict] = []
+    seen_costs: set[tuple[float, float]] = set()
+    for target in sorted(set(targets)):
+        if len(operator_scores) < min_resolvable(target):
+            continue
+        point = calibrate(operator_scores, target, other_scores)
+        far = point["false_admit_rate"]
+        if far is None:
+            continue
+        costs = (point["measured_frr"], far)
+        if costs in seen_costs:
+            continue
+        seen_costs.add(costs)
+        distinct.append(point)
+
+    if len(distinct) < 2:
+        raise ValueError(
+            "fewer than two distinct operating points are resolvable with both costs"
+        )
+    if len(distinct) <= 3:
+        return distinct
+    middle = (len(distinct) - 1) // 2
+    return [distinct[0], distinct[middle], distinct[-1]]
+
+
 # A judgement, and labelled as one rather than dressed up as a measurement. The
 # evidence that single-sitting thresholds run over-tight came from labelled corpora
 # with real time between enrolment and test; it puts no number on how much time is
 # enough. An hour is the smallest gap where "a different sitting" is plausibly true
 # of a room, a seating position, a gain setting and a voice. A different day is
-# better and is what the README asks for.
+# ideal, but the enforced boundary is greater than or equal to one hour.
 MIN_SITTING_GAP_S = 3600
 
 
@@ -731,7 +790,7 @@ def _sitting_problems(manifest) -> list[str]:
                 + (" — the same capture window, so these are pieces of one recording "
                    "rather than two sittings" if gap == 0 else "")
                 + f". Separate sittings means at least {MIN_SITTING_GAP_S // 3600}h "
-                  f"apart, and a different day is what the measured bias is about.")
+                  f"apart; different days are ideal.")
     return out
 
 
@@ -1274,6 +1333,43 @@ def run_self_test() -> int:
         "a target outside (0, 1) is refused rather than clamped",
         _raises(lambda: calibrate(own, target_frr=0.0), ValueError),
     )
+    choice_own = np.linspace(0.60, 0.90, 100).tolist()
+    choice_other = np.linspace(0.54, 0.82, 40).tolist()
+    choices = operating_point_choices(choice_own, choice_other)
+    check(
+        "product choices are the loose, lower-median, and strict measured points",
+        [p["target_frr"] for p in choices] == [0.01, 0.05, 0.20]
+        and all(p["false_admit_rate"] is not None for p in choices),
+        f"targets {[p['target_frr'] for p in choices]}",
+    )
+    thin_choices = operating_point_choices(choice_own[:40], choice_other)
+    check(
+        "an operating point the held-out sample cannot resolve is not offered",
+        [p["target_frr"] for p in thin_choices] == [0.05, 0.10, 0.20],
+        f"targets {[p['target_frr'] for p in thin_choices]}",
+    )
+    two_choices = operating_point_choices(
+        choice_own,
+        choice_other,
+        targets=(0.10, 0.20),
+    )
+    check(
+        "when only two distinct measured choices exist, both are offered",
+        [p["target_frr"] for p in two_choices] == [0.10, 0.20],
+        f"targets {[p['target_frr'] for p in two_choices]}",
+    )
+    duplicate_own = [0.6] * 20 + [0.9] * 20
+    check(
+        "duplicate measured cost pairs collapse and cannot fabricate a choice",
+        _raises(
+            lambda: operating_point_choices(duplicate_own, [0.7] * 20),
+            ValueError,
+        ),
+    )
+    check(
+        "a policy list without the other voice's measured cost is refused",
+        _raises(lambda: operating_point_choices(choice_own, []), ValueError),
+    )
 
     print("\n=== gating ===\n")
     threshold = cal["threshold"]
@@ -1779,6 +1875,13 @@ def run_self_test() -> int:
             plenty, other_ok, 0.05, False), SystemExit),
     )
     check(
+        "exactly one hour between sittings meets the enforced boundary",
+        not _raises(lambda: enforce_enrollment(
+            [sitting_at("alpha", "2026-07-20T09:00:00+0000"),
+             sitting_at("bravo", "2026-07-20T10:00:00+0000")],
+            plenty, other_ok, 0.05, False), SystemExit),
+    )
+    check(
         "material with no capture time is refused rather than assumed separate",
         _raises(lambda: enforce_enrollment(
             [sitting_at("alpha", None), sitting_at("bravo", None)],
@@ -1923,17 +2026,25 @@ def run_calibrate(args) -> int:
         print(f"  other-speaker scores: mean {np.mean(other):.3f}, "
               f"p95 {np.percentile(other, 95):.3f} (n={len(other)})")
 
-    print("\n=== operating points ===\n")
-    print(f"  {'operator dropped':>16}  {'threshold':>9}  {'room admitted':>13}")
-    points = {}
-    for target in (0.01, 0.02, 0.05, 0.10, 0.20):
-        c = calibrate(own, target, other or None)
-        points[target] = c
-        far = "—" if c["false_admit_rate"] is None else f"{c['false_admit_rate']:.1%}"
-        print(f"  {target:>15.0%}  {c['threshold']:>9.3f}  {far:>13}")
-    if not other:
-        print("\n  no --against material, so nothing states what these thresholds cost.\n"
-              "  A threshold chosen without it is a rejection rate, not a gate.")
+    print("\n=== operating-point choices ===\n")
+    choices: list[dict] = []
+    try:
+        choices = operating_point_choices(own, other)
+    except ValueError as exc:
+        print(f"  unavailable: {exc}")
+    if choices:
+        labels = (
+            ["loosest", "strictest"] if len(choices) == 2
+            else ["loosest", "lower median", "strictest"]
+        )
+        print(f"  {'policy':>12}  {'choose with':>11}  {'operator dropped':>16}  "
+              f"{'room admitted':>13}")
+        for label, point in zip(labels, choices, strict=True):
+            print(f"  {label:>12}  {point['target_frr']:>10.0%}  "
+                  f"{point['measured_frr']:>15.1%}  "
+                  f"{point['false_admit_rate']:>12.1%}")
+        print("\n  No point is selected. To build a profile, rerun this command with\n"
+              "  --enroll-out PATH and one displayed value as --target-frr.")
     if len(own) < 30:
         print(f"\n  n={len(own)} is thin for a quantile — read the low targets as indicative.")
     if not multi:
@@ -1950,8 +2061,23 @@ def run_calibrate(args) -> int:
                 "which operating point it is has to be a choice on the record rather "
                 "than a default this module picked.")
         _finite("--target-frr", args.target_frr, 0.0, 1.0)
+        matching = [
+            point for point in choices
+            if np.isclose(point["target_frr"], args.target_frr, rtol=0.0, atol=1e-12)
+        ]
+        if not matching and not args.experimental:
+            offered = ", ".join(f"{p['target_frr']:.0%}" for p in choices) or "none"
+            raise SystemExit(
+                f"--target-frr {args.target_frr:g} is not one of the measured choices "
+                f"this material can support ({offered}). Run once without "
+                "--enroll-out, inspect both costs, then rerun with a displayed value."
+            )
         enforce_enrollment(manifest, own, other, args.target_frr, args.experimental)
-        chosen = calibrate(own, args.target_frr, other or None)
+        chosen = (
+            dict(matching[0])
+            if matching
+            else calibrate(own, args.target_frr, other or None)
+        )
         chosen["held_out"] = held
         chosen["n_sittings"] = len(sittings)
         chosen["experimental"] = bool(args.experimental)
@@ -1962,6 +2088,8 @@ def run_calibrate(args) -> int:
         print(f"\n{mark}wrote {args.enroll_out} — threshold "
               f"{chosen['threshold']:.3f} at {args.target_frr:.0%} operator-dropped, "
               f"{len(sittings)} sitting(s), {len(own)} held-out scores")
+    else:
+        print("\n  REPORT ONLY — no profile was written.")
     return 0
 
 

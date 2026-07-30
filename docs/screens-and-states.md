@@ -456,9 +456,10 @@ voices are kept.
 The permissions do not make the product ready by themselves. First run orders the
 requirements as permissions → meeting-audio retention → voice enrolment. The dedicated
 recordings made by enrolment are not meetings and do not inherit the meeting-retention
-choice: they are deleted as soon as the profile is built. The manual meeting-capture
-control remains disabled until `enrolled`; reviewing a panel or satisfying only one
-requirement cannot make it appear ready.
+choice: each raw artifact is deleted as soon as the needed owner-only derived material
+is safely stored. The manual meeting-capture control remains disabled until a valid
+profile is loaded; reviewing a panel or satisfying only one requirement cannot make it
+appear ready.
 
 ---
 
@@ -473,14 +474,19 @@ bugs that *move* from surface to surface instead of closing.
 
 | State | Trigger | Notes |
 |---|---|---|
-| `unenrolled` | No material yet | Supported meeting capture is blocked. The profile is absent; the surface offers the first dedicated calibration sitting. |
-| `accumulating` | Some sittings, contract unmet | The common state, and it can last days. Shows observed counts and exactly what is missing, never a made-up percentage. |
+| `blocked` | No valid profile loaded | Supported meeting capture is disabled. Existing meetings remain readable. |
+| `first-sitting-saved` | Owner-only derived material safely stored | The dedicated raw, transcript, segment list, and partial work are already deleted. |
+| `resume-after-gap` | One sitting held | Names the enforced ≥1 hour gap and says different days are ideal; it does not invent elapsed time. |
+| `second-sitting-review` | Second sitting processed | Shows observed counts, gap, held-out speech, and any refusal before asking for negative material. |
 | `needs-other-voice` | Operator material sufficient, no negative sample | Offers public-domain or licensed playback, or a person who knowingly consents to make a calibration recording. |
 | `ready-to-build` | Contract satisfied | The operating point is the only decision left. |
-| `choosing-operating-point` | Operator is picking the threshold | Ordered policy choices, no default. Both measured costs populate at runtime from this material. |
-| `enrolled` | A profile exists | Carries its provenance: sittings, held-out count, both measured rates, build time, and encoder identity. Supported manual capture becomes available. |
-| `reset-confirm` | The operator asks to delete the profile | Names exactly what goes, what remains, and that future capture becomes ungated and unsupported. |
-| `reset` | Profile removed | Meetings remain. Supported capture is blocked until enrolment completes again. |
+| `choosing-operating-point` | Measured choices exist | Two or three ordered choices, actual costs, no default; controls remain disabled before measurements load. |
+| `enrolled` | A new profile is safely persisted | Carries provenance, both measured rates, build time, and encoder identity, then enters the valid-profile condition. |
+| `returning-valid-profile` | A persisted profile passes every load check | Distinct from `blocked`; this condition alone enables supported Start in the prototype. |
+| `discard-confirm` | The operator abandons incomplete enrolment | Deletes dedicated raw, partial derived work, and partial profile state; source meetings and any previous valid profile remain. |
+| `incomplete-cleaned` | Extraction/build failure, cancellation, or abandonment | Partial raw is deleted and enrolment remains incomplete. |
+| `reset-confirm` | The operator asks to delete the valid profile | Names exactly what goes and what remains. |
+| `reset` | Profile removed | Meetings remain and application capture is blocked until enrolment completes again. Only the research CLI may run ungated outside beta. |
 | `stale` | The encoder changed under the profile | Cosines between two embedding spaces are not comparable, so the threshold means nothing. `load_profile` already refuses this; the surface has to explain it. |
 | `experimental` | Built past the contract | Visually distinct from `enrolled`. Nothing a capture gated by it does is a measured result. |
 
@@ -497,27 +503,28 @@ the code enforces, not as a progress bar.** `enforce_enrollment` refuses for fou
 specific reasons, and a percentage cannot express any of them:
 
 - fewer than two sittings,
-- sittings less than an hour apart — including two pieces of one recording, which is
-  the case that reads as satisfied and is not,
-- fewer held-out segments than the chosen operating point can express (twenty for
-  5%, and the floor moves with the target),
+- sittings less than one hour apart — exactly one hour passes; different days are
+  ideal — including two pieces of one recording, which reads as satisfied and is not,
+- fewer held-out segments than a candidate target can express
+  (`ceil(1 / target)`),
 - no allowed recording of a voice that is not the operator.
 
-A bar at "80%" tells the operator to keep going. "One more sitting, on a different
-day, and a permitted negative sample" tells them what to do. The second is the whole
-job of this surface. A negative sample is not permission to harvest someone else's
-speech: it is public-domain or appropriately licensed playback, or a deliberate
-recording made by a person who consented to that use.
+A bar at "80%" tells the operator to keep going. "Return at least one hour after the
+first sitting — ideally another day — then supply a permitted negative sample" tells
+them what to do. The second is the whole job of this surface. A negative sample is not
+permission to harvest someone else's speech: it is public-domain or appropriately
+licensed playback, or a deliberate recording made by a person who consented to that
+use.
 
 **`choosing-operating-point` is the one screen in the product that presents a
-trade-off rather than a reading**, which makes it the exception to the thesis and
-the reason it is its own state. The CLI prints every operating point beside what it
-admits of the other voice, and that pairing is the point: the threshold cannot be
-chosen well from one number. Both costs are concrete and asymmetric — dropping the
+trade-off rather than a reading**, which makes it the exception to the thesis and the
+reason it is its own state. `speaker_gate.operating_point_choices` keeps only targets
+the held-out sample can resolve and that carry both the measured operator-speech drop
+rate and negative-speech admission rate. Duplicate cost pairs collapse. It requires at
+least two distinct choices; with more than three it presents the loosest, deterministic
+lower median, and strictest. Both costs are concrete and asymmetric — dropping the
 operator removes the answer to the only question this tool exists to answer, while
-admitting the room perturbs which real content survives compression. The surface has
-to say which cost is which, because the two are not interchangeable and a slider
-alone implies they are.
+admitting the room perturbs which real content survives compression.
 
 **It must not ask for a number, and that resolves a contradiction between two things
 this project decided separately.** `speaker_gate.py` deliberately gives `--target-frr`
@@ -527,24 +534,25 @@ every later reader — correct for a CLI whose user is reading the source.
 asks for a false-reject rate satisfies the first and violates the second, and both
 were written as binding.
 
-The resolution keeps the choice and drops the vocabulary: **three ordered named
-options, each carrying both costs measured from the operator's own calibration**, in
-the terms of their meeting rather than the model's. "Preserve more of my speech" comes
-first, "choose the middle ground" second, and "keep more other voices out" third.
-The product fills in the actual operator-speech drop rate and negative-sample admission
-rate at runtime. The prototype shows no numbers, because it has no personal
-measurements. The chosen quantile still lands in the profile and still has no default;
-nothing about it is inferred.
+The resolution keeps the choice and drops the vocabulary: **two or three ordered named
+options, each carrying both actual costs measured from the operator's calibration**.
+"Preserve more of my speech" comes first, a measured middle point appears when three
+survive, and "keep more other voices out" comes last. Before measurements load, the
+prototype radios stay disabled. Its populated rates come from a deterministic
+non-personal score fixture and are labelled as such; they are not claims about the
+reviewer. The CLI first reports without writing, then requires an explicit rerun with
+one displayed target. No point is selected by default.
 
 **The profile and its source recordings have separate lifecycles.** The profile is
 app-private to the owning macOS account, is never included in a meeting export, and can
-be reset independently. Dedicated operator and negative-sample recordings are deleted
-immediately after a successful profile build. A retained meeting later used as source
-material remains a meeting: its audio follows the auto-deletion period already chosen
-for it. Reset deletes the profile, threshold, and enrolment provenance. It does not
-delete notes, transcripts, meeting audio, meeting-retention choices, or other meetings.
-Future captures then have no voice gate and sit outside the supported beta; the
-supported manual-capture control remains blocked until enrolment completes again.
+be reset independently. After each dedicated operator or negative recording yields the
+needed owner-only derived material safely, its raw, transcript, segments, and working
+files are deleted immediately. Failure, cancellation, abandonment, and **Discard
+enrolment** delete partial dedicated raw and derived work and leave enrolment
+incomplete. A retained source meeting is never copied or deleted by enrolment and keeps
+its chosen meeting policy. Reset deletes the profile, threshold, and enrolment
+provenance; it does not delete any meeting. The application then blocks capture until
+reenrolment. Only the research CLI may run ungated outside beta.
 
 **`experimental` must not look like `enrolled`.** The override exists so a
 measurement can be taken with material that does not meet the contract, and its only
@@ -664,8 +672,10 @@ answer is stated here rather than assumed.
 
 This period governs source meetings, including any retained meeting later used to
 rebuild a voice profile. It does not govern dedicated enrolment recordings: dedicated
-operator and negative-sample audio is deleted immediately after the profile is built.
-That shorter lifecycle is stated before either recording starts.
+operator and negative-sample raw is deleted immediately after the needed owner-only
+derived material is safely stored. Failure, cancellation, or abandonment deletes
+partial raw and leaves enrolment incomplete. That shorter lifecycle is stated before
+either recording starts.
 
 **The vocabulary is the category's, not this project's.** Granola's enterprise tier
 offers "Org-wide auto-deletion periods" (`journeys.md`, market check), so this surface
@@ -710,10 +720,10 @@ sidecar has to degrade to nothing, not to an error.
 **Surface I does not demand a sixth template, and that was checked rather than
 assumed.** The instinct is to call enrolment a Sequence like first run, and it is
 not: a Sequence is a series of steps taken in one sitting, and enrolment's central
-constraint is that it *cannot* be — two sittings must be an hour apart and should be
-a day apart. So `accumulating` is a status panel in the shell chrome that persists
-across days, not a step in a flow, and the only genuinely form-shaped state is
-choosing the operating point. Modelling enrolment as a wizard would encode exactly
+constraint is that it *cannot* be — two sittings must be at least one hour apart and
+different days are ideal. So `accumulating` is a status panel in the shell chrome that
+persists across days, not a step in a flow, and the only genuinely form-shaped state
+is choosing the operating point. Modelling enrolment as a wizard would encode exactly
 the shortcut the enrolment contract refuses.
 
 The menubar item (A) is not a template. It is a single glyph with seven states

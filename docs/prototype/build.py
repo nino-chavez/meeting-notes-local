@@ -35,6 +35,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,6 +53,10 @@ from summarize import (  # noqa: E402
     validate_support_measurement,
 )
 from transcript import load  # noqa: E402  (needs the path above)
+
+sys.path.insert(0, str(REPO / "spike"))
+
+from speaker_gate import operating_point_choices  # noqa: E402
 
 OUT_DIR = REPO / "notes" / "out"
 
@@ -554,6 +559,40 @@ def specimen() -> str:
 </section>'''
 
 
+def operating_point_fixture() -> list[dict]:
+    """Measured, non-personal points for reviewing a populated product choice.
+
+    The values are derived through the shipping calibration arithmetic from fixed
+    score fixtures. They demonstrate the populated state without presenting a
+    reviewer with a fabricated personal result. Production supplies held-out scores
+    from the owner and the permitted negative sample instead.
+    """
+    operator = [0.60 + i * 0.003 for i in range(100)]
+    negative = [0.54 + i * 0.007 for i in range(40)]
+    return operating_point_choices(operator, negative)
+
+
+def operating_point_markup(points: list[dict]) -> str:
+    labels = (
+        ["Preserve more of my speech", "Keep more other voices out"]
+        if len(points) == 2
+        else [
+            "Preserve more of my speech",
+            "Choose the measured middle point",
+            "Keep more other voices out",
+        ]
+    )
+    return "".join(
+        f'''<label><input type="radio" name="voice-policy"
+          data-target="{point["target_frr"]:.8f}"
+          data-operator-rate="{point["measured_frr"]:.8f}"
+          data-negative-rate="{point["false_admit_rate"]:.8f}" disabled>
+        <strong>{esc(label)}</strong>
+        <span>Load the measured-point fixture to review both rates.</span></label>'''
+        for label, point in zip(labels, points, strict=True)
+    )
+
+
 def encounter() -> str:
     """The interaction questions the corpus cannot answer, marked in place.
 
@@ -563,7 +602,9 @@ def encounter() -> str:
     test the decisions those absences leave open without claiming that the selected
     state produced the QMSum note below.
     """
-    return '''
+    points = operating_point_fixture()
+    returning = points[(len(points) - 1) // 2]
+    markup = '''
 <section class="encounter" id="encounter" data-initial-panel="spec-library">
   <header class="encounter-head">
     <div>
@@ -582,9 +623,7 @@ def encounter() -> str:
   <div class="encounter-controls" aria-label="Review states">
     <button type="button" data-panel="spec-library">library</button>
     <button type="button" data-panel="spec-first-run">first launch</button>
-    <button type="button" data-panel="spec-enrollment">enrollment progress</button>
-    <button type="button" data-panel="spec-negative-sample">negative sample</button>
-    <button type="button" data-panel="spec-operating-point">voice policy</button>
+    <button type="button" data-panel="spec-enrollment-blocked">enrollment blocked</button>
     <button type="button" data-panel="spec-enrolled">enrolled profile</button>
     <button type="button" data-panel="spec-profile-reset">reset profile</button>
     <button type="button" data-panel="spec-detected">future: detection</button>
@@ -612,7 +651,8 @@ def encounter() -> str:
         start capture — enrollment required
       </button>
       <button type="button" data-panel="spec-first-run">review first launch</button>
-      <button type="button" data-panel="spec-enrollment">review enrollment blocker</button>
+      <button type="button" data-panel="spec-enrollment-blocked">
+        review enrollment blocker</button>
     </div>
   </section>
 
@@ -638,8 +678,9 @@ def encounter() -> str:
     </button>
   </section>
 
-  <section class="encounter-panel" id="spec-enrollment" data-menubar="idle" hidden>
-    <p class="eyebrow">accumulating · no operator data loaded by this prototype</p>
+  <section class="encounter-panel" id="spec-enrollment-blocked"
+    data-menubar="idle" hidden>
+    <p class="eyebrow">blocked · no valid profile loaded</p>
     <h3>Supported capture waits for a measured voice profile</h3>
     <p>A first profile comes from dedicated calibration, not from an ungated meeting.
       The app reports observed facts here; this specimen uses placeholders rather than
@@ -651,19 +692,72 @@ def encounter() -> str:
       <p><strong>Other-voice sample</strong><span>measured at runtime</span></p>
     </div>
     <ul class="setup-list">
-      <li><strong>At least two sittings</strong>, at least one hour apart and ideally
-        on different days.</li>
-      <li>Enough held-out operator speech to measure every offered policy.</li>
+      <li><strong>At least two sittings</strong>, at least one hour apart; different
+        days are ideal.</li>
+      <li>Enough held-out operator speech to resolve at least two distinct policies.</li>
       <li>Negative material from public or licensed playback, or a person who
         consented to make the calibration recording.</li>
     </ul>
-    <p class="state-result">No enrollment conclusion is claimed here. In the product,
-      the missing requirement and next action replace these placeholders.</p>
+    <p class="state-result" id="enrollment-status">Enrollment blocked. No profile or
+      personal result is claimed by this prototype.</p>
     <div class="panel-actions">
-      <button type="button" data-panel="spec-negative-sample">
-        review the negative-sample step</button>
-      <button type="button" data-panel="spec-operating-point">
-        review the policy choice</button>
+      <button type="button" data-enrollment-event="save-first">
+        review first-sitting saved</button>
+      <button type="button" id="load-valid-profile-fixture"
+        data-enrollment-event="load-valid-profile">
+        load returning valid-profile fixture</button>
+    </div>
+  </section>
+
+  <section class="encounter-panel" id="spec-first-sitting-saved"
+    data-menubar="idle" hidden>
+    <p class="eyebrow">accumulating · first sitting saved</p>
+    <h3>Keep derived material; remove the dedicated raw recording</h3>
+    <p>After owner-only embeddings and provenance are written safely, the product
+      deletes the dedicated WAV, transcript, temporary segments, and partial working
+      files immediately. It keeps only the owner-only derived enrollment material
+      needed to compare a later sitting.</p>
+    <p class="state-result">Review transition only — no sitting was recorded or saved
+      for this prototype.</p>
+    <div class="panel-actions">
+      <button type="button" data-enrollment-event="resume-after-gap">
+        review resume after the gap</button>
+      <button type="button" data-panel="spec-discard-enrollment">
+        discard enrollment</button>
+    </div>
+  </section>
+
+  <section class="encounter-panel" id="spec-resume-after-gap"
+    data-menubar="idle" hidden>
+    <p class="eyebrow">resume · first sitting derived material held</p>
+    <h3>Return at least one hour later; another day is ideal</h3>
+    <p>The product reads the recorded timestamps. It does not turn two clips from one
+      session into two sittings, and it does not fabricate elapsed time in this
+      specimen.</p>
+    <p class="state-result">Elapsed time and next eligibility are measured at runtime.</p>
+    <div class="panel-actions">
+      <button type="button" data-enrollment-event="review-second">
+        review second-sitting completion</button>
+      <button type="button" data-panel="spec-discard-enrollment">
+        discard enrollment</button>
+    </div>
+  </section>
+
+  <section class="encounter-panel" id="spec-second-sitting-review"
+    data-menubar="idle" hidden>
+    <p class="eyebrow">accumulating · second sitting review</p>
+    <h3>Review what the two operator sittings support</h3>
+    <p>The runtime state reports the exact sitting count, gap, held-out segments, and
+      any refusal. Each dedicated raw recording is deleted immediately after its
+      owner-only derived material is safely stored.</p>
+    <p>If extraction fails, the operator cancels, or the flow is abandoned, partial
+      raw and working files are deleted and enrollment remains incomplete.</p>
+    <p class="state-result">No operator counts are asserted by this specimen.</p>
+    <div class="panel-actions">
+      <button type="button" data-enrollment-event="review-negative">
+        review the required negative sample</button>
+      <button type="button" data-panel="spec-discard-enrollment">
+        discard enrollment</button>
     </div>
   </section>
 
@@ -681,14 +775,20 @@ def encounter() -> str:
       <label><input type="radio" name="negative-source">
         A consenting person recording for calibration</label>
     </fieldset>
-    <p>Dedicated operator and negative-sample recordings are deleted automatically
-      after the profile is built. If an existing retained meeting is later used to
-      rebuild a profile, that meeting keeps the audio-retention period already chosen
-      for it.</p>
+    <p>After owner-only negative scores are safely stored, the dedicated raw recording,
+      transcript, temporary segments, and partial working files are deleted
+      immediately. Failure, cancellation, or abandonment deletes partial raw and leaves
+      enrollment incomplete. Existing source meetings are never copied or deleted;
+      each keeps the audio-retention period already chosen for it.</p>
     <p class="state-result" id="negative-material-result">No source selected in this
       specimen. No recording is made.</p>
-    <button type="button" data-panel="spec-operating-point">
-      review the operating-point choice</button>
+    <div class="panel-actions">
+      <button type="button" id="load-operating-fixture"
+        data-enrollment-event="measurements-ready" disabled>
+        load measured-point fixture</button>
+      <button type="button" data-panel="spec-discard-enrollment">
+        discard enrollment</button>
+    </div>
   </section>
 
   <section class="encounter-panel" id="spec-operating-point" data-menubar="idle" hidden>
@@ -697,25 +797,19 @@ def encounter() -> str:
     <p>The product populates both rates below from the operator's held-out sittings
       and the permitted negative sample. Until those measurements exist, the choices
       remain unavailable. No option is selected or recommended by default.</p>
-    <fieldset class="voice-policy-choice">
+    <fieldset class="voice-policy-choice" id="voice-policy-choices">
       <legend>Ordered from preserving your speech to excluding other voices</legend>
-      <label><input type="radio" name="voice-policy">
-        <strong>Preserve more of my speech</strong>
-        <span>My speech dropped: measured at runtime · other voice admitted:
-          measured at runtime</span></label>
-      <label><input type="radio" name="voice-policy">
-        <strong>Choose the middle ground</strong>
-        <span>My speech dropped: measured at runtime · other voice admitted:
-          measured at runtime</span></label>
-      <label><input type="radio" name="voice-policy">
-        <strong>Keep more other voices out</strong>
-        <span>My speech dropped: measured at runtime · other voice admitted:
-          measured at runtime</span></label>
+      __OPERATING_POINT_CHOICES__
     </fieldset>
     <p class="state-result" id="voice-policy-result">No policy selected. This
-      prototype has no personal measurements and cannot build a profile.</p>
-    <button type="button" data-panel="spec-enrolled">
-      review the enrolled-state contract</button>
+      prototype has no personal measurements; fixture choices remain disabled until
+      the measured-point transition runs.</p>
+    <div class="panel-actions">
+      <button type="button" data-panel="spec-enrolled">
+        review the enrolled-state contract</button>
+      <button type="button" data-panel="spec-discard-enrollment">
+        discard enrollment</button>
+    </div>
   </section>
 
   <section class="encounter-panel" id="spec-enrolled" data-menubar="idle" hidden>
@@ -735,8 +829,51 @@ def encounter() -> str:
       source meetings retain their own chosen lifecycle.</p>
     <p class="state-result">Only a real, persisted profile enables the supported
       manual-capture control. Reviewing this panel does not enable it.</p>
-    <button type="button" data-panel="spec-profile-reset">review profile reset</button>
+    <button type="button" data-enrollment-event="load-valid-profile">
+      load returning valid-profile fixture</button>
     <button type="button" data-panel="spec-library">return to blocked library</button>
+  </section>
+
+  <section class="encounter-panel" id="spec-returning-profile"
+    data-menubar="idle" hidden>
+    <p class="eyebrow">returning-valid-profile fixture · no profile built here</p>
+    <h3>A previously persisted valid profile enables manual Start</h3>
+    <p>The explicit fixture transition represents a profile that has already passed
+      schema, provenance, encoder, and operating-point validation. It neither builds a
+      profile nor claims one exists for this reviewer.</p>
+    <div class="setup-status">
+      <p><strong>Fixture operator speech dropped</strong>
+        <span>__RETURNING_OPERATOR_RATE__ measured</span></p>
+      <p><strong>Fixture negative speech admitted</strong>
+        <span>__RETURNING_NEGATIVE_RATE__ measured</span></p>
+      <p><strong>Profile owner</strong><span>fixture macOS account only</span></p>
+    </div>
+    <p class="state-result">The Start control is enabled only while this valid-profile
+      fixture is loaded. Use it to review the consent transition.</p>
+    <button type="button" data-panel="spec-library">use enabled Start in library</button>
+    <button type="button" data-panel="spec-profile-reset">review profile reset</button>
+  </section>
+
+  <section class="encounter-panel" id="spec-discard-enrollment"
+    data-menubar="idle" hidden>
+    <p class="eyebrow">discard incomplete enrollment · destructive</p>
+    <h3>Discard enrollment without touching meetings</h3>
+    <p>Discard deletes derived operator embeddings, negative scores, temporary
+      provenance, any partial profile, and every partial dedicated raw or working file.
+      Enrollment becomes incomplete. Existing meetings, notes, transcripts, meeting
+      audio, retention choices, and any previously valid profile remain.</p>
+    <p class="state-result" id="discard-result">Incomplete enrollment material remains
+      in this interaction specimen.</p>
+    <button type="button" id="discard-enrollment-now">discard enrollment</button>
+    <div class="confirm-box" id="discard-enrollment-confirm" hidden>
+      <strong>Discard this incomplete enrollment?</strong>
+      <p>All dedicated enrollment material and partial derived work go. Source meetings
+        are never copied or deleted. No profile is built. This product action cannot be
+        undone; this specimen changes no file.</p>
+      <button type="button" id="confirm-discard-enrollment"
+        data-enrollment-event="discard">discard enrollment material</button>
+      <button type="button" id="cancel-discard-enrollment">cancel</button>
+    </div>
   </section>
 
   <section class="encounter-panel" id="spec-profile-reset" data-menubar="idle" hidden>
@@ -749,14 +886,15 @@ def encounter() -> str:
       <strong>Delete the local voice profile?</strong>
       <p>The profile, calibrated threshold, and enrollment provenance go. Existing
         notes, transcripts, meeting audio, and meeting retention choices remain.
-        Dedicated calibration recordings were already deleted after the profile was
-        built. Future capture has no voice gate and is outside the supported beta
-        until enrollment completes again. This product action cannot be undone; this
-        specimen changes no file.</p>
+        Dedicated calibration raw was already deleted after its owner-only derived
+        material was stored. The application blocks capture until enrollment completes
+        again; only the research CLI may run ungated outside the beta. This product
+        action cannot be undone; this specimen changes no file.</p>
       <button type="button" id="confirm-reset-profile">delete profile</button>
       <button type="button" id="cancel-reset-profile">cancel</button>
     </div>
-    <button type="button" data-panel="spec-enrollment">review re-enrollment</button>
+    <button type="button" data-panel="spec-enrollment-blocked">
+      review re-enrollment</button>
   </section>
 
   <section class="encounter-panel" id="spec-retention-choice" data-menubar="idle" hidden>
@@ -764,8 +902,8 @@ def encounter() -> str:
     <h3>Choose how long audio stays on this Mac</h3>
     <p>Notes and transcripts remain when meeting audio is deleted. There is
       intentionally no preselected period: this choice concerns recordings of other
-      people. Dedicated enrollment recordings are shorter lived and are deleted as
-      soon as the profile is built.</p>
+      people. Dedicated enrollment raw is shorter lived and is deleted as soon as the
+      needed owner-only derived material is safely stored.</p>
     <fieldset class="retention-choice">
       <legend>Auto-deletion period</legend>
       <label><input type="radio" name="retention-period"> 30 days</label>
@@ -775,7 +913,8 @@ def encounter() -> str:
         Keep audio until I delete it</label>
     </fieldset>
     <p class="state-result" id="retention-result">No period selected.</p>
-    <button type="button" data-panel="spec-enrollment" data-requires-retention disabled>
+    <button type="button" data-panel="spec-enrollment-blocked"
+      data-requires-retention disabled>
       continue to required voice enrollment
     </button>
   </section>
@@ -948,6 +1087,12 @@ def encounter() -> str:
     <p class="state-result" id="notice-result">No policy selected in this prototype.</p>
   </section>
 </section>'''
+    return (
+        markup
+        .replace("__OPERATING_POINT_CHOICES__", operating_point_markup(points))
+        .replace("__RETURNING_OPERATOR_RATE__", f"{returning['measured_frr']:.1%}")
+        .replace("__RETURNING_NEGATIVE_RATE__", f"{returning['false_admit_rate']:.1%}")
+    )
 
 
 def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str],
@@ -1288,6 +1433,52 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   // Interaction specimens use one state switcher. The panels declare their menubar
   // reading in markup, so a new state cannot be wired only in JavaScript and leave the
   // primary status ambiguous. Nothing below fabricates transcript or note content.
+  // BEGIN ENROLLMENT STATE MACHINE
+  var ENROLLMENT_TRANSITIONS = Object.freeze({{
+    blocked: Object.freeze({{
+      'save-first': 'first-sitting-saved',
+      'load-valid-profile': 'returning-valid-profile'
+    }}),
+    'first-sitting-saved': Object.freeze({{
+      'resume-after-gap': 'resume-after-gap',
+      discard: 'blocked'
+    }}),
+    'resume-after-gap': Object.freeze({{
+      'review-second': 'second-sitting-review',
+      discard: 'blocked'
+    }}),
+    'second-sitting-review': Object.freeze({{
+      'review-negative': 'negative-sample',
+      discard: 'blocked'
+    }}),
+    'negative-sample': Object.freeze({{
+      'measurements-ready': 'operating-point',
+      discard: 'blocked'
+    }}),
+    'operating-point': Object.freeze({{
+      'load-valid-profile': 'returning-valid-profile',
+      discard: 'blocked'
+    }}),
+    'returning-valid-profile': Object.freeze({{
+      reset: 'blocked'
+    }})
+  }});
+  function nextEnrollmentState(state, event) {{
+    var available = ENROLLMENT_TRANSITIONS[state];
+    if (!available || !available[event]) {{
+      throw new Error('invalid enrollment transition: ' + state + ' + ' + event);
+    }}
+    return available[event];
+  }}
+  function enrollmentEventEnabled(state, event) {{
+    var available = ENROLLMENT_TRANSITIONS[state];
+    return Boolean(available && available[event]);
+  }}
+  function enrollmentStartEnabled(state) {{
+    return state === 'returning-valid-profile';
+  }}
+  // END ENROLLMENT STATE MACHINE
+
   var panels = Array.prototype.slice.call(document.querySelectorAll('.encounter-panel'));
   var glyphs = {{
     idle: ['○', 'idle', 'glyph-idle'],
@@ -1313,6 +1504,75 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
     glyph.className = 'menubar-glyph ' + reading[2];
     document.getElementById('menubar-word').textContent = reading[1];
   }}
+  var enrollmentState = 'blocked';
+  function renderEnrollmentState() {{
+    var allowed = enrollmentStartEnabled(enrollmentState);
+    var negativeSource = document.querySelector(
+      'input[name="negative-source"]:checked'
+    );
+    var start = document.getElementById('manual-capture');
+    start.disabled = !allowed;
+    start.textContent = allowed
+      ? 'start capture manually'
+      : 'start capture — enrollment required';
+    document.getElementById('capture-eligibility').textContent = allowed
+      ? 'Returning valid-profile fixture loaded. Supported Start is enabled for '
+        + 'transition review; no profile was built or loaded from this Mac.'
+      : 'Supported capture unavailable: complete voice enrollment first. Existing '
+        + 'meetings remain readable.';
+    document.querySelectorAll('button[data-enrollment-event]')
+      .forEach(function (button) {{
+        var eventAllowed = enrollmentEventEnabled(
+          enrollmentState,
+          button.dataset.enrollmentEvent
+        );
+        if (button.id === 'load-operating-fixture') {{
+          eventAllowed = eventAllowed && Boolean(negativeSource);
+        }}
+        button.disabled = !eventAllowed;
+      }});
+    document.querySelectorAll('input[name="voice-policy"]')
+      .forEach(function (input) {{
+        input.disabled = enrollmentState !== 'operating-point';
+        if (input.disabled) input.checked = false;
+      }});
+  }}
+  function showRatesFromFixture() {{
+    document.querySelectorAll('input[name="voice-policy"]').forEach(function (input) {{
+      var row = input.parentElement.querySelector('span');
+      row.textContent =
+        'Fixture measured: my speech dropped '
+        + (Number(input.dataset.operatorRate) * 100).toFixed(1)
+        + '% · negative speech admitted '
+        + (Number(input.dataset.negativeRate) * 100).toFixed(1)
+        + '% · choose with --target-frr '
+        + Number(input.dataset.target).toFixed(2);
+    }});
+  }}
+  var eventPanels = {{
+    'save-first': 'spec-first-sitting-saved',
+    'resume-after-gap': 'spec-resume-after-gap',
+    'review-second': 'spec-second-sitting-review',
+    'review-negative': 'spec-negative-sample',
+    'measurements-ready': 'spec-operating-point',
+    'load-valid-profile': 'spec-returning-profile',
+    discard: 'spec-enrollment-blocked'
+  }};
+  document.querySelectorAll('button[data-enrollment-event]')
+    .forEach(function (button) {{
+      button.addEventListener('click', function () {{
+        var event = button.dataset.enrollmentEvent;
+        enrollmentState = nextEnrollmentState(enrollmentState, event);
+        if (event === 'measurements-ready') showRatesFromFixture();
+        renderEnrollmentState();
+        showPanel(eventPanels[event]);
+      }});
+    }});
+  document.getElementById('manual-capture').addEventListener('click', function () {{
+    if (!enrollmentStartEnabled(enrollmentState)) return;
+    showPanel('spec-consent');
+  }});
+  renderEnrollmentState();
   document.addEventListener('click', function (e) {{
     var button = e.target.closest('button[data-panel]');
     if (!button || button.disabled) return;
@@ -1347,13 +1607,17 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
       document.getElementById('negative-material-result').textContent =
         'Allowed source selected for interaction review. No recording is made, and '
         + 'no compliance result is claimed.';
+      renderEnrollmentState();
     }});
   }});
   document.querySelectorAll('input[name="voice-policy"]').forEach(function (input) {{
     input.addEventListener('change', function () {{
       document.getElementById('voice-policy-result').textContent =
-        'Policy selected for interaction review only. A real selection stays '
-        + 'unavailable until both measured rates can be shown.';
+        'Fixture policy selected for review: my speech dropped '
+        + (Number(input.dataset.operatorRate) * 100).toFixed(1)
+        + '%, negative speech admitted '
+        + (Number(input.dataset.negativeRate) * 100).toFixed(1)
+        + '%. No profile is built.';
     }});
   }});
   document.getElementById('participant-attested').addEventListener('change', function (e) {{
@@ -1425,10 +1689,31 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
   document.getElementById('confirm-reset-profile')
     .addEventListener('click', function () {{
       document.getElementById('reset-profile-confirm').hidden = true;
+      enrollmentState = enrollmentState === 'returning-valid-profile'
+        ? nextEnrollmentState(enrollmentState, 'reset')
+        : 'blocked';
+      renderEnrollmentState();
       document.getElementById('profile-result').textContent =
         'Profile deleted in the interaction specimen. Existing meetings remain; '
-        + 'future capture is ungated and outside the supported beta until re-enrollment. '
-        + 'No local file changed.';
+        + 'application capture is blocked until re-enrollment. Only the research CLI '
+        + 'may run ungated outside the beta. No local file changed.';
+      showPanel('spec-enrollment-blocked');
+  }});
+  document.getElementById('discard-enrollment-now').addEventListener('click', function () {{
+    document.getElementById('discard-enrollment-confirm').hidden = false;
+  }});
+  document.getElementById('cancel-discard-enrollment')
+    .addEventListener('click', function () {{
+      document.getElementById('discard-enrollment-confirm').hidden = true;
+      document.getElementById('discard-result').textContent =
+        'Discard cancelled. Incomplete enrollment material remains in this specimen.';
+  }});
+  document.getElementById('confirm-discard-enrollment')
+    .addEventListener('click', function () {{
+      document.getElementById('discard-enrollment-confirm').hidden = true;
+      document.getElementById('discard-result').textContent =
+        'Incomplete enrollment discarded in the interaction specimen. Meetings and '
+        + 'any previously valid profile remain; no local file changed.';
   }});
   document.querySelector('[data-action="finish-processing"]')
     .addEventListener('click', function () {{
@@ -1470,6 +1755,86 @@ def check_wiring(page_html: str) -> int:
     return len(wanted)
 
 
+def check_enrollment_js(page_html: str) -> int:
+    """Execute the enrollment transition function, independent of browser markup.
+
+    String presence cannot prove that Start enables after a valid-profile load and
+    disables again on reset. The state machine is deliberately pure so Node can run
+    those exact transitions without a browser or a fake DOM.
+    """
+    match = re.search(
+        r"// BEGIN ENROLLMENT STATE MACHINE(.*?)// END ENROLLMENT STATE MACHINE",
+        page_html,
+        re.DOTALL,
+    )
+    if not match:
+        raise SystemExit("enrollment JavaScript state machine is missing")
+    controls = match.group(1)
+    assertions = r"""
+const assert = require('node:assert/strict');
+let checks = 0;
+function equal(actual, expected, message) {
+  assert.equal(actual, expected, message);
+  checks += 1;
+}
+function throws(callback, message) {
+  assert.throws(callback, message);
+  checks += 1;
+}
+const known = Object.keys(ENROLLMENT_TRANSITIONS);
+for (const state of known) {
+  equal(
+    enrollmentStartEnabled(state),
+    state === 'returning-valid-profile',
+    'Start eligibility drifted for ' + state
+  );
+}
+let state = 'blocked';
+equal(enrollmentStartEnabled(state), false);
+state = nextEnrollmentState(state, 'save-first');
+equal(state, 'first-sitting-saved');
+state = nextEnrollmentState(state, 'resume-after-gap');
+equal(state, 'resume-after-gap');
+state = nextEnrollmentState(state, 'review-second');
+equal(state, 'second-sitting-review');
+state = nextEnrollmentState(state, 'review-negative');
+equal(state, 'negative-sample');
+state = nextEnrollmentState(state, 'measurements-ready');
+equal(state, 'operating-point');
+state = nextEnrollmentState(state, 'load-valid-profile');
+equal(state, 'returning-valid-profile');
+equal(enrollmentStartEnabled(state), true);
+state = nextEnrollmentState(state, 'reset');
+equal(state, 'blocked');
+equal(enrollmentStartEnabled(state), false);
+equal(nextEnrollmentState('blocked', 'load-valid-profile'),
+      'returning-valid-profile');
+equal(enrollmentEventEnabled('negative-sample', 'measurements-ready'), true);
+equal(enrollmentEventEnabled('blocked', 'measurements-ready'), false);
+equal(nextEnrollmentState('resume-after-gap', 'discard'), 'blocked');
+throws(() => nextEnrollmentState('returning-valid-profile', 'discard'));
+throws(() => nextEnrollmentState('blocked', 'review-second'));
+process.stdout.write(String(checks));
+"""
+    try:
+        result = subprocess.run(
+            ["node", "-e", controls + assertions],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(f"cannot execute enrollment JavaScript checks: {exc}") from exc
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip()
+        raise SystemExit(f"enrollment JavaScript transition check failed:\n{detail}")
+    try:
+        return int(result.stdout)
+    except ValueError as exc:
+        raise SystemExit("enrollment JavaScript check returned no assertion count") from exc
+
+
 def check_encounter_wiring(page_html: str) -> int:
     """Fail if an interaction state can be named but not reached.
 
@@ -1479,16 +1844,21 @@ def check_encounter_wiring(page_html: str) -> int:
     """
     expected = {
         "spec-library", "spec-first-run", "spec-detected", "spec-consent",
-        "spec-enrollment", "spec-negative-sample", "spec-operating-point",
-        "spec-enrolled", "spec-profile-reset", "spec-retention-choice",
+        "spec-enrollment-blocked", "spec-first-sitting-saved",
+        "spec-resume-after-gap", "spec-second-sitting-review",
+        "spec-negative-sample", "spec-operating-point", "spec-enrolled",
+        "spec-returning-profile", "spec-discard-enrollment",
+        "spec-profile-reset", "spec-retention-choice",
         "spec-armed", "spec-recording", "spec-degraded", "spec-transcribing",
         "spec-processing-failed", "spec-note-ready", "spec-correction",
         "spec-retention", "spec-delete-meeting", "spec-far-end",
     }
     panels = set(re.findall(
-        r'<section class="encounter-panel[^\"]*" id="([^\"]+)" data-menubar="([^\"]+)"',
+        r'<section class="encounter-panel[^\"]*"\s+id="([^\"]+)"\s+'
+        r'data-menubar="([^\"]+)"',
         page_html,
     ))
+    flat_page = re.sub(r"\s+", " ", page_html)
     panel_ids = {panel for panel, _ in panels}
     if panel_ids != expected:
         raise SystemExit(
@@ -1504,8 +1874,24 @@ def check_encounter_wiring(page_html: str) -> int:
     missing = sorted(set(targets) - panel_ids)
     if missing:
         raise SystemExit(f"encounter button(s) target no panel: {missing}")
-    if not expected <= set(targets) | {"spec-library"}:
+    transition_panels = {
+        "spec-first-sitting-saved", "spec-resume-after-gap",
+        "spec-second-sitting-review", "spec-negative-sample",
+        "spec-operating-point", "spec-returning-profile",
+    }
+    if not expected <= set(targets) | transition_panels | {"spec-library"}:
         raise SystemExit("some reviewed encounter states have no incoming control")
+    enrollment_events = set(re.findall(r'data-enrollment-event="([^\"]+)"', page_html))
+    expected_events = {
+        "save-first", "resume-after-gap", "review-second", "review-negative",
+        "measurements-ready", "load-valid-profile", "discard",
+    }
+    if enrollment_events != expected_events:
+        raise SystemExit(
+            "enrollment controls do not match the executable state machine: "
+            f"missing {sorted(expected_events - enrollment_events)}, "
+            f"unexpected {sorted(enrollment_events - expected_events)}"
+        )
     if len(re.findall(r'<input[^>]+name="retention-period"', page_html)) != 4:
         raise SystemExit("first-run retention choice no longer exposes four test options")
     retention = re.search(
@@ -1513,7 +1899,10 @@ def check_encounter_wiring(page_html: str) -> int:
     )
     if not retention or "checked" in retention.group(1):
         raise SystemExit("first-run retention choice must have no default")
-    if 'data-panel="spec-enrollment" data-requires-retention disabled' not in page_html:
+    if (
+        'data-panel="spec-enrollment-blocked" data-requires-retention disabled'
+        not in re.sub(r"\s+", " ", page_html)
+    ):
         raise SystemExit("retention must lead to enrollment, not an apparently ready library")
     if len(re.findall(r'<button[^>]+data-permission="(?:microphone|system)"', page_html)) != 2:
         raise SystemExit("first-run no longer exposes both required permission states")
@@ -1536,21 +1925,38 @@ def check_encounter_wiring(page_html: str) -> int:
     for required in (
         "Public-domain or licensed speech playback",
         "A consenting person recording for calibration",
-        "Dedicated operator and negative-sample recordings are deleted automatically",
+        "Source meetings are never copied or deleted",
+        "Failure, cancellation, or abandonment deletes partial raw",
     ):
-        if required not in page_html:
+        if required not in flat_page:
             raise SystemExit(f"enrollment lifecycle no longer states: {required}")
     policy = re.search(
-        r'<fieldset class="voice-policy-choice">(.*?)</fieldset>', page_html, re.DOTALL
+        r'<fieldset class="voice-policy-choice"[^>]*>(.*?)</fieldset>',
+        page_html,
+        re.DOTALL,
     )
-    if (
-        not policy
-        or len(re.findall(r'name="voice-policy"', policy.group(1))) != 3
-        or "checked" in policy.group(1)
-    ):
-        raise SystemExit("voice policy must expose three ordered options with no default")
-    if policy.group(1).count("measured at runtime") != 6:
-        raise SystemExit("voice-policy costs must be populated from runtime measurements")
+    inputs = re.findall(
+        r'<input type="radio" name="voice-policy"\s+'
+        r'data-target="([^"]+)"\s+data-operator-rate="([^"]+)"\s+'
+        r'data-negative-rate="([^"]+)" disabled>',
+        policy.group(1) if policy else "",
+    )
+    if not policy or len(inputs) not in (2, 3) or "checked" in policy.group(1):
+        raise SystemExit("voice policy must expose two or three options with no default")
+    expected_points = [
+        (
+            f"{point['target_frr']:.8f}",
+            f"{point['measured_frr']:.8f}",
+            f"{point['false_admit_rate']:.8f}",
+        )
+        for point in operating_point_fixture()
+    ]
+    if inputs != expected_points:
+        raise SystemExit("prototype policies drifted from speaker_gate's measured choices")
+    if any("disabled" not in tag for tag in re.findall(
+        r'<input[^>]+name="voice-policy"[^>]*>', policy.group(1)
+    )):
+        raise SystemExit("voice-policy radios must stay disabled without measurements")
     if "%" in policy.group(1):
         raise SystemExit("voice-policy specimen must not invent personal rates")
     if "this macOS account only" not in page_html or "not included in exports" not in page_html:
@@ -1569,8 +1975,12 @@ def check_encounter_wiring(page_html: str) -> int:
     required_ids = {
         "menubar-glyph", "menubar-word", "permission-microphone", "permission-system",
         "permissions-result", "capture-eligibility", "manual-capture",
+        "enrollment-status", "load-valid-profile-fixture",
         "participant-attested", "attestation-result", "consent-retention",
-        "negative-material-result", "voice-policy-result",
+        "negative-material-result", "load-operating-fixture",
+        "voice-policy-choices", "voice-policy-result",
+        "discard-result", "discard-enrollment-now", "discard-enrollment-confirm",
+        "confirm-discard-enrollment", "cancel-discard-enrollment",
         "profile-result", "reset-profile-now", "reset-profile-confirm",
         "confirm-reset-profile", "cancel-reset-profile",
         "retention-result", "withheld-turn", "correction-result", "restore-turn",
@@ -1593,7 +2003,6 @@ def check_encounter_wiring(page_html: str) -> int:
         r'<button[^>]+data-action="open-real-data-detail"', page_html
     )) != 2:
         raise SystemExit("ready state and specimen row must both reach real-data detail")
-    flat_page = re.sub(r"\s+", " ", page_html)
     if "The note, transcript, claim evidence, and voice profile remain." not in flat_page:
         raise SystemExit("delete-audio confirmation no longer states what survives")
     if (
@@ -1612,10 +2021,27 @@ def check_encounter_wiring(page_html: str) -> int:
         not reset
         or "Existing notes, transcripts, meeting audio, and meeting retention choices remain"
         not in flat_reset
-        or "Future capture has no voice gate and is outside the supported beta"
+        or "The application blocks capture until enrollment completes again"
         not in flat_reset
+        or "only the research CLI may run ungated outside the beta" not in flat_reset
     ):
         raise SystemExit("profile reset no longer states its exact independent consequence")
+    discard = re.search(
+        r'<div class="confirm-box" id="discard-enrollment-confirm".*?</div>',
+        page_html,
+        re.DOTALL,
+    )
+    flat_discard = re.sub(r"\s+", " ", discard.group(0)) if discard else ""
+    if (
+        not discard
+        or "All dedicated enrollment material and partial derived work go"
+        not in flat_discard
+        or "Source meetings are never copied or deleted" not in flat_discard
+        or "No profile is built" not in flat_discard
+    ):
+        raise SystemExit("discard enrollment no longer states its exact consequence")
+    if "__OPERATING_" in page_html or "__RETURNING_" in page_html:
+        raise SystemExit("an enrollment fixture placeholder reached the rendered page")
     return len(targets)
 
 
@@ -1654,12 +2080,14 @@ def main() -> int:
     rendered = page("".join(sections), "".join(library), totals, tok, len(notes))
     buttons = check_wiring(rendered)
     encounter_controls = check_encounter_wiring(rendered)
+    enrollment_assertions = check_enrollment_js(rendered)
     page_path.write_text(rendered)
     size = page_path.stat().st_size / 1024
     noun = "meeting" if len(notes) == 1 else "meetings"
     print(f"wrote {page_path}  ({size:.0f} KB, {len(notes)} {noun}, "
           f"{sum(totals.values())} claims, {buttons} locators all resolving, "
-          f"{encounter_controls} encounter controls wired)")
+          f"{encounter_controls} encounter controls wired, "
+          f"{enrollment_assertions} enrollment transitions checked)")
     for state, n in totals.items():
         print(f"  {n:>4}  {state}")
     return 0

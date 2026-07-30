@@ -268,10 +268,10 @@ now runs inside the capture rather than beside it.
 **You talk normally throughout the operator sittings.** Nothing to read, nothing
 playing in the background, no cues on screen.
 
-**1. Two dedicated operator sittings on headphones, on different days.** The
-supported product cannot bootstrap its first profile from an ungated meeting and
-still claim that meeting was inside the supported envelope. These are calibration
-captures, not meetings:
+**1. Two dedicated operator sittings on headphones, at least one hour apart;
+different days are ideal.** The supported product cannot bootstrap its first profile
+from an ungated meeting and still claim that meeting was inside the supported
+envelope. These are calibration captures, not meetings:
 
 ```sh
 .venv/bin/python spike/dual_capture.py --seconds 180 --out ~/enroll-1
@@ -285,17 +285,19 @@ headphone meetings after a valid profile already exists; that path is not built.
 
 **Two things that cannot be shortcut, and both are enforced rather than advised.**
 
-*Different days, not two pieces of one session.* Chunking one recording into
+*At least one hour apart; different days are ideal.* Chunking one recording into
 "sittings" gives every chunk a different digest while carrying none of the
 session-to-session variation the plural is for — same room, same gain, same
 position, same voice, same half hour. The threshold would then be measured
 leave-one-*sitting*-out across sittings that do not exist, claiming cross-session
 evidence it does not have, and reading *better* than the truth. Every capture
-records when it happened and enrolment refuses sittings less than an hour apart.
+records when it happened. Enrolment requires a gap greater than or equal to one hour;
+different days are ideal.
 
-*Enough judgeable speech.* A 5% operating point needs twenty segments of two seconds
-or more before any one of them *is* the fifth percentile. The 117-second take from
-the echo work has nine, which is why it is not enough on its own.
+*Enough judgeable speech.* A candidate target needs at least
+`ceil(1 / target)` held-out segments of two seconds or more before that quantile is an
+observation rather than interpolation. The 117-second take from the echo work has
+nine, which is why it is not enough on its own.
 
 **2. A minute of permitted speech that is not you.** Use public-domain or
 appropriately licensed playback, or a person who knowingly consents to make this
@@ -310,43 +312,64 @@ Without it the threshold is a rejection rate rather than a gate: it says how muc
 *you* it drops and nothing about what it lets through. Enrolment refuses to write a
 profile without it.
 
-**3. Build the voiceprint, then take a third meeting with it on.**
+**3. Report the measured choices without writing a profile.**
+
+```sh
+.venv/bin/python spike/speaker_gate.py \
+  --calibrate ~/enroll-1/mic-segments.json ~/enroll-1/mic.wav \
+  --calibrate ~/enroll-2/mic-segments.json ~/enroll-2/mic.wav \
+  --against   ~/not-me/mic-segments.json    ~/not-me/mic.wav
+```
+
+This first pass is report-only. It offers only targets the held-out operator sample
+can resolve and for which the negative sample supplies the other cost. Duplicate
+observed cost pairs collapse. If more than three distinct pairs remain, it shows the
+loosest, lower-median, and strictest; fewer than two is a refusal, not a one-option
+choice.
+
+**4. Choose one displayed row, then rerun explicitly to write the profile.**
 
 ```sh
 .venv/bin/python spike/speaker_gate.py \
   --calibrate ~/enroll-1/mic-segments.json ~/enroll-1/mic.wav \
   --calibrate ~/enroll-2/mic-segments.json ~/enroll-2/mic.wav \
   --against   ~/not-me/mic-segments.json    ~/not-me/mic.wav \
-  --enroll-out ~/voiceprint.json --target-frr 0.05
-
-.venv/bin/python spike/dual_capture.py --seconds 3600 \
-  --voiceprint ~/voiceprint.json --out ~/meeting-gated
+  --enroll-out ~/voiceprint.json \
+  --target-frr <chosen-target-from-the-report>
 ```
 
-The product contract deletes dedicated operator and negative-sample recordings after
-the profile is built. The research CLI above does not yet implement that lifecycle;
-it leaves those capture directories in place, so it is not the beta privacy behavior.
-A retained source meeting used for a later rebuild is different: its audio keeps the
-auto-deletion period already chosen for that meeting.
+Do not paste the angle-bracket placeholder: replace it with one target printed by the
+report-only pass. The CLI refuses an undisplayed target unless the run is explicitly
+marked experimental.
 
-Every operating point is printed with what it admits of the other voice before
-anything is written, so `--target-frr` is a choice made with the cost in view. If
-the material falls short the run refuses and names which requirement failed;
-`--experimental` overrides that and marks the profile, and every capture gated by an
-experimental profile says so rather than reading like a measured configuration.
+The product deletes each dedicated raw recording, transcript, temporary segment list,
+and partial working file immediately after the needed owner-only derived material is
+safely stored. Extraction or build failure, cancellation, abandonment, and **Discard
+enrollment** delete partial dedicated raw and leave enrollment incomplete. A retained
+source meeting used for a later rebuild is never copied or deleted by enrollment; its
+audio keeps the auto-deletion period already chosen for that meeting. The research CLI
+above does not yet implement this lifecycle and leaves its input directories in place,
+so it is not the beta privacy behavior.
 
 The product presents three ordered policy choices — preserve more operator speech,
-choose the middle ground, or keep more other voices out. No option is selected by
-default. The operator-speech drop rate and negative-sample admission rate beside each
-choice come from that operator's material at runtime; the prototype does not invent
-personal percentages. The CLI command above uses `0.05` only as an explicit research
-example, not a product default.
+choose the measured middle point, or keep more other voices out. If only two distinct
+measured pairs survive, it shows both. No option is selected by default. The measured
+operator-speech drop rate and negative-sample admission rate beside each choice come
+from that operator's material at runtime; the prototype's populated values are marked
+fixtures rather than personal percentages.
 
 The resulting profile is private to the owning macOS account and separate from every
 meeting. Resetting it deletes the profile, calibrated threshold, and enrollment
 provenance. It does not delete notes, transcripts, meeting audio, retention choices,
-or other meetings. Future capture is then ungated and outside the supported beta;
-supported manual capture remains blocked until enrollment completes again.
+or other meetings. The application blocks capture until enrollment completes again.
+Only the research CLI may run ungated outside the beta.
+
+**5. Take a meeting with the selected profile on.**
+
+```sh
+.venv/bin/python spike/dual_capture.py --seconds 3600 \
+  --voiceprint ~/voiceprint.json --out ~/meeting-gated
+```
 
 Then hand the transcript to the notes half below and **read the note**. That is the
 step, and it cannot be automated: whether a partial transcript supports usable
@@ -367,11 +390,10 @@ they give the first clean read on something never yet tested: whether the Me/The
 split survives genuine speech arriving on *both* legs at once. Every capture so far
 put all the real words on one leg.
 
-`--target-frr 0.05` is the operating point — the share of your own speech the
-threshold may drop. It has no default, because a plausible constant reads exactly
-like a measured one to anybody downstream. `--calibrate` also prints what each
-operating point would admit of a *second* voice if you pass `--against` a recording
-of one.
+The chosen `--target-frr` is the operating point — the share of your own speech the
+threshold may drop. It has no default, because a plausible constant reads exactly like
+a measured one to anybody downstream. The report-only pass prints only resolvable
+choices and puts each one's measured negative-voice admission cost beside it.
 
 Three things are worth knowing before reading the gate's output as a result:
 

@@ -339,11 +339,14 @@ audio does not silently destroy the note built from it, and the note says the au
 gone.
 
 Voice enrollment has a deliberately shorter branch. Dedicated operator and
-negative-sample recordings are deleted immediately after the profile is built; a
-retained source meeting later used for recalibration keeps its existing meeting
+negative-sample raw is deleted immediately after the needed owner-only derived
+material is safely stored. Failure, cancellation, abandonment, and **Discard
+enrollment** delete partial raw and leave enrollment incomplete. A retained source
+meeting is never copied or deleted by enrollment and keeps its existing meeting
 retention. The derived profile is private to the owning macOS account and is deleted
-through its own reset action. Resetting it leaves meetings alone and makes future
-capture ungated and outside the supported beta until enrollment completes again.
+through its own reset action. Resetting it leaves meetings alone and blocks application
+capture until enrollment completes again; only the research CLI may run ungated
+outside beta.
 
 ---
 
