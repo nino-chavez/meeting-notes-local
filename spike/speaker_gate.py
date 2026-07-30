@@ -1152,6 +1152,42 @@ def _private_profile_partial(path: Path) -> tuple[int, Path]:
     return fd, Path(name)
 
 
+def _persist_profile(
+    path: Path,
+    serialized: str,
+    *,
+    before_write=None,
+    write_payload=None,
+    replace=None,
+) -> None:
+    """Write one profile privately and atomically, with injectable test boundaries.
+
+    The optional callables are private controls for this module's deterministic
+    self-test. `save_profile` exposes none of them: production callers still pass
+    enrollment evidence only.
+    """
+    fd, tmp = _private_profile_partial(path)
+    try:
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1  # ownership moved to handle
+        with handle:
+            if before_write is not None:
+                before_write(handle.fileno(), tmp)
+            if write_payload is None:
+                handle.write(serialized)
+            else:
+                write_payload(handle, serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_file = os.replace if replace is None else replace
+        replace_file(tmp, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
+
+
 def save_profile(
     path: Path,
     profile: Profile,
@@ -1261,21 +1297,7 @@ def save_profile(
     # so replacement is atomic. chmod-after-write leaves a biometric record at the
     # caller's umask until the write finishes, and permanently if the process dies
     # in between.
-    fd, tmp = _private_profile_partial(path)
-    try:
-        handle = os.fdopen(fd, "w", encoding="utf-8")
-        fd = -1  # ownership moved to handle
-        with handle:
-            handle.write(serialized)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-        path.chmod(0o600)
-    finally:
-        if fd >= 0:
-            os.close(fd)
-        with contextlib.suppress(FileNotFoundError):
-            tmp.unlink()
+    _persist_profile(path, serialized)
 
 
 def verify_provenance(path: Path, doc: dict) -> None:
@@ -1917,7 +1939,11 @@ def run_self_test() -> int:
             "scorable_seconds": 80.0,
         }]
 
-        def save_fixture(profile_path: Path, **over) -> None:
+        def save_fixture(
+            profile_path: Path,
+            profile_value: Profile = operator,
+            **over,
+        ) -> None:
             values = {
                 "selected_target": 0.05,
                 "operator_scores": good_operator_scores,
@@ -1929,7 +1955,7 @@ def run_self_test() -> int:
                 "encoder_fingerprint_value": fixture_fingerprint,
             }
             values.update(over)
-            save_profile(profile_path, operator, **values)
+            save_profile(profile_path, profile_value, **values)
 
         save_fixture(pp)
         back, thresh, doc = load_fixture(pp)
@@ -1939,21 +1965,116 @@ def run_self_test() -> int:
             good_negative_scores,
         )
 
-        partial_fd, partial_path = _private_profile_partial(pp)
-        try:
-            partial_is_private_before_content = (
-                stat.S_IMODE(os.fstat(partial_fd).st_mode) == 0o600
-                and os.fstat(partial_fd).st_size == 0
+        original_persist_profile = _persist_profile
+        write_boundary = {}
+
+        def observed_persist(profile_path: Path, serialized: str) -> None:
+            def observe(fd: int, partial_path: Path) -> None:
+                stat_at_boundary = os.fstat(fd)
+                write_boundary.update({
+                    "mode": stat.S_IMODE(stat_at_boundary.st_mode),
+                    "size": stat_at_boundary.st_size,
+                    "same_parent": partial_path.parent == profile_path.parent,
+                })
+
+            original_persist_profile(
+                profile_path,
+                serialized,
+                before_write=observe,
             )
+
+        globals()["_persist_profile"] = observed_persist
+        try:
+            save_fixture(pp)
         finally:
-            os.close(partial_fd)
-            partial_path.unlink()
+            globals()["_persist_profile"] = original_persist_profile
+        partial_is_private_before_content = (
+            write_boundary == {
+                "mode": 0o600,
+                "size": 0,
+                "same_parent": True,
+            }
+            and stat.S_IMODE(pp.stat().st_mode) == 0o600
+        )
         check(
-            "the profile partial is owner-only before any biometric content is written",
+            "the actual save path is owner-only before its first biometric byte",
             partial_is_private_before_content,
         )
 
         valid_profile_bytes = pp.read_bytes()
+        changed_profile = Profile(
+            centroid=operator.centroid,
+            n_enrolled=operator.n_enrolled,
+            n_excluded=operator.n_excluded,
+            seconds=operator.seconds + 10.0,
+            cohesion=operator.cohesion,
+            spread=operator.spread,
+        )
+
+        def fail_during_profile_write(handle, serialized: str) -> None:
+            handle.write(serialized[:max(1, len(serialized) // 2)])
+            handle.flush()
+            raise OSError("injected profile write failure")
+
+        write_failure_control = {}
+
+        def write_failing_persist(profile_path: Path, serialized: str) -> None:
+            write_failure_control["candidate_differs"] = (
+                serialized.encode() != valid_profile_bytes
+            )
+            original_persist_profile(
+                profile_path,
+                serialized,
+                write_payload=fail_during_profile_write,
+            )
+
+        globals()["_persist_profile"] = write_failing_persist
+        try:
+            write_failure_refused = _raises(
+                lambda: save_fixture(pp, changed_profile), OSError
+            )
+        finally:
+            globals()["_persist_profile"] = original_persist_profile
+        check(
+            "an interrupted profile write preserves the existing bytes and leaves "
+            "no partial",
+            write_failure_refused
+            and write_failure_control.get("candidate_differs") is True
+            and pp.read_bytes() == valid_profile_bytes
+            and not list(pp.parent.glob(f".{pp.name}.*.partial")),
+        )
+
+        def fail_profile_replace(_source: Path, _target: Path) -> None:
+            raise OSError("injected profile replace failure")
+
+        replace_failure_control = {}
+
+        def replace_failing_persist(profile_path: Path, serialized: str) -> None:
+            replace_failure_control["candidate_differs"] = (
+                serialized.encode() != valid_profile_bytes
+            )
+            original_persist_profile(
+                profile_path,
+                serialized,
+                replace=fail_profile_replace,
+            )
+
+        globals()["_persist_profile"] = replace_failing_persist
+        try:
+            replace_failure_refused = _raises(
+                lambda: save_fixture(pp, changed_profile), OSError
+            )
+        finally:
+            globals()["_persist_profile"] = original_persist_profile
+        check(
+            "a failed profile replacement preserves the existing bytes and leaves "
+            "no partial",
+            replace_failure_refused
+            and replace_failure_control.get("candidate_differs") is True
+            and pp.read_bytes() == valid_profile_bytes
+            and not list(pp.parent.glob(f".{pp.name}.*.partial")),
+        )
+
         nonfinite_seconds = Profile(
             centroid=operator.centroid,
             n_enrolled=operator.n_enrolled,

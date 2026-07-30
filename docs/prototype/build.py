@@ -38,7 +38,6 @@ import re
 import subprocess
 import sys
 import tempfile
-from copy import deepcopy
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -54,6 +53,7 @@ from summarize import (  # noqa: E402
     _seq,
     _support_key,
     artifact_uses_source_evidence,
+    reconcile_capture_provenance,
     structured_artifact_citations,
     validate_artifact_pair,
     validate_evidence_contract,
@@ -189,27 +189,6 @@ def transcript_for(doc: dict, note_path: Path) -> Transcript:
     elif transform is not None:
         raise SystemExit(f"{note_path}: unknown transform {transform!r}")
     return t
-
-
-def reconcile_capture_provenance(
-    doc: dict,
-    transcript: Transcript,
-    note_path: Path,
-) -> dict:
-    """Derive missing legacy fields and refuse copied provenance that disagrees."""
-    expected = {
-        "capture_health": deepcopy(transcript.capture_health),
-        "capture_integrity_unknown": transcript.capture_integrity_unknown,
-        "capture_warnings": list(transcript.capture_warnings),
-    }
-    reconciled = dict(doc)
-    for field, value in expected.items():
-        if field in doc and doc[field] != value:
-            raise SystemExit(
-                f"{note_path.name}: note {field} disagrees with its retained transcript"
-            )
-        reconciled[field] = value
-    return reconciled
 
 
 def esc(s) -> str:
@@ -349,9 +328,18 @@ def check_capture_warning_renderer() -> None:
             "turns": [],
         }))
         note_path = fixture_dir / "legacy.note.json"
-        note_doc = {"transcript": "transcript.json", "transform": None}
+        note_doc = {
+            "schema": "note/1",
+            "transcript": "transcript.json",
+            "transform": None,
+        }
         retained = transcript_for(note_doc, note_path)
-        reconciled = reconcile_capture_provenance(note_doc, retained, note_path)
+        reconciled = reconcile_capture_provenance(
+            note_doc,
+            retained,
+            where=note_path.name,
+            allow_absent_legacy=True,
+        )
         retained_banner = capture_warning_markup(reconciled)
         if (
             'role="alert"' not in retained_banner
@@ -367,8 +355,13 @@ def check_capture_warning_renderer() -> None:
             capture_warnings=[],
         )
         try:
-            reconcile_capture_provenance(stripped, retained, note_path)
-        except SystemExit:
+            reconcile_capture_provenance(
+                stripped,
+                retained,
+                where=note_path.name,
+                allow_absent_legacy=True,
+            )
+        except ValueError:
             return
     raise SystemExit("a note was allowed to contradict its retained transcript")
 
@@ -2703,12 +2696,17 @@ def main() -> int:
             raise SystemExit(
                 f"{path}: expected one of {sorted(NOTE_SCHEMAS)}, "
                 f"got {doc.get('schema')!r}")
+        transcript = transcript_for(doc, path)
         try:
-            validate_artifact_pair(doc, path)
+            capture_doc = reconcile_capture_provenance(
+                doc,
+                transcript,
+                where=str(path),
+                allow_absent_legacy=True,
+            )
+            validate_artifact_pair(capture_doc, path, transcript)
         except ValueError as e:
             raise SystemExit(f"{path}: note pair refused: {e}") from e
-        transcript = transcript_for(doc, path)
-        capture_doc = reconcile_capture_provenance(doc, transcript, path)
         section, c = meeting_section(doc, path, transcript, capture_doc)
         sections.append(section)
         library.append(library_row(doc, capture_doc))

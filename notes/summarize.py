@@ -49,7 +49,18 @@ from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 
-from transcript import CHANNEL, NAMED, NONE, Transcript, Turn, load, qmsum_reference
+from transcript import (
+    CAPTURE_INTEGRITY_UNKNOWN_WARNING,
+    CAPTURE_TRANSCRIPT_SCHEMA,
+    CHANNEL,
+    FILE_TRANSCRIPT_SCHEMA,
+    NAMED,
+    NONE,
+    Transcript,
+    Turn,
+    load,
+    qmsum_reference,
+)
 
 OLLAMA = "http://localhost:11434"
 DEFAULT_MODEL = "llama3.1:latest"
@@ -3529,10 +3540,11 @@ UNTESTABLE = "untestable"  # too short to distinguish evidence from coincidence
 UNQUOTED = "unquoted"      # the claim offered no evidence at all
 
 
-def _artifact_transcript(artifact: Path, doc: dict) -> Transcript:
-    """Load the retained transcript in the exact transformed view an artifact names."""
-    t = load((artifact.parent / doc["transcript"]).resolve())
-    transform = doc["transform"]
+def _transform_artifact_transcript(
+    t: Transcript,
+    transform: str | None,
+) -> Transcript:
+    """Apply the exact transcript view named by a note artifact."""
     if transform == "strip":
         return t.strip_attribution()
     if transform == "as-channel":
@@ -3542,6 +3554,109 @@ def _artifact_transcript(artifact: Path, doc: dict) -> Transcript:
     if transform is not None:
         raise StructuredOutputError(f"unknown transcript transform {transform!r}")
     return t
+
+
+def _artifact_transcript_snapshot(
+    artifact: Path,
+    doc: dict,
+) -> tuple[Transcript, Path, str]:
+    """Load one stable retained transcript view and bind its exact file bytes."""
+    path = Path(os.path.abspath(artifact.parent / doc["transcript"]))
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    t = load(path)
+    after = hashlib.sha256(path.read_bytes()).hexdigest()
+    if before != after:
+        raise StructuredOutputError(
+            f"{path}: retained transcript changed while it was being loaded"
+        )
+    return _transform_artifact_transcript(t, doc["transform"]), path, after
+
+
+def _artifact_transcript(artifact: Path, doc: dict) -> Transcript:
+    """Load the retained transcript in the exact transformed view an artifact names."""
+    return _artifact_transcript_snapshot(artifact, doc)[0]
+
+
+def _assert_transcript_digest(path: Path, digest: str, where: str) -> None:
+    """Refuse a note write if its retained transcript changed under the operation."""
+    current = hashlib.sha256(path.read_bytes()).hexdigest()
+    if current != digest:
+        raise StructuredOutputError(
+            f"{where}: retained transcript changed before the note write completed"
+        )
+
+
+CAPTURE_PROVENANCE_FIELDS = (
+    "capture_health",
+    "capture_integrity_unknown",
+    "capture_warnings",
+)
+
+
+def _exact_json_equal(left, right) -> bool:
+    """Compare JSON values without Python's bool/int coercion."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return (
+            left.keys() == right.keys()
+            and all(_exact_json_equal(left[key], right[key]) for key in left)
+        )
+    if isinstance(left, list):
+        return (
+            len(left) == len(right)
+            and all(
+                _exact_json_equal(a, b)
+                for a, b in zip(left, right, strict=True)
+            )
+        )
+    return left == right
+
+
+def reconcile_capture_provenance(
+    doc: dict,
+    transcript: Transcript,
+    *,
+    where: str = "note artifact",
+    allow_absent_legacy: bool = False,
+) -> dict:
+    """Bind a note's capture claims to the retained transformed transcript.
+
+    Current artifacts carry all three fields and they must match exactly. A
+    pre-contract note/1 may omit the whole group; readers can derive a temporary
+    view from its retained transcript, and the first path that rewrites it
+    materialises those fields. Partial omission is never a legacy shape: it is a
+    contradictory artifact and is refused.
+    """
+    expected = {
+        "capture_health": deepcopy(transcript.capture_health),
+        "capture_integrity_unknown": transcript.capture_integrity_unknown,
+        "capture_warnings": list(transcript.capture_warnings),
+    }
+    present = {field for field in CAPTURE_PROVENANCE_FIELDS if field in doc}
+    if not present:
+        if allow_absent_legacy and doc.get("schema") == LEGACY_NOTE_SCHEMA:
+            return {**doc, **expected}
+        raise StructuredOutputError(
+            f"{where}: note is missing capture provenance"
+        )
+    missing = set(CAPTURE_PROVENANCE_FIELDS) - present
+    if missing:
+        raise StructuredOutputError(
+            f"{where}: note capture provenance is incomplete; missing "
+            f"{', '.join(sorted(missing))}"
+        )
+    for field, value in expected.items():
+        if not _exact_json_equal(doc[field], value):
+            raise StructuredOutputError(
+                f"{where}: note {field} disagrees with its retained transcript"
+            )
+    # Return a detached view even on the exact path. A reader may decorate its
+    # view, but it must not mutate the artifact or the transcript it was checked
+    # against through a shared nested object.
+    reconciled = dict(doc)
+    reconciled.update(expected)
+    return reconciled
 
 
 def _support_key(record: dict) -> tuple:
@@ -3788,13 +3903,18 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
             raise SystemExit(
                 f"{path}: no `transform`, so evidence coordinates cannot be resolved")
         try:
-            validate_artifact_pair(doc, path)
+            transcript = _artifact_transcript(path, doc)
+            doc = reconcile_capture_provenance(
+                doc,
+                transcript,
+                where=str(path),
+                allow_absent_legacy=True,
+            )
+            validate_artifact_pair(doc, path, transcript)
             if artifact_uses_source_evidence(doc):
-                transcript = _artifact_transcript(path, doc)
                 cites = structured_artifact_citations(doc, transcript)
                 claims = _claims_in_read_order(cites)
             else:
-                transcript = None
                 claims = [c for c in doc["claims"] if c["status"] == LOCATED]
         except (KeyError, TypeError, StructuredOutputError) as e:
             raise SystemExit(f"{path}: source evidence refused: {e}") from e
@@ -3939,15 +4059,43 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
 
 
 def _write_support_measurement(path: Path, doc: dict,
-                               transcript: Transcript | None) -> None:
+                               transcript: Transcript) -> None:
     """Validate and atomically persist support without disturbing the note pair."""
-    validate_note_render(doc)
-    if transcript is not None:
-        validate_support_measurement(doc, transcript)
-    _atomic_replace_text(
-        path, json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+    retained_transcript, transcript_path, transcript_digest = (
+        _artifact_transcript_snapshot(path, doc)
     )
-    validate_artifact_pair(doc, path)
+    doc = reconcile_capture_provenance(
+        doc,
+        retained_transcript,
+        where=str(path),
+        allow_absent_legacy=True,
+    )
+    reconcile_capture_provenance(
+        doc,
+        transcript,
+        where=f"{path} measured transcript",
+    )
+    validate_note_render(doc)
+    # Repair 4 also proves that the transcript used for measurement is still the
+    # retained evidence graph. Legacy support uses its stored quotes, while the
+    # capture fields above still come from the file as it exists at write time.
+    validate_support_measurement(doc, transcript)
+    validate_support_measurement(doc, retained_transcript)
+
+    def transcript_unchanged() -> None:
+        _assert_transcript_digest(
+            transcript_path, transcript_digest, str(path)
+        )
+
+    def written_support_is_valid() -> None:
+        validate_artifact_pair(doc, path, retained_transcript)
+
+    _atomic_replace_text(
+        path,
+        json.dumps(doc, ensure_ascii=False, indent=2) + "\n",
+        guard=transcript_unchanged,
+        validate=written_support_is_valid,
+    )
 
 
 def recheck(artifact: Path) -> dict:
@@ -3985,8 +4133,14 @@ def recheck(artifact: Path) -> dict:
                          f"resolved. Regenerate from the model.")
 
     try:
-        validate_artifact_pair(doc, artifact)
         t = _artifact_transcript(artifact, doc)
+        doc = reconcile_capture_provenance(
+            doc,
+            t,
+            where=str(artifact),
+            allow_absent_legacy=True,
+        )
+        validate_artifact_pair(doc, artifact, t)
         cites = (
             structured_artifact_citations(doc, t)
             if artifact_uses_source_evidence(doc) else check_citations(doc["note"], t)
@@ -4009,12 +4163,31 @@ def recheck(artifact: Path) -> dict:
                   f"located claim — re-run --measure-support")
         if fresh := now - judged:
             print(f"      {len(fresh)} located claim(s) have no support verdict")
-    doc["provenance"]["rechecked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    _atomic_replace_text(
-        artifact, json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+    retained_for_write, transcript_path, transcript_digest = (
+        _artifact_transcript_snapshot(artifact, doc)
     )
+    doc = reconcile_capture_provenance(
+        doc,
+        retained_for_write,
+        where=f"{artifact} before rewrite",
+    )
+    doc["provenance"]["rechecked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+    def transcript_unchanged() -> None:
+        _assert_transcript_digest(
+            transcript_path, transcript_digest, str(artifact)
+        )
+
+    def rewritten_note_is_valid() -> None:
+        validate_artifact_pair(doc, artifact, retained_for_write)
+
     try:
-        validate_artifact_pair(doc, artifact)
+        _atomic_replace_text(
+            artifact,
+            json.dumps(doc, ensure_ascii=False, indent=2) + "\n",
+            guard=transcript_unchanged,
+            validate=rewritten_note_is_valid,
+        )
     except StructuredOutputError as e:
         raise SystemExit(f"{artifact}: rewritten note pair refused: {e}") from e
 
@@ -4174,7 +4347,9 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
         "checks": {k: v for k, v in checks.items() if k != "passed"},
         "passed": checks["passed"],
     }
-    return artifact
+    return reconcile_capture_provenance(
+        artifact, transcript, where="new note artifact"
+    )
 
 
 def write_note_outputs(result: dict, transcript: Transcript, checks: dict,
@@ -4193,10 +4368,22 @@ def write_note_outputs(result: dict, transcript: Transcript, checks: dict,
         result, transcript, checks, transcript_path, out.parent, transform,
         markdown_path=markdown,
     )
+    # The file the artifact retains is the authority, not the in-memory object a
+    # caller happened to pass beside it. Re-load the declared transformed view
+    # before either output exists; a stale or mismatched caller cannot stamp its
+    # capture claims onto a different transcript.
+    retained_transcript, retained_path, retained_digest = (
+        _artifact_transcript_snapshot(artifact, doc)
+    )
+    doc = reconcile_capture_provenance(
+        doc,
+        retained_transcript,
+        where=f"{artifact} before write",
+    )
     markdown_text = validate_note_render(doc)
     if runtime_uses_source_evidence(result):
         # Artifact construction is complete before either public target can exist.
-        structured_artifact_citations(doc, transcript)
+        structured_artifact_citations(doc, retained_transcript)
     artifact_text = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
 
     # Close the ordinary preflight-to-write race before creating temporary content.
@@ -4206,8 +4393,15 @@ def write_note_outputs(result: dict, transcript: Transcript, checks: dict,
     installed: list[tuple[Path, Path]] = []
     replaced: list[tuple[Path, Path]] = []
     replacement_installs: list[tuple[Path, os.stat_result]] = []
+
+    def transcript_unchanged() -> None:
+        _assert_transcript_digest(
+            retained_path, retained_digest, str(artifact)
+        )
+
     try:
         markdown_temp = _write_private_temp(markdown, markdown_text)
+        transcript_unchanged()
         if replace:
             for target in (artifact, markdown):
                 if target.exists() or target.is_symlink():
@@ -4230,6 +4424,8 @@ def write_note_outputs(result: dict, transcript: Transcript, checks: dict,
                 os.link(temp, target)
                 installed.append((target, temp))
         _fsync_directory(out.parent)
+        validate_artifact_pair(doc, artifact, retained_transcript)
+        transcript_unchanged()
     except Exception as install_error:
         # A late no-clobber conflict must not strand the other half of a new pair.
         # Compare inodes before unlinking so a concurrent replacement is never removed.
@@ -4293,7 +4489,6 @@ def write_note_outputs(result: dict, transcript: Transcript, checks: dict,
                 with contextlib.suppress(FileNotFoundError):
                     temp.unlink()
 
-    validate_artifact_pair(doc, artifact)
     return doc, (markdown, artifact)
 
 
@@ -4388,8 +4583,13 @@ def validate_note_render(doc: dict, markdown_text: str | None = None) -> str:
     return canonical
 
 
-def validate_artifact_pair(doc: dict, artifact: Path) -> Path | None:
-    """Validate a JSON artifact and its declared sibling Markdown rendering."""
+def validate_artifact_pair(
+    doc: dict,
+    artifact: Path,
+    transcript: Transcript,
+) -> Path | None:
+    """Validate a note against its transcript and declared Markdown rendering."""
+    reconcile_capture_provenance(doc, transcript, where=str(artifact))
     canonical = validate_note_render(doc)
     render = doc.get("render")
     if render is None:
@@ -4466,15 +4666,56 @@ def _fsync_directory(path: Path) -> None:
         os.close(fd)
 
 
-def _atomic_replace_text(target: Path, text: str) -> None:
-    """Replace one file atomically from an owner-private sibling temporary."""
+def _atomic_replace_text(
+    target: Path,
+    text: str,
+    *,
+    guard=None,
+    validate=None,
+) -> None:
+    """Replace one file privately, rolling back a failed guarded install."""
     temp = _write_private_temp(target, text)
+    rollback = None
+    installed_stat = None
     try:
+        if guard is not None:
+            previous = target.read_bytes().decode("utf-8")
+            rollback = _write_private_temp(target, previous)
+            guard()
         os.replace(temp, target)
+        installed_stat = target.stat(follow_symlinks=False)
+        if validate is not None:
+            validate()
         _fsync_directory(target.parent)
+        if guard is not None:
+            guard()
+    except Exception:
+        if installed_stat is not None and rollback is not None:
+            try:
+                current = target.stat(follow_symlinks=False)
+                if (
+                    current.st_dev,
+                    current.st_ino,
+                ) != (
+                    installed_stat.st_dev,
+                    installed_stat.st_ino,
+                ):
+                    raise StructuredOutputError(
+                        "guarded note write failed after another process replaced "
+                        f"{target}; rollback refused"
+                    )
+                os.replace(rollback, target)
+                _fsync_directory(target.parent)
+            except Exception as rollback_error:
+                raise StructuredOutputError(
+                    "guarded note write failed and rollback was incomplete"
+                ) from rollback_error
+        raise
     finally:
-        with contextlib.suppress(FileNotFoundError):
-            temp.unlink()
+        for partial in (temp, rollback):
+            if partial is not None:
+                with contextlib.suppress(FileNotFoundError):
+                    partial.unlink()
 
 
 _STOPWORDS = {"the", "of", "and", "a", "on", "about", "for", "to", "in", "last",
@@ -4661,6 +4902,123 @@ def run_self_test() -> int:
     print(
         f"  [{'pass' if legacy_kept else 'FAIL'}] legacy unknown-integrity "
         "provenance survives every transcript transform"
+    )
+
+    with tempfile.TemporaryDirectory(prefix="capture-provenance-contract-") as tmp:
+        fixture_dir = Path(tmp)
+        generic_path = fixture_dir / "generic.json"
+        generic_path.write_text(json.dumps({
+            "schema": FILE_TRANSCRIPT_SCHEMA,
+            "source": "recording:generic fixture",
+            "attribution": NONE,
+            "turns": [{"text": "generic words", "start": 1.0}],
+        }))
+        legacy_path = fixture_dir / "legacy.json"
+        legacy_path.write_text(json.dumps({
+            "source": "legacy capture fixture",
+            "attribution": CHANNEL,
+            "turns": [{"text": "legacy words", "speaker": "Me", "start": 1.0}],
+        }))
+        failed_path = fixture_dir / "failed.json"
+        failed_path.write_text(json.dumps({
+            "schema": CAPTURE_TRANSCRIPT_SCHEMA,
+            "source": "failed current capture fixture",
+            "attribution": CHANNEL,
+            "turns": [{"text": "current words", "speaker": "Me", "start": 1.0}],
+            "capture_health": health_fixture,
+        }))
+        generic_loaded = load(generic_path)
+        legacy_loaded = load(legacy_path)
+        failed_loaded = load(failed_path)
+
+    def exact_capture_doc(transcript: Transcript) -> dict:
+        return {
+            "schema": STRUCTURED_NOTE_SCHEMA,
+            "capture_health": deepcopy(transcript.capture_health),
+            "capture_integrity_unknown": transcript.capture_integrity_unknown,
+            "capture_warnings": list(transcript.capture_warnings),
+        }
+
+    generic_capture_ok = (
+        generic_loaded.capture_health is None
+        and not generic_loaded.capture_integrity_unknown
+        and generic_loaded.capture_warnings == []
+        and reconcile_capture_provenance(
+            exact_capture_doc(generic_loaded), generic_loaded
+        )["capture_warnings"] == []
+    )
+    failures += not generic_capture_ok
+    print(
+        f"  [{'pass' if generic_capture_ok else 'FAIL'}] a generic file transcript "
+        "honestly carries no dual-capture health claim or unknown-integrity warning"
+    )
+
+    legacy_capture_ok = (
+        legacy_loaded.capture_health is None
+        and legacy_loaded.capture_integrity_unknown
+        and legacy_loaded.capture_warnings
+        == [CAPTURE_INTEGRITY_UNKNOWN_WARNING]
+        and reconcile_capture_provenance(
+            exact_capture_doc(legacy_loaded), legacy_loaded
+        )["capture_integrity_unknown"] is True
+    )
+    failures += not legacy_capture_ok
+    print(
+        f"  [{'pass' if legacy_capture_ok else 'FAIL'}] a schema-less legacy capture "
+        "remains readable only with unknown capture integrity"
+    )
+
+    failed_capture_ok = (
+        failed_loaded.capture_health == health_fixture
+        and not failed_loaded.capture_integrity_unknown
+        and failed_loaded.capture_warnings
+        and reconcile_capture_provenance(
+            exact_capture_doc(failed_loaded), failed_loaded
+        )["capture_health"] == health_fixture
+    )
+    failures += not failed_capture_ok
+    print(
+        f"  [{'pass' if failed_capture_ok else 'FAIL'}] a failed current capture "
+        "retains its exact failed-health evidence and warning"
+    )
+
+    absent_legacy_doc = {"schema": LEGACY_NOTE_SCHEMA}
+    derived_legacy_doc = reconcile_capture_provenance(
+        absent_legacy_doc,
+        legacy_loaded,
+        allow_absent_legacy=True,
+    )
+    partial_legacy_refused = False
+    current_absence_refused = False
+    try:
+        reconcile_capture_provenance(
+            {"schema": LEGACY_NOTE_SCHEMA, "capture_health": None},
+            legacy_loaded,
+            allow_absent_legacy=True,
+        )
+    except StructuredOutputError:
+        partial_legacy_refused = True
+    try:
+        reconcile_capture_provenance(
+            {"schema": STRUCTURED_NOTE_SCHEMA},
+            failed_loaded,
+            allow_absent_legacy=True,
+        )
+    except StructuredOutputError:
+        current_absence_refused = True
+    absent_legacy_ok = (
+        not (set(CAPTURE_PROVENANCE_FIELDS) & absent_legacy_doc.keys())
+        and derived_legacy_doc["capture_health"] is None
+        and derived_legacy_doc["capture_integrity_unknown"] is True
+        and derived_legacy_doc["capture_warnings"]
+        == [CAPTURE_INTEGRITY_UNKNOWN_WARNING]
+        and partial_legacy_refused
+        and current_absence_refused
+    )
+    failures += not absent_legacy_ok
+    print(
+        f"  [{'pass' if absent_legacy_ok else 'FAIL'}] an all-absent note/1 gets a "
+        "derived read-only view; partial legacy and absent current fields fail closed"
     )
 
     print("=== attribution check, positive and negative controls ===\n")
@@ -5729,6 +6087,22 @@ def run_self_test() -> int:
             Turn(text="and agreed to keep the exact source words", start=5.0),
         ],
     )
+
+    def write_fixture_transcript(path: Path, transcript: Transcript) -> None:
+        path.write_text(json.dumps({
+            "schema": FILE_TRANSCRIPT_SCHEMA,
+            "source": transcript.source,
+            "attribution": NONE,
+            "turns": [
+                {
+                    "text": turn.text,
+                    "speaker": turn.speaker,
+                    "start": turn.start,
+                }
+                for turn in transcript.turns
+            ],
+        }))
+
     original_chat = ollama_chat
     source_fixture_calls = 0
     try:
@@ -5894,18 +6268,24 @@ def run_self_test() -> int:
         ))
     )
     with tempfile.TemporaryDirectory(prefix="repair4-output-control-") as tmp:
-        output_dir = Path(tmp)
+        fixture_root = Path(tmp)
+        output_dir = fixture_root / "out"
+        output_dir.mkdir()
+        fixture_transcript_path = fixture_root / "fixture.json"
+        write_fixture_transcript(fixture_transcript_path, fixture_transcript)
         output_path = output_dir / "fixture.md"
         validate_output_target(output_path)
         written_doc, written_paths = write_note_outputs(
             staged_new, fixture_transcript,
             {"passed": verdict(structured_checks), **structured_checks},
-            Path("fixture.json"), output_path,
+            fixture_transcript_path, output_path,
         )
         written_names = {path.name for path in written_paths}
         actual_names = {path.name for path in output_dir.iterdir()}
         pair_path = validate_artifact_pair(
-            written_doc, output_path.with_suffix(".note.json")
+            written_doc,
+            output_path.with_suffix(".note.json"),
+            fixture_transcript,
         )
         pair_modes = {
             path.name: path.stat().st_mode & 0o777
@@ -5917,6 +6297,94 @@ def run_self_test() -> int:
             and output_path.read_text(encoding="utf-8") == canonical_markdown
         )
 
+        mismatched_capture = Transcript(
+            source=fixture_transcript.source,
+            attribution=fixture_transcript.attribution,
+            turns=[
+                Turn(text=turn.text, speaker=turn.speaker, start=turn.start)
+                for turn in fixture_transcript.turns
+            ],
+            capture_health=health_fixture,
+        )
+        mismatch_output = output_dir / "mismatched-capture.md"
+        before_mismatch = {path.name for path in output_dir.iterdir()}
+        try:
+            write_note_outputs(
+                staged_new,
+                mismatched_capture,
+                {"passed": verdict(structured_checks), **structured_checks},
+                fixture_transcript_path,
+                mismatch_output,
+            )
+            retained_mismatch_refused = False
+        except StructuredOutputError:
+            retained_mismatch_refused = True
+        retained_mismatch_refused = (
+            retained_mismatch_refused
+            and before_mismatch == {path.name for path in output_dir.iterdir()}
+            and not mismatch_output.exists()
+            and not mismatch_output.with_suffix(".note.json").exists()
+        )
+
+        fixture_transcript_bytes = fixture_transcript_path.read_bytes()
+        changed_fixture_transcript_bytes = json.dumps({
+            "schema": CAPTURE_TRANSCRIPT_SCHEMA,
+            "source": fixture_transcript.source,
+            "attribution": fixture_transcript.attribution,
+            "turns": [
+                {
+                    "text": turn.text,
+                    "speaker": turn.speaker,
+                    "start": turn.start,
+                }
+                for turn in fixture_transcript.turns
+            ],
+            "capture_health": health_fixture,
+        }).encode()
+        raced_output = output_dir / "raced-capture.md"
+        before_raced_write = {path.name for path in output_dir.iterdir()}
+        original_link_for_race = os.link
+        raced_link_calls = 0
+
+        def change_transcript_after_pair_install(source, target):
+            nonlocal raced_link_calls
+            result = original_link_for_race(source, target)
+            if Path(target) in {
+                raced_output,
+                raced_output.with_suffix(".note.json"),
+            }:
+                raced_link_calls += 1
+                if raced_link_calls == 2:
+                    fixture_transcript_path.write_bytes(
+                        changed_fixture_transcript_bytes
+                    )
+            return result
+
+        os.link = change_transcript_after_pair_install
+        try:
+            try:
+                write_note_outputs(
+                    staged_new,
+                    fixture_transcript,
+                    {"passed": verdict(structured_checks), **structured_checks},
+                    fixture_transcript_path,
+                    raced_output,
+                )
+                new_write_transcript_race_refused = False
+            except StructuredOutputError:
+                new_write_transcript_race_refused = True
+        finally:
+            os.link = original_link_for_race
+            fixture_transcript_path.write_bytes(fixture_transcript_bytes)
+        new_write_transcript_race_refused = (
+            new_write_transcript_race_refused
+            and raced_link_calls == 2
+            and before_raced_write
+            == {path.name for path in output_dir.iterdir()}
+            and not raced_output.exists()
+            and not raced_output.with_suffix(".note.json").exists()
+        )
+
         prior_pair = {
             path: path.read_bytes()
             for path in written_paths
@@ -5925,7 +6393,7 @@ def run_self_test() -> int:
             write_note_outputs(
                 staged_new, fixture_transcript,
                 {"passed": verdict(structured_checks), **structured_checks},
-                Path("fixture.json"), output_path,
+                fixture_transcript_path, output_path,
             )
             target_conflict_refused = False
         except StructuredOutputError:
@@ -5952,7 +6420,7 @@ def run_self_test() -> int:
             write_note_outputs(
                 staged_new, fixture_transcript,
                 {"passed": verdict(structured_checks), **structured_checks},
-                Path("fixture.json"), interrupted_output,
+                fixture_transcript_path, interrupted_output,
             )
             new_pair_rollback = False
         except OSError:
@@ -5987,7 +6455,7 @@ def run_self_test() -> int:
             write_note_outputs(
                 staged_new, fixture_transcript,
                 {"passed": verdict(structured_checks), **structured_checks},
-                Path("fixture.json"), output_path,
+                fixture_transcript_path, output_path,
                 replace=True,
             )
             replacement_rollback = False
@@ -6004,31 +6472,232 @@ def run_self_test() -> int:
                 for path, content in replacement_before.items()
             )
             and validate_artifact_pair(
-                written_doc, output_path.with_suffix(".note.json")
+                written_doc,
+                output_path.with_suffix(".note.json"),
+                fixture_transcript,
             ) == output_path
         )
 
         replaced_doc, _ = write_note_outputs(
             staged_new, fixture_transcript,
             {"passed": verdict(structured_checks), **structured_checks},
-            Path("fixture.json"), output_path,
+            fixture_transcript_path, output_path,
             replace=True,
         )
         replace_pair_ok = validate_artifact_pair(
-            replaced_doc, output_path.with_suffix(".note.json")
+            replaced_doc,
+            output_path.with_suffix(".note.json"),
+            fixture_transcript,
         ) == output_path
 
         output_path.write_text("tampered Markdown\n", encoding="utf-8")
         try:
             validate_artifact_pair(
-                replaced_doc, output_path.with_suffix(".note.json")
+                replaced_doc,
+                output_path.with_suffix(".note.json"),
+                fixture_transcript,
             )
             pair_tamper_refused = False
         except StructuredOutputError:
             pair_tamper_refused = True
         _atomic_replace_text(output_path, validate_note_render(replaced_doc))
         validate_artifact_pair(
-            replaced_doc, output_path.with_suffix(".note.json")
+            replaced_doc,
+            output_path.with_suffix(".note.json"),
+            fixture_transcript,
+        )
+
+        failed_transcript_path = output_dir / "failed-capture.json"
+        failed_transcript_path.write_text(json.dumps({
+            "schema": CAPTURE_TRANSCRIPT_SCHEMA,
+            # Structured stage receipts bind the source label as well as the
+            # rendered words. Keep it identical to the fixture whose receipts
+            # this no-inference persistence control reuses.
+            "source": fixture_transcript.source,
+            "attribution": fixture_transcript.attribution,
+            "turns": [
+                {
+                    "text": turn.text,
+                    "speaker": turn.speaker,
+                    "start": turn.start,
+                }
+                for turn in fixture_transcript.turns
+            ],
+            "capture_health": health_fixture,
+        }))
+        failed_transcript = load(failed_transcript_path)
+        failed_output = output_dir / "failed-capture.md"
+        failed_doc, _ = write_note_outputs(
+            staged_new,
+            failed_transcript,
+            {"passed": verdict(structured_checks), **structured_checks},
+            failed_transcript_path,
+            failed_output,
+        )
+        failed_artifact = failed_output.with_suffix(".note.json")
+        failed_artifact_bytes = failed_artifact.read_bytes()
+        failed_markdown_bytes = failed_output.read_bytes()
+        null_health = json.loads(json.dumps(failed_doc))
+        null_health["capture_health"] = None
+        false_integrity_state = json.loads(json.dumps(failed_doc))
+        false_integrity_state["capture_integrity_unknown"] = True
+        coerced_integrity_state = json.loads(json.dumps(failed_doc))
+        coerced_integrity_state["capture_integrity_unknown"] = 0
+        coerced_health_state = json.loads(json.dumps(failed_doc))
+        coerced_health_state["capture_health"]["usable"] = 0
+        hidden_warning = json.loads(json.dumps(failed_doc))
+        hidden_warning["capture_warnings"] = []
+        falsely_clean = json.loads(json.dumps(failed_doc))
+        falsely_clean.update({
+            "capture_health": None,
+            "capture_integrity_unknown": False,
+            "capture_warnings": [],
+        })
+        capture_tampers_refused = True
+        for candidate in (
+            null_health,
+            false_integrity_state,
+            coerced_integrity_state,
+            coerced_health_state,
+            hidden_warning,
+            falsely_clean,
+        ):
+            _atomic_replace_text(
+                failed_artifact,
+                json.dumps(candidate, ensure_ascii=False, indent=2) + "\n",
+            )
+            tampered_bytes = failed_artifact.read_bytes()
+            try:
+                recheck(failed_artifact)
+                capture_tampers_refused = False
+            except SystemExit:
+                pass
+            capture_tampers_refused = (
+                capture_tampers_refused
+                and failed_artifact.read_bytes() == tampered_bytes
+                and failed_output.read_bytes() == failed_markdown_bytes
+            )
+            _atomic_replace_text(
+                failed_artifact, failed_artifact_bytes.decode("utf-8")
+            )
+        support_capture_tamper = json.loads(json.dumps(coerced_integrity_state))
+        try:
+            _write_support_measurement(
+                failed_artifact, support_capture_tamper, failed_transcript
+            )
+            support_capture_tamper_refused = False
+        except StructuredOutputError:
+            support_capture_tamper_refused = True
+        failed_health_tamper_ok = (
+            capture_tampers_refused
+            and support_capture_tamper_refused
+            and failed_artifact.read_bytes() == failed_artifact_bytes
+            and failed_output.read_bytes() == failed_markdown_bytes
+            and validate_artifact_pair(
+                failed_doc, failed_artifact, failed_transcript
+            ) == failed_output
+        )
+
+        failed_transcript_bytes = failed_transcript_path.read_bytes()
+        changed_failed_transcript_bytes = json.dumps({
+            "schema": FILE_TRANSCRIPT_SCHEMA,
+            "source": failed_transcript.source,
+            "attribution": NONE,
+            "turns": [
+                {
+                    "text": turn.text,
+                    "speaker": turn.speaker,
+                    "start": turn.start,
+                }
+                for turn in failed_transcript.turns
+            ],
+        }).encode()
+        artifact_before_raced_recheck = failed_artifact.read_bytes()
+        original_replace_for_race = os.replace
+        raced_recheck_install = False
+
+        def change_transcript_after_recheck_install(source, target):
+            nonlocal raced_recheck_install
+            result = original_replace_for_race(source, target)
+            if (
+                not raced_recheck_install
+                and Path(target) == failed_artifact
+                and Path(source).name.endswith(".tmp")
+            ):
+                raced_recheck_install = True
+                failed_transcript_path.write_bytes(
+                    changed_failed_transcript_bytes
+                )
+            return result
+
+        os.replace = change_transcript_after_recheck_install
+        try:
+            try:
+                recheck(failed_artifact)
+                recheck_transcript_race_refused = False
+            except SystemExit:
+                recheck_transcript_race_refused = True
+        finally:
+            os.replace = original_replace_for_race
+            failed_transcript_path.write_bytes(failed_transcript_bytes)
+        recheck_transcript_race_refused = (
+            recheck_transcript_race_refused
+            and raced_recheck_install
+            and failed_artifact.read_bytes() == artifact_before_raced_recheck
+            and failed_output.read_bytes() == failed_markdown_bytes
+            and not list(
+                failed_artifact.parent.glob(
+                    f".{failed_artifact.name}.*.tmp"
+                )
+            )
+            and validate_artifact_pair(
+                failed_doc, failed_artifact, failed_transcript
+            ) == failed_output
+        )
+
+        legacy_transcript_path = output_dir / "legacy-capture.json"
+        legacy_transcript_path.write_text(json.dumps({
+            "source": verdict_t.source,
+            "attribution": verdict_t.attribution,
+            "turns": [
+                {
+                    "text": turn.text,
+                    "speaker": turn.speaker,
+                    "start": turn.start,
+                }
+                for turn in verdict_t.turns
+            ],
+        }))
+        retained_legacy = load(legacy_transcript_path)
+        legacy_output = output_dir / "legacy-capture.md"
+        legacy_written, _ = write_note_outputs(
+            ordered,
+            retained_legacy,
+            ordered_checks,
+            legacy_transcript_path,
+            legacy_output,
+        )
+        legacy_artifact = legacy_output.with_suffix(".note.json")
+        absent_legacy_artifact = json.loads(json.dumps(legacy_written))
+        for field in CAPTURE_PROVENANCE_FIELDS:
+            del absent_legacy_artifact[field]
+        _atomic_replace_text(
+            legacy_artifact,
+            json.dumps(
+                absent_legacy_artifact, ensure_ascii=False, indent=2
+            ) + "\n",
+        )
+        upgraded_legacy = recheck(legacy_artifact)
+        persisted_legacy = json.loads(legacy_artifact.read_text())
+        legacy_rewrite_upgrades = (
+            upgraded_legacy["capture_health"] is None
+            and upgraded_legacy["capture_integrity_unknown"] is True
+            and upgraded_legacy["capture_warnings"]
+            == [CAPTURE_INTEGRITY_UNKNOWN_WARNING]
+            and all(field in persisted_legacy for field in CAPTURE_PROVENANCE_FIELDS)
+            and validate_artifact_pair(
+                persisted_legacy, legacy_artifact, retained_legacy
+            ) == legacy_output
         )
 
         broken_output = output_dir / "broken.md"
@@ -6039,7 +6708,7 @@ def run_self_test() -> int:
             write_note_outputs(
                 broken_result, fixture_transcript,
                 {"passed": verdict(structured_checks), **structured_checks},
-                Path("fixture.json"), broken_output,
+                fixture_transcript_path, broken_output,
             )
             construction_refused = False
         except StructuredOutputError:
@@ -6106,6 +6775,31 @@ def run_self_test() -> int:
         and symlink_default_refused
         and symlink_replace_explicit
         and stale_sidecar_refused,
+    )
+    control(
+        "new note writes bind capture provenance to the retained transformed "
+        "transcript, not a caller's mismatched object",
+        retained_mismatch_refused,
+    )
+    control(
+        "new note-pair installation rolls back if the retained transcript changes "
+        "inside the write boundary",
+        new_write_transcript_race_refused,
+    )
+    control(
+        "note/2 failed capture health cannot be nulled, type-coerced, or made "
+        "clean before recheck or support rewrite",
+        failed_health_tamper_ok,
+    )
+    control(
+        "recheck rolls its note artifact back if the retained transcript changes "
+        "inside atomic replacement",
+        recheck_transcript_race_refused,
+    )
+    control(
+        "rewriting an all-absent legacy note/1 materialises the exact retained "
+        "capture provenance",
+        legacy_rewrite_upgrades,
     )
     receipt_tampers = []
     tampered_schema = json.loads(json.dumps(structured_doc))
@@ -6370,11 +7064,14 @@ def run_self_test() -> int:
         and support_surface_tamper_refused,
     )
     with tempfile.TemporaryDirectory(prefix="repair4-support-write-") as tmp:
-        support_markdown = Path(tmp) / "fixture.md"
+        support_dir = Path(tmp)
+        support_transcript_path = support_dir / "fixture.json"
+        write_fixture_transcript(support_transcript_path, fixture_transcript)
+        support_markdown = support_dir / "fixture.md"
         persisted_support_doc, _ = write_note_outputs(
             staged_new, fixture_transcript,
             {"passed": verdict(structured_checks), **structured_checks},
-            Path("fixture.json"), support_markdown,
+            support_transcript_path, support_markdown,
         )
         persisted_support_doc["support"] = valid_support_payload
         support_artifact = support_markdown.with_suffix(".note.json")
@@ -6382,6 +7079,62 @@ def run_self_test() -> int:
             support_artifact, persisted_support_doc, fixture_transcript
         )
         support_before_invalid = support_artifact.read_bytes()
+        support_transcript_bytes = support_transcript_path.read_bytes()
+        changed_support_transcript_bytes = json.dumps({
+            "schema": CAPTURE_TRANSCRIPT_SCHEMA,
+            "source": fixture_transcript.source,
+            "attribution": fixture_transcript.attribution,
+            "turns": [
+                {
+                    "text": turn.text,
+                    "speaker": turn.speaker,
+                    "start": turn.start,
+                }
+                for turn in fixture_transcript.turns
+            ],
+            "capture_health": health_fixture,
+        }).encode()
+        original_replace_for_support_race = os.replace
+        raced_support_install = False
+
+        def change_transcript_after_support_install(source, target):
+            nonlocal raced_support_install
+            result = original_replace_for_support_race(source, target)
+            if (
+                not raced_support_install
+                and Path(target) == support_artifact
+                and Path(source).name.endswith(".tmp")
+            ):
+                raced_support_install = True
+                support_transcript_path.write_bytes(
+                    changed_support_transcript_bytes
+                )
+            return result
+
+        os.replace = change_transcript_after_support_install
+        try:
+            try:
+                _write_support_measurement(
+                    support_artifact,
+                    persisted_support_doc,
+                    fixture_transcript,
+                )
+                support_transcript_race_refused = False
+            except StructuredOutputError:
+                support_transcript_race_refused = True
+        finally:
+            os.replace = original_replace_for_support_race
+            support_transcript_path.write_bytes(support_transcript_bytes)
+        support_transcript_race_refused = (
+            support_transcript_race_refused
+            and raced_support_install
+            and support_artifact.read_bytes() == support_before_invalid
+            and not list(
+                support_artifact.parent.glob(
+                    f".{support_artifact.name}.*.tmp"
+                )
+            )
+        )
         invalid_support_doc = json.loads(json.dumps(persisted_support_doc))
         invalid_support_doc["support"]["verdicts"][0]["supports"] = False
         try:
@@ -6394,7 +7147,7 @@ def run_self_test() -> int:
         support_write_ok = (
             support_artifact.stat().st_mode & 0o777 == 0o600
             and validate_artifact_pair(
-                persisted_support_doc, support_artifact
+                persisted_support_doc, support_artifact, fixture_transcript
             ) == support_markdown
             and json.loads(support_artifact.read_text())["support"]
             == valid_support_payload
@@ -6404,6 +7157,11 @@ def run_self_test() -> int:
     control(
         "support persistence is private, atomic, pair-checked, and validates before write",
         support_write_ok,
+    )
+    control(
+        "support persistence rolls back if the retained transcript changes inside "
+        "atomic replacement",
+        support_transcript_race_refused,
     )
     empty_artifact = json.loads(json.dumps(structured_doc))
     empty_artifact["evidence"] = {}
