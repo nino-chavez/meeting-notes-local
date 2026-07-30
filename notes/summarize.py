@@ -67,6 +67,11 @@ What was actually settled. Not what was discussed.
 ## Action items
 What someone committed to do next. Every one of them, routine included.
 
+## Proposed
+What was suggested, offered or asked for and NOT agreed to. Anything hedged — "maybe
+we should", "we could", "I think we ought to", "they are asking for" — belongs here and
+not under Decisions or Action items.
+
 ## Open questions
 What was raised and left unresolved.
 
@@ -80,6 +85,11 @@ Write the item on its own line and nothing else on it. Write the spoken words on
 the next line, indented, starting with the > character. ITEM IN YOUR OWN WORDS
 and SPOKEN WORDS COPIED EXACTLY name the two slots; do not write those words.
 Do not put angle brackets or square brackets around anything.
+
+Put an item where its spoken words put it, not where it would be most useful. Words
+that hedge, suggest or ask make it Proposed even when the idea is a good one and even
+when it plainly should have been agreed. A meeting that settled little produces a note
+that is mostly Proposed, and that is the correct note.
 
 The Summary section takes no quotes."""
 
@@ -509,6 +519,8 @@ _HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+(?P<title>\S.*?)[ \t]*$")
 # information and silently relabelling it would destroy that.
 _TYPES = {"decisions": "decision", "decision": "decision",
           "action items": "action", "actions": "action", "action": "action",
+          "proposed": "proposal", "proposals": "proposal",
+          "proposal": "proposal", "suggestions": "proposal",
           "open questions": "question", "questions": "question",
           "question": "question"}
 
@@ -1115,6 +1127,10 @@ The claim begins with what kind of thing it says it is. Honour that:
 - ACTION claims someone committed to do something. Words that raise it as a possibility
   do not support it. "we could just get a DAT machine" does not support "ACTION: Get a
   DAT machine".
+- PROPOSAL claims something was suggested, offered or asked for and NOT agreed to.
+  Hedged words support it: "maybe we should use rubber" supports "PROPOSAL: Rubber for
+  the case". Words that settle something do NOT — "okay let's go with the rubber then"
+  is stronger than the claim and does not support it.
 - QUESTION claims something was asked or left open.
 
 Answer NO when the words:
@@ -1169,6 +1185,13 @@ SUPPORT_FIXTURES = [
         "ACTION: Smaller battery ||| yeah um okay do that then, the smaller battery",
         ("QUESTION: Whether to record the rooms separately ||| what if we recorded "
          "the two rooms separately"),
+        # The new bucket, both directions. A PROPOSAL claim is supported by hedged words
+        # and NOT by words that settle the thing — an under-claim is as wrong as an
+        # over-claim, and without the second fixture the judge could pass everything by
+        # treating PROPOSAL as a weaker bar that anything clears.
+        "PROPOSAL: Rubber for the case ||| maybe we should use rubber for the case",
+        ("PROPOSAL: Smaller battery ||| we could probably get away with the smaller "
+         "battery"),
         # Contradiction: the words argue against the claim.
         ("ACTION: Burn CDs for every attendee ||| you know, i personally would not "
          "want a CD of my meeting"),
@@ -1178,6 +1201,9 @@ SUPPORT_FIXTURES = [
         ("ACTION: Offer the seminar to senior students ||| talking about the kind of "
          "thing that you were just talking about"),
         "DECISION: Market it abroad ||| non-English speaking countries",
+        # Stronger than the claim states, which is the inverse error and equally wrong:
+        # a note filing a settled decision as merely proposed is also inaccurate.
+        "PROPOSAL: Rubber for the case ||| okay let's go with the rubber then",
         # Supports only a weaker version than the claim states.
         "DECISION: Rubber chosen for the case ||| maybe we should use rubber for the case",
         ("ACTION: Get a DAT machine ||| we could have a fairly We could just get a "
@@ -1185,8 +1211,8 @@ SUPPORT_FIXTURES = [
         ("DECISION: World release matches the licensed one ||| i think that when we "
          "do that world release, it should be the same"),
         "ACTION: Write down the error message ||| maybe we should write it down",
-    ], "", [True, True, True, True, True, True,
-            False, False, False, False, False, False, False, False]),
+    ], "", [True, True, True, True, True, True, True, True,
+            False, False, False, False, False, False, False, False, False]),
 ]
 
 
@@ -1466,7 +1492,7 @@ def chunk_transcript(transcript: Transcript, target_words: int,
 
 
 _ITEM = re.compile(
-    r"^\s*(?:[-*]\s*)?(DECISION|ACTION|QUESTION)\s*:\s*(?P<text>[^|]+?)"
+    r"^\s*(?:[-*]\s*)?(DECISION|ACTION|PROPOSAL|QUESTION)\s*:\s*(?P<text>[^|]+?)"
     r"(?:\s*\|\s*(?P<quote>.+?))?\s*$", re.IGNORECASE)
 
 
@@ -2334,9 +2360,10 @@ def run_self_test() -> int:
         if not ok:
             print(f"          got {got} want {want}")
 
-    type_case("each of the three sections names its claims' kind",
-              "## Decisions\n- A.\n## Action items\n- B.\n## Open questions\n- C.\n",
-              ["decision", "action", "question"])
+    type_case("each section names its claims' kind",
+              "## Decisions\n- A.\n## Action items\n- B.\n## Proposed\n- C.\n"
+              "## Open questions\n- D.\n",
+              ["decision", "action", "proposal", "question"])
     type_case("an unrecognised heading keeps its own words rather than being forced",
               "## Risks\n- A.\n", ["risks"])
     type_case("an item before any heading has no kind rather than a guessed one",

@@ -1197,3 +1197,60 @@ worth reading at all; whether the claims that fail these checks are ones he woul
 wanted; whether 55 items on a 75-minute call is thoroughness or noise; and whether the
 `located`/`composed` distinction changes what he trusts. Those are all questions about a
 reader, and the corpus has no reader in it.
+
+---
+
+## A fourth bucket, and what it should and should not fix (written before the run)
+
+Four measurements found the notes' content wrong and none attempted a repair. This is
+the first repair, and its expected effect is recorded **before** it ran, because twice in
+this file's history a conclusion has survived a figure that undercut it. A prediction
+written afterwards is not a prediction.
+
+**The diagnosis.** Classifying all 25 non-supporting cases from the 6-of-31 measurement:
+
+| failure | count | what it looks like |
+|---|---|---|
+| **overstatement** | 11 | quote is apt, claim drops its hedge — "Get a DAT machine" from *"we could just get a DAT machine"* |
+| mis-selection | 9 | quote does not bear on the claim — "Offer professors and senior doctoral students" from *"talking about the kind of thing that you were just talking about"* |
+| category error | 4 | covid_4's petitions read into the record, filed as Decisions |
+| contradiction | 1 | *"I personally would not want a CD of my meeting"* under "Burn extra CD-ROMs for meeting attendees" |
+
+**So the largest class is the model having nowhere honest to put what it found.** Given
+Decisions, Action items and Open questions, a real quote saying "maybe we should X" has
+to become a decision, a commitment, or nothing. There was no bucket for *raised and not
+agreed*, and 11 items were forced up a level to fit.
+
+**The repair: a `Proposed` section**, with the test stated in the prompt — words that
+hedge, suggest or ask make an item Proposed even when the idea is good and even when it
+plainly should have been agreed, and a meeting that settled little correctly produces a
+note that is mostly Proposed.
+
+**Predicted effect, and its ceiling.** Overstatement (11) should move, and the petitions
+(4) may — a petition is a request, which is what Proposed is for, but that is reasoning
+about a label and the judge decides it, so it is not predicted either way. Mis-selection
+(9) and contradiction (1) **cannot** move: nothing about a new label changes a model
+attaching an unrelated quote. **Expected 17 of 31 supported, up to 21 if the petitions
+land in Proposed.** A result well above 21 means something other than the new bucket
+changed, and that would need explaining rather than celebrating.
+
+**Two other candidates, developed and not chosen yet.** *Invert the generation* — have
+the model find turns where something was settled and write the claim from those words,
+so a claim cannot drift from evidence it was derived from. That is the only one of the
+three that addresses mis-selection. And *gate at check time* — run the support judge
+inside the pipeline and drop or mark failing items, which costs a model call per item
+with a second model and trades recall for precision.
+
+**Why the fourth bucket goes first, and it is not that it is cheaper.** Shipping it
+alongside the inverted generation would make the next measurement uninterpretable — two
+changes addressing different failure classes, one number, no way to attribute the
+movement. Sequencing here buys attribution, which is the campsite carve-out's own reason
+rather than an appeal to effort.
+
+**One note on circularity, since the generator and the checker now share a rule.** The
+prompt states the hedge test and the support judge enforces it; that is the intended
+relationship — a checker verifying the generator honoured a contract. The protection that
+matters is that `SUPPORT_FIXTURES` are synthetic and drawn from no corpus meeting, so the
+judge's calibration is independent of the items being measured. That still holds after
+adding the two `PROPOSAL` fixtures, which cover both directions: hedged words support a
+proposal claim, and words that settle something do not.
