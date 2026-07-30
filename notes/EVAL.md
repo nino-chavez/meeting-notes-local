@@ -1616,37 +1616,38 @@ evidence after generation, which is the defect these repairs are meant to remove
 
 ## Repair 4: choose canonical evidence, then write the claim
 
-Audit correction registered 2026-07-30, before any Repair 4 inference: the first
-contract required the consolidator to write an uncited narrative `summary` before its
-evidence-covered `items`. That field could make claims about the meeting without a
-source reference, including when extraction returned no items, so it violated the
-repair's own evidence boundary. The final consolidation root contains only `items`.
-Local code adds a fixed `Evidence-bound note` wrapper and, for an empty result, the
-fixed statement `No evidence-bound claims were produced.` Neither is model-authored or
-asserts what happened in the meeting. This correction changes the registered design,
-not a measured result; no Repair 4 run existed when it was made.
+The current contract has one model-authored stage: extraction. A preflight version also
+asked the model to consolidate records, but the synthetic run recorded below proved that
+exact coverage was not a feasible prompt contract. That model stage never produced a
+Repair 4 artifact and is not part of the implementation.
 
-The same pre-inference audit closed three adjacent gaps. The durable graph hashes every
-extraction and consolidated claim, so changing note prose and `claims[]` together no
-longer leaves the declared evidence untouched. Consolidation may group at most three
-records, and only when their extraction claim text is byte-for-byte identical. It keeps
-each member ID and digest. That preserves distinct claim identities; it does not prove
-the consolidator's rewritten claim means the same thing, so the support check and human
-review still own that judgment. Repair 4 also writes no `.items.md` extraction sidecar:
-it does not persist every selected fragment as a second transcript-derived list. The
+Each extraction response contains only `source_fragment_ids`, `label`, and `claim`.
+Local code then performs deterministic normalization. Its claim identity is the
+JSON-decoded string after one exact outer-whitespace `str.strip()`; raw JSON spelling is
+not identity. It may group at most three records only when label, canonical claim UTF-8,
+and ordered `source_fragment_ids` are identical. The first occurrence keeps its position
+and canonical decoded claim. Equal prose attached to different evidence remains
+separate, and every extraction item appears exactly once. The artifact field remains
+named `consolidated_items` for compatibility, but no model authored that list.
+
+The durable graph hashes every extraction and normalized claim, so changing note prose
+and `claims[]` together no longer leaves the declared evidence untouched. This does not
+prove that an extraction claim fairly reads its selected words; the support check and
+human review still own that judgment. Repair 4 writes no `.items.md` extraction sidecar.
+It does not persist every selected fragment as a second transcript-derived list. The
 note still carries the primary evidence excerpt for each rendered claim. A retired
 sidecar already present beside `--out` refuses the run before inference; the tool does
 not silently delete it.
 
-Stage receipts now distinguish replayable evidence from a receipt. The exact validated
-`message.content` JSON is retained for every extraction and consolidation call. Those
-bodies' schema permits only IDs, labels, and claims; it has no source-text field and
-does not retain a second transcript copy. A claim may still reuse words from the
-transcript, so the artifacts remain private meeting data.
-`--recheck` decodes them again under the strict key-order and schema rules, reconstructs
-each extraction record from the retained transcript, reconstructs the exact
-consolidation input from the safe extraction JSON plus that transcript, and re-derives
-claim digests, membership, exact-once coverage, item order, and cardinality.
+Stage receipts distinguish model evidence from local work. The exact validated
+`message.content` JSON is retained for every extraction call. Its schema permits only
+IDs, labels, and claims; it has no source-text field and does not retain a second
+transcript copy. The final `local-normalization-receipt/1` records the deterministic
+contract, safe-input and durable-output digests, counts, coverage, and largest group. It
+has no model, schema, prompt, or response fields. `--recheck` decodes extraction again
+under the strict key-order and schema rules, reconstructs it from the retained
+transcript, reruns local normalization, and requires the output graph and receipt to
+match exactly.
 
 Two boundaries remain receipts rather than replayable evidence. The Ollama transport
 envelope is not retained, and the historical `/api/tags` response used to resolve the
@@ -1684,15 +1685,13 @@ exactly
 source fragment establishes only that those words were said; it does not establish that
 the resulting claim is a fair reading of them.
 
-The consolidator also selects evidence before writing its claim. Each response item is
-exactly `source_item_ids`, `label`, `claim`, in that order. Every extraction item must
-be covered exactly once across the output, labels may not be crossed, and every ID is
-constrained to the validated input set. The durable consolidation row is exactly
-`source_item_ids`, `source_claim_sha256s`, `source_fragment_ids`, `label`, and
-`claim_sha256`. The canonical fragment union and final quote are resolved locally
-through the covered extraction items. The compatibility quote is the first passage;
-the complete evidence set remains available to the support judge and product. The
-model cannot compose, repair, or transpose the quote.
+Normalization does not ask for another response. It walks validated extraction in first-
+occurrence order and groups only the exact canonical identity defined above. The durable
+normalized row is `source_item_ids`, `source_claim_sha256s`, `source_fragment_ids`,
+`label`, and `claim_sha256`. Its source-fragment sequence is the identical sequence
+shared by every member, never a union of different evidence. The final quote resolves
+locally through that sequence. No model can compose, repair, transpose, merge, or rewrite
+at this stage.
 
 Repair 4 artifacts use `note/2`; legacy `note/1` artifacts and readers remain supported.
 A `note/2` file missing its graph, stage responses, provenance, or render contract fails
@@ -1744,3 +1743,35 @@ Predictions, recorded before implementation or inference:
    quote composition; it does not prevent a model from choosing the wrong real fragment or
    overstating what that fragment means. Those remain acceptance questions for the
    calibrated support pass and human inspection after all structural gates pass.
+
+### Synthetic preflight refused model consolidation
+
+The registered predictions above remain unchanged. Before any Bmr006 inference, a live
+`llama3.1` synthetic run validated extraction and then stopped at consolidation:
+
+    consolidation: structured output refused:
+    consolidation may merge only byte-identical extraction claims
+
+No note or artifact was written; the requested output directory stayed empty. The model
+had merged non-byte-identical extraction claims despite an explicit contract forbidding
+that operation. This is preflight evidence about feasibility, not a corpus result. A
+prompted model merge is not a reliable implementation of exact coverage.
+
+Repair 4 therefore no longer makes a consolidation model call. After strict extraction
+decoding and evidence attachment, local code performs one deterministic normalization:
+it may group up to three items only when their label, canonical decoded claim UTF-8, and
+ordered `source_fragment_ids` are all identical. Canonical means the JSON-decoded claim
+after one exact outer-whitespace `str.strip()`; two raw JSON strings can therefore share
+one canonical identity. The first occurrence keeps its position and canonical claim.
+Equal prose attached to different evidence remains separate. Every validated extraction
+item appears in exactly one output group.
+
+The final stage is a `local-normalization-receipt/1`, not a simulated model receipt. It
+records the normalization contract and digest, safe input and durable output digests,
+counts, coverage, and largest observed group. It carries no model, schema, prompt, or
+response fields. Recheck rebuilds extraction from retained safe JSON plus the transcript,
+runs the same local normalization, and requires the durable output and local receipt to
+match exactly. Only extraction stages carry model receipts.
+
+This correction removes a feasibility failure before spending a Bmr006 run. It does not
+change the registered corpus outcome predictions or establish note quality.
