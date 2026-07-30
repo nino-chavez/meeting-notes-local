@@ -119,7 +119,13 @@ is no display scale, because there is no marketing surface inside this app.
 
 ## Composition
 
-- The window opens on the last meeting's note. There is no dashboard.
+- The window opens on the notes library with the most recent note already rendered
+  beside it — real content in the first viewport, and still the operator's choice
+  which note they came for. There is no dashboard. `DIRECTION.md § Constraints`
+  carries the reason and the evidence: an earlier version of this line said the
+  window opens *on* the last note, which is the pattern the operator rejected in a
+  sibling project ("rather than assuming i want to go straight back to the last
+  job/library/project").
 - One action per surface. The consent notification is the strict case: record,
   decline, never-for-this-app — and nothing else competes with them.
 - Progressive disclosure. The note is the summary; the transcript is on demand.

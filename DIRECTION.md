@@ -36,8 +36,8 @@ dark, dense, metered. Not the soft pastel SaaS notetaker.
 STORY: Dormant, alert, armed, running, settled. One indicator carries the whole
 arc; the window is only where it lands.
 
-FIRST VIEWPORT: The last meeting's note, already written. Never an empty
-dashboard, never a welcome card.
+FIRST VIEWPORT: The library, the last note already written beside it. Real
+content, and the choice of which. Never an empty dashboard, never a welcome card.
 
 FORM: Dark neutral ramp, monospace transcript, no shadows, no ambient motion.
 The single accent is reserved for live capture and appears nowhere else.

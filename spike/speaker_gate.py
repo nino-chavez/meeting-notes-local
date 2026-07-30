@@ -595,6 +595,65 @@ def min_resolvable(target_frr: float) -> int:
     return int(np.ceil(1.0 / target_frr))
 
 
+# A judgement, and labelled as one rather than dressed up as a measurement. The
+# evidence that single-sitting thresholds run over-tight came from labelled corpora
+# with real time between enrolment and test; it puts no number on how much time is
+# enough. An hour is the smallest gap where "a different sitting" is plausibly true
+# of a room, a seating position, a gain setting and a voice. A different day is
+# better and is what the README asks for.
+MIN_SITTING_GAP_S = 3600
+
+
+def _sitting_problems(manifest: list[dict]) -> list[str]:
+    """Whether these recordings are really from separate sittings.
+
+    Distinct audio digests were the original test and they are not sufficient:
+    slicing one recording into chunks produces distinct digests for every chunk
+    while carrying none of the session-to-session variation the plural exists for —
+    same room, same gain, same position, same voice, same minute. The check passed
+    and the profile was worse than one honest sitting, because a threshold measured
+    leave-one-*sitting*-out across fabricated sittings claims cross-session evidence
+    it does not have.
+
+    A capture window is the fact that separates the two cases, so `write_leg_segments`
+    records one and this reads it. Chunks of one recording share it.
+
+    Material with no `captured_at` predates that field and cannot be checked either
+    way. It is refused rather than assumed good, because the failure it would hide —
+    a threshold that deletes the operator from his own meeting — is worse than the
+    inconvenience of re-recording. `--experimental` accepts it and marks the profile.
+    """
+    import datetime as dt
+
+    stamps = []
+    for m in manifest:
+        raw = m.get("captured_at")
+        if not raw:
+            return [(f"{m['audio']} does not record when it was captured, so nothing "
+                     f"establishes it as a separate sitting from the others. "
+                     f"Recordings made before that field existed cannot be checked; "
+                     f"re-record, or pass --experimental.")]
+        try:
+            stamps.append((dt.datetime.fromisoformat(raw), m))
+        except ValueError:
+            return [(f"{m['audio']} records captured_at {raw!r}, which is not a "
+                     f"timestamp this can compare.")]
+
+    stamps.sort(key=lambda s: s[0])
+    out = []
+    for (t1, m1), (t2, m2) in pairwise(stamps):
+        gap = (t2 - t1).total_seconds()
+        if gap < MIN_SITTING_GAP_S:
+            out.append(
+                f"{Path(m1['audio']).name} and {Path(m2['audio']).name} were captured "
+                f"{gap / 60:.0f} minutes apart"
+                + (" — the same capture window, so these are pieces of one recording "
+                   "rather than two sittings" if gap == 0 else "")
+                + f". Separate sittings means at least {MIN_SITTING_GAP_S // 3600}h "
+                  f"apart, and a different day is what the measured bias is about.")
+    return out
+
+
 # And above the resolvable floor there is still thin. Thirty is where a sample
 # quantile stops moving by more than a hundredth when one observation is added or
 # removed, measured on this project's own score distributions. Between the floor
@@ -725,6 +784,60 @@ def save_profile(path: Path, profile: Profile, threshold: float, *,
     tmp.replace(path)
 
 
+def verify_provenance(path: Path, doc: dict) -> None:
+    """Re-derive the enrolment contract from what the profile records about itself.
+
+    `enforce_enrollment` runs in `run_calibrate` — the *producing* boundary — and
+    nothing else calls it. But the gate's real trust boundary is here:
+    `dual_capture.load_voiceprint` calls `load_profile`, and a profile can arrive by
+    any route. Hand-edited JSON, an older file, a caller using `save_profile`
+    directly, or a copy from another machine all reached the gate with the contract
+    unchecked. Verified: a one-sitting profile with no negative-speaker material and
+    four held-out scores, `experimental: false`, loaded and gated as production.
+
+    So `experimental: false` is a claim, and this checks it instead of believing it.
+    That is the workspace's own audit rule turned on this project's artifact — an
+    artifact asserting it was verified is not verification.
+
+    Everything needed is already in the file, because `save_profile` records the
+    sittings manifest and the operating point. Nothing here re-measures audio; it
+    re-runs the arithmetic over the record and refuses a mismatch. A profile marked
+    experimental is allowed through, because that marker is surfaced at every capture
+    and in the transcript — the override's whole purpose is to stay visible.
+    """
+    op = doc.get("operating_point") or {}
+    if op.get("experimental"):
+        return
+    target = op.get("target_frr")
+    if target is None:
+        raise SystemExit(
+            f"{path} records no target_frr, so nothing states which operating point "
+            f"its threshold is. An unnamed operating point cannot be checked against "
+            f"the material that produced it.")
+    problems = _sitting_problems(doc.get("sittings") or [])
+    if len(doc.get("sittings") or []) < 2:
+        problems.append(f"{len(doc.get('sittings') or [])} sitting(s) recorded, and a "
+                        f"threshold needs material from at least two")
+    held = op.get("n_operator")
+    floor = min_resolvable(float(target))
+    if held is None:
+        problems.append("no n_operator, so nothing says how many held-out scores the "
+                        "quantile was taken over")
+    elif held < floor:
+        problems.append(f"{held} held-out scores cannot express a {float(target):.0%} "
+                        f"false-reject rate, which needs at least {floor}")
+    if op.get("false_admit_rate") is None:
+        problems.append("no false_admit_rate, so nothing states what this threshold "
+                        "admits of a voice that is not the operator")
+    if problems:
+        raise SystemExit(
+            f"\n  {path} presents itself as a measured profile, and its own record "
+            f"does not support that:\n"
+            + "".join(f"\n    - {p}" for p in problems)
+            + "\n\n  Re-enrol from material that meets the contract, or re-enrol with "
+              "--experimental so the weakening is recorded and surfaced.")
+
+
 def load_profile(path: Path) -> tuple[Profile, float, dict]:
     """Read a saved voiceprint, its threshold, and the manifest behind them.
 
@@ -760,6 +873,8 @@ def load_profile(path: Path) -> tuple[Profile, float, dict]:
     # A cosine threshold outside [-1, 1] can never be met or never be missed, and
     # NaN is met by nothing at all — see _finite.
     threshold = _finite(f"{path}: threshold", doc["threshold"], -1.0, 1.0)
+    # And the enrolment contract, re-derived from the record rather than believed.
+    verify_provenance(Path(path), doc)
     # Recorded so the transcript can say which profile gated it. Computed here
     # rather than stored inside, because a digest of a file cannot live in it.
     doc["_profile_sha256"] = ab.sha256(Path(path))
@@ -1083,9 +1198,17 @@ def run_self_test() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         pp = Path(tmp) / "voiceprint.json"
-        point = {"threshold": 0.61, "target_frr": 0.05, "n_sittings": 2}
+        # A fixture that satisfies the contract, because load_profile now re-derives
+        # it. The earlier minimal fixture is what the new check caught first.
+        point = {"threshold": 0.61, "target_frr": 0.05, "n_sittings": 2,
+                 "n_operator": 24, "false_admit_rate": 0.0}
+        good_sittings = [
+            {"audio": "a.wav", "audio_sha256": "aaa",
+             "captured_at": "2026-07-20T09:00:00+0000"},
+            {"audio": "b.wav", "audio_sha256": "bbb",
+             "captured_at": "2026-07-22T14:00:00+0000"}]
         save_profile(pp, operator, 0.61, operating_point=point,
-                     sittings=[{"audio": "a.wav"}, {"audio": "b.wav"}])
+                     sittings=good_sittings)
         back, thresh, doc = load_profile(pp)
         check(
             "a profile round-trips through the file with its centroid intact",
@@ -1108,6 +1231,55 @@ def run_self_test() -> int:
             "how many sittings built it hides the one bias that matters",
             _raises(lambda: save_profile(pp, operator, 0.61, operating_point=point,
                                          sittings=[]), ValueError),
+        )
+
+        # The contract is re-derived HERE, not only where the profile is produced.
+        # enforce_enrollment runs in run_calibrate and nothing else calls it, while
+        # the gate's real trust boundary is load_profile — dual_capture goes through
+        # it. Verified before this existed: a one-sitting profile with no negative
+        # material and four held-out scores, experimental:false, loaded and gated as
+        # production. `experimental: false` is a claim; these check it.
+        def edited(**over) -> Path:
+            doc = json.loads(pp.read_text())
+            for k, v in over.items():
+                if k == "sittings":
+                    doc["sittings"] = v
+                else:
+                    doc["operating_point"][k] = v
+            q = Path(tmp) / f"edited-{abs(hash(tuple(sorted(over))))}.json"
+            q.write_text(json.dumps(doc))
+            return q
+
+        check(
+            "a hand-edited one-sitting profile does not load as production",
+            _raises(lambda: load_profile(edited(sittings=good_sittings[:1])),
+                    SystemExit),
+        )
+        check(
+            "nor one whose two sittings share a capture window",
+            _raises(lambda: load_profile(edited(sittings=[
+                good_sittings[0],
+                {**good_sittings[1], "captured_at": good_sittings[0]["captured_at"]},
+            ])), SystemExit),
+        )
+        check(
+            "nor one with too few held-out scores for the rate it claims",
+            _raises(lambda: load_profile(edited(n_operator=4)), SystemExit),
+        )
+        check(
+            "nor one that never priced what it admits of another voice",
+            _raises(lambda: load_profile(edited(false_admit_rate=None)), SystemExit),
+        )
+        check(
+            "nor one that does not say which operating point it is",
+            _raises(lambda: load_profile(edited(target_frr=None)), SystemExit),
+        )
+        check(
+            "but an experimental profile loads, because that marker is surfaced "
+            "at every capture and hiding it is the only thing that would help",
+            not _raises(lambda: load_profile(edited(
+                sittings=good_sittings[:1], n_operator=4, false_admit_rate=None,
+                experimental=True)), SystemExit),
         )
 
         wrong_space = json.loads(pp.read_text())
@@ -1389,65 +1561,6 @@ def run_calibrate(args) -> int:
               f"{chosen['threshold']:.3f} at {args.target_frr:.0%} operator-dropped, "
               f"{len(sittings)} sitting(s), {len(own)} held-out scores")
     return 0
-
-
-# A judgement, and labelled as one rather than dressed up as a measurement. The
-# evidence that single-sitting thresholds run over-tight came from labelled corpora
-# with real time between enrolment and test; it puts no number on how much time is
-# enough. An hour is the smallest gap where "a different sitting" is plausibly true
-# of a room, a seating position, a gain setting and a voice. A different day is
-# better and is what the README asks for.
-MIN_SITTING_GAP_S = 3600
-
-
-def _sitting_problems(manifest: list[dict]) -> list[str]:
-    """Whether these recordings are really from separate sittings.
-
-    Distinct audio digests were the original test and they are not sufficient:
-    slicing one recording into chunks produces distinct digests for every chunk
-    while carrying none of the session-to-session variation the plural exists for —
-    same room, same gain, same position, same voice, same minute. The check passed
-    and the profile was worse than one honest sitting, because a threshold measured
-    leave-one-*sitting*-out across fabricated sittings claims cross-session evidence
-    it does not have.
-
-    A capture window is the fact that separates the two cases, so `write_leg_segments`
-    records one and this reads it. Chunks of one recording share it.
-
-    Material with no `captured_at` predates that field and cannot be checked either
-    way. It is refused rather than assumed good, because the failure it would hide —
-    a threshold that deletes the operator from his own meeting — is worse than the
-    inconvenience of re-recording. `--experimental` accepts it and marks the profile.
-    """
-    import datetime as dt
-
-    stamps = []
-    for m in manifest:
-        raw = m.get("captured_at")
-        if not raw:
-            return [(f"{m['audio']} does not record when it was captured, so nothing "
-                     f"establishes it as a separate sitting from the others. "
-                     f"Recordings made before that field existed cannot be checked; "
-                     f"re-record, or pass --experimental.")]
-        try:
-            stamps.append((dt.datetime.fromisoformat(raw), m))
-        except ValueError:
-            return [(f"{m['audio']} records captured_at {raw!r}, which is not a "
-                     f"timestamp this can compare.")]
-
-    stamps.sort(key=lambda s: s[0])
-    out = []
-    for (t1, m1), (t2, m2) in pairwise(stamps):
-        gap = (t2 - t1).total_seconds()
-        if gap < MIN_SITTING_GAP_S:
-            out.append(
-                f"{Path(m1['audio']).name} and {Path(m2['audio']).name} were captured "
-                f"{gap / 60:.0f} minutes apart"
-                + (" — the same capture window, so these are pieces of one recording "
-                   "rather than two sittings" if gap == 0 else "")
-                + f". Separate sittings means at least {MIN_SITTING_GAP_S // 3600}h "
-                  f"apart, and a different day is what the measured bias is about.")
-    return out
 
 
 def enforce_enrollment(manifest: list[dict], own: list[float],
