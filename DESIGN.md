@@ -166,6 +166,35 @@ The three-runtime cost is real and is the strongest argument for A. It is
 accepted because two of the three already exist: the Python daemon is
 `local-dictation`, and the Swift sidecar is required regardless.
 
+### The menubar item has a reference implementation, and a defect to avoid
+
+`~/Workspace/dev/tools/local-dictation/menubar.py` is 63 lines of `rumps` driving a
+menubar item over the same launchd daemon pattern this app needs, with
+`com.local-dictation.menubar.plist` beside it. Per the workspace's
+canonical-pattern-first rule an internal working implementation ranks with vendor
+documentation, so the daemon lifecycle and the launchctl integration are copied from
+there rather than derived.
+
+**What is not copied is how it learns the state.** It polls `launchctl` on a
+three-second timer and renders two glyphs, `◉` and `○`. Two states is right for a
+dictation toggle and wrong here — this app has seven — but the polling is the part
+that would be a defect rather than a simplification. `DIRECTION.md`'s thesis is that
+one bit of state must be readable at a glance and trustworthy, and
+`docs/screens-and-states.md` requires `degraded` to be distinguishable from
+`recording` without a click. A three-second poll means up to three seconds of a
+capture displaying as healthy after a leg has died. The state has to be pushed from
+the capture process, and the poll can only be a backstop for a daemon that died
+without reporting.
+
+**The menubar glyph sits outside the design-QA net either way, and that is not a
+consequence of this decision.** The resolver and the impeccable detector read CSS
+custom properties and rendered DOM; a status item is neither, under Tauri's tray API
+or under `rumps`. `docs/screens-and-states.md` already says the menubar item is not a
+template and is specified directly. So the Tauri choice above buys enforceability for
+the windows, and the one surface most sessions never look past is held to this
+document by review rather than by a scan — which is worth stating plainly rather than
+discovering when the first scan reports clean.
+
 ---
 
 ## Engineering baseline
