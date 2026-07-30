@@ -335,6 +335,75 @@ gone.
 
 ---
 
+## Future research opportunity — meeting evidence as product input
+
+**Status: research candidate, not a current product commitment.** This note app is
+beginning to look like one source-specific spoke in the broader knowledge-capture and
+retrieval work explored by `se-docs-frontdoor` and its successor, `docracles`.
+`local-meeting-notes` would still own the narrow job it is designed for: capture a
+meeting locally and preserve enough evidence to check what the note says. The broader
+system would decide how that evidence relates to product work, who can approve the
+relationship, and how it becomes findable later.
+
+### Concrete case
+
+The operator is already building a product. Its current goals, requirements,
+decisions, assumptions, and open questions exist somewhere outside this app. They then
+meet with a customer or user and collect feedback independently of that product work.
+
+After the meeting note is ready, the useful question is not only "what happened?" It
+is:
+
+> What did this conversation reveal that may inform what we build next?
+
+A useful result would identify candidate product inputs such as:
+
+- an intent or goal the person stated directly;
+- an intent, goal, or unmet need inferred from what they described;
+- evidence that supports or challenges an existing product assumption;
+- a possible opportunity, constraint, or change in priority; or
+- no supported product implication.
+
+Every candidate must link back to the exact meeting evidence behind it and to the
+product context it may affect. It must also preserve three different claims that are
+easy to collapse and dangerous to confuse:
+
+| Layer | Example | Authority |
+|---|---|---|
+| **Meeting evidence** | "The customer said they reconcile this by hand every Friday." | The cited transcript turns support what was said; capture gaps remain visible. |
+| **Derived intent or goal** | "They may be trying to reduce recurring reconciliation work." | A labelled inference to review, never rewritten as the customer's own words. |
+| **Proposed product consequence** | "This may support prioritising automated reconciliation." | A product proposal that requires a human decision against the rest of the product evidence. |
+
+The handoff is the opportunity. The meeting app produces evidence-preserving notes.
+The wider knowledge system can turn permitted work exhaust into candidate records,
+retain their provenance, route consequential inferences for review, and later answer
+questions such as "which customer evidence supports this feature?" or "which user
+goals conflict with the current requirement?" Neither system has to pretend that a
+single meeting comment is already roadmap authority.
+
+### What research must settle before this becomes roadmap work
+
+1. **Product binding:** how a meeting is connected to the correct product, initiative,
+   feature, requirement, or open question without guessing from vocabulary alone.
+2. **Explicit versus inferred meaning:** what evidence is sufficient to call something
+   a stated goal, and how weaker extrapolations are labelled and reviewed.
+3. **Traceability:** whether a reviewer can move from a proposed product consequence
+   to the derived intent, the cited meeting words, and the capture-quality limits.
+4. **Aggregation and conflict:** how repeated signals, contradictory customers,
+   recency, and product strategy affect a candidate without manufacturing consensus.
+5. **Human authority:** where accept, edit, reject, and defer happen before any
+   requirement, specification, backlog, or authoritative product record changes.
+6. **Value:** whether the candidates find useful product evidence that a person would
+   otherwise miss, without creating more review work or false implications than they
+   save.
+
+The minimum guardrail is simple: this path may propose a connection, but it cannot
+make the product decision. A partial transcript is not a complete meeting record, an
+inference is not a quote, one person's feedback is not consensus, and a generated
+candidate does not have authority to edit the product.
+
+---
+
 ## The one decision that resolves J1 against J5
 
 J1's defence against a confident partial note is tracing a claim back to the words
