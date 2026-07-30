@@ -1235,6 +1235,52 @@ def sha256(path):
     return h.hexdigest()
 
 
+def write_session_manifest(out_dir: Path, status: str, started_at: str) -> dict:
+    """Atomically mark whether one unique capture directory is usable.
+
+    The directory is created before audio devices open, so a crash can leave a
+    legitimate partial recording. Absence of a transcript is not enough to call
+    that failure: ``--no-transcribe`` intentionally writes none. This manifest is
+    the one machine-readable completion boundary.
+    """
+    if status not in {"incomplete", "complete", "abandoned"}:
+        raise ValueError(f"invalid capture session status: {status!r}")
+    artifacts = []
+    for path in sorted(out_dir.iterdir()):
+        if path.name == "session.json" or not path.is_file():
+            continue
+        artifacts.append({
+            "name": path.name,
+            "bytes": path.stat().st_size,
+            "sha256": sha256(path),
+            "mode": f"{stat.S_IMODE(path.stat().st_mode):04o}",
+        })
+    payload = {
+        "schema": "capture-session/1",
+        "status": status,
+        "started_at": started_at,
+        "finalized_at": (
+            time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            if status in {"complete", "abandoned"} else None
+        ),
+        "artifacts": artifacts,
+    }
+    target = out_dir / "session.json"
+    fd, temporary = tempfile.mkstemp(prefix=".session-", suffix=".json", dir=out_dir)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write((json.dumps(payload, indent=2) + "\n").encode())
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        target.chmod(0o600)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+    return payload
+
+
 # The calibration protocol. An echo-cancellation experiment needs two things no
 # ordinary capture supplies: a stretch of the far end playing while the operator
 # is silent, to fit on, and per-interval ground truth about who was talking, to
@@ -1729,9 +1775,21 @@ def self_test_output_directory() -> bool:
         first_explicit = prepare_output_dir(str(explicit)) == explicit.resolve()
         probe = explicit / "private.json"
         write_private_text(probe, '{"text":"private"}')
+        started = "2026-07-30T12:00:00-0500"
+        write_session_manifest(explicit, "incomplete", started)
+        manifest = write_session_manifest(explicit, "complete", started)
+        stored_manifest = json.loads((explicit / "session.json").read_text())
         private_modes = (
             stat.S_IMODE(explicit.stat().st_mode) == 0o700
             and stat.S_IMODE(probe.stat().st_mode) == 0o600
+            and stat.S_IMODE((explicit / "session.json").stat().st_mode) == 0o600
+        )
+        finalized = (
+            manifest == stored_manifest
+            and stored_manifest["status"] == "complete"
+            and stored_manifest["started_at"] == started
+            and [row["name"] for row in stored_manifest["artifacts"]] == ["private.json"]
+            and stored_manifest["artifacts"][0]["sha256"] == sha256(probe)
         )
         try:
             prepare_output_dir(str(explicit))
@@ -1749,10 +1807,11 @@ def self_test_output_directory() -> bool:
             repo_refused = False
 
     ok = (
-        fresh_default and first_explicit and private_modes
+        fresh_default and first_explicit and private_modes and finalized
         and reuse_refused and repo_refused
     )
-    print(f"  [{'pass' if ok else 'FAIL'}] capture output is private and never reused")
+    print(f"  [{'pass' if ok else 'FAIL'}] capture output is private, finalized, "
+          "and never reused")
     return ok
 
 
@@ -1844,6 +1903,8 @@ def main():
         out_dir = prepare_output_dir(args.out)
     except OutputDirectoryError as exc:
         ap.error(str(exc))
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    write_session_manifest(out_dir, "incomplete", started_at)
     print(f"capture output → {out_dir}")
 
     shown_at = {}                    # phase index -> mic-clock time it appeared
@@ -1898,6 +1959,9 @@ def main():
     report(mic_leg, tap_leg, args, out_dir,
            None if abandoned.is_set() else phases,
            None if abandoned.is_set() else shown_at)
+    final_status = "abandoned" if abandoned.is_set() else "complete"
+    write_session_manifest(out_dir, final_status, started_at)
+    print(f"  session manifest → {out_dir / 'session.json'} ({final_status})")
     return 1 if abandoned.is_set() else 0
 
 

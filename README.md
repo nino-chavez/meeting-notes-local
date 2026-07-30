@@ -227,7 +227,9 @@ Capture both legs, measure drift and bleed, print a labelled transcript:
 Every capture requires a new directory. An existing `--out` path is refused so
 rerunning a command cannot truncate an earlier meeting. If `--out` is omitted, the
 CLI creates an owner-only session directory under
-`~/Library/Application Support/local-meeting-notes/captures`.
+`~/Library/Application Support/local-meeting-notes/captures`. `session.json` is
+written atomically at the end; anything left `incomplete` is recovery material, not
+a successful meeting.
 
 `--no-transcribe` measures without transcribing, which needs only numpy and
 sounddevice and skips the 1.6 GB Whisper download entirely. Plain
