@@ -2173,6 +2173,7 @@ def _ground_truth_controls() -> bool:
         #     And the notes half surfaces it. A warning that stops at the JSON is the
         #     same failure one layer down from a warning that stops at the terminal.
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notes"))
+        import summarize
         import transcript as nt
 
         loaded_note = nt.load_capture(gated_p)
@@ -2194,11 +2195,33 @@ def _ground_truth_controls() -> bool:
               (2, 0.21), shown="2 turns, one marked")
         check("and an ungated turn carries no gate keys at all",
               set(marked_doc["turns"][0]) == {"start", "end", "speaker", "text"})
-        rendered = nt.load_capture(both_p).render()
+        marked_t = nt.load_capture(both_p)
+        rendered = marked_t.render()
         check("but the model is handed only what the gate accepted",
               ("the part he said" in rendered,
                "someone else" in rendered), (True, False),
               shown="kept in, gated out")
+        check("the gated turn is still loaded, so it can be overruled",
+              [t.text for t in marked_t.gated_turns],
+              ["the part someone else said"])
+        check("and the report's count agrees with the turns held back",
+              len(marked_t.gated_turns), 1)
+
+        #     Every transform rebuilds Turn objects, and the first version of this
+        #     filtered inside render() while leaving gated turns in `turns` — so
+        #     strip_attribution reconstructed the room's speech without the mark and
+        #     fed it back to the model. The split is structural now; these check that
+        #     no reshaping can undo it.
+        for name, made in (("strip_attribution", marked_t.strip_attribution()),
+                           ("as_channel", marked_t.as_channel("Me")),
+                           ("simulate_bleed", marked_t.simulate_bleed())):
+            check(f"{name} cannot reconstruct a gated turn",
+                  "someone else" in made.render(), False)
+        #     Windowing counts turns to size its slices, so a stretch where only the
+        #     room spoke would otherwise form a window that renders empty.
+        slices = summarize.chunk_transcript(marked_t, target_words=3, overlap_words=0)
+        check("and no window is built from gated turns alone",
+              all(s.render().strip() for s in slices), shown=f"{len(slices)} slices")
         check("and turns a co-located-speaker alert into a human warning",
               any("recurring voice" in w for w in nt.Transcript(
                   source="x", attribution="channel",

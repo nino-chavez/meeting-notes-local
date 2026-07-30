@@ -1057,7 +1057,11 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
 
     print("\n=== checks ===\n")
     print(f"  source        {transcript.source}")
-    print(f"  turns         {len(transcript.turns)}")
+    # The visible count, and the held-back count beside it when there is one. A bare
+    # count here disagreed with the transcript on disk, which holds both.
+    held = (f"  ({len(transcript.gated_turns)} held back by the voiceprint gate, "
+            f"still in the transcript)" if transcript.gated_turns else "")
+    print(f"  turns         {len(transcript.turns)}{held}")
     print(f"  model         {result['model']}  in {result['elapsed_s']:.1f}s")
 
     # Before the fabrication checks, because this one is about what is MISSING from

@@ -39,18 +39,32 @@ class Turn:
     text: str
     speaker: str | None = None
     start: float | None = None
-    # The capture's voiceprint gate judged this not to be the operator. Carried
-    # rather than dropped at the loader, because the substrate keeps everything and
-    # the renderer decides what the model sees — the operator can overrule a gate
-    # decision only against a record that still contains it.
-    gated: bool = False
 
 
 @dataclass
 class Transcript:
     source: str
     attribution: str
+    # Only what the model may see. Turns the capture's voiceprint gate marked as not
+    # the operator are NOT in here — they are in `gated_turns`, and the separation is
+    # structural on purpose.
+    #
+    # The first version of this filtered gated turns inside `render()` and left them
+    # in `turns`, which put the obligation to remember on every transform. It was
+    # already broken when written: `strip_attribution` rebuilds each Turn to drop the
+    # speaker, so `--strip` reconstructed the room's speech without the mark and fed
+    # it back to the model. `as_channel` and `simulate_bleed` rebuild turns too, and
+    # `chunk_transcript` sizes windows by counting them.
+    #
+    # This is the same argument the attribution contract already makes one line down:
+    # the difference between instructing something not to happen and making it unable
+    # to. Four call sites remembering a rule is an instruction. A field they cannot
+    # reach is a fact.
     turns: list[Turn] = field(default_factory=list)
+    # The gated turns themselves, kept so the operator can overrule a gate that
+    # removed a colleague. Deliberately not part of any transform's output: a
+    # transform's job is to reshape what the model sees.
+    gated_turns: list[Turn] = field(default_factory=list)
     # What the capture's voiceprint gate did, when there was one. Carried through
     # rather than dropped at the loader because the gate can delete a co-located
     # participant, and `docs/screens-and-states.md` requires that warning to reach
@@ -98,18 +112,11 @@ class Transcript:
         difference between instructing a model not to do something and making it
         unable to; the mechanical checks in summarize.py depend on the latter.
 
-        Gated turns are excluded here, and the same reasoning decides where. The
-        capture no longer removes them — it marks them, so the operator can overrule
-        a gate that deleted a colleague — which means something downstream has to
-        keep them out of the prompt. Doing it in the renderer rather than the loader
-        is what lets both be true at once: the record holds every word, and the model
-        is handed only what the gate accepted. An instruction not to summarise
-        certain lines would be a request; omitting them is a fact.
+        Gated turns need no filtering here: they are not in `turns` at all. See the
+        field comment for why that is structural rather than a convention.
         """
         lines = []
         for t in self.turns:
-            if t.gated:
-                continue
             if self.attribution == NONE or not t.speaker:
                 lines.append(f"- {t.text}")
             else:
@@ -225,14 +232,17 @@ def load_capture(path: Path) -> Transcript:
     bleed arrives as `none` and gets the unattributed contract automatically.
     """
     data = json.loads(path.read_text())
+
+    def turn(t: dict) -> Turn:
+        return Turn(text=t["text"], speaker=t.get("speaker"), start=t.get("start"))
+
+    # Split at the boundary, once. Everything downstream operates on `turns` and
+    # therefore cannot leak a gated turn into a prompt, however it reshapes them.
     return Transcript(
         source=data.get("source", path.stem),
         attribution=data["attribution"],
-        turns=[
-            Turn(text=t["text"], speaker=t.get("speaker"), start=t.get("start"),
-                 gated=bool(t.get("gated")))
-            for t in data["turns"]
-        ],
+        turns=[turn(t) for t in data["turns"] if not t.get("gated")],
+        gated_turns=[turn(t) for t in data["turns"] if t.get("gated")],
         gate=data.get("voiceprint"),
     )
 
