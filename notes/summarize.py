@@ -1817,6 +1817,7 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
     for path in artifacts:
         doc = json.loads(path.read_text())
         claims = [c for c in doc["claims"] if c["status"] == LOCATED]
+        verdicts = []
         print(f"  {doc['meeting']['id']}: {len(claims)} located of "
               f"{len(doc['claims'])} claims")
         for c in claims:
@@ -1835,6 +1836,21 @@ def measure_support(artifacts: list[Path], model: str, num_ctx: int,
             # Every verdict shows its quote, supporting ones included. A reader checking
             # a rate needs to see the cases on both sides of it.
             print(f"                 turn {c['turn']}: {c['quote'][:88]!r}")
+            verdicts.append({"claim": c["claim"], "quote": c["quote"],
+                             "supports": verdict})
+
+        # Written into the artifact so the measurement is reusable instead of a console
+        # run somebody has to remember. Content-addressed on claim and quote rather than
+        # keyed by position: `recheck` rebuilds `claims` from the citation buckets, and a
+        # verdict stored on a claim would be silently dropped the next time it ran.
+        doc["support"] = {
+            "judge": model,
+            "calibration": real["agreement"],
+            "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "verdicts": verdicts,
+        }
+        path.write_text(json.dumps(doc, indent=2) + "\n")
+        print(f"    wrote {len(verdicts)} verdict(s) into {path.name}")
 
     judged = supported + unsupported
     print(f"\n  {supported} of {judged} located quotes support their claim"
@@ -1890,6 +1906,14 @@ def recheck(artifact: Path) -> dict:
     # uncorrected pass mark.
     was = doc["passed"]
     doc["passed"] = verdict(doc["checks"])
+    if support := doc.get("support"):
+        judged = {(v["claim"], v["quote"]) for v in support["verdicts"]}
+        now = {(c["claim"], c["quote"]) for c in doc["claims"] if c["status"] == LOCATED}
+        if stale := judged - now:
+            print(f"      {len(stale)} stored support verdict(s) no longer match any "
+                  f"located claim — re-run --measure-support")
+        if fresh := now - judged:
+            print(f"      {len(fresh)} located claim(s) have no support verdict")
     doc["provenance"]["rechecked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     artifact.write_text(json.dumps(doc, indent=2) + "\n")
 

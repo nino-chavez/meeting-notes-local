@@ -1174,3 +1174,26 @@ something earns it.
 
 **31 claims, 3 meetings, one judge.** The per-kind rows are shown so the split is visible,
 not so a rate can be read off 4 questions or 8 actions.
+
+**The verdicts are written into the artifact, so the surface can stop implying more than
+was checked.** `--measure-support` records them under `support`, content-addressed on
+claim and quote rather than keyed by position — `recheck` rebuilds `claims` from the
+citation buckets, so a verdict stored on a claim would be dropped the next time it ran,
+and `recheck` now reports when stored verdicts and located claims have parted company. A
+located claim on a note that has not been measured says so in those words rather than
+looking clean.
+
+### What the corpus has left to give
+
+This is the fourth measurement in a row to find the notes' *content* failing rather than
+their presentation: sections are not the model's to choose, `Decisions` mostly does not
+hold decisions, and most located evidence does not support its claim. Every one was found
+by inspecting artifacts, and this file's own boundary has not moved — a corpus can show
+that a note is wrong and cannot show whether a note is *useful to the person who was in
+the meeting*.
+
+What only the dogfood run settles: whether a note about the operator's own meeting is
+worth reading at all; whether the claims that fail these checks are ones he would have
+wanted; whether 55 items on a 75-minute call is thoroughness or noise; and whether the
+`located`/`composed` distinction changes what he trusts. Those are all questions about a
+reader, and the corpus has no reader in it.

@@ -192,7 +192,41 @@ def trust_bar(c: dict[str, int]) -> str:
             f'claims can be checked against the words{tail}</span>')
 
 
-def claim_row(claim: dict, i: int, meeting: str) -> str:
+def support_line(claim: dict, support: dict | None) -> str:
+    """Whether the located words support this claim, when that has been measured.
+
+    Absent by default and absent honestly: the measurement costs a model call per claim
+    with a second model, so a note carries it only after `--measure-support` has run. A
+    surface that showed nothing here would let a located quote keep implying more than it
+    establishes, which is what the `verified` rename was for — so where the verdict
+    exists it is rendered, and where it does not the claim says the question is unasked
+    rather than passed.
+    """
+    if claim["status"] != "located":
+        return ""
+    if not support:
+        return ('<p class="support unmeasured">whether these words support the claim '
+                'has not been measured on this note</p>')
+    key = (claim["claim"], claim.get("quote"))
+    for v in support["verdicts"]:
+        if (v["claim"], v["quote"]) == key:
+            if v["supports"] is None:
+                return ('<p class="support unmeasured">the judge returned no verdict on '
+                        'whether these words support the claim</p>')
+            if v["supports"]:
+                return (f'<p class="support yes">the words support this claim '
+                        f'<span class="by">judged by {esc(support["judge"])}, '
+                        f'calibrated {esc(support["calibration"])}</span></p>')
+            return (f'<p class="support no">these words do <strong>not</strong> support '
+                    f'this claim &mdash; they contradict it, are about something else, '
+                    f'or support only a weaker version '
+                    f'<span class="by">judged by {esc(support["judge"])}, '
+                    f'calibrated {esc(support["calibration"])}</span></p>')
+    return ('<p class="support unmeasured">no support verdict recorded for this '
+            'claim</p>')
+
+
+def claim_row(claim: dict, i: int, meeting: str, support: dict | None = None) -> str:
     mark, word, color, why = STATES[claim["status"]]
     quote = claim.get("quote")
     turn = claim.get("turn")
@@ -224,6 +258,7 @@ def claim_row(claim: dict, i: int, meeting: str) -> str:
         # directly above, so the colour is never carrying the state alone.
         body.append(f'<blockquote class="quote" style="--state:{color}">{at}'
                     f'<span class="qtext">{esc(quote)}</span></blockquote>')
+    body.append(support_line(claim, support))
     return f'<li class="claim claim-{esc(claim["status"])}" id="c-{esc(meeting)}-{i}">' \
            + "".join(body) + "</li>"
 
@@ -288,7 +323,9 @@ def meeting_section(doc: dict, note_path: Path) -> tuple[str, dict]:
     cited = {cl["turn"] for cl in doc["claims"] if cl.get("turn") is not None}
     prov = doc["provenance"]
 
-    claims = "".join(claim_row(cl, i, m["id"]) for i, cl in enumerate(doc["claims"]))
+    support = doc.get("support")
+    claims = "".join(claim_row(cl, i, m["id"], support)
+                     for i, cl in enumerate(doc["claims"]))
     path = ("two passes over "
             f"{prov['slices']} slices" if prov["passes"] == 2 else "a single pass")
 
@@ -484,6 +521,11 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
                   align-items: baseline; }}
   .claim-state .mark {{ color: var(--state); }}
   .claim-state .word {{ color: var(--state); white-space: nowrap; }}
+  .support {{ margin: 8px 0 0; font-size: 11px; line-height: 1.5; }}
+  .support.no {{ color: var(--semantic-error); }}
+  .support.yes {{ color: var(--neutral-200); }}
+  .support.unmeasured {{ color: var(--neutral-500); font-style: italic; }}
+  .support .by {{ color: var(--neutral-500); font-style: normal; }}
   .quote {{ margin: 9px 0 0; padding: 8px 10px; background: var(--surface-base);
             border-left: 2px solid var(--state); border-radius: 0 4px 4px 0;
             font-family: var(--mono); font-size: 12px; color: var(--neutral-200); }}
