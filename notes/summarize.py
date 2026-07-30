@@ -284,8 +284,18 @@ CHANNEL_LEAK_PATTERNS = [
 
 
 def _ollama_payload(model: str, system: str, user: str, num_ctx: int,
-                    response_format: dict | None = None) -> dict:
+                    response_format: dict | None = None,
+                    num_predict: int | None = None) -> dict:
     """Build the documented /api/chat request without making a network call."""
+    if response_format is not None and num_predict is None:
+        raise StructuredOutputError(
+            "schema-constrained inference requires a bounded num_predict")
+    if num_predict is not None and (
+        isinstance(num_predict, bool)
+        or not isinstance(num_predict, int)
+        or num_predict <= 0
+    ):
+        raise StructuredOutputError("num_predict must be a positive integer")
     payload = {
         "model": model,
         "messages": [
@@ -300,6 +310,8 @@ def _ollama_payload(model: str, system: str, user: str, num_ctx: int,
             "temperature": 0.0,
         },
     }
+    if num_predict is not None:
+        payload["options"]["num_predict"] = num_predict
     if response_format is not None:
         # Ollama's documented /api/chat contract accepts a JSON schema directly at
         # `format`; do not stringify it or silently fall back to grammar-free text.
@@ -314,6 +326,7 @@ def ollama_chat(
     num_ctx: int,
     timeout: int,
     response_format: dict | None = None,
+    num_predict: int | None = None,
 ):
     """Call Ollama, optionally requiring a JSON-schema response.
 
@@ -322,14 +335,26 @@ def ollama_chat(
     ``decode_records`` below: JSON Schema cannot express duplicate object keys or
     the evidence-before-claim generation order.
     """
-    body = json.dumps(_ollama_payload(model, system, user, num_ctx, response_format)).encode()
+    body = json.dumps(_ollama_payload(
+        model, system, user, num_ctx, response_format, num_predict
+    )).encode()
     req = urllib.request.Request(
         f"{OLLAMA}/api/chat", data=body, headers={"Content-Type": "application/json"}
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
+    except TimeoutError:
+        raise SystemExit(
+            f"Ollama /api/chat timed out after {timeout}s; "
+            "no response was accepted"
+        ) from None
     except urllib.error.URLError as e:
+        if isinstance(e.reason, TimeoutError) or "timed out" in str(e.reason).lower():
+            raise SystemExit(
+                f"Ollama /api/chat timed out after {timeout}s; "
+                "no response was accepted"
+            ) from None
         raise SystemExit(
             f"cannot reach Ollama at {OLLAMA} ({e.reason}).\n"
             "Start it with `ollama serve`, and check the model is pulled:\n"
@@ -1726,11 +1751,34 @@ STRUCTURED_NOTE_CONTRACT = {
     "without_claims": "No evidence-bound claims were produced.",
     "model_authored_narrative": False,
 }
-STRUCTURED_RUN_CONTRACT = "structured-run/2"
-STRUCTURED_STAGE_RECEIPT = "structured-stage-receipt/3"
+STRUCTURED_RUN_CONTRACT = "structured-run/3"
+STRUCTURED_STAGE_RECEIPT = "structured-stage-receipt/4"
 LOCAL_NORMALIZATION_RECEIPT = "local-normalization-receipt/1"
 SOURCE_EVIDENCE_CONTRACT = "source-evidence/1"
 MAX_NORMALIZATION_GROUP = 3
+MAX_STRUCTURED_CLAIM_CHARS = 160
+MAX_EXTRACTION_ITEMS_PER_SLICE = 48
+EXTRACTION_NUM_PREDICT_BASE = 64
+EXTRACTION_NUM_PREDICT_PER_ITEM = 192
+MAX_EXTRACTION_NUM_PREDICT = 8192
+EXTRACTION_OUTPUT_CONTRACT = {
+    "schema": "bounded-extraction-output/1",
+    "max_items_formula": (
+        f"min(visible_source_fragments, {MAX_EXTRACTION_ITEMS_PER_SLICE})"
+    ),
+    "max_items_per_slice": MAX_EXTRACTION_ITEMS_PER_SLICE,
+    "claim_max_chars": MAX_STRUCTURED_CLAIM_CHARS,
+    "num_predict_formula": (
+        f"min({MAX_EXTRACTION_NUM_PREDICT}, {EXTRACTION_NUM_PREDICT_BASE} + "
+        f"{EXTRACTION_NUM_PREDICT_PER_ITEM} * max_items)"
+    ),
+    "num_predict_base": EXTRACTION_NUM_PREDICT_BASE,
+    "num_predict_per_item": EXTRACTION_NUM_PREDICT_PER_ITEM,
+    "num_predict_cap": MAX_EXTRACTION_NUM_PREDICT,
+    "cap_behavior": (
+        "done_reason=length or incomplete valid JSON is refused"
+    ),
+}
 LOCAL_NORMALIZATION_CONTRACT = {
     "schema": "exact-overlap-normalization/1",
     "input_order": "validated extraction first-occurrence order",
@@ -1855,6 +1903,34 @@ def resolve_fragment(fragment: dict, transcript: Transcript, view_digest: str) -
     return exact
 
 
+def extraction_item_capacity(visible_source_fragments: int) -> int:
+    """Cap one slice above three times the observed Bmr006 extraction density."""
+    if (
+        isinstance(visible_source_fragments, bool)
+        or not isinstance(visible_source_fragments, int)
+        or visible_source_fragments < 0
+    ):
+        raise StructuredOutputError(
+            "visible source fragment count must be a nonnegative integer")
+    return min(visible_source_fragments, MAX_EXTRACTION_ITEMS_PER_SLICE)
+
+
+def extraction_num_predict(visible_source_fragments: int) -> int:
+    """Bound generation from the evidence offered to one extraction call.
+
+    The allowance is 64 tokens for the JSON envelope plus 192 for each permitted
+    item. At most 48 items are permitted, and 8,192 tokens is the independent
+    final stop. A length stop or incomplete JSON refuses the stage rather than
+    treating a prefix as a smaller extraction.
+    """
+    capacity = extraction_item_capacity(visible_source_fragments)
+    return min(
+        MAX_EXTRACTION_NUM_PREDICT,
+        EXTRACTION_NUM_PREDICT_BASE
+        + EXTRACTION_NUM_PREDICT_PER_ITEM * capacity,
+    )
+
+
 def extraction_format(fragment_ids: list[str]) -> dict:
     """Constrain one extraction response to references visible in that slice."""
     item = {
@@ -1870,14 +1946,24 @@ def extraction_format(fragment_ids: list[str]) -> dict:
                 "uniqueItems": True,
             },
             "label": {"type": "string", "enum": list(_LABEL_VALUES)},
-            "claim": {"type": "string", "minLength": 1},
+            "claim": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_STRUCTURED_CLAIM_CHARS,
+            },
         },
     }
     return {
         "type": "object",
         "additionalProperties": False,
         "required": ["items"],
-        "properties": {"items": {"type": "array", "items": item}},
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": item,
+                "maxItems": extraction_item_capacity(len(fragment_ids)),
+            },
+        },
     }
 
 
@@ -1936,8 +2022,14 @@ def _text(value: object, where: str) -> str:
 def _extract_item(value: object, where: str) -> dict:
     keys = ("source_fragment_ids", "label", "claim")
     item = _object(value, keys, where)
-    for key in ("label", "claim"):
-        item[key] = _text(item[key], f"{where}.{key}")
+    item["label"] = _text(item["label"], f"{where}.label")
+    if (
+        isinstance(item["claim"], str)
+        and len(item["claim"]) > MAX_STRUCTURED_CLAIM_CHARS
+    ):
+        raise StructuredOutputError(
+            f"{where}.claim: exceeds {MAX_STRUCTURED_CLAIM_CHARS} characters")
+    item["claim"] = _text(item["claim"], f"{where}.claim")
     fragment_ids = item["source_fragment_ids"]
     if not isinstance(fragment_ids, list) or not 1 <= len(fragment_ids) <= 3:
         raise StructuredOutputError(
@@ -1972,6 +2064,9 @@ def decode_records(raw: str, stage: str, *,
     if allowed_fragment_ids is None:
         raise StructuredOutputError(
             "extraction: visible source fragment IDs are required")
+    if len(doc["items"]) > extraction_item_capacity(len(allowed_fragment_ids)):
+        raise StructuredOutputError(
+            "extraction.items: exceeds the bounded capacity for this slice")
     allowed = set(allowed_fragment_ids)
     items = [
         _extract_item(item, f"extraction.items[{i}]")
@@ -2051,8 +2146,24 @@ def _valid_sha256(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+def _validate_extraction_completion(response: object, num_predict: int) -> None:
+    """Reject a token-limited prefix even when the server closed valid JSON."""
+    if not isinstance(response, dict):
+        raise StructuredOutputError("Ollama extraction response is not an object")
+    if response.get("done") is not True:
+        raise StructuredOutputError(
+            "Ollama extraction response did not prove completion")
+    if response.get("done_reason") == "length":
+        raise StructuredOutputError(
+            f"extraction reached its {num_predict}-token output limit")
+    if response.get("done_reason") != "stop":
+        raise StructuredOutputError(
+            "Ollama extraction response has no recognized completion reason")
+
+
 def _response_provenance(source: str, ordinal: int, response: dict,
                          schema: dict, model_identity: dict, num_ctx: int,
+                         num_predict: int,
                          system: str, user: str, reference_context: dict,
                          response_cardinality: dict) -> dict:
     """Retain one validated extraction JSON reply, never a fake local stage."""
@@ -2065,7 +2176,11 @@ def _response_provenance(source: str, ordinal: int, response: dict,
         "model": model_identity["requested"],
         "resolved_model": model_identity["name"],
         "model_digest": model_identity["digest"],
-        "options": {"num_ctx": num_ctx, "temperature": 0.0},
+        "options": {
+            "num_ctx": num_ctx,
+            "temperature": 0.0,
+            "num_predict": num_predict,
+        },
         "schema": schema,
         "schema_sha256": _json_sha256(schema),
         "system_prompt_sha256": _sha256(system),
@@ -2584,9 +2699,11 @@ Each item object MUST write its keys in this exact order: `source_fragment_ids`,
 `label`, `claim`. `source_fragment_ids` comes first and contains one to three IDs
 offered in this slice, in transcript order, with no duplicate. Use more than one only
 when the claim genuinely depends on words from multiple turns or fragments. `label` is
-one of the four allowed uppercase values. `claim` is your short reading of those
-fragments' words. Do not copy source text into any field. Do not return markdown,
-headings, comments, or any key not in the schema."""
+one of the four allowed uppercase values. `claim` is one short, atomic reading of those
+fragments' words, at most 160 Unicode characters. Split distinct claims rather than
+writing a longer one. Do not copy source text into any field. Emit compact JSON with no
+insignificant whitespace. Do not return markdown, headings, comments, or any key not in
+the schema."""
 
 def _structured_system(transcript: Transcript) -> str:
     contract = CONTRACTS[transcript.attribution]
@@ -2793,6 +2910,7 @@ def _validate_structured_contract(contract: dict, evidence: dict) -> tuple[int, 
         "schema", "evidence_contract", "extraction_receipt_contract",
         "normalization_receipt_contract", "normalization_contract",
         "normalization_contract_sha256",
+        "extraction_output_contract", "extraction_output_contract_sha256",
         "target_words", "overlap_words", "num_ctx", "temperature",
         "model_identity_validation",
         "input_sources", "covered_sources", "output_records", "rendered_claims",
@@ -2812,6 +2930,13 @@ def _validate_structured_contract(contract: dict, evidence: dict) -> tuple[int, 
             != _json_sha256(LOCAL_NORMALIZATION_CONTRACT)):
         raise StructuredOutputError(
             "artifact local normalization contract is missing or changed")
+    if (
+        contract["extraction_output_contract"] != EXTRACTION_OUTPUT_CONTRACT
+        or contract["extraction_output_contract_sha256"]
+        != _json_sha256(EXTRACTION_OUTPUT_CONTRACT)
+    ):
+        raise StructuredOutputError(
+            "artifact extraction output bound is missing or changed")
     target = contract["target_words"]
     overlap = contract["overlap_words"]
     if (not isinstance(target, int) or not isinstance(overlap, int)
@@ -2864,10 +2989,6 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
     receipt because the historical tags response is not retained.
     """
     target, overlap = _validate_structured_contract(contract, evidence)
-    expected_options = {
-        "num_ctx": contract["num_ctx"],
-        "temperature": contract["temperature"],
-    }
     if (not isinstance(model, str) or not model
             or not isinstance(model_identity, dict)
             or set(model_identity) != {"requested", "name", "digest"}
@@ -2920,6 +3041,11 @@ def validate_structured_stage_receipts(stages: object, contract: dict, evidence:
         visible, visible_ids, schema, user = _extraction_request(
             transcript, fragment_map, turn_ordinals
         )
+        expected_options = {
+            "num_ctx": contract["num_ctx"],
+            "temperature": contract["temperature"],
+            "num_predict": extraction_num_predict(len(visible_ids)),
+        }
         selected = [
             row for row in extraction_rows if row["slice_ordinal"] == ordinal
         ]
@@ -3106,8 +3232,20 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         _visible_fragments, visible_ids, schema, user = _extraction_request(
             transcript, fragment_map, turn_ordinals
         )
-        response = ollama_chat(model, extract_system, user, num_ctx, timeout,
-                               schema)
+        num_predict = extraction_num_predict(len(visible_ids))
+        try:
+            response = ollama_chat(
+                model, extract_system, user, num_ctx, timeout, schema,
+                num_predict=num_predict,
+            )
+        except SystemExit as e:
+            raise SystemExit(f"{chunk.source}: {e}") from None
+        try:
+            _validate_extraction_completion(response, num_predict)
+        except StructuredOutputError as e:
+            raise SystemExit(
+                f"{chunk.source}: structured extraction refused: {e}"
+            ) from None
         calls.append({"label": chunk.source, "prompt": extract_system + user,
                       "response": response})
         raw = response.get("message", {}).get("content", "")
@@ -3130,6 +3268,7 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         )
         stage_provenance.append(_response_provenance(
             chunk.source, ordinal, response, schema, identity, num_ctx,
+            num_predict,
             extract_system, user, reference_context={
                 "transcript_view_sha256": fragment_map["transcript_view_sha256"],
                 "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
@@ -3198,6 +3337,10 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
             "normalization_contract": dict(LOCAL_NORMALIZATION_CONTRACT),
             "normalization_contract_sha256": _json_sha256(
                 LOCAL_NORMALIZATION_CONTRACT
+            ),
+            "extraction_output_contract": dict(EXTRACTION_OUTPUT_CONTRACT),
+            "extraction_output_contract_sha256": _json_sha256(
+                EXTRACTION_OUTPUT_CONTRACT
             ),
             "target_words": target_words,
             "overlap_words": overlap_words,
@@ -5752,15 +5895,85 @@ def run_self_test() -> int:
 
     fragment_ids = [row["source_fragment_id"] for row in fragments]
     dynamic_extract = extraction_format(fragment_ids)
-    request = _ollama_payload("fixture", "system", "user", 1234, dynamic_extract)
+    bounded_predict = extraction_num_predict(len(fragment_ids))
+    request = _ollama_payload(
+        "fixture", "system", "user", 1234, dynamic_extract, bounded_predict
+    )
     control(
-        "each extraction call sends a slice-local fragment enum without sampling",
+        "each extraction call bounds items, claims, and generation from visible evidence",
         request.get("format") == dynamic_extract
         and dynamic_extract["properties"]["items"]["items"]["properties"][
             "source_fragment_ids"
         ]["items"]["enum"] == fragment_ids
+        and dynamic_extract["properties"]["items"]["maxItems"]
+        == extraction_item_capacity(len(fragment_ids))
+        and dynamic_extract["properties"]["items"]["items"]["properties"][
+            "claim"
+        ]["maxLength"] == MAX_STRUCTURED_CLAIM_CHARS
         and request["options"]["temperature"] == 0.0
+        and request["options"]["num_predict"] == bounded_predict
+        == min(
+            MAX_EXTRACTION_NUM_PREDICT,
+            EXTRACTION_NUM_PREDICT_BASE
+            + EXTRACTION_NUM_PREDICT_PER_ITEM
+            * extraction_item_capacity(len(fragment_ids)),
+        )
         and request["stream"] is False,
+    )
+    try:
+        _ollama_payload(
+            "fixture", "system", "user", 1234, dynamic_extract
+        )
+        unbounded_schema_refused = False
+    except StructuredOutputError:
+        unbounded_schema_refused = True
+    dense_ids = [f"dense-{index}" for index in range(136)]
+    dense_schema = extraction_format(dense_ids)
+    control(
+        "a schema-constrained request cannot regress to unbounded output options",
+        unbounded_schema_refused
+        and extraction_num_predict(10_000) == MAX_EXTRACTION_NUM_PREDICT
+        and extraction_item_capacity(10_000)
+        == MAX_EXTRACTION_ITEMS_PER_SLICE
+        and dense_schema["properties"]["items"]["maxItems"]
+        == MAX_EXTRACTION_ITEMS_PER_SLICE
+        and extraction_num_predict(65) == extraction_num_predict(136)
+        == MAX_EXTRACTION_NUM_PREDICT
+        and EXTRACTION_OUTPUT_CONTRACT["num_predict_cap"]
+        == MAX_EXTRACTION_NUM_PREDICT,
+    )
+    original_urlopen = urllib.request.urlopen
+
+    def timed_out_urlopen(*_args, **_kwargs):
+        raise TimeoutError("timed out")
+
+    urllib.request.urlopen = timed_out_urlopen
+    try:
+        ollama_chat(
+            "fixture", "system", "user", 1234, 7, dynamic_extract,
+            num_predict=bounded_predict,
+        )
+        timeout_closed = False
+    except SystemExit as e:
+        timeout_closed = str(e) == (
+            "Ollama /api/chat timed out after 7s; no response was accepted"
+        )
+    finally:
+        urllib.request.urlopen = original_urlopen
+    control(
+        "an Ollama timeout is a concise fail-closed refusal, not a traceback",
+        timeout_closed,
+    )
+    try:
+        _validate_extraction_completion(
+            {"done": True, "done_reason": "length"}, bounded_predict
+        )
+        length_stop_refused = False
+    except StructuredOutputError:
+        length_stop_refused = True
+    control(
+        "a token-limited prefix is refused even if its JSON could be complete",
+        length_stop_refused,
     )
     control(
         "the live extraction schema has no field where a model can author quote text",
@@ -5844,6 +6057,39 @@ def run_self_test() -> int:
     control(
         "blank, malformed, duplicate-key, invalid, injected, and extra fields fail closed",
         invalid_closed,
+    )
+    overlong_raw = json.dumps({
+        "items": [{
+            "source_fragment_ids": [fragment_ids[0]],
+            "label": "QUESTION",
+            "claim": "x" * (MAX_STRUCTURED_CLAIM_CHARS + 1),
+        }]
+    }, separators=(",", ":"))
+    over_cardinality_raw = json.dumps({
+        "items": [
+            {
+                "source_fragment_ids": [fragment_ids[0]],
+                "label": "QUESTION",
+                "claim": f"bounded claim {index}",
+            }
+            for index in range(2)
+        ]
+    }, separators=(",", ":"))
+    bounded_response_refused = True
+    for raw, allowed_ids in (
+        (overlong_raw, fragment_ids),
+        (over_cardinality_raw, fragment_ids[:1]),
+    ):
+        try:
+            decode_records(
+                raw, "extract", allowed_fragment_ids=allowed_ids
+            )
+            bounded_response_refused = False
+        except StructuredOutputError:
+            pass
+    control(
+        "overlong claims and responses larger than their evidence offer fail closed",
+        bounded_response_refused,
     )
     empty_extract = decode_records(
         '{"items":[]}', "extract", allowed_fragment_ids=fragment_ids
@@ -6104,12 +6350,89 @@ def run_self_test() -> int:
         }))
 
     original_chat = ollama_chat
+
+    def staged_timeout_chat(*_args, **_kwargs):
+        raise SystemExit(
+            "Ollama /api/chat timed out after 7s; no response was accepted")
+
+    globals()["ollama_chat"] = staged_timeout_chat
+    try:
+        summarize_chunked(
+            fixture_transcript, "fixture:latest", 32768, 7, 1000, 0,
+            model_identity=fixture_identity,
+        )
+        staged_timeout_closed = False
+    except SystemExit as e:
+        staged_timeout_closed = str(e) == (
+            "structured fixture [slice 1/1]: Ollama /api/chat timed out "
+            "after 7s; no response was accepted"
+        )
+    finally:
+        globals()["ollama_chat"] = original_chat
+    control(
+        "a structured timeout names the failed slice and accepts no partial stage",
+        staged_timeout_closed,
+    )
+    def staged_length_chat(*_args, **_kwargs):
+        return {
+            "message": {"content": '{"items":[]}'},
+            "done": True,
+            "done_reason": "length",
+        }
+
+    globals()["ollama_chat"] = staged_length_chat
+    try:
+        summarize_chunked(
+            fixture_transcript, "fixture:latest", 32768, 7, 1000, 0,
+            model_identity=fixture_identity,
+        )
+        staged_length_closed = False
+    except SystemExit as e:
+        staged_length_closed = (
+            "structured fixture [slice 1/1]: structured extraction refused: "
+            f"extraction reached its {extraction_num_predict(2)}-token output limit"
+        ) == str(e)
+    finally:
+        globals()["ollama_chat"] = original_chat
+    control(
+        "the real structured path refuses a valid-JSON response stopped by length",
+        staged_length_closed,
+    )
+    def missing_completion_chat(*_args, **_kwargs):
+        return {"message": {"content": '{"items":[]}'}}
+
+    globals()["ollama_chat"] = missing_completion_chat
+    try:
+        summarize_chunked(
+            fixture_transcript, "fixture:latest", 32768, 7, 1000, 0,
+            model_identity=fixture_identity,
+        )
+        missing_completion_closed = False
+    except SystemExit as e:
+        missing_completion_closed = str(e) == (
+            "structured fixture [slice 1/1]: structured extraction refused: "
+            "Ollama extraction response did not prove completion"
+        )
+    finally:
+        globals()["ollama_chat"] = original_chat
+    control(
+        "missing transport completion metadata fails through the structured path",
+        missing_completion_closed,
+    )
+    original_chat = ollama_chat
     source_fixture_calls = 0
     try:
         def source_fixture_chat(model, system, user, num_ctx, timeout,
-                                response_format=None):
+                                response_format=None, num_predict=None):
             nonlocal source_fixture_calls
             source_fixture_calls += 1
+            visible_enum = response_format["properties"]["items"]["items"][
+                "properties"
+            ]["source_fragment_ids"]["items"]["enum"]
+            if num_predict != extraction_num_predict(
+                len(visible_enum)
+            ):
+                raise AssertionError("extraction generation budget was not derived")
             properties = response_format["properties"]["items"]["items"]["properties"]
             if "source_fragment_ids" not in properties:
                 raise AssertionError("non-extraction model call attempted")
@@ -6122,7 +6445,12 @@ def run_self_test() -> int:
             content = json.dumps({
                 "items": [item, dict(item)]
             }, separators=(",", ":"))
-            return {"message": {"content": content}, "prompt_eval_count": 16}
+            return {
+                "message": {"content": content},
+                "prompt_eval_count": 16,
+                "done": True,
+                "done_reason": "stop",
+            }
 
         globals()["ollama_chat"] = source_fixture_chat
         staged_new = summarize_chunked(
@@ -6148,10 +6476,14 @@ def run_self_test() -> int:
     )
     try:
         def empty_source_fixture_chat(model, system, user, num_ctx, timeout,
-                                      response_format=None):
+                                      response_format=None, num_predict=None):
+            if num_predict is None:
+                raise AssertionError("empty extraction call was left unbounded")
             return {
                 "message": {"content": '{"items":[]}'},
                 "prompt_eval_count": 8,
+                "done": True,
+                "done_reason": "stop",
             }
 
         globals()["ollama_chat"] = empty_source_fixture_chat
@@ -6233,6 +6565,11 @@ def run_self_test() -> int:
             row["input_prompt_validation"] == REPLAYABLE_INPUT
             for row in extraction_receipts
         )
+        and all(
+            row["options"]["num_predict"]
+            == extraction_num_predict(row["reference_context"]["visible_fragments"])
+            for row in extraction_receipts
+        )
         and normalization_receipt["schema_contract"]
         == LOCAL_NORMALIZATION_RECEIPT
         and normalization_receipt["normalization_contract"]
@@ -6266,6 +6603,11 @@ def run_self_test() -> int:
             STRUCTURED_NOTE_CONTRACT, ensure_ascii=False, sort_keys=True,
             separators=(",", ":"),
         ))
+        and staged_new["structured_contract"]["extraction_output_contract"]
+        == EXTRACTION_OUTPUT_CONTRACT
+        and staged_new["structured_contract"][
+            "extraction_output_contract_sha256"
+        ] == _json_sha256(EXTRACTION_OUTPUT_CONTRACT)
     )
     with tempfile.TemporaryDirectory(prefix="repair4-output-control-") as tmp:
         fixture_root = Path(tmp)
@@ -6822,6 +7164,23 @@ def run_self_test() -> int:
         "response_cardinality"
     ]["items"] += 1
     receipt_tampers.append(tampered_cardinality)
+    tampered_budget = json.loads(json.dumps(structured_doc))
+    tampered_budget["provenance"]["structured_stages"][0][
+        "options"
+    ]["num_predict"] += 1
+    receipt_tampers.append(tampered_budget)
+    tampered_output_contract = json.loads(json.dumps(structured_doc))
+    tampered_output_contract["provenance"]["structured_contract"][
+        "extraction_output_contract"
+    ]["num_predict_cap"] += 1
+    tampered_output_contract["provenance"]["structured_contract"][
+        "extraction_output_contract_sha256"
+    ] = _json_sha256(
+        tampered_output_contract["provenance"]["structured_contract"][
+            "extraction_output_contract"
+        ]
+    )
+    receipt_tampers.append(tampered_output_contract)
     tampered_normalization = json.loads(json.dumps(structured_doc))
     tampered_normalization["provenance"]["structured_stages"][-1][
         "normalization_contract"

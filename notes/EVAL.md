@@ -1776,3 +1776,55 @@ match exactly. Only extraction stages carry model receipts.
 
 This correction removes a feasibility failure before spending a Bmr006 run. It does not
 change the registered corpus outcome predictions or establish note quality.
+
+### First registered run: output was unbounded, so timeout is not a result
+
+The first Bmr006 run against the registered Repair 4 contract produced no artifact. It
+spent about 25 minutes across the extraction work that completed, then one Ollama
+`/api/chat` request reached the command's 900-second timeout. There is no validated
+response from that stage, no completed extraction graph, and no note or support
+measurement. The registered predictions above therefore remain unchanged: a transport
+timeout before a response exists cannot confirm or reject any of them.
+
+The request itself was not bounded in the dimension that failed. Its schema constrained
+each evidence set to one to three offered fragment IDs, but the top-level `items` array
+had no maximum, `claim` had no maximum length, and the Ollama options carried no
+`num_predict`. The server had a wall-clock timeout but the generation contract still
+allowed an indefinitely growing response. This is feasibility evidence about the runner,
+not a corpus result.
+
+Every extraction call is now bounded from the evidence it is offered:
+
+- `items.maxItems = min(visible source fragments, 48)`;
+- `claim.maxLength` is 160 Unicode characters, matching the existing short, atomic-claim
+  contract; a longer thought must be split rather than expanding one record without end;
+- `num_predict = min(8192, 64 + 192 × items.maxItems)`.
+
+The item ceiling comes from the observed density rather than the timeout after the fact.
+The prior quote-first Bmr006 extraction produced 227 items across 16 slices, about 14 per
+slice. Forty-eight is more than three times that observed rate and still allows roughly
+one item per 31 input words in a nominal 1,500-word slice. The tradeoff is recall: a slice
+with more than 48 real atomic claims cannot express all of them under this contract. That
+limit is now visible and reviewable; an unlimited array hid the same choice behind
+runtime and let one request consume the full timeout.
+
+The 64-token base pays for the response envelope. The 192-token allowance budgets one
+compact record, its enumerated IDs, label, and bounded claim. The 8,192-token ceiling is
+the independent final stop. Under the exact Bmr006 defaults the 16 slices expose 65–136
+source fragments each, so every one now offers at most 48 output items and carries the
+same 8,192-token cap. If Ollama reports `done_reason=length`, the stage fails even when
+the returned prefix happens to be valid JSON. A response missing `done: true` or the
+recognized `done_reason=stop` also fails; the discarded transport envelope cannot be
+replaced by an assumption that generation completed. Incomplete JSON fails strict
+decoding as before. None can be mistaken for a smaller complete extraction or written
+as an artifact.
+
+The schema, formula, cap, and actual per-slice `num_predict` now travel in the structured
+run contract and extraction receipts. Recheck re-derives all of them from the retained
+transcript. An over-cardinality response, a 161-character claim, a receipt with a changed
+budget, or a schema-constrained call with no budget fails closed. A transport timeout is
+reported as one concise refusal naming the slice, without a Python traceback.
+
+No Bmr006 inference was rerun for this correction. It makes the registered run finite and
+replayable; whether the model now completes, what it extracts, and whether those claims
+are supported remain the next measurement.
