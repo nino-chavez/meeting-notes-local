@@ -1616,6 +1616,39 @@ evidence after generation, which is the defect these repairs are meant to remove
 
 ## Repair 4: choose canonical evidence, then write the claim
 
+Audit correction registered 2026-07-30, before any Repair 4 inference: the first
+contract required the consolidator to write an uncited narrative `summary` before its
+evidence-covered `items`. That field could make claims about the meeting without a
+source reference, including when extraction returned no items, so it violated the
+repair's own evidence boundary. The final consolidation root contains only `items`.
+Local code adds a fixed `Evidence-bound note` wrapper and, for an empty result, the
+fixed statement `No evidence-bound claims were produced.` Neither is model-authored or
+asserts what happened in the meeting. This correction changes the registered design,
+not a measured result; no Repair 4 run existed when it was made.
+
+The same pre-inference audit closed three adjacent gaps. The durable graph hashes every
+extraction and consolidated claim, so changing note prose and `claims[]` together no
+longer leaves the declared evidence untouched. Consolidation may group at most three
+records, and only when their extraction claim text is byte-for-byte identical. It keeps
+each member ID and digest. That preserves distinct claim identities; it does not prove
+the consolidator's rewritten claim means the same thing, so the support check and human
+review still own that judgment. Repair 4 also writes no `.items.md` extraction sidecar:
+it does not persist every selected fragment as a second transcript-derived list. The
+note still carries the primary evidence excerpt for each rendered claim. A retired
+sidecar already present beside `--out` refuses the run before inference; the tool does
+not silently delete it.
+
+Stage receipts now distinguish proof from a receipt. Schemas, options, extraction
+prompts, source references, and item counts are re-derived mechanically. Model identity
+is cross-checked among artifact fields against one immutable digest receipt; the
+historical `/api/tags` response is not retained, so recheck cannot independently derive
+that digest. Extraction-claim prose sent into consolidation and raw model responses are
+also not retained, so their hashes are labelled receipt-only and cannot support a replay
+claim. An explicit top-level `source-evidence/1` discriminator, plus the two-pass
+model-identity signature, keeps a damaged Repair 4 artifact from falling back to the
+looser legacy checker. These are contract corrections, not evidence that the model
+produces acceptable notes.
+
 Repair 4 keeps the causal part of quote-first generation and removes the copying task the
 model has repeatedly failed. Local code divides each visible transcript turn into
 deterministic, overlapping source fragments. The model sees each fragment with an opaque

@@ -40,6 +40,7 @@ from summarize import (  # noqa: E402
     _seq,
     _support_key,
     artifact_uses_source_evidence,
+    structured_artifact_citations,
     validate_evidence_contract,
     validate_support_measurement,
 )
@@ -356,6 +357,7 @@ def check_locators(doc: dict, transcript, note_path: Path) -> None:
                 "evidence graph"
             )
         try:
+            structured_artifact_citations(doc, transcript)
             resolved = validate_evidence_contract(doc["evidence"], transcript)
         except ValueError as e:
             raise SystemExit(f"{note_path.name}: source evidence refused: {e}") from e
@@ -382,6 +384,9 @@ def check_locators(doc: dict, transcript, note_path: Path) -> None:
                 for ref in evidence["evidence_refs"]
             ]
             if (claim.get("source_item_ids") != evidence["source_item_ids"]
+                    or claim.get("source_claim_sha256s")
+                    != evidence["source_claim_sha256s"]
+                    or claim.get("claim_sha256") != evidence["claim_sha256"]
                     or claim.get("evidence_refs") != resolved_refs
                     or claim.get("status") != "located"
                     or claim.get("type") != evidence["label"].lower()):

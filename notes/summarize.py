@@ -40,6 +40,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import unicodedata
 import urllib.error
@@ -1672,6 +1673,23 @@ FRAGMENT_CONTRACT = {
     "cross_turns": False,
     "offsets": "Unicode code point indices [start,end)",
 }
+STRUCTURED_NOTE_CONTRACT = {
+    "schema": "evidence-bound-note/1",
+    "heading": "## Evidence-bound note",
+    "with_claims": "Every claim below is linked to retained meeting words.",
+    "without_claims": "No evidence-bound claims were produced.",
+    "model_authored_narrative": False,
+}
+STRUCTURED_RUN_CONTRACT = "structured-run/1"
+STRUCTURED_STAGE_RECEIPT = "structured-stage-receipt/1"
+SOURCE_EVIDENCE_CONTRACT = "source-evidence/1"
+MAX_CONSOLIDATION_GROUP = 3
+REPLAYABLE_INPUT = "replayable from the retained transcript"
+RECEIPT_ONLY_INPUT = (
+    "receipt only; extraction-claim prose in the consolidation input is not "
+    "retained for replay"
+)
+RECEIPT_ONLY_RESPONSE = "receipt only; raw model response is not retained"
 
 
 def transcript_view_sha256(transcript: Transcript) -> str:
@@ -1808,6 +1826,7 @@ def consolidation_format(evidence_item_ids: list[str]) -> dict:
                 "type": "array",
                 "items": {"type": "string", "enum": evidence_item_ids},
                 "minItems": 1,
+                "maxItems": MAX_CONSOLIDATION_GROUP,
                 "uniqueItems": True,
             },
             "label": {"type": "string", "enum": list(_LABEL_VALUES)},
@@ -1817,11 +1836,8 @@ def consolidation_format(evidence_item_ids: list[str]) -> dict:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["summary", "items"],
-        "properties": {
-            "summary": {"type": "string", "minLength": 1},
-            "items": {"type": "array", "items": item},
-        },
+        "required": ["items"],
+        "properties": {"items": {"type": "array", "items": item}},
     }
 
 
@@ -1905,8 +1921,11 @@ def _consolidated_item(value: object, where: str) -> dict:
     if item["label"] not in _LABEL_VALUES:
         raise StructuredOutputError(f"{where}.label: invalid label {item['label']!r}")
     sources = item["source_item_ids"]
-    if not isinstance(sources, list) or not sources:
-        raise StructuredOutputError(f"{where}.source_item_ids: expected a nonempty array")
+    if (not isinstance(sources, list)
+            or not 1 <= len(sources) <= MAX_CONSOLIDATION_GROUP):
+        raise StructuredOutputError(
+            f"{where}.source_item_ids: expected one to "
+            f"{MAX_CONSOLIDATION_GROUP} IDs")
     if any(not isinstance(source_id, str) or not source_id.strip() for source_id in sources):
         raise StructuredOutputError(
             f"{where}.source_item_ids: expected nonblank strings")
@@ -1958,8 +1977,7 @@ def decode_records(raw: str, stage: str, *,
         return {"items": items}
     if stage != "consolidate":
         raise ValueError(f"unknown structured stage {stage!r}")
-    doc = _object(root, ("summary", "items"), "consolidation")
-    summary = _text(doc["summary"], "consolidation.summary")
+    doc = _object(root, ("items",), "consolidation")
     if not isinstance(doc["items"], list):
         raise StructuredOutputError("consolidation.items: expected an array")
     items = [
@@ -1983,6 +2001,14 @@ def decode_records(raw: str, stage: str, *,
         if any(source["label"] != item["label"] for source in sources):
             raise StructuredOutputError(
                 "consolidation merged source item IDs across incompatible labels")
+        if any(_sha256(source["claim"]) != source.get("claim_sha256")
+               for source in sources):
+            raise StructuredOutputError(
+                "consolidation input claim disagrees with its attached digest")
+        if (len(sources) > 1
+                and len({source["claim_sha256"] for source in sources}) != 1):
+            raise StructuredOutputError(
+                "consolidation may merge only byte-identical extraction claims")
         ordered_refs = []
         seen_refs = set()
         for source in sources:
@@ -2004,6 +2030,10 @@ def decode_records(raw: str, stage: str, *,
             "char_end": primary["char_end"],
             "text_sha256": primary["text_sha256"],
             "evidence_refs": ordered_refs,
+            "claim_sha256": _sha256(item["claim"]),
+            "source_claim_sha256s": [
+                source["claim_sha256"] for source in sources
+            ],
         })
     duplicates = [source_id for source_id, count in Counter(covered).items() if count != 1]
     if duplicates:
@@ -2013,7 +2043,7 @@ def decode_records(raw: str, stage: str, *,
     if missing:
         raise StructuredOutputError(
             f"consolidation discarded source item IDs: {missing!r}")
-    return {"summary": summary, "items": items}
+    return {"items": items}
 
 
 def attach_evidence_items(items: list[dict], slice_ordinal: int,
@@ -2041,6 +2071,8 @@ def attach_evidence_items(items: list[dict], slice_ordinal: int,
         attached.append({
             **item,
             "evidence_item_id": f"slice-{slice_ordinal:04d}-item-{index:04d}",
+            "slice_ordinal": slice_ordinal,
+            "claim_sha256": _sha256(item["claim"]),
             "quote": primary["quote"],
             "turn": primary["turn"],
             "char_start": primary["char_start"],
@@ -2055,13 +2087,27 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def _json_sha256(value: object) -> str:
+    return _sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ))
+
+
+def _valid_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
 def _response_provenance(stage: str, source: str, ordinal: int, response: dict,
                          schema: dict, model_identity: dict, num_ctx: int, system: str,
                          user: str, input_records: str | None = None,
-                         reference_context: dict | None = None) -> dict:
+                         input_contract: object | None = None,
+                         input_prompt_template: str | None = None,
+                         reference_context: dict | None = None,
+                         response_cardinality: dict | None = None) -> dict:
     """Audit a response without copying its text (or transcript-derived quotes)."""
     raw = response.get("message", {}).get("content", "")
     result = {
+        "schema_contract": STRUCTURED_STAGE_RECEIPT,
         "stage": stage,
         "source": source,
         "ordinal": ordinal,
@@ -2070,29 +2116,49 @@ def _response_provenance(stage: str, source: str, ordinal: int, response: dict,
         "model_digest": model_identity["digest"],
         "options": {"num_ctx": num_ctx, "temperature": 0.0},
         "schema": schema,
-        "schema_sha256": _sha256(json.dumps(schema, sort_keys=True, separators=(",", ":"))),
+        "schema_sha256": _json_sha256(schema),
         "system_prompt_sha256": _sha256(system),
         "input_prompt_sha256": _sha256(user),
+        "input_prompt_validation": (
+            REPLAYABLE_INPUT if stage == "extract" else RECEIPT_ONLY_INPUT
+        ),
         "response_sha256": _sha256(raw),
+        "response_validation": RECEIPT_ONLY_RESPONSE,
+        "raw_response_retained": False,
     }
     if input_records is not None:
-        # The consolidation prompt contains a little framing text too.  This separate
-        # digest pins the exact validated JSON listing that crossed the stage boundary.
+        # This pins the private transport used during inference. Claim and fragment
+        # text are deliberately not copied into the artifact, so it is a receipt
+        # rather than a replayable input.
         result["input_records_sha256"] = _sha256(input_records)
+        result["input_records_validation"] = RECEIPT_ONLY_INPUT
+    if input_contract is not None:
+        result["input_contract_sha256"] = _json_sha256(input_contract)
+    if input_prompt_template is not None:
+        result["input_prompt_template_sha256"] = _sha256(input_prompt_template)
     if reference_context is not None:
         result["reference_context"] = reference_context
+    if response_cardinality is not None:
+        result["response_cardinality"] = response_cardinality
     return result
 
 
-def render_structured_note(summary: str, items: list[dict]) -> str:
-    """Render a typed note deterministically in the legacy markdown shape."""
+def render_structured_note(items: list[dict]) -> str:
+    """Render only evidence-bound claims under a deterministic local wrapper."""
     titles = {
         "DECISION": "Decisions",
         "ACTION": "Action items",
         "PROPOSAL": "Proposed",
         "QUESTION": "Open questions",
     }
-    lines = ["## Summary", summary]
+    lines = [
+        STRUCTURED_NOTE_CONTRACT["heading"],
+        (
+            STRUCTURED_NOTE_CONTRACT["with_claims"]
+            if items else
+            STRUCTURED_NOTE_CONTRACT["without_claims"]
+        ),
+    ]
     for label in _LABEL_VALUES:
         group = [item for item in items if item["label"] == label]
         if not group:
@@ -2105,6 +2171,9 @@ def render_structured_note(summary: str, items: list[dict]) -> str:
 
 def validate_structured_render(note: str, items: list[dict]) -> dict:
     """Prove rendering neither injected nor discarded a typed consolidated record."""
+    if note != render_structured_note(items):
+        raise StructuredOutputError(
+            "structured note contains text outside the deterministic local rendering")
     parsed = _parse_claims(note)
     expected = [
         item
@@ -2130,7 +2199,8 @@ def validate_evidence_contract(evidence: dict, transcript: Transcript) -> list[d
     plausible match: every reference must resolve at its declared exact character
     span in the exact transformed transcript view.
     """
-    if not isinstance(evidence, dict) or evidence.get("schema") != "source-evidence/1":
+    if (not isinstance(evidence, dict)
+            or evidence.get("schema") != SOURCE_EVIDENCE_CONTRACT):
         raise StructuredOutputError("missing or unknown source evidence contract")
     fragment_map = build_fragment_map(transcript)
     for key in (
@@ -2159,16 +2229,26 @@ def validate_evidence_contract(evidence: dict, transcript: Transcript) -> list[d
     inputs: dict[str, dict] = {}
     for index, row in enumerate(extraction_rows):
         if not isinstance(row, dict) or set(row) != {
-                "evidence_item_id", "source_fragment_ids", "label"}:
+                "evidence_item_id", "slice_ordinal", "source_fragment_ids",
+                "label", "claim_sha256"}:
             raise StructuredOutputError(
                 f"source evidence extraction item {index} has the wrong shape")
         evidence_item_id = row["evidence_item_id"]
+        slice_ordinal = row["slice_ordinal"]
         fragment_ids = row["source_fragment_ids"]
         label = row["label"]
         if (not isinstance(evidence_item_id, str) or not evidence_item_id
                 or evidence_item_id in inputs):
             raise StructuredOutputError(
                 "source evidence extraction item IDs must be unique nonblank strings")
+        item_id_match = re.fullmatch(
+            r"slice-(\d{4})-item-(\d{4})", evidence_item_id
+        )
+        if (not isinstance(slice_ordinal, int) or slice_ordinal < 1
+                or item_id_match is None
+                or int(item_id_match.group(1)) != slice_ordinal):
+            raise StructuredOutputError(
+                "source evidence extraction item has no valid slice identity")
         if (not isinstance(fragment_ids, list) or not 1 <= len(fragment_ids) <= 3
                 or any(not isinstance(fragment_id, str) or not fragment_id
                        for fragment_id in fragment_ids)
@@ -2177,6 +2257,9 @@ def validate_evidence_contract(evidence: dict, transcript: Transcript) -> list[d
                 "source evidence extraction references must contain one to three unique IDs")
         if label not in _LABEL_VALUES:
             raise StructuredOutputError("source evidence extraction label is invalid")
+        if not _valid_sha256(row["claim_sha256"]):
+            raise StructuredOutputError(
+                "source evidence extraction claim digest is invalid")
         try:
             positions = [fragment_order[fragment_id] for fragment_id in fragment_ids]
         except (KeyError, TypeError) as e:
@@ -2191,18 +2274,30 @@ def validate_evidence_contract(evidence: dict, transcript: Transcript) -> list[d
     resolved = []
     for index, row in enumerate(consolidation_rows):
         if not isinstance(row, dict) or set(row) != {
-                "source_item_ids", "source_fragment_ids", "label"}:
+                "source_item_ids", "source_claim_sha256s",
+                "source_fragment_ids", "label", "claim_sha256"}:
             raise StructuredOutputError(
                 f"source evidence consolidated item {index} has the wrong shape")
         source_ids = row["source_item_ids"]
+        source_claim_sha256s = row["source_claim_sha256s"]
         declared_fragments = row["source_fragment_ids"]
         label = row["label"]
-        if (not isinstance(source_ids, list) or not source_ids
+        if (not isinstance(source_ids, list)
+                or not 1 <= len(source_ids) <= MAX_CONSOLIDATION_GROUP
                 or any(not isinstance(source_id, str) or not source_id
                        for source_id in source_ids)
                 or len(set(source_ids)) != len(source_ids)):
             raise StructuredOutputError(
-                "source evidence consolidation coverage must be nonempty and unique")
+                "source evidence consolidation coverage exceeds its bounded group")
+        if (not isinstance(source_claim_sha256s, list)
+                or len(source_claim_sha256s) != len(source_ids)
+                or any(not _valid_sha256(digest)
+                       for digest in source_claim_sha256s)):
+            raise StructuredOutputError(
+                "source evidence consolidation member claim digests are invalid")
+        if not _valid_sha256(row["claim_sha256"]):
+            raise StructuredOutputError(
+                "source evidence consolidated claim digest is invalid")
         if (not isinstance(declared_fragments, list)
                 or any(not isinstance(fragment_id, str) or not fragment_id
                        for fragment_id in declared_fragments)
@@ -2217,6 +2312,15 @@ def validate_evidence_contract(evidence: dict, transcript: Transcript) -> list[d
         if label not in _LABEL_VALUES or any(source["label"] != label for source in sources):
             raise StructuredOutputError(
                 "source evidence consolidation crosses incompatible labels")
+        expected_source_claims = [
+            source["claim_sha256"] for source in sources
+        ]
+        if source_claim_sha256s != expected_source_claims:
+            raise StructuredOutputError(
+                "source evidence consolidation member claim digests disagree")
+        if len(sources) > 1 and len(set(source_claim_sha256s)) != 1:
+            raise StructuredOutputError(
+                "source evidence merged distinct extraction claims")
         covered.extend(source_ids)
         union_ids = sorted(
             {
@@ -2244,8 +2348,10 @@ def validate_evidence_contract(evidence: dict, transcript: Transcript) -> list[d
             })
         resolved.append({
             "source_item_ids": source_ids,
+            "source_claim_sha256s": source_claim_sha256s,
             "source_fragment_ids": union_ids,
             "label": label,
+            "claim_sha256": row["claim_sha256"],
             "evidence_refs": refs,
         })
 
@@ -2264,36 +2370,77 @@ def validate_evidence_contract(evidence: dict, transcript: Transcript) -> list[d
 
 def runtime_uses_source_evidence(result: dict) -> bool:
     """Whether a live result declares any part of the Repair 4 contract."""
-    return any(key in result for key in (
-        "evidence_contract", "consolidated_records", "structured_provenance",
-        "structured_contract",
-    ))
+    if any(key in result for key in (
+        "claim_evidence_contract", "evidence_contract", "consolidated_records",
+        "structured_provenance", "structured_contract",
+    )):
+        return True
+    note = result.get("note")
+    if (isinstance(note, str)
+            and note.startswith(STRUCTURED_NOTE_CONTRACT["heading"] + "\n")):
+        return True
+    return (
+        isinstance(result.get("model_identity"), dict)
+        and "slices" in result
+    )
 
 
 def artifact_uses_source_evidence(doc: dict) -> bool:
     """Detect Repair 4 even when its evidence graph was emptied or removed."""
-    if "evidence" in doc:
+    if "claim_evidence_contract" in doc or "evidence" in doc:
         return True
     provenance = doc.get("provenance")
     if isinstance(provenance, dict) and any(
             provenance.get(key) is not None
             for key in ("source_evidence", "structured_stages", "structured_contract")):
         return True
+    checks = doc.get("checks")
+    citations = checks.get("citations") if isinstance(checks, dict) else None
+    if isinstance(citations, dict) and "authority" in citations:
+        return True
+    # Repair 4 is the first two-pass path that resolves an immutable model identity.
+    # This residual signature keeps a damaged artifact on the strict path even if
+    # every explicit graph marker was removed together.
+    if (isinstance(provenance, dict)
+            and provenance.get("passes") == 2
+            and isinstance(provenance.get("model_identity"), dict)):
+        return True
+    note = doc.get("note")
+    if (isinstance(note, str)
+            and note.startswith(STRUCTURED_NOTE_CONTRACT["heading"] + "\n")):
+        return True
     claims = doc.get("claims")
     return isinstance(claims, list) and any(
         isinstance(claim, dict)
-        and ("source_item_ids" in claim or "evidence_refs" in claim)
+        and any(key in claim for key in (
+            "source_item_ids", "source_claim_sha256s", "claim_sha256",
+            "evidence_refs",
+        ))
         for claim in claims
     )
 
 
 def structured_citations(result: dict, transcript: Transcript) -> dict:
     """Build citation findings from validated fragment references, not Markdown search."""
+    if result.get("claim_evidence_contract") != SOURCE_EVIDENCE_CONTRACT:
+        raise StructuredOutputError(
+            "Repair 4 runtime result has no explicit evidence discriminator")
     if "evidence_contract" not in result:
         raise StructuredOutputError(
             "Repair 4 runtime result is missing its source evidence graph")
     resolved = validate_evidence_contract(result["evidence_contract"], transcript)
+    validate_structured_stage_receipts(
+        result.get("structured_provenance"),
+        result.get("structured_contract"),
+        result["evidence_contract"],
+        transcript,
+        result.get("model"),
+        result.get("model_identity"),
+    )
     consolidated = result["consolidated_records"]["items"]
+    if result["note"] != render_structured_note(consolidated):
+        raise StructuredOutputError(
+            "runtime structured note contains text outside evidence-bound records")
     if len(resolved) != len(consolidated):
         raise StructuredOutputError(
             "resolved evidence count does not match consolidated records")
@@ -2311,10 +2458,13 @@ def structured_citations(result: dict, transcript: Transcript) -> dict:
     cited = []
     for rendered, (item, evidence) in zip(parsed, expected, strict=True):
         if (item["source_item_ids"] != evidence["source_item_ids"]
+                or item["source_claim_sha256s"]
+                != evidence["source_claim_sha256s"]
                 or item["label"] != evidence["label"]
-                or item["evidence_refs"] != evidence["evidence_refs"]):
+                or item["evidence_refs"] != evidence["evidence_refs"]
+                or _sha256(item["claim"]) != evidence["claim_sha256"]):
             raise StructuredOutputError(
-                "runtime consolidated evidence disagrees with durable coverage")
+                "runtime consolidated claim or evidence disagrees with durable coverage")
         primary = evidence["evidence_refs"][0]
         if (rendered["claim"], rendered["quote"], rendered["type"]) != (
                 item["claim"], primary["quote"], item["label"].lower()):
@@ -2328,6 +2478,8 @@ def structured_citations(result: dict, transcript: Transcript) -> dict:
             "turn": primary["turn"],
             "start": transcript.turns[primary["turn"]].start,
             "source_item_ids": evidence["source_item_ids"],
+            "source_claim_sha256s": evidence["source_claim_sha256s"],
+            "claim_sha256": evidence["claim_sha256"],
             "evidence_refs": [
                 {key: ref[key] for key in (
                     "source_fragment_id", "turn", "char_start", "char_end",
@@ -2356,6 +2508,9 @@ def structured_citations(result: dict, transcript: Transcript) -> dict:
 
 def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
     """Re-derive Repair 4 claims from durable references without model-stage replay."""
+    if doc.get("claim_evidence_contract") != SOURCE_EVIDENCE_CONTRACT:
+        raise StructuredOutputError(
+            "Repair 4 artifact has no current evidence discriminator")
     if "evidence" not in doc:
         raise StructuredOutputError(
             "Repair 4 artifact is missing its source evidence graph")
@@ -2374,6 +2529,15 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
     if doc.get("provenance", {}).get("source_evidence") != expected_provenance:
         raise StructuredOutputError(
             "artifact source evidence provenance disagrees with its coverage graph")
+    provenance = doc.get("provenance", {})
+    validate_structured_stage_receipts(
+        provenance.get("structured_stages"),
+        provenance.get("structured_contract"),
+        evidence,
+        transcript,
+        provenance.get("model"),
+        provenance.get("model_identity"),
+    )
     parsed = _parse_claims(doc["note"])
     expected = [
         evidence
@@ -2387,10 +2551,11 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
     cited = []
     for rendered, evidence in zip(parsed, expected, strict=True):
         primary = evidence["evidence_refs"][0]
-        if (rendered["quote"], rendered["type"]) != (
-                primary["quote"], evidence["label"].lower()):
+        if (rendered["quote"], rendered["type"], _sha256(rendered["claim"])) != (
+                primary["quote"], evidence["label"].lower(),
+                evidence["claim_sha256"]):
             raise StructuredOutputError(
-                "artifact Markdown does not render its declared source evidence")
+                "artifact Markdown claim or quote disagrees with durable evidence")
         cited.append({
             "claim": rendered["claim"],
             "quote": primary["quote"],
@@ -2399,6 +2564,8 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
             "turn": primary["turn"],
             "start": transcript.turns[primary["turn"]].start,
             "source_item_ids": evidence["source_item_ids"],
+            "source_claim_sha256s": evidence["source_claim_sha256s"],
+            "claim_sha256": evidence["claim_sha256"],
             "evidence_refs": [
                 {key: ref[key] for key in (
                     "source_fragment_id", "turn", "char_start", "char_end",
@@ -2407,6 +2574,17 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
                 for ref in evidence["evidence_refs"]
             ],
         })
+    rendered_items = [
+        {
+            "label": evidence["label"],
+            "claim": rendered["claim"],
+            "quote": evidence["evidence_refs"][0]["quote"],
+        }
+        for rendered, evidence in zip(parsed, expected, strict=True)
+    ]
+    if doc["note"] != render_structured_note(rendered_items):
+        raise StructuredOutputError(
+            "artifact note contains narrative outside evidence-bound records")
     # Stored claims are not trusted as the authority, but disagreement is corruption,
     # not permission to silently replace one evidence graph with another.
     stored = doc.get("claims")
@@ -2418,7 +2596,8 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
             key: old.get(key)
             for key in (
                 "status", "claim", "quote", "at", "type", "turn", "start",
-                "source_item_ids", "evidence_refs",
+                "source_item_ids", "source_claim_sha256s", "claim_sha256",
+                "evidence_refs",
             )
         } != {
             "status": LOCATED,
@@ -2426,7 +2605,8 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
                 key: new[key]
                 for key in (
                     "claim", "quote", "at", "type", "turn", "start",
-                    "source_item_ids", "evidence_refs",
+                    "source_item_ids", "source_claim_sha256s", "claim_sha256",
+                    "evidence_refs",
                 )
             },
         }:
@@ -2463,15 +2643,324 @@ headings, comments, or any key not in the schema."""
 
 CONSOLIDATE_STRUCTURED_RULES = CONSOLIDATE_RULES + """
 
-Return ONLY a JSON object matching the supplied schema. Its keys MUST be `summary`,
-then `items`. Each item object MUST write its keys in this exact order:
+Return ONLY a JSON object matching the supplied schema. Its only root key MUST be
+`items`. Each item object MUST write its keys in this exact order:
 `source_item_ids`, `label`, `claim`. Choose the complete group of input record IDs
 before writing its label or claim. Cover every input item ID exactly once across the
-output; never drop, repeat, invent, or merge IDs carrying different labels. You may
-merge duplicate claims but may not compose or repair evidence. Local code resolves the
-ordered union of source fragments from the covered records. `summary` is three to six
-plain sentences about the meeting and does not carry quoted items. Do not return
-markdown, headings, comments, or any key not in the schema."""
+output; never drop, repeat, invent, or merge IDs carrying different labels. A group
+contains at most three IDs. Merge only claims whose input claim text is byte-for-byte
+identical; otherwise preserve each as its own output item. You may not compose or repair
+evidence. Local code resolves the ordered union of source fragments from the covered
+records. Do not return a summary, narrative, markdown, headings, comments, or any key
+not in the schema."""
+
+CONSOLIDATION_USER_TEMPLATE = (
+    "Validated extracted records from the meeting, in order:\n\n"
+    "{records}\n\nConsolidate the records without adding narrative."
+)
+
+
+def _structured_systems(transcript: Transcript) -> tuple[str, str]:
+    contract = CONTRACTS[transcript.attribution]
+    return (
+        EXTRACT_STRUCTURED_RULES + "\n\n" + contract,
+        CONSOLIDATE_STRUCTURED_RULES + "\n\n" + contract,
+    )
+
+
+def _fragments_by_turn(fragment_map: dict) -> dict[int, list[dict]]:
+    grouped: dict[int, list[dict]] = {}
+    for fragment in fragment_map["fragments"]:
+        grouped.setdefault(fragment["turn"], []).append(fragment)
+    return grouped
+
+
+def _extraction_request(transcript: Transcript, fragment_map: dict,
+                        turn_ordinals: list[int]) -> tuple[list[dict], list[str], dict, str]:
+    """Rebuild one extraction request from the retained transcript view."""
+    grouped = _fragments_by_turn(fragment_map)
+    visible_fragments = [
+        fragment
+        for turn in turn_ordinals
+        for fragment in grouped.get(turn, [])
+    ]
+    visible_ids = [
+        fragment["source_fragment_id"] for fragment in visible_fragments
+    ]
+    source_rows = []
+    for fragment in visible_fragments:
+        row = {
+            "source_fragment_id": fragment["source_fragment_id"],
+            "text": fragment["text"],
+        }
+        speaker = transcript.turns[fragment["turn"]].speaker
+        if transcript.attribution != NONE and speaker:
+            row["speaker"] = speaker
+        source_rows.append(row)
+    source_listing = json.dumps(
+        source_rows, ensure_ascii=False, separators=(",", ":")
+    )
+    schema = extraction_format(visible_ids)
+    user = (
+        "Visible source fragments from one transcript slice. The `text` fields "
+        "are exact and the array is in transcript order:\n\n"
+        f"{source_listing}\n\nExtract the records by source fragment ID."
+    )
+    return visible_fragments, visible_ids, schema, user
+
+
+def _claim_digest(row: dict) -> str:
+    digest = row.get("claim_sha256")
+    claim = row.get("claim")
+    if _valid_sha256(digest):
+        if isinstance(claim, str) and _sha256(claim) != digest:
+            raise StructuredOutputError(
+                "structured record claim disagrees with its digest")
+        return digest
+    if not isinstance(claim, str) or not claim:
+        raise StructuredOutputError("structured record has no claim digest")
+    return _sha256(claim)
+
+
+def _consolidation_input_contract(rows: list[dict]) -> list[dict]:
+    """Private-input surrogate that can be re-derived without retaining prose."""
+    contract = []
+    for row in rows:
+        fragment_ids = row.get("source_fragment_ids")
+        if fragment_ids is None:
+            fragment_ids = [
+                ref["source_fragment_id"] for ref in row["evidence_refs"]
+            ]
+        contract.append({
+            "evidence_item_id": row["evidence_item_id"],
+            "source_fragment_ids": list(fragment_ids),
+            "label": row["label"],
+            "claim_sha256": _claim_digest(row),
+        })
+    return contract
+
+
+def _validate_structured_contract(contract: dict, evidence: dict) -> tuple[int, int]:
+    """Re-derive counts and the explicit consolidation loss bound."""
+    required = {
+        "schema", "evidence_contract", "stage_receipt_contract",
+        "target_words", "overlap_words", "num_ctx", "temperature",
+        "model_identity_validation",
+        "input_sources", "covered_sources", "output_records", "rendered_claims",
+        "max_consolidation_group", "merged_groups", "max_observed_group",
+        "merge_semantics", "render_contract", "render_contract_sha256",
+    }
+    if not isinstance(contract, dict) or set(contract) != required:
+        raise StructuredOutputError("artifact structured run contract has the wrong shape")
+    if (contract["schema"] != STRUCTURED_RUN_CONTRACT
+            or contract["evidence_contract"] != SOURCE_EVIDENCE_CONTRACT
+            or contract["stage_receipt_contract"] != STRUCTURED_STAGE_RECEIPT):
+        raise StructuredOutputError("artifact structured run contract is not current")
+    target = contract["target_words"]
+    overlap = contract["overlap_words"]
+    if (not isinstance(target, int) or not isinstance(overlap, int)
+            or target <= 0 or not 0 <= overlap < target):
+        raise StructuredOutputError("artifact structured chunking parameters are invalid")
+    if (not isinstance(contract["num_ctx"], int) or contract["num_ctx"] <= 0
+            or contract["temperature"] != 0.0):
+        raise StructuredOutputError("artifact structured inference options are invalid")
+    if contract["model_identity_validation"] != (
+            "cross-checked receipt; historical tags response is not retained"):
+        raise StructuredOutputError(
+            "artifact structured model identity limitation is missing")
+    extraction_rows = evidence["extraction_items"]
+    consolidation_rows = evidence["consolidated_items"]
+    groups = [len(row["source_item_ids"]) for row in consolidation_rows]
+    expected = {
+        "input_sources": len(extraction_rows),
+        "covered_sources": sum(groups),
+        "output_records": len(consolidation_rows),
+        "rendered_claims": len(consolidation_rows),
+        "max_consolidation_group": MAX_CONSOLIDATION_GROUP,
+        "merged_groups": sum(size > 1 for size in groups),
+        "max_observed_group": max(groups, default=0),
+        "merge_semantics": (
+            "only byte-identical source claims may merge; consolidated semantic "
+            "fidelity is not mechanically verified"
+        ),
+    }
+    if any(contract.get(key) != value for key, value in expected.items()):
+        raise StructuredOutputError(
+            "artifact structured counts or consolidation bound do not re-derive")
+    render_contract_json = json.dumps(
+        STRUCTURED_NOTE_CONTRACT, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    )
+    if (contract["render_contract"] != STRUCTURED_NOTE_CONTRACT
+            or contract["render_contract_sha256"] != _sha256(render_contract_json)):
+        raise StructuredOutputError(
+            "artifact evidence-bound render contract is missing or changed")
+    return target, overlap
+
+
+def validate_structured_stage_receipts(stages: object, contract: dict, evidence: dict,
+                                       transcript: Transcript, model: object,
+                                       model_identity: object) -> list[dict]:
+    """Validate every retained receipt that can still be re-derived.
+
+    Extraction inputs are replayable from the retained transcript. Extraction-claim
+    prose inside the consolidation input and all raw responses are intentionally
+    absent, so their hashes are accepted only as explicitly labelled receipts; schema,
+    prompt template, model-receipt consistency, membership, and cardinality remain
+    mechanically checkable.
+    """
+    target, overlap = _validate_structured_contract(contract, evidence)
+    expected_options = {
+        "num_ctx": contract["num_ctx"],
+        "temperature": contract["temperature"],
+    }
+    if (not isinstance(model, str) or not model
+            or not isinstance(model_identity, dict)
+            or set(model_identity) != {"requested", "name", "digest"}
+            or model_identity.get("requested") != model
+            or not isinstance(model_identity.get("name"), str)
+            or not model_identity["name"]
+            or not _valid_sha256(model_identity.get("digest"))):
+        raise StructuredOutputError(
+            "structured run has no valid immutable summarization model identity")
+    if not isinstance(stages, list):
+        raise StructuredOutputError("structured stage receipts are missing")
+
+    fragment_map = build_fragment_map(transcript)
+    turn_windows = _chunk_turn_windows(transcript, target, overlap)
+    extraction_rows = evidence["extraction_items"]
+    consolidation_rows = evidence["consolidated_items"]
+    if len(stages) != len(turn_windows) + 1:
+        raise StructuredOutputError(
+            "structured stage receipt count does not match the chunking contract")
+    if any(row["slice_ordinal"] > len(turn_windows) for row in extraction_rows):
+        raise StructuredOutputError(
+            "source evidence extraction item belongs to no retained slice")
+    extract_system, consolidate_system = _structured_systems(transcript)
+    base_keys = {
+        "schema_contract", "stage", "source", "ordinal",
+        "model", "resolved_model", "model_digest", "options",
+        "schema", "schema_sha256", "system_prompt_sha256",
+        "input_prompt_sha256", "input_prompt_validation",
+        "response_sha256", "response_validation", "raw_response_retained",
+        "reference_context", "response_cardinality",
+    }
+    common_references = {
+        "transcript_view_sha256": fragment_map["transcript_view_sha256"],
+        "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
+        "fragment_map_sha256": fragment_map["fragment_map_sha256"],
+    }
+
+    for ordinal, turn_ordinals in enumerate(turn_windows, 1):
+        receipt = stages[ordinal - 1]
+        if not isinstance(receipt, dict) or set(receipt) != base_keys:
+            raise StructuredOutputError(
+                f"structured extraction receipt {ordinal} has the wrong shape")
+        visible, visible_ids, schema, user = _extraction_request(
+            transcript, fragment_map, turn_ordinals
+        )
+        selected = [
+            row for row in extraction_rows if row["slice_ordinal"] == ordinal
+        ]
+        visible_set = set(visible_ids)
+        if any(
+            fragment_id not in visible_set
+            for row in selected
+            for fragment_id in row["source_fragment_ids"]
+        ):
+            raise StructuredOutputError(
+                f"structured extraction receipt {ordinal} covers an unseen fragment")
+        expected_reference = {
+            **common_references,
+            "visible_fragment_ids_sha256": _json_sha256(visible_ids),
+            "visible_fragments": len(visible),
+            "selected_fragment_references": sum(
+                len(row["source_fragment_ids"]) for row in selected
+            ),
+        }
+        expected_cardinality = {
+            "items": len(selected),
+            "selected_fragment_references": expected_reference[
+                "selected_fragment_references"
+            ],
+        }
+        expected_source = (
+            f"{transcript.source} [slice {ordinal}/{len(turn_windows)}]"
+        )
+        if (
+            receipt["schema_contract"] != STRUCTURED_STAGE_RECEIPT
+            or receipt["stage"] != "extract"
+            or receipt["source"] != expected_source
+            or receipt["ordinal"] != ordinal
+            or receipt["model"] != model_identity["requested"]
+            or receipt["resolved_model"] != model_identity["name"]
+            or receipt["model_digest"] != model_identity["digest"]
+            or receipt["options"] != expected_options
+            or receipt["schema"] != schema
+            or receipt["schema_sha256"] != _json_sha256(schema)
+            or receipt["system_prompt_sha256"] != _sha256(extract_system)
+            or receipt["input_prompt_sha256"] != _sha256(user)
+            or receipt["input_prompt_validation"] != REPLAYABLE_INPUT
+            or not _valid_sha256(receipt["response_sha256"])
+            or receipt["response_validation"] != RECEIPT_ONLY_RESPONSE
+            or receipt["raw_response_retained"] is not False
+            or receipt["reference_context"] != expected_reference
+            or receipt["response_cardinality"] != expected_cardinality
+        ):
+            raise StructuredOutputError(
+                f"structured extraction receipt {ordinal} does not re-derive")
+
+    receipt = stages[-1]
+    consolidation_keys = base_keys | {
+        "input_records_sha256", "input_records_validation",
+        "input_contract_sha256", "input_prompt_template_sha256",
+    }
+    if not isinstance(receipt, dict) or set(receipt) != consolidation_keys:
+        raise StructuredOutputError(
+            "structured consolidation receipt has the wrong shape")
+    input_contract = _consolidation_input_contract(extraction_rows)
+    consolidation_schema = consolidation_format([
+        row["evidence_item_id"] for row in extraction_rows
+    ])
+    consolidation_reference = {
+        **common_references,
+        "input_evidence_items": len(extraction_rows),
+        "output_records": len(consolidation_rows),
+    }
+    consolidation_cardinality = {
+        "items": len(consolidation_rows),
+        "covered_source_items": sum(
+            len(row["source_item_ids"]) for row in consolidation_rows
+        ),
+    }
+    if (
+        receipt["schema_contract"] != STRUCTURED_STAGE_RECEIPT
+        or receipt["stage"] != "consolidate"
+        or receipt["source"] != "consolidate"
+        or receipt["ordinal"] != len(turn_windows) + 1
+        or receipt["model"] != model_identity["requested"]
+        or receipt["resolved_model"] != model_identity["name"]
+        or receipt["model_digest"] != model_identity["digest"]
+        or receipt["options"] != expected_options
+        or receipt["schema"] != consolidation_schema
+        or receipt["schema_sha256"] != _json_sha256(consolidation_schema)
+        or receipt["system_prompt_sha256"] != _sha256(consolidate_system)
+        or not _valid_sha256(receipt["input_prompt_sha256"])
+        or receipt["input_prompt_validation"] != RECEIPT_ONLY_INPUT
+        or receipt["input_prompt_template_sha256"]
+        != _sha256(CONSOLIDATION_USER_TEMPLATE)
+        or not _valid_sha256(receipt["input_records_sha256"])
+        or receipt["input_records_validation"] != RECEIPT_ONLY_INPUT
+        or receipt["input_contract_sha256"] != _json_sha256(input_contract)
+        or not _valid_sha256(receipt["response_sha256"])
+        or receipt["response_validation"] != RECEIPT_ONLY_RESPONSE
+        or receipt["raw_response_retained"] is not False
+        or receipt["reference_context"] != consolidation_reference
+        or receipt["response_cardinality"] != consolidation_cardinality
+    ):
+        raise StructuredOutputError(
+            "structured consolidation receipt does not re-derive")
+    return stages
 
 # The order the contract now asks for: spoken words, pipe, label, item. The quote
 # group excludes pipes, so it cannot swallow a later field by backtracking.
@@ -2543,14 +3032,11 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
     to select, so no step faces the ratio that causes the loss.
 
     This is not free. It makes one model call per slice plus one, and it
-    introduces a second place for omission to happen — the merge. The extracted
-    items are returned alongside the note precisely so the two stages can be
-    scored separately: if extraction finds a commitment the note lacks, the
-    defect is in the merge, which is a different fix.
+    introduces a second place for omission to happen — the merge. The durable
+    graph keeps item identities, claim digests, and exact coverage so the two
+    stages can be audited without writing a second transcript-derived sidecar.
     """
-    contract = CONTRACTS[transcript.attribution]
-    extract_system = EXTRACT_STRUCTURED_RULES + "\n\n" + contract
-    consolidate_system = CONSOLIDATE_STRUCTURED_RULES + "\n\n" + contract
+    extract_system, consolidate_system = _structured_systems(transcript)
     turn_windows = _chunk_turn_windows(transcript, target_words, overlap_words)
     slices = [
         transcript._derived(
@@ -2565,43 +3051,19 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         fragment["source_fragment_id"]: fragment
         for fragment in fragment_map["fragments"]
     }
-    fragments_by_turn: dict[int, list[dict]] = {}
-    for fragment in fragment_map["fragments"]:
-        fragments_by_turn.setdefault(fragment["turn"], []).append(fragment)
     live_model_identity = model_identity is None
     identity = model_identity or resolve_ollama_model(model, min(timeout, 30))
+    if identity.get("requested") != model:
+        raise StructuredOutputError(
+            "summarization model identity does not match the requested model")
 
     t0 = time.monotonic()
     calls, items, stage_provenance = [], [], []
     selected_fragment_count = 0
     for ordinal, (chunk, turn_ordinals) in enumerate(
             zip(slices, turn_windows, strict=True), 1):
-        visible_fragments = [
-            fragment
-            for turn in turn_ordinals
-            for fragment in fragments_by_turn.get(turn, [])
-        ]
-        visible_ids = [
-            fragment["source_fragment_id"] for fragment in visible_fragments
-        ]
-        source_rows = []
-        for fragment in visible_fragments:
-            row = {
-                "source_fragment_id": fragment["source_fragment_id"],
-                "text": fragment["text"],
-            }
-            speaker = transcript.turns[fragment["turn"]].speaker
-            if transcript.attribution != NONE and speaker:
-                row["speaker"] = speaker
-            source_rows.append(row)
-        source_listing = json.dumps(
-            source_rows, ensure_ascii=False, separators=(",", ":")
-        )
-        schema = extraction_format(visible_ids)
-        user = (
-            "Visible source fragments from one transcript slice. The `text` fields "
-            "are exact and the array is in transcript order:\n\n"
-            f"{source_listing}\n\nExtract the records by source fragment ID."
+        _visible_fragments, visible_ids, schema, user = _extraction_request(
+            transcript, fragment_map, turn_ordinals
         )
         response = ollama_chat(model, extract_system, user, num_ctx, timeout,
                                schema)
@@ -2625,17 +3087,19 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         selected_fragment_count += sum(
             len(item["source_fragment_ids"]) for item in attached
         )
-        visible_ids_json = json.dumps(
-            visible_ids, ensure_ascii=False, separators=(",", ":")
-        )
         stage_provenance.append(_response_provenance(
             "extract", chunk.source, ordinal, response, schema, identity, num_ctx,
             extract_system, user, reference_context={
                 "transcript_view_sha256": fragment_map["transcript_view_sha256"],
                 "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
                 "fragment_map_sha256": fragment_map["fragment_map_sha256"],
-                "visible_fragment_ids_sha256": _sha256(visible_ids_json),
+                "visible_fragment_ids_sha256": _json_sha256(visible_ids),
                 "visible_fragments": len(visible_ids),
+                "selected_fragment_references": sum(
+                    len(item["source_fragment_ids"]) for item in attached
+                ),
+            }, response_cardinality={
+                "items": len(attached),
                 "selected_fragment_references": sum(
                     len(item["source_fragment_ids"]) for item in attached
                 ),
@@ -2661,8 +3125,7 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
     listing = json.dumps(
         consolidation_inputs, ensure_ascii=False, separators=(",", ":")
     )
-    user = ("Validated extracted records from the meeting, in order:\n\n"
-            f"{listing}\n\nWrite a non-empty summary, then consolidate the records.")
+    user = CONSOLIDATION_USER_TEMPLATE.format(records=listing)
     consolidate_schema = consolidation_format(
         [item["evidence_item_id"] for item in items]
     )
@@ -2679,11 +3142,20 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
     stage_provenance.append(_response_provenance(
         "consolidate", "consolidate", len(slices) + 1, response,
         consolidate_schema, identity, num_ctx, consolidate_system, user,
-        input_records=listing, reference_context={
+        input_records=listing,
+        input_contract=_consolidation_input_contract(items),
+        input_prompt_template=CONSOLIDATION_USER_TEMPLATE,
+        reference_context={
             "transcript_view_sha256": fragment_map["transcript_view_sha256"],
             "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
             "fragment_map_sha256": fragment_map["fragment_map_sha256"],
             "input_evidence_items": len(items),
+            "output_records": len(consolidated["items"]),
+        }, response_cardinality={
+            "items": len(consolidated["items"]),
+            "covered_source_items": sum(
+                len(item["source_item_ids"]) for item in consolidated["items"]
+            ),
         }))
     if (live_model_identity
             and resolve_ollama_model(model, min(timeout, 30)) != identity):
@@ -2691,18 +3163,13 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
             "summarization model identity changed during inference; no note written"
         )
 
-    note = render_structured_note(consolidated["summary"], consolidated["items"])
+    note = render_structured_note(consolidated["items"])
     try:
         rendered = validate_structured_render(note, consolidated["items"])
     except StructuredOutputError as e:
         raise SystemExit(f"structured rendering refused: {e}") from e
-    extracted_display = [
-        f"- [{item['label']}] {item['claim']}\n"
-        + "\n".join(f"  > {ref['quote']}" for ref in item["evidence_refs"])
-        for item in items
-    ]
     evidence_contract = {
-        "schema": "source-evidence/1",
+        "schema": SOURCE_EVIDENCE_CONTRACT,
         "transcript_view_sha256": fragment_map["transcript_view_sha256"],
         "fragment_contract": fragment_map["fragment_contract"],
         "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
@@ -2710,24 +3177,32 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         "extraction_items": [
             {
                 "evidence_item_id": item["evidence_item_id"],
+                "slice_ordinal": item["slice_ordinal"],
                 "source_fragment_ids": item["source_fragment_ids"],
                 "label": item["label"],
+                "claim_sha256": item["claim_sha256"],
             }
             for item in items
         ],
         "consolidated_items": [
             {
                 "source_item_ids": item["source_item_ids"],
+                "source_claim_sha256s": item["source_claim_sha256s"],
                 "source_fragment_ids": [
                     ref["source_fragment_id"] for ref in item["evidence_refs"]
                 ],
                 "label": item["label"],
+                "claim_sha256": item["claim_sha256"],
             }
             for item in consolidated["items"]
         ],
     }
+    render_contract_json = json.dumps(
+        STRUCTURED_NOTE_CONTRACT, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
     return {
+        "claim_evidence_contract": SOURCE_EVIDENCE_CONTRACT,
         "note": note,
         "elapsed_s": elapsed,
         "model": model,
@@ -2735,18 +3210,41 @@ def summarize_chunked(transcript: Transcript, model: str, num_ctx: int, timeout:
         "rendered": transcript.render(),
         "system": extract_system + "\n" + consolidate_system,
         "calls": calls,
-        "extracted": extracted_display,
-        "extracted_records": items,
         "consolidated_records": consolidated,
         "evidence_contract": evidence_contract,
         "structured_render": rendered,
         "structured_provenance": stage_provenance,
         "structured_contract": {
+            "schema": STRUCTURED_RUN_CONTRACT,
+            "evidence_contract": SOURCE_EVIDENCE_CONTRACT,
+            "stage_receipt_contract": STRUCTURED_STAGE_RECEIPT,
+            "target_words": target_words,
+            "overlap_words": overlap_words,
+            "num_ctx": num_ctx,
+            "temperature": 0.0,
+            "model_identity_validation": (
+                "cross-checked receipt; historical tags response is not retained"
+            ),
             "input_sources": len(items),
             "covered_sources": sum(
                 len(item["source_item_ids"]) for item in consolidated["items"]),
             "output_records": len(consolidated["items"]),
             "rendered_claims": rendered["rendered_claims"],
+            "max_consolidation_group": MAX_CONSOLIDATION_GROUP,
+            "merged_groups": sum(
+                len(item["source_item_ids"]) > 1
+                for item in consolidated["items"]
+            ),
+            "max_observed_group": max(
+                (len(item["source_item_ids"]) for item in consolidated["items"]),
+                default=0,
+            ),
+            "merge_semantics": (
+                "only byte-identical source claims may merge; consolidated semantic "
+                "fidelity is not mechanically verified"
+            ),
+            "render_contract": dict(STRUCTURED_NOTE_CONTRACT),
+            "render_contract_sha256": _sha256(render_contract_json),
         },
         "extraction": {
             "applies": True,
@@ -2814,6 +3312,17 @@ def report(result: dict, transcript: Transcript, stripped_speakers: list[str],
                   "resolved at exact spans")
         for line in extraction["dropped"]:
             print(f"                DROPPED (looks like an item, parsed as none): {line}")
+    if runtime_uses_source_evidence(result):
+        structured_contract = result["structured_contract"]
+        print(
+            f"  consolidate   {structured_contract['merged_groups']} byte-identical "
+            f"claim group(s); largest {structured_contract['max_observed_group']}/"
+            f"{structured_contract['max_consolidation_group']}"
+        )
+        print(
+            "                member IDs and claim digests retained; fidelity of each "
+            "rewritten output claim is not mechanically proven"
+        )
     if result.get("duplicates_removed"):
         # Reported, not hidden. The consolidator repeating itself is a fact about the
         # chunked path's reliability, and the note it came from no longer shows it.
@@ -3182,7 +3691,7 @@ def validate_support_measurement(doc: dict, transcript: Transcript) -> dict | No
     if "evidence" not in doc:
         raise StructuredOutputError(
             "Repair 4 artifact is missing its source evidence graph")
-    validate_evidence_contract(doc["evidence"], transcript)
+    structured_artifact_citations(doc, transcript)
     if support is None:
         return None
     if not isinstance(support, dict) or support.get("schema") != "support-measurement/1":
@@ -3462,8 +3971,10 @@ def recheck(artifact: Path) -> dict:
     are not stored; carrying their stored verdicts forward is honest, silently
     recomputing them against a substitute input would not be. Repair 4's declared
     fragment spans and exact-once coverage do survive and are revalidated here. Raw
-    model responses do not, so key generation order and schema compliance remain pinned
-    by hashes rather than replayed.
+    model responses do not; their content, key order, and schema compliance cannot be
+    replayed. The receipt says only which response hash was observed. Schemas,
+    extraction inputs, membership, and counts are re-derived; model identity is only
+    cross-checked among retained receipt fields.
     """
     doc = json.loads(artifact.read_text())
     if doc.get("schema") != NOTE_SCHEMA:
@@ -3570,6 +4081,9 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
 
     artifact = {
         "schema": NOTE_SCHEMA,
+        **({
+            "claim_evidence_contract": SOURCE_EVIDENCE_CONTRACT
+        } if structured else {}),
         "meeting": {
             "id": transcript_path.stem,
             "source": transcript.source,
@@ -3606,16 +4120,17 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
             "model": result["model"],
             "model_identity": result.get("model_identity"),
             "elapsed_s": round(result["elapsed_s"], 1),
-            "passes": 2 if "extracted" in result else 1,
+            "passes": 2 if structured else 1,
             "slices": result.get("slices"),
             # `null` on both current paths: live Markdown is never deduplicated after
             # generation. Kept for note/1 compatibility with older artifacts that
             # recorded the now-retired chunked Markdown pass.
             "duplicates_removed": result.get("duplicates_removed"),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            # Raw model replies contain transcript-derived evidence.  Keep their
-            # hashes and the exact schemas/options needed to audit the contract, not
-            # a second copy of the meeting in an artifact a UI may export.
+            # Raw model replies contain transcript-derived evidence. Keep only their
+            # explicitly receipt-only hashes. Schemas, replayable extraction inputs,
+            # options, references, and counts are retained for mechanical recheck,
+            # without a second transcript in an artifact a UI may export.
             "structured_stages": result.get("structured_provenance"),
             "structured_contract": result.get("structured_contract"),
             "source_evidence": (
@@ -3635,6 +4150,34 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
         "passed": checks["passed"],
     }
     return artifact
+
+
+def write_note_outputs(result: dict, transcript: Transcript, checks: dict,
+                       transcript_path: Path, out: Path,
+                       transform: str | None = None) -> tuple[dict, tuple[Path, Path]]:
+    """Write the two durable note surfaces and no extraction-text sidecar."""
+    validate_output_target(out)
+    markdown = out
+    artifact = out.with_suffix(".note.json")
+    markdown.write_text(result["note"] + "\n")
+    doc = note_artifact(
+        result, transcript, checks, transcript_path, out.parent, transform
+    )
+    artifact.write_text(json.dumps(doc, indent=2) + "\n")
+    return doc, (markdown, artifact)
+
+
+def validate_output_target(out: Path) -> None:
+    """Refuse a basename that still carries the retired verbatim sidecar."""
+    if out.name.endswith(".items.md"):
+        raise StructuredOutputError(
+            "--out cannot use the retired .items.md sidecar name")
+    stale_sidecar = out.with_suffix(".items.md")
+    if stale_sidecar.exists() or stale_sidecar.is_symlink():
+        raise StructuredOutputError(
+            f"--out refused: retired extraction sidecar still exists at "
+            f"{stale_sidecar}. Move or remove it explicitly before this run."
+        )
 
 
 _STOPWORDS = {"the", "of", "and", "a", "on", "about", "for", "to", "in", "last",
@@ -4516,15 +5059,18 @@ def run_self_test() -> int:
         '{"items":[]}', "extract", allowed_fragment_ids=fragment_ids
     )
     empty_consolidation = decode_records(
-        '{"summary":"No note items were found.","items":[]}',
+        '{"items":[]}',
         "consolidate", input_items=[],
     )
+    empty_note = render_structured_note(empty_consolidation["items"])
     control(
-        "schema-valid empty stages remain distinct from failed transport",
+        "schema-valid empty stages render an explicit local no-claims state",
         empty_extract == {"items": []}
-        and empty_consolidation == {
-            "summary": "No note items were found.", "items": [],
-        },
+        and empty_consolidation == {"items": []}
+        and empty_note == (
+            "## Evidence-bound note\nNo evidence-bound claims were produced."
+        )
+        and not _parse_claims(empty_note),
     )
     shared_fragment = decode_records(
         json.dumps({
@@ -4571,7 +5117,6 @@ def run_self_test() -> int:
     source_ids = [row["evidence_item_id"] for row in source_items]
     dynamic_consolidate = consolidation_format(source_ids)
     valid_consolidation_raw = json.dumps({
-        "summary": "The exact evidence contract was discussed.",
         "items": [
             {
                 "source_item_ids": [source_ids[0]],
@@ -4590,7 +5135,9 @@ def run_self_test() -> int:
     )
     control(
         "consolidation groups first and resolves a canonical ordered fragment union locally",
-        tuple(dynamic_consolidate["properties"]["items"]["items"]["properties"])
+        tuple(dynamic_consolidate["properties"]) == ("items",)
+        and "summary" not in json.dumps(dynamic_consolidate)
+        and tuple(dynamic_consolidate["properties"]["items"]["items"]["properties"])
         == ("source_item_ids", "label", "claim")
         and len(consolidated_new["items"][0]["evidence_refs"]) == 2
         and consolidated_new["items"][0]["quote"]
@@ -4599,7 +5146,7 @@ def run_self_test() -> int:
 
     def consolidation_case(label: str, rows: list[dict], want_ok: bool) -> None:
         raw = json.dumps(
-            {"summary": "A valid nonempty summary.", "items": rows},
+            {"items": rows},
             separators=(",", ":"),
         )
         try:
@@ -4640,10 +5187,74 @@ def run_self_test() -> int:
         [{"source_item_ids": source_ids, "label": "QUESTION", "claim": "Crossed"}],
         False,
     )
+    duplicate_inputs = []
+    for index in range(1, 5):
+        duplicate = json.loads(json.dumps(source_items[0]))
+        duplicate["evidence_item_id"] = f"duplicate-{index}"
+        duplicate_inputs.append(duplicate)
+    bounded_duplicate = decode_records(
+        json.dumps({
+            "items": [{
+                "source_item_ids": [
+                    row["evidence_item_id"] for row in duplicate_inputs[:3]
+                ],
+                "label": duplicate_inputs[0]["label"],
+                "claim": "Keep the source evidence exact",
+            }],
+        }, separators=(",", ":")),
+        "consolidate", input_items=duplicate_inputs[:3],
+    )
+    four_way_refused = False
+    try:
+        decode_records(
+            json.dumps({
+                "items": [{
+                    "source_item_ids": [
+                        row["evidence_item_id"] for row in duplicate_inputs
+                    ],
+                    "label": duplicate_inputs[0]["label"],
+                    "claim": "Keep the source evidence exact",
+                }],
+            }, separators=(",", ":")),
+            "consolidate", input_items=duplicate_inputs,
+        )
+    except StructuredOutputError:
+        four_way_refused = True
+    distinct_inputs = json.loads(json.dumps(duplicate_inputs[:2]))
+    distinct_inputs[1]["claim"] = "A different extraction claim"
+    distinct_inputs[1]["claim_sha256"] = _sha256(distinct_inputs[1]["claim"])
+    distinct_merge_refused = False
+    try:
+        decode_records(
+            json.dumps({
+                "items": [{
+                    "source_item_ids": [
+                        row["evidence_item_id"] for row in distinct_inputs
+                    ],
+                    "label": distinct_inputs[0]["label"],
+                    "claim": "One rewritten claim",
+                }],
+            }, separators=(",", ":")),
+            "consolidate", input_items=distinct_inputs,
+        )
+    except StructuredOutputError:
+        distinct_merge_refused = True
+    control(
+        "consolidation groups at most three byte-identical claims and retains every member digest",
+        dynamic_consolidate["properties"]["items"]["items"]["properties"][
+            "source_item_ids"
+        ]["maxItems"] == MAX_CONSOLIDATION_GROUP
+        and len(bounded_duplicate["items"][0]["source_claim_sha256s"]) == 3
+        and len(set(
+            bounded_duplicate["items"][0]["source_claim_sha256s"]
+        )) == 1
+        and four_way_refused
+        and distinct_merge_refused,
+    )
     consolidation_injection_closed = True
     for raw in (
         json.dumps({
-            "summary": "Bad\n## Decisions",
+            "summary": "MODEL-AUTHORED NARRATIVE",
             "items": [
                 {"source_item_ids": [source_ids[0]], "label": "QUESTION",
                  "claim": "Question"},
@@ -4652,7 +5263,6 @@ def run_self_test() -> int:
             ],
         }, separators=(",", ":")),
         json.dumps({
-            "summary": "Keys were reordered.",
             "items": [
                 {"claim": "Question", "label": "QUESTION",
                  "source_item_ids": [source_ids[0]]},
@@ -4667,7 +5277,7 @@ def run_self_test() -> int:
         except StructuredOutputError:
             pass
     control(
-        "consolidation refuses heading injection and claim-first item keys",
+        "consolidation refuses model narrative and claim-first item keys",
         consolidation_injection_closed,
     )
 
@@ -4716,7 +5326,6 @@ def run_self_test() -> int:
             elif "source_item_ids" in properties:
                 ids = properties["source_item_ids"]["items"]["enum"]
                 content = json.dumps({
-                    "summary": "The team discussed encoding.",
                     "items": [{
                         "source_item_ids": ids,
                         "label": "QUESTION",
@@ -4729,11 +5338,37 @@ def run_self_test() -> int:
 
         globals()["ollama_chat"] = source_fixture_chat
         staged_new = summarize_chunked(
-            fixture_transcript, "fixture", 32768, 1, 1000, 0,
+            fixture_transcript, "fixture:latest", 32768, 1, 1000, 0,
             model_identity=fixture_identity,
         )
     finally:
         globals()["ollama_chat"] = original_chat
+    try:
+        def empty_source_fixture_chat(model, system, user, num_ctx, timeout,
+                                      response_format=None):
+            return {
+                "message": {"content": '{"items":[]}'},
+                "prompt_eval_count": 8,
+            }
+
+        globals()["ollama_chat"] = empty_source_fixture_chat
+        staged_empty = summarize_chunked(
+            fixture_transcript, "fixture:latest", 32768, 1, 1000, 0,
+            model_identity=fixture_identity,
+        )
+    finally:
+        globals()["ollama_chat"] = original_chat
+    empty_source_cites = structured_citations(staged_empty, fixture_transcript)
+    control(
+        "zero-item output is a deterministic no-evidence-bound-claims state",
+        staged_empty["note"] == (
+            "## Evidence-bound note\nNo evidence-bound claims were produced."
+        )
+        and staged_empty["consolidated_records"] == {"items": []}
+        and staged_empty["evidence_contract"]["extraction_items"] == []
+        and staged_empty["evidence_contract"]["consolidated_items"] == []
+        and empty_source_cites["cited"] == [],
+    )
     source_cites = structured_citations(staged_new, fixture_transcript)
     structured_checks = {
         **stored,
@@ -4769,18 +5404,152 @@ def run_self_test() -> int:
         ),
     )
     control(
-        "structured provenance pins view, map, contract, schemas, and model without raw output",
+        "structured receipts re-derive available inputs and label private inputs as receipt-only",
         all(row["model_digest"] == fixture_identity["digest"]
                 for row in staged_new["structured_provenance"])
         and all("raw_response" not in row
                 for row in staged_new["structured_provenance"])
+        and all(row["raw_response_retained"] is False
+                and row["response_validation"] == RECEIPT_ONLY_RESPONSE
+                for row in staged_new["structured_provenance"])
+        and all(
+            row["input_prompt_validation"] == REPLAYABLE_INPUT
+            for row in staged_new["structured_provenance"]
+            if row["stage"] == "extract"
+        )
+        and staged_new["structured_provenance"][-1][
+            "input_prompt_validation"
+        ] == RECEIPT_ONLY_INPUT
+        and staged_new["structured_provenance"][-1][
+            "input_records_validation"
+        ] == RECEIPT_ONLY_INPUT
         and all({"transcript_view_sha256", "fragment_contract_sha256",
                  "fragment_map_sha256"}
                 <= row["reference_context"].keys()
                 for row in staged_new["structured_provenance"])
+        and validate_structured_stage_receipts(
+            staged_new["structured_provenance"],
+            staged_new["structured_contract"],
+            staged_new["evidence_contract"],
+            fixture_transcript,
+            staged_new["model"],
+            staged_new["model_identity"],
+        ) is staged_new["structured_provenance"]
         and structured_doc["provenance"]["source_evidence"][
             "transcript_view_sha256"
-        ] == transcript_view_sha256(fixture_transcript),
+        ] == transcript_view_sha256(fixture_transcript)
+        and staged_new["structured_contract"]["render_contract"]
+        == STRUCTURED_NOTE_CONTRACT
+        and staged_new["structured_contract"]["render_contract_sha256"]
+        == _sha256(json.dumps(
+            STRUCTURED_NOTE_CONTRACT, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"),
+        ))
+    )
+    with tempfile.TemporaryDirectory(prefix="repair4-output-control-") as tmp:
+        output_path = Path(tmp) / "fixture.md"
+        validate_output_target(output_path)
+        _written_doc, written_paths = write_note_outputs(
+            staged_new, fixture_transcript,
+            {"passed": verdict(structured_checks), **structured_checks},
+            Path("fixture.json"), output_path,
+        )
+        written_names = {path.name for path in written_paths}
+        actual_names = {path.name for path in Path(tmp).iterdir()}
+        stale_output = Path(tmp) / "stale.md"
+        stale_output.with_suffix(".items.md").write_text(
+            "retired transcript-derived evidence"
+        )
+        try:
+            validate_output_target(stale_output)
+            stale_sidecar_refused = False
+        except StructuredOutputError:
+            stale_sidecar_refused = True
+    control(
+        "Repair 4 writes only Markdown and note JSON, with no extracted-text sidecar",
+        "extracted" not in staged_new
+        and "extracted_records" not in staged_new
+        and structured_doc["claim_evidence_contract"]
+        == SOURCE_EVIDENCE_CONTRACT
+        and written_names == actual_names
+        == {"fixture.md", "fixture.note.json"}
+        and stale_sidecar_refused,
+    )
+    receipt_tampers = []
+    tampered_schema = json.loads(json.dumps(structured_doc))
+    tampered_schema["provenance"]["structured_stages"][0]["schema"][
+        "tampered"
+    ] = True
+    tampered_schema["provenance"]["structured_stages"][0][
+        "schema_sha256"
+    ] = _json_sha256(
+        tampered_schema["provenance"]["structured_stages"][0]["schema"]
+    )
+    receipt_tampers.append(tampered_schema)
+    tampered_model = json.loads(json.dumps(structured_doc))
+    tampered_model["provenance"]["structured_stages"][0][
+        "model_digest"
+    ] = "b" * 64
+    receipt_tampers.append(tampered_model)
+    tampered_cardinality = json.loads(json.dumps(structured_doc))
+    tampered_cardinality["provenance"]["structured_stages"][0][
+        "response_cardinality"
+    ]["items"] += 1
+    receipt_tampers.append(tampered_cardinality)
+    tampered_input_contract = json.loads(json.dumps(structured_doc))
+    tampered_input_contract["provenance"]["structured_stages"][-1][
+        "input_contract_sha256"
+    ] = "c" * 64
+    receipt_tampers.append(tampered_input_contract)
+    receipt_tampers_refused = True
+    for candidate in receipt_tampers:
+        try:
+            structured_artifact_citations(candidate, fixture_transcript)
+            receipt_tampers_refused = False
+        except StructuredOutputError:
+            pass
+    control(
+        "tampered stage schema, model, cardinality, or input contract fails recheck",
+        receipt_tampers_refused,
+    )
+    narrative_runtime = json.loads(json.dumps(staged_new))
+    narrative_runtime["note"] += "\nMODEL-AUTHORED NARRATIVE"
+    narrative_artifact = json.loads(json.dumps(structured_doc))
+    narrative_artifact["note"] += "\nMODEL-AUTHORED NARRATIVE"
+    narrative_refused = True
+    for candidate, validator in (
+        (narrative_runtime, lambda value: structured_citations(
+            value, fixture_transcript
+        )),
+        (narrative_artifact, lambda value: structured_artifact_citations(
+            value, fixture_transcript
+        )),
+    ):
+        try:
+            validator(candidate)
+            narrative_refused = False
+        except StructuredOutputError:
+            pass
+    control(
+        "no model-authored narrative can survive beside evidence-covered records",
+        narrative_refused,
+    )
+    coordinated_claim = json.loads(json.dumps(structured_doc))
+    original_claim = coordinated_claim["claims"][0]["claim"]
+    changed_claim = "A coordinated but unsupported replacement claim"
+    coordinated_claim["note"] = coordinated_claim["note"].replace(
+        original_claim, changed_claim, 1
+    )
+    coordinated_claim["claims"][0]["claim"] = changed_claim
+    coordinated_claim["claims"][0]["claim_sha256"] = _sha256(changed_claim)
+    try:
+        structured_artifact_citations(coordinated_claim, fixture_transcript)
+        coordinated_claim_refused = False
+    except StructuredOutputError:
+        coordinated_claim_refused = True
+    control(
+        "changing Markdown and claims together cannot outrun the durable claim digest",
+        coordinated_claim_refused,
     )
     recall_was_called = False
     original_check_recall = check_recall
@@ -4792,14 +5561,31 @@ def run_self_test() -> int:
 
     globals()["check_recall"] = forbidden_recall
     malformed_runtime_refused = True
-    for mutation in ("wrong digest", "empty graph", "removed graph"):
+    for mutation in (
+        "wrong digest", "empty graph", "removed graph",
+        "heading only", "runtime signature only",
+    ):
         malformed_runtime = json.loads(json.dumps(staged_new))
         if mutation == "wrong digest":
             malformed_runtime["evidence_contract"]["fragment_map_sha256"] = "0" * 64
         elif mutation == "empty graph":
             malformed_runtime["evidence_contract"] = {}
-        else:
+        elif mutation == "removed graph":
             del malformed_runtime["evidence_contract"]
+        else:
+            for key in (
+                "claim_evidence_contract", "evidence_contract",
+                "consolidated_records", "structured_provenance",
+                "structured_contract",
+            ):
+                malformed_runtime.pop(key, None)
+            if mutation == "heading only":
+                malformed_runtime.pop("model_identity", None)
+                malformed_runtime.pop("slices", None)
+            else:
+                malformed_runtime["note"] = malformed_runtime["note"].replace(
+                    STRUCTURED_NOTE_CONTRACT["heading"], "## Damaged heading", 1
+                )
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 report(
@@ -4811,7 +5597,7 @@ def run_self_test() -> int:
             pass
     globals()["check_recall"] = original_check_recall
     control(
-        "wrong, empty, or removed evidence is refused before any recall-model work",
+        "damaged or stripped runtime evidence is refused before any recall-model work",
         malformed_runtime_refused and not recall_was_called,
     )
     support_prompt = _support_judge_prompt(
@@ -4890,6 +5676,19 @@ def run_self_test() -> int:
     valid_support = validate_support_measurement(
         support_doc, fixture_transcript
     ) is support_doc["support"]
+    support_surface_tamper = json.loads(json.dumps(support_doc))
+    support_surface_tamper["note"] = support_surface_tamper["note"].replace(
+        support_claim["claim"], changed_claim, 1
+    )
+    support_surface_tamper["claims"][0]["claim"] = changed_claim
+    support_surface_tamper["claims"][0]["claim_sha256"] = _sha256(changed_claim)
+    try:
+        validate_support_measurement(
+            support_surface_tamper, fixture_transcript
+        )
+        support_surface_tamper_refused = False
+    except StructuredOutputError:
+        support_surface_tamper_refused = True
     support_doc["support"]["verdicts"][0]["supports"] = False
     try:
         validate_support_measurement(support_doc, fixture_transcript)
@@ -4898,24 +5697,49 @@ def run_self_test() -> int:
         changed_support_refused = True
     control(
         "displayed support is re-derived from model, calibration, prompt, and evidence receipts",
-        valid_support and changed_support_refused,
+        valid_support and changed_support_refused
+        and support_surface_tamper_refused,
     )
     empty_artifact = json.loads(json.dumps(structured_doc))
     empty_artifact["evidence"] = {}
     removed_artifact = json.loads(json.dumps(structured_doc))
     del removed_artifact["evidence"]
+    stripped_artifact = json.loads(json.dumps(structured_doc))
+    del stripped_artifact["claim_evidence_contract"]
+    del stripped_artifact["evidence"]
+    for key in ("source_evidence", "structured_stages", "structured_contract"):
+        stripped_artifact["provenance"].pop(key, None)
+    for claim in stripped_artifact["claims"]:
+        for key in (
+            "source_item_ids", "source_claim_sha256s", "claim_sha256",
+            "evidence_refs",
+        ):
+            claim.pop(key, None)
+    stripped_identity_artifact = json.loads(json.dumps(stripped_artifact))
+    stripped_identity_artifact["provenance"].pop("model_identity", None)
+    authority_only_artifact = json.loads(json.dumps(stripped_identity_artifact))
+    authority_only_artifact["note"] = authority_only_artifact["note"].replace(
+        STRUCTURED_NOTE_CONTRACT["heading"], "## Damaged heading", 1
+    )
+    authority_only_artifact["checks"]["citations"]["authority"] = "damaged"
     artifact_downgrades_refused = (
         artifact_uses_source_evidence(empty_artifact)
         and artifact_uses_source_evidence(removed_artifact)
+        and artifact_uses_source_evidence(stripped_artifact)
+        and artifact_uses_source_evidence(stripped_identity_artifact)
+        and artifact_uses_source_evidence(authority_only_artifact)
     )
-    for damaged in (empty_artifact, removed_artifact):
+    for damaged in (
+        empty_artifact, removed_artifact, stripped_artifact,
+        stripped_identity_artifact, authority_only_artifact,
+    ):
         try:
             structured_artifact_citations(damaged, fixture_transcript)
             artifact_downgrades_refused = False
         except StructuredOutputError:
             pass
     control(
-        "empty or removed Repair 4 evidence cannot downgrade an artifact to legacy",
+        "empty, removed, or stripped Repair 4 graph/provenance cannot downgrade to legacy",
         artifact_downgrades_refused,
     )
     different_evidence = {
@@ -4938,6 +5762,32 @@ def run_self_test() -> int:
     except StructuredOutputError:
         tamper_refused = True
     control("a reordered durable evidence union fails recheck", tamper_refused)
+    digest_tampers_refused = True
+    for field in ("claim_sha256", "source_claim_sha256s"):
+        damaged = json.loads(json.dumps(structured_doc))
+        row = damaged["evidence"]["consolidated_items"][0]
+        if field == "claim_sha256":
+            row[field] = "d" * 64
+        else:
+            row[field][0] = "e" * 64
+        try:
+            structured_artifact_citations(damaged, fixture_transcript)
+            digest_tampers_refused = False
+        except StructuredOutputError:
+            pass
+    extraction_digests = Counter(
+        row["claim_sha256"]
+        for row in structured_doc["evidence"]["extraction_items"]
+    )
+    covered_digests = Counter(
+        digest
+        for row in structured_doc["evidence"]["consolidated_items"]
+        for digest in row["source_claim_sha256s"]
+    )
+    control(
+        "output and member claim digests fail closed and cover every extraction claim once",
+        digest_tampers_refused and extraction_digests == covered_digests,
+    )
 
     # The same source fragment may be selected independently in overlapping slices.
     # Record coverage, not fragment uniqueness across the meeting, is the invariant.
@@ -4945,11 +5795,16 @@ def run_self_test() -> int:
     first_input = overlap_evidence["extraction_items"][0]
     overlap_evidence["extraction_items"].append({
         "evidence_item_id": "slice-0002-item-0001",
+        "slice_ordinal": 2,
         "source_fragment_ids": list(first_input["source_fragment_ids"]),
         "label": first_input["label"],
+        "claim_sha256": first_input["claim_sha256"],
     })
     overlap_evidence["consolidated_items"][0]["source_item_ids"].append(
         "slice-0002-item-0001"
+    )
+    overlap_evidence["consolidated_items"][0]["source_claim_sha256s"].append(
+        first_input["claim_sha256"]
     )
     overlap_resolved = validate_evidence_contract(
         overlap_evidence, fixture_transcript
@@ -5067,6 +5922,11 @@ def main():
                          f"Try --out {args.out / args.transcript.stem}.md")
     if args.out and not args.out.parent.exists():
         raise SystemExit(f"--out {args.out}: {args.out.parent} does not exist.")
+    if args.out:
+        try:
+            validate_output_target(args.out)
+        except StructuredOutputError as e:
+            raise SystemExit(str(e)) from e
 
     t = load(args.transcript)
     reference = None
@@ -5091,29 +5951,16 @@ def main():
     checks = report(result, t, stripped_speakers, reference, args.num_ctx, expected)
 
     if args.out:
-        args.out.write_text(result["note"] + "\n")
-        print(f"\n  wrote {args.out}")
-        # The artifact, beside the reading copy. `note/1` is what a surface renders:
-        # the markdown alone cannot say which claims were checked or what was found,
-        # and a renderer that re-derived that would become a second authority on it.
-        artifact = args.out.with_suffix(".note.json")
         transform = ("simulate-bleed" if args.simulate_bleed
                      else "as-channel" if args.as_channel
                      else "strip" if args.strip else None)
-        doc = note_artifact(result, t, checks, args.transcript, args.out.parent,
-                            transform)
-        artifact.write_text(json.dumps(doc, indent=2) + "\n")
+        doc, (markdown, artifact) = write_note_outputs(
+            result, t, checks, args.transcript, args.out, transform
+        )
+        print(f"\n  wrote {markdown}")
         by_status = Counter(c["status"] for c in doc["claims"])
         print(f"  wrote {artifact} ({len(doc['claims'])} claims: "
               f"{', '.join(f'{n} {s}' for s, n in by_status.most_common()) or 'none'})")
-        if "extracted" in result:
-            # Written beside the notes so the two stages can be scored apart.
-            # A commitment present here and absent from the notes is a merge
-            # defect; one absent from both is an extraction defect, and they do
-            # not have the same fix.
-            items = args.out.with_suffix(".items.md")
-            items.write_text("\n".join(result["extracted"]) + "\n")
-            print(f"  wrote {items} ({len(result['extracted'])} extracted items)")
 
     return 0 if checks["passed"] else 1
 
