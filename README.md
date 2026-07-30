@@ -7,13 +7,15 @@ the meeting, and the audio never leaves the Mac — system audio comes through a
 Core Audio process tap, your microphone comes through the same path
 `local-dictation` already uses, and the two arrive as separate streams.
 
-> **Status: product definition, a reviewable encounter, capture and note
-> experiments, but no app.** What exists is a working two-leg capture — validated
-> end to end over a 75-minute meeting — a voiceprint gate wired into that capture
-> but never yet run on a real meeting, and a local summarizer whose current
-> evidence-transport repair fails closed before it can produce a structurally
-> invalid result. Its support quality is still unmeasured under that repair.
-> Start with
+> **Status: product definition, a partially reviewable encounter, capture and
+> note experiments, but no app.** What exists is a working two-leg capture —
+> validated end to end over a 75-minute meeting — a voiceprint gate wired into
+> that capture but never yet run on a real meeting, and a local summarizer whose
+> evidence graph completes, rechecks and fails closed. Two bounded corpus runs
+> under the current list-generating model contract produced rejected diagnostics,
+> not an accepted note. By default, a failed run writes no note. Explicitly
+> retained research diagnostics carry `passed: false`, and product readers refuse
+> their claims. Start with
 > [`spike/RESULTS.md`](./spike/RESULTS.md) and [`notes/EVAL.md`](./notes/EVAL.md).
 >
 > **The ungated, bounded CLI capture path works today** for a call taken on
@@ -23,11 +25,16 @@ Core Audio process tap, your microphone comes through the same path
 > another voice, and has never been tried on a real conversation. See
 > [Limits](#limits).
 >
-> **The next product gate is operator review.** The real-content click-through now
-> covers consent, capture, note, evidence, correction and deletion. Application
-> implementation starts only after the operator reviews that encounter. The next
-> human evidence after implementation is to enrol, take one real meeting on
-> headphones, and read the note. [The capture commands are
+> **The next product gate is an extraction-architecture decision, then operator
+> review.** The click-through covers consent, capture, evidence, correction,
+> deletion and a rejected-summary recovery path. It has no accepted real note to
+> review. The current choices are a candidate-first evidence extractor, a
+> deliberate amendment of the first-beta promise to a transcript-first product, or
+> further research on a generative extractor. Under the current goal, application
+> implementation still waits for an accepted real note and cold operator review;
+> choosing transcript-first requires changing the goal and delivery gates first.
+> The later human evidence is to enrol, take one real meeting on headphones, and
+> read the result. [The capture commands are
 > here](#keeping-the-room-out-of-your-half).
 
 ---

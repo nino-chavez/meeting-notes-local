@@ -1887,3 +1887,61 @@ research-only escape hatch. The prototype refuses every artifact whose `passed` 
 not exactly `true` as a ready note. It renders none of that artifact's claims or trust
 counts and routes the encounter to `summary-failed`, where the retained transcript
 remains available for retry.
+
+### Product-oriented whole-context candidate: bounded, completed, and rejected
+
+This is not a second registered Repair 4 corpus result. It is one bounded attempt to
+populate the accepted-note side of the product encounter with a different installed
+model and a whole-context prompt:
+
+    python3 notes/summarize.py notes/corpus/ES2004c.json \
+      --model gemma3:12b --num-ctx 32768 --timeout 1800 \
+      --strip --passes 2 --chunk-words 9000 --overlap-words 0 \
+      --retain-failed-diagnostic \
+      --out notes/out/product-candidate-gemma3/ES2004c.md
+
+The raw QMSum source contains 604 annotated rows and 8,103 whitespace-delimited
+content words. The canonical loader removes non-speech markers and empty results. The
+artifact therefore records 582 model-visible turns containing 7,850 content words
+before the 582 prompt bullet markers are added. The single extraction call completed
+in 475.3 seconds with `done: true` and `done_reason: stop`, but the server reported
+reading exactly 32,768 prompt tokens for a prompt estimated at 33,393. The hard context
+check therefore records that the last estimated 625 tokens were dropped.
+
+The validated response reached the 48-item ceiling. All 48 records carried label
+`ACTION`, selected the same first source fragment, and repeated the same claim. Local
+normalization, whose maximum group is three, rendered 16 identical claims; the citation
+check found 15 repeats. Exact reference resolution and attribution passed, but they do
+not repair the missing prompt tail or turn repeated first-fragment output into a note.
+The overall verdict is `passed: false`.
+
+The research-only diagnostic is
+`notes/out/product-candidate-gemma3/ES2004c.note.json`, generated at
+`2026-07-30T14:25:09-0500`, SHA-256
+`5f47d39d0aafe72fa7953c7f15a9cebfe0fb5a86867f8b43baef85db75f9753c`.
+Its sibling Markdown has SHA-256
+`5c6091fccd3bc11233e7dde87e0d97910e0d241144905dd32dfc082aea882b8e`.
+It records `gemma3:12b` at resolved digest
+`f4031aab637d1ffa37b42570452ae0e4fad0314754d17ded67322e4b95836f8a`.
+These are digest-pinned, ignored local run observations, not durable repository
+evidence or accepted product data.
+
+The product prototype built from that directory reports zero accepted notes, one
+withheld summary, and zero rendered claims. It keeps the transcript and retry path.
+That is the intended failure encounter, not an acceptable-note encounter.
+
+Taken together, the bounded `llama3.1:latest` Bmr006 run and this bounded
+`gemma3:12b` ES2004c run reject the current enumerative, model-authored list contract
+under the two tested conditions. They do not prove that automatic notes are infeasible,
+that either model cannot work under a materially different architecture, or that a
+transcript-first product is unusable. More prompt tuning inside this contract is not
+the next product step. The next decision is among:
+
+1. generate deterministic evidence candidates first, then let a model label,
+   paraphrase or abstain one candidate at a time;
+2. make the first beta transcript-first and withhold automatic notes until a new
+   extractor clears acceptance; or
+3. continue generative-extractor research outside the first-beta critical path.
+
+No application implementation or accepted-note operator review follows from this
+rejected diagnostic.
