@@ -608,10 +608,10 @@ _BLOCKQUOTE = re.compile(r"^[ \t]*>[ \t]*(?P<quote>\S.*?)[ \t]*$")
 # item list whose fields are pipe-separated.
 #
 # Which side of that separator holds speech is an assumption, not something the line
-# says. The current chunked path normalises the consolidator input to claim-first, so
-# the assumed reading matches the live contract. `check_citations` still measures the
-# opposite reading for artifacts generated before that normalisation, and for a model
-# that copies an unexpected layout despite it.
+# says. Historical note/1 chunked artifacts used claim, separator, quote after a model
+# consolidation pass; `check_citations` keeps that legacy reading and measures the
+# opposite one for older transposed artifacts. Repair 4 renders deterministic next-line
+# blockquotes, so collapsed-line orientation is not part of its current contract.
 _SAME_LINE = re.compile(r"^(?P<claim>.*?\S)[ \t]+(?P<sep>[>|])[ \t]*(?P<quote>\S.*)$")
 # Leftover template punctuation around a claim, stripped for comparison and counted
 # so the leak stays visible instead of being quietly cleaned up.
@@ -863,10 +863,10 @@ def check_citations(note: str, transcript: Transcript) -> dict:
     layout = items[0]["layout"] if items else "none"
     separator = items[0]["separator"] if items else None
     # A collapsed line has two sides and no marker saying which is speech. `_SAME_LINE`
-    # assumes the current contract's reading order — claim, separator, quote. The live
-    # chunked path now feeds the consolidator in that order too; the reverse diagnostic
-    # remains for artifacts generated before that normalisation and for contract
-    # deviations a later `--recheck` must not silently misread.
+    # reads the legacy note/1 order — claim, separator, quote — used by the retired model
+    # consolidation path. Repair 4's deterministic renderer uses next-line blockquotes.
+    # The reverse diagnostic remains for historical transposed artifacts that a later
+    # `--recheck` must not silently misread.
     #
     # Counted rather than corrected. Swapping the sides on evidence would change the
     # measured fabrication rate in the same run that changes the prompt, and there
