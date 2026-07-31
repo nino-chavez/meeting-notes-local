@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 EXPECTED_IDENTIFIER = "com.ninochavez.local-meeting-notes"
 EXPECTED_MINIMUM_MACOS = "14.4"
@@ -177,13 +178,12 @@ def macho_inventory(app: Path) -> list[tuple[Path, str]]:
 
 def entitlements(path: Path) -> dict:
     result = run("/usr/bin/codesign", "-d", "--entitlements", ":-", str(path))
-    combined = result.stdout + result.stderr
-    xml_start = combined.find("<?xml")
+    xml_start = result.stdout.find("<?xml")
     if xml_start < 0:
         return {}
     try:
-        value = plistlib.loads(combined[xml_start:].encode())
-    except plistlib.InvalidFileException:
+        value = plistlib.loads(result.stdout[xml_start:].encode())
+    except (plistlib.InvalidFileException, ExpatError):
         raise VerificationError("signed entitlement output is malformed") from None
     require(isinstance(value, dict), "signed entitlements are not a dictionary")
     return value
