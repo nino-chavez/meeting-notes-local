@@ -45,7 +45,8 @@ python3.13 -m venv .venv
 Confirm the checkout and deterministic controls before opening a meeting:
 
 ```sh
-test "$(git rev-list --count HEAD)" = 1
+test "$(git rev-list --max-parents=0 --all | sort -u)" = \
+  "212a0e154895427536001fdb3d91b3e0fa0965c1"
 test -z "$(git status --porcelain --untracked-files=all)"
 
 .venv/bin/python spike/dual_capture.py --self-test
@@ -53,8 +54,9 @@ test -z "$(git status --porcelain --untracked-files=all)"
 .venv/bin/python spike/dual_capture.py --list-devices
 ```
 
-The one-commit check is a history boundary. Stop if it fails; the clean remote
-must not acquire the retired repository's objects.
+The root check is the history boundary. It allows ordinary development commits
+but refuses a checkout containing a reachable root from the retired repository.
+Stop if it fails.
 
 ## Warm the cold machine before the meeting
 
@@ -79,7 +81,9 @@ Do not continue until all of these are true:
 - both level meters move during the smoke capture;
 - the final `session manifest` line says `complete`;
 - the transcript reports `attribution: channel`; and
-- the verifier passes for the output directory printed by the command.
+- the verifier passes for the output directory printed by the command. For this
+  interaction test, it also refuses an exactly silent leg or a transcript that
+  contains no channel-attributed speech from either participant.
 
 ```sh
 .venv/bin/python spike/verify_capture.py --interaction-canary \

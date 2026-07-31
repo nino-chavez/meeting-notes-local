@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import stat
 import tempfile
 import wave
@@ -59,6 +60,26 @@ def _artifact_receipt(path: Path) -> dict:
         "sha256": sha256(path),
         "mode": _mode(path),
     }
+
+
+def _wav_contains_nonzero_pcm(path: Path) -> bool:
+    """Return whether a supported WAV contains anything beyond digital zero."""
+    try:
+        with wave.open(str(path), "rb") as wav:
+            if (
+                wav.getnchannels() != 1
+                or wav.getsampwidth() != 2
+                or wav.getframerate() != 16_000
+            ):
+                raise VerificationError(
+                    f"{path.name} is not mono 16 kHz 16-bit PCM"
+                )
+            while frames := wav.readframes(65_536):
+                if any(frames):
+                    return True
+    except (EOFError, OSError, wave.Error) as exc:
+        raise VerificationError(f"{path.name} is not a readable WAV ({exc})") from None
+    return False
 
 
 def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> dict:
@@ -136,6 +157,22 @@ def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> di
             )
         if transcript.get("voiceprint") is not None:
             raise VerificationError("interaction canary must be the ungated capture")
+        for leg in ("mic", "system"):
+            if not _wav_contains_nonzero_pcm(capture_dir / f"{leg}.wav"):
+                raise VerificationError(
+                    f"interaction canary {leg} leg contains only digital silence"
+                )
+        speakers = {
+            turn.get("speaker")
+            for turn in transcript.get("turns", [])
+            if isinstance(turn, dict)
+        }
+        missing_speakers = sorted({"Me", "Them"} - speakers)
+        if missing_speakers:
+            raise VerificationError(
+                "interaction canary transcript lacks channel speech from: "
+                + ", ".join(missing_speakers)
+            )
 
     return {
         "schema": session["schema"],
@@ -147,12 +184,12 @@ def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> di
     }
 
 
-def _write_wav(path: Path, samples: int) -> None:
+def _write_wav(path: Path, samples: int, *, nonzero: bool = True) -> None:
     with open_private_binary(path) as handle, wave.open(handle, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(16_000)
-        wav.writeframes(b"\0\0" * samples)
+        wav.writeframes((b"\x01\0" if nonzero else b"\0\0") * samples)
 
 
 def run_self_test() -> int:
@@ -179,7 +216,20 @@ def run_self_test() -> int:
             "bleed": None,
             "voiceprint": None,
             "capture_health": health,
-            "turns": [],
+            "turns": [
+                {
+                    "speaker": "Me",
+                    "start": 0.00,
+                    "end": 0.08,
+                    "text": "mechanical fixture one",
+                },
+                {
+                    "speaker": "Them",
+                    "start": 0.10,
+                    "end": 0.18,
+                    "text": "mechanical fixture two",
+                },
+            ],
         }
         write_private_text(
             capture_dir / "transcript.json",
@@ -207,6 +257,40 @@ def run_self_test() -> int:
             )
         finalize_session(capture_dir, "2000-01-01T00:00:00+0000", health)
         valid = verify_capture(capture_dir, interaction_canary=True)
+
+        silent_dir = Path(temporary) / "silent-system"
+        shutil.copytree(capture_dir, silent_dir)
+        _write_wav(silent_dir / "system.wav", samples, nonzero=False)
+        system_segments = _load_json(silent_dir / "system-segments.json")
+        system_segments["audio_sha256"] = sha256(silent_dir / "system.wav")
+        write_private_text(
+            silent_dir / "system-segments.json",
+            json.dumps(system_segments, indent=2) + "\n",
+        )
+        finalize_session(silent_dir, "2000-01-01T00:00:00+0000", health)
+        try:
+            verify_capture(silent_dir, interaction_canary=True)
+        except VerificationError as exc:
+            silent_refused = "only digital silence" in str(exc)
+        else:
+            silent_refused = False
+
+        one_sided_dir = Path(temporary) / "one-sided"
+        shutil.copytree(capture_dir, one_sided_dir)
+        one_sided_transcript = _load_json(one_sided_dir / "transcript.json")
+        one_sided_transcript["turns"] = [one_sided_transcript["turns"][0]]
+        write_private_text(
+            one_sided_dir / "transcript.json",
+            json.dumps(one_sided_transcript, indent=2) + "\n",
+        )
+        finalize_session(one_sided_dir, "2000-01-01T00:00:00+0000", health)
+        try:
+            verify_capture(one_sided_dir, interaction_canary=True)
+        except VerificationError as exc:
+            one_sided_refused = "lacks channel speech" in str(exc)
+        else:
+            one_sided_refused = False
+
         with (capture_dir / "mic-segments.json").open("ab") as handle:
             handle.write(b" ")
         try:
@@ -216,8 +300,16 @@ def run_self_test() -> int:
         else:
             tamper_refused = False
 
-    if valid["status"] == "complete" and tamper_refused:
-        print("capture verifier self-test: OK (valid packet passes; tamper refused)")
+    if (
+        valid["status"] == "complete"
+        and tamper_refused
+        and silent_refused
+        and one_sided_refused
+    ):
+        print(
+            "capture verifier self-test: OK "
+            "(valid packet passes; tamper, silent leg, and one-sided transcript refused)"
+        )
         return 0
     print("capture verifier self-test: FAIL")
     return 1
