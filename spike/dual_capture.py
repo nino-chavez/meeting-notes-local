@@ -30,6 +30,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import math
 import os
 import queue
 import signal
@@ -1537,8 +1538,9 @@ CALIBRATION_S = 35.0
 # end plays continuously, so the microphone is voiced throughout and the
 # segmenter emits long spans that straddle cue edges; one segment ran 73.5-83.5 s,
 # covering the end of a speak interval and the whole of the control after it.
-# A control interval has to be longer than the longest segment it must contain,
-# not longer than the shortest it could.
+# Sixteen seconds produced scorable controls on the next two real takes. It is
+# an observed default, not a containment guarantee: unaligned segments can still
+# straddle both margins, in which case the protocol must remain inconclusive.
 SPEAK_S, CONTROL_S = 10.0, 16.0
 DEFAULT_PAIRS = 5
 
@@ -1631,12 +1633,21 @@ def build_schedule(calibration_s=CALIBRATION_S, pairs=DEFAULT_PAIRS,
     audio in this project, which is what an honest echo-return-loss figure needs
     and what every earlier one lacked.
 
-    Phase lengths are set by what has to fit inside them once CUE_MARGIN_S is
-    trimmed from each edge: a 6 s silent interval leaves 4 s, which admits two
-    segments at speaker_gate's 2 s floor, and a 10 s speak interval leaves 8 s.
-    Shortening either below 2 * CUE_MARGIN_S + 2.0 makes the interval yield
-    nothing and the control decorative.
+    Phase lengths must leave at least the segmenter's 2 s floor after
+    CUE_MARGIN_S is trimmed from each edge. That floor only makes a segment
+    possible; it does not guarantee one because segmentation is not aligned to
+    cue boundaries. A run with no contained segment remains inconclusive.
     """
+    durations = {
+        "calibration": calibration_s,
+        "speak": speak_s,
+        "control": control_s,
+    }
+    for name, value in durations.items():
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"{name} duration must be a finite number")
+        if value <= 0:
+            raise ValueError(f"{name} duration must be greater than zero")
     interior = min(speak_s, control_s) - 2 * CUE_MARGIN_S
     if interior < 2.0:
         raise ValueError(
@@ -2384,12 +2395,19 @@ def self_test_output_directory() -> bool:
             all("spike/out/transcript.json" not in text for text in guidance)
             and all("~/meeting-smoke/transcript.json" in text for text in guidance)
         )
+        default_schedule = build_schedule()
+        protocol_schedule_guarded = (
+            default_schedule[-1]["end"] == 165.0
+            and refused(lambda: build_schedule(control_s=float("nan")))
+            and refused(lambda: build_schedule(control_s=float("inf")))
+            and refused(lambda: build_schedule(control_s=0.0))
+        )
 
     ok = (
         fresh_default and first_explicit and private_modes and finalized
         and health_fails_closed and artifact_reconciliation_fails_closed
         and reuse_refused and repo_refused
-        and guidance_points_to_capture
+        and guidance_points_to_capture and protocol_schedule_guarded
     )
     print(f"  [{'pass' if ok else 'FAIL'}] capture output is private, health-gated, "
           "finalized, and never reused")
@@ -2428,10 +2446,9 @@ def main():
     ap.add_argument("--protocol-pairs", type=int, default=DEFAULT_PAIRS,
                     help="speak/silent interval pairs after the calibration phase")
     ap.add_argument("--protocol-control-s", type=float, default=CONTROL_S,
-                    help="length of each silent control interval. Must exceed the "
-                         "longest microphone segment the segmenter produces, plus "
-                         "a margin at each edge, or the interval contains no whole "
-                         "segment and scores nothing")
+                    help="length of each silent control interval. Longer intervals "
+                         "make a whole unaligned microphone segment more likely; "
+                         "a run with none remains inconclusive")
     ap.add_argument(
         "--voiceprint", type=Path, default=None,
         help="a profile from speaker_gate.py --enroll-out. Removes microphone "

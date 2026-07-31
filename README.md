@@ -605,7 +605,7 @@ have already had the contaminated ones removed.
 
 What neither file carries is who was speaking. "Microphone-only" names the
 channel, not the talker — on speakers the far end arrives on the microphone too.
-`--protocol` is the answer: it runs a two-minute cued capture and writes
+`--protocol` is the answer: it runs a roughly three-minute cued capture and writes
 `protocol.json` beside the recordings, a schedule of which intervals the operator
 was asked to speak in and which to stay silent through, fixed before any audio
 exists. Each speaking cue shows a passage to read aloud for the whole interval, so the
