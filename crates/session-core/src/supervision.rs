@@ -38,6 +38,8 @@ pub enum SupervisionError {
     RequestTimeout,
     #[error("worker standard error exceeded its byte limit")]
     StderrOverflow,
+    #[error("worker cleanup failed: {0}")]
+    CleanupFailed(#[source] io::Error),
     #[error("worker protocol is not ready or is no longer usable")]
     Unavailable,
     #[error(transparent)]
@@ -73,9 +75,21 @@ struct CleanupFailure {
     message: String,
 }
 
+impl CleanupFailure {
+    fn from_error(error: &io::Error) -> Self {
+        Self {
+            kind: error.kind(),
+            message: error.to_string(),
+        }
+    }
+
+    fn into_error(self) -> io::Error {
+        io::Error::new(self.kind, self.message)
+    }
+}
+
 #[derive(Default)]
 struct CleanupState {
-    started: bool,
     finished: bool,
     failure: Option<CleanupFailure>,
 }
@@ -89,6 +103,8 @@ struct ProcessControl {
     cleanup: Mutex<CleanupState>,
     cleanup_finished: Condvar,
     shutting_down: AtomicBool,
+    #[cfg(test)]
+    cleanup_failure_injection: Mutex<Option<CleanupFailure>>,
 }
 
 struct DispatchItem {
@@ -170,6 +186,8 @@ impl OwnedChild {
             cleanup: Mutex::new(CleanupState::default()),
             cleanup_finished: Condvar::new(),
             shutting_down: AtomicBool::new(false),
+            #[cfg(test)]
+            cleanup_failure_injection: Mutex::new(None),
         });
         let stderr_thread = Some(spawn_stderr_monitor(
             stderr,
@@ -197,13 +215,19 @@ impl OwnedChild {
     }
 
     pub fn check_health(&self) -> Result<(), SupervisionError> {
+        if let Some(error) = self.control.cleanup_failure_error() {
+            return Err(error);
+        }
         if self.stopped || self.output_receiver.is_none() {
             return Err(SupervisionError::Unavailable);
         }
-        match self.current_fault_error() {
-            Some(error) => Err(error),
-            None => Ok(()),
+        if let Some(error) = self.current_fault_error() {
+            return Err(error);
         }
+        if self.control.shutting_down.load(Ordering::SeqCst) {
+            return Err(SupervisionError::Unavailable);
+        }
+        Ok(())
     }
 
     pub fn wait_ready(
@@ -285,8 +309,14 @@ impl OwnedChild {
         if self.stopped || self.output_receiver.is_none() {
             return Err(SupervisionError::Unavailable);
         }
-        if let Some(error) = self.current_fault_error() {
+        if let Some(error) = self.control.cleanup_failure_error() {
             return Err(error);
+        }
+        if let Some(error) = self.current_fault_error() {
+            return Err(self.abort_error(error));
+        }
+        if self.control.shutting_down.load(Ordering::SeqCst) {
+            return Err(SupervisionError::Unavailable);
         }
         if Instant::now() >= deadline {
             return Err(SupervisionError::RequestTimeout);
@@ -302,11 +332,11 @@ impl OwnedChild {
             .register(command)?;
         if let Err(error) = self.control.write_until(&frame, deadline) {
             self.cancel_request(command.request_id);
-            let _ = self.abort_and_wait(Duration::from_millis(500));
-            return Err(match error {
+            let error = match error {
                 DeadlineWriteError::Timeout => SupervisionError::RequestTimeout,
                 DeadlineWriteError::Io(error) => SupervisionError::Io(error),
-            });
+            };
+            return Err(self.abort_error(error));
         }
 
         loop {
@@ -337,22 +367,19 @@ impl OwnedChild {
                 Ok(item) => item,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.cancel_request(command.request_id);
-                    let _ = self.abort_and_wait(Duration::from_millis(500));
-                    return Err(SupervisionError::RequestTimeout);
+                    return Err(self.abort_error(SupervisionError::RequestTimeout));
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     let error = self
                         .current_fault_error()
                         .unwrap_or(SupervisionError::WorkerExited);
                     self.cancel_request(command.request_id);
-                    let _ = self.abort_and_wait(Duration::from_millis(500));
-                    return Err(error);
+                    return Err(self.abort_error(error));
                 }
             };
             if item.received_at > deadline {
                 self.cancel_request(command.request_id);
-                let _ = self.abort_and_wait(Duration::from_millis(500));
-                return Err(SupervisionError::RequestTimeout);
+                return Err(self.abort_error(SupervisionError::RequestTimeout));
             }
             match item.output {
                 WorkerOutput::Progress(progress) => {
@@ -361,13 +388,11 @@ impl OwnedChild {
                     {
                         let error = worker_fault_error(fault.fault);
                         self.cancel_request(command.request_id);
-                        let _ = self.abort_and_wait(Duration::from_millis(500));
-                        return Err(error);
+                        return Err(self.abort_error(error));
                     }
                     if let Err(error) = on_progress(&progress) {
                         self.cancel_request(command.request_id);
-                        let _ = self.abort_and_wait(Duration::from_millis(500));
-                        return Err(error.into());
+                        return Err(self.abort_error(error.into()));
                     }
                 }
                 WorkerOutput::Result(result) => {
@@ -375,8 +400,7 @@ impl OwnedChild {
                         && !queued_output_precedes_eof(fault, item.received_at)
                     {
                         let error = worker_fault_error(fault.fault);
-                        let _ = self.abort_and_wait(Duration::from_millis(500));
-                        return Err(error);
+                        return Err(self.abort_error(error));
                     }
                     return Ok(result);
                 }
@@ -396,6 +420,13 @@ impl OwnedChild {
         self.stop_owned_group(grace, true)
     }
 
+    fn abort_error(&mut self, primary: SupervisionError) -> SupervisionError {
+        match self.abort_and_wait(Duration::from_millis(500)) {
+            Ok(()) => primary,
+            Err(error) => SupervisionError::CleanupFailed(error),
+        }
+    }
+
     fn stop_owned_group(&mut self, grace: Duration, abort: bool) -> io::Result<()> {
         if self.stopped {
             return Ok(());
@@ -409,7 +440,11 @@ impl OwnedChild {
             grace,
         );
         self.control.wait_for_cleanup()?;
-        self.finish_stopped()
+        if let Err(error) = self.finish_stopped() {
+            self.control.record_cleanup_failure(&error);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn finish_stopped(&mut self) -> io::Result<()> {
@@ -481,23 +516,15 @@ impl ProcessControl {
     }
 
     fn begin_cleanup(self: &Arc<Self>, mode: CleanupMode, grace: Duration) {
-        {
-            let mut state = self.cleanup.lock().expect("cleanup state lock");
-            if state.started {
-                return;
-            }
-            state.started = true;
+        if self.shutting_down.swap(true, Ordering::SeqCst) {
+            return;
         }
-        self.shutting_down.store(true, Ordering::SeqCst);
         let control = Arc::clone(self);
         std::thread::spawn(move || {
             let failure = control
                 .cleanup_process_group(mode, grace)
                 .err()
-                .map(|error| CleanupFailure {
-                    kind: error.kind(),
-                    message: error.to_string(),
-                });
+                .map(|error| CleanupFailure::from_error(&error));
             let mut state = control.cleanup.lock().expect("cleanup state lock");
             state.failure = failure;
             state.finished = true;
@@ -514,12 +541,43 @@ impl ProcessControl {
                 .expect("cleanup state lock");
         }
         match state.failure.clone() {
-            Some(failure) => Err(io::Error::new(failure.kind, failure.message)),
+            Some(failure) => Err(failure.into_error()),
             None => Ok(()),
         }
     }
 
+    fn cleanup_failure_error(&self) -> Option<SupervisionError> {
+        self.cleanup
+            .lock()
+            .expect("cleanup state lock")
+            .failure
+            .clone()
+            .map(|failure| SupervisionError::CleanupFailed(failure.into_error()))
+    }
+
+    fn record_cleanup_failure(&self, error: &io::Error) {
+        let mut state = self.cleanup.lock().expect("cleanup state lock");
+        if state.failure.is_none() {
+            state.failure = Some(CleanupFailure::from_error(error));
+        }
+    }
+
     fn cleanup_process_group(&self, mode: CleanupMode, grace: Duration) -> io::Result<()> {
+        let result = self.cleanup_process_group_inner(mode, grace);
+        #[cfg(test)]
+        if result.is_ok()
+            && let Some(failure) = self
+                .cleanup_failure_injection
+                .lock()
+                .expect("cleanup failure injection lock")
+                .clone()
+        {
+            return Err(failure.into_error());
+        }
+        result
+    }
+
+    fn cleanup_process_group_inner(&self, mode: CleanupMode, grace: Duration) -> io::Result<()> {
         let mut terminate_error = if matches!(mode, CleanupMode::Abort) {
             signal_group(self.process_group_id, libc::SIGTERM).err()
         } else {
@@ -556,6 +614,14 @@ impl ProcessControl {
                 "owned process group did not exit after SIGKILL",
             )
         }))
+    }
+
+    #[cfg(test)]
+    fn inject_cleanup_failure(&self, error: &io::Error) {
+        *self
+            .cleanup_failure_injection
+            .lock()
+            .expect("cleanup failure injection lock") = Some(CleanupFailure::from_error(error));
     }
 }
 
@@ -1395,6 +1461,41 @@ mod tests {
                 occurred_at: received_at + Duration::from_millis(1),
             },
             received_at,
+        ));
+    }
+
+    #[test]
+    fn cleanup_failure_overrides_request_timeout_and_remains_terminal() {
+        let script = r#"printf '%s\n' '{"schema":"worker-event/1","event":"worker.ready","protocol":1,"build":"test-worker","runtime":{"kind":"bundled","digest":"test-runtime"},"tap":{"build":"test-tap","available":true},"models":[{"id":"test-model","digest":"test-model-digest","available":true}],"operations":["profile.inspect","profile.adopt","capture.start","capture.stop","capture.inspect","transcript.create","note.create","note.inspect"]}'; IFS= read -r command; exec sleep 30"#;
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]);
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        child
+            .wait_ready(Duration::from_secs(1), &expected_operations())
+            .unwrap();
+        child
+            .control
+            .inject_cleanup_failure(&io::Error::other("injected cleanup failure"));
+
+        let request = WorkerCommand::new(
+            Operation::CaptureInspect,
+            serde_json::json!({"meeting_id": "fixture"}),
+        );
+        let request_error = child
+            .request_until(&request, Instant::now() + Duration::from_millis(50), |_| {
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(matches!(
+            request_error,
+            SupervisionError::CleanupFailed(error)
+                if error.to_string() == "injected cleanup failure"
+        ));
+
+        assert!(matches!(
+            child.check_health(),
+            Err(SupervisionError::CleanupFailed(error))
+                if error.to_string() == "injected cleanup failure"
         ));
     }
 }
