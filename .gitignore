@@ -1,0 +1,38 @@
+# Three runtimes per DESIGN.md's shell decision: Rust/TS shell, Python ASR
+# daemon, Swift capture sidecar.
+node_modules/
+dist/
+target/
+.venv/
+__pycache__/
+.build/
+.ruff_cache/
+.DS_Store
+
+# Recorded audio and transcripts never belong in the repo. A transcript is the
+# same secret as the audio it came from and never belongs in source control.
+*.wav
+*.m4a
+notes.sqlite*
+spike/out/
+
+# Third-party evaluation corpus: someone else's data under someone else's
+# licence. Fetched on demand by notes/fetch_corpus.py.
+notes/corpus/
+notes/out/
+
+# Built C++ binary; the library it links is not vendored (see spike/aec3/README.md).
+spike/aec3/aec3_offline
+
+# The aec_bound scores artifact carries what each segment transcribed, which makes
+# it a transcript. The tool refuses to write one in here; this is the second line.
+spike/aec-bound-results.json
+spike/**/results.json
+spike/**/scores.json
+
+# Other transcript writers also refuse the repository, and these cover the
+# common hand-authored paths. `privacy_gate.py` inspects tracked JSON content so
+# an unexpected filename cannot bypass the boundary.
+**/transcript.json
+**/transcript-*.json
+**/*-transcript.json

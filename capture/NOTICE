@@ -1,0 +1,15 @@
+capture/audiotee/ is vendored third-party source, not original work.
+
+    AudioTee — https://github.com/makeusabrew/audiotee
+    The MIT License. Copyright (C) 2025 Nick Payne.
+    Vendored at upstream commit 56ac954369a09318e46b88a6eec33c2d2b0d32a3
+    (2026-03-31). Unmodified.
+
+Why vendored rather than a submodule: the source is 124K, the repo must build
+offline, and this project expects to fork it. Upstream's own README notes the
+author maintains internal variants that also capture microphone input; if we
+need timestamped dual-leg capture inside one process, that fork starts from this
+tree. Pinning the commit here keeps that diff legible.
+
+Upstream carries an explicit API-instability warning. Re-read its README before
+bumping the pin.

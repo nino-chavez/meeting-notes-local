@@ -1,0 +1,24 @@
+# Versions match local-dictation's venv, which is where the spike was first run
+# and where the Whisper weights are already cached.
+mlx-whisper==0.4.3
+sounddevice==0.5.5
+numpy==2.4.6
+
+# speaker_gate.py, and aec_bound.py when it scores real takes. Costed here
+# because this ships to end users and a
+# dependency is not free: on macOS arm64 these two pull 36 wheels totalling
+# 153 MB, of which torch alone is 111 MB and scipy 20 MB, and ECAPA's checkpoint
+# adds 89 MB the first time a profile is built — 242 MB before the gate scores
+# its first segment. Only 83 MB of the checkpoint is the embedding network; the
+# rest is a VoxCeleb classification head that `from_hparams` fetches as part of
+# the recipe and this module never calls.
+#
+# torch is the cost, not speechbrain, which is 2 MB of pure Python. An ONNX
+# Runtime export of ECAPA would trade torch for a runtime an order of magnitude
+# smaller and is the obvious thing to price if the gate ships — but it has not
+# been measured here, and an unmeasured swap is not a saving.
+#
+# `--self-test` deliberately needs neither, in both files. The encoder is an
+# argument rather than an import, so every control runs on numpy alone.
+speechbrain==1.1.0
+torch==2.13.0

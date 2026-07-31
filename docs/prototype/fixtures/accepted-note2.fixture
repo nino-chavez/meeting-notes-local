@@ -1,0 +1,417 @@
+{
+  "schema": "prototype-fixture-pack/1",
+  "product_evidence": false,
+  "transcript_filename": "synthetic-control-not-product-evidence.json",
+  "note_filename": "synthetic-control-not-product-evidence.note.json",
+  "markdown_filename": "synthetic-control-not-product-evidence.md",
+  "transcript": {
+    "schema": "file-transcript/1",
+    "source": "synthetic renderer control; not product evidence",
+    "attribution": "none",
+    "turns": [
+      {
+        "text": "Review the compact battery before making the product decision.",
+        "start": 1.0
+      },
+      {
+        "text": "Keep both packaging options open during that review.",
+        "start": 2.0
+      }
+    ]
+  },
+  "note": {
+    "schema": "note/2",
+    "claim_evidence_contract": "source-evidence/1",
+    "meeting": {
+      "id": "synthetic-control-not-product-evidence",
+      "source": "synthetic renderer control; not product evidence",
+      "attribution": "none",
+      "speakers": [],
+      "turns": 2,
+      "gated_turns": 0,
+      "duration_s": 2.0
+    },
+    "transcript": "synthetic-control-not-product-evidence.json",
+    "transform": null,
+    "note": "## Evidence-bound note\nEvery claim below is linked to retained meeting words.\n\n## Proposed\n- Review the compact battery while keeping both packaging options open\n  > Review the compact battery before making the product decision.",
+    "render": {
+      "schema": "note-render/1",
+      "path": "synthetic-control-not-product-evidence.md",
+      "encoding": "utf-8",
+      "line_ending": "LF",
+      "terminal_newline": true,
+      "note_sha256": "469a253982593aa81e208556a6c1d5efc23ab76238a705c4bb031423837139c8",
+      "markdown_sha256": "b25121df57007a3bdf3db8aeb07d73601a1d6bcd6bf34178af320e1f9c7fd31b"
+    },
+    "claims": [
+      {
+        "status": "located",
+        "claim": "Review the compact battery while keeping both packaging options open",
+        "quote": "Review the compact battery before making the product decision.",
+        "at": 91,
+        "type": "proposal",
+        "turn": 0,
+        "start": 1.0,
+        "source_item_ids": [
+          "slice-0001-item-0001"
+        ],
+        "source_claim_sha256s": [
+          "6c25ec092fe2156dfa4cc82d20ce95cc9fde1cb32bd59ad590b52c4e19281a5e"
+        ],
+        "claim_sha256": "6c25ec092fe2156dfa4cc82d20ce95cc9fde1cb32bd59ad590b52c4e19281a5e",
+        "evidence_refs": [
+          {
+            "source_fragment_id": "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000000-c000000-000062",
+            "turn": 0,
+            "char_start": 0,
+            "char_end": 62,
+            "text_sha256": "4411d058a7dd4fa0e301503d7f4e6aeb833fb5e0a2018f294e58d68b9f2c735b"
+          },
+          {
+            "source_fragment_id": "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000001-c000000-000052",
+            "turn": 1,
+            "char_start": 0,
+            "char_end": 52,
+            "text_sha256": "98039fd9db1521d6585855b1bc943e42ea12a685b664417d4b5ab99f88974c86"
+          }
+        ]
+      }
+    ],
+    "evidence": {
+      "schema": "source-evidence/1",
+      "transcript_view_sha256": "a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b",
+      "fragment_contract": {
+        "schema": "source-fragments/1",
+        "word_definition": "non-whitespace Unicode runs",
+        "target_words": 32,
+        "overlap_words": 8,
+        "merge_tail_under_words": 12,
+        "cross_turns": false,
+        "offsets": "Unicode code point indices [start,end)"
+      },
+      "fragment_contract_sha256": "2ea37109a924fb26bcc070836417c6fd822c8318c0b428d8dcf5cb5600ec727c",
+      "fragment_map_sha256": "0631681a64aea3f5a0c35e0d81a584ebdf2b344258c558a7e3dd75a2a680941f",
+      "extraction_items": [
+        {
+          "evidence_item_id": "slice-0001-item-0001",
+          "slice_ordinal": 1,
+          "source_fragment_ids": [
+            "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000000-c000000-000062",
+            "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000001-c000000-000052"
+          ],
+          "label": "PROPOSAL",
+          "claim_sha256": "6c25ec092fe2156dfa4cc82d20ce95cc9fde1cb32bd59ad590b52c4e19281a5e"
+        }
+      ],
+      "consolidated_items": [
+        {
+          "source_item_ids": [
+            "slice-0001-item-0001"
+          ],
+          "source_claim_sha256s": [
+            "6c25ec092fe2156dfa4cc82d20ce95cc9fde1cb32bd59ad590b52c4e19281a5e"
+          ],
+          "source_fragment_ids": [
+            "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000000-c000000-000062",
+            "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000001-c000000-000052"
+          ],
+          "label": "PROPOSAL",
+          "claim_sha256": "6c25ec092fe2156dfa4cc82d20ce95cc9fde1cb32bd59ad590b52c4e19281a5e"
+        }
+      ]
+    },
+    "capture": null,
+    "capture_health": null,
+    "capture_integrity_unknown": false,
+    "capture_warnings": [],
+    "provenance": {
+      "model": "synthetic-control:latest",
+      "model_identity": {
+        "requested": "synthetic-control:latest",
+        "name": "synthetic-control:latest",
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "elapsed_s": 0.0,
+      "passes": 2,
+      "slices": 1,
+      "duplicates_removed": null,
+      "generated_at": "2026-07-30T20:26:14-0500",
+      "structured_stages": [
+        {
+          "schema_contract": "structured-stage-receipt/5",
+          "stage": "extract",
+          "source": "synthetic renderer control; not product evidence [slice 1/1]",
+          "ordinal": 1,
+          "model": "synthetic-control:latest",
+          "resolved_model": "synthetic-control:latest",
+          "model_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "options": {
+            "num_ctx": 32768,
+            "temperature": 0.0,
+            "num_predict": 448
+          },
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "source_fragment_ids",
+                    "label",
+                    "claim"
+                  ],
+                  "properties": {
+                    "source_fragment_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000000-c000000-000062",
+                          "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000001-c000000-000052"
+                        ]
+                      },
+                      "minItems": 1,
+                      "maxItems": 3,
+                      "uniqueItems": true
+                    },
+                    "label": {
+                      "type": "string",
+                      "enum": [
+                        "DECISION",
+                        "ACTION",
+                        "PROPOSAL",
+                        "QUESTION"
+                      ]
+                    },
+                    "claim": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160
+                    }
+                  }
+                },
+                "maxItems": 2
+              }
+            }
+          },
+          "schema_sha256": "df278e910eb57d75c1d7c71cc36bee42e4ce462aa8198a4adb22e9c9cda65b44",
+          "system_prompt_sha256": "ac611d7c41bd385cbadbc871aefb5b2b0c4b2dac76038bb76181be72844d2bc0",
+          "input_prompt_sha256": "4a393a736a04e620caf2c1a470d4dec7dad3945e22f131cfc4cea6c7ec301ecf",
+          "input_prompt_validation": "replayable from the retained transcript",
+          "validated_response_json": "{\"items\":[{\"source_fragment_ids\":[\"sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000000-c000000-000062\",\"sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000001-c000000-000052\"],\"label\":\"PROPOSAL\",\"claim\":\"Review the compact battery while keeping both packaging options open\"}]}",
+          "validated_response_sha256": "aef2992e70db3c2a7e3c4725bd1e191fc1e0b60262e64a2c50272a3afd5df441",
+          "response_validation": "replayable validated JSON; contains only IDs, labels, and claims",
+          "transport_response_retained": false,
+          "transport_response_limit": "Full Ollama transport envelope is not retained; validated message JSON and minimal completion proof remain",
+          "transport_completion": {
+            "done": true,
+            "done_reason": "stop"
+          },
+          "reference_context": {
+            "transcript_view_sha256": "a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b",
+            "fragment_contract_sha256": "2ea37109a924fb26bcc070836417c6fd822c8318c0b428d8dcf5cb5600ec727c",
+            "fragment_map_sha256": "0631681a64aea3f5a0c35e0d81a584ebdf2b344258c558a7e3dd75a2a680941f",
+            "visible_fragment_ids_sha256": "447404b153034a34e5b1604061c58bf2eafabaf74c1869c2a920989577bc987f",
+            "visible_fragments": 2,
+            "selected_fragment_references": 2
+          },
+          "response_cardinality": {
+            "items": 1,
+            "selected_fragment_references": 2
+          }
+        },
+        {
+          "schema_contract": "local-normalization-receipt/1",
+          "stage": "normalize",
+          "ordinal": 2,
+          "executor": "local deterministic code; no model call",
+          "normalization_contract": {
+            "schema": "exact-overlap-normalization/1",
+            "input_order": "validated extraction first-occurrence order",
+            "claim_canonicalization": "JSON-decoded string after one exact outer-whitespace str.strip()",
+            "group_key": [
+              "label",
+              "canonical_decoded_claim_utf8",
+              "ordered_source_fragment_ids"
+            ],
+            "max_group": 3,
+            "claim_output": "first canonical decoded extraction claim",
+            "coverage": "every extraction item exactly once",
+            "different_evidence": "never merge"
+          },
+          "normalization_contract_sha256": "f8ceb8ab173c19c1fa8231ac34f081405f113f3f625d1f4763f36c03923c57de",
+          "input_validation": "replayable deterministic local normalization from safe extraction JSON and retained transcript",
+          "input_records_sha256": "58d09372929a9fc6fab32e93a033425a93ec6de62babbb0fe4175bac170b0020",
+          "output_validation": "replayable deterministic local normalization from safe extraction JSON and retained transcript",
+          "output_records_sha256": "4833f9f37182dcdddbbdfce36c6acdf634f00bd18f5075727cc970af651eec04",
+          "input_items": 1,
+          "output_items": 1,
+          "covered_source_items": 1,
+          "merged_groups": 0,
+          "max_observed_group": 1
+        }
+      ],
+      "structured_contract": {
+        "schema": "structured-run/4",
+        "evidence_contract": "source-evidence/1",
+        "extraction_receipt_contract": "structured-stage-receipt/5",
+        "normalization_receipt_contract": "local-normalization-receipt/1",
+        "normalization_contract": {
+          "schema": "exact-overlap-normalization/1",
+          "input_order": "validated extraction first-occurrence order",
+          "claim_canonicalization": "JSON-decoded string after one exact outer-whitespace str.strip()",
+          "group_key": [
+            "label",
+            "canonical_decoded_claim_utf8",
+            "ordered_source_fragment_ids"
+          ],
+          "max_group": 3,
+          "claim_output": "first canonical decoded extraction claim",
+          "coverage": "every extraction item exactly once",
+          "different_evidence": "never merge"
+        },
+        "normalization_contract_sha256": "f8ceb8ab173c19c1fa8231ac34f081405f113f3f625d1f4763f36c03923c57de",
+        "extraction_output_contract": {
+          "schema": "bounded-extraction-output/1",
+          "max_items_formula": "min(visible_source_fragments, 48)",
+          "max_items_per_slice": 48,
+          "claim_max_chars": 160,
+          "num_predict_formula": "min(8192, 64 + 192 * max_items)",
+          "num_predict_base": 64,
+          "num_predict_per_item": 192,
+          "num_predict_cap": 8192,
+          "cap_behavior": "done_reason=length or incomplete valid JSON is refused"
+        },
+        "extraction_output_contract_sha256": "598767aad11ca43592eee28919aeb663bf59e391d69d193257bcfe104389b782",
+        "target_words": 1000,
+        "overlap_words": 0,
+        "num_ctx": 32768,
+        "temperature": 0.0,
+        "model_identity_validation": "cross-checked receipt; historical tags response is not retained",
+        "input_sources": 1,
+        "covered_sources": 1,
+        "output_records": 1,
+        "rendered_claims": 1,
+        "max_normalization_group": 3,
+        "merged_groups": 0,
+        "max_observed_group": 1,
+        "normalization_semantics": "local only: merge up to three items iff label, canonical decoded claim UTF-8, and ordered source fragment IDs are identical",
+        "render_contract": {
+          "schema": "evidence-bound-note/1",
+          "heading": "## Evidence-bound note",
+          "with_claims": "Every claim below is linked to retained meeting words.",
+          "without_claims": "No evidence-bound claims were produced.",
+          "model_authored_narrative": false
+        },
+        "render_contract_sha256": "0488001feaaa0909d93f73111c4ebb12c8a4b5921a03c312b681bcd1db64ee95"
+      },
+      "source_evidence": {
+        "schema": "source-evidence/1",
+        "transcript_view_sha256": "a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b",
+        "fragment_contract_sha256": "2ea37109a924fb26bcc070836417c6fd822c8318c0b428d8dcf5cb5600ec727c",
+        "fragment_map_sha256": "0631681a64aea3f5a0c35e0d81a584ebdf2b344258c558a7e3dd75a2a680941f"
+      }
+    },
+    "checks": {
+      "context": {
+        "ok": true,
+        "counted": 128,
+        "estimated": 1032,
+        "num_ctx": 32768,
+        "reason": "",
+        "calls": 1
+      },
+      "attribution": {
+        "applies": true,
+        "ok": true,
+        "named_speakers": [],
+        "actor_phrases": []
+      },
+      "numbers": {
+        "ok": true,
+        "invented": []
+      },
+      "prompt_echo": {
+        "ok": true,
+        "echoed": []
+      },
+      "citations": {
+        "applies": true,
+        "ok": true,
+        "items": 1,
+        "cited": [
+          {
+            "claim": "Review the compact battery while keeping both packaging options open",
+            "quote": "Review the compact battery before making the product decision.",
+            "at": 91,
+            "type": "proposal",
+            "turn": 0,
+            "start": 1.0,
+            "source_item_ids": [
+              "slice-0001-item-0001"
+            ],
+            "source_claim_sha256s": [
+              "6c25ec092fe2156dfa4cc82d20ce95cc9fde1cb32bd59ad590b52c4e19281a5e"
+            ],
+            "claim_sha256": "6c25ec092fe2156dfa4cc82d20ce95cc9fde1cb32bd59ad590b52c4e19281a5e",
+            "evidence_refs": [
+              {
+                "source_fragment_id": "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000000-c000000-000062",
+                "turn": 0,
+                "char_start": 0,
+                "char_end": 62,
+                "text_sha256": "4411d058a7dd4fa0e301503d7f4e6aeb833fb5e0a2018f294e58d68b9f2c735b"
+              },
+              {
+                "source_fragment_id": "sf-a33dcffb8640f196be5709bfdbb830a51662e05ea52f93a2d12cb3c3cc3c442b-t000001-c000000-000052",
+                "turn": 1,
+                "char_start": 0,
+                "char_end": 52,
+                "text_sha256": "98039fd9db1521d6585855b1bc943e42ea12a685b664417d4b5ab99f88974c86"
+              }
+            ]
+          }
+        ],
+        "fabricated": [],
+        "unverifiable": [],
+        "uncited": [],
+        "template_echo": 0,
+        "layout": "next-line",
+        "separator": null,
+        "repeats": 0,
+        "reversed_locatable": 0,
+        "authority": "source-evidence/1"
+      },
+      "extraction": {
+        "applies": true,
+        "ok": true,
+        "dropped": [],
+        "orders": {
+          "source-reference-first": 1
+        },
+        "labels": {
+          "PROPOSAL": 1
+        },
+        "transport": "json-schema",
+        "fragment_references": {
+          "items": 1,
+          "selected": 2,
+          "resolved": 2
+        }
+      }
+    },
+    "passed": true,
+    "prototype_fixture": {
+      "schema": "prototype-mechanical-fixture/1",
+      "product_evidence": false
+    }
+  },
+  "markdown": "## Evidence-bound note\nEvery claim below is linked to retained meeting words.\n\n## Proposed\n- Review the compact battery while keeping both packaging options open\n  > Review the compact battery before making the product decision.\n"
+}
