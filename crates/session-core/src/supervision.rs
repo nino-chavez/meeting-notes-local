@@ -356,7 +356,10 @@ impl OwnedChild {
             }
             match item.output {
                 WorkerOutput::Progress(progress) => {
-                    if let Some(error) = self.current_fault_error() {
+                    if let Some(fault) = self.current_fault_record()
+                        && !queued_output_precedes_eof(fault, item.received_at)
+                    {
+                        let error = worker_fault_error(fault.fault);
                         self.cancel_request(command.request_id);
                         let _ = self.abort_and_wait(Duration::from_millis(500));
                         return Err(error);
@@ -369,8 +372,7 @@ impl OwnedChild {
                 }
                 WorkerOutput::Result(result) => {
                     if let Some(fault) = self.current_fault_record()
-                        && (!matches!(fault.fault, WorkerFault::WorkerExited)
-                            || fault.occurred_at < item.received_at)
+                        && !queued_output_precedes_eof(fault, item.received_at)
                     {
                         let error = worker_fault_error(fault.fault);
                         let _ = self.abort_and_wait(Duration::from_millis(500));
@@ -794,6 +796,10 @@ fn worker_fault_error(fault: WorkerFault) -> SupervisionError {
         WorkerFault::StderrIo => SupervisionError::Io(io::Error::other("worker stderr failed")),
         WorkerFault::StderrOverflow => SupervisionError::StderrOverflow,
     }
+}
+
+fn queued_output_precedes_eof(fault: WorkerFaultRecord, received_at: Instant) -> bool {
+    matches!(fault.fault, WorkerFault::WorkerExited) && fault.occurred_at >= received_at
 }
 
 fn wait_for_group_exit(
@@ -1358,5 +1364,37 @@ mod tests {
             RecoveryCompletion::StoppedExactGroup
         );
         assert_eq!(signaler.calls.get(), 1);
+    }
+    #[test]
+    fn only_eof_after_receipt_allows_a_queued_output() {
+        let received_at = Instant::now();
+        assert!(queued_output_precedes_eof(
+            WorkerFaultRecord {
+                fault: WorkerFault::WorkerExited,
+                occurred_at: received_at + Duration::from_millis(1),
+            },
+            received_at,
+        ));
+        assert!(!queued_output_precedes_eof(
+            WorkerFaultRecord {
+                fault: WorkerFault::WorkerExited,
+                occurred_at: received_at - Duration::from_millis(1),
+            },
+            received_at,
+        ));
+        assert!(!queued_output_precedes_eof(
+            WorkerFaultRecord {
+                fault: WorkerFault::Protocol(ProtocolError::Malformed),
+                occurred_at: received_at + Duration::from_millis(1),
+            },
+            received_at,
+        ));
+        assert!(!queued_output_precedes_eof(
+            WorkerFaultRecord {
+                fault: WorkerFault::StderrOverflow,
+                occurred_at: received_at + Duration::from_millis(1),
+            },
+            received_at,
+        ));
     }
 }

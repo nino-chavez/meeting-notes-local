@@ -198,6 +198,45 @@ fn validated_result_precedes_and_survives_following_eof() {
     }
 }
 
+#[test]
+fn queued_progress_and_result_both_precede_following_eof() {
+    for _ in 0..40 {
+        let mut command = Command::new(FAKE_WORKER);
+        command.args(["--mode", "progress-result-then-exit"]);
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        let pid = child.pid();
+        child
+            .wait_ready(Duration::from_secs(1), &expected_operations())
+            .unwrap();
+        let meeting_id = uuid::Uuid::new_v4();
+        let request = WorkerCommand::new(
+            Operation::CaptureStart,
+            serde_json::json!({"meeting_id": meeting_id, "profile_id": "fixture"}),
+        );
+        let mut progress = Vec::new();
+        let result = child
+            .request_until(&request, Instant::now() + Duration::from_secs(1), |event| {
+                progress.push((event.state, event.meeting_id));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            progress,
+            vec![(CaptureProgressState::Recording, meeting_id)]
+        );
+        assert_eq!(result.artifact_digests["fixture"], "digest");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while child.check_health().is_ok() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(matches!(
+            child.check_health(),
+            Err(SupervisionError::WorkerExited)
+        ));
+        assert!(wait_until_gone(pid, Duration::from_secs(1)));
+    }
+}
+
 fn process_exists(pid: u32) -> bool {
     let result = unsafe { libc::kill(pid as i32, 0) };
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
