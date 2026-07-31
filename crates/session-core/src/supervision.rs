@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -55,21 +55,55 @@ enum WorkerFault {
     StderrOverflow,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WorkerFaultRecord {
+    fault: WorkerFault,
+    occurred_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CleanupMode {
+    Graceful,
+    Abort,
+}
+
+#[derive(Debug, Clone)]
+struct CleanupFailure {
+    kind: io::ErrorKind,
+    message: String,
+}
+
+#[derive(Default)]
+struct CleanupState {
+    started: bool,
+    finished: bool,
+    failure: Option<CleanupFailure>,
+}
+
+struct ProcessControl {
+    pid: u32,
+    process_group_id: i32,
+    child: Mutex<Child>,
+    stdin: Mutex<Option<ChildStdin>>,
+    liveness_writer: Mutex<Option<File>>,
+    cleanup: Mutex<CleanupState>,
+    cleanup_finished: Condvar,
+    shutting_down: AtomicBool,
+}
+
 struct DispatchItem {
     received_at: Instant,
     output: WorkerOutput,
 }
 
 pub struct OwnedChild {
-    child: Child,
-    process_group_id: i32,
-    liveness_writer: Option<File>,
+    control: Arc<ProcessControl>,
+    readiness_stdout: Option<ChildStdout>,
     output_receiver: Option<mpsc::Receiver<DispatchItem>>,
     dispatcher_thread: Option<JoinHandle<()>>,
     stderr_thread: Option<JoinHandle<()>>,
     requests: Arc<Mutex<RequestTracker>>,
-    fault: Arc<Mutex<Option<WorkerFault>>>,
-    shutting_down: Arc<AtomicBool>,
+    fault: Arc<Mutex<Option<WorkerFaultRecord>>>,
     stopped: bool,
 }
 
@@ -108,38 +142,58 @@ impl OwnedChild {
         }
         let liveness_writer = unsafe { File::from_raw_fd(write_fd) };
         let process_group_id = child.id() as i32;
+        let pid = child.id();
         let fault = Arc::new(Mutex::new(None));
-        let shutting_down = Arc::new(AtomicBool::new(false));
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("worker stdin missing"))?;
+        if let Err(error) = set_nonblocking(&stdin) {
+            let _ = signal_group(process_group_id, libc::SIGKILL);
+            let _ = child.wait();
+            return Err(error.into());
+        }
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("worker stdout missing"))?;
         let stderr = child
             .stderr
             .take()
             .ok_or_else(|| io::Error::other("worker stderr missing"))?;
+        let control = Arc::new(ProcessControl {
+            pid,
+            process_group_id,
+            child: Mutex::new(child),
+            stdin: Mutex::new(Some(stdin)),
+            liveness_writer: Mutex::new(Some(liveness_writer)),
+            cleanup: Mutex::new(CleanupState::default()),
+            cleanup_finished: Condvar::new(),
+            shutting_down: AtomicBool::new(false),
+        });
         let stderr_thread = Some(spawn_stderr_monitor(
             stderr,
-            process_group_id,
             Arc::clone(&fault),
-            Arc::clone(&shutting_down),
+            Arc::clone(&control),
         ));
         Ok(Self {
-            process_group_id,
-            child,
-            liveness_writer: Some(liveness_writer),
+            control,
+            readiness_stdout: Some(stdout),
             output_receiver: None,
             dispatcher_thread: None,
             stderr_thread,
             requests: Arc::new(Mutex::new(RequestTracker::default())),
             fault,
-            shutting_down,
             stopped: false,
         })
     }
 
     pub fn pid(&self) -> u32 {
-        self.child.id()
+        self.control.pid
     }
 
     pub fn process_group_id(&self) -> i32 {
-        self.process_group_id
+        self.control.process_group_id
     }
 
     pub fn check_health(&self) -> Result<(), SupervisionError> {
@@ -161,8 +215,7 @@ impl OwnedChild {
             return Err(SupervisionError::Unavailable);
         }
         let stdout = self
-            .child
-            .stdout
+            .readiness_stdout
             .take()
             .ok_or_else(|| io::Error::other("worker stdout missing"))?;
         let (sender, receiver) = mpsc::channel();
@@ -235,6 +288,9 @@ impl OwnedChild {
         if let Some(error) = self.current_fault_error() {
             return Err(error);
         }
+        if Instant::now() >= deadline {
+            return Err(SupervisionError::RequestTimeout);
+        }
         let mut frame = serde_json::to_vec(command).map_err(|_| ProtocolError::Malformed)?;
         frame.push(b'\n');
         if frame.len() > MAX_FRAME_BYTES {
@@ -244,23 +300,16 @@ impl OwnedChild {
             .lock()
             .expect("request tracker lock")
             .register(command)?;
-        let stdin = self
-            .child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| io::Error::other("worker stdin missing"))?;
-        if let Err(error) = stdin.write_all(&frame).and_then(|_| stdin.flush()) {
+        if let Err(error) = self.control.write_until(&frame, deadline) {
             self.cancel_request(command.request_id);
             let _ = self.abort_and_wait(Duration::from_millis(500));
-            return Err(error.into());
+            return Err(match error {
+                DeadlineWriteError::Timeout => SupervisionError::RequestTimeout,
+                DeadlineWriteError::Io(error) => SupervisionError::Io(error),
+            });
         }
 
         loop {
-            if let Some(error) = self.current_fault_error() {
-                self.cancel_request(command.request_id);
-                let _ = self.abort_and_wait(Duration::from_millis(500));
-                return Err(error);
-            }
             let now = Instant::now();
             let receiver = self
                 .output_receiver
@@ -269,6 +318,14 @@ impl OwnedChild {
             let received = match receiver.try_recv() {
                 Ok(item) => Ok(item),
                 Err(mpsc::TryRecvError::Disconnected) => Err(mpsc::RecvTimeoutError::Disconnected),
+                Err(mpsc::TryRecvError::Empty) if self.current_fault_record().is_some() => {
+                    match receiver.try_recv() {
+                        Ok(item) => Ok(item),
+                        Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => {
+                            Err(mpsc::RecvTimeoutError::Disconnected)
+                        }
+                    }
+                }
                 Err(mpsc::TryRecvError::Empty) if now >= deadline => {
                     Err(mpsc::RecvTimeoutError::Timeout)
                 }
@@ -297,20 +354,30 @@ impl OwnedChild {
                 let _ = self.abort_and_wait(Duration::from_millis(500));
                 return Err(SupervisionError::RequestTimeout);
             }
-            if let Some(error) = self.current_fault_error() {
-                self.cancel_request(command.request_id);
-                let _ = self.abort_and_wait(Duration::from_millis(500));
-                return Err(error);
-            }
             match item.output {
                 WorkerOutput::Progress(progress) => {
+                    if let Some(error) = self.current_fault_error() {
+                        self.cancel_request(command.request_id);
+                        let _ = self.abort_and_wait(Duration::from_millis(500));
+                        return Err(error);
+                    }
                     if let Err(error) = on_progress(&progress) {
                         self.cancel_request(command.request_id);
                         let _ = self.abort_and_wait(Duration::from_millis(500));
                         return Err(error.into());
                     }
                 }
-                WorkerOutput::Result(result) => return Ok(result),
+                WorkerOutput::Result(result) => {
+                    if let Some(fault) = self.current_fault_record()
+                        && (!matches!(fault.fault, WorkerFault::WorkerExited)
+                            || fault.occurred_at < item.received_at)
+                    {
+                        let error = worker_fault_error(fault.fault);
+                        let _ = self.abort_and_wait(Duration::from_millis(500));
+                        return Err(error);
+                    }
+                    return Ok(result);
+                }
             }
         }
     }
@@ -331,36 +398,19 @@ impl OwnedChild {
         if self.stopped {
             return Ok(());
         }
-        self.shutting_down.store(true, Ordering::SeqCst);
-        self.child.stdin.take();
-        self.liveness_writer.take();
-        if !abort && wait_for_group_exit(&mut self.child, self.process_group_id, grace)? {
-            return self.finish_stopped();
-        }
-        let terminate_error = signal_group(self.process_group_id, libc::SIGTERM).err();
-        if wait_for_group_exit(&mut self.child, self.process_group_id, grace)? {
-            return self.finish_stopped();
-        }
-        let kill_error = signal_group(self.process_group_id, libc::SIGKILL).err();
-        if !wait_for_group_exit(
-            &mut self.child,
-            self.process_group_id,
-            grace.max(Duration::from_millis(250)),
-        )? {
-            return Err(kill_error.or(terminate_error).unwrap_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "owned process group did not exit after SIGKILL",
-                )
-            }));
-        }
+        self.control.begin_cleanup(
+            if abort {
+                CleanupMode::Abort
+            } else {
+                CleanupMode::Graceful
+            },
+            grace,
+        );
+        self.control.wait_for_cleanup()?;
         self.finish_stopped()
     }
 
     fn finish_stopped(&mut self) -> io::Result<()> {
-        if self.child.try_wait()?.is_none() {
-            self.child.wait()?;
-        }
         self.output_receiver.take();
         join_thread(self.dispatcher_thread.take())?;
         join_thread(self.stderr_thread.take())?;
@@ -374,10 +424,9 @@ impl OwnedChild {
         self.dispatcher_thread = Some(spawn_dispatcher(
             reader,
             sender,
-            self.process_group_id,
             Arc::clone(&self.requests),
             Arc::clone(&self.fault),
-            Arc::clone(&self.shutting_down),
+            Arc::clone(&self.control),
         ));
     }
 
@@ -389,20 +438,226 @@ impl OwnedChild {
     }
 
     fn current_fault_error(&self) -> Option<SupervisionError> {
+        self.current_fault_record()
+            .map(|record| worker_fault_error(record.fault))
+    }
+
+    fn current_fault_record(&self) -> Option<WorkerFaultRecord> {
         self.fault
             .lock()
             .expect("worker fault lock")
-            .map(worker_fault_error)
+            .as_ref()
+            .copied()
+    }
+}
+
+#[derive(Debug)]
+enum DeadlineWriteError {
+    Timeout,
+    Io(io::Error),
+}
+
+impl ProcessControl {
+    fn write_until(&self, frame: &[u8], deadline: Instant) -> Result<(), DeadlineWriteError> {
+        if Instant::now() >= deadline {
+            return Err(DeadlineWriteError::Timeout);
+        }
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(DeadlineWriteError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "worker is shutting down",
+            )));
+        }
+        let mut stdin = self.stdin.lock().expect("worker stdin lock");
+        let stdin = stdin.as_mut().ok_or_else(|| {
+            DeadlineWriteError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "worker stdin is closed",
+            ))
+        })?;
+        write_all_until(stdin, frame, deadline, &self.shutting_down)
+    }
+
+    fn begin_cleanup(self: &Arc<Self>, mode: CleanupMode, grace: Duration) {
+        {
+            let mut state = self.cleanup.lock().expect("cleanup state lock");
+            if state.started {
+                return;
+            }
+            state.started = true;
+        }
+        self.shutting_down.store(true, Ordering::SeqCst);
+        let control = Arc::clone(self);
+        std::thread::spawn(move || {
+            let failure = control
+                .cleanup_process_group(mode, grace)
+                .err()
+                .map(|error| CleanupFailure {
+                    kind: error.kind(),
+                    message: error.to_string(),
+                });
+            let mut state = control.cleanup.lock().expect("cleanup state lock");
+            state.failure = failure;
+            state.finished = true;
+            control.cleanup_finished.notify_all();
+        });
+    }
+
+    fn wait_for_cleanup(&self) -> io::Result<()> {
+        let mut state = self.cleanup.lock().expect("cleanup state lock");
+        while !state.finished {
+            state = self
+                .cleanup_finished
+                .wait(state)
+                .expect("cleanup state lock");
+        }
+        match state.failure.clone() {
+            Some(failure) => Err(io::Error::new(failure.kind, failure.message)),
+            None => Ok(()),
+        }
+    }
+
+    fn cleanup_process_group(&self, mode: CleanupMode, grace: Duration) -> io::Result<()> {
+        let mut terminate_error = if matches!(mode, CleanupMode::Abort) {
+            signal_group(self.process_group_id, libc::SIGTERM).err()
+        } else {
+            None
+        };
+        self.stdin.lock().expect("worker stdin lock").take();
+        self.liveness_writer
+            .lock()
+            .expect("liveness writer lock")
+            .take();
+        let mut child = self.child.lock().expect("worker child lock");
+        if matches!(mode, CleanupMode::Graceful)
+            && wait_for_group_exit(&mut child, self.process_group_id, grace)?
+        {
+            return finish_child(&mut child);
+        }
+        if matches!(mode, CleanupMode::Graceful) {
+            terminate_error = signal_group(self.process_group_id, libc::SIGTERM).err();
+        }
+        if wait_for_group_exit(&mut child, self.process_group_id, grace)? {
+            return finish_child(&mut child);
+        }
+        let kill_error = signal_group(self.process_group_id, libc::SIGKILL).err();
+        if wait_for_group_exit(
+            &mut child,
+            self.process_group_id,
+            grace.max(Duration::from_millis(250)),
+        )? {
+            return finish_child(&mut child);
+        }
+        Err(kill_error.or(terminate_error).unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "owned process group did not exit after SIGKILL",
+            )
+        }))
+    }
+}
+
+fn set_nonblocking(stdin: &ChildStdin) -> io::Result<()> {
+    let descriptor = stdin.as_raw_fd();
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags == -1
+        || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn write_all_until(
+    stdin: &mut ChildStdin,
+    frame: &[u8],
+    deadline: Instant,
+    shutting_down: &AtomicBool,
+) -> Result<(), DeadlineWriteError> {
+    let descriptor = stdin.as_raw_fd();
+    let mut written = 0_usize;
+    while written < frame.len() {
+        if shutting_down.load(Ordering::SeqCst) {
+            return Err(DeadlineWriteError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "worker stopped while writing a command",
+            )));
+        }
+        if Instant::now() >= deadline {
+            return Err(DeadlineWriteError::Timeout);
+        }
+        match stdin.write(&frame[written..]) {
+            Ok(0) => {
+                return Err(DeadlineWriteError::Io(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "worker stdin accepted zero bytes",
+                )));
+            }
+            Ok(count) => written += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait_until_writable(descriptor, deadline, shutting_down)?;
+            }
+            Err(error) => return Err(DeadlineWriteError::Io(error)),
+        }
+    }
+    Ok(())
+}
+
+fn wait_until_writable(
+    descriptor: RawFd,
+    deadline: Instant,
+    shutting_down: &AtomicBool,
+) -> Result<(), DeadlineWriteError> {
+    loop {
+        if shutting_down.load(Ordering::SeqCst) {
+            return Err(DeadlineWriteError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "worker stopped while waiting to write",
+            )));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(DeadlineWriteError::Timeout);
+        }
+        let timeout_ms = remaining
+            .min(Duration::from_millis(50))
+            .as_millis()
+            .clamp(1, i32::MAX as u128) as i32;
+        let mut poll_descriptor = libc::pollfd {
+            fd: descriptor,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut poll_descriptor, 1, timeout_ms) };
+        if result == 0 {
+            continue;
+        }
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(DeadlineWriteError::Io(error));
+        }
+        if poll_descriptor.revents & libc::POLLOUT != 0 {
+            return Ok(());
+        }
+        if poll_descriptor.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(DeadlineWriteError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "worker stdin closed while waiting to write",
+            )));
+        }
     }
 }
 
 fn spawn_dispatcher(
     mut reader: BufReader<ChildStdout>,
     sender: mpsc::SyncSender<DispatchItem>,
-    process_group_id: i32,
     requests: Arc<Mutex<RequestTracker>>,
-    fault: Arc<Mutex<Option<WorkerFault>>>,
-    shutting_down: Arc<AtomicBool>,
+    fault: Arc<Mutex<Option<WorkerFaultRecord>>>,
+    control: Arc<ProcessControl>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut progress_window = Instant::now();
@@ -410,45 +665,25 @@ fn spawn_dispatcher(
         loop {
             let frame = match read_bounded_frame(&mut reader) {
                 Ok(frame) if frame.is_empty() => {
-                    if !shutting_down.load(Ordering::SeqCst) {
-                        install_fault(
-                            WorkerFault::WorkerExited,
-                            &fault,
-                            &shutting_down,
-                            process_group_id,
-                        );
+                    if !control.shutting_down.load(Ordering::SeqCst) {
+                        install_fault(WorkerFault::WorkerExited, &fault, &control);
                     }
                     break;
                 }
                 Ok(frame) => frame,
                 Err(SupervisionError::Protocol(error)) => {
-                    install_fault(
-                        WorkerFault::Protocol(error),
-                        &fault,
-                        &shutting_down,
-                        process_group_id,
-                    );
+                    install_fault(WorkerFault::Protocol(error), &fault, &control);
                     break;
                 }
                 Err(_) => {
-                    install_fault(
-                        WorkerFault::StdoutIo,
-                        &fault,
-                        &shutting_down,
-                        process_group_id,
-                    );
+                    install_fault(WorkerFault::StdoutIo, &fault, &control);
                     break;
                 }
             };
             let output = match parse_output(&frame) {
                 Ok(output) => output,
                 Err(error) => {
-                    install_fault(
-                        WorkerFault::Protocol(error),
-                        &fault,
-                        &shutting_down,
-                        process_group_id,
-                    );
+                    install_fault(WorkerFault::Protocol(error), &fault, &control);
                     break;
                 }
             };
@@ -463,8 +698,7 @@ fn spawn_dispatcher(
                     install_fault(
                         WorkerFault::Protocol(ProtocolError::EventRateExceeded),
                         &fault,
-                        &shutting_down,
-                        process_group_id,
+                        &control,
                     );
                     break;
                 }
@@ -477,12 +711,7 @@ fn spawn_dispatcher(
                 }
             };
             if let Err(error) = validation {
-                install_fault(
-                    WorkerFault::Protocol(error),
-                    &fault,
-                    &shutting_down,
-                    process_group_id,
-                );
+                install_fault(WorkerFault::Protocol(error), &fault, &control);
                 break;
             }
             match sender.try_send(DispatchItem {
@@ -494,8 +723,7 @@ fn spawn_dispatcher(
                     install_fault(
                         WorkerFault::Protocol(ProtocolError::OutputQueueOverflow),
                         &fault,
-                        &shutting_down,
-                        process_group_id,
+                        &control,
                     );
                     break;
                 }
@@ -507,9 +735,8 @@ fn spawn_dispatcher(
 
 fn spawn_stderr_monitor(
     mut stderr: ChildStderr,
-    process_group_id: i32,
-    fault: Arc<Mutex<Option<WorkerFault>>>,
-    shutting_down: Arc<AtomicBool>,
+    fault: Arc<Mutex<Option<WorkerFaultRecord>>>,
+    control: Arc<ProcessControl>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut total = 0_usize;
@@ -522,23 +749,13 @@ fn spawn_stderr_monitor(
                     total = total.saturating_add(read);
                     if total > MAX_STDERR_BYTES && !overflowed {
                         overflowed = true;
-                        install_fault(
-                            WorkerFault::StderrOverflow,
-                            &fault,
-                            &shutting_down,
-                            process_group_id,
-                        );
+                        install_fault(WorkerFault::StderrOverflow, &fault, &control);
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => {
-                    if !shutting_down.load(Ordering::SeqCst) {
-                        install_fault(
-                            WorkerFault::StderrIo,
-                            &fault,
-                            &shutting_down,
-                            process_group_id,
-                        );
+                    if !control.shutting_down.load(Ordering::SeqCst) {
+                        install_fault(WorkerFault::StderrIo, &fault, &control);
                     }
                     break;
                 }
@@ -549,21 +766,23 @@ fn spawn_stderr_monitor(
 
 fn install_fault(
     new_fault: WorkerFault,
-    fault: &Arc<Mutex<Option<WorkerFault>>>,
-    shutting_down: &Arc<AtomicBool>,
-    process_group_id: i32,
+    fault: &Arc<Mutex<Option<WorkerFaultRecord>>>,
+    control: &Arc<ProcessControl>,
 ) {
     let installed = {
         let mut slot = fault.lock().expect("worker fault lock");
         if slot.is_some() {
             false
         } else {
-            *slot = Some(new_fault);
+            *slot = Some(WorkerFaultRecord {
+                fault: new_fault,
+                occurred_at: Instant::now(),
+            });
             true
         }
     };
-    if installed && !shutting_down.load(Ordering::SeqCst) {
-        let _ = signal_group(process_group_id, libc::SIGTERM);
+    if installed && !control.shutting_down.load(Ordering::SeqCst) {
+        control.begin_cleanup(CleanupMode::Abort, Duration::from_millis(500));
     }
 }
 
@@ -593,6 +812,13 @@ fn wait_for_group_exit(
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn finish_child(child: &mut Child) -> io::Result<()> {
+    if child.try_wait()?.is_none() {
+        child.wait()?;
+    }
+    Ok(())
 }
 
 fn process_group_exists(process_group_id: i32) -> io::Result<bool> {

@@ -35,16 +35,32 @@ fn ready() {
 }
 
 #[allow(clippy::zombie_processes)]
-fn spawn_tap_for_orphan_cleanup_test() -> u32 {
+fn spawn_tap_for_orphan_cleanup_test(mode: &str) -> u32 {
     let executable = env::current_exe().unwrap();
     Command::new(executable)
-        .args(["--mode", "tap"])
+        .args(["--mode", mode])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .unwrap()
         .id()
+}
+
+fn spawn_stubborn_tap_with_receipt() -> u32 {
+    let tap_pid = spawn_tap_for_orphan_cleanup_test("tap-stubborn");
+    if let Ok(path) = env::var("LMN_PID_FILE") {
+        fs::write(
+            path,
+            format!(
+                "{{\"worker\":{},\"tap\":{}}}\n",
+                std::process::id(),
+                tap_pid
+            ),
+        )
+        .unwrap();
+    }
+    tap_pid
 }
 
 fn main() {
@@ -129,7 +145,53 @@ fn main() {
             let _ = io::stdin().lock().lines().next();
             read_parent_liveness(parent_fd()).unwrap();
         }
+        "never-read" => {
+            ready();
+            read_parent_liveness(parent_fd()).unwrap();
+        }
+        "record-command" => {
+            ready();
+            if io::stdin().lock().lines().next().is_some()
+                && let Ok(path) = env::var("LMN_COMMAND_FILE")
+            {
+                fs::write(path, b"executed\n").unwrap();
+            }
+            read_parent_liveness(parent_fd()).unwrap();
+        }
+        "result-then-exit" => {
+            ready();
+            let line = io::stdin().lock().lines().next().unwrap().unwrap();
+            let command: serde_json::Value = serde_json::from_str(&line).unwrap();
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "worker-result/1",
+                    "request_id": command["request_id"],
+                    "ok": true,
+                    "code": null,
+                    "recoverable": null,
+                    "artifact_digests": {"fixture": "digest"}
+                })
+            );
+            io::stdout().flush().unwrap();
+        }
         "stderr-overflow" => {
+            io::stderr().write_all(&vec![b'x'; 16 * 1024 + 1]).unwrap();
+            io::stderr().flush().unwrap();
+            read_parent_liveness(parent_fd()).unwrap();
+        }
+        "ready-malformed-with-tap" => {
+            let _ = spawn_stubborn_tap_with_receipt();
+            ready();
+            std::thread::sleep(Duration::from_millis(50));
+            println!("{{}}");
+            io::stdout().flush().unwrap();
+            read_parent_liveness(parent_fd()).unwrap();
+        }
+        "ready-stderr-with-tap" => {
+            let _ = spawn_stubborn_tap_with_receipt();
+            ready();
+            std::thread::sleep(Duration::from_millis(50));
             io::stderr().write_all(&vec![b'x'; 16 * 1024 + 1]).unwrap();
             io::stderr().flush().unwrap();
             read_parent_liveness(parent_fd()).unwrap();
@@ -170,21 +232,18 @@ fn main() {
         "ready-exit-with-tap" => {
             // This mode deliberately exits without waiting so the supervisor
             // must prove it cleans up the remaining process-group member.
-            let tap_pid = spawn_tap_for_orphan_cleanup_test();
-            if let Ok(path) = env::var("LMN_PID_FILE") {
-                fs::write(
-                    path,
-                    format!(
-                        "{{\"worker\":{},\"tap\":{}}}\n",
-                        std::process::id(),
-                        tap_pid
-                    ),
-                )
-                .unwrap();
-            }
+            let _ = spawn_stubborn_tap_with_receipt();
             ready();
         }
         "tap" => read_parent_liveness(parent_fd()).unwrap(),
+        "tap-stubborn" => {
+            unsafe {
+                libc::signal(libc::SIGTERM, libc::SIG_IGN);
+            }
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
         other => panic!("unknown fake mode {other}"),
     }
 }

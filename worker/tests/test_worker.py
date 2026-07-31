@@ -282,6 +282,20 @@ class WorkerProtocolTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_unavailable_capture_start_cannot_report_success(self) -> None:
+        worker = WorkerProcess(self.root, self.manifest)
+        try:
+            result = worker.request(
+                "capture.start",
+                {"meeting_id": str(uuid.uuid4())},
+            )
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["code"], "protocol_failure")
+            self.assertFalse(result["recoverable"])
+            self.assertEqual(result["artifact_digests"], {})
+        finally:
+            worker.close()
+
     def test_note_pair_matches_direct_validator(self) -> None:
         pack = json.loads(
             (REPO / "docs/prototype/fixtures/accepted-note2.fixture").read_text()

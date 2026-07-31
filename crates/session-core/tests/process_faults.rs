@@ -115,6 +115,89 @@ fn request_deadline_stops_and_reaps_worker() {
     assert!(wait_until_gone(pid, Duration::from_secs(1)));
 }
 
+#[test]
+fn expired_deadline_writes_no_command() {
+    let temp = TempDir::new().unwrap();
+    let command_file = temp.path().join("command-executed");
+    let mut command = Command::new(FAKE_WORKER);
+    command
+        .args(["--mode", "record-command"])
+        .env("LMN_COMMAND_FILE", &command_file);
+    let mut child = OwnedChild::spawn(&mut command).unwrap();
+    child
+        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .unwrap();
+    let request = WorkerCommand::new(
+        Operation::CaptureInspect,
+        serde_json::json!({"meeting_id": "fixture"}),
+    );
+    assert!(matches!(
+        child.request_until(&request, Instant::now(), |_| Ok(())),
+        Err(SupervisionError::RequestTimeout)
+    ));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!command_file.exists());
+    child.stop_and_wait(Duration::from_millis(100)).unwrap();
+}
+
+#[test]
+fn blocked_worker_stdin_obeys_deadline_and_reaps_worker() {
+    let mut command = Command::new(FAKE_WORKER);
+    command.args(["--mode", "never-read"]);
+    let mut child = OwnedChild::spawn(&mut command).unwrap();
+    let pid = child.pid();
+    child
+        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .unwrap();
+    let request = WorkerCommand::new(
+        Operation::CaptureInspect,
+        serde_json::json!({"meeting_id": "x".repeat(63 * 1024)}),
+    );
+    assert!(matches!(
+        child.request_until(
+            &request,
+            Instant::now() + Duration::from_millis(100),
+            |_| Ok(())
+        ),
+        Err(SupervisionError::RequestTimeout)
+    ));
+    assert!(wait_until_gone(pid, Duration::from_secs(1)));
+}
+
+#[test]
+fn validated_result_precedes_and_survives_following_eof() {
+    for _ in 0..20 {
+        let mut command = Command::new(FAKE_WORKER);
+        command.args(["--mode", "result-then-exit"]);
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        let pid = child.pid();
+        child
+            .wait_ready(Duration::from_secs(1), &expected_operations())
+            .unwrap();
+        let request = WorkerCommand::new(
+            Operation::CaptureInspect,
+            serde_json::json!({"meeting_id": "fixture"}),
+        );
+        let result = child
+            .request_until(
+                &request,
+                Instant::now() + Duration::from_secs(1),
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(result.artifact_digests["fixture"], "digest");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while child.check_health().is_ok() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(matches!(
+            child.check_health(),
+            Err(SupervisionError::WorkerExited)
+        ));
+        assert!(wait_until_gone(pid, Duration::from_secs(1)));
+    }
+}
+
 fn process_exists(pid: u32) -> bool {
     let result = unsafe { libc::kill(pid as i32, 0) };
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
@@ -207,9 +290,47 @@ fn worker_exit_cleanup_reaps_remaining_tap() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let pids: serde_json::Value = serde_json::from_slice(&fs::read(&pid_file).unwrap()).unwrap();
+    let worker = pids["worker"].as_u64().unwrap() as u32;
     let tap = pids["tap"].as_u64().unwrap() as u32;
-    child.stop_and_wait(Duration::from_millis(100)).unwrap();
-    assert!(wait_until_gone(tap, Duration::from_secs(1)));
+    assert!(wait_until_gone(worker, Duration::from_secs(2)));
+    assert!(wait_until_gone(tap, Duration::from_secs(2)));
+    assert!(matches!(
+        child.check_health(),
+        Err(SupervisionError::WorkerExited)
+    ));
+}
+
+#[test]
+fn idle_protocol_and_stderr_faults_autonomously_reap_the_group() {
+    for mode in ["ready-malformed-with-tap", "ready-stderr-with-tap"] {
+        let temp = TempDir::new().unwrap();
+        let pid_file = temp.path().join("children.json");
+        let mut command = Command::new(FAKE_WORKER);
+        command
+            .args(["--mode", mode])
+            .env("LMN_PID_FILE", &pid_file);
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        child
+            .wait_ready(Duration::from_secs(1), &expected_operations())
+            .unwrap();
+        let pids: serde_json::Value =
+            serde_json::from_slice(&fs::read(&pid_file).unwrap()).unwrap();
+        let worker = pids["worker"].as_u64().unwrap() as u32;
+        let tap = pids["tap"].as_u64().unwrap() as u32;
+        assert!(wait_until_gone(worker, Duration::from_secs(2)));
+        assert!(wait_until_gone(tap, Duration::from_secs(2)));
+        match mode {
+            "ready-malformed-with-tap" => assert!(matches!(
+                child.check_health(),
+                Err(SupervisionError::Protocol(ProtocolError::Malformed))
+            )),
+            "ready-stderr-with-tap" => assert!(matches!(
+                child.check_health(),
+                Err(SupervisionError::StderrOverflow)
+            )),
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[test]
