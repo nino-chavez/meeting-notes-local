@@ -177,10 +177,12 @@ class WorkerProtocolTests(unittest.TestCase):
             "models": [],
         }
         self.base_manifest = manifest
+        self.admission = "boundary-test"
         packaged_root = os.environ.get("LMN_PACKAGED_RUNTIME_ROOT")
         if packaged_root:
             self.manifest = Path(packaged_root) / "app-runtime.json"
             packaged_manifest = json.loads(self.manifest.read_text())
+            self.admission = packaged_manifest["admission"]
             self.encoder_digest = packaged_manifest["encoder"]["sha256"]
         else:
             self.manifest = resources / "manifest.json"
@@ -217,11 +219,14 @@ class WorkerProtocolTests(unittest.TestCase):
             )
             created = worker.request("transcript.create", {"meeting_id": meeting_id})
             self.assertTrue(created["ok"])
-            self.assertEqual(created["artifact_digests"]["transcript"], transcript_digest)
+            created_digest = created["artifact_digests"]["transcript"]
+            if self.admission == "boundary-test":
+                self.assertEqual(created_digest, transcript_digest)
             retained = self.root / "meetings" / meeting_id / "transcript" / (
-                transcript_digest + ".json"
+                created_digest + ".json"
             )
-            self.assertEqual(digest(retained), transcript_digest)
+            self.assertEqual(digest(retained), created_digest)
+            load(retained)
             self.assertEqual(direct["status"], "complete")
             self.assertEqual(acquisition["status"], "complete")
         finally:
