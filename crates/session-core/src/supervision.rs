@@ -253,18 +253,14 @@ impl OwnedChild {
             Ok((Ok(frame), reader)) if !frame.is_empty() => {
                 let _ = ready_thread.join();
                 if let Some(error) = self.current_fault_error() {
-                    let _ = self.abort_and_wait(Duration::from_millis(500));
-                    return Err(error);
+                    return Err(self.abort_error(error));
                 }
                 match parse_ready(&frame, expected_operations) {
                     Ok(ready) => {
                         self.start_dispatcher(reader);
                         Ok(ready)
                     }
-                    Err(error) => {
-                        let _ = self.abort_and_wait(Duration::from_millis(500));
-                        Err(error.into())
-                    }
+                    Err(error) => Err(self.abort_error(error.into())),
                 }
             }
             Ok((Ok(_), _)) => {
@@ -272,27 +268,24 @@ impl OwnedChild {
                 let error = self
                     .current_fault_error()
                     .unwrap_or(SupervisionError::EarlyExit);
-                let _ = self.abort_and_wait(Duration::from_millis(500));
-                Err(error)
+                Err(self.abort_error(error))
             }
             Ok((Err(read_error), _)) => {
                 let _ = ready_thread.join();
                 let error = self.current_fault_error().unwrap_or(read_error);
-                let _ = self.abort_and_wait(Duration::from_millis(500));
-                Err(error)
+                Err(self.abort_error(error))
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = self.abort_and_wait(Duration::from_millis(500));
+                let error = self.abort_error(SupervisionError::ReadyTimeout);
                 let _ = ready_thread.join();
-                Err(SupervisionError::ReadyTimeout)
+                Err(error)
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = ready_thread.join();
                 let error = self
                     .current_fault_error()
                     .unwrap_or(SupervisionError::EarlyExit);
-                let _ = self.abort_and_wait(Duration::from_millis(500));
-                Err(error)
+                Err(self.abort_error(error))
             }
         }
     }
@@ -1461,6 +1454,31 @@ mod tests {
                 occurred_at: received_at + Duration::from_millis(1),
             },
             received_at,
+        ));
+    }
+
+    #[test]
+    fn cleanup_failure_overrides_readiness_timeout_and_remains_terminal() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exec sleep 30"]);
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        child
+            .control
+            .inject_cleanup_failure(&io::Error::other("injected readiness cleanup failure"));
+
+        let ready_error = child
+            .wait_ready(Duration::from_millis(50), &expected_operations())
+            .unwrap_err();
+        assert!(matches!(
+            ready_error,
+            SupervisionError::CleanupFailed(error)
+                if error.to_string() == "injected readiness cleanup failure"
+        ));
+
+        assert!(matches!(
+            child.check_health(),
+            Err(SupervisionError::CleanupFailed(error))
+                if error.to_string() == "injected readiness cleanup failure"
         ));
     }
 
