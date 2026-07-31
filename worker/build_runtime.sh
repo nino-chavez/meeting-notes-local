@@ -25,17 +25,25 @@ verify() {
   (cd "$STAGE" && "$STAGE/python-runtime/bin/python3.12" -E -s -B -c \
     'import json, numpy; import worker.main; doc=json.load(open("app-runtime.json")); print(doc["admission"], numpy.__version__)' \
     1>/dev/null)
-  if [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["admission"])' "$STAGE/app-runtime.json")" == "internal-alpha" ]]; then
+  local admission
+  admission="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["admission"])' "$STAGE/app-runtime.json")"
+  if [[ "$admission" == "internal-alpha" ]]; then
     [[ -x "$STAGE/bin/meeting-capture" ]]
     echo "$WHISPER_CONFIG_SHA256  $STAGE/models/whisper-large-v3-turbo/config.json" | shasum -a 256 -c - >/dev/null
     echo "$WHISPER_WEIGHTS_SHA256  $STAGE/models/whisper-large-v3-turbo/weights.safetensors" | shasum -a 256 -c - >/dev/null
     (cd "$STAGE" && "$STAGE/python-runtime/bin/python3.12" -E -s -B -c \
       'import mlx.core, mlx_whisper, worker.transcription' 1>/dev/null)
+    LMN_PACKAGED_RUNTIME_ROOT="$STAGE" \
+      LMN_TAP_TEST_BINARY="$STAGE/bin/audiotee" \
+      LMN_MEETING_CAPTURE_TEST_BINARY="$STAGE/bin/meeting-capture" \
+      "$STAGE/python-runtime/bin/python3.12" -E -s -B -m unittest discover \
+        -s "$REPO/worker/tests" -v
+  else
+    LMN_PACKAGED_RUNTIME_ROOT="$STAGE" \
+      LMN_TAP_TEST_BINARY="$STAGE/bin/audiotee" \
+      "$STAGE/python-runtime/bin/python3.12" -E -s -B -m unittest discover \
+        -s "$REPO/worker/tests" -v
   fi
-  LMN_PACKAGED_RUNTIME_ROOT="$STAGE" \
-  LMN_TAP_TEST_BINARY="$STAGE/bin/audiotee" \
-    "$STAGE/python-runtime/bin/python3.12" -E -s -B -m unittest discover \
-      -s "$REPO/worker/tests" -v
 }
 
 mode="${1:-build}"

@@ -53,12 +53,13 @@ public class AudioBuffer {
   /// This is the fast path used by the IO proc callback: one memcpy from
   /// the Core Audio buffer into our ring buffer, with no intermediate
   /// Data allocation.
-  public func append(from source: UnsafeRawPointer, count: Int) {
+  @discardableResult
+  public func append(from source: UnsafeRawPointer, count: Int) -> Bool {
     guard count >= 0 else {
       AudioTeeLogging.logger.error(
         "Audio buffer append called with negative count",
         context: ["count": String(count)])
-      return
+      return false
     }
 
     guard availableBytes + count <= maxBufferSize else {
@@ -68,7 +69,7 @@ public class AudioBuffer {
           "requested": String(count),
           "available": String(maxBufferSize - availableBytes),
         ])
-      return
+      return false
     }
 
     if writeIndex + count <= maxBufferSize {
@@ -87,6 +88,7 @@ public class AudioBuffer {
     }
 
     availableBytes += count
+    return true
   }
 
   /// Calls `handler` once for each complete chunk available in the buffer.
@@ -117,5 +119,24 @@ public class AudioBuffer {
 
       availableBytes -= bytesPerChunk
     }
+  }
+
+  /// Delivers the final partial chunk during ordered shutdown. Without this,
+  /// every stop silently discards up to one configured chunk of audio.
+  public func drainRemainder(_ handler: (UnsafeRawPointer, Int) -> Void) {
+    guard availableBytes > 0 else { return }
+    if readIndex + availableBytes <= maxBufferSize {
+      handler(buffer.advanced(by: readIndex), availableBytes)
+    } else {
+      let firstChunkSize = maxBufferSize - readIndex
+      let secondChunkSize = availableBytes - firstChunkSize
+      linearizationBuffer.copyMemory(
+        from: buffer.advanced(by: readIndex), byteCount: firstChunkSize)
+      linearizationBuffer.advanced(by: firstChunkSize).copyMemory(
+        from: buffer, byteCount: secondChunkSize)
+      handler(linearizationBuffer, availableBytes)
+    }
+    readIndex = (readIndex + availableBytes) % maxBufferSize
+    availableBytes = 0
   }
 }

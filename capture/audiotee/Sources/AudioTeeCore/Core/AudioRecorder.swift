@@ -9,6 +9,9 @@ public class AudioRecorder {
   private var audioBuffer: AudioBuffer?
   private var outputHandler: AudioOutputHandler
   private var converter: AudioFormatConverter?
+  private let strictConversion: Bool
+  private let sourceBytesPerFrame: Int
+  private var expectedNextSampleTime: Float64?
 
   /// The audio format this recorder produces (after any conversion).
   public var outputFormat: AudioStreamBasicDescription {
@@ -22,13 +25,16 @@ public class AudioRecorder {
 
   public init(
     deviceID: AudioObjectID, outputHandler: AudioOutputHandler, convertToSampleRate: Double? = nil,
-    chunkDuration: Double = 0.2
+    chunkDuration: Double = 0.2,
+    strictConversion: Bool = false
   ) throws {
     self.deviceID = deviceID
     self.outputHandler = outputHandler
+    self.strictConversion = strictConversion
 
     // Get source format and set up conversion if requested
     let sourceFormat = try AudioFormatManager.getDeviceFormat(deviceID: deviceID)
+    self.sourceBytesPerFrame = max(Int(sourceFormat.mBytesPerFrame), 1)
 
     // Set up the audio buffer using source format and configurable chunk duration
     self.audioBuffer = AudioBuffer(format: sourceFormat, chunkDuration: chunkDuration)
@@ -38,6 +44,7 @@ public class AudioRecorder {
       guard AudioFormatConverter.isValidSampleRate(targetSampleRate) else {
         AudioTeeLogging.logger.error(
           "Invalid sample rate", context: ["sample_rate": String(targetSampleRate)])
+        if strictConversion { throw AudioConverterError.invalidFormat }
         self.converter = nil
         self.finalFormat = sourceFormat
         return
@@ -50,6 +57,7 @@ public class AudioRecorder {
         AudioTeeLogging.logger.info(
           "Audio conversion enabled", context: ["target_sample_rate": String(targetSampleRate)])
       } catch {
+        if strictConversion { throw error }
         AudioTeeLogging.logger.error(
           "Failed to create audio converter, using original format",
           context: ["error": String(describing: error)])
@@ -86,7 +94,7 @@ public class AudioRecorder {
         (inDevice, inNow, inInputData, inInputTime, outOutputData, inOutputTime, inClientData)
           -> OSStatus in
         let recorder = Unmanaged<AudioRecorder>.fromOpaque(inClientData!).takeUnretainedValue()
-        return recorder.processAudio(inInputData)
+        return recorder.processAudio(inInputData, timestamp: inInputTime)
       },
       Unmanaged.passUnretained(self).toOpaque(),
       &ioProcID
@@ -105,7 +113,10 @@ public class AudioRecorder {
     }
   }
 
-  private func processAudio(_ inputData: UnsafePointer<AudioBufferList>) -> OSStatus {
+  private func processAudio(
+    _ inputData: UnsafePointer<AudioBufferList>,
+    timestamp: UnsafePointer<AudioTimeStamp>
+  ) -> OSStatus {
     let bufferList = inputData.pointee
     let firstBuffer = bufferList.mBuffers
 
@@ -118,7 +129,21 @@ public class AudioRecorder {
     // This avoids creating an intermediate Data object (heap alloc + memcpy)
     // on every IO callback (~10ms). The pointer is valid for the duration
     // of this callback, so this is safe.
-    audioBuffer?.append(from: sourcePointer, count: Int(firstBuffer.mDataByteSize))
+    let bytes = Int(firstBuffer.mDataByteSize)
+    // kAudioTimeStampSampleTimeValid is bit zero. The SDK imports the field as
+    // UInt32 but does not consistently expose the C enum case to Swift.
+    if timestamp.pointee.mFlags.rawValue & 1 != 0 {
+      let actual = timestamp.pointee.mSampleTime
+      if let expectedNextSampleTime, abs(actual - expectedNextSampleTime) > 0.5 {
+        outputHandler.handleFailure(.timelineDiscontinuity)
+      }
+      expectedNextSampleTime = actual + Float64(bytes / sourceBytesPerFrame)
+    }
+
+    guard audioBuffer?.append(from: sourcePointer, count: bytes) == true else {
+      outputHandler.handleFailure(.bufferOverflow)
+      return noErr
+    }
 
     processAudioBuffer()
 
@@ -126,23 +151,37 @@ public class AudioRecorder {
   }
 
   public func stopRecording() {
-    processAudioBuffer()
-    outputHandler.handleStreamStop()
+    // Stop callbacks before touching the single-threaded converter and ring
+    // buffer from the caller's shutdown thread.
     cleanupIOProc()
+    processAudioBuffer()
+    audioBuffer?.drainRemainder { pointer, count in
+      self.processChunk(pointer, count: count)
+    }
+    outputHandler.handleStreamStop()
   }
 
   private func processAudioBuffer() {
     audioBuffer?.processChunks { pointer, count in
-      if let converter = self.converter {
-        if !converter.transform(from: pointer, count: count, handler: { outPtr, outCount in
+      self.processChunk(pointer, count: count)
+    }
+  }
+
+  private func processChunk(_ pointer: UnsafeRawPointer, count: Int) {
+    if let converter {
+      if !converter.transform(
+        from: pointer, count: count,
+        handler: { outPtr, outCount in
           self.outputHandler.handleAudioData(outPtr, count: outCount)
-        }) {
-          // Conversion failed — pass through unconverted audio
-          self.outputHandler.handleAudioData(pointer, count: count)
+        })
+      {
+        outputHandler.handleFailure(.conversionFailed)
+        if !strictConversion {
+          outputHandler.handleAudioData(pointer, count: count)
         }
-      } else {
-        self.outputHandler.handleAudioData(pointer, count: count)
       }
+    } else {
+      outputHandler.handleAudioData(pointer, count: count)
     }
   }
 

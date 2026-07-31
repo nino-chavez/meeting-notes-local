@@ -170,7 +170,11 @@ final class AudioBufferTests: XCTestCase {
     appendData(makeData(byte: 0x01, count: maxBuffer), to: buffer)
 
     // Try to append more — should be silently rejected (overflow guard)
-    appendData(makeData(byte: 0x02, count: 100), to: buffer)
+    let overflow = makeData(byte: 0x02, count: 100)
+    let accepted = overflow.withUnsafeBytes { bytes in
+      buffer.append(from: bytes.baseAddress!, count: bytes.count)
+    }
+    XCTAssertFalse(accepted)
 
     // Drain and verify we only got the original data
     let chunks = collectChunks(from: buffer)
@@ -215,5 +219,22 @@ final class AudioBufferTests: XCTestCase {
 
     // 16kHz * 0.1s * 2 bytes/frame = 3200
     XCTAssertEqual(buffer.bytesPerChunk, 3200)
+  }
+
+  func testDrainRemainderDeliversFinalPartialChunk() {
+    let format = makeFormat()
+    let buffer = AudioBuffer(format: format, chunkDuration: 0.1)
+    let remainder = makeData(byte: 0x7A, count: 318)
+    appendData(remainder, to: buffer)
+
+    var drained: Data?
+    buffer.drainRemainder { pointer, count in
+      drained = Data(bytes: pointer, count: count)
+    }
+    XCTAssertEqual(drained, remainder)
+
+    var secondDrain = false
+    buffer.drainRemainder { _, _ in secondDrain = true }
+    XCTAssertFalse(secondDrain)
   }
 }

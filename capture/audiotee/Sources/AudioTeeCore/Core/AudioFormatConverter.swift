@@ -152,13 +152,19 @@ public class AudioFormatConverter {
     // across chunks (avoiding discontinuity artifacts).
     var error: NSError?
 
+    var supplied = false
     let status = avConverter.convert(to: outputBuffer, error: &error) {
       requestedPackets, outStatus in
+      if supplied {
+        outStatus.pointee = .noDataNow
+        return nil
+      }
+      supplied = true
       outStatus.pointee = .haveData
       return inputBuffer
     }
 
-    guard outputBuffer.frameLength > 0 else {
+    guard status != .error, outputBuffer.frameLength > 0 else {
       AudioTeeLogging.logger.error(
         "Audio conversion produced no output",
         context: [

@@ -18,7 +18,15 @@ let package = Package(
     .executable(
       name: "audiotee",
       targets: ["AudioTeeCLI"]
-    )
+    ),
+    .executable(
+      name: "meeting-capture",
+      targets: ["MeetingCaptureCLI"]
+    ),
+    .executable(
+      name: "meeting-capture-self-test",
+      targets: ["MeetingCaptureSelfTest"]
+    ),
   ],
   targets: [
     // Core library with all business logic
@@ -34,11 +42,23 @@ let package = Package(
       path: "Sources/AudioTeeCLI"
     ),
 
+    .executableTarget(
+      name: "MeetingCaptureCLI",
+      dependencies: ["AudioTeeCore"],
+      path: "Sources/MeetingCaptureCLI"
+    ),
+
+    .executableTarget(
+      name: "MeetingCaptureSelfTest",
+      dependencies: ["AudioTeeCore"],
+      path: "Tests/MeetingCaptureSelfTest"
+    ),
+
     // Tests for the library
     .testTarget(
       name: "AudioTeeCoreTests",
       dependencies: ["AudioTeeCore"],
       path: "Tests/AudioTeeCoreTests"
-    )
+    ),
   ]
 )

@@ -8,4 +8,15 @@ public protocol AudioOutputHandler {
   func handleMetadata(_ metadata: AudioStreamMetadata)
   func handleStreamStart()
   func handleStreamStop()
+  func handleFailure(_ failure: AudioOutputFailure)
+}
+
+public enum AudioOutputFailure: Error, Equatable, Sendable {
+  case bufferOverflow
+  case conversionFailed
+  case timelineDiscontinuity
+}
+
+extension AudioOutputHandler {
+  public func handleFailure(_ failure: AudioOutputFailure) {}
 }
