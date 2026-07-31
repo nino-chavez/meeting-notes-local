@@ -40,7 +40,8 @@ scripts/verify-release-bundle.py \
 ```
 
 That command must report `PASS`. It checks the built permission text, bundle
-identity, macOS version, arm64-only code, packaged Python, NumPy native code,
+identity, macOS version, arm64-only executables, arm64-compatible native libraries,
+packaged Python, NumPy native code,
 worker import, runtime inventory, and `admission: product`.
 
 The current `worker/build_runtime.sh` intentionally produces

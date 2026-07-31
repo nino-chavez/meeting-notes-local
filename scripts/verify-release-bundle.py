@@ -151,10 +151,21 @@ def macho_inventory(app: Path) -> list[tuple[Path, str]]:
             continue
         arches = run("/usr/bin/lipo", "-archs", str(path))
         require(arches.returncode == 0, "lipo could not inspect a Mach-O")
+        architecture_list = arches.stdout.strip().split()
+        architecture_set = set(architecture_list)
         require(
-            arches.stdout.strip().split() == ["arm64"],
-            f"non-arm64 Mach-O in bundle: {path.relative_to(app)}",
+            "arm64" in architecture_set,
+            f"Mach-O lacks an arm64 slice: {path.relative_to(app)}",
         )
+        require(
+            architecture_set <= {"arm64", "x86_64"},
+            f"Mach-O contains an unexpected architecture: {path.relative_to(app)}",
+        )
+        if "executable" in kind.stdout:
+            require(
+                architecture_list == ["arm64"],
+                f"bundle executable is not arm64-only: {path.relative_to(app)}",
+            )
         inventory.append((path, kind.stdout.strip()))
     require(inventory, "built app contains no Mach-O files")
     return inventory
@@ -239,7 +250,7 @@ def main() -> int:
     mode = "signed" if args.signed else "unsigned"
     print(
         f"release bundle verification: PASS ({mode}, version {version}, "
-        f"{macho_count} arm64 Mach-O files, {args.admission})"
+        f"{macho_count} arm64-compatible Mach-O files, {args.admission})"
     )
     return 0
 
