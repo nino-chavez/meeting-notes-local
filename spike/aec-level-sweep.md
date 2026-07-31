@@ -1,178 +1,156 @@
-# Three protocol takes: what a static linear canceller does as the far end changes
+# Three protocol takes: reported observations and the missing receipt
 
-Run 2026-07-31 on one machine, one room, one seat, one system volume, in a
-single afternoon. Three `--protocol` takes, each with its own far-end source.
-Written as a standalone note because it answers a question `RESULTS.md` leaves
-open — whether the offline linear condition holds up on material it was not
-chosen for — and should be folded into that document rather than kept apart.
+Status: **candidate evidence from another Mac, not independently re-derived in
+this checkout**.
 
-The short version: **the echo-cancellation case for AEC3 is now made, and it is
-made by the takes that failed.** The operator-recovery claim is not made, and
-three more takes will not make it, because the instrument cannot measure it
-under the condition it exists to study.
+Three `dual_capture.py --protocol` takes were run on 2026-07-31 on one machine,
+in one room and seat, at one system-volume setting. Only the far-end source was
+intentionally changed. The source captures remain private and are not in Git.
 
----
+The reported aggregate figures are preserved below because they identify useful
+next experiments. The run did not persist the bounded `aec_bound.py --out`
+artifact needed to bind those figures to input, protocol, harness, and encoder
+digests. This checkout therefore cannot independently reproduce or confirm the
+measurements. Nothing in this note is a release or model-admission receipt.
 
-## What was run
+`spike/RESULTS.md` is frozen. This note remains a standalone appendix until a
+redacted receipt exists; actual real-canceller evidence belongs with
+`spike/aec3/README.md`.
 
-`dual_capture.py --protocol`, laptop speakers, built-in microphone, the same
-seat and the same system volume throughout. Only the far-end recording changed.
+## What was reported
 
-| | far-end source | pairs | control length |
-|---|---|---|---|
-| take 1 | operator's own screencast | 5 | 6 s |
-| take 2 | a screencast, loudness-maximised | 8 | 16 s |
-| take 3 | a broadcast talk-show interview | 8 | 16 s |
+The runs used laptop speakers and the built-in microphone. Take 1 used the old
+six-second control interval. Takes 2 and 3 reportedly used sixteen-second
+controls and a far end that was not the operator's voice.
 
-Take 1 ran before `CONTROL_S` was raised and scored no control segments at all;
-that defect and its fix are described in the commit that raised it.
+| take | far-end source class | pairs | control |
+|---|---|---:|---:|
+| 1 | single-voice screencast | 5 | 6 s |
+| 2 | loudness-maximised screencast | 8 | 16 s |
+| 3 | broadcast talk-show interview | 8 | 16 s |
 
-Scored with:
+The reported scoring command was equivalent to:
 
 ```sh
 python spike/aec_bound.py \
-  --take proto=<capture-dir> --take clean=<headphone-capture-dir> --enroll clean \
-  --protocol proto=<capture-dir>/protocol.json \
-  --segments proto=<capture-dir>/mic-segments.json \
+  --take proto=<private-capture-dir> \
+  --take clean=<private-headphone-capture-dir> \
+  --enroll clean \
+  --protocol proto=<private-capture-dir>/protocol.json \
+  --segments proto=<private-capture-dir>/mic-segments.json \
   --fit-mode prefix --fit-before 34 --score-after 37
 ```
 
-The operator profile was enrolled from a separate headphone capture — 11
-segments, 81 s — so no take scores against a profile built from itself. That
-capture is private meeting audio and nothing from its content appears here.
+The operator profile for the protocol takes was reportedly enrolled from a
+separate private headphone capture. No transcript text, cue response, path, or
+audio from any private capture appears here.
 
----
+## Reported aggregate measurements
 
-## The measurements
+Operator-to-echo is described as microphone level in speak intervals relative
+to microphone level in silent-control intervals. `linear` and `masked` are
+reported echo-only suppression over control intervals. A negative suppression
+figure means the output residual was larger than the input echo for that score.
 
-Operator-to-echo is computed at the microphone, not at the speaker: mean level
-inside the speak intervals against mean level inside the control intervals,
-which hold the same echo with nobody talking over it.
+| take | tap RMS | tap peak | operator/echo at mic | linear | masked | echo-only audio |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 0.064 | 0.943 | +3.5 dB | +4.5 dB | +9.8 dB | 14.3 s |
+| 2 | 0.138 | 1.000 | -0.9 dB | +0.7 dB | +4.3 dB | 85.4 s |
+| 3 | 0.111 | 0.970 | +1.0 dB | -0.3 dB | +2.8 dB | 92.3 s |
 
-| | far end at the tap | operator/echo at the mic | linear | masked | echo-only audio |
-|---|---|---|---|---|---|
-| take 1 | rms 0.064, peak 0.943 | **+3.5 dB** | **+4.5 dB** | **+9.8 dB** | 14.3 s |
-| take 2 | rms 0.138, peak 1.000 | −0.9 dB | +0.7 dB | +4.3 dB | 85.4 s |
-| take 3 | rms 0.111, peak 0.970 | +1.0 dB | **−0.3 dB** | +2.8 dB | 92.3 s |
+These rows are a transcription of the other machine's report. They are not
+machine-verifiable evidence until the receipt described below is produced.
 
-`linear` and `masked` are echo-only suppression measured across the control
-intervals. A negative figure means the filter left more residual than it removed.
+## Bounded observations
 
----
+### Static suppression varied across the three sources
 
-## The far end's loudness was not the operator's doing
+The reported linear score ranged from +4.5 dB to -0.3 dB. Take 3 had lower tap
+RMS than take 2 and also lower reported suppression, so tap RMS alone does not
+order these three outcomes.
 
-Take 2's source is a hot master: 17.2 dB crest factor against take 1's 23.4 dB,
-and 42 samples pinned at full scale where take 1 had none. Same system volume,
-roughly twice the energy leaving the speakers. This is worth stating plainly
-because the first reading of these numbers blamed the operator for turning the
-volume up, and he had not.
+The sources changed together in loudness, spectrum, words, speaker count, and
+dynamics, and each take fitted its own prefix. These runs therefore do **not**
+show which source property caused the difference. They also neither validate nor
+reject AEC3. The repository's executable contract is explicit that an offline
+static filter is not a bound on AEC3 in either direction.
 
-It matters beyond attribution. If source mastering alone moves the operator from
-3.5 dB above the echo to 0.9 dB below it, then playback level is not a setting a
-product can ask the operator to manage. It is a property of whoever is on the
-other end of the call and what they are playing.
+The safe consequence is narrower: the reported variation motivates testing the
+actual continuously adapting AEC3 path on held-out material. It does not by
+itself earn that dependency or establish product readiness.
 
----
+### Playback source level was not controlled by one volume setting
 
-## A static fit does not generalise, and the failure is not only about level
+Take 2 reportedly had 0.138 RMS at the tap, versus 0.064 for take 1: 2.16 times
+the RMS amplitude. Its reported crest factor was 17.2 dB versus 23.4 dB, with 42
+full-scale samples versus none. Those aggregates are consistent with differently
+mastered sources producing materially different digital levels at the same
+system-volume setting.
 
-Take 3 was **quieter at the tap than take 2 and suppressed less** — −0.3 dB
-against +0.7 dB. Level alone does not order these results.
+They do not isolate a four-decibel causal effect on operator-to-echo ratio,
+because operator vocal level and the other source properties were not separately
+controlled.
 
-What separates take 3 is content. A broadcast interview has several speakers,
-audience laughter, music stings and abrupt dynamics; the two screencasts are one
-voice at a near-constant level. A filter fit on 34 seconds of calibration and
-frozen cannot follow that, and the mask built from its estimate inherits the
-error.
+### No false admission was reported in this narrow control sample
 
-This is the result worth carrying into an AEC3 decision. AEC3 adapts
-continuously, tracks delay and drift, detects double-talk, and derives
-suppression from running statistics. The offline condition has none of those,
-and on the most ordinary far-end material of the three it went negative. The
-question "does AEC3 earn its dependency" is answered by the material, not by
-argument about the algorithm.
+Takes 2 and 3 reportedly yielded 20 and 18 control segments. At the fixed
++0.580 threshold, 0 of those 38 far-end segments were admitted as the operator;
+reported mean scores were +0.090 and +0.146.
 
-`RESULTS.md` already says the offline condition is not a bound on AEC3 in either
-direction. These takes are consistent with that and sharpen it: the offline
-condition is weakest exactly where a product needs cancellation most.
+That is an observation about this tested sample, conditional on adherence to the
+silent cues. The protocol cannot independently prove operator silence in a
+control interval, and the two takes share one operator, profile, machine, room,
+session, and threshold. This is not a false-admission rate and does not establish
+that the negative control can be relied on outside the tested sample.
 
----
+### Operator recovery remained inconclusive
 
-## The negative control works, and it is the one thing that got better
+Cue passages were reportedly detected in 4 of 5 speak intervals on take 1 and
+0 of 8 on each later take. Fragments reportedly appeared in the microphone
+transcript, but echo dominated the same leg used to decide whether the operator
+spoke. The instrument therefore fails to label many of the segments under the
+condition it is meant to study.
 
-With `CONTROL_S` at 16 s and a far end that is not the operator's own voice:
+Those runs support an **inconclusive** operator-recovery verdict, not a low one.
+Closing the gap requires a separate near-end observation channel, such as a
+close microphone used only to label when the operator spoke while the built-in
+microphone records the contaminated signal.
 
-| | control segments | admitted at +0.580 | mean |
-|---|---|---|---|
-| take 2 | 20 | **0** | +0.090 |
-| take 3 | 18 | **0** | +0.146 |
+### The clean-capture score is an exploratory anomaly
 
-Zero admissions across 38 segments of far-end-only audio. The gate does not
-mistake the far end for the operator, which is the property the control exists
-to establish. Take 1 could not show this at all: 0 of 5 control intervals
-contained a whole segment, and its far end was the operator's own recorded
-voice, which cannot serve as a negative control in any case.
+A clean headphone capture reportedly scored 1 admitted segment out of 7 with a
+mean of +0.507 against the +0.580 threshold. That run used the same capture for
+enrollment and scoring and did not supply matched segment annotations. The
++0.864 value in `RESULTS.md` comes from a different synthetic level-sweep setup.
 
----
+The figures are not like-for-like. Preserve the discrepancy as a reason to run a
+held-out, matched-segment threshold-transfer test; do not use it to claim that
+the production threshold fails on meetings.
 
-## The operator claim cannot be closed with this instrument
+## Receipt required before promotion
 
-Cue phrases were transcribed in 4 of 5 speak intervals on take 1, and **0 of 8**
-on takes 2 and 3. Take 3 produced no attributable operator segment at all.
+Repeat or re-score the takes with `aec_bound.py --out` to a private path outside
+the repository. From that private artifact, derive a scrubbed public receipt
+containing only:
 
-This is not a compliance failure. The operator read; fragments of the passages
-appear in the transcript. The verification requires those passages to be
-transcribed *from the microphone leg*, and that leg is dominated by echo, so the
-recogniser transcribes the far end instead. Passage words surface only between
-the far end's own sentences.
+- input audio, protocol, segment, harness, encoder, and profile digests;
+- fixed command parameters and condition names;
+- run verdicts, reason codes, counts, durations, and suppression aggregates;
+- the exact derivation and code revision for RMS, peak, crest-factor, and
+  full-scale-sample counts; and
+- an explicit statement that all `text`, `heard`, `script`, local paths, and
+  other speech-bearing fields were removed.
 
-The mechanism fails precisely when the condition under study is present. The
-existing note that echo-contaminated speech transcribes badly, so a
-non-matching segment is unverified rather than silent, understates it: at
-realistic levels *nearly every* segment becomes unverified, and the protocol
-stops producing evidence rather than producing weak evidence.
+The scrubber needs its own fixture proving that sentinel transcript content and
+paths cannot survive. Until that receipt is reviewed, these rows remain a useful
+other-machine report rather than canonical measured evidence.
 
-`aec_bound` reaches the same conclusion from its own side and says so in its
-output — closing the gap needs a near-end channel.
+## What this changes now
 
-### What would close it
-
-A third recorded channel: a close microphone on the operator, capturing him
-while the built-in microphone captures the contaminated version. That supplies
-ground truth about when he spoke and what he said, independent of the leg being
-measured, and it is the only thing here that does. `dual_capture` takes one
-`--input-device` today, so this is a capture-path change rather than a flag.
-
-Until then, operator-recovery figures on speakers should be reported as
-inconclusive rather than as low.
-
----
-
-## One incidental finding, unrelated to echo
-
-Scoring the clean headphone capture against a profile enrolled from that same
-capture admitted **1 of 7 segments, mean +0.507**, against the +0.580 threshold
-and the +0.864 `RESULTS.md` reports for clean operator audio.
-
-That take has no echo in it — bleed measured `positive_r: 0.0` across 160 s. So
-this is not contamination. Real-meeting audio on the built-in microphone simply
-sits far below the controlled captures the threshold was calibrated on, which is
-the "embedding degrades by half on the leg that needs it" result appearing in a
-place nobody was looking. A threshold set on controlled material may not transfer
-to meetings at all, independent of speakers, echo, or the room.
-
----
-
-## What this changes
-
-- The AEC3 integration has a measured case, and it does not depend on the
-  operator claim: a static linear fit returns +4.5 dB on favourable material and
-  −0.3 dB on ordinary material.
-- Playback level is not an operator-managed variable. Source mastering moves it
-  4 dB on its own.
-- Operator recovery on speakers is unmeasured, not measured-and-poor. Saying
-  otherwise would repeat the class of error this document's predecessors were
-  corrected for.
-- The negative control is sound and can be relied on: 0 of 38 far-end segments
-  admitted as the operator.
+- Keep the sixteen-second control as an empirically useful default, while
+  preserving an inconclusive result when no complete segment lands inside it.
+- Prioritize an actual AEC3 capture-path trial over more static-filter takes.
+- Add a separate near-end label channel before claiming operator recovery on
+  speakers.
+- Treat the 0-of-38 control result and the +0.507 clean score as narrow
+  observations, not population or threshold conclusions.
