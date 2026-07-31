@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-shell-rendered="true" data-startup-state="shell-rendered">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,22 +8,117 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main aria-labelledby="page-title">
-      <p class="eyebrow">Local Meeting Notes</p>
-      <h1 id="page-title">Nothing is recording.</h1>
-      <p class="lede">
-        The local runtime must pass its safety checks before a meeting can start.
-      </p>
-      <section class="status" aria-live="polite" aria-labelledby="status-title">
-        <div>
-          <p class="label">Runtime status</p>
-          <h2 id="status-title">Checking this installation</h2>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Local Meeting Notes</p>
+        <p class="product-state"><span class="status-dot" aria-hidden="true"></span><span id="header-state">Opening safely</span></p>
+      </div>
+      <span class="release-badge" id="release-badge">Internal alpha</span>
+    </header>
+
+    <main aria-live="polite">
+      <section class="screen active" id="startup-screen" aria-labelledby="startup-title">
+        <p class="kicker">Nothing is recording</p>
+        <h1 id="startup-title">Checking this installation.</h1>
+        <p class="lede" id="startup-copy">The window opens before any audio or model process starts.</p>
+        <div class="status-card">
+          <div>
+            <p class="label">Runtime status</p>
+            <h2 id="runtime-status">Checking bundled files</h2>
+          </div>
+          <span class="pill" id="runtime-pill">Checking</span>
         </div>
-        <span class="pill">Checking</span>
+        <button class="secondary" id="retry-startup" type="button" hidden>Check again</button>
       </section>
-      <button type="button" disabled>Start a meeting</button>
-      <p class="footnote">No microphone or system-audio process has started.</p>
+
+      <section class="screen" id="idle-screen" aria-labelledby="idle-title">
+        <p class="kicker">Manual start</p>
+        <h1 id="idle-title">Record this meeting?</h1>
+        <p class="lede">This alpha keeps audio and transcripts on this Mac. It does not create an automatic note.</p>
+
+        <form id="start-form">
+          <fieldset>
+            <legend>Confirm before recording</legend>
+            <label class="check-row">
+              <input type="checkbox" id="consent-check" />
+              <span><strong>Everyone has agreed to be recorded.</strong><small>The app cannot decide consent or recording law for you.</small></span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" id="headphones-check" />
+              <span><strong>I am wearing headphones.</strong><small>Speaker playback can make the transcript incomplete and misattribute words.</small></span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" id="room-check" />
+              <span><strong>I am the only person near this microphone.</strong><small>This alpha does not identify voices in the room.</small></span>
+            </label>
+          </fieldset>
+
+          <label class="retention-field" for="retention-days">
+            <span>Delete meeting audio after</span>
+            <select id="retention-days" required>
+              <option value="" selected>Choose a retention period</option>
+              <option value="1">1 day</option>
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+            </select>
+            <small>Audio is deleted only while the app is open. If the deadline passes while it is closed, deletion runs the next time it opens. The transcript remains.</small>
+          </label>
+
+          <p class="form-error" id="start-error" role="alert" hidden></p>
+          <button class="primary" id="start-button" type="submit" disabled>Start recording</button>
+        </form>
+      </section>
+
+      <section class="screen" id="arming-screen" aria-labelledby="arming-title">
+        <p class="kicker">Nothing is recording yet</p>
+        <h1 id="arming-title">Preparing both audio channels.</h1>
+        <p class="lede">macOS may ask for microphone and system-audio access. Recording starts only after both channels are ready.</p>
+        <div class="meter-card" aria-hidden="true"><span></span><span></span></div>
+      </section>
+
+      <section class="screen recording-screen" id="recording-screen" aria-labelledby="recording-title">
+        <p class="kicker live"><span class="live-dot" aria-hidden="true"></span>Recording</p>
+        <h1 id="recording-title"><time id="elapsed-time">00:00</time></h1>
+        <p class="lede" id="capture-health">Microphone and system audio are both arriving.</p>
+        <div class="channel-grid" aria-label="Capture channels">
+          <div><span class="channel-mark"></span><strong>Microphone</strong><small id="mic-state">Active</small></div>
+          <div><span class="channel-mark"></span><strong>System audio</strong><small id="system-state">Active</small></div>
+        </div>
+        <p class="form-error" id="stop-error" role="alert" hidden></p>
+        <button class="stop" id="stop-button" type="button">Stop recording</button>
+        <p class="footnote">Stopping flushes both audio files before transcription begins.</p>
+      </section>
+
+      <section class="screen" id="processing-screen" aria-labelledby="processing-title">
+        <p class="kicker">Recording stopped</p>
+        <h1 id="processing-title">Transcribing on this Mac.</h1>
+        <p class="lede">The fixed offline model is processing both channels. No meeting content is sent to a service.</p>
+        <div class="progress-track" aria-label="Transcription in progress"><span></span></div>
+        <p class="footnote">You may leave this window open while the transcript is prepared.</p>
+      </section>
+
+      <section class="screen transcript-screen" id="transcript-screen" aria-labelledby="transcript-title">
+        <p class="kicker">Transcript ready</p>
+        <h1 id="transcript-title">Captured words, not an automatic note.</h1>
+        <p class="lede">Review this as an internal-alpha transcript. Names, decisions, and action items have not been inferred.</p>
+        <div class="notice" id="transcript-warning" hidden></div>
+        <article id="transcript-turns" aria-label="Meeting transcript"></article>
+        <button class="primary" id="new-meeting" type="button">Return to Start</button>
+      </section>
+
+      <section class="screen" id="error-screen" aria-labelledby="error-title">
+        <p class="kicker">Nothing is recording</p>
+        <h1 id="error-title">This attempt did not complete.</h1>
+        <p class="lede" id="error-copy">The app kept any recoverable local evidence and did not mark the meeting complete.</p>
+        <div class="notice error" id="error-detail"></div>
+        <button class="secondary" id="recover-button" type="button">Return to Start</button>
+      </section>
     </main>
+
+    <footer>
+      <span>Offline transcript alpha</span>
+      <span id="meeting-id"></span>
+    </footer>
     <script src="main.js" defer></script>
   </body>
 </html>

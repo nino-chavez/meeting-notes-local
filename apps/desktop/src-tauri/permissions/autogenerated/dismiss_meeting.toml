@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dismiss-meeting"
+description = "Enables the dismiss_meeting command without any pre-configured scope."
+commands.allow = ["dismiss_meeting"]
+
+[[permission]]
+identifier = "deny-dismiss-meeting"
+description = "Denies the dismiss_meeting command without any pre-configured scope."
+commands.deny = ["dismiss_meeting"]

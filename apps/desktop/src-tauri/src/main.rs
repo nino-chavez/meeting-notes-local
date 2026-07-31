@@ -1,29 +1,946 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashSet;
-#[cfg(debug_assertions)]
-use std::path::PathBuf;
-use std::process::Command;
-use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, mpsc};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use local_meeting_notes_session_core::diagnostic::write_private_diagnostic;
-use local_meeting_notes_session_core::recovery::{RecoveryDisposition, scan_and_recover};
-use local_meeting_notes_session_core::reducer::StartupState;
-use local_meeting_notes_session_core::retention::{RetentionOutcome, execute_due_retention};
-use local_meeting_notes_session_core::runtime::RuntimeManifest;
-use local_meeting_notes_session_core::storage::StorageRoot;
-use local_meeting_notes_session_core::supervision::{
-    OwnedChild, SupervisionError, SystemGroupSignaler, SystemProcessInspector, expected_operations,
+use local_meeting_notes_session_core::meeting::{
+    ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
+    MeetingLifecycle, MeetingRecord, MeetingSchema, artifact_ref, load_meeting, read_private_bytes,
+    retention_policy_sha256, write_meeting,
 };
-use tauri::{Manager, State};
+use local_meeting_notes_session_core::protocol::{
+    Operation, ProtocolError, WorkerCommand, WorkerResult,
+};
+use local_meeting_notes_session_core::recovery::{
+    RecoveryCode, RecoveryDisposition, scan_and_recover,
+};
+use local_meeting_notes_session_core::reducer::{
+    CaptureState, ExclusiveOperation, Reducer, StartupState,
+};
+use local_meeting_notes_session_core::retention::{
+    RetentionOutcome, execute_due_retention, meeting_dir,
+};
+use local_meeting_notes_session_core::runtime::RuntimeManifest;
+use local_meeting_notes_session_core::storage::{
+    StorageRoot, create_private_dir, durable_create_new, sync_directory,
+};
+use local_meeting_notes_session_core::supervision::{
+    OwnedChild, OwnershipReceipt, OwnershipSchema, ProcessIdentity, ProcessInspection,
+    ProcessInspector, SupervisionError, SystemGroupSignaler, SystemProcessInspector,
+    expected_operations,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Manager, State};
+use uuid::Uuid;
 
-struct StartupStatus(Mutex<StartupState>);
-struct WorkerProcess(Mutex<Option<OwnedChild>>);
+const CAPTURE_EVENT_MAX_BYTES: usize = 64 * 1024;
+const TRANSCRIPT_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const CAPTURE_ARM_TIMEOUT: Duration = Duration::from_secs(120);
+const CAPTURE_STOP_TIMEOUT: Duration = Duration::from_secs(20);
+const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
+
+struct ApplicationState {
+    model: Mutex<AppModel>,
+    storage: Mutex<Option<StorageContext>>,
+    runtime: Mutex<Option<RuntimeIdentity>>,
+    worker: Mutex<Option<OwnedChild>>,
+    capture_task: Mutex<Option<CaptureTaskControl>>,
+    command_lock: Mutex<()>,
+    retention_started: AtomicBool,
+}
+
+impl Default for ApplicationState {
+    fn default() -> Self {
+        Self {
+            model: Mutex::new(AppModel::default()),
+            storage: Mutex::new(None),
+            runtime: Mutex::new(None),
+            worker: Mutex::new(None),
+            capture_task: Mutex::new(None),
+            command_lock: Mutex::new(()),
+            retention_started: AtomicBool::new(false),
+        }
+    }
+}
+
+struct AppModel {
+    reducer: Reducer,
+    admission: String,
+    retention_operational: bool,
+    meeting_id: Option<String>,
+    started_at_epoch_seconds: Option<u64>,
+    degraded: bool,
+    mic_state: Option<String>,
+    system_state: Option<String>,
+    turns: Vec<TranscriptTurn>,
+    warnings: Vec<String>,
+    error: Option<String>,
+}
+
+impl Default for AppModel {
+    fn default() -> Self {
+        Self {
+            reducer: Reducer::default(),
+            admission: "internal-alpha".into(),
+            retention_operational: false,
+            meeting_id: None,
+            started_at_epoch_seconds: None,
+            degraded: false,
+            mic_state: None,
+            system_state: None,
+            turns: Vec::new(),
+            warnings: Vec::new(),
+            error: None,
+        }
+    }
+}
+
+impl AppModel {
+    fn snapshot(&self) -> AppSnapshot {
+        AppSnapshot {
+            startup: self.reducer.startup(),
+            admission: self.admission.clone(),
+            retention_operational: self.retention_operational,
+            capture: self.reducer.capture(),
+            meeting_id: self.meeting_id.clone(),
+            started_at_epoch_seconds: self.started_at_epoch_seconds,
+            degraded: self.degraded,
+            mic_state: self.mic_state.clone(),
+            system_state: self.system_state.clone(),
+            turns: self.turns.clone(),
+            warnings: self.warnings.clone(),
+            error: self.error.clone(),
+        }
+    }
+
+    fn clear_meeting_projection(&mut self) {
+        self.meeting_id = None;
+        self.started_at_epoch_seconds = None;
+        self.degraded = false;
+        self.mic_state = None;
+        self.system_state = None;
+        self.turns.clear();
+        self.warnings.clear();
+        self.error = None;
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct AppSnapshot {
+    startup: StartupState,
+    admission: String,
+    retention_operational: bool,
+    capture: CaptureState,
+    meeting_id: Option<String>,
+    started_at_epoch_seconds: Option<u64>,
+    degraded: bool,
+    mic_state: Option<String>,
+    system_state: Option<String>,
+    turns: Vec<TranscriptTurn>,
+    warnings: Vec<String>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct TranscriptTurn {
+    speaker: Option<String>,
+    start: f64,
+    text: String,
+}
+
+#[derive(Clone)]
+struct StorageContext {
+    storage: StorageRoot,
+    resource_root: PathBuf,
+    manifest_path: PathBuf,
+    diagnostics: PathBuf,
+}
+
+#[derive(Clone)]
+struct RuntimeIdentity {
+    admission: String,
+    worker_build_sha256: String,
+    worker_executable_sha256: String,
+    tap_build_sha256: String,
+    tap_path: PathBuf,
+}
+
+struct CaptureTaskControl {
+    meeting_id: String,
+    sender: mpsc::SyncSender<CaptureTaskCommand>,
+}
+
+struct CaptureTaskRegistration {
+    app: AppHandle,
+    meeting_id: String,
+}
+
+impl Drop for CaptureTaskRegistration {
+    fn drop(&mut self) {
+        let state = self.app.state::<ApplicationState>();
+        clear_capture_task(&state, &self.meeting_id);
+    }
+}
+
+enum CaptureTaskCommand {
+    Stop,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StartAttestation {
+    participants_consented: bool,
+    headphones: bool,
+    operator_alone: bool,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureAttemptReceipt {
+    schema: &'static str,
+    meeting_id: String,
+    attempt_id: String,
+    created_at_epoch_seconds: u64,
+    application_build_sha256: String,
+    participant_notice_version: &'static str,
+    operator_attestation: StartAttestation,
+    retention_policy_sha256: String,
+}
+
+struct AttemptContext {
+    meeting_dir: PathBuf,
+    application_build_sha256: String,
+}
+
+#[derive(Debug)]
+enum WorkerCallError {
+    Rejected,
+    Supervisor(String),
+}
+
+impl WorkerCallError {
+    fn is_supervisor(&self) -> bool {
+        matches!(self, Self::Supervisor(_))
+    }
+}
+
+impl std::fmt::Display for WorkerCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected => formatter.write_str("worker rejected the operation"),
+            Self::Supervisor(detail) => formatter.write_str(detail),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CaptureEvent {
+    Paused,
+    Recording,
+    Finalized {
+        mic_samples: u64,
+        system_samples: u64,
+    },
+    Failed {
+        code: String,
+    },
+    Interrupted,
+}
+
+enum CaptureStreamItem {
+    Event(CaptureEvent),
+    ProtocolFailure,
+    Closed,
+}
+
+struct CaptureProcess {
+    child: Option<Child>,
+    control: Option<File>,
+    liveness: Option<File>,
+    events: mpsc::Receiver<CaptureStreamItem>,
+    reader_thread: Option<JoinHandle<()>>,
+    process_group_id: i32,
+    finished: bool,
+}
+
+impl CaptureProcess {
+    fn spawn(
+        executable: &Path,
+        capture_directory: &Path,
+        process_group_id: i32,
+    ) -> Result<Self, String> {
+        if !executable.is_file() || process_group_id <= 0 {
+            return Err("capture helper is unavailable".into());
+        }
+        let capture_directory_file = File::open(capture_directory).map_err(error_text)?;
+        let (control_read, control_write) = cloexec_pipe().map_err(error_text)?;
+        let (event_read, event_write) = cloexec_pipe().map_err(error_text)?;
+        let (liveness_read, liveness_write) = cloexec_pipe().map_err(error_text)?;
+        let inherited = [
+            capture_directory_file.as_raw_fd(),
+            control_read.as_raw_fd(),
+            event_write.as_raw_fd(),
+            liveness_read.as_raw_fd(),
+        ];
+        let mut command = Command::new(executable);
+        command
+            .arg("--capture-dir-fd")
+            .arg(inherited[0].to_string())
+            .arg("--control-fd")
+            .arg(inherited[1].to_string())
+            .arg("--event-fd")
+            .arg(inherited[2].to_string())
+            .arg("--parent-liveness-fd")
+            .arg(inherited[3].to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setpgid(0, process_group_id) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                for descriptor in inherited {
+                    set_close_on_exec(descriptor, false)?;
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().map_err(error_text)?;
+        drop(capture_directory_file);
+        drop(control_read);
+        drop(event_write);
+        drop(liveness_read);
+
+        let (sender, events) = mpsc::channel();
+        let reader_thread = match std::thread::Builder::new()
+            .name("meeting-capture-events".into())
+            .spawn(move || read_capture_events(event_read, sender))
+        {
+            Ok(thread) => thread,
+            Err(error) => {
+                drop(control_write);
+                drop(liveness_write);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.to_string());
+            }
+        };
+        Ok(Self {
+            child: Some(child),
+            control: Some(control_write),
+            liveness: Some(liveness_write),
+            events,
+            reader_thread: Some(reader_thread),
+            process_group_id,
+            finished: false,
+        })
+    }
+
+    fn pid(&self) -> Result<u32, String> {
+        self.child
+            .as_ref()
+            .map(Child::id)
+            .ok_or_else(|| "capture helper is no longer running".into())
+    }
+
+    fn send(&mut self, command: u8) -> Result<(), String> {
+        self.control
+            .as_mut()
+            .ok_or_else(|| "capture control channel is closed".to_string())?
+            .write_all(&[command])
+            .map_err(error_text)
+    }
+
+    fn receive_until(&self, deadline: Instant) -> Result<CaptureEvent, String> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("capture helper timed out".into());
+        }
+        match self.events.recv_timeout(remaining) {
+            Ok(CaptureStreamItem::Event(event)) => Ok(event),
+            Ok(CaptureStreamItem::ProtocolFailure) => {
+                Err("capture helper returned an invalid event".into())
+            }
+            Ok(CaptureStreamItem::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("capture helper exited before completing".into())
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => Err("capture helper timed out".into()),
+        }
+    }
+
+    fn receive_briefly(&self, timeout: Duration) -> Result<Option<CaptureEvent>, String> {
+        match self.events.recv_timeout(timeout) {
+            Ok(CaptureStreamItem::Event(event)) => Ok(Some(event)),
+            Ok(CaptureStreamItem::ProtocolFailure) => {
+                Err("capture helper returned an invalid event".into())
+            }
+            Ok(CaptureStreamItem::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("capture helper exited while recording".into())
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+        }
+    }
+
+    fn finish_cleanly(&mut self, deadline: Instant) -> Result<(), String> {
+        let Some(status) = self.wait_for_exit(deadline).map_err(error_text)? else {
+            self.cleanup();
+            return Err("capture helper did not exit after finalization".into());
+        };
+        if !status.success() {
+            self.cleanup();
+            return Err("capture helper reported an unsuccessful exit".into());
+        }
+        self.control.take();
+        self.liveness.take();
+        self.join_reader()?;
+        self.finished = true;
+        Ok(())
+    }
+
+    fn wait_for_exit(&mut self, deadline: Instant) -> io::Result<Option<ExitStatus>> {
+        loop {
+            let Some(child) = self.child.as_mut() else {
+                return Ok(None);
+            };
+            if let Some(status) = child.try_wait()? {
+                let _ = child.wait();
+                self.child.take();
+                return Ok(Some(status));
+            }
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn join_reader(&mut self) -> Result<(), String> {
+        if let Some(thread) = self.reader_thread.take() {
+            thread
+                .join()
+                .map_err(|_| "capture event reader failed".to_string())?;
+        }
+        Ok(())
+    }
+
+    fn cleanup(&mut self) {
+        self.control.take();
+        self.liveness.take();
+        let first_deadline = Instant::now() + Duration::from_millis(750);
+        if self.wait_for_exit(first_deadline).ok().flatten().is_none() {
+            let _ = signal_process_group(self.process_group_id, libc::SIGTERM);
+            let second_deadline = Instant::now() + Duration::from_millis(750);
+            if self.wait_for_exit(second_deadline).ok().flatten().is_none() {
+                let _ = signal_process_group(self.process_group_id, libc::SIGKILL);
+                if let Some(mut child) = self.child.take() {
+                    let _ = child.wait();
+                }
+            }
+        }
+        let _ = self.join_reader();
+        self.finished = true;
+    }
+}
+
+impl Drop for CaptureProcess {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.cleanup();
+        }
+    }
+}
 
 #[tauri::command]
-fn startup_status(status: State<'_, StartupStatus>) -> StartupState {
-    *status.0.lock().expect("startup status lock")
+fn app_snapshot(state: State<'_, ApplicationState>) -> AppSnapshot {
+    state
+        .model
+        .lock()
+        .expect("application model lock")
+        .snapshot()
+}
+
+#[tauri::command]
+fn start_meeting(
+    app: AppHandle,
+    retention_days: u64,
+    attestation: StartAttestation,
+) -> Result<AppSnapshot, String> {
+    validate_start_request(retention_days, &attestation)?;
+    let state = app.state::<ApplicationState>();
+    let _command = state.command_lock.lock().expect("command lock");
+    let meeting_id = Uuid::new_v4().to_string();
+    let attempt_id = Uuid::new_v4().to_string();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let snapshot = {
+        let mut model = state.model.lock().expect("application model lock");
+        if model.reducer.startup() != StartupState::Ready
+            || model.reducer.capture() != CaptureState::Idle
+        {
+            return Err("A meeting cannot start from the current state.".into());
+        }
+        if !model.retention_operational {
+            return Err("Audio retention needs attention before another meeting can start.".into());
+        }
+        let mut active = state.capture_task.lock().expect("capture task lock");
+        if active.is_some() {
+            return Err("Another capture attempt is already active.".into());
+        }
+        transition_capture(&mut model, CaptureState::Arming)?;
+        model.clear_meeting_projection();
+        model.meeting_id = Some(meeting_id.clone());
+        *active = Some(CaptureTaskControl {
+            meeting_id: meeting_id.clone(),
+            sender,
+        });
+        model.snapshot()
+    };
+    let task_app = app.clone();
+    let spawn_failure_meeting_id = meeting_id.clone();
+    std::thread::Builder::new()
+        .name("meeting-capture-attempt".into())
+        .spawn(move || {
+            run_capture_task(
+                task_app,
+                meeting_id,
+                attempt_id,
+                retention_days,
+                attestation,
+                receiver,
+            )
+        })
+        .map_err(|error| {
+            fail_capture_task(
+                &app,
+                None,
+                false,
+                true,
+                "capture_task_spawn_failed",
+                &error.to_string(),
+                "The recording task could not start.",
+            );
+            clear_capture_task(&app.state::<ApplicationState>(), &spawn_failure_meeting_id);
+            "The recording task could not start.".to_string()
+        })?;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn stop_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
+    let state = app.state::<ApplicationState>();
+    let _command = state.command_lock.lock().expect("command lock");
+    let mut model = state.model.lock().expect("application model lock");
+    if model.reducer.capture() != CaptureState::Recording {
+        return Err("No recording is ready to stop.".into());
+    }
+    transition_capture(&mut model, CaptureState::Stopping)?;
+    let send_result = state
+        .capture_task
+        .lock()
+        .expect("capture task lock")
+        .as_ref()
+        .ok_or_else(|| "The recording task is unavailable.".to_string())?
+        .sender
+        .try_send(CaptureTaskCommand::Stop);
+    if send_result.is_err() {
+        transition_capture(&mut model, CaptureState::RecoveredInterrupted)?;
+        model.error = Some("The recording task ended before Stop completed.".into());
+        return Err("The recording task ended before Stop completed.".into());
+    }
+    Ok(model.snapshot())
+}
+
+#[tauri::command]
+fn dismiss_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
+    let state = app.state::<ApplicationState>();
+    let _command = state.command_lock.lock().expect("command lock");
+    let mut model = state.model.lock().expect("application model lock");
+    if model.reducer.startup() != StartupState::Ready {
+        return Err("Finish the installation check before starting another meeting.".into());
+    }
+    if state
+        .capture_task
+        .lock()
+        .expect("capture task lock")
+        .is_some()
+    {
+        return Err("The current meeting is still finishing.".into());
+    }
+    if !matches!(
+        model.reducer.capture(),
+        CaptureState::TranscriptReady
+            | CaptureState::TranscriptionFailed
+            | CaptureState::RecoveredInterrupted
+    ) {
+        return Err("The current meeting cannot be dismissed yet.".into());
+    }
+    transition_capture(&mut model, CaptureState::Idle)?;
+    model.clear_meeting_projection();
+    if !model.retention_operational && model.reducer.startup() == StartupState::Ready {
+        model.error =
+            Some("Audio retention needs attention before another meeting can start.".into());
+        transition_startup(&mut model, StartupState::DiagnosticWritten)?;
+    }
+    Ok(model.snapshot())
+}
+
+#[tauri::command]
+fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
+    let state = app.state::<ApplicationState>();
+    let _command = state.command_lock.lock().expect("command lock");
+    if state
+        .capture_task
+        .lock()
+        .expect("capture task lock")
+        .is_some()
+    {
+        return Err("Startup cannot be retried while a meeting is active.".into());
+    }
+    let snapshot = {
+        let mut model = state.model.lock().expect("application model lock");
+        if !matches!(
+            model.reducer.startup(),
+            StartupState::RuntimeMissing
+                | StartupState::ServiceTimeout
+                | StartupState::DiagnosticWritten
+        ) {
+            return Err("The installation check is not waiting for a retry.".into());
+        }
+        transition_startup(&mut model, StartupState::Retrying)?;
+        model.error = None;
+        model.snapshot()
+    };
+    let task_app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("meeting-runtime-retry".into())
+        .spawn(move || initialize_application(task_app, true));
+    if let Err(error) = spawned {
+        write_diagnostic(&state, "startup_retry_spawn_failed", &error.to_string());
+        finish_startup_failure(
+            &state,
+            true,
+            StartupFailure::Diagnostic,
+            "the installation retry could not start",
+        );
+        return Err("The installation retry could not start.".into());
+    }
+    Ok(snapshot)
+}
+
+fn main() {
+    tauri::Builder::default()
+        .manage(ApplicationState::default())
+        .invoke_handler(tauri::generate_handler![
+            app_snapshot,
+            start_meeting,
+            stop_meeting,
+            dismiss_meeting,
+            retry_startup
+        ])
+        .setup(|app| {
+            let handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("meeting-runtime-startup".into())
+                .spawn(move || initialize_application(handle, false))
+                .map_err(io_error)?;
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("Local Meeting Notes shell failed");
+}
+
+fn initialize_application(app: AppHandle, retry: bool) {
+    let state = app.state::<ApplicationState>();
+    {
+        let mut model = state.model.lock().expect("application model lock");
+        model.retention_operational = false;
+        if !retry && transition_startup(&mut model, StartupState::Checking).is_err() {
+            return;
+        }
+    }
+
+    state.runtime.lock().expect("runtime identity lock").take();
+    let worker_cleanup = state
+        .worker
+        .lock()
+        .expect("worker process lock")
+        .take()
+        .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
+    if let Some(Err(error)) = worker_cleanup {
+        write_diagnostic(&state, "worker_cleanup_failed", &error.to_string());
+        finish_startup_failure(
+            &state,
+            retry,
+            StartupFailure::Diagnostic,
+            "the previous worker could not be stopped safely",
+        );
+        return;
+    }
+
+    let storage_context = match create_storage_context(&app) {
+        Ok(context) => context,
+        Err(error) => {
+            finish_startup_failure(&state, retry, StartupFailure::Diagnostic, &error);
+            return;
+        }
+    };
+    *state.storage.lock().expect("storage context lock") = Some(storage_context.clone());
+
+    let recovery = scan_and_recover(
+        &storage_context.storage,
+        now_epoch_seconds(),
+        &SystemProcessInspector,
+        &SystemGroupSignaler,
+        Duration::from_millis(750),
+    );
+    let recovery_ready = match recovery {
+        Ok(report) => {
+            let mut retention_ready = true;
+            for meeting in &report.meetings {
+                match meeting.disposition {
+                    RecoveryDisposition::Quarantined(code) => {
+                        if code == RecoveryCode::RetentionMismatch {
+                            retention_ready = false;
+                        }
+                        let _ = write_private_diagnostic(
+                            &storage_context.diagnostics,
+                            code.as_str(),
+                            &format!(
+                                "meeting {} was quarantined without mutation",
+                                meeting.meeting_id
+                            ),
+                        );
+                    }
+                    RecoveryDisposition::OwnershipAmbiguous => {
+                        let _ = write_private_diagnostic(
+                            &storage_context.diagnostics,
+                            "meeting_recovery_ownership_ambiguous",
+                            &format!(
+                                "meeting {} blocks capture because child identity is uncertain",
+                                meeting.meeting_id
+                            ),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            !report.blocks_capture && retention_ready
+        }
+        Err(error) => {
+            let _ = write_private_diagnostic(
+                &storage_context.diagnostics,
+                "meeting_recovery_failed",
+                &error.to_string(),
+            );
+            false
+        }
+    };
+    if !recovery_ready {
+        finish_startup_failure(
+            &state,
+            retry,
+            StartupFailure::Diagnostic,
+            "meeting recovery requires attention",
+        );
+        return;
+    }
+    {
+        let mut model = state.model.lock().expect("application model lock");
+        model.retention_operational = true;
+    }
+    start_retention_executor(&app, &storage_context);
+
+    let manifest = match RuntimeManifest::load_and_verify(&storage_context.manifest_path) {
+        Ok(manifest) if manifest.is_internal_alpha() => manifest,
+        _ => {
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Runtime,
+                "the packaged runtime is missing or changed",
+            );
+            return;
+        }
+    };
+    let worker_path = storage_context.resource_root.join(&manifest.runtime.path);
+    let mut command = Command::new(worker_path);
+    command
+        .args(["-E", "-s", "-B", "-m", "worker.main"])
+        .arg("--app-data-root")
+        .arg(storage_context.storage.path())
+        .arg("--runtime-manifest")
+        .arg(&storage_context.manifest_path)
+        .current_dir(&storage_context.resource_root);
+    let mut worker = match OwnedChild::spawn(&mut command) {
+        Ok(worker) => worker,
+        Err(SupervisionError::MissingChild) => {
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Runtime,
+                "the packaged worker is missing",
+            );
+            return;
+        }
+        Err(error) => {
+            let _ = write_private_diagnostic(
+                &storage_context.diagnostics,
+                "worker_spawn_failed",
+                &error.to_string(),
+            );
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Diagnostic,
+                "the packaged worker could not start",
+            );
+            return;
+        }
+    };
+    let ready = worker.wait_ready(Duration::from_secs(10), &expected_operations());
+    match ready {
+        Ok(ready) if manifest.matches_ready(&ready) => {}
+        Err(SupervisionError::ReadyTimeout) => {
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Timeout,
+                "the packaged worker did not answer",
+            );
+            return;
+        }
+        Ok(_) => {
+            if let Err(error) = worker.stop_and_wait(Duration::from_millis(750)) {
+                let _ = write_private_diagnostic(
+                    &storage_context.diagnostics,
+                    "worker_identity_mismatch_cleanup_failed",
+                    &error.to_string(),
+                );
+                finish_startup_failure(
+                    &state,
+                    retry,
+                    StartupFailure::Diagnostic,
+                    "the mismatched worker could not be stopped safely",
+                );
+                return;
+            }
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Runtime,
+                "the packaged worker identity does not match the application",
+            );
+            return;
+        }
+        Err(error) => {
+            let _ = write_private_diagnostic(
+                &storage_context.diagnostics,
+                "worker_startup_failed",
+                &error.to_string(),
+            );
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Diagnostic,
+                "the packaged worker failed its startup check",
+            );
+            return;
+        }
+    }
+
+    let retention_ready = state
+        .model
+        .lock()
+        .expect("application model lock")
+        .retention_operational;
+    if !retention_ready {
+        if let Err(error) = worker.stop_and_wait(Duration::from_millis(750)) {
+            let _ = write_private_diagnostic(
+                &storage_context.diagnostics,
+                "worker_retention_block_cleanup_failed",
+                &error.to_string(),
+            );
+        }
+        finish_startup_failure(
+            &state,
+            retry,
+            StartupFailure::Diagnostic,
+            "audio retention needs attention before startup can finish",
+        );
+        return;
+    }
+
+    let runtime = RuntimeIdentity {
+        admission: "internal-alpha".into(),
+        worker_build_sha256: manifest.worker.sha256.clone(),
+        worker_executable_sha256: manifest.runtime.sha256.clone(),
+        tap_build_sha256: manifest.tap.sha256.clone(),
+        tap_path: storage_context.resource_root.join(&manifest.tap.path),
+    };
+    *state.worker.lock().expect("worker process lock") = Some(worker);
+    *state.runtime.lock().expect("runtime identity lock") = Some(runtime.clone());
+    let mut model = state.model.lock().expect("application model lock");
+    model.admission = runtime.admission;
+    if let Err(error) = transition_startup(&mut model, StartupState::Ready) {
+        model.error = Some(error);
+    }
+}
+
+enum StartupFailure {
+    Runtime,
+    Timeout,
+    Diagnostic,
+}
+
+fn finish_startup_failure(
+    state: &ApplicationState,
+    retry: bool,
+    failure: StartupFailure,
+    detail: &str,
+) {
+    let target = match (retry, failure) {
+        (_, StartupFailure::Timeout) => StartupState::ServiceTimeout,
+        (false, StartupFailure::Runtime) => StartupState::RuntimeMissing,
+        (false, StartupFailure::Diagnostic) => StartupState::DiagnosticWritten,
+        (true, StartupFailure::Runtime) => StartupState::ReinstallRequired,
+        (true, StartupFailure::Diagnostic) => StartupState::DiagnosticWritten,
+    };
+    let mut model = state.model.lock().expect("application model lock");
+    if transition_startup(&mut model, target).is_err() {
+        model.error = Some("The installation check stopped in an invalid state.".into());
+    } else {
+        model.error = Some(detail.into());
+    }
+}
+
+fn create_storage_context(app: &AppHandle) -> Result<StorageContext, String> {
+    let app_data = app.path().app_data_dir().map_err(error_text)?;
+    let resource_root = app.path().resource_dir().map_err(error_text)?;
+    #[cfg(debug_assertions)]
+    let protected_root = repository_root();
+    #[cfg(not(debug_assertions))]
+    let protected_root = resource_root.clone();
+    let storage = StorageRoot::create(&app_data, &protected_root).map_err(error_text)?;
+    Ok(StorageContext {
+        manifest_path: resource_root.join("app-runtime.json"),
+        diagnostics: storage.path().join("diagnostics"),
+        storage,
+        resource_root,
+    })
 }
 
 #[cfg(debug_assertions)]
@@ -35,6 +952,1304 @@ fn repository_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
+    let state = app.state::<ApplicationState>();
+    if state.retention_started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    let storage = context.storage.clone();
+    let diagnostics = context.diagnostics.clone();
+    std::thread::spawn(move || {
+        let mut reported_quarantines = HashSet::new();
+        loop {
+            std::thread::sleep(Duration::from_secs(30));
+            match execute_due_retention(&storage, now_epoch_seconds()) {
+                Ok(outcomes) => {
+                    let mut retention_failed = false;
+                    for outcome in outcomes {
+                        if let RetentionOutcome::Quarantined(meeting_id) = outcome {
+                            retention_failed = true;
+                            if reported_quarantines.insert(meeting_id.clone()) {
+                                let _ = write_private_diagnostic(
+                                    &diagnostics,
+                                    "retention_meeting_quarantined",
+                                    &format!(
+                                        "meeting {meeting_id} was quarantined without mutation"
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    if retention_failed {
+                        mark_retention_unavailable(&app);
+                    }
+                }
+                Err(error) => {
+                    let _ = write_private_diagnostic(
+                        &diagnostics,
+                        "retention_tick_failed",
+                        &error.to_string(),
+                    );
+                    mark_retention_unavailable(&app);
+                }
+            }
+        }
+    });
+}
+
+fn mark_retention_unavailable(app: &AppHandle) {
+    let state = app.state::<ApplicationState>();
+    let mut model = state.model.lock().expect("application model lock");
+    model.retention_operational = false;
+    model.error = Some("Audio retention needs attention before another meeting can start.".into());
+    if model.reducer.capture() == CaptureState::Idle
+        && model.reducer.startup() == StartupState::Ready
+    {
+        let _ = transition_startup(&mut model, StartupState::DiagnosticWritten);
+    }
+}
+
+fn run_capture_task(
+    app: AppHandle,
+    meeting_id: String,
+    attempt_id: String,
+    retention_days: u64,
+    attestation: StartAttestation,
+    commands: mpsc::Receiver<CaptureTaskCommand>,
+) {
+    let state = app.state::<ApplicationState>();
+    let _task_registration = CaptureTaskRegistration {
+        app: app.clone(),
+        meeting_id: meeting_id.clone(),
+    };
+    let storage = match state.storage.lock().expect("storage context lock").clone() {
+        Some(storage) => storage,
+        None => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_storage_unavailable",
+                "storage context is missing",
+                "Private meeting storage is unavailable.",
+            );
+            return;
+        }
+    };
+    let runtime = match state.runtime.lock().expect("runtime identity lock").clone() {
+        Some(runtime) => runtime,
+        None => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_runtime_unavailable",
+                "runtime identity is missing",
+                "The local runtime is unavailable.",
+            );
+            return;
+        }
+    };
+    let (process_group_id, initial_worker_identity) = match inspect_worker(&state, &runtime) {
+        Ok(identity) => identity,
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_worker_unavailable",
+                &error,
+                "The local worker stopped before recording began.",
+            );
+            return;
+        }
+    };
+    let attempt = match create_attempt(
+        &storage.storage,
+        &meeting_id,
+        &attempt_id,
+        retention_days,
+        attestation,
+    ) {
+        Ok(attempt) => attempt,
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_attempt_write_failed",
+                &error,
+                "The private attempt receipt could not be saved.",
+            );
+            return;
+        }
+    };
+
+    let mut helper = match CaptureProcess::spawn(
+        &runtime.tap_path,
+        &attempt.meeting_dir.join("capture"),
+        process_group_id,
+    ) {
+        Ok(helper) => helper,
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                false,
+                "capture_helper_spawn_failed",
+                &error,
+                "The audio helper could not start.",
+            );
+            return;
+        }
+    };
+    match helper.receive_until(Instant::now() + Duration::from_secs(10)) {
+        Ok(CaptureEvent::Paused) => {}
+        Ok(_) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                false,
+                "capture_helper_bad_pause",
+                "capture helper did not begin in paused state",
+                "The audio helper did not start safely.",
+            );
+            return;
+        }
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                false,
+                "capture_helper_pause_failed",
+                &error,
+                "The audio helper did not reach its safe paused state.",
+            );
+            return;
+        }
+    }
+
+    let helper_identity = match helper.pid().and_then(inspect_process) {
+        Ok(identity) if identity.executable_sha256 == runtime.tap_build_sha256 => identity,
+        _ => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_helper_identity_failed",
+                "capture helper identity could not be established",
+                "The audio helper identity could not be verified.",
+            );
+            return;
+        }
+    };
+    let current_worker_identity = match inspect_process(initial_worker_identity.pid) {
+        Ok(identity)
+            if identity == initial_worker_identity
+                && identity.executable_sha256 == runtime.worker_executable_sha256 =>
+        {
+            identity
+        }
+        _ => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_worker_identity_changed",
+                "worker identity changed before ownership commit",
+                "The local worker changed before recording began.",
+            );
+            return;
+        }
+    };
+    let ownership = OwnershipReceipt {
+        schema: OwnershipSchema::V1,
+        process_group_id,
+        application_build_sha256: attempt.application_build_sha256.clone(),
+        worker_build_sha256: runtime.worker_build_sha256.clone(),
+        tap_build_sha256: runtime.tap_build_sha256.clone(),
+        children: vec![current_worker_identity, helper_identity],
+    };
+    if write_ownership_receipt(&attempt.meeting_dir, &ownership).is_err() {
+        fail_capture_task(
+            &app,
+            Some(&meeting_id),
+            false,
+            true,
+            "capture_ownership_write_failed",
+            "capture ownership receipt could not become durable",
+            "The capture ownership receipt could not be saved.",
+        );
+        return;
+    }
+    let ownership_ref = match artifact_ref(&attempt.meeting_dir, "ownership.json") {
+        Ok(reference) => reference,
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_ownership_verify_failed",
+                &error.to_string(),
+                "The capture ownership receipt could not be verified.",
+            );
+            return;
+        }
+    };
+    let mut meeting = match load_meeting(&attempt.meeting_dir) {
+        Ok(meeting) => meeting,
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_meeting_load_failed",
+                &error.to_string(),
+                "The meeting record could not be reopened.",
+            );
+            return;
+        }
+    };
+    meeting.artifacts.ownership = Some(ownership_ref);
+    meeting.lifecycle = MeetingLifecycle::Incomplete;
+    if let Err(error) = write_meeting(&attempt.meeting_dir, &meeting) {
+        fail_capture_task(
+            &app,
+            Some(&meeting_id),
+            false,
+            true,
+            "capture_meeting_ownership_commit_failed",
+            &error.to_string(),
+            "The meeting ownership record could not be committed.",
+        );
+        return;
+    }
+    let recovery_required = true;
+    if let Err(error) = helper.send(b'S') {
+        fail_capture_task(
+            &app,
+            Some(&meeting_id),
+            recovery_required,
+            true,
+            "capture_start_signal_failed",
+            &error,
+            "Recording could not begin.",
+        );
+        return;
+    }
+    match helper.receive_until(Instant::now() + CAPTURE_ARM_TIMEOUT) {
+        Ok(CaptureEvent::Recording) => {}
+        Ok(CaptureEvent::Failed { code }) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                true,
+                "capture_hardware_failed",
+                &format!("capture helper failed with code {code}"),
+                capture_user_message(&code),
+            );
+            return;
+        }
+        Ok(_) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                true,
+                "capture_recording_event_invalid",
+                "capture helper emitted an unexpected event before recording",
+                "Both audio channels did not become ready.",
+            );
+            return;
+        }
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                true,
+                "capture_recording_event_failed",
+                &error,
+                "Both audio channels did not become ready.",
+            );
+            return;
+        }
+    }
+    let recording_started = Instant::now();
+    let started_at_epoch_seconds = now_epoch_seconds();
+    {
+        let mut model = state.model.lock().expect("application model lock");
+        if transition_capture(&mut model, CaptureState::Recording).is_err() {
+            drop(model);
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                true,
+                "capture_recording_transition_failed",
+                "application state changed during capture arming",
+                "The recording state could not be confirmed.",
+            );
+            return;
+        }
+        model.started_at_epoch_seconds = Some(started_at_epoch_seconds);
+        model.mic_state = Some("Active".into());
+        model.system_state = Some("Active".into());
+    }
+
+    loop {
+        match commands.try_recv() {
+            Ok(CaptureTaskCommand::Stop) => break,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                fail_capture_task(
+                    &app,
+                    Some(&meeting_id),
+                    recovery_required,
+                    true,
+                    "capture_control_disconnected",
+                    "application capture control closed",
+                    "The recording control closed unexpectedly.",
+                );
+                return;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        match helper.receive_briefly(Duration::from_millis(100)) {
+            Ok(None) => {}
+            Ok(Some(CaptureEvent::Failed { code })) => {
+                fail_capture_task(
+                    &app,
+                    Some(&meeting_id),
+                    recovery_required,
+                    true,
+                    "capture_failed_while_recording",
+                    &format!("capture helper failed with code {code}"),
+                    capture_user_message(&code),
+                );
+                return;
+            }
+            Ok(Some(CaptureEvent::Interrupted)) => {
+                fail_capture_task(
+                    &app,
+                    Some(&meeting_id),
+                    recovery_required,
+                    true,
+                    "capture_interrupted",
+                    "capture helper reported interruption",
+                    "Recording was interrupted before both files were finalized.",
+                );
+                return;
+            }
+            Ok(Some(_)) | Err(_) => {
+                fail_capture_task(
+                    &app,
+                    Some(&meeting_id),
+                    recovery_required,
+                    true,
+                    "capture_event_invalid",
+                    "capture helper emitted an invalid event sequence",
+                    "The audio helper stopped following the recording protocol.",
+                );
+                return;
+            }
+        }
+    }
+
+    let capture_elapsed_samples = match elapsed_samples(recording_started.elapsed()) {
+        Ok(samples) => samples,
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                true,
+                "capture_elapsed_time_invalid",
+                &error,
+                "The recording exceeded the supported duration.",
+            );
+            return;
+        }
+    };
+    if let Err(error) = helper.send(b'X') {
+        fail_capture_task(
+            &app,
+            Some(&meeting_id),
+            recovery_required,
+            true,
+            "capture_stop_signal_failed",
+            &error,
+            "The audio helper did not receive Stop.",
+        );
+        return;
+    }
+    let finalized = match helper.receive_until(Instant::now() + CAPTURE_STOP_TIMEOUT) {
+        Ok(CaptureEvent::Finalized {
+            mic_samples,
+            system_samples,
+        }) if mic_samples > 0 && system_samples > 0 => (mic_samples, system_samples),
+        Ok(CaptureEvent::Failed { code }) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                true,
+                "capture_finalize_failed",
+                &format!("capture helper failed with code {code}"),
+                capture_user_message(&code),
+            );
+            return;
+        }
+        Ok(_) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                true,
+                "capture_finalize_event_invalid",
+                "capture helper did not return a valid finalized event",
+                "Both audio files could not be finalized.",
+            );
+            return;
+        }
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                true,
+                "capture_finalize_event_failed",
+                &error,
+                "Both audio files could not be finalized.",
+            );
+            return;
+        }
+    };
+    if finalized.0 > 16_000 * 60 * 60 * 24 || finalized.1 > 16_000 * 60 * 60 * 24 {
+        fail_capture_task(
+            &app,
+            Some(&meeting_id),
+            recovery_required,
+            true,
+            "capture_sample_count_invalid",
+            "capture helper returned an out-of-range sample count",
+            "The finalized audio timing was invalid.",
+        );
+        return;
+    }
+    if let Err(error) = helper.finish_cleanly(Instant::now() + Duration::from_secs(5)) {
+        fail_capture_task(
+            &app,
+            Some(&meeting_id),
+            recovery_required,
+            true,
+            "capture_helper_exit_failed",
+            &error,
+            "The audio helper did not close cleanly.",
+        );
+        return;
+    }
+    drop(helper);
+
+    let capture_result = request_worker(
+        &state,
+        Operation::CaptureStop,
+        json!({
+            "meeting_id": meeting_id,
+            "started_at_epoch_seconds": started_at_epoch_seconds,
+            "capture_elapsed_samples": capture_elapsed_samples,
+        }),
+        WORKER_REQUEST_TIMEOUT,
+    );
+    let capture_digests = match capture_result {
+        Ok(result) => match exact_digests(
+            &result,
+            &["capture-session", "capture-mic", "capture-system"],
+        ) {
+            Ok(digests) => digests,
+            Err(error) => {
+                fail_capture_task(
+                    &app,
+                    Some(&meeting_id),
+                    recovery_required,
+                    true,
+                    "capture_digest_set_invalid",
+                    &error,
+                    "The finalized capture could not be verified.",
+                );
+                return;
+            }
+        },
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                recovery_required,
+                error.is_supervisor(),
+                "capture_worker_finalize_failed",
+                &error.to_string(),
+                "The finalized capture did not pass its integrity check.",
+            );
+            return;
+        }
+    };
+    if let Err(error) = commit_captured_meeting(&attempt.meeting_dir, &capture_digests) {
+        fail_capture_task(
+            &app,
+            Some(&meeting_id),
+            recovery_required,
+            true,
+            "capture_meeting_commit_failed",
+            &error,
+            "The validated capture could not be committed.",
+        );
+        return;
+    }
+    {
+        let mut model = state.model.lock().expect("application model lock");
+        if transition_capture(&mut model, CaptureState::Captured).is_err()
+            || transition_capture(&mut model, CaptureState::Transcribing).is_err()
+        {
+            drop(model);
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_processing_transition_failed",
+                "application state changed before transcription",
+                "The captured meeting could not enter transcription.",
+            );
+            return;
+        }
+    }
+
+    let transcript_result = request_worker(
+        &state,
+        Operation::TranscriptCreate,
+        json!({"meeting_id": meeting_id}),
+        TRANSCRIPT_REQUEST_TIMEOUT,
+    );
+    let transcript_digests = match transcript_result {
+        Ok(result) => match exact_digests(&result, &["transcript"]) {
+            Ok(digests) => digests,
+            Err(error) => {
+                finish_transcription_failure(
+                    &app,
+                    &attempt.meeting_dir,
+                    &meeting_id,
+                    false,
+                    "transcript_digest_set_invalid",
+                    &error,
+                    "The transcript result could not be verified.",
+                );
+                return;
+            }
+        },
+        Err(error) => {
+            finish_transcription_failure(
+                &app,
+                &attempt.meeting_dir,
+                &meeting_id,
+                error.is_supervisor(),
+                "transcript_worker_failed",
+                &error.to_string(),
+                "The offline transcript could not be created.",
+            );
+            return;
+        }
+    };
+    let transcript_digest = &transcript_digests["transcript"];
+    let transcript_reference = match verified_artifact(
+        &attempt.meeting_dir,
+        &format!("transcript/{transcript_digest}.json"),
+        transcript_digest,
+    ) {
+        Ok(reference) => reference,
+        Err(error) => {
+            finish_transcription_failure(
+                &app,
+                &attempt.meeting_dir,
+                &meeting_id,
+                false,
+                "transcript_artifact_invalid",
+                &error,
+                "The transcript file did not match its verified identity.",
+            );
+            return;
+        }
+    };
+    let (turns, warnings) =
+        match load_transcript_projection(&attempt.meeting_dir, &transcript_reference) {
+            Ok(projection) => projection,
+            Err(error) => {
+                finish_transcription_failure(
+                    &app,
+                    &attempt.meeting_dir,
+                    &meeting_id,
+                    false,
+                    "transcript_projection_invalid",
+                    &error,
+                    "The transcript could not be displayed safely.",
+                );
+                return;
+            }
+        };
+    let mut meeting = match load_meeting(&attempt.meeting_dir) {
+        Ok(meeting) => meeting,
+        Err(error) => {
+            finish_transcription_failure(
+                &app,
+                &attempt.meeting_dir,
+                &meeting_id,
+                true,
+                "transcript_meeting_load_failed",
+                &error.to_string(),
+                "The transcript could not be attached to its meeting.",
+            );
+            return;
+        }
+    };
+    meeting.lifecycle = MeetingLifecycle::TranscriptReady;
+    meeting.artifacts.current_transcript = Some(transcript_reference);
+    if let Err(error) = write_meeting(&attempt.meeting_dir, &meeting) {
+        finish_transcription_failure(
+            &app,
+            &attempt.meeting_dir,
+            &meeting_id,
+            true,
+            "transcript_meeting_commit_failed",
+            &error.to_string(),
+            "The transcript could not be attached to its meeting.",
+        );
+        return;
+    }
+    {
+        let mut model = state.model.lock().expect("application model lock");
+        if transition_capture(&mut model, CaptureState::TranscriptReady).is_err() {
+            model.error = Some("The transcript was saved but its screen could not open.".into());
+        } else {
+            model.turns = turns;
+            model.warnings = warnings;
+            model.error = None;
+            model.mic_state = None;
+            model.system_state = None;
+        }
+    }
+}
+
+fn write_ownership_receipt(meeting_dir: &Path, ownership: &OwnershipReceipt) -> Result<(), String> {
+    if !ownership.validate() {
+        return Err("capture ownership receipt is invalid".into());
+    }
+    let encoded = serde_json::to_vec_pretty(ownership).map_err(error_text)?;
+    durable_create_new(&meeting_dir.join("ownership.json"), &encoded).map_err(error_text)
+}
+
+fn validate_start_request(days: u64, attestation: &StartAttestation) -> Result<(), String> {
+    if !matches!(days, 1 | 7 | 30) {
+        return Err("Choose one of the available audio-retention periods.".into());
+    }
+    if !attestation.participants_consented {
+        return Err("Confirm that everyone agreed before recording.".into());
+    }
+    if !attestation.headphones {
+        return Err("This alpha requires headphones.".into());
+    }
+    if !attestation.operator_alone {
+        return Err("This alpha requires one person near the microphone.".into());
+    }
+    Ok(())
+}
+
+fn create_attempt(
+    storage: &StorageRoot,
+    meeting_id: &str,
+    attempt_id: &str,
+    retention_days: u64,
+    attestation: StartAttestation,
+) -> Result<AttemptContext, String> {
+    let meeting_dir = meeting_dir(storage, meeting_id).map_err(error_text)?;
+    let capture_dir = meeting_dir.join("capture");
+    create_private_dir(&meeting_dir).map_err(error_text)?;
+    create_private_dir(&capture_dir).map_err(error_text)?;
+    let result = (|| {
+        let created_at_epoch_seconds = now_epoch_seconds();
+        let seconds = retention_days
+            .checked_mul(24 * 60 * 60)
+            .ok_or_else(|| "retention period overflowed".to_string())?;
+        let rule = AudioRetentionRule::DeleteAfter { seconds };
+        let policy_sha256 = retention_policy_sha256(&rule);
+        let application_build_sha256 =
+            sha256_file(&std::env::current_exe().map_err(error_text)?).map_err(error_text)?;
+        let attempt = CaptureAttemptReceipt {
+            schema: "capture-attempt/1",
+            meeting_id: meeting_id.into(),
+            attempt_id: attempt_id.into(),
+            created_at_epoch_seconds,
+            application_build_sha256: application_build_sha256.clone(),
+            participant_notice_version: PARTICIPANT_NOTICE_VERSION,
+            operator_attestation: attestation,
+            retention_policy_sha256: policy_sha256.clone(),
+        };
+        durable_create_new(
+            &meeting_dir.join("attempt.json"),
+            &serde_json::to_vec_pretty(&attempt).map_err(error_text)?,
+        )
+        .map_err(error_text)?;
+        let meeting = MeetingRecord {
+            schema: MeetingSchema::V2,
+            meeting_id: meeting_id.into(),
+            lifecycle: MeetingLifecycle::RecoveredInterrupted,
+            retention: AudioRetention {
+                rule,
+                policy_sha256,
+                next_deletion_at_epoch_seconds: Some(
+                    created_at_epoch_seconds
+                        .checked_add(seconds)
+                        .ok_or_else(|| "retention deadline overflowed".to_string())?,
+                ),
+                state: AudioState::NeverCreated,
+                deletion_receipt: None,
+            },
+            artifacts: MeetingArtifacts {
+                attempt: artifact_ref(&meeting_dir, "attempt.json").map_err(error_text)?,
+                ownership: None,
+                capture_session: None,
+                microphone_audio: None,
+                system_audio: None,
+                current_transcript: None,
+                current_note: None,
+            },
+            pending_storage_operation: None,
+        };
+        meeting.validate(meeting_id).map_err(error_text)?;
+        durable_create_new(
+            &meeting_dir.join("meeting.json"),
+            &serde_json::to_vec_pretty(&meeting).map_err(error_text)?,
+        )
+        .map_err(error_text)?;
+        sync_directory(&meeting_dir).map_err(error_text)?;
+        Ok(AttemptContext {
+            meeting_dir: meeting_dir.clone(),
+            application_build_sha256,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(meeting_dir.join("meeting.json"));
+        let _ = fs::remove_file(meeting_dir.join("attempt.json"));
+        let _ = fs::remove_dir(&capture_dir);
+        let _ = fs::remove_dir(&meeting_dir);
+        if let Some(meetings) = meeting_dir.parent() {
+            let _ = sync_directory(meetings);
+        }
+    }
+    result
+}
+
+fn inspect_worker(
+    state: &ApplicationState,
+    runtime: &RuntimeIdentity,
+) -> Result<(i32, ProcessIdentity), String> {
+    let worker = state.worker.lock().expect("worker process lock");
+    let worker = worker
+        .as_ref()
+        .ok_or_else(|| "worker process is unavailable".to_string())?;
+    worker.check_health().map_err(error_text)?;
+    let process_group_id = worker.process_group_id();
+    let identity = inspect_process(worker.pid())?;
+    if identity.executable_sha256 != runtime.worker_executable_sha256 {
+        return Err("worker executable identity does not match the runtime manifest".into());
+    }
+    Ok((process_group_id, identity))
+}
+
+fn inspect_process(pid: u32) -> Result<ProcessIdentity, String> {
+    match SystemProcessInspector.inspect(pid).map_err(error_text)? {
+        ProcessInspection::Identity(identity) => Ok(identity),
+        ProcessInspection::Absent => Err("owned process is absent".into()),
+        ProcessInspection::Unavailable => Err("owned process identity is unavailable".into()),
+    }
+}
+
+fn request_worker(
+    state: &ApplicationState,
+    operation: Operation,
+    arguments: Value,
+    timeout: Duration,
+) -> Result<HashMap<String, String>, WorkerCallError> {
+    let command = WorkerCommand::new(operation, arguments);
+    let mut guard = state.worker.lock().expect("worker process lock");
+    let result = match guard.as_mut() {
+        Some(worker) => worker.request_until(&command, Instant::now() + timeout, |_| {
+            Err(ProtocolError::InvalidEvent)
+        }),
+        None => return Err(WorkerCallError::Supervisor("worker is unavailable".into())),
+    };
+    let result: WorkerResult = match result {
+        Ok(result) => result,
+        Err(error) => {
+            guard.take();
+            return Err(WorkerCallError::Supervisor(error.to_string()));
+        }
+    };
+    if !result.ok {
+        return Err(WorkerCallError::Rejected);
+    }
+    Ok(result.artifact_digests)
+}
+
+fn exact_digests(
+    values: &HashMap<String, String>,
+    expected: &[&str],
+) -> Result<HashMap<String, String>, String> {
+    let actual = values.keys().map(String::as_str).collect::<HashSet<_>>();
+    let expected = expected.iter().copied().collect::<HashSet<_>>();
+    if actual != expected
+        || values.values().any(|digest| {
+            digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    {
+        return Err("worker artifact digest set is invalid".into());
+    }
+    Ok(values.clone())
+}
+
+fn commit_captured_meeting(
+    meeting_dir: &Path,
+    digests: &HashMap<String, String>,
+) -> Result<(), String> {
+    let capture_session = verified_artifact(
+        meeting_dir,
+        "capture/session.json",
+        &digests["capture-session"],
+    )?;
+    let microphone_audio =
+        verified_artifact(meeting_dir, "capture/mic.wav", &digests["capture-mic"])?;
+    let system_audio = verified_artifact(
+        meeting_dir,
+        "capture/system.wav",
+        &digests["capture-system"],
+    )?;
+    let mut meeting = load_meeting(meeting_dir).map_err(error_text)?;
+    if meeting.lifecycle != MeetingLifecycle::Incomplete || meeting.artifacts.ownership.is_none() {
+        return Err("meeting is not awaiting a finalized capture".into());
+    }
+    meeting.lifecycle = MeetingLifecycle::Captured;
+    meeting.retention.state = AudioState::Retained;
+    meeting.artifacts.capture_session = Some(capture_session);
+    meeting.artifacts.microphone_audio = Some(microphone_audio);
+    meeting.artifacts.system_audio = Some(system_audio);
+    write_meeting(meeting_dir, &meeting).map_err(error_text)
+}
+
+fn verified_artifact(
+    meeting_dir: &Path,
+    relative_path: &str,
+    expected_digest: &str,
+) -> Result<ArtifactRef, String> {
+    let reference = artifact_ref(meeting_dir, relative_path).map_err(error_text)?;
+    if reference.sha256 != expected_digest {
+        return Err("worker digest does not match the private artifact".into());
+    }
+    Ok(reference)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TranscriptDocument {
+    schema: String,
+    #[serde(rename = "source")]
+    _source: String,
+    attribution: String,
+    #[serde(rename = "bleed")]
+    _bleed: Option<Value>,
+    #[serde(rename = "voiceprint")]
+    _voiceprint: Option<Value>,
+    #[serde(rename = "capture_health")]
+    _capture_health: Value,
+    turns: Vec<TranscriptInputTurn>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TranscriptInputTurn {
+    start: f64,
+    end: f64,
+    speaker: Option<String>,
+    text: String,
+    gated: Option<bool>,
+    gate_score: Option<f64>,
+    gate_reason: Option<String>,
+}
+
+fn load_transcript_projection(
+    meeting_dir: &Path,
+    reference: &ArtifactRef,
+) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
+    let path = meeting_dir.join(&reference.relative_path);
+    let bytes = read_private_bytes(&path, TRANSCRIPT_MAX_BYTES).map_err(error_text)?;
+    parse_transcript_projection(&bytes)
+}
+
+fn parse_transcript_projection(bytes: &[u8]) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
+    let document: TranscriptDocument = serde_json::from_slice(bytes).map_err(error_text)?;
+    if document.schema != "capture-transcript/1"
+        || !matches!(document.attribution.as_str(), "channel" | "none")
+        || document.turns.len() > 20_000
+    {
+        return Err("transcript presentation schema is invalid".into());
+    }
+    let unattributed = document.attribution == "none";
+    let mut turns = Vec::with_capacity(document.turns.len());
+    let mut gated = 0_u64;
+    for turn in document.turns {
+        if !turn.start.is_finite()
+            || !turn.end.is_finite()
+            || turn.start < 0.0
+            || turn.end < turn.start
+            || turn.text.len() > 100_000
+            || turn
+                .speaker
+                .as_ref()
+                .is_some_and(|speaker| speaker.len() > 256)
+            || (!unattributed
+                && turn
+                    .speaker
+                    .as_deref()
+                    .is_some_and(|speaker| !matches!(speaker, "Me" | "Them")))
+            || ((turn.gate_score.is_some() || turn.gate_reason.is_some())
+                && turn.gated != Some(true))
+        {
+            return Err("transcript turn is invalid".into());
+        }
+        if turn.gated == Some(true) {
+            gated += 1;
+            continue;
+        }
+        turns.push(TranscriptTurn {
+            speaker: if unattributed { None } else { turn.speaker },
+            start: turn.start,
+            text: turn.text,
+        });
+    }
+    let mut warnings = Vec::new();
+    if document.attribution == "none" {
+        warnings.push(
+            "Speaker labels are unavailable because the channel split could not be trusted.".into(),
+        );
+    }
+    if gated > 0 {
+        warnings.push(format!(
+            "The voice check withheld {gated} microphone segment(s); review the retained capture if words appear missing."
+        ));
+    }
+    Ok((turns, warnings))
+}
+
+fn finish_transcription_failure(
+    app: &AppHandle,
+    meeting_dir: &Path,
+    _meeting_id: &str,
+    block_start: bool,
+    code: &str,
+    detail: &str,
+    user_message: &str,
+) {
+    let mut must_block_start = block_start;
+    let persistence_error = match load_meeting(meeting_dir) {
+        Ok(mut meeting) if meeting.lifecycle == MeetingLifecycle::Captured => {
+            meeting.lifecycle = MeetingLifecycle::TranscriptionFailed;
+            write_meeting(meeting_dir, &meeting)
+                .err()
+                .map(|error| error.to_string())
+        }
+        Ok(_) => Some("meeting was not in captured state".into()),
+        Err(error) => Some(error.to_string()),
+    };
+    if let Some(error) = persistence_error {
+        must_block_start = true;
+        write_diagnostic(
+            &app.state::<ApplicationState>(),
+            "transcript_failure_state_write_failed",
+            &error,
+        );
+    }
+    let state = app.state::<ApplicationState>();
+    write_diagnostic(&state, code, detail);
+    {
+        let mut model = state.model.lock().expect("application model lock");
+        let _ = transition_capture(&mut model, CaptureState::TranscriptionFailed);
+        if must_block_start && model.reducer.startup() == StartupState::Ready {
+            let _ = transition_startup(&mut model, StartupState::DiagnosticWritten);
+        }
+        model.error = Some(user_message.into());
+        model.mic_state = None;
+        model.system_state = None;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fail_capture_task(
+    app: &AppHandle,
+    _meeting_id: Option<&str>,
+    recovery_required: bool,
+    block_start: bool,
+    code: &str,
+    detail: &str,
+    user_message: &str,
+) {
+    let state = app.state::<ApplicationState>();
+    write_diagnostic(&state, code, detail);
+    {
+        let mut model = state.model.lock().expect("application model lock");
+        if matches!(
+            model.reducer.capture(),
+            CaptureState::Arming | CaptureState::Recording | CaptureState::Stopping
+        ) {
+            let _ = transition_capture(&mut model, CaptureState::RecoveredInterrupted);
+        }
+        if (recovery_required || block_start) && model.reducer.startup() == StartupState::Ready {
+            let _ = transition_startup(&mut model, StartupState::DiagnosticWritten);
+        }
+        model.error = Some(user_message.into());
+        model.mic_state = None;
+        model.system_state = None;
+    }
+}
+
+fn clear_capture_task(state: &ApplicationState, meeting_id: &str) {
+    let mut task = state.capture_task.lock().expect("capture task lock");
+    if task
+        .as_ref()
+        .is_some_and(|task| task.meeting_id == meeting_id)
+    {
+        task.take();
+    }
+}
+
+fn write_diagnostic(state: &ApplicationState, code: &str, detail: &str) {
+    if let Some(storage) = state.storage.lock().expect("storage context lock").as_ref() {
+        let _ = write_private_diagnostic(&storage.diagnostics, code, detail);
+    }
+}
+
+fn transition_startup(model: &mut AppModel, target: StartupState) -> Result<(), String> {
+    model
+        .reducer
+        .begin(ExclusiveOperation::StartupRecovery)
+        .map_err(error_text)?;
+    let result = model.reducer.transition_startup(target).map_err(error_text);
+    model.reducer.finish(ExclusiveOperation::StartupRecovery);
+    result
+}
+
+fn transition_capture(model: &mut AppModel, target: CaptureState) -> Result<(), String> {
+    model
+        .reducer
+        .begin(ExclusiveOperation::CaptureTransition)
+        .map_err(error_text)?;
+    let result = model.reducer.transition_capture(target).map_err(error_text);
+    model.reducer.finish(ExclusiveOperation::CaptureTransition);
+    result
+}
+
+fn read_capture_events(file: File, sender: mpsc::Sender<CaptureStreamItem>) {
+    let mut reader = BufReader::new(file);
+    loop {
+        let mut frame = Vec::new();
+        let read = std::io::Read::by_ref(&mut reader)
+            .take((CAPTURE_EVENT_MAX_BYTES + 1) as u64)
+            .read_until(b'\n', &mut frame);
+        match read {
+            Ok(0) => {
+                let _ = sender.send(CaptureStreamItem::Closed);
+                return;
+            }
+            Ok(_) if frame.len() <= CAPTURE_EVENT_MAX_BYTES && frame.ends_with(b"\n") => {
+                frame.pop();
+                match parse_capture_event(&frame) {
+                    Ok(event) => {
+                        if sender.send(CaptureStreamItem::Event(event)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(_) => {
+                        let _ = sender.send(CaptureStreamItem::ProtocolFailure);
+                        return;
+                    }
+                }
+            }
+            Ok(_) | Err(_) => {
+                let _ = sender.send(CaptureStreamItem::ProtocolFailure);
+                return;
+            }
+        }
+    }
+}
+
+fn parse_capture_event(frame: &[u8]) -> Result<CaptureEvent, String> {
+    let value: Value = serde_json::from_slice(frame).map_err(error_text)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "capture event is not an object".to_string())?;
+    if object.get("schema").and_then(Value::as_str) != Some("capture-event/1") {
+        return Err("capture event schema is invalid".into());
+    }
+    match object.get("event").and_then(Value::as_str) {
+        Some("paused") if exact_object_keys(object, &["schema", "event"]) => {
+            Ok(CaptureEvent::Paused)
+        }
+        Some("recording") if exact_object_keys(object, &["schema", "event", "format"]) => {
+            let format = object["format"]
+                .as_object()
+                .ok_or_else(|| "capture format is invalid".to_string())?;
+            if !exact_object_keys(format, &["encoding", "sample_rate", "channels"])
+                || format.get("encoding").and_then(Value::as_str) != Some("pcm_s16le")
+                || format.get("sample_rate").and_then(Value::as_u64) != Some(16_000)
+                || format.get("channels").and_then(Value::as_u64) != Some(1)
+            {
+                return Err("capture format is invalid".into());
+            }
+            Ok(CaptureEvent::Recording)
+        }
+        Some("finalized") if exact_object_keys(object, &["schema", "event", "legs"]) => {
+            let legs = object["legs"]
+                .as_object()
+                .ok_or_else(|| "capture legs are invalid".to_string())?;
+            if !exact_object_keys(legs, &["mic", "system"]) {
+                return Err("capture legs are invalid".into());
+            }
+            let samples = |name: &str| -> Result<u64, String> {
+                let leg = legs[name]
+                    .as_object()
+                    .ok_or_else(|| "capture leg is invalid".to_string())?;
+                if !exact_object_keys(leg, &["samples"]) {
+                    return Err("capture leg is invalid".into());
+                }
+                leg["samples"]
+                    .as_u64()
+                    .ok_or_else(|| "capture sample count is invalid".to_string())
+            };
+            Ok(CaptureEvent::Finalized {
+                mic_samples: samples("mic")?,
+                system_samples: samples("system")?,
+            })
+        }
+        Some("failed") => {
+            let valid_keys = exact_object_keys(object, &["schema", "event", "code", "detail"])
+                || exact_object_keys(object, &["schema", "event", "code", "detail", "leg"]);
+            let code = object.get("code").and_then(Value::as_str);
+            let detail = object.get("detail").and_then(Value::as_str);
+            let leg = object.get("leg").and_then(Value::as_str);
+            if !valid_keys
+                || code.is_none_or(|code| code.is_empty() || code.len() > 128)
+                || detail.is_none_or(|detail| detail.len() > 4_096)
+                || leg.is_some_and(|leg| !matches!(leg, "mic" | "system"))
+            {
+                return Err("capture failure event is invalid".into());
+            }
+            Ok(CaptureEvent::Failed {
+                code: code.expect("validated code").into(),
+            })
+        }
+        Some("interrupted") if exact_object_keys(object, &["schema", "event"]) => {
+            Ok(CaptureEvent::Interrupted)
+        }
+        _ => Err("capture event is outside the closed schema".into()),
+    }
+}
+
+fn exact_object_keys(object: &serde_json::Map<String, Value>, expected: &[&str]) -> bool {
+    object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
+}
+
+fn cloexec_pipe() -> io::Result<(File, File)> {
+    let mut descriptors = [-1; 2];
+    if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let result = set_close_on_exec(descriptors[0], true)
+        .and_then(|_| set_close_on_exec(descriptors[1], true));
+    if let Err(error) = result {
+        unsafe {
+            libc::close(descriptors[0]);
+            libc::close(descriptors[1]);
+        }
+        return Err(error);
+    }
+    Ok(unsafe {
+        (
+            File::from_raw_fd(descriptors[0]),
+            File::from_raw_fd(descriptors[1]),
+        )
+    })
+}
+
+fn set_close_on_exec(descriptor: RawFd, enabled: bool) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let updated = if enabled {
+        flags | libc::FD_CLOEXEC
+    } else {
+        flags & !libc::FD_CLOEXEC
+    };
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFD, updated) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn signal_process_group(process_group_id: i32, signal: i32) -> io::Result<()> {
+    if unsafe { libc::kill(-process_group_id, signal) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+fn elapsed_samples(duration: Duration) -> Result<u64, String> {
+    let samples = duration.as_secs_f64() * 16_000.0;
+    let maximum = (16_000 * 60 * 60 * 24) as f64;
+    if !samples.is_finite() || samples < 1.0 || samples > maximum {
+        return Err("capture elapsed time is outside the supported range".into());
+    }
+    Ok(samples.round() as u64)
+}
+
+fn capture_user_message(code: &str) -> &'static str {
+    match code {
+        "microphone_permission_denied" => {
+            "Microphone access was not granted. Nothing was marked complete."
+        }
+        "system_tap_setup_failed" | "system_tap_unavailable" | "system_tap_start_failed" => {
+            "System-audio access was unavailable. Nothing was marked complete."
+        }
+        _ => "An audio channel failed. Nothing was marked complete.",
+    }
+}
+
 fn now_epoch_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -42,178 +2257,112 @@ fn now_epoch_seconds() -> u64 {
         .as_secs()
 }
 
-fn main() {
-    tauri::Builder::default()
-        .manage(StartupStatus(Mutex::new(StartupState::ShellRendered)))
-        .manage(WorkerProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![startup_status])
-        .setup(|app| {
-            let status = app.state::<StartupStatus>();
-            *status.0.lock().expect("startup status lock") = StartupState::Checking;
-
-            let app_data = app.path().app_data_dir()?;
-            let resource_root = app.path().resource_dir()?;
-            #[cfg(debug_assertions)]
-            let protected_root = repository_root();
-            #[cfg(not(debug_assertions))]
-            let protected_root = resource_root.clone();
-            let storage = StorageRoot::create(&app_data, &protected_root)
-                .map_err(|error| io_error(error.to_string()))?;
-            let diagnostics = storage.path().join("diagnostics");
-
-            let recovery_ready = match scan_and_recover(
-                &storage,
-                now_epoch_seconds(),
-                &SystemProcessInspector,
-                &SystemGroupSignaler,
-                Duration::from_millis(500),
-            ) {
-                Ok(report) => {
-                    for meeting in &report.meetings {
-                        match meeting.disposition {
-                            RecoveryDisposition::Quarantined(code) => {
-                                let _ = write_private_diagnostic(
-                                    &diagnostics,
-                                    code.as_str(),
-                                    &format!(
-                                        "meeting {} was quarantined without mutation",
-                                        meeting.meeting_id
-                                    ),
-                                );
-                            }
-                            RecoveryDisposition::OwnershipAmbiguous => {
-                                let _ = write_private_diagnostic(
-                                    &diagnostics,
-                                    "meeting_recovery_ownership_ambiguous",
-                                    &format!(
-                                        "meeting {} blocks capture because child identity is uncertain",
-                                        meeting.meeting_id
-                                    ),
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-                    !report.blocks_capture
-                }
-                Err(error) => {
-                    let _ = write_private_diagnostic(
-                        &diagnostics,
-                        "meeting_recovery_failed",
-                        &error.to_string(),
-                    );
-                    false
-                }
-            };
-
-            if !recovery_ready {
-                *status.0.lock().expect("startup status lock") = StartupState::DiagnosticWritten;
-            } else {
-                let manifest_path = resource_root.join("app-runtime.json");
-                match RuntimeManifest::load_and_verify(&manifest_path) {
-                    Ok(manifest) if !manifest.permits_application_start() => {
-                        *status.0.lock().expect("startup status lock") =
-                            StartupState::RuntimeMissing;
-                    }
-                    Ok(manifest) => {
-                        let worker_path = resource_root.join(&manifest.runtime.path);
-                        let mut command = Command::new(worker_path);
-                        command
-                            .args(["-E", "-s", "-B", "-m", "worker.main"])
-                            .arg("--app-data-root")
-                            .arg(storage.path())
-                            .arg("--runtime-manifest")
-                            .arg(&manifest_path);
-                        command.current_dir(&resource_root);
-                        match OwnedChild::spawn(&mut command) {
-                            Ok(mut worker) => match worker
-                                .wait_ready(Duration::from_secs(10), &expected_operations())
-                            {
-                                Ok(ready) if manifest.matches_ready(&ready) => {
-                                    *app.state::<WorkerProcess>()
-                                        .0
-                                        .lock()
-                                        .expect("worker process lock") = Some(worker);
-                                    *status.0.lock().expect("startup status lock") =
-                                        StartupState::Ready;
-                                }
-                                Ok(_) => {
-                                    let _ = worker.stop_and_wait(Duration::from_millis(500));
-                                    *status.0.lock().expect("startup status lock") =
-                                        StartupState::RuntimeMissing;
-                                }
-                                Err(SupervisionError::ReadyTimeout) => {
-                                    *status.0.lock().expect("startup status lock") =
-                                        StartupState::ServiceTimeout;
-                                }
-                                Err(error) => {
-                                    let _ = write_private_diagnostic(
-                                        &diagnostics,
-                                        "worker_startup_failed",
-                                        &error.to_string(),
-                                    );
-                                    *status.0.lock().expect("startup status lock") =
-                                        StartupState::DiagnosticWritten;
-                                }
-                            },
-                            Err(SupervisionError::MissingChild) => {
-                                *status.0.lock().expect("startup status lock") =
-                                    StartupState::RuntimeMissing;
-                            }
-                            Err(error) => {
-                                let _ = write_private_diagnostic(
-                                    &diagnostics,
-                                    "worker_spawn_failed",
-                                    &error.to_string(),
-                                );
-                                *status.0.lock().expect("startup status lock") =
-                                    StartupState::DiagnosticWritten;
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        *status.0.lock().expect("startup status lock") =
-                            StartupState::RuntimeMissing;
-                    }
-                }
-            }
-
-            std::thread::spawn(move || {
-                let mut reported_quarantines = HashSet::new();
-                loop {
-                    std::thread::sleep(Duration::from_secs(30));
-                    match execute_due_retention(&storage, now_epoch_seconds()) {
-                        Ok(outcomes) => {
-                            for outcome in outcomes {
-                                if let RetentionOutcome::Quarantined(meeting_id) = outcome
-                                    && reported_quarantines.insert(meeting_id.clone())
-                                {
-                                    let _ = write_private_diagnostic(
-                                        &diagnostics,
-                                        "retention_meeting_quarantined",
-                                        &format!(
-                                            "meeting {meeting_id} was quarantined without mutation"
-                                        ),
-                                    );
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            let _ = write_private_diagnostic(
-                                &diagnostics,
-                                "retention_tick_failed",
-                                &error.to_string(),
-                            );
-                        }
-                    }
-                }
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("Local Meeting Notes shell failed");
+fn sha256_file(path: &Path) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
-fn io_error(message: String) -> Box<dyn std::error::Error> {
-    Box::new(std::io::Error::other(message))
+fn error_text(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+fn io_error(error: io::Error) -> Box<dyn std::error::Error> {
+    Box::new(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_attestation() -> StartAttestation {
+        StartAttestation {
+            participants_consented: true,
+            headphones: true,
+            operator_alone: true,
+        }
+    }
+
+    #[test]
+    fn start_requires_every_assertion_and_a_closed_retention_choice() {
+        assert!(validate_start_request(1, &valid_attestation()).is_ok());
+        assert!(validate_start_request(7, &valid_attestation()).is_ok());
+        assert!(validate_start_request(30, &valid_attestation()).is_ok());
+        assert!(validate_start_request(2, &valid_attestation()).is_err());
+        for field in 0..3 {
+            let mut attestation = valid_attestation();
+            match field {
+                0 => attestation.participants_consented = false,
+                1 => attestation.headphones = false,
+                _ => attestation.operator_alone = false,
+            }
+            assert!(validate_start_request(7, &attestation).is_err());
+        }
+    }
+
+    #[test]
+    fn capture_events_are_closed_and_format_bound() {
+        assert_eq!(
+            parse_capture_event(br#"{"schema":"capture-event/1","event":"paused"}"#).unwrap(),
+            CaptureEvent::Paused
+        );
+        assert_eq!(
+            parse_capture_event(
+                br#"{"schema":"capture-event/1","event":"recording","format":{"encoding":"pcm_s16le","sample_rate":16000,"channels":1}}"#
+            )
+            .unwrap(),
+            CaptureEvent::Recording
+        );
+        assert!(
+            parse_capture_event(br#"{"schema":"capture-event/1","event":"paused","extra":true}"#)
+                .is_err()
+        );
+        assert!(
+            parse_capture_event(
+                br#"{"schema":"capture-event/1","event":"recording","format":{"encoding":"pcm_f32le","sample_rate":16000,"channels":1}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn worker_digest_sets_are_exact_and_lowercase() {
+        let valid = HashMap::from([("transcript".into(), "a".repeat(64))]);
+        assert!(exact_digests(&valid, &["transcript"]).is_ok());
+        let extra = HashMap::from([
+            ("transcript".into(), "a".repeat(64)),
+            ("note".into(), "b".repeat(64)),
+        ]);
+        assert!(exact_digests(&extra, &["transcript"]).is_err());
+        let uppercase = HashMap::from([("transcript".into(), "A".repeat(64))]);
+        assert!(exact_digests(&uppercase, &["transcript"]).is_err());
+    }
+
+    #[test]
+    fn transcript_projection_filters_gated_words_without_claiming_a_note() {
+        let document = br#"{
+          "schema":"capture-transcript/1",
+          "source":"fixture",
+          "attribution":"channel",
+          "bleed":null,
+          "voiceprint":null,
+          "capture_health":{},
+          "turns":[
+            {"start":0.0,"end":1.0,"speaker":"Me","text":"visible"},
+            {"start":1.0,"end":2.0,"speaker":"Me","text":"withheld","gated":true,"gate_score":0.1,"gate_reason":"fixture"}
+          ]
+        }"#;
+        let (turns, warnings) = parse_transcript_projection(document).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].text, "visible");
+        assert_eq!(warnings.len(), 1);
+    }
 }

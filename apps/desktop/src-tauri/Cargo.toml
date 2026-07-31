@@ -9,8 +9,13 @@ description = "Local Meeting Notes safety-first macOS shell"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+libc.workspace = true
 local-meeting-notes-session-core = { path = "../../../crates/session-core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tauri = { version = "2", features = [] }
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

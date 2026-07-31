@@ -1,13 +1,19 @@
 use serde_json::Value;
 
 #[test]
-fn main_window_has_one_named_command_and_no_generic_capability() {
+fn main_window_has_only_named_commands_and_no_generic_capability() {
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
     assert_eq!(capability["windows"], serde_json::json!(["main"]));
     assert_eq!(
         capability["permissions"],
-        serde_json::json!(["allow-startup-status"])
+        serde_json::json!([
+            "allow-app-snapshot",
+            "allow-start-meeting",
+            "allow-stop-meeting",
+            "allow-dismiss-meeting",
+            "allow-retry-startup"
+        ])
     );
     assert!(capability.get("remote").is_none());
     let serialized = serde_json::to_string(&capability).unwrap();
@@ -37,10 +43,20 @@ fn bundled_shell_uses_restrictive_local_csp() {
 fn shell_renders_safe_state_before_runtime_preflight() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
-    assert!(html.contains("Nothing is recording."));
-    assert!(html.contains("<button type=\"button\" disabled>"));
-    assert!(html.contains("No microphone or system-audio process has started."));
-    assert!(script.contains("invoke(\"startup_status\")"));
+    assert!(html.contains("data-startup-state=\"shell-rendered\""));
+    assert!(html.contains("Nothing is recording"));
+    assert!(html.contains("The window opens before any audio or model process starts."));
+    for command in [
+        "app_snapshot",
+        "start_meeting",
+        "stop_meeting",
+        "dismiss_meeting",
+        "retry_startup",
+    ] {
+        assert!(script.contains(&format!("invoke(\"{command}\"")));
+    }
+    assert!(!script.contains("innerHTML"));
+    assert!(!script.contains("Internal beta"));
     assert!(!script.contains("Command.sidecar"));
     assert!(!script.contains("window.__TAURI__.fs"));
 }
@@ -51,6 +67,11 @@ fn macos_bundle_declares_capture_purposes_and_common_resources() {
     assert!(plist.contains("NSMicrophoneUsageDescription"));
     assert!(plist.contains("NSAudioCaptureUsageDescription"));
     assert!(plist.contains("meetings you start"));
+    assert!(plist.contains("local transcript"));
+    assert!(!plist.contains("local notes"));
+
+    let html = include_str!("../../ui/index.html");
+    assert!(html.contains("deletion runs the next time it opens"));
 
     let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
     assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "14.4");

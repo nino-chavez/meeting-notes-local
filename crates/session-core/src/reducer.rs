@@ -23,6 +23,7 @@ pub enum CaptureState {
     Stopping,
     Captured,
     Transcribing,
+    TranscriptReady,
     Summarizing,
     Ready,
     TranscriptionFailed,
@@ -104,9 +105,11 @@ impl Reducer {
                 | (StartupState::RuntimeMissing, StartupState::Retrying)
                 | (StartupState::ServiceTimeout, StartupState::Retrying)
                 | (StartupState::DiagnosticWritten, StartupState::Retrying)
+                | (StartupState::Ready, StartupState::DiagnosticWritten)
                 | (StartupState::Retrying, StartupState::Ready)
                 | (StartupState::Retrying, StartupState::RuntimeMissing)
                 | (StartupState::Retrying, StartupState::ServiceTimeout)
+                | (StartupState::Retrying, StartupState::DiagnosticWritten)
                 | (StartupState::Retrying, StartupState::ReinstallRequired)
         );
         if !valid {
@@ -135,10 +138,13 @@ impl Reducer {
                     CaptureState::Transcribing,
                     CaptureState::TranscriptionFailed
                 )
+                | (CaptureState::Transcribing, CaptureState::TranscriptReady)
                 | (
                     CaptureState::TranscriptionFailed,
                     CaptureState::Transcribing
                 )
+                | (CaptureState::TranscriptionFailed, CaptureState::Idle)
+                | (CaptureState::TranscriptReady, CaptureState::Idle)
                 | (CaptureState::Summarizing, CaptureState::Ready)
                 | (CaptureState::Summarizing, CaptureState::SummaryFailed)
                 | (CaptureState::SummaryFailed, CaptureState::Summarizing)
@@ -183,5 +189,37 @@ mod tests {
             .transition_capture(CaptureState::Summarizing)
             .unwrap();
         reducer.transition_capture(CaptureState::Ready).unwrap();
+    }
+
+    #[test]
+    fn transcript_alpha_returns_to_idle_without_claiming_a_summary() {
+        let mut reducer = Reducer::default();
+        for state in [
+            CaptureState::Arming,
+            CaptureState::Recording,
+            CaptureState::Stopping,
+            CaptureState::Captured,
+            CaptureState::Transcribing,
+            CaptureState::TranscriptReady,
+            CaptureState::Idle,
+        ] {
+            reducer.transition_capture(state).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_transcript_may_be_dismissed_without_discarding_its_capture() {
+        let mut reducer = Reducer::default();
+        for state in [
+            CaptureState::Arming,
+            CaptureState::Recording,
+            CaptureState::Stopping,
+            CaptureState::Captured,
+            CaptureState::Transcribing,
+            CaptureState::TranscriptionFailed,
+            CaptureState::Idle,
+        ] {
+            reducer.transition_capture(state).unwrap();
+        }
     }
 }
