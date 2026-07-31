@@ -10,8 +10,8 @@ use thiserror::Error;
 use crate::meeting::{
     ArtifactRef, AudioState, MAX_RECEIPT_BYTES, MeetingError, MeetingRecord,
     PendingStorageOperation, artifact_ref, load_meeting, open_private_file, read_private_bytes,
-    resolve_artifact, verify_artifact_ref, verify_record_artifacts, verify_record_static_artifacts,
-    write_meeting,
+    require_private_directory, resolve_artifact, verify_artifact_ref, verify_record_artifacts,
+    verify_record_static_artifacts, write_meeting,
 };
 use crate::storage::{
     StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
@@ -109,20 +109,51 @@ pub fn execute_due_retention(
     Ok(outcomes)
 }
 
+pub(crate) fn preflight_meeting_retention(
+    meeting_dir: &Path,
+    meeting: &MeetingRecord,
+) -> Result<(), RetentionError> {
+    meeting.validate(&meeting.meeting_id)?;
+    verify_record_static_artifacts(meeting_dir, meeting)?;
+    validate_deletion_directory(meeting_dir)?;
+    let receipt_path = meeting_dir.join("deletion/audio-deletion.json");
+    if !deletion_receipt_present(&receipt_path)? {
+        if matches!(
+            meeting.retention.state,
+            AudioState::Deleting | AudioState::Released
+        ) {
+            return Err(RetentionError::UnexplainedAudioLoss);
+        }
+        ensure_no_staged_audio_without_receipt(meeting_dir)?;
+        verify_record_artifacts(meeting_dir, meeting)?;
+        return Ok(());
+    }
+
+    let receipt = load_receipt(&receipt_path)?;
+    validate_receipt_binding(meeting, &receipt)?;
+    if meeting.retention.state == AudioState::Released {
+        let stored_receipt = meeting
+            .retention
+            .deletion_receipt
+            .as_ref()
+            .ok_or(RetentionError::MalformedReceipt)?;
+        verify_artifact_ref(meeting_dir, stored_receipt)?;
+        if receipt.state != DeletionState::Removed {
+            return Err(RetentionError::MalformedReceipt);
+        }
+    }
+    validate_receipt_storage(meeting_dir, meeting, &receipt)
+}
+
 pub(crate) fn reconcile_meeting_retention(
     meeting_dir: &Path,
     meeting: &mut MeetingRecord,
     now_epoch_seconds: u64,
     execute_due: bool,
 ) -> Result<MeetingRetentionResult, RetentionError> {
-    meeting.validate(&meeting.meeting_id)?;
-    verify_record_static_artifacts(meeting_dir, meeting)?;
+    preflight_meeting_retention(meeting_dir, meeting)?;
     let receipt_path = meeting_dir.join("deletion/audio-deletion.json");
-    let receipt_present = match fs::symlink_metadata(&receipt_path) {
-        Ok(_) => true,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error.into()),
-    };
+    let receipt_present = deletion_receipt_present(&receipt_path)?;
 
     if receipt_present {
         let receipt = load_receipt(&receipt_path)?;
@@ -213,16 +244,9 @@ fn finish_staged_removal(
     validate_receipt_binding(meeting, &receipt)?;
     let deletion_dir = meeting_dir.join("deletion");
     let capture_dir = meeting_dir.join("capture");
-    ensure_no_unbound_audio(meeting_dir, meeting)?;
+    validate_receipt_storage(meeting_dir, meeting, &receipt)?;
 
     if receipt.state == DeletionState::Removed {
-        for reference in audio_references(meeting) {
-            let live = resolve_artifact(meeting_dir, &reference.relative_path)?;
-            let staged = staged_path(&deletion_dir, &reference.relative_path)?;
-            if path_present(&live)? || path_present(&staged)? {
-                return Err(RetentionError::UnexplainedAudioLoss);
-            }
-        }
         finalize_released_record(meeting_dir, receipt_path, meeting)?;
         return Ok(());
     }
@@ -278,6 +302,76 @@ fn finish_staged_removal(
     receipt.state = DeletionState::Removed;
     durable_replace(receipt_path, &serde_json::to_vec_pretty(&receipt)?)?;
     finalize_released_record(meeting_dir, receipt_path, meeting)?;
+    Ok(())
+}
+
+fn deletion_receipt_present(receipt_path: &Path) -> Result<bool, RetentionError> {
+    match fs::symlink_metadata(receipt_path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_deletion_directory(meeting_dir: &Path) -> Result<(), RetentionError> {
+    let deletion_dir = meeting_dir.join("deletion");
+    match fs::symlink_metadata(&deletion_dir) {
+        Ok(_) => {
+            require_private_directory(&deletion_dir)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_receipt_storage(
+    meeting_dir: &Path,
+    meeting: &MeetingRecord,
+    receipt: &AudioDeletionReceipt,
+) -> Result<(), RetentionError> {
+    let deletion_dir = meeting_dir.join("deletion");
+    ensure_no_unbound_audio(meeting_dir, meeting)?;
+    for expected in &receipt.artifacts {
+        let live = resolve_artifact(meeting_dir, &expected.relative_name)?;
+        let staged = staged_path(&deletion_dir, &expected.relative_name)?;
+        let live_present = path_present(&live)?;
+        let staged_present = path_present(&staged)?;
+        match receipt.state {
+            DeletionState::Deleting => {
+                if live_present == staged_present {
+                    return Err(RetentionError::UnexplainedAudioLoss);
+                }
+                let present = if live_present { &live } else { &staged };
+                if inspect_audio(present, &expected.relative_name)? != *expected {
+                    return Err(RetentionError::UnexplainedAudioLoss);
+                }
+            }
+            DeletionState::Staged => {
+                if live_present {
+                    return Err(RetentionError::UnexplainedAudioLoss);
+                }
+                if staged_present && inspect_audio(&staged, &expected.relative_name)? != *expected {
+                    return Err(RetentionError::UnexplainedAudioLoss);
+                }
+            }
+            DeletionState::Removed => {
+                if live_present || staged_present {
+                    return Err(RetentionError::UnexplainedAudioLoss);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_no_staged_audio_without_receipt(meeting_dir: &Path) -> Result<(), RetentionError> {
+    let deletion_dir = meeting_dir.join("deletion");
+    for relative in ["capture/mic.wav", "capture/system.wav"] {
+        if path_present(&staged_path(&deletion_dir, relative)?)? {
+            return Err(RetentionError::UnexplainedAudioLoss);
+        }
+    }
     Ok(())
 }
 

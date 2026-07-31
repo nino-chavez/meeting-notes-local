@@ -163,8 +163,10 @@ direct liveness pipe makes both worker and tap exit. A fresh launch waits for
 that shutdown, then compares each surviving PID's current process start time
 and executable path and digest with `ownership.json`. It signals only an exact
 match. PID or process-group number alone is never authority to kill a process.
-If identity cannot be proven, Start stays blocked and recovery explains why
-without signalling an unrelated process.
+Process existence is checked independently with `kill(pid, 0)`: only `ESRCH`
+means absent. A successful probe or `EPERM` without a complete inspectable
+identity remains ambiguous. If identity cannot be proven, Start stays blocked
+and recovery explains why without signalling an unrelated process.
 
 There is no `launchd` job. A job that can restart or outlive the Tauri
 application conflicts with per-attempt consent and makes process ownership
@@ -552,6 +554,9 @@ offers Start. It resolves exact child ownership first, then interrupted deletion
 then newly due retention. One meeting's malformed storage does not abort the
 rest of the scan.
 
+- A meeting directory whose record cannot be read and validated cannot be
+  classified as terminal. It is quarantined and blocks Start; filesystem
+  absence guesses are not a substitute for a durable terminal fact.
 - A terminal, validated capture remains terminal.
 - An `incomplete` meeting first requires the exact ownership receipt bound by
   `meeting.json`. A missing receipt or digest mismatch quarantines the meeting
@@ -562,6 +567,9 @@ rest of the scan.
 - Once no matching child is live, the meeting is marked
   `recovered-interrupted`. If identity is ambiguous, Start remains blocked and
   no unrelated process is signalled.
+- Before partial artifacts are bound or `meeting.json` is rewritten, recovery
+  preflights the deletion receipt and staged paths without mutation. Impossible
+  or malformed deletion state quarantines the original record byte-for-byte.
 - Recording never resumes automatically.
 - Readable partial WAVs are preserved and named as partial. They do not become a
   product note without a separate, explicit recovery contract and validated

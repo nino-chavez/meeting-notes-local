@@ -304,11 +304,14 @@ pub struct SystemProcessInspector;
 
 impl ProcessInspector for SystemProcessInspector {
     fn inspect(&self, pid: u32) -> io::Result<ProcessInspection> {
+        if probe_process_existence(pid)? == ProcessExistence::Absent {
+            return Ok(ProcessInspection::Absent);
+        }
         let mut system = System::new();
         let system_pid = Pid::from_u32(pid);
         system.refresh_processes(ProcessesToUpdate::Some(&[system_pid]), true);
         let Some(process) = system.process(system_pid) else {
-            return Ok(ProcessInspection::Absent);
+            return Ok(ProcessInspection::Unavailable);
         };
         let Some(executable) = process.exe() else {
             return Ok(ProcessInspection::Unavailable);
@@ -323,6 +326,45 @@ impl ProcessInspector for SystemProcessInspector {
             executable_path: executable.to_path_buf(),
             executable_sha256,
         }))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessExistence {
+    Absent,
+    Present,
+}
+
+fn probe_process_existence(pid: u32) -> io::Result<ProcessExistence> {
+    if pid == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "process identifier must be positive",
+        ));
+    }
+    let pid = libc::pid_t::try_from(pid).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "process identifier exceeds the platform range",
+        )
+    })?;
+    let result = unsafe { libc::kill(pid, 0) };
+    let error = (result != 0).then(io::Error::last_os_error);
+    classify_process_probe(result, error)
+}
+
+fn classify_process_probe(
+    result: libc::c_int,
+    error: Option<io::Error>,
+) -> io::Result<ProcessExistence> {
+    if result == 0 {
+        return Ok(ProcessExistence::Present);
+    }
+    let error = error.unwrap_or_else(io::Error::last_os_error);
+    match error.raw_os_error() {
+        Some(libc::ESRCH) => Ok(ProcessExistence::Absent),
+        Some(libc::EPERM) => Ok(ProcessExistence::Present),
+        _ => Err(error),
     }
 }
 
@@ -590,6 +632,37 @@ mod tests {
             RecoveryDecision::AmbiguousIdentity
         );
         assert_eq!(signaler.0.get(), 0);
+    }
+
+    #[test]
+    fn process_existence_probe_maps_only_esrch_to_absent() {
+        assert_eq!(
+            classify_process_probe(0, None).unwrap(),
+            ProcessExistence::Present
+        );
+        assert_eq!(
+            classify_process_probe(-1, Some(io::Error::from_raw_os_error(libc::ESRCH))).unwrap(),
+            ProcessExistence::Absent
+        );
+        assert_eq!(
+            classify_process_probe(-1, Some(io::Error::from_raw_os_error(libc::EPERM))).unwrap(),
+            ProcessExistence::Present
+        );
+        let error = classify_process_probe(-1, Some(io::Error::from_raw_os_error(libc::EINVAL)))
+            .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EINVAL));
+    }
+
+    #[test]
+    fn system_inspector_never_classifies_current_process_as_absent() {
+        assert_eq!(
+            probe_process_existence(std::process::id()).unwrap(),
+            ProcessExistence::Present
+        );
+        assert!(matches!(
+            SystemProcessInspector.inspect(std::process::id()).unwrap(),
+            ProcessInspection::Identity(_) | ProcessInspection::Unavailable
+        ));
     }
 
     #[test]

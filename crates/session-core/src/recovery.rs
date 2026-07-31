@@ -11,7 +11,10 @@ use crate::meeting::{
     load_meeting, read_private_bytes, resolve_artifact, verify_artifact_ref,
     verify_record_static_artifacts, write_meeting,
 };
-use crate::retention::{MeetingRetentionResult, RetentionError, reconcile_meeting_retention};
+use crate::retention::{
+    MeetingRetentionResult, RetentionError, preflight_meeting_retention,
+    reconcile_meeting_retention,
+};
 use crate::storage::StorageRoot;
 use crate::supervision::{
     GroupSignaler, OwnershipReceipt, ProcessInspector, RecoveryCompletion,
@@ -91,7 +94,19 @@ pub fn scan_and_recover(
     for entry in entries {
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
-        if !entry.file_type()?.is_dir() {
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => {
+                report.blocks_capture = true;
+                report.meetings.push(RecoveredMeeting {
+                    meeting_id: id,
+                    disposition: RecoveryDisposition::Quarantined(RecoveryCode::MalformedMeeting),
+                });
+                continue;
+            }
+        };
+        if !file_type.is_dir() {
+            report.blocks_capture = true;
             report.meetings.push(RecoveredMeeting {
                 meeting_id: id,
                 disposition: RecoveryDisposition::Quarantined(RecoveryCode::MalformedMeeting),
@@ -116,23 +131,22 @@ pub fn scan_and_recover(
                 report.blocks_capture = true;
                 RecoveryDisposition::Quarantined(RecoveryCode::OwnershipMalformed)
             }
+            Err(RecoveryOneError::Unclassifiable(MeetingError::ArtifactMismatch)) => {
+                report.blocks_capture = true;
+                RecoveryDisposition::Quarantined(RecoveryCode::ArtifactMismatch)
+            }
+            Err(RecoveryOneError::Unclassifiable(_)) => {
+                report.blocks_capture = true;
+                RecoveryDisposition::Quarantined(RecoveryCode::MalformedMeeting)
+            }
             Err(RecoveryOneError::Meeting(MeetingError::ArtifactMismatch)) => {
                 RecoveryDisposition::Quarantined(RecoveryCode::ArtifactMismatch)
             }
             Err(RecoveryOneError::Meeting(_)) => {
-                if meeting_dir.join("ownership.json").exists() {
-                    report.blocks_capture = true;
-                }
                 RecoveryDisposition::Quarantined(RecoveryCode::MalformedMeeting)
             }
             Err(RecoveryOneError::Retention(_)) => {
                 RecoveryDisposition::Quarantined(RecoveryCode::RetentionMismatch)
-            }
-            Err(RecoveryOneError::Io(_)) => {
-                if meeting_dir.join("ownership.json").exists() {
-                    report.blocks_capture = true;
-                }
-                RecoveryDisposition::Quarantined(RecoveryCode::MalformedMeeting)
             }
         };
         report.meetings.push(RecoveredMeeting {
@@ -145,12 +159,12 @@ pub fn scan_and_recover(
 
 #[derive(Debug, Error)]
 enum RecoveryOneError {
+    #[error("meeting record could not be classified")]
+    Unclassifiable(#[source] MeetingError),
     #[error(transparent)]
     Meeting(#[from] MeetingError),
     #[error(transparent)]
     Retention(#[from] RetentionError),
-    #[error(transparent)]
-    Io(#[from] io::Error),
 }
 
 fn recover_one(
@@ -160,7 +174,7 @@ fn recover_one(
     signaler: &dyn GroupSignaler,
     shutdown_grace: Duration,
 ) -> Result<OneMeeting, RecoveryOneError> {
-    let mut meeting = load_meeting(meeting_dir)?;
+    let mut meeting = load_meeting(meeting_dir).map_err(RecoveryOneError::Unclassifiable)?;
     if meeting.lifecycle != MeetingLifecycle::Incomplete {
         let result =
             reconcile_meeting_retention(meeting_dir, &mut meeting, now_epoch_seconds, true)?;
@@ -178,8 +192,14 @@ fn recover_one(
     if verify_artifact_ref(meeting_dir, ownership_ref).is_err() {
         return Ok(OneMeeting::OwnershipMalformed);
     }
-    let path = resolve_artifact(meeting_dir, &ownership_ref.relative_path)?;
-    let bytes = read_private_bytes(&path, MAX_RECEIPT_BYTES)?;
+    let path = match resolve_artifact(meeting_dir, &ownership_ref.relative_path) {
+        Ok(path) => path,
+        Err(_) => return Ok(OneMeeting::OwnershipMalformed),
+    };
+    let bytes = match read_private_bytes(&path, MAX_RECEIPT_BYTES) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(OneMeeting::OwnershipMalformed),
+    };
     let receipt: OwnershipReceipt = match from_slice(&bytes) {
         Ok(receipt) => receipt,
         Err(_) => return Ok(OneMeeting::OwnershipMalformed),
@@ -187,13 +207,19 @@ fn recover_one(
     if !receipt.validate() {
         return Ok(OneMeeting::OwnershipMalformed);
     }
-    match recover_owned_group_and_wait(&receipt, inspector, signaler, shutdown_grace)? {
+    let completion =
+        match recover_owned_group_and_wait(&receipt, inspector, signaler, shutdown_grace) {
+            Ok(completion) => completion,
+            Err(_) => return Ok(OneMeeting::OwnershipBlocked),
+        };
+    match completion {
         RecoveryCompletion::NoChildrenLive | RecoveryCompletion::StoppedExactGroup => {}
         RecoveryCompletion::AmbiguousIdentity | RecoveryCompletion::StillRunning => {
             return Ok(OneMeeting::OwnershipBlocked);
         }
     }
     verify_record_static_artifacts(meeting_dir, &meeting)?;
+    preflight_meeting_retention(meeting_dir, &meeting)?;
 
     bind_interrupted_artifacts(meeting_dir, &mut meeting)?;
     write_meeting(meeting_dir, &meeting)?;
@@ -247,6 +273,7 @@ fn optional_artifact(
 mod tests {
     use std::cell::Cell;
     use std::collections::HashMap;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     use super::*;
@@ -530,6 +557,7 @@ mod tests {
         )
         .unwrap();
 
+        assert!(report.blocks_capture);
         assert!(report.meetings.iter().any(|meeting| {
             meeting.meeting_id == "bad"
                 && matches!(
@@ -541,6 +569,66 @@ mod tests {
             load_meeting(&good).unwrap().lifecycle,
             MeetingLifecycle::RecoveredInterrupted
         );
+    }
+
+    #[test]
+    fn unreadable_meeting_record_is_unclassifiable_and_blocks_capture() {
+        let (_temp, storage) = make_storage();
+        let directory = write_incomplete(&storage, "unreadable", None);
+        fs::set_permissions(
+            directory.join("meeting.json"),
+            fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(report.blocks_capture);
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::Quarantined(RecoveryCode::MalformedMeeting)
+        );
+    }
+
+    #[test]
+    fn malformed_deletion_state_is_found_before_interrupted_record_rewrite() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(49, 10);
+        let directory = write_incomplete(&storage, "bad-deletion", Some(ownership(expected)));
+        create_private_dir(&directory.join("capture")).unwrap();
+        durable_create_new(&directory.join("capture/session.json"), b"incomplete").unwrap();
+        durable_create_new(&directory.join("capture/mic.wav"), b"partial-mic").unwrap();
+        create_private_dir(&directory.join("deletion")).unwrap();
+        durable_create_new(&directory.join("deletion/audio-deletion.json"), b"not-json").unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(!report.blocks_capture);
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::Quarantined(RecoveryCode::RetentionMismatch)
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        let meeting = load_meeting(&directory).unwrap();
+        assert_eq!(meeting.lifecycle, MeetingLifecycle::Incomplete);
+        assert!(meeting.artifacts.capture_session.is_none());
+        assert!(meeting.artifacts.microphone_audio.is_none());
+        assert!(directory.join("capture/mic.wav").exists());
     }
 
     #[test]
