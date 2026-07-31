@@ -346,6 +346,7 @@ $APP_DATA/                         0700
         <note-digest>.json        0600
         <note-digest>.md          0600
       deletion/                   0700
+        audio-deletion.json       0600
 ```
 
 The application form of `capture-session/2` is the immutable acquisition
@@ -373,14 +374,43 @@ tap starts paused and before audio files open. It carries the exact per-child
 identity used by stop and recovery. If it cannot become durable, the process
 group is stopped and the attempt never reaches `recording`.
 
-`meeting.json` is the mutable application-owned receipt. It contains lifecycle
-state, the chosen retention rule and next deletion time, the digests of
-`attempt.json` and `ownership.json`, relative artifact identifiers and digests,
-the current transcript and note revisions, and pending storage operations. None
-of these receipts contains copied transcript or note text.
+`meeting.json` is the mutable application-owned `meeting/2` receipt. Its closed
+shape is:
+
+```text
+schema, meeting_id, lifecycle
+retention { rule, policy_sha256, next_deletion_at_epoch_seconds,
+            state, deletion_receipt }
+artifacts { attempt, ownership, capture_session, microphone_audio,
+            system_audio, current_transcript, current_note }
+pending_storage_operation
+```
+
+Every artifact reference contains only an exact relative path and lowercase
+SHA-256. A current-note reference contains the JSON and Markdown references plus
+the SHA-256 of its source transcript; it contains no copied meeting text.
+`meeting/2` has stable content lifecycles `incomplete`, `captured`,
+`transcript-ready`, `transcription-failed`, `summary-failed`, `ready`, and
+`recovered-interrupted`. Live `transcribing` and `summarizing` remain reducer
+states: the durable record stays at its last retry source until validated
+artifact bytes commit.
+
+Audio retention is orthogonal to that content lifecycle. Its states are
+`never-created`, `retained`, `deleting`, and `released`. Releasing audio does not
+erase whether the retained transcript and note are ready. Quarantine is a
+startup-library disposition, not a meeting lifecycle: an inconsistent record is
+left byte-for-byte untouched and excluded from the projection.
+
+The earlier `meeting/1` safety-skeleton shape is not silently upgraded: it lacks
+the provenance needed to authorize recovery or deletion. A scanner leaves such
+a development record untouched and quarantines it until an explicit migration
+contract exists.
 
 Application writes use a same-directory temporary file, file `fsync`, atomic
-no-overwrite or replace as appropriate, and parent-directory `fsync`. The
+no-overwrite or replace as appropriate, and parent-directory `fsync`. A replace
+followed by a parent-directory `fsync` error has an uncertain durability result;
+the application does not advance in-memory status, and fresh recovery accepts
+only a complete state whose referenced bytes reconcile. The
 current capture manifest writer fsyncs its temporary file but not its parent,
 and ordinary transcript writes do not yet meet this durability contract. The
 real worker phase must harden a shared owner-private writer and migrate those
@@ -414,15 +444,16 @@ its immediate raw-data deletion contract must replace it first.
 
 The automatic retention executor is part of the first human-capture slice.
 Rust records the next deletion time in `meeting.json`, scans due work on launch
-and while running, and first writes a durable deletion receipt. It stages the
-two WAVs by same-volume rename and fsyncs both directories while the meeting
-reads `deleting`. It then removes the staged bytes, fsyncs the deletion
-directory, advances the receipt to `removed`, and only then commits
-`audio-released` to `meeting.json`. A crash before that last commit leaves the
-conservative `deleting` state; recovery verifies the receipt and absence of the
-bound digests before advancing it. Manual deletion, disk accounting, policy
-change, and whole-meeting deletion reuse the mechanism in the later
-trust-action slice.
+and while running, and first writes a durable deletion receipt. It stages each
+bound WAV by same-volume rename and fsyncs both directories while audio reads
+`deleting`; the content lifecycle does not change. It then removes the staged
+bytes, fsyncs the deletion directory, advances the receipt to `removed`, and
+only then commits audio `released` to `meeting.json`. A crash before that last
+commit leaves the conservative deleting state; recovery verifies the receipt
+and absence of the bound digests before advancing it. This also covers the
+one-leg subset preserved from an interrupted capture. Manual deletion, disk
+accounting, policy change, and whole-meeting deletion reuse the mechanism in the
+later trust-action slice.
 
 The completed operation receipt has schema `audio-deletion/1`. It binds the
 original `capture-session/2` digest and the exact relative name, byte size, and
@@ -515,7 +546,9 @@ or retention change clears the attempt attestation.
 ### Fresh-process recovery
 
 On launch, Rust scans meeting records and `capture-session/2` receipts before it
-offers Start.
+offers Start. It resolves exact child ownership first, then interrupted deletion,
+then newly due retention. One meeting's malformed storage does not abort the
+rest of the scan.
 
 - A terminal, validated capture remains terminal.
 - An `incomplete` meeting first follows its ownership receipt. Recovery waits
@@ -735,7 +768,7 @@ contracts. The installed boundary needs its own evidence.
 | Profile is missing, malformed, experimental, or fingerprint-mismatched | Start is disabled before tap launch |
 | Adopted profile is oversized, a symlink, changes after selection, or fails strict validation | Quarantine is removed, installed profile is unchanged, and the webview learns no source path |
 | `passed: false` note or mismatched Markdown sibling is injected | Reader refuses ready state and reports a bounded artifact error |
-| State file write, `fsync`, replace, or parent `fsync` fails | Old committed state survives; status does not advance; temporary material remains private and is cleaned or recoverable |
+| State file write, `fsync`, replace, or parent `fsync` fails | Status does not advance from an error; a fresh process accepts only one complete state whose referenced bytes reconcile; temporary material remains private and is cleaned or recoverable |
 | Run under `umask 000` | App root and directories are `0700`; private files are `0600`; nothing is written in the repository |
 | Retention time becomes due while the app is closed | Next launch stages and removes the bound WAVs under a durable receipt, fsyncs removal, then commits `audio-released`; transcript, note, profile, and other meetings remain |
 | One or both WAVs disappear without a matching completed `audio-deletion/1` receipt | Meeting is quarantined; the reader does not relabel unexplained loss as retention |

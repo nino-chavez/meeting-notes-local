@@ -238,6 +238,7 @@ fn signal_group(group: i32, signal: i32) -> io::Result<()> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessIdentity {
     pub pid: u32,
     pub start_time_epoch_seconds: u64,
@@ -245,17 +246,43 @@ pub struct ProcessIdentity {
     pub executable_sha256: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OwnershipReceipt {
     pub schema: OwnershipSchema,
     pub process_group_id: i32,
+    pub application_build_sha256: String,
+    pub worker_build_sha256: String,
+    pub tap_build_sha256: String,
     pub children: Vec<ProcessIdentity>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OwnershipSchema {
     #[serde(rename = "capture-ownership/1")]
     V1,
+}
+
+impl OwnershipReceipt {
+    pub fn validate(&self) -> bool {
+        let mut pids = HashSet::new();
+        self.process_group_id > 0
+            && valid_sha256(&self.application_build_sha256)
+            && valid_sha256(&self.worker_build_sha256)
+            && valid_sha256(&self.tap_build_sha256)
+            && !self.children.is_empty()
+            && self
+                .children
+                .iter()
+                .any(|child| child.pid == self.process_group_id as u32)
+            && self.children.iter().all(|child| {
+                child.pid > 0
+                    && child.start_time_epoch_seconds > 0
+                    && pids.insert(child.pid)
+                    && child.executable_path.is_absolute()
+                    && valid_sha256(&child.executable_sha256)
+            })
+    }
 }
 
 pub trait ProcessInspector {
@@ -303,11 +330,25 @@ pub enum RecoveryDecision {
     AmbiguousIdentity,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecoveryCompletion {
+    NoChildrenLive,
+    StoppedExactGroup,
+    AmbiguousIdentity,
+    StillRunning,
+}
+
 pub fn recover_owned_group(
     receipt: &OwnershipReceipt,
     inspector: &dyn ProcessInspector,
     signaler: &dyn GroupSignaler,
 ) -> io::Result<RecoveryDecision> {
+    if !receipt.validate() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "capture ownership receipt is malformed",
+        ));
+    }
     let mut live = 0;
     for expected in &receipt.children {
         if let Some(actual) = inspector.identity(expected.pid)? {
@@ -322,6 +363,47 @@ pub fn recover_owned_group(
     }
     signaler.terminate(receipt.process_group_id)?;
     Ok(RecoveryDecision::ExactGroupSignalled)
+}
+
+pub fn recover_owned_group_and_wait(
+    receipt: &OwnershipReceipt,
+    inspector: &dyn ProcessInspector,
+    signaler: &dyn GroupSignaler,
+    grace: Duration,
+) -> io::Result<RecoveryCompletion> {
+    match recover_owned_group(receipt, inspector, signaler)? {
+        RecoveryDecision::NoChildrenLive => return Ok(RecoveryCompletion::NoChildrenLive),
+        RecoveryDecision::AmbiguousIdentity => {
+            return Ok(RecoveryCompletion::AmbiguousIdentity);
+        }
+        RecoveryDecision::ExactGroupSignalled => {}
+    }
+    let deadline = Instant::now() + grace;
+    loop {
+        let mut live = false;
+        for expected in &receipt.children {
+            if let Some(actual) = inspector.identity(expected.pid)? {
+                live = true;
+                if &actual != expected {
+                    return Ok(RecoveryCompletion::AmbiguousIdentity);
+                }
+            }
+        }
+        if !live {
+            return Ok(RecoveryCompletion::StoppedExactGroup);
+        }
+        if Instant::now() >= deadline {
+            return Ok(RecoveryCompletion::StillRunning);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn sha256_file(path: &Path) -> io::Result<String> {
@@ -372,8 +454,9 @@ pub fn bounded_frame(frame: &[u8]) -> Result<&[u8], ProtocolError> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
+    use std::rc::Rc;
 
     use super::*;
 
@@ -391,12 +474,31 @@ mod tests {
         }
     }
 
+    struct SharedInspector(Rc<RefCell<HashMap<u32, ProcessIdentity>>>);
+    impl ProcessInspector for SharedInspector {
+        fn identity(&self, pid: u32) -> io::Result<Option<ProcessIdentity>> {
+            Ok(self.0.borrow().get(&pid).cloned())
+        }
+    }
+
+    struct ClearingSignaler {
+        calls: Cell<u32>,
+        processes: Rc<RefCell<HashMap<u32, ProcessIdentity>>>,
+    }
+    impl GroupSignaler for ClearingSignaler {
+        fn terminate(&self, _process_group_id: i32) -> io::Result<()> {
+            self.calls.set(self.calls.get() + 1);
+            self.processes.borrow_mut().clear();
+            Ok(())
+        }
+    }
+
     fn identity(pid: u32, start: u64) -> ProcessIdentity {
         ProcessIdentity {
             pid,
             start_time_epoch_seconds: start,
             executable_path: PathBuf::from("/fixed/worker"),
-            executable_sha256: "digest".into(),
+            executable_sha256: "d".repeat(64),
         }
     }
 
@@ -406,6 +508,9 @@ mod tests {
         let receipt = OwnershipReceipt {
             schema: OwnershipSchema::V1,
             process_group_id: 44,
+            application_build_sha256: "a".repeat(64),
+            worker_build_sha256: "b".repeat(64),
+            tap_build_sha256: "c".repeat(64),
             children: vec![expected.clone()],
         };
         let signaler = FakeSignaler(Cell::new(0));
@@ -422,5 +527,35 @@ mod tests {
             RecoveryDecision::AmbiguousIdentity
         );
         assert_eq!(signaler.0.get(), 1);
+    }
+
+    #[test]
+    fn exact_recovery_waits_until_the_recorded_child_is_gone() {
+        let expected = identity(55, 20);
+        let receipt = OwnershipReceipt {
+            schema: OwnershipSchema::V1,
+            process_group_id: 55,
+            application_build_sha256: "a".repeat(64),
+            worker_build_sha256: "b".repeat(64),
+            tap_build_sha256: "c".repeat(64),
+            children: vec![expected.clone()],
+        };
+        let processes = Rc::new(RefCell::new(HashMap::from([(55, expected)])));
+        let inspector = SharedInspector(processes.clone());
+        let signaler = ClearingSignaler {
+            calls: Cell::new(0),
+            processes,
+        };
+        assert_eq!(
+            recover_owned_group_and_wait(
+                &receipt,
+                &inspector,
+                &signaler,
+                Duration::from_millis(20),
+            )
+            .unwrap(),
+            RecoveryCompletion::StoppedExactGroup
+        );
+        assert_eq!(signaler.calls.get(), 1);
     }
 }

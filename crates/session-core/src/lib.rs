@@ -1,5 +1,7 @@
 pub mod diagnostic;
+pub mod meeting;
 pub mod protocol;
+pub mod recovery;
 pub mod reducer;
 pub mod retention;
 pub mod runtime;

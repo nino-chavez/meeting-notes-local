@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::HashSet;
 #[cfg(debug_assertions)]
 use std::path::PathBuf;
 use std::process::Command;
@@ -7,12 +8,13 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use local_meeting_notes_session_core::diagnostic::write_private_diagnostic;
+use local_meeting_notes_session_core::recovery::{RecoveryDisposition, scan_and_recover};
 use local_meeting_notes_session_core::reducer::StartupState;
-use local_meeting_notes_session_core::retention::execute_due_retention;
+use local_meeting_notes_session_core::retention::{RetentionOutcome, execute_due_retention};
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::StorageRoot;
 use local_meeting_notes_session_core::supervision::{
-    OwnedChild, SupervisionError, expected_operations,
+    OwnedChild, SupervisionError, SystemGroupSignaler, SystemProcessInspector, expected_operations,
 };
 use tauri::{Manager, State};
 
@@ -59,12 +61,52 @@ fn main() {
                 .map_err(|error| io_error(error.to_string()))?;
             let diagnostics = storage.path().join("diagnostics");
 
-            if let Err(error) = execute_due_retention(&storage, now_epoch_seconds()) {
-                let _ = write_private_diagnostic(
-                    &diagnostics,
-                    "retention_startup_failed",
-                    &error.to_string(),
-                );
+            let recovery_ready = match scan_and_recover(
+                &storage,
+                now_epoch_seconds(),
+                &SystemProcessInspector,
+                &SystemGroupSignaler,
+                Duration::from_millis(500),
+            ) {
+                Ok(report) => {
+                    for meeting in &report.meetings {
+                        match meeting.disposition {
+                            RecoveryDisposition::Quarantined(code) => {
+                                let _ = write_private_diagnostic(
+                                    &diagnostics,
+                                    code.as_str(),
+                                    &format!(
+                                        "meeting {} was quarantined without mutation",
+                                        meeting.meeting_id
+                                    ),
+                                );
+                            }
+                            RecoveryDisposition::OwnershipAmbiguous => {
+                                let _ = write_private_diagnostic(
+                                    &diagnostics,
+                                    "meeting_recovery_ownership_ambiguous",
+                                    &format!(
+                                        "meeting {} blocks capture because child identity is uncertain",
+                                        meeting.meeting_id
+                                    ),
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    !report.blocks_capture
+                }
+                Err(error) => {
+                    let _ = write_private_diagnostic(
+                        &diagnostics,
+                        "meeting_recovery_failed",
+                        &error.to_string(),
+                    );
+                    false
+                }
+            };
+
+            if !recovery_ready {
                 *status.0.lock().expect("startup status lock") = StartupState::DiagnosticWritten;
             } else {
                 let manifest_path = resource_root.join("app-runtime.json");
@@ -137,14 +179,32 @@ fn main() {
             }
 
             std::thread::spawn(move || {
+                let mut reported_quarantines = HashSet::new();
                 loop {
                     std::thread::sleep(Duration::from_secs(30));
-                    if let Err(error) = execute_due_retention(&storage, now_epoch_seconds()) {
-                        let _ = write_private_diagnostic(
-                            &diagnostics,
-                            "retention_tick_failed",
-                            &error.to_string(),
-                        );
+                    match execute_due_retention(&storage, now_epoch_seconds()) {
+                        Ok(outcomes) => {
+                            for outcome in outcomes {
+                                if let RetentionOutcome::Quarantined(meeting_id) = outcome
+                                    && reported_quarantines.insert(meeting_id.clone())
+                                {
+                                    let _ = write_private_diagnostic(
+                                        &diagnostics,
+                                        "retention_meeting_quarantined",
+                                        &format!(
+                                            "meeting {meeting_id} was quarantined without mutation"
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let _ = write_private_diagnostic(
+                                &diagnostics,
+                                "retention_tick_failed",
+                                &error.to_string(),
+                            );
+                        }
                     }
                 }
             });
