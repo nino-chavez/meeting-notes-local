@@ -34,6 +34,16 @@ Run:
       --out ~/private-meeting-review/prototype.html \
       --node /absolute/path/to/node
 
+For the operator-confirmed real-content encounter, keep the immutable six-file
+capture directory separate from its approved review packet:
+
+    python3 docs/prototype/build.py \
+      --capture-dir /private/capture \
+      --encounter-content /private/review/review-content.json \
+      --content-approval /private/review/content-approval.json \
+      --out /private/review/prototype.html \
+      --node /absolute/path/to/node
+
 The output directory must already exist, be owner-only (0700), and sit outside
 every Git repository. The renderer refuses an existing output rather than
 replacing it.
@@ -51,6 +61,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import wave
 from collections.abc import Callable
 from pathlib import Path
 
@@ -79,7 +90,14 @@ from transcript import Transcript, load  # noqa: E402  (needs the path above)
 
 sys.path.insert(0, str(REPO / "spike"))
 
+from dual_capture import (  # noqa: E402
+    finalize_session,
+    open_private_binary,
+    sha256,
+    write_private_text,
+)
 from speaker_gate import operating_point_choices  # noqa: E402
+from verify_capture import VerificationError, verify_capture  # noqa: E402
 
 GIT = Path("/usr/bin/git")
 FIXTURE_PACK = REPO / "docs" / "prototype" / "fixtures" / "accepted-note2.fixture"
@@ -169,6 +187,214 @@ def private_output_target(path: Path) -> Path:
             f"--out already exists or is a symlink: {target}; use a fresh filename"
         )
     return target
+
+
+def _sha256_file(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def _private_json_input(path: Path, label: str) -> tuple[Path, dict]:
+    """Load one owner-only external JSON input without following a symlink."""
+    expanded = path.expanduser()
+    if expanded.parent.is_symlink():
+        raise SystemExit(f"{label} parent may not be a symlink")
+    if expanded.is_symlink() or not expanded.is_file():
+        raise SystemExit(f"{label} must be one regular file, not a symlink")
+    try:
+        resolved = expanded.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"cannot resolve {label} {expanded}: {exc}") from exc
+    info = resolved.stat()
+    if info.st_uid != os.geteuid():
+        raise SystemExit(f"{label} must be owned by the current user")
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        raise SystemExit(f"{label} must be mode 0600")
+    parent_info = resolved.parent.stat()
+    if parent_info.st_uid != os.geteuid():
+        raise SystemExit(f"{label} parent must be owned by the current user")
+    if stat.S_IMODE(parent_info.st_mode) != 0o700:
+        raise SystemExit(f"{label} parent must be mode 0700")
+    _require_outside_git(resolved.parent)
+    try:
+        value = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"{label} is not readable JSON: {exc}") from None
+    if not isinstance(value, dict):
+        raise SystemExit(f"{label} must contain one JSON object")
+    return resolved, value
+
+
+def load_encounter_review(
+    capture_dir: Path,
+    content_path: Path,
+    approval_path: Path,
+) -> tuple[dict, dict, Transcript]:
+    """Reconcile human-curated encounter content without promoting it to a note."""
+    supplied_capture = capture_dir.expanduser()
+    if supplied_capture.is_symlink():
+        raise SystemExit("--capture-dir may not be a symlink")
+    try:
+        capture = supplied_capture.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"cannot resolve --capture-dir {capture_dir}: {exc}") from exc
+    _require_outside_git(capture)
+    try:
+        verify_capture(capture, interaction_canary=True)
+    except VerificationError as exc:
+        raise SystemExit(f"encounter capture refused: {exc}") from None
+
+    content_file, content = _private_json_input(
+        content_path, "--encounter-content"
+    )
+    approval_file, approval = _private_json_input(
+        approval_path, "--content-approval"
+    )
+    if content_file.parent != approval_file.parent:
+        raise SystemExit("encounter content and approval must share one private directory")
+    if content_file.parent == capture:
+        raise SystemExit("review inputs may not alter the immutable capture directory")
+
+    if set(content) != {
+        "schema",
+        "origin",
+        "product_evidence",
+        "runtime_validation",
+        "source",
+        "meeting",
+        "items",
+    }:
+        raise SystemExit("encounter review content has the wrong top-level shape")
+    if (
+        content.get("schema") != "encounter-review-content/1"
+        or content.get("origin") != "review-draft"
+        or content.get("product_evidence") is not False
+        or content.get("runtime_validation") != "not_run"
+    ):
+        raise SystemExit(
+            "encounter content must remain a non-product review draft with runtime not run"
+        )
+
+    if set(approval) != {
+        "schema",
+        "review_content_sha256",
+        "participant_consent_before_capture",
+        "curation",
+        "reviewer",
+        "decided_at",
+    }:
+        raise SystemExit("encounter content approval has the wrong shape")
+    if approval.get("schema") != "encounter-content-approval/1":
+        raise SystemExit("encounter content approval has an unknown schema")
+    if approval.get("review_content_sha256") != _sha256_file(content_file):
+        raise SystemExit("encounter approval does not bind the exact review content")
+    if approval.get("participant_consent_before_capture") != "confirmed":
+        raise SystemExit("encounter approval does not confirm participant consent")
+    if approval.get("curation") != "accept":
+        raise SystemExit("encounter content was not accepted by the operator")
+    if not isinstance(approval.get("reviewer"), str) or not approval["reviewer"].strip():
+        raise SystemExit("encounter approval has no reviewer identifier")
+    if not isinstance(approval.get("decided_at"), str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}",
+        approval["decided_at"],
+    ):
+        raise SystemExit("encounter approval has no recognized decision timestamp")
+
+    source = content.get("source")
+    meeting = content.get("meeting")
+    items = content.get("items")
+    if not isinstance(source, dict) or set(source) != {
+        "capture_id",
+        "capture_mode",
+        "transcript_file",
+        "transcript_sha256",
+        "session_file",
+        "session_sha256",
+    }:
+        raise SystemExit("encounter content source has the wrong shape")
+    if not isinstance(meeting, dict) or set(meeting) != {
+        "id",
+        "title",
+        "captured_at",
+    }:
+        raise SystemExit("encounter meeting metadata has the wrong shape")
+    capture_id = source.get("capture_id")
+    if not isinstance(capture_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9._-]{1,80}", capture_id
+    ):
+        raise SystemExit("encounter capture id is not a safe stable identifier")
+    if meeting.get("id") != capture_id:
+        raise SystemExit("encounter meeting id does not match its capture id")
+    if not isinstance(meeting.get("title"), str) or not meeting["title"].strip():
+        raise SystemExit("encounter meeting has no review title")
+    if source.get("capture_mode") != "headphones":
+        raise SystemExit("encounter content is not declared as a headphone capture")
+    if source.get("transcript_file") != "transcript.json":
+        raise SystemExit("encounter content names the wrong transcript artifact")
+    if source.get("session_file") != "session.json":
+        raise SystemExit("encounter content names the wrong session artifact")
+
+    transcript_path = capture / "transcript.json"
+    session_path = capture / "session.json"
+    if source.get("transcript_sha256") != _sha256_file(transcript_path):
+        raise SystemExit("encounter content does not bind the retained transcript")
+    if source.get("session_sha256") != _sha256_file(session_path):
+        raise SystemExit("encounter content does not bind the capture session")
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    if meeting.get("captured_at") != session.get("started_at"):
+        raise SystemExit("encounter captured_at does not match the capture session")
+
+    transcript_doc = json.loads(transcript_path.read_text(encoding="utf-8"))
+    turns = transcript_doc.get("turns")
+    if not isinstance(items, list) or not 3 <= len(items) <= 12:
+        raise SystemExit("encounter review must contain 3 to 12 items")
+    if not isinstance(turns, list):
+        raise SystemExit("encounter transcript has no turn list")
+    allowed_types = {"decision", "action", "proposal", "open_question"}
+    seen = set()
+    for number, item in enumerate(items, start=1):
+        if not isinstance(item, dict) or set(item) != {"type", "claim", "evidence"}:
+            raise SystemExit(f"encounter item {number} has the wrong shape")
+        if item.get("type") not in allowed_types:
+            raise SystemExit(f"encounter item {number} has an unknown type")
+        claim = item.get("claim")
+        evidence = item.get("evidence")
+        if not isinstance(claim, str) or not claim.strip() or claim != claim.strip():
+            raise SystemExit(f"encounter item {number} has an invalid claim")
+        if not isinstance(evidence, list) or not 1 <= len(evidence) <= 3:
+            raise SystemExit(f"encounter item {number} must carry 1 to 3 evidence spans")
+        item_key = [item["type"], claim]
+        for span_number, span in enumerate(evidence, start=1):
+            if not isinstance(span, dict) or set(span) != {"turn", "quote"}:
+                raise SystemExit(
+                    f"encounter item {number} evidence {span_number} has the wrong shape"
+                )
+            turn = span.get("turn")
+            quote = span.get("quote")
+            if type(turn) is not int or not 0 <= turn < len(turns):
+                raise SystemExit(
+                    f"encounter item {number} evidence {span_number} points outside the transcript"
+                )
+            if (
+                not isinstance(quote, str)
+                or quote != quote.strip()
+                or len(quote.split()) < 4
+                or quote not in turns[turn].get("text", "")
+            ):
+                raise SystemExit(
+                    f"encounter item {number} evidence {span_number} does not resolve exactly"
+                )
+            item_key.extend((turn, quote))
+        frozen_key = tuple(item_key)
+        if frozen_key in seen:
+            raise SystemExit("encounter review contains a duplicate item")
+        seen.add(frozen_key)
+
+    transcript = load(transcript_path)
+    return content, approval, transcript
 
 
 def _fsync_directory(path: Path) -> None:
@@ -849,6 +1075,99 @@ def transcript_pane(meeting: str, turns: list, cited: set[int]) -> str:
                     f'<span class="tt">{esc(where)}</span>{who}'
                     f'<span class="text">{esc(t.text)}</span></li>')
     return f'<ol class="turns" id="tr-{esc(meeting)}">' + "".join(rows) + "</ol>"
+
+
+def encounter_claim_row(item: dict, index: int, meeting: str, transcript: Transcript) -> str:
+    """Render one operator-confirmed review item without implying model validation."""
+    color = STATES["located"][2]
+    evidence_rows = []
+    for evidence_index, evidence in enumerate(item["evidence"], start=1):
+        turn = evidence["turn"]
+        part = (
+            f'<span class="evidence-part">source {evidence_index} of '
+            f'{len(item["evidence"])}</span>'
+            if len(item["evidence"]) > 1
+            else ""
+        )
+        evidence_rows.append(
+            f'<blockquote class="quote" style="--state:{color}">'
+            f'<button class="at" data-meeting="{esc(meeting)}" data-turn="{turn}">'
+            f'{esc(stamp(transcript.turns[turn].start))}</button>{part}'
+            f'<span class="qtext">{esc(evidence["quote"])}</span></blockquote>'
+        )
+    kind = item["type"].replace("_", " ")
+    return f'''
+<li class="claim claim-located" id="c-{esc(meeting)}-{index}">
+  <p class="claim-text"><span class="kind">{esc(kind)}</span>{esc(item["claim"])}</p>
+  <p class="claim-state" style="--state:{color}">
+    <span class="mark" aria-hidden="true">{MARKS[STATES["located"][0]]}</span>
+    <span class="word">operator confirmed</span>
+    <span class="why">wording and exact evidence accepted in a separate digest-bound review</span>
+  </p>
+  {"".join(evidence_rows)}
+  <p class="support unmeasured">Automatic extraction and application runtime were not tested.</p>
+</li>'''
+
+
+def encounter_meeting_section(content: dict, transcript: Transcript) -> str:
+    """Render approved interaction content while keeping it outside note/2."""
+    meeting = content["meeting"]
+    meeting_id = meeting["id"]
+    cited = {
+        evidence["turn"]
+        for item in content["items"]
+        for evidence in item["evidence"]
+    }
+    claims = "".join(
+        encounter_claim_row(item, index, meeting_id, transcript)
+        for index, item in enumerate(content["items"])
+    )
+    return f'''
+<section class="meeting" id="m-{esc(meeting_id)}">
+  <header class="mhead">
+    <p class="eyebrow">human-curated real content &middot; product evidence false</p>
+    <h3>{esc(meeting["title"])}</h3>
+    <p class="meta">{len(transcript.turns)} turns &middot; channel attribution &middot;
+      {len(content["items"])} operator-confirmed review items</p>
+    <div class="trust"><span class="bar-label"><strong>{len(content["items"])}</strong>
+      items approved for this interaction review; automatic note quality was not tested</span></div>
+  </header>
+  <div class="split">
+    <div class="col">
+      <h4>The review &mdash; every item with its accepted evidence</h4>
+      {note_annotation("human-curated",
+                       "Real meeting words and operator-confirmed wording. An automatic "
+                       "diagnostic supplied a draft pool but failed its own attribution "
+                       "check; it is not rendered and supplies no product result.")}
+      <ol class="claims">{claims}</ol>
+    </div>
+    <div class="col col-evidence">
+      <h4>The transcript &mdash; retained source words</h4>
+      {note_annotation("real data",
+                       "Each evidence button resolves to the exact retained turn. The "
+                       "capture passed the bounded headphone interaction gate; this does "
+                       "not test an application runtime.")}
+      {transcript_pane(meeting_id, transcript.turns, cited)}
+    </div>
+  </div>
+</section>'''
+
+
+def encounter_library_row(content: dict, transcript: Transcript) -> str:
+    meeting = content["meeting"]
+    return f'''
+    <li class="lib-row">
+      <span class="lib-ident">
+        <a class="lib-open" href="#m-{esc(meeting["id"])}">{esc(meeting["title"])}</a>
+        <span class="lib-src">human-curated interaction content</span>
+        <span class="lib-turns">{len(transcript.turns)} turns</span>
+        <span class="lib-date">{esc(meeting["captured_at"])}</span>
+      </span>
+      <span class="lib-trust"><span class="bar-label">
+        <strong>{len(content["items"])}</strong> operator-confirmed review items &middot;
+        automatic extraction and runtime not tested
+      </span></span>
+    </li>'''
 
 
 def check_locators(doc: dict, transcript, note_path: Path) -> None:
@@ -1899,8 +2218,17 @@ def encounter() -> str:
     )
 
 
-def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str],
-         meetings: int, accepted: int, rejected: int) -> str:
+def page(
+    sections: str,
+    library: str,
+    totals: dict[str, int],
+    tok: dict[str, str],
+    meetings: int,
+    accepted: int,
+    rejected: int,
+    *,
+    encounter_review: bool = False,
+) -> str:
     css_vars = "\n      ".join(f"--{k}: {v};" for k, v in tok.items())
     legend = "".join(
         f'<li style="--state:{color}"><span class="mark">{MARKS[mark]}</span>'
@@ -1912,11 +2240,81 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
         f'<span class="word"><span class="kind">{esc(k)}</span></span>'
         f'<span class="why">{esc(v)}</span></li>'
         for k, v in KINDS.items())
-    detail_state = (
-        "Displayed note: current for its retained transcript."
-        if accepted else
-        "No accepted note is available in this build. The retained transcript is shown."
-    )
+    if encounter_review:
+        detail_state = (
+            "Displayed review: operator-confirmed for this interaction only; "
+            "automatic extraction and application runtime were not tested."
+        )
+        product_lede = (
+            "A local-first macOS product encounter populated with a consented headphone "
+            "capture. This reviews interaction design, not automatic note quality."
+        )
+        evidence_lede = (
+            f"This build contains {meetings} real channel-attributed transcript and "
+            f"{sum(totals.values())} operator-confirmed review items. The populated "
+            "content is human-curated, product evidence is false, and runtime validation "
+            "was not run."
+        )
+        details_label = "Reviewer details: boundaries on the approved encounter content"
+        reviewer_legend = note_annotation(
+            "human-curated",
+            "The populated items do not use automatic-note evidence states. Their "
+            "wording and exact transcript spans were accepted through a separate "
+            "digest-bound operator receipt.",
+        )
+        library_lede = (
+            "The populated row is real meeting content approved for this interaction "
+            "review. It is not a passing automatic note."
+        )
+        provenance_annotation = note_annotation(
+            "human-curated",
+            f"{meetings} retained real transcript and {sum(totals.values())} "
+            "operator-confirmed review items. Automatic extraction and application "
+            "runtime remain untested.",
+        )
+        date_annotation = note_annotation(
+            "real data",
+            "The date comes from the capture session. Speaker labels remain Me and "
+            "Them because channel attribution does not identify a person by name.",
+        )
+    else:
+        detail_state = (
+            "Displayed note: current for its retained transcript."
+            if accepted
+            else "No accepted note is available in this build. The retained transcript is shown."
+        )
+        product_lede = (
+            "A local-first macOS product encounter. Capture is manual, headphones "
+            "are required, and no summary enters the library unless its hard checks pass."
+        )
+        evidence_lede = (
+            f"This build contains {meetings} "
+            f'{"real transcript" if meetings == 1 else "real transcripts"}: '
+            f'{accepted} accepted {"summary" if accepted == 1 else "summaries"} and '
+            f'{rejected} {"summary withheld" if rejected == 1 else "summaries withheld"}. '
+            "Rejected draft claims are not shown or counted."
+        )
+        details_label = "Reviewer details: evidence labels used on accepted notes"
+        reviewer_legend = (
+            f'<ul class="legend">{legend}</ul><ul class="legend kinds">{kinds}</ul>'
+        )
+        library_lede = (
+            "A failed summary never becomes an empty or misleading note. Open its "
+            "retained transcript, or retry processing."
+        )
+        provenance_annotation = note_annotation(
+            "real data",
+            f"{meetings} retained real transcript"
+            f'{"s" if meetings != 1 else ""}; {accepted} accepted summary '
+            f"and {rejected} withheld. Rejected claim content never enters these rows.",
+        )
+        date_annotation = note_annotation(
+            "open question",
+            "The date column reads <em>no date</em> because corpus meetings carry none. "
+            "A real capture records <code>captured_at</code>, so this is a limit of "
+            "the material and not of the product &mdash; but it does mean chronological "
+            "ordering is untested here.",
+        )
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2167,38 +2565,22 @@ def page(sections: str, library: str, totals: dict[str, int], tok: dict[str, str
 <body><div class="wrap">
 
 <h1>Meeting notes</h1>
-<p class="lede">A local-first macOS product encounter. Capture is manual, headphones
-  are required, and no summary enters the library unless its hard checks pass.</p>
-<p class="lede">This build contains {meetings}
-  {"real transcript" if meetings == 1 else "real transcripts"}:
-  {accepted} accepted {"summary" if accepted == 1 else "summaries"} and
-  {rejected} {"summary withheld" if rejected == 1 else "summaries withheld"}.
-  Rejected draft claims are not shown or counted.</p>
+<p class="lede">{esc(product_lede)}</p>
+<p class="lede">{esc(evidence_lede)}</p>
 
 {encounter()}
 
 <details class="reviewer-details">
-<summary>Reviewer details: evidence labels used on accepted notes</summary>
-<ul class="legend">{legend}</ul>
-
-<ul class="legend kinds">{kinds}</ul>
+<summary>{esc(details_label)}</summary>
+{reviewer_legend}
 </details>
 
 <h2>Your meetings</h2>
-<p class="lede">A failed summary never becomes an empty or misleading note. Open its
-  retained transcript, or retry processing.</p>
+<p class="lede">{esc(library_lede)}</p>
 <details class="reviewer-details">
 <summary>Reviewer details: provenance and corpus limits</summary>
-{note_annotation("real data",
-                 f"{meetings} retained real transcript"
-                 f"{'s' if meetings != 1 else ''}; {accepted} accepted summary "
-                 f"and {rejected} withheld. Rejected claim content never enters "
-                 "these rows.")}
-{note_annotation("open question",
-                 "The date column reads <em>no date</em> because corpus meetings "
-                 "carry none. A real capture records <code>captured_at</code>, so "
-                 "this is a limit of the material and not of the product &mdash; but "
-                 "it does mean chronological ordering is untested here.")}
+{provenance_annotation}
+{date_annotation}
 </details>
 <ul class="lib">
   <li class="lib-row specimen-new-note" id="specimen-new-note">
@@ -3703,6 +4085,64 @@ def check_encounter_wiring(page_html: str) -> int:
     return len(targets)
 
 
+def render_encounter_review(
+    capture_dir: Path,
+    content_path: Path,
+    approval_path: Path,
+    node: Path,
+) -> tuple[str, dict[str, int]]:
+    """Render one approved real-content encounter without accepting a model note."""
+    check_capture_warning_renderer()
+    check_note_admission_renderers()
+    content, _approval, transcript = load_encounter_review(
+        capture_dir,
+        content_path,
+        approval_path,
+    )
+    totals = dict.fromkeys(STATES, 0)
+    totals["located"] = len(content["items"])
+    section = encounter_meeting_section(content, transcript)
+    library = encounter_library_row(content, transcript)
+    if (
+        "human-curated real content" not in section
+        or "product evidence false" not in section
+        or "Automatic extraction and application runtime were not tested" not in section
+        or "Generated by a real model run" in section
+    ):
+        raise SystemExit("encounter content lost its visible non-product boundary")
+    rendered = page(
+        section,
+        library,
+        totals,
+        tokens(),
+        1,
+        0,
+        0,
+        encounter_review=True,
+    )
+    buttons = check_wiring(rendered)
+    if buttons != sum(len(item["evidence"]) for item in content["items"]):
+        raise SystemExit("encounter evidence locator count drifted during rendering")
+    encounter_controls = check_encounter_wiring(rendered)
+    enrollment_assertions = check_enrollment_js(rendered, node)
+    startup_assertions = check_startup_recovery_js(rendered, node)
+    capture_dom_assertions = check_capture_dom_js(rendered, node)
+    summary = {
+        "meetings": 1,
+        "accepted": 0,
+        "rejected": 0,
+        "claims": len(content["items"]),
+        "locators": buttons,
+        "encounter_controls": encounter_controls,
+        "enrollment_assertions": enrollment_assertions,
+        "startup_assertions": startup_assertions,
+        "capture_dom_assertions": capture_dom_assertions,
+        "encounter_review": True,
+        **{f"state_{state}": count for state, count in totals.items()},
+    }
+    return rendered, summary
+
+
 def render_note_directory(
     notes_dir: Path,
     node: Path,
@@ -3928,6 +4368,150 @@ def _expect_refusal(callback: Callable[[], object], phrase: str) -> None:
             ) from exc
         return
     raise SystemExit(f"self-test expected refusal containing {phrase!r}")
+
+
+def materialize_synthetic_encounter_control(
+    root: Path,
+) -> tuple[Path, Path, Path]:
+    """Create a private, explicitly non-product encounter fixture for controls."""
+    capture = root / "encounter-capture"
+    capture.mkdir(mode=0o700)
+    samples = 48_000
+    for leg in ("mic", "system"):
+        with (
+            open_private_binary(capture / f"{leg}.wav") as handle,
+            wave.open(handle, "wb") as wav,
+        ):
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16_000)
+            wav.writeframes(b"\x01\0" * samples)
+    health = build_capture_health(
+        mic_samples=samples,
+        system_samples=samples,
+        capture_elapsed_samples=samples,
+        dropouts={"mic": [], "system": []},
+        tap_errors=[],
+        transcription_requested=True,
+        transcript_written=True,
+    )
+    turns = [
+        {
+            "speaker": "Me",
+            "start": 0.0,
+            "end": 0.8,
+            "text": "We will review the fixture tomorrow morning.",
+        },
+        {
+            "speaker": "Them",
+            "start": 1.0,
+            "end": 1.8,
+            "text": "Please send the approved summary after review.",
+        },
+        {
+            "speaker": "Me",
+            "start": 2.0,
+            "end": 2.8,
+            "text": "Which retention period should remain available?",
+        },
+    ]
+    transcript = {
+        "schema": "capture-transcript/1",
+        "source": "synthetic encounter control",
+        "attribution": "channel",
+        "bleed": None,
+        "voiceprint": None,
+        "capture_health": health,
+        "turns": turns,
+    }
+    write_private_text(
+        capture / "transcript.json",
+        json.dumps(transcript, ensure_ascii=False, indent=2) + "\n",
+    )
+    for leg in ("mic", "system"):
+        write_private_text(
+            capture / f"{leg}-segments.json",
+            json.dumps(
+                {
+                    "schema": "mic-segments/1",
+                    "timeline": f"{leg}-local",
+                    "leg": leg,
+                    "duration_s": samples / 16_000,
+                    "filtered": ["voicing"],
+                    "labels": None,
+                    "audio_sha256": sha256(capture / f"{leg}.wav"),
+                    "audio_samples": samples,
+                    "captured_at": "2000-01-01T00:00:00+0000",
+                    "segments": [],
+                },
+                indent=2,
+            )
+            + "\n",
+        )
+    started_at = "2000-01-01T00:00:00+0000"
+    finalize_session(capture, started_at, health)
+
+    review = root / "encounter-review"
+    review.mkdir(mode=0o700)
+    capture_id = "synthetic-encounter-control"
+    content = {
+        "schema": "encounter-review-content/1",
+        "origin": "review-draft",
+        "product_evidence": False,
+        "runtime_validation": "not_run",
+        "source": {
+            "capture_id": capture_id,
+            "capture_mode": "headphones",
+            "transcript_file": "transcript.json",
+            "transcript_sha256": _sha256_file(capture / "transcript.json"),
+            "session_file": "session.json",
+            "session_sha256": _sha256_file(capture / "session.json"),
+        },
+        "meeting": {
+            "id": capture_id,
+            "title": "Synthetic encounter control",
+            "captured_at": started_at,
+        },
+        "items": [
+            {
+                "type": "decision",
+                "claim": "The fixture review is scheduled for tomorrow morning.",
+                "evidence": [{"turn": 0, "quote": turns[0]["text"]}],
+            },
+            {
+                "type": "action",
+                "claim": "Send the approved summary after review.",
+                "evidence": [{"turn": 1, "quote": turns[1]["text"]}],
+            },
+            {
+                "type": "open_question",
+                "claim": "The retention period remains open.",
+                "evidence": [{"turn": 2, "quote": turns[2]["text"]}],
+            },
+        ],
+    }
+    content_path = review / "review-content.json"
+    _write_synthetic_control(
+        content_path,
+        json.dumps(content, ensure_ascii=False, indent=2) + "\n",
+    )
+    approval_path = review / "content-approval.json"
+    _write_synthetic_control(
+        approval_path,
+        json.dumps(
+            {
+                "schema": "encounter-content-approval/1",
+                "review_content_sha256": _sha256_file(content_path),
+                "participant_consent_before_capture": "confirmed",
+                "curation": "accept",
+                "reviewer": "synthetic control",
+                "decided_at": "2000-01-01T00:00:00+0000",
+            },
+            indent=2,
+        )
+        + "\n",
+    )
+    return capture, content_path, approval_path
 
 
 def self_test(node: Path) -> int:
@@ -4206,9 +4790,123 @@ def self_test(node: Path) -> int:
             raise SystemExit("self-test: synthetic rendered page is not mode 0600")
         checks += 1
 
+        encounter_capture, encounter_content, encounter_approval = (
+            materialize_synthetic_encounter_control(root)
+        )
+        encounter_page, encounter_summary = render_encounter_review(
+            encounter_capture,
+            encounter_content,
+            encounter_approval,
+            node,
+        )
+        if (
+            encounter_summary["claims"] != 3
+            or encounter_summary["locators"] != 3
+            or encounter_summary.get("encounter_review") is not True
+            or "human-curated real content" not in encounter_page
+            or "product evidence false" not in encounter_page
+            or "automatic extraction and application runtime were not tested"
+            not in encounter_page.lower()
+        ):
+            raise SystemExit(
+                "self-test: approved encounter content lost its visible authority boundary"
+            )
+        encounter_target = root / "encounter-prototype.html"
+        _encounter_path, encounter_digest = publish_private_html(
+            encounter_target,
+            encounter_page,
+        )
+        if (
+            stat.S_IMODE(encounter_target.stat().st_mode) != 0o600
+            or encounter_digest
+            != hashlib.sha256(encounter_target.read_bytes()).hexdigest()
+        ):
+            raise SystemExit("self-test: encounter page is not exact owner-private output")
+        checks += 1
+
+        approval_doc = json.loads(encounter_approval.read_text(encoding="utf-8"))
+        mismatched_approval = encounter_approval.parent / "mismatched-approval.json"
+        _write_synthetic_control(
+            mismatched_approval,
+            json.dumps(
+                {**approval_doc, "review_content_sha256": "0" * 64},
+                indent=2,
+            )
+            + "\n",
+        )
+        _expect_refusal(
+            lambda: load_encounter_review(
+                encounter_capture,
+                encounter_content,
+                mismatched_approval,
+            ),
+            "does not bind",
+        )
+        checks += 1
+
+        declined_approval = encounter_approval.parent / "declined-approval.json"
+        _write_synthetic_control(
+            declined_approval,
+            json.dumps({**approval_doc, "curation": "decline"}, indent=2) + "\n",
+        )
+        _expect_refusal(
+            lambda: load_encounter_review(
+                encounter_capture,
+                encounter_content,
+                declined_approval,
+            ),
+            "not accepted",
+        )
+        checks += 1
+
+        content_doc = json.loads(encounter_content.read_text(encoding="utf-8"))
+        bad_content_doc = json.loads(json.dumps(content_doc))
+        bad_content_doc["items"][0]["evidence"][0]["quote"] = (
+            "words that do not occur in the retained turn"
+        )
+        bad_content = encounter_content.parent / "bad-content.json"
+        _write_synthetic_control(
+            bad_content,
+            json.dumps(bad_content_doc, indent=2) + "\n",
+        )
+        bad_approval = encounter_content.parent / "bad-content-approval.json"
+        _write_synthetic_control(
+            bad_approval,
+            json.dumps(
+                {
+                    **approval_doc,
+                    "review_content_sha256": _sha256_file(bad_content),
+                },
+                indent=2,
+            )
+            + "\n",
+        )
+        _expect_refusal(
+            lambda: load_encounter_review(
+                encounter_capture,
+                bad_content,
+                bad_approval,
+            ),
+            "does not resolve exactly",
+        )
+        checks += 1
+
+        linked_content = encounter_content.parent / "linked-content.json"
+        linked_content.symlink_to(encounter_content.name)
+        _expect_refusal(
+            lambda: load_encounter_review(
+                encounter_capture,
+                linked_content,
+                encounter_approval,
+            ),
+            "regular file",
+        )
+        checks += 1
+
     print(
         f"prototype builder self-test: pass ({checks} private/publication and "
-        "serialized note/2 controls; synthetic content is not product evidence)"
+        "serialized note/2 and encounter controls; synthetic content is not "
+        "product evidence)"
     )
     return 0
 
@@ -4221,6 +4919,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--notes-dir",
         type=Path,
         help="directory containing retained *.note.json pairs",
+    )
+    parser.add_argument(
+        "--capture-dir",
+        type=Path,
+        help="verified private capture directory for interaction-review mode",
+    )
+    parser.add_argument(
+        "--encounter-content",
+        type=Path,
+        help="approved encounter-review-content/1 JSON outside Git",
+    )
+    parser.add_argument(
+        "--content-approval",
+        type=Path,
+        help="digest-bound encounter-content-approval/1 JSON outside Git",
     )
     parser.add_argument(
         "--out",
@@ -4239,11 +4952,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="run synthetic publication and renderer controls; write no retained output",
     )
     args = parser.parse_args(argv)
+    encounter_values = (
+        args.capture_dir,
+        args.encounter_content,
+        args.content_approval,
+    )
     if args.self_test:
-        if args.notes_dir is not None or args.out is not None:
-            parser.error("--self-test does not accept --notes-dir or --out")
-    elif args.notes_dir is None or args.out is None:
-        parser.error("--notes-dir and --out are both required")
+        if args.notes_dir is not None or args.out is not None or any(encounter_values):
+            parser.error("--self-test does not accept content or output inputs")
+    elif args.out is None:
+        parser.error("--out is required")
+    elif args.notes_dir is not None and any(encounter_values):
+        parser.error("--notes-dir and interaction-review inputs are mutually exclusive")
+    elif any(encounter_values) and not all(encounter_values):
+        parser.error(
+            "interaction review requires --capture-dir, --encounter-content, "
+            "and --content-approval"
+        )
+    elif args.notes_dir is None and not all(encounter_values):
+        parser.error("use --notes-dir or all three interaction-review inputs")
     return args
 
 
@@ -4256,10 +4983,19 @@ def print_build_summary(
 ) -> None:
     size = page_path.stat().st_size / 1024
     noun = "meeting" if summary["meetings"] == 1 else "meetings"
+    if summary.get("encounter_review"):
+        description = (
+            f"{summary['meetings']} {noun}, {summary['claims']} operator-confirmed "
+            f"review items, automatic extraction and runtime not tested"
+        )
+    else:
+        description = (
+            f"{summary['meetings']} {noun}, {summary['accepted']} accepted, "
+            f"{summary['rejected']} summary withheld, {summary['claims']} claims"
+        )
     print(
-        f"wrote {page_path}  ({size:.0f} KB, {summary['meetings']} {noun}, "
-        f"{summary['accepted']} accepted, {summary['rejected']} summary withheld, "
-        f"{summary['claims']} claims, {summary['locators']} locators all resolving, "
+        f"wrote {page_path}  ({size:.0f} KB, {description}, "
+        f"{summary['locators']} locators all resolving, "
         f"{summary['encounter_controls']} encounter controls wired, "
         f"{summary['enrollment_assertions']} enrollment transitions checked, "
         f"{summary['startup_assertions']} startup recovery transitions checked, "
@@ -4285,7 +5021,15 @@ def main(argv: list[str] | None = None) -> int:
     # JavaScript controls. A bad output path must not spend the expensive work first.
     private_output_target(args.out)
     node, node_version = resolve_node(args.node)
-    rendered, summary = render_note_directory(args.notes_dir, node)
+    if args.encounter_content is not None:
+        rendered, summary = render_encounter_review(
+            args.capture_dir,
+            args.encounter_content,
+            args.content_approval,
+            node,
+        )
+    else:
+        rendered, summary = render_note_directory(args.notes_dir, node)
     page_path, page_digest = publish_private_html(args.out, rendered)
     print_build_summary(page_path, page_digest, summary, node, node_version)
     return 0

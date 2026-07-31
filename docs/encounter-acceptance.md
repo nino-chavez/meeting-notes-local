@@ -2,11 +2,11 @@
 
 ## Status
 
-The input and approval contract is now defined, but the encounter cannot be
-built or pass yet. The missing input is one short, consented headphone capture
-and an operator-confirmed set of review items drawn from its retained
-transcript. The existing renderer still accepts product-note artifacts only; do
-not forge a `note/2` to feed it this content.
+The input, approval contract, and interaction-only renderer now exist. An owner-only
+private packet has satisfied the capture and digest-bound content prerequisites. No
+meeting content, response detail, or approval packet is stored in Git. The encounter
+still has **not passed**: the missing gate is a cold operator review of the rendered
+interaction.
 
 This gate approves an interaction design. It does not prove that capture,
 automatic extraction, correction, deletion, startup recovery, or packaging works
@@ -69,11 +69,13 @@ classifier decision, automatic claim, product `note/2`, model receipt, latency,
 or runtime verdict used in a product claim must still be produced unedited by the
 frozen model/runtime path.
 
-The private input has this exact shape. `transcript.json`, `session.json`, and
-the review-content file live together in one owner-only directory. The renderer
-route will require 3–12 items, 1–3 source fragments per item, current passing
-capture health, channel attribution, and exact digest and locator matches. The
-example abbreviates the item list after its first entry.
+The private input has this exact shape. The immutable capture directory retains only
+its six session-receipted files. Review content and its approval live in a separate
+owner-only directory, because adding either one to the capture would invalidate its
+artifact receipt. The renderer takes both directories and requires 3–12 items, 1–3
+source fragments per item, current passing capture health, channel attribution, and
+exact digest and locator matches. The example abbreviates the item list after its
+first entry.
 
 ```json
 {
@@ -195,12 +197,21 @@ human_review:
   findings: <one result per checklist item>
 ```
 
-Prepare a fresh owner-only directory outside every Git repository. Once the real
-input exists and its digest-bound operator receipt is recorded, add the smallest
-interaction-only renderer route against this exact schema. It must reuse the
-existing private-output rules: absolute fresh output, an external `0700` parent,
-`0600` HTML, symlink refusal, and atomic no-overwrite publication. Record its
-exact command and resolved Python and Node versions in the manifest.
+Prepare fresh owner-only capture and review directories outside every Git repository.
+The interaction-only renderer uses the existing private-output rules: absolute fresh
+output, an external `0700` parent, `0600` HTML, symlink refusal, and atomic
+no-overwrite publication:
+
+```sh
+python3 docs/prototype/build.py \
+  --capture-dir /private/capture \
+  --encounter-content /private/review/review-content.json \
+  --content-approval /private/review/content-approval.json \
+  --out /private/review/prototype.html \
+  --node /absolute/path/to/node
+```
+
+Record that exact command and the resolved Python and Node versions in the manifest.
 
 The correction state is deliberately a labeled specimen at this gate. Do not
 enrol a voice profile or engineer a false rejection merely to populate it.

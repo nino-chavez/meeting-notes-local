@@ -7,8 +7,8 @@ the meeting, and the audio never leaves the Mac — system audio comes through a
 Core Audio process tap, your microphone comes through the same path
 `local-dictation` already uses, and the two arrive as separate streams.
 
-> **Status: product definition, a partially reviewable encounter, capture and
-> note experiments, but no app.** What exists is a working two-leg capture —
+> **Status: product definition, a private real-content encounter awaiting cold
+> review, capture and note experiments, but no app.** What exists is a working two-leg capture —
 > validated end to end over a 75-minute meeting — a voiceprint gate wired into
 > that capture but never yet run on a real meeting, and a local summarizer whose
 > evidence graph completes, rechecks and fails closed. Two bounded corpus runs
@@ -33,10 +33,11 @@ Core Audio process tap, your microphone comes through the same path
 > its 582-turn evaluation transcript. The operator must then approve the exact
 > validated files. Only then may the registered classifier run. A pass permits
 > claim-writing research; it still does not provide a product note. That benchmark
-> no longer blocks product interaction work. The click-through instead waits for
-> one short, consented headphone capture and a small operator-confirmed set of
-> real claims and source words. It must label those words as human-curated and
-> automatic extraction as untested. After cold interaction approval, the safety
+> no longer blocks product interaction work. An eligible private packet now populates
+> an owner-only local click-through without putting meeting content or packet metadata
+> in Git. It labels populated words as human-curated and automatic extraction as
+> untested. The click-through has not passed its cold review. After that interaction
+> approval, the safety
 > skeleton may be built; an unedited automatic note remains a separate pre-beta
 > gate.
 > [The capture commands are
