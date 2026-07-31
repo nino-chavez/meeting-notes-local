@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO / "notes"))
 
 from capture_health import TRANSCRIPT_SCHEMA, build as build_capture_health
 from dual_capture import finalize_session, open_private_binary, sha256, write_private_text
-from verify_capture import verify_capture
+from verify_capture import verify_acquisition, verify_capture
 from summarize import validate_artifact_pair
 from speaker_gate import Profile, load_profile, save_profile
 from transcript import load
@@ -191,7 +191,10 @@ class WorkerProtocolTests(unittest.TestCase):
         capture = self.root / "meetings" / meeting_id / "capture"
         build_capture(capture)
         direct = verify_capture(capture)
+        acquisition = verify_acquisition(capture)
         session_digest = digest(capture / "session.json")
+        mic_digest = digest(capture / "mic.wav")
+        system_digest = digest(capture / "system.wav")
         transcript_digest = digest(capture / "transcript.json")
 
         worker = WorkerProcess(self.root, self.manifest)
@@ -204,7 +207,8 @@ class WorkerProtocolTests(unittest.TestCase):
                 inspected["artifact_digests"],
                 {
                     "capture-session": session_digest,
-                    "capture-transcript": transcript_digest,
+                    "capture-mic": mic_digest,
+                    "capture-system": system_digest,
                 },
             )
             created = worker.request("transcript.create", {"meeting_id": meeting_id})
@@ -215,6 +219,7 @@ class WorkerProtocolTests(unittest.TestCase):
             )
             self.assertEqual(digest(retained), transcript_digest)
             self.assertEqual(direct["status"], "complete")
+            self.assertEqual(acquisition["status"], "complete")
         finally:
             worker.close()
 

@@ -46,12 +46,13 @@ def _meeting_capture(root: Path, meeting_id: str) -> Path:
 def capture_inspect(root: Path, arguments: object) -> dict[str, str]:
     values = _exact_arguments(arguments, {"meeting_id"})
     capture_dir = _meeting_capture(root, values["meeting_id"])
-    from verify_capture import verify_capture
+    from verify_capture import verify_acquisition
 
-    verify_capture(capture_dir)
+    verify_acquisition(capture_dir)
     return {
         "capture-session": sha256(capture_dir / "session.json"),
-        "capture-transcript": sha256(capture_dir / "transcript.json"),
+        "capture-mic": sha256(capture_dir / "mic.wav"),
+        "capture-system": sha256(capture_dir / "system.wav"),
     }
 
 
@@ -59,13 +60,19 @@ def transcript_create(root: Path, arguments: object) -> dict[str, str]:
     values = _exact_arguments(arguments, {"meeting_id"})
     meeting_id = opaque_id(values["meeting_id"], "meeting_id")
     capture_dir = _meeting_capture(root, meeting_id)
-    digests = capture_inspect(root, values)
     source = capture_dir / "transcript.json"
+
+    # Boundary fixtures still carry a precomputed transcript. Product capture
+    # validates acquisition independently; the real ASR adapter will replace
+    # this strict combined-packet bridge when its frozen runtime lands.
+    from verify_capture import verify_capture
+
+    verify_capture(capture_dir)
 
     from transcript import load
 
     load(source)
-    transcript_digest = digests["capture-transcript"]
+    transcript_digest = sha256(source)
     target_dir = resolve_below(root, "meetings", meeting_id, "transcript")
     private_directory(target_dir)
     target = resolve_below(

@@ -23,6 +23,7 @@ from dual_capture import (
 )
 
 SESSION_SCHEMA = "capture-session/2"
+REQUIRED_ACQUISITION_FILES = frozenset({"mic.wav", "session.json", "system.wav"})
 REQUIRED_CAPTURE_FILES = frozenset(
     {
         "mic-segments.json",
@@ -82,8 +83,13 @@ def _wav_contains_nonzero_pcm(path: Path) -> bool:
     return False
 
 
-def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> dict:
-    """Reconcile one owner-only capture directory against its final receipt."""
+def _verify_directory(
+    capture_dir: Path,
+    *,
+    transcript_context: bool,
+    required_files: frozenset[str],
+) -> tuple[Path, dict, list[dict]]:
+    """Reconcile private artifact bytes against one final capture receipt."""
     supplied = capture_dir.expanduser()
     if supplied.is_symlink():
         raise VerificationError("capture directory may not be a symlink")
@@ -112,7 +118,7 @@ def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> di
 
     health = session.get("health")
     try:
-        usable = validate_capture_health(health, transcript_context=True)
+        usable = validate_capture_health(health, transcript_context=transcript_context)
     except ValueError as exc:
         raise VerificationError(f"capture health is invalid ({exc})") from None
     if not usable:
@@ -127,7 +133,7 @@ def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> di
         raise VerificationError("every capture artifact must have mode 0600")
 
     actual_names = {path.name for path in actual_paths} | {"session.json"}
-    missing = sorted(REQUIRED_CAPTURE_FILES - actual_names)
+    missing = sorted(required_files - actual_names)
     if missing:
         raise VerificationError(
             "capture is missing required artifact(s): " + ", ".join(missing)
@@ -146,6 +152,35 @@ def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> di
         raise VerificationError(f"capture artifacts do not reconcile ({exc})") from None
     if session.get("reconciliation") != reconciliation:
         raise VerificationError("session reconciliation receipt does not match the files")
+
+    return capture_dir, session, current_artifacts
+
+
+def verify_acquisition(capture_dir: Path) -> dict:
+    """Verify finalized audio before any ASR or transcript artifact exists."""
+    capture_dir, session, artifacts = _verify_directory(
+        capture_dir,
+        transcript_context=False,
+        required_files=REQUIRED_ACQUISITION_FILES,
+    )
+    return {
+        "schema": session["schema"],
+        "status": session["status"],
+        "started_at": session.get("started_at"),
+        "artifact_count": len(artifacts) + 1,
+        "session_sha256": sha256(capture_dir / "session.json"),
+        "mic_sha256": sha256(capture_dir / "mic.wav"),
+        "system_sha256": sha256(capture_dir / "system.wav"),
+    }
+
+
+def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> dict:
+    """Verify the combined research/transfer packet including its transcript."""
+    capture_dir, session, current_artifacts = _verify_directory(
+        capture_dir,
+        transcript_context=True,
+        required_files=REQUIRED_CAPTURE_FILES,
+    )
 
     transcript = _load_json(capture_dir / "transcript.json")
     if transcript.get("schema") != TRANSCRIPT_SCHEMA:
@@ -194,10 +229,48 @@ def _write_wav(path: Path, samples: int, *, nonzero: bool = True) -> None:
 
 def run_self_test() -> int:
     with tempfile.TemporaryDirectory() as temporary:
+        acquisition_dir = Path(temporary) / "acquisition"
+        acquisition_dir.mkdir(mode=0o700)
+        acquisition_dir.chmod(0o700)
+        samples = 3_200
+        _write_wav(acquisition_dir / "mic.wav", samples)
+        _write_wav(acquisition_dir / "system.wav", samples)
+        acquisition_health = build_capture_health(
+            mic_samples=samples,
+            system_samples=samples,
+            capture_elapsed_samples=samples,
+            dropouts={"mic": [], "system": []},
+            tap_errors=[],
+            transcription_requested=False,
+            transcript_written=False,
+        )
+        finalize_session(
+            acquisition_dir,
+            "2000-01-01T00:00:00+0000",
+            acquisition_health,
+        )
+        acquisition = verify_acquisition(acquisition_dir)
+        try:
+            verify_capture(acquisition_dir)
+        except VerificationError:
+            transcriptless_packet_refused = True
+        else:
+            transcriptless_packet_refused = False
+
+        acquisition_tamper_dir = Path(temporary) / "acquisition-tamper"
+        shutil.copytree(acquisition_dir, acquisition_tamper_dir)
+        with (acquisition_tamper_dir / "mic.wav").open("ab") as handle:
+            handle.write(b"\0\0")
+        try:
+            verify_acquisition(acquisition_tamper_dir)
+        except VerificationError:
+            acquisition_tamper_refused = True
+        else:
+            acquisition_tamper_refused = False
+
         capture_dir = Path(temporary) / "capture"
         capture_dir.mkdir(mode=0o700)
         capture_dir.chmod(0o700)
-        samples = 3_200
         _write_wav(capture_dir / "mic.wav", samples)
         _write_wav(capture_dir / "system.wav", samples)
         health = build_capture_health(
@@ -301,14 +374,19 @@ def run_self_test() -> int:
             tamper_refused = False
 
     if (
-        valid["status"] == "complete"
+        acquisition["status"] == "complete"
+        and acquisition["artifact_count"] == 3
+        and transcriptless_packet_refused
+        and acquisition_tamper_refused
+        and valid["status"] == "complete"
         and tamper_refused
         and silent_refused
         and one_sided_refused
     ):
         print(
             "capture verifier self-test: OK "
-            "(valid packet passes; tamper, silent leg, and one-sided transcript refused)"
+            "(acquisition and combined packet pass; transcriptless strict packet, "
+            "tamper, silent leg, and one-sided transcript refused)"
         )
         return 0
     print("capture verifier self-test: FAIL")

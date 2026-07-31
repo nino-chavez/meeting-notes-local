@@ -348,6 +348,19 @@ $APP_DATA/                         0700
       deletion/                   0700
 ```
 
+The application form of `capture-session/2` is the immutable acquisition
+receipt. Its closed payload is `session.json`, `mic.wav`, and `system.wav`;
+`verify_acquisition` re-derives capture health and reconciles the stored byte,
+mode, name, and digest inventory before ASR begins. Transcript revisions are
+written only below `transcript/` and are never copied back into `capture/`.
+
+The existing `verify_capture` entry point remains the stricter validator for
+combined research and machine-transfer packets that intentionally co-locate
+segment evidence and `transcript.json` with the audio. That packet shape is not
+the application's durable storage layout. Keeping the two validators explicit
+avoids making either the capture receipt or a copied transcript a second
+authority for the other.
+
 `attempt.json` is an immutable `capture-attempt/1` receipt written before the
 tap launches. It binds the Rust-generated meeting and attempt identifiers,
 time, application build, participant-notice version, the operator's
