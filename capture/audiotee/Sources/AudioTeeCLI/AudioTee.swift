@@ -1,5 +1,6 @@
 import AudioTeeCore
 import CoreAudio
+import Darwin
 import Foundation
 
 struct AudioTee {
@@ -9,6 +10,9 @@ struct AudioTee {
   var stereo: Bool = false
   var sampleRate: Double?
   var chunkDuration: Double = 0.2
+  var appControlFD: Int32?
+  var appReadyFD: Int32?
+  var parentLivenessFD: Int32?
 
   init() {}
 
@@ -48,6 +52,12 @@ struct AudioTee {
       help: "Target sample rate (8000, 16000, 22050, 24000, 32000, 44100, 48000)")
     parser.addOption(
       name: "chunk-duration", help: "Audio chunk duration in seconds", defaultValue: "0.2")
+    parser.addOption(
+      name: "app-control-fd", help: "Application-owned activation channel")
+    parser.addOption(
+      name: "app-ready-fd", help: "Application-owned readiness channel")
+    parser.addOption(
+      name: "parent-liveness-fd", help: "Application parent-liveness channel")
 
     // Parse arguments
     do {
@@ -62,6 +72,10 @@ struct AudioTee {
       audioTee.stereo = parser.getFlag("stereo")
       audioTee.sampleRate = try parser.getOptionalValue("sample-rate", as: Double.self)
       audioTee.chunkDuration = try parser.getValue("chunk-duration", as: Double.self)
+      audioTee.appControlFD = try parser.getOptionalValue("app-control-fd", as: Int32.self)
+      audioTee.appReadyFD = try parser.getOptionalValue("app-ready-fd", as: Int32.self)
+      audioTee.parentLivenessFD =
+        try parser.getOptionalValue("parent-liveness-fd", as: Int32.self)
 
       // Validate
       try audioTee.validate()
@@ -90,10 +104,34 @@ struct AudioTee {
       throw ArgumentParserError.validationFailed(
         "Cannot specify both --include-processes and --exclude-processes")
     }
+    let appHandshakeFDs = [appControlFD, appReadyFD]
+    if appHandshakeFDs.contains(where: { $0 != nil })
+      && appHandshakeFDs.contains(where: { $0 == nil })
+    {
+      throw ArgumentParserError.validationFailed(
+        "App mode requires both --app-control-fd and --app-ready-fd")
+    }
+    if appControlFD != nil && parentLivenessFD == nil {
+      throw ArgumentParserError.validationFailed(
+        "App mode requires --parent-liveness-fd")
+    }
   }
 
   func run() throws {
     setupSignalHandlers()
+
+    if let controlFD = appControlFD, let readyFD = appReadyFD,
+      let livenessFD = parentLivenessFD
+    {
+      try writeAppState(readyFD, state: "paused")
+      guard try waitForActivation(controlFD: controlFD, livenessFD: livenessFD) else {
+        return
+      }
+      monitorParentLiveness(livenessFD)
+    } else if let livenessFD = parentLivenessFD {
+      guard try parentIsAlive(livenessFD) else { return }
+      monitorParentLiveness(livenessFD)
+    }
 
     AudioTeeLogging.logger.info("Starting AudioTee...")
 
@@ -142,6 +180,9 @@ struct AudioTee {
       deviceID: deviceID, outputHandler: outputHandler, convertToSampleRate: sampleRate,
       chunkDuration: chunkDuration)
     try recorder.startRecording()
+    if let readyFD = appReadyFD {
+      try writeAppState(readyFD, state: "recording")
+    }
 
     // Run until the run loop is stopped (by signal handler)
     while true {
@@ -153,6 +194,60 @@ struct AudioTee {
 
     AudioTeeLogging.logger.info("Shutting down...")
     recorder.stopRecording()
+  }
+
+  private func writeAppState(_ fileDescriptor: Int32, state: String) throws {
+    let message = "{\"schema\":\"tap-ready/1\",\"state\":\"\(state)\"}\n"
+    let data = Data(message.utf8)
+    try FileHandle(fileDescriptor: fileDescriptor, closeOnDealloc: false).write(contentsOf: data)
+  }
+
+  private func waitForActivation(controlFD: Int32, livenessFD: Int32) throws -> Bool {
+    var descriptors = [
+      pollfd(fd: controlFD, events: Int16(POLLIN | POLLHUP), revents: 0),
+      pollfd(fd: livenessFD, events: Int16(POLLIN | POLLHUP), revents: 0),
+    ]
+    while true {
+      let result = poll(&descriptors, nfds_t(descriptors.count), -1)
+      if result < 0 {
+        if errno == EINTR { continue }
+        throw ExitCode.failure
+      }
+      if descriptors[1].revents & Int16(POLLIN | POLLHUP) != 0 {
+        var byte: UInt8 = 0
+        if read(livenessFD, &byte, 1) == 0 { return false }
+      }
+      if descriptors[0].revents & Int16(POLLIN | POLLHUP) != 0 {
+        var byte: UInt8 = 0
+        let count = read(controlFD, &byte, 1)
+        if count == 0 { return false }
+        if byte == Character("S").asciiValue { return true }
+        throw ExitCode.failure
+      }
+    }
+  }
+
+  private func parentIsAlive(_ fileDescriptor: Int32) throws -> Bool {
+    var descriptor = pollfd(
+      fd: fileDescriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
+    while true {
+      let result = poll(&descriptor, 1, 0)
+      if result < 0 {
+        if errno == EINTR { continue }
+        throw ExitCode.failure
+      }
+      if result == 0 { return true }
+      var byte: UInt8 = 0
+      return read(fileDescriptor, &byte, 1) != 0
+    }
+  }
+
+  private func monitorParentLiveness(_ fileDescriptor: Int32) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      var byte: UInt8 = 0
+      while read(fileDescriptor, &byte, 1) > 0 {}
+      CFRunLoopStop(CFRunLoopGetMain())
+    }
   }
 
   private func setupSignalHandlers() {

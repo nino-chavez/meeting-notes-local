@@ -1,0 +1,1 @@
+{"main-window":{"identifier":"main-window","description":"The bundled main window renders local state. It receives no shell, process, filesystem, dialog, or remote-origin permission.","local":true,"windows":["main"],"permissions":["allow-startup-status"],"platforms":["macOS"]}}

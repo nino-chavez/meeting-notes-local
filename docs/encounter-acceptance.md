@@ -3,15 +3,15 @@
 ## Status
 
 The input, approval contract, and interaction-only renderer now exist. An owner-only
-private packet has satisfied the capture and digest-bound content prerequisites. No
-meeting content, response detail, or approval packet is stored in Git. The encounter
-still has **not passed**: the missing gate is a cold operator review of the rendered
-interaction.
+private packet satisfied the capture and digest-bound content prerequisites, and the
+operator accepted the exact rendered interaction in a cold review on 2026-07-31. The
+digest-bound human-review receipt remains beside that private packet. No meeting
+content, response detail, or approval packet is stored in Git.
 
 This gate approves an interaction design. It does not prove that capture,
 automatic extraction, correction, deletion, startup recovery, or packaging works
-in an application. The executable application skeleton remains blocked until the
-encounter passes. Automatic note quality remains a separate pre-beta gate.
+in an application. The encounter no longer blocks the executable application
+skeleton. Automatic note quality remains a separate pre-beta gate.
 
 This repository has fresh sanitized history. That does not make meeting content
 source material: no capture, transcript, review packet, or private meeting
@@ -23,14 +23,13 @@ The durable continuation point is branch `codex/product-foundation`. A new sessi
 should read this Status section, the Cold operator checklist, and
 `vertical-slice.md`'s Status before acting. It does not need the prior chat transcript.
 
-The only input missing from this gate is the operator's cold verdict on the exact
-private page already rendered: `accept`, `revise`, or `decline`. Do not regenerate the
-page merely to start a new session. Do not move its content, paths, manifest, or review
-details into Git or chat.
+The gate passed when the operator returned `accept` for the exact private page already
+rendered and the digest-bound receipt was recorded on 2026-07-31. Do not regenerate
+the page merely to start a new session. Do not move its content, paths, manifest, or
+review details into Git or chat.
 
-- `accept` permits recording the human-review receipt against the existing private page
-  digest and then updating the public gate status. It does not approve automatic note
-  quality or the application runtime.
+- The recorded `accept` approves only this interaction. It does not approve automatic
+  note quality or the application runtime.
 - `revise` records UI findings without quoting private meeting content. Any interface
   change requires a new render, digest, and cold review.
 - `decline` leaves application implementation blocked and preserves the reason as a

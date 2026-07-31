@@ -6,6 +6,8 @@ target/
 .venv/
 __pycache__/
 .build/
+apps/desktop/runtime/
+apps/desktop/vendor/
 .ruff_cache/
 .DS_Store
 

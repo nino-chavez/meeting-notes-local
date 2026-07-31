@@ -1,0 +1,18 @@
+[package]
+name = "local-meeting-notes-session-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust-owned safety, storage, protocol, and process boundary"
+
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sysinfo.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

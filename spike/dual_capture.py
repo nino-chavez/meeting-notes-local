@@ -297,6 +297,7 @@ class TapLeg(Leg):
         self.log_lines = []
         self.stream_failures = []
         self._stop = threading.Event()
+        self._liveness_write_fd = None
 
     def start(self):
         if not TAP_BIN.exists():
@@ -304,18 +305,30 @@ class TapLeg(Leg):
                 f"tap binary missing: {TAP_BIN}\n"
                 f"build it with:  (cd {TAP_BIN.parents[2]} && swift build -c release)"
             )
-        self.proc = subprocess.Popen(
-            [str(TAP_BIN), "--sample-rate", str(RATE)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            # Own session, so a terminal Ctrl-C reaches this process only through
-            # stop(), which sets _stop before signalling. Sharing the terminal's
-            # foreground group let SIGINT hit the tap and the parent at once: the
-            # tap closed stdout, the reader saw EOF with _stop still unset, and
-            # filed a fatal "stream ended before capture stop". Every Ctrl-C run
-            # failed its integrity floor with audio that was entirely intact.
-            start_new_session=True,
-        )
+        liveness_read, liveness_write = os.pipe()
+        try:
+            self.proc = subprocess.Popen(
+                [
+                    str(TAP_BIN),
+                    "--sample-rate",
+                    str(RATE),
+                    "--parent-liveness-fd",
+                    str(liveness_read),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                pass_fds=(liveness_read,),
+                # Own session, so a terminal Ctrl-C reaches this process only
+                # through stop(), which sets _stop before signalling. The
+                # liveness pipe still binds the detached tap to parent death.
+                start_new_session=True,
+            )
+        except BaseException:
+            os.close(liveness_read)
+            os.close(liveness_write)
+            raise
+        os.close(liveness_read)
+        self._liveness_write_fd = liveness_write
         self.reader = threading.Thread(target=self._read_audio, daemon=True)
         self.reader.start()
         self.stderr_reader = threading.Thread(target=self._read_logs, daemon=True)
@@ -368,6 +381,9 @@ class TapLeg(Leg):
 
     def stop(self):
         self._stop.set()
+        if self._liveness_write_fd is not None:
+            os.close(self._liveness_write_fd)
+            self._liveness_write_fd = None
         if self.proc and self.proc.poll() is None:
             self.proc.send_signal(signal.SIGINT)
             try:
@@ -378,6 +394,11 @@ class TapLeg(Leg):
             self.reader.join(timeout=2)
         if self.stderr_reader:
             self.stderr_reader.join(timeout=2)
+        if self.proc:
+            if self.proc.stdout:
+                self.proc.stdout.close()
+            if self.proc.stderr:
+                self.proc.stderr.close()
         super().stop()
 
     def tap_error(self):

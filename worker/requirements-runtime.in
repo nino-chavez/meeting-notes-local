@@ -1,0 +1,3 @@
+# Phase 2 boundary only. Live ASR, capture, and model dependencies remain out
+# until their operations and exact versions are implemented and verified.
+numpy==2.4.6

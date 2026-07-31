@@ -7,8 +7,9 @@ the meeting, and the audio never leaves the Mac — system audio comes through a
 Core Audio process tap, your microphone comes through the same path
 `local-dictation` already uses, and the two arrive as separate streams.
 
-> **Status: product definition, a private real-content encounter awaiting cold
-> review, capture and note experiments, but no app.** What exists is a working two-leg capture —
+> **Status: product definition, an accepted private real-content encounter, an
+> executable safety skeleton, capture and note experiments, but no working capture
+> app.** What exists is a working two-leg research capture —
 > validated end to end over a 75-minute meeting — a voiceprint gate wired into
 > that capture but never yet run on a real meeting, and a local summarizer whose
 > evidence graph completes, rechecks and fails closed. Two bounded corpus runs
@@ -36,10 +37,18 @@ Core Audio process tap, your microphone comes through the same path
 > no longer blocks product interaction work. An eligible private packet now populates
 > an owner-only local click-through without putting meeting content or packet metadata
 > in Git. It labels populated words as human-curated and automatic extraction as
-> untested. The click-through has not passed its cold review. After that interaction
-> approval, the safety
-> skeleton may be built; an unedited automatic note remains a separate pre-beta
-> gate.
+> untested. The operator accepted the exact digest-bound click-through in a cold
+> review on 2026-07-31. The Phase 1 Tauri/Rust safety skeleton now compiles and its
+> deterministic fault suite passes without importing a model or touching hardware.
+> It deliberately reports the packaged runtime as missing. Phase 2 now has a
+> protocol-only source worker, direct-validator fixture equivalence, Rust runtime
+> manifest and process supervision, and a non-capturing paused handshake from the
+> Swift tap. Live capture finalization, transcription, note generation, and the
+> product model set remain open. A pinned arm64 CPython boundary runtime now builds
+> reproducibly and passes the same controls from inside an ad hoc signed Tauri
+> `.app`, but its manifest deliberately blocks product startup. It is packaging
+> evidence, not a build for another person's meetings. An unedited automatic note
+> remains a separate pre-beta gate.
 > [The capture commands are
 > here](#keeping-the-room-out-of-your-half).
 >

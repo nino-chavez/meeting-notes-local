@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Local Meeting Notes</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main aria-labelledby="page-title">
+      <p class="eyebrow">Local Meeting Notes</p>
+      <h1 id="page-title">Nothing is recording.</h1>
+      <p class="lede">
+        The local runtime must pass its safety checks before a meeting can start.
+      </p>
+      <section class="status" aria-live="polite" aria-labelledby="status-title">
+        <div>
+          <p class="label">Runtime status</p>
+          <h2 id="status-title">Checking this installation</h2>
+        </div>
+        <span class="pill">Checking</span>
+      </section>
+      <button type="button" disabled>Start a meeting</button>
+      <p class="footnote">No microphone or system-audio process has started.</p>
+    </main>
+    <script src="main.js" defer></script>
+  </body>
+</html>

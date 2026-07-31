@@ -2,13 +2,25 @@
 
 ## Status
 
-This is an implementation contract, not permission to implement.
+This remains the implementation contract. The accepted interaction receipt now
+authorizes the ordered work below.
 
-Application work remains blocked by
-[`encounter-acceptance.md`](./encounter-acceptance.md). The repository's fresh
-history closes the source-distribution stop; it does not approve the encounter
-or permit private meeting artifacts in Git. No application build may be
-described as beta-ready while the encounter gate remains open.
+The interaction gate in
+[`encounter-acceptance.md`](./encounter-acceptance.md) passed on 2026-07-31 for
+the exact digest-bound private page. The repository's fresh history and that
+receipt do not permit private meeting artifacts in Git. They also do not prove
+the application runtime or automatic-note quality, so no application build may
+be described as beta-ready from this approval.
+
+Phase 1, the executable safety skeleton, now exists. The static Tauri shell and
+Rust core compile. The mechanical suite covers the closed reducer and protocol,
+private storage and diagnostics, exact-identity recovery, process-group shutdown,
+parent-death cleanup, automatic retention, interrupted-deletion integrity, and
+the named-command/CSP boundary. It uses fake worker and tap binaries only; it does
+not import a model or touch capture hardware. The shell therefore reports the
+real packaged runtime as missing. This is safety-foundation evidence, not a
+working meeting path, installed-runtime evidence, note-quality evidence, or beta
+readiness.
 
 The contract exists now so the first implementation does not have to settle
 process ownership, persistence, recovery, and security while it is also trying
@@ -546,6 +558,10 @@ Exit: the shell passes missing-child, timeout, duplicate-operation, forced-exit,
 Rust `SIGKILL`, due-retention, and fresh-launch recovery tests without importing
 a model or touching hardware.
 
+Status: implemented. The deterministic workspace suite passes those cases plus
+malformed startup, private file-mode enforcement, missing deletion receipts, and
+tampered staged-audio quarantine. The real worker boundary remains Phase 2.
+
 ### 2. Real worker boundary
 
 Extract app-safe adapters around strict profile loading, capture finalization,
@@ -556,6 +572,37 @@ durable writer. Keep research CLI options out of the operation registry.
 
 Exit: prerecorded fixtures travel through one protocol and produce the same
 digests and verdicts as the direct validated functions.
+
+Status: in progress. A protocol-only Python worker now resolves opaque IDs under
+the fixed app-data root and calls the strict profile, capture, transcript, and
+note-pair validators directly. Prerecorded controls produce the same profile,
+capture-session, transcript, note, and Markdown digests through that worker as
+they do through the direct functions. Rust verifies a closed runtime manifest,
+starts the worker in its owned process group, preserves the protocol stream after
+readiness, and stops it through the parent-liveness channel. The Swift tap now
+acknowledges a non-capturing paused state and exits on parent death before Core
+Audio is opened.
+
+The Phase 2 exit is not yet met. Live capture start and stop, app-owned capture
+finalization, model-backed transcript and note creation, and a self-contained
+product runtime remain open.
+
+The arm64 packaging mechanism now has a narrower proof. It downloads a pinned,
+digest-checked CPython 3.12 install-only archive, installs the hash-locked NumPy
+wheel used by the current adapters, copies only the required worker and validator
+modules, adds the compiled Swift tap, and writes a closed digest manifest. All eight
+worker-boundary controls pass both from that staged runtime and from the resources
+inside a 154 MB Tauri `.app`. The bundle passes strict ad hoc signature validation.
+Its manifest is deliberately marked `boundary-test`; Rust refuses that admission
+class for product startup, so the app still reports `runtime-missing`. It has no
+ASR, note model, encoder model, Developer ID signature, notarization, or fresh-Mac
+install receipt. This proves reproducible packaging, not a distributable product.
+
+The detached research CLI tap now uses the same parent-liveness primitive. Its
+own session still prevents terminal `Ctrl-C` from racing the ordered stop path,
+while an inherited pipe closes on parent crash or kill and stops the Core Audio
+run loop. App-handshake, liveness-only, and CLI-to-tap FD controls cover both
+launch modes without opening capture hardware.
 
 ### 3. True end-to-end surface
 

@@ -1,0 +1,19 @@
+[package]
+name = "local-meeting-notes-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local Meeting Notes safety-first macOS shell"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+local-meeting-notes-session-core = { path = "../../../crates/session-core" }
+tauri = { version = "2", features = [] }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

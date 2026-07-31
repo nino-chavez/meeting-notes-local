@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "The bundled main window renders local state. It receives no shell, process, filesystem, dialog, or remote-origin permission.",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "permissions": ["allow-startup-status"]
+}
