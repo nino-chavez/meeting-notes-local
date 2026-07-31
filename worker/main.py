@@ -78,7 +78,7 @@ def load_manifest(path: Path) -> dict:
         raise ValueError("runtime manifest has the wrong shape")
     if document["schema"] != "app-runtime/1":
         raise ValueError("runtime manifest schema is not current")
-    if document["admission"] not in {"boundary-test", "product"}:
+    if document["admission"] not in {"boundary-test", "internal-alpha", "product"}:
         raise ValueError("runtime manifest admission is not current")
     for name in ("runtime", "worker", "tap", "encoder"):
         entry = document[name]
@@ -114,6 +114,25 @@ def load_manifest(path: Path) -> dict:
         if not resource.is_file() or file_sha256(resource) != model["sha256"]:
             raise ValueError("runtime manifest model digest mismatch")
     return document
+
+
+def transcript_model_dir(manifest_path: Path, manifest: dict) -> Path | None:
+    if manifest["admission"] == "boundary-test":
+        return None
+    resources = {model["id"]: model for model in manifest["models"]}
+    expected = {
+        "whisper-large-v3-turbo-config",
+        "whisper-large-v3-turbo-weights",
+    }
+    if not expected.issubset(resources):
+        raise ValueError("runtime manifest lacks the fixed transcript model")
+    parents = {
+        (manifest_path.parent / resources[model_id]["path"]).resolve(strict=True).parent
+        for model_id in expected
+    }
+    if len(parents) != 1:
+        raise ValueError("fixed transcript model resources do not share one directory")
+    return parents.pop()
 
 
 def parse_command(frame: bytes) -> tuple[str, str, object]:
@@ -164,6 +183,7 @@ def start_parent_liveness_watchdog(parent_fd: int) -> threading.Thread:
 def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
     root = require_private_root(root)
     manifest = load_manifest(manifest_path)
+    model_dir = transcript_model_dir(manifest_path, manifest)
     emit(
         {
             "schema": "worker-event/1",
@@ -199,6 +219,8 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                 operation,
                 arguments,
                 encoder_digest=manifest["encoder"]["sha256"],
+                admission=manifest["admission"],
+                model_dir=model_dir,
             )
             emit(
                 {

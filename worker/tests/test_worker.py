@@ -164,6 +164,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.root.mkdir(mode=0o700)
         resources = self.base / "resources"
         resources.mkdir(mode=0o700)
+        self.resources = resources
         for name in ("runtime", "worker", "tap", "encoder"):
             private_file(resources / name, name.encode())
         manifest = {
@@ -175,6 +176,7 @@ class WorkerProtocolTests(unittest.TestCase):
             "encoder": {"path": "encoder", "sha256": digest(resources / "encoder")},
             "models": [],
         }
+        self.base_manifest = manifest
         packaged_root = os.environ.get("LMN_PACKAGED_RUNTIME_ROOT")
         if packaged_root:
             self.manifest = Path(packaged_root) / "app-runtime.json"
@@ -224,6 +226,33 @@ class WorkerProtocolTests(unittest.TestCase):
             self.assertEqual(acquisition["status"], "complete")
         finally:
             worker.close()
+
+    def test_internal_alpha_manifest_selects_the_fixed_model_directory(self) -> None:
+        from worker.main import load_manifest, transcript_model_dir
+
+        model_dir = self.resources / "models" / "whisper-large-v3-turbo"
+        model_dir.mkdir(mode=0o700, parents=True)
+        private_file(model_dir / "config.json", b"config")
+        private_file(model_dir / "weights.safetensors", b"weights")
+        document = json.loads(json.dumps(self.base_manifest))
+        document["admission"] = "internal-alpha"
+        document["models"] = [
+            {
+                "id": "whisper-large-v3-turbo-config",
+                "path": "models/whisper-large-v3-turbo/config.json",
+                "sha256": digest(model_dir / "config.json"),
+            },
+            {
+                "id": "whisper-large-v3-turbo-weights",
+                "path": "models/whisper-large-v3-turbo/weights.safetensors",
+                "sha256": digest(model_dir / "weights.safetensors"),
+            },
+        ]
+        alpha_manifest = self.resources / "internal-alpha.json"
+        private_file(alpha_manifest, (json.dumps(document) + "\n").encode())
+
+        loaded = load_manifest(alpha_manifest)
+        self.assertEqual(transcript_model_dir(alpha_manifest, loaded), model_dir.resolve())
 
     def test_capture_stop_finalizes_exact_wav_pair_without_overwrite(self) -> None:
         meeting_id = str(uuid.uuid4())
