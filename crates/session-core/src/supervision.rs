@@ -286,7 +286,14 @@ impl OwnershipReceipt {
 }
 
 pub trait ProcessInspector {
-    fn identity(&self, pid: u32) -> io::Result<Option<ProcessIdentity>>;
+    fn inspect(&self, pid: u32) -> io::Result<ProcessInspection>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessInspection {
+    Absent,
+    Identity(ProcessIdentity),
+    Unavailable,
 }
 
 pub trait GroupSignaler {
@@ -296,21 +303,25 @@ pub trait GroupSignaler {
 pub struct SystemProcessInspector;
 
 impl ProcessInspector for SystemProcessInspector {
-    fn identity(&self, pid: u32) -> io::Result<Option<ProcessIdentity>> {
+    fn inspect(&self, pid: u32) -> io::Result<ProcessInspection> {
         let mut system = System::new();
         let system_pid = Pid::from_u32(pid);
         system.refresh_processes(ProcessesToUpdate::Some(&[system_pid]), true);
         let Some(process) = system.process(system_pid) else {
-            return Ok(None);
+            return Ok(ProcessInspection::Absent);
         };
         let Some(executable) = process.exe() else {
-            return Ok(None);
+            return Ok(ProcessInspection::Unavailable);
         };
-        Ok(Some(ProcessIdentity {
+        let executable_sha256 = match sha256_file(executable) {
+            Ok(sha256) => sha256,
+            Err(_) => return Ok(ProcessInspection::Unavailable),
+        };
+        Ok(ProcessInspection::Identity(ProcessIdentity {
             pid,
             start_time_epoch_seconds: process.start_time(),
             executable_path: executable.to_path_buf(),
-            executable_sha256: sha256_file(executable)?,
+            executable_sha256,
         }))
     }
 }
@@ -351,9 +362,15 @@ pub fn recover_owned_group(
     }
     let mut live = 0;
     for expected in &receipt.children {
-        if let Some(actual) = inspector.identity(expected.pid)? {
-            live += 1;
-            if &actual != expected {
+        match inspector.inspect(expected.pid)? {
+            ProcessInspection::Absent => {}
+            ProcessInspection::Identity(actual) => {
+                live += 1;
+                if &actual != expected {
+                    return Ok(RecoveryDecision::AmbiguousIdentity);
+                }
+            }
+            ProcessInspection::Unavailable => {
                 return Ok(RecoveryDecision::AmbiguousIdentity);
             }
         }
@@ -382,9 +399,15 @@ pub fn recover_owned_group_and_wait(
     loop {
         let mut live = false;
         for expected in &receipt.children {
-            if let Some(actual) = inspector.identity(expected.pid)? {
-                live = true;
-                if &actual != expected {
+            match inspector.inspect(expected.pid)? {
+                ProcessInspection::Absent => {}
+                ProcessInspection::Identity(actual) => {
+                    live = true;
+                    if &actual != expected {
+                        return Ok(RecoveryCompletion::AmbiguousIdentity);
+                    }
+                }
+                ProcessInspection::Unavailable => {
                     return Ok(RecoveryCompletion::AmbiguousIdentity);
                 }
             }
@@ -460,10 +483,14 @@ mod tests {
 
     use super::*;
 
-    struct FakeInspector(HashMap<u32, ProcessIdentity>);
+    struct FakeInspector(HashMap<u32, ProcessInspection>);
     impl ProcessInspector for FakeInspector {
-        fn identity(&self, pid: u32) -> io::Result<Option<ProcessIdentity>> {
-            Ok(self.0.get(&pid).cloned())
+        fn inspect(&self, pid: u32) -> io::Result<ProcessInspection> {
+            Ok(self
+                .0
+                .get(&pid)
+                .cloned()
+                .unwrap_or(ProcessInspection::Absent))
         }
     }
     struct FakeSignaler(Cell<u32>);
@@ -476,8 +503,14 @@ mod tests {
 
     struct SharedInspector(Rc<RefCell<HashMap<u32, ProcessIdentity>>>);
     impl ProcessInspector for SharedInspector {
-        fn identity(&self, pid: u32) -> io::Result<Option<ProcessIdentity>> {
-            Ok(self.0.borrow().get(&pid).cloned())
+        fn inspect(&self, pid: u32) -> io::Result<ProcessInspection> {
+            Ok(self
+                .0
+                .borrow()
+                .get(&pid)
+                .cloned()
+                .map(ProcessInspection::Identity)
+                .unwrap_or(ProcessInspection::Absent))
         }
     }
 
@@ -514,19 +547,49 @@ mod tests {
             children: vec![expected.clone()],
         };
         let signaler = FakeSignaler(Cell::new(0));
-        let exact = FakeInspector(HashMap::from([(44, expected)]));
+        let exact = FakeInspector(HashMap::from([(44, ProcessInspection::Identity(expected))]));
         assert_eq!(
             recover_owned_group(&receipt, &exact, &signaler).unwrap(),
             RecoveryDecision::ExactGroupSignalled
         );
         assert_eq!(signaler.0.get(), 1);
 
-        let reused = FakeInspector(HashMap::from([(44, identity(44, 11))]));
+        let reused = FakeInspector(HashMap::from([(
+            44,
+            ProcessInspection::Identity(identity(44, 11)),
+        )]));
         assert_eq!(
             recover_owned_group(&receipt, &reused, &signaler).unwrap(),
             RecoveryDecision::AmbiguousIdentity
         );
         assert_eq!(signaler.0.get(), 1);
+    }
+
+    #[test]
+    fn absent_process_is_clear_but_unavailable_identity_is_ambiguous() {
+        let expected = identity(66, 30);
+        let receipt = OwnershipReceipt {
+            schema: OwnershipSchema::V1,
+            process_group_id: 66,
+            application_build_sha256: "a".repeat(64),
+            worker_build_sha256: "b".repeat(64),
+            tap_build_sha256: "c".repeat(64),
+            children: vec![expected],
+        };
+        let signaler = FakeSignaler(Cell::new(0));
+
+        assert_eq!(
+            recover_owned_group(&receipt, &FakeInspector(HashMap::new()), &signaler).unwrap(),
+            RecoveryDecision::NoChildrenLive
+        );
+        assert_eq!(signaler.0.get(), 0);
+
+        let unavailable = FakeInspector(HashMap::from([(66, ProcessInspection::Unavailable)]));
+        assert_eq!(
+            recover_owned_group(&receipt, &unavailable, &signaler).unwrap(),
+            RecoveryDecision::AmbiguousIdentity
+        );
+        assert_eq!(signaler.0.get(), 0);
     }
 
     #[test]

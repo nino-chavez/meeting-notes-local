@@ -444,16 +444,18 @@ its immediate raw-data deletion contract must replace it first.
 
 The automatic retention executor is part of the first human-capture slice.
 Rust records the next deletion time in `meeting.json`, scans due work on launch
-and while running, and first writes a durable deletion receipt. It stages each
-bound WAV by same-volume rename and fsyncs both directories while audio reads
-`deleting`; the content lifecycle does not change. It then removes the staged
-bytes, fsyncs the deletion directory, advances the receipt to `removed`, and
-only then commits audio `released` to `meeting.json`. A crash before that last
-commit leaves the conservative deleting state; recovery verifies the receipt
-and absence of the bound digests before advancing it. This also covers the
-one-leg subset preserved from an interrupted capture. Manual deletion, disk
-accounting, policy change, and whole-meeting deletion reuse the mechanism in the
-later trust-action slice.
+and while running, and first writes a durable deletion receipt. Before the first
+rename, it validates the existence, regular-file type, private mode, byte size,
+and digest of every bound WAV. It then stages the complete validated set by
+same-volume rename, fsyncs both directories, and advances the receipt from
+`deleting` to `staged`; the content lifecycle does not change. Only then does it
+remove staged bytes, fsync the deletion directory, advance the receipt to
+`removed`, and commit audio `released` to `meeting.json`. A crash before that
+last commit leaves a conservative in-progress state; recovery validates every
+remaining artifact against the durable phase before advancing it. This also
+covers the one-leg subset preserved from an interrupted capture. Manual
+deletion, disk accounting, policy change, and whole-meeting deletion reuse the
+mechanism in the later trust-action slice.
 
 The completed operation receipt has schema `audio-deletion/1`. It binds the
 original `capture-session/2` digest and the exact relative name, byte size, and
@@ -551,9 +553,12 @@ then newly due retention. One meeting's malformed storage does not abort the
 rest of the scan.
 
 - A terminal, validated capture remains terminal.
-- An `incomplete` meeting first follows its ownership receipt. Recovery waits
-  for the parent-liveness shutdown, reads each surviving process identity from
-  the OS, compares every recorded field, and terminates only exact matches.
+- An `incomplete` meeting first requires the exact ownership receipt bound by
+  `meeting.json`. A missing receipt or digest mismatch quarantines the meeting
+  and blocks Start. Recovery then waits for the parent-liveness shutdown, reads
+  each surviving process identity from the OS, compares every recorded field,
+  and terminates only exact matches. A PID that exists but whose identity cannot
+  be inspected remains ambiguous; it is not treated as an exited process.
 - Once no matching child is live, the meeting is marked
   `recovered-interrupted`. If identity is ambiguous, Start remains blocked and
   no unrelated process is signalled.

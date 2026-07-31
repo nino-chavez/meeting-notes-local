@@ -8,8 +8,8 @@ use thiserror::Error;
 
 use crate::meeting::{
     AudioState, MAX_RECEIPT_BYTES, MeetingError, MeetingLifecycle, MeetingRecord, artifact_ref,
-    load_meeting, read_private_bytes, resolve_artifact, verify_record_static_artifacts,
-    write_meeting,
+    load_meeting, read_private_bytes, resolve_artifact, verify_artifact_ref,
+    verify_record_static_artifacts, write_meeting,
 };
 use crate::retention::{MeetingRetentionResult, RetentionError, reconcile_meeting_retention};
 use crate::storage::StorageRoot;
@@ -172,26 +172,28 @@ fn recover_one(
         }));
     }
 
-    verify_record_static_artifacts(meeting_dir, &meeting)?;
-    if let Some(ownership_ref) = &meeting.artifacts.ownership {
-        let path = resolve_artifact(meeting_dir, &ownership_ref.relative_path)?;
-        let bytes = read_private_bytes(&path, MAX_RECEIPT_BYTES)?;
-        let receipt: OwnershipReceipt = match from_slice(&bytes) {
-            Ok(receipt) => receipt,
-            Err(_) => return Ok(OneMeeting::OwnershipMalformed),
-        };
-        if !receipt.validate() {
-            return Ok(OneMeeting::OwnershipMalformed);
-        }
-        match recover_owned_group_and_wait(&receipt, inspector, signaler, shutdown_grace)? {
-            RecoveryCompletion::NoChildrenLive | RecoveryCompletion::StoppedExactGroup => {}
-            RecoveryCompletion::AmbiguousIdentity | RecoveryCompletion::StillRunning => {
-                return Ok(OneMeeting::OwnershipBlocked);
-            }
-        }
-    } else if capture_material_exists(meeting_dir)? {
+    let Some(ownership_ref) = &meeting.artifacts.ownership else {
+        return Ok(OneMeeting::OwnershipMalformed);
+    };
+    if verify_artifact_ref(meeting_dir, ownership_ref).is_err() {
         return Ok(OneMeeting::OwnershipMalformed);
     }
+    let path = resolve_artifact(meeting_dir, &ownership_ref.relative_path)?;
+    let bytes = read_private_bytes(&path, MAX_RECEIPT_BYTES)?;
+    let receipt: OwnershipReceipt = match from_slice(&bytes) {
+        Ok(receipt) => receipt,
+        Err(_) => return Ok(OneMeeting::OwnershipMalformed),
+    };
+    if !receipt.validate() {
+        return Ok(OneMeeting::OwnershipMalformed);
+    }
+    match recover_owned_group_and_wait(&receipt, inspector, signaler, shutdown_grace)? {
+        RecoveryCompletion::NoChildrenLive | RecoveryCompletion::StoppedExactGroup => {}
+        RecoveryCompletion::AmbiguousIdentity | RecoveryCompletion::StillRunning => {
+            return Ok(OneMeeting::OwnershipBlocked);
+        }
+    }
+    verify_record_static_artifacts(meeting_dir, &meeting)?;
 
     bind_interrupted_artifacts(meeting_dir, &mut meeting)?;
     write_meeting(meeting_dir, &meeting)?;
@@ -199,21 +201,6 @@ fn recover_one(
     Ok(OneMeeting::Disposition(
         RecoveryDisposition::RecoveredInterrupted,
     ))
-}
-
-fn capture_material_exists(meeting_dir: &Path) -> Result<bool, io::Error> {
-    for relative in [
-        "capture/session.json",
-        "capture/mic.wav",
-        "capture/system.wav",
-    ] {
-        match fs::symlink_metadata(meeting_dir.join(relative)) {
-            Ok(_) => return Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(false)
 }
 
 fn bind_interrupted_artifacts(
@@ -269,14 +256,18 @@ mod tests {
     };
     use crate::retention::meeting_dir;
     use crate::storage::{create_private_dir, durable_create_new, durable_replace};
-    use crate::supervision::{OwnershipSchema, ProcessIdentity};
+    use crate::supervision::{OwnershipSchema, ProcessIdentity, ProcessInspection};
     use tempfile::TempDir;
 
-    struct FakeInspector(HashMap<u32, ProcessIdentity>);
+    struct FakeInspector(HashMap<u32, ProcessInspection>);
 
     impl ProcessInspector for FakeInspector {
-        fn identity(&self, pid: u32) -> io::Result<Option<ProcessIdentity>> {
-            Ok(self.0.get(&pid).cloned())
+        fn inspect(&self, pid: u32) -> io::Result<ProcessInspection> {
+            Ok(self
+                .0
+                .get(&pid)
+                .cloned()
+                .unwrap_or(ProcessInspection::Absent))
         }
     }
 
@@ -402,7 +393,10 @@ mod tests {
         let report = scan_and_recover(
             &storage,
             10,
-            &FakeInspector(HashMap::from([(44, identity(44, 11))])),
+            &FakeInspector(HashMap::from([(
+                44,
+                ProcessInspection::Identity(identity(44, 11)),
+            )])),
             &signaler,
             Duration::from_millis(1),
         )
@@ -421,10 +415,111 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_process_identity_is_not_signalled_and_blocks_capture() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(46, 10);
+        let directory = write_incomplete(&storage, "unavailable", Some(ownership(expected)));
+        let signaler = FakeSignaler(Cell::new(0));
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::from([(46, ProcessInspection::Unavailable)])),
+            &signaler,
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(report.blocks_capture);
+        assert_eq!(signaler.0.get(), 0);
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::OwnershipAmbiguous
+        );
+        assert_eq!(
+            load_meeting(&directory).unwrap().lifecycle,
+            MeetingLifecycle::Incomplete
+        );
+    }
+
+    #[test]
+    fn missing_ownership_blocks_capture_without_mutating_record() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(47, 10);
+        let directory = write_incomplete(&storage, "missing-owner", Some(ownership(expected)));
+        fs::remove_file(directory.join("ownership.json")).unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(report.blocks_capture);
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::Quarantined(RecoveryCode::OwnershipMalformed)
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+    }
+
+    #[test]
+    fn absent_ownership_reference_blocks_capture_without_mutating_record() {
+        let (_temp, storage) = make_storage();
+        let directory = write_incomplete(&storage, "absent-owner-ref", None);
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(report.blocks_capture);
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::Quarantined(RecoveryCode::OwnershipMalformed)
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+    }
+
+    #[test]
+    fn changed_ownership_digest_blocks_capture_without_mutating_record() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(48, 10);
+        let directory = write_incomplete(&storage, "changed-owner", Some(ownership(expected)));
+        durable_replace(&directory.join("ownership.json"), b"changed").unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(report.blocks_capture);
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::Quarantined(RecoveryCode::OwnershipMalformed)
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+    }
+
+    #[test]
     fn malformed_meeting_isolated_from_valid_recovery() {
         let (_temp, storage) = make_storage();
         let bad = write_incomplete(&storage, "bad", None);
-        let good = write_incomplete(&storage, "good", None);
+        let expected = identity(45, 10);
+        let good = write_incomplete(&storage, "good", Some(ownership(expected)));
         durable_replace(&bad.join("meeting.json"), b"not-json").unwrap();
         let report = scan_and_recover(
             &storage,

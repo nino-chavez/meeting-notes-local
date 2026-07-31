@@ -36,6 +36,7 @@ enum AudioDeletionSchema {
 #[serde(rename_all = "kebab-case")]
 enum DeletionState {
     Deleting,
+    Staged,
     Removed,
 }
 
@@ -226,35 +227,53 @@ fn finish_staged_removal(
         return Ok(());
     }
 
-    for expected in &receipt.artifacts {
-        let live = resolve_artifact(meeting_dir, &expected.relative_name)?;
-        let staged = staged_path(&deletion_dir, &expected.relative_name)?;
-        let live_present = path_present(&live)?;
-        let staged_present = path_present(&staged)?;
-        if live_present && staged_present {
-            return Err(RetentionError::UnexplainedAudioLoss);
-        }
-        let present = if live_present {
-            Some(&live)
-        } else if staged_present {
-            Some(&staged)
-        } else {
-            None
-        };
-        if let Some(path) = present {
-            let actual = inspect_audio(path, &expected.relative_name)?;
+    if receipt.state == DeletionState::Deleting {
+        let mut validated_locations = Vec::with_capacity(receipt.artifacts.len());
+        for expected in &receipt.artifacts {
+            let live = resolve_artifact(meeting_dir, &expected.relative_name)?;
+            let staged = staged_path(&deletion_dir, &expected.relative_name)?;
+            let live_present = path_present(&live)?;
+            let staged_present = path_present(&staged)?;
+            if live_present == staged_present {
+                return Err(RetentionError::UnexplainedAudioLoss);
+            }
+            let present = if live_present { &live } else { &staged };
+            let actual = inspect_audio(present, &expected.relative_name)?;
             if &actual != expected {
                 return Err(RetentionError::UnexplainedAudioLoss);
             }
+            validated_locations.push((live, staged, live_present));
         }
-        if live_present {
-            fs::rename(&live, &staged)?;
+
+        for (live, staged, live_present) in validated_locations {
+            if live_present {
+                fs::rename(&live, &staged)?;
+            }
         }
+        sync_directory(&capture_dir)?;
+        sync_directory(&deletion_dir)?;
+        receipt.state = DeletionState::Staged;
+        durable_replace(receipt_path, &serde_json::to_vec_pretty(&receipt)?)?;
+    }
+
+    let mut staged_to_remove = Vec::with_capacity(receipt.artifacts.len());
+    for expected in &receipt.artifacts {
+        let live = resolve_artifact(meeting_dir, &expected.relative_name)?;
+        if path_present(&live)? {
+            return Err(RetentionError::UnexplainedAudioLoss);
+        }
+        let staged = staged_path(&deletion_dir, &expected.relative_name)?;
         if path_present(&staged)? {
-            fs::remove_file(&staged)?;
+            let actual = inspect_audio(&staged, &expected.relative_name)?;
+            if &actual != expected {
+                return Err(RetentionError::UnexplainedAudioLoss);
+            }
+            staged_to_remove.push(staged);
         }
     }
-    sync_directory(&capture_dir)?;
+    for staged in staged_to_remove {
+        fs::remove_file(staged)?;
+    }
     sync_directory(&deletion_dir)?;
     receipt.state = DeletionState::Removed;
     durable_replace(receipt_path, &serde_json::to_vec_pretty(&receipt)?)?;
@@ -462,6 +481,33 @@ mod tests {
         (temp, storage)
     }
 
+    fn begin_audio_deletion(directory: &Path, meeting: &mut MeetingRecord) {
+        create_private_dir(&directory.join("deletion")).unwrap();
+        let receipt = AudioDeletionReceipt {
+            schema: AudioDeletionSchema::V1,
+            capture_session_sha256: meeting
+                .artifacts
+                .capture_session
+                .as_ref()
+                .unwrap()
+                .sha256
+                .clone(),
+            state: DeletionState::Deleting,
+            artifacts: vec![
+                inspect_audio(&directory.join("capture/mic.wav"), "capture/mic.wav").unwrap(),
+                inspect_audio(&directory.join("capture/system.wav"), "capture/system.wav").unwrap(),
+            ],
+        };
+        durable_create_new(
+            &directory.join("deletion/audio-deletion.json"),
+            &serde_json::to_vec_pretty(&receipt).unwrap(),
+        )
+        .unwrap();
+        meeting.retention.state = AudioState::Deleting;
+        meeting.pending_storage_operation = Some(PendingStorageOperation::AudioDeletionV1);
+        write_meeting(directory, meeting).unwrap();
+    }
+
     #[test]
     fn due_retention_preserves_content_lifecycle() {
         let (_temp, storage) = storage();
@@ -501,33 +547,13 @@ mod tests {
     fn tampered_staged_audio_is_quarantined_without_further_deletion() {
         let (_temp, storage) = storage();
         let (directory, mut meeting) = fixture(&storage, "meeting-c", Some(10));
-        let receipt_path = directory.join("deletion/audio-deletion.json");
-        create_private_dir(&directory.join("deletion")).unwrap();
-        let receipt = AudioDeletionReceipt {
-            schema: AudioDeletionSchema::V1,
-            capture_session_sha256: meeting
-                .artifacts
-                .capture_session
-                .as_ref()
-                .unwrap()
-                .sha256
-                .clone(),
-            state: DeletionState::Deleting,
-            artifacts: vec![
-                inspect_audio(&directory.join("capture/mic.wav"), "capture/mic.wav").unwrap(),
-                inspect_audio(&directory.join("capture/system.wav"), "capture/system.wav").unwrap(),
-            ],
-        };
-        durable_create_new(&receipt_path, &serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+        begin_audio_deletion(&directory, &mut meeting);
         fs::rename(
             directory.join("capture/mic.wav"),
             directory.join("deletion/mic.wav.staged"),
         )
         .unwrap();
         durable_replace(&directory.join("deletion/mic.wav.staged"), b"tampered").unwrap();
-        meeting.retention.state = AudioState::Deleting;
-        meeting.pending_storage_operation = Some(PendingStorageOperation::AudioDeletionV1);
-        write_meeting(&directory, &meeting).unwrap();
 
         assert_eq!(
             execute_due_retention(&storage, 10).unwrap(),
@@ -535,6 +561,40 @@ mod tests {
         );
         assert!(directory.join("deletion/mic.wav.staged").exists());
         assert!(directory.join("capture/system.wav").exists());
+    }
+
+    #[test]
+    fn tampered_second_audio_is_detected_before_either_artifact_moves() {
+        let (_temp, storage) = storage();
+        let (directory, mut meeting) = fixture(&storage, "meeting-d", Some(10));
+        begin_audio_deletion(&directory, &mut meeting);
+        durable_replace(&directory.join("capture/system.wav"), b"tampered-system").unwrap();
+
+        assert_eq!(
+            execute_due_retention(&storage, 10).unwrap(),
+            vec![RetentionOutcome::Quarantined("meeting-d".into())]
+        );
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/system.wav").exists());
+        assert!(!directory.join("deletion/mic.wav.staged").exists());
+        assert!(!directory.join("deletion/system.wav.staged").exists());
+    }
+
+    #[test]
+    fn missing_second_audio_is_detected_before_the_first_artifact_moves() {
+        let (_temp, storage) = storage();
+        let (directory, mut meeting) = fixture(&storage, "meeting-e", Some(10));
+        begin_audio_deletion(&directory, &mut meeting);
+        fs::remove_file(directory.join("capture/system.wav")).unwrap();
+
+        assert_eq!(
+            execute_due_retention(&storage, 10).unwrap(),
+            vec![RetentionOutcome::Quarantined("meeting-e".into())]
+        );
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(!directory.join("capture/system.wav").exists());
+        assert!(!directory.join("deletion/mic.wav.staged").exists());
+        assert!(!directory.join("deletion/system.wav.staged").exists());
     }
 
     #[test]
