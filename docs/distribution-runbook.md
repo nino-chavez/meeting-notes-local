@@ -106,17 +106,19 @@ The script follows the same two-submission sequence used by Film Room:
    timestamp.
 3. Rebuild the alpha runtime manifest from those exact signed bytes.
 4. Sign and strictly verify the outer app.
-5. Exercise the signed packaged runtime with no entitlements.
+5. Exercise the signed packaged runtime with the closed entitlement allowlist.
 6. Submit the app to Apple, staple it, and pass Gatekeeper.
 7. Build and verify the drag-to-Applications DMG.
 8. Sign, submit, staple, and Gatekeeper-check the DMG.
 9. Recheck the frozen app and DMG without relying on release credentials.
 
-The first control uses no entitlements. Do not copy Film Room's Python
-entitlements into this app. If the signed runtime exercise fails, preserve the
-failure and identify the exact executable and missing capability. Add only the
-smallest Python-only entitlement that a repeated A/B check proves necessary.
-The Tauri executable, Swift audio tap, and libraries remain entitlement-free.
+The preserved empty-entitlement control failed when `llvmlite` changed an
+allocated page to executable memory. Re-signing only the packaged `python3.12`
+with `com.apple.security.cs.allow-unsigned-executable-memory` made the identical
+offline-runtime import pass. That one key is the closed allowlist. The Tauri
+executable, Swift audio tap, libraries, and every other packaged executable
+remain entitlement-free; this app does not carry Film Room's library-validation
+exception.
 
 The output name is derived from the built app version:
 
@@ -136,7 +138,7 @@ scripts/verify-signed-release.sh \
 ```
 
 This checks strict signatures, staples, Gatekeeper, the mounted DMG layout, the
-runtime, every Mach-O signing authority, the empty entitlement allowlist, and
+runtime, every Mach-O signing authority, the closed entitlement allowlist, and
 the release hashes. Omit the final `internal-alpha` argument only for a product
 release.
 

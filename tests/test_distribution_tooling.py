@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import plistlib
 import unittest
 from pathlib import Path
 
@@ -42,7 +43,7 @@ class DistributionToolingTests(unittest.TestCase):
         self.assertLess(notary_check, preflight_verdict)
 
         unsigned_verify = signing.index('verify-release-bundle.py" "$APP"')
-        first_mutating_sign = signing.index("codesign --force --options runtime")
+        first_mutating_sign = signing.index('codesign "${sign_args[@]}" "$path"')
         manifest_refresh = signing.index(
             'build_manifest.py" \\\n    "$APP/Contents/Resources" --admission "$ADMISSION"'
         )
@@ -63,6 +64,15 @@ class DistributionToolingTests(unittest.TestCase):
         self.assertLess(dmg_submit, final_verify)
 
         self.assertIn('[[ "$ADMISSION" == "internal-alpha" ]]', signing)
+        self.assertIn('--entitlements "$PYTHON_ENTITLEMENTS"', signing)
+
+        entitlements = plistlib.loads(
+            (ROOT / "apps/desktop/src-tauri/python-entitlements.plist").read_bytes()
+        )
+        self.assertEqual(
+            entitlements,
+            {"com.apple.security.cs.allow-unsigned-executable-memory": True},
+        )
 
     def test_frozen_verifier_covers_app_dmg_layout_and_runtime(self) -> None:
         verifier = source("scripts/verify-signed-release.sh")
@@ -95,7 +105,7 @@ class DistributionToolingTests(unittest.TestCase):
             'if "executable" in kind.stdout',
             "np.linalg.svd(np.eye(2))",
             "np.fft.fft(np.ones(4))",
-            "not entitlements(path)",
+            "entitlements(path) == expected_entitlements",
         ):
             self.assertIn(required, verifier)
 

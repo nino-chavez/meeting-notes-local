@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="filmroom-notary"
 EXPECTED_TEAM_ID="34VZ63G58M"
 VOLNAME="Local Meeting Notes"
+PYTHON_ENTITLEMENTS="$ROOT/apps/desktop/src-tauri/python-entitlements.plist"
 
 die() { echo "sign-notarize: $*" >&2; exit 1; }
 
@@ -61,6 +62,7 @@ fi
   || die "usage: sign-notarize.sh [preflight|run|run-alpha] [app]"
 APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
 [[ -d "$APP" ]] || die "no app bundle at $APP"
+[[ -f "$PYTHON_ENTITLEMENTS" ]] || die "missing Python entitlements"
 ADMISSION="product"
 if [[ "$cmd" == "run-alpha" ]]; then
   ADMISSION="internal-alpha"
@@ -86,7 +88,11 @@ find "$APP" -type f -print0 \
     done > "$STAGE/machos" || true
 count=0
 while IFS= read -r -d '' path; do
-  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$path"
+  sign_args=(--force --options runtime --timestamp --sign "$IDENTITY")
+  if [[ "$path" == "$APP/Contents/Resources/python-runtime/bin/python3.12" ]]; then
+    sign_args+=(--entitlements "$PYTHON_ENTITLEMENTS")
+  fi
+  codesign "${sign_args[@]}" "$path"
   count=$((count + 1))
 done < "$STAGE/machos"
 [[ "$count" -gt 0 ]] || die "app contains no Mach-O files"

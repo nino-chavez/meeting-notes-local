@@ -20,6 +20,10 @@ REQUIRED_PURPOSES = (
     "NSMicrophoneUsageDescription",
     "NSAudioCaptureUsageDescription",
 )
+PYTHON_EXECUTABLE = Path("Contents/Resources/python-runtime/bin/python3.12")
+PYTHON_ENTITLEMENTS = {
+    "com.apple.security.cs.allow-unsigned-executable-memory": True,
+}
 
 
 class VerificationError(ValueError):
@@ -209,10 +213,12 @@ def verify_signatures(app: Path, inventory: list[tuple[Path, str]]) -> None:
                 "runtime" in signature,
                 f"executable lacks hardened runtime: {path.relative_to(app)}",
             )
-        # Initial allowlist is intentionally empty. Add a key only after a
-        # reproducible Developer ID runtime failure proves its need and scope.
+        relative = path.relative_to(app)
+        expected_entitlements = (
+            PYTHON_ENTITLEMENTS if relative == PYTHON_EXECUTABLE else {}
+        )
         require(
-            not entitlements(path),
+            entitlements(path) == expected_entitlements,
             f"unexpected entitlement: {path.relative_to(app)}",
         )
 
