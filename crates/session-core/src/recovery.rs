@@ -7,9 +7,11 @@ use serde_json::from_slice;
 use thiserror::Error;
 
 use crate::meeting::{
-    AudioState, MAX_RECEIPT_BYTES, MeetingError, MeetingLifecycle, MeetingRecord, artifact_ref,
-    load_meeting, read_private_bytes, resolve_artifact, verify_artifact_ref,
-    verify_record_static_artifacts, write_meeting,
+    AudioState, MAX_RECEIPT_BYTES, MICROPHONE_AUDIO_PATH, MICROPHONE_PARTIAL_AUDIO_PATH,
+    MeetingError, MeetingLifecycle, MeetingRecord, SYSTEM_AUDIO_PATH, SYSTEM_PARTIAL_AUDIO_PATH,
+    artifact_ref, load_meeting, read_private_bytes, require_private_directory, resolve_artifact,
+    verify_artifact_ref, verify_record_static_artifacts, write_capture_interruption_receipt,
+    write_meeting,
 };
 use crate::retention::{
     MeetingRetentionResult, RetentionError, preflight_meeting_retention,
@@ -233,17 +235,9 @@ fn bind_interrupted_artifacts(
     meeting_dir: &Path,
     meeting: &mut MeetingRecord,
 ) -> Result<(), MeetingError> {
-    let session = optional_artifact(meeting_dir, "capture/session.json")?;
-    let microphone = optional_artifact(meeting_dir, "capture/mic.wav")?;
-    let system = optional_artifact(meeting_dir, "capture/system.wav")?;
-    if (microphone.is_some() || system.is_some()) && session.is_none() {
-        return Err(MeetingError::Malformed(
-            "partial audio lacks its initial session receipt",
-        ));
-    }
-    meeting.artifacts.capture_session = session;
-    meeting.artifacts.microphone_audio = microphone;
-    meeting.artifacts.system_audio = system;
+    let inventory = discover_interrupted_capture(meeting_dir)?;
+    meeting.artifacts.microphone_audio = inventory.microphone;
+    meeting.artifacts.system_audio = inventory.system;
     meeting.lifecycle = MeetingLifecycle::RecoveredInterrupted;
     meeting.retention.state = if meeting.artifacts.microphone_audio.is_some()
         || meeting.artifacts.system_audio.is_some()
@@ -254,26 +248,112 @@ fn bind_interrupted_artifacts(
     };
     meeting.retention.deletion_receipt = None;
     meeting.pending_storage_operation = None;
+    meeting.artifacts.capture_session = if meeting.retention.state == AudioState::Retained {
+        if inventory.session_present {
+            Some(artifact_ref(meeting_dir, "capture/session.json")?)
+        } else {
+            Some(write_capture_interruption_receipt(meeting_dir, meeting)?)
+        }
+    } else {
+        None
+    };
+    verify_record_static_artifacts(meeting_dir, meeting)?;
     Ok(())
 }
 
-fn optional_artifact(
+struct InterruptedCaptureInventory {
+    session_present: bool,
+    microphone: Option<crate::meeting::ArtifactRef>,
+    system: Option<crate::meeting::ArtifactRef>,
+}
+
+fn discover_interrupted_capture(
     meeting_dir: &Path,
-    relative_path: &str,
-) -> Result<Option<crate::meeting::ArtifactRef>, MeetingError> {
-    let path = meeting_dir.join(relative_path);
-    match fs::symlink_metadata(&path) {
-        Ok(_) => Ok(Some(artifact_ref(meeting_dir, relative_path)?)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+) -> Result<InterruptedCaptureInventory, MeetingError> {
+    let capture_dir = meeting_dir.join("capture");
+    match fs::symlink_metadata(&capture_dir) {
+        Ok(_) => require_private_directory(&capture_dir)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(InterruptedCaptureInventory {
+                session_present: false,
+                microphone: None,
+                system: None,
+            });
+        }
+        Err(error) => return Err(error.into()),
     }
+
+    let mut names = std::collections::HashSet::new();
+    for entry in fs::read_dir(&capture_dir)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| MeetingError::Malformed("capture artifact name is not UTF-8"))?;
+        let recognized = matches!(
+            name.as_str(),
+            "session.json" | "mic.wav" | "system.wav" | ".mic.wav.partial" | ".system.wav.partial"
+        );
+        if !recognized || !names.insert(name) {
+            return Err(MeetingError::Malformed(
+                "capture directory has an unexpected artifact shape",
+            ));
+        }
+    }
+
+    let canonical_mic = names.contains("mic.wav");
+    let canonical_system = names.contains("system.wav");
+    let partial_mic = names.contains(".mic.wav.partial");
+    let partial_system = names.contains(".system.wav.partial");
+    let canonical = canonical_mic || canonical_system;
+    let partial = partial_mic || partial_system;
+    if canonical && partial {
+        return Err(MeetingError::Malformed(
+            "capture directory mixes final and partial WAV names",
+        ));
+    }
+    if canonical && !(canonical_mic && canonical_system) {
+        return Err(MeetingError::Malformed(
+            "capture directory has an incomplete promoted WAV pair",
+        ));
+    }
+    let session_present = names.contains("session.json");
+    if !canonical && !partial && session_present {
+        return Err(MeetingError::Malformed(
+            "capture receipt exists without interrupted audio",
+        ));
+    }
+
+    let microphone_path = if canonical_mic {
+        Some(MICROPHONE_AUDIO_PATH)
+    } else if partial_mic {
+        Some(MICROPHONE_PARTIAL_AUDIO_PATH)
+    } else {
+        None
+    };
+    let system_path = if canonical_system {
+        Some(SYSTEM_AUDIO_PATH)
+    } else if partial_system {
+        Some(SYSTEM_PARTIAL_AUDIO_PATH)
+    } else {
+        None
+    };
+    Ok(InterruptedCaptureInventory {
+        session_present,
+        microphone: microphone_path
+            .map(|relative| artifact_ref(meeting_dir, relative))
+            .transpose()?,
+        system: system_path
+            .map(|relative| artifact_ref(meeting_dir, relative))
+            .transpose()?,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::collections::HashMap;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::PathBuf;
 
     use super::*;
@@ -382,14 +462,18 @@ mod tests {
         }
     }
 
+    fn private_wav(marker: u8) -> Vec<u8> {
+        vec![marker; 44]
+    }
+
     #[test]
-    fn incomplete_meeting_recovers_and_preserves_partial_audio() {
+    fn clean_promoted_pair_without_session_gets_non_product_interruption_receipt() {
         let (_temp, storage) = make_storage();
         let expected = identity(44, 10);
-        let directory = write_incomplete(&storage, "partial", Some(ownership(expected)));
+        let directory = write_incomplete(&storage, "promoted", Some(ownership(expected)));
         create_private_dir(&directory.join("capture")).unwrap();
-        durable_create_new(&directory.join("capture/session.json"), b"incomplete").unwrap();
-        durable_create_new(&directory.join("capture/mic.wav"), b"partial-mic").unwrap();
+        durable_create_new(&directory.join("capture/mic.wav"), &private_wav(1)).unwrap();
+        durable_create_new(&directory.join("capture/system.wav"), &private_wav(2)).unwrap();
         let report = scan_and_recover(
             &storage,
             10,
@@ -408,7 +492,195 @@ mod tests {
         assert_eq!(meeting.lifecycle, MeetingLifecycle::RecoveredInterrupted);
         assert_eq!(meeting.retention.state, AudioState::Retained);
         assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/system.wav").exists());
+        assert_eq!(
+            meeting.artifacts.microphone_audio.unwrap().relative_path,
+            "capture/mic.wav"
+        );
+        assert_eq!(
+            meeting.artifacts.system_audio.unwrap().relative_path,
+            "capture/system.wav"
+        );
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("capture/session.json")).unwrap())
+                .unwrap();
+        assert_eq!(receipt["schema"], "capture-interruption/1");
+        assert_ne!(receipt["schema"], "capture-session/2");
+        assert_eq!(receipt["meeting_id"], "promoted");
+        assert_eq!(receipt["artifacts"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn interrupted_partial_pair_is_bound_under_its_original_private_names() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(45, 10);
+        let directory = write_incomplete(&storage, "partials", Some(ownership(expected)));
+        create_private_dir(&directory.join("capture")).unwrap();
+        durable_create_new(&directory.join("capture/.mic.wav.partial"), &private_wav(3)).unwrap();
+        durable_create_new(
+            &directory.join("capture/.system.wav.partial"),
+            &private_wav(4),
+        )
+        .unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::RecoveredInterrupted
+        );
+        let meeting = load_meeting(&directory).unwrap();
+        assert_eq!(meeting.retention.state, AudioState::Retained);
+        assert_eq!(
+            meeting.artifacts.microphone_audio.unwrap().relative_path,
+            "capture/.mic.wav.partial"
+        );
+        assert_eq!(
+            meeting.artifacts.system_audio.unwrap().relative_path,
+            "capture/.system.wav.partial"
+        );
+        assert!(directory.join("capture/.mic.wav.partial").exists());
+        assert!(directory.join("capture/.system.wav.partial").exists());
+    }
+
+    #[test]
+    fn one_leg_partial_is_still_bound_to_retention() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(145, 10);
+        let directory = write_incomplete(&storage, "one-leg", Some(ownership(expected)));
+        create_private_dir(&directory.join("capture")).unwrap();
+        durable_create_new(&directory.join("capture/.mic.wav.partial"), &private_wav(5)).unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::RecoveredInterrupted
+        );
+        let meeting = load_meeting(&directory).unwrap();
+        assert_eq!(meeting.retention.state, AudioState::Retained);
+        assert_eq!(
+            meeting.artifacts.microphone_audio.unwrap().relative_path,
+            "capture/.mic.wav.partial"
+        );
         assert!(meeting.artifacts.system_audio.is_none());
+    }
+
+    #[test]
+    fn mismatched_interruption_receipt_is_quarantined_without_rebinding() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(46, 10);
+        let directory = write_incomplete(&storage, "receipt-mismatch", Some(ownership(expected)));
+        create_private_dir(&directory.join("capture")).unwrap();
+        let mic = private_wav(5);
+        durable_create_new(&directory.join("capture/.mic.wav.partial"), &mic).unwrap();
+        let receipt = serde_json::json!({
+            "schema": "capture-interruption/1",
+            "status": "interrupted",
+            "reason": "fresh-process-recovery",
+            "meeting_id": "receipt-mismatch",
+            "artifacts": [{
+                "name": ".mic.wav.partial",
+                "bytes": mic.len(),
+                "sha256": "0".repeat(64),
+                "mode": "0600"
+            }]
+        });
+        durable_create_new(
+            &directory.join("capture/session.json"),
+            &serde_json::to_vec_pretty(&receipt).unwrap(),
+        )
+        .unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::Quarantined(RecoveryCode::ArtifactMismatch)
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(directory.join("capture/.mic.wav.partial").exists());
+    }
+
+    #[test]
+    fn duplicate_final_and_partial_names_are_quarantined_untouched() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(47, 10);
+        let directory = write_incomplete(&storage, "duplicate", Some(ownership(expected)));
+        create_private_dir(&directory.join("capture")).unwrap();
+        durable_create_new(&directory.join("capture/mic.wav"), &private_wav(6)).unwrap();
+        durable_create_new(&directory.join("capture/system.wav"), &private_wav(7)).unwrap();
+        durable_create_new(&directory.join("capture/.mic.wav.partial"), &private_wav(8)).unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::Quarantined(_)
+        ));
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(!directory.join("capture/session.json").exists());
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/.mic.wav.partial").exists());
+    }
+
+    #[test]
+    fn symlinked_partial_audio_is_quarantined_without_creating_a_receipt() {
+        let (_temp, storage) = make_storage();
+        let expected = identity(48, 10);
+        let directory = write_incomplete(&storage, "symlink", Some(ownership(expected)));
+        create_private_dir(&directory.join("capture")).unwrap();
+        let target = storage.path().join("symlink-target.wav");
+        durable_create_new(&target, &private_wav(9)).unwrap();
+        symlink(&target, directory.join("capture/.mic.wav.partial")).unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+
+        let report = scan_and_recover(
+            &storage,
+            10,
+            &FakeInspector(HashMap::new()),
+            &FakeSignaler(Cell::new(0)),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            report.meetings[0].disposition,
+            RecoveryDisposition::Quarantined(_)
+        ));
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(!directory.join("capture/session.json").exists());
+        assert_eq!(fs::read(target).unwrap(), private_wav(9));
     }
 
     #[test]

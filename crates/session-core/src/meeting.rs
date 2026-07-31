@@ -4,13 +4,24 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::storage::durable_replace;
+use crate::storage::{durable_create_new, durable_replace};
 
 pub const MAX_MEETING_RECORD_BYTES: u64 = 256 * 1024;
 pub const MAX_RECEIPT_BYTES: u64 = 256 * 1024;
+pub(crate) const MICROPHONE_AUDIO_PATH: &str = "capture/mic.wav";
+pub(crate) const SYSTEM_AUDIO_PATH: &str = "capture/system.wav";
+pub(crate) const MICROPHONE_PARTIAL_AUDIO_PATH: &str = "capture/.mic.wav.partial";
+pub(crate) const SYSTEM_PARTIAL_AUDIO_PATH: &str = "capture/.system.wav.partial";
+pub(crate) const AUDIO_ARTIFACT_PATHS: [&str; 4] = [
+    MICROPHONE_AUDIO_PATH,
+    SYSTEM_AUDIO_PATH,
+    MICROPHONE_PARTIAL_AUDIO_PATH,
+    SYSTEM_PARTIAL_AUDIO_PATH,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,11 +153,22 @@ impl MeetingRecord {
         if let Some(session) = &self.artifacts.capture_session {
             validate_ref(session, "capture/session.json")?;
         }
+        let recovered_interruption = self.lifecycle == MeetingLifecycle::RecoveredInterrupted;
         if let Some(mic) = &self.artifacts.microphone_audio {
-            validate_ref(mic, "capture/mic.wav")?;
+            validate_audio_ref(
+                mic,
+                MICROPHONE_AUDIO_PATH,
+                MICROPHONE_PARTIAL_AUDIO_PATH,
+                recovered_interruption,
+            )?;
         }
         if let Some(system) = &self.artifacts.system_audio {
-            validate_ref(system, "capture/system.wav")?;
+            validate_audio_ref(
+                system,
+                SYSTEM_AUDIO_PATH,
+                SYSTEM_PARTIAL_AUDIO_PATH,
+                recovered_interruption,
+            )?;
         }
         if let Some(transcript) = &self.artifacts.current_transcript {
             validate_digest_named_ref(transcript, "transcript", "json")?;
@@ -216,11 +238,12 @@ impl MeetingRecord {
                         "interrupted meeting points to derived artifacts",
                     ));
                 }
-                if any_audio && self.artifacts.capture_session.is_none() {
+                if any_audio != self.artifacts.capture_session.is_some() {
                     return Err(MeetingError::Malformed(
-                        "partial audio lacks a capture session receipt",
+                        "interrupted audio and its capture receipt disagree",
                     ));
                 }
+                validate_interrupted_audio_family(&self.artifacts)?;
             }
         }
 
@@ -350,6 +373,9 @@ pub fn verify_record_static_artifacts(
     if let Some(reference) = &meeting.artifacts.capture_session {
         verify_artifact_ref(meeting_dir, reference)?;
     }
+    if meeting.lifecycle == MeetingLifecycle::RecoveredInterrupted {
+        verify_recovered_capture_receipt(meeting_dir, meeting)?;
+    }
     if let Some(reference) = &meeting.artifacts.current_transcript {
         verify_artifact_ref(meeting_dir, reference)?;
     }
@@ -358,6 +384,222 @@ pub fn verify_record_static_artifacts(
         verify_artifact_ref(meeting_dir, &note.markdown)?;
     }
     Ok(())
+}
+
+pub(crate) fn write_capture_interruption_receipt(
+    meeting_dir: &Path,
+    meeting: &MeetingRecord,
+) -> Result<ArtifactRef, MeetingError> {
+    let artifacts = receipt_artifacts(meeting_dir, meeting, true)?;
+    if artifacts.is_empty() || artifacts.iter().any(|artifact| artifact.bytes < 44) {
+        return Err(MeetingError::Malformed(
+            "an interruption receipt requires readable WAV storage",
+        ));
+    }
+    let receipt = CaptureInterruptionReceipt {
+        schema: CaptureInterruptionSchema::V1,
+        status: CaptureInterruptionStatus::Interrupted,
+        reason: CaptureInterruptionReason::FreshProcessRecovery,
+        meeting_id: meeting.meeting_id.clone(),
+        artifacts,
+    };
+    durable_create_new(
+        &meeting_dir.join("capture/session.json"),
+        &serde_json::to_vec_pretty(&receipt)?,
+    )?;
+    artifact_ref(meeting_dir, "capture/session.json")
+}
+
+fn verify_recovered_capture_receipt(
+    meeting_dir: &Path,
+    meeting: &MeetingRecord,
+) -> Result<(), MeetingError> {
+    let references = audio_references(meeting);
+    let Some(session) = &meeting.artifacts.capture_session else {
+        return if references.is_empty() {
+            Ok(())
+        } else {
+            Err(MeetingError::Malformed(
+                "interrupted audio lacks its capture receipt",
+            ))
+        };
+    };
+    if references.is_empty() {
+        return Err(MeetingError::Malformed(
+            "interruption receipt has no retained audio",
+        ));
+    }
+
+    verify_artifact_ref(meeting_dir, session)?;
+    let bytes = read_private_bytes(
+        &resolve_artifact(meeting_dir, &session.relative_path)?,
+        MAX_RECEIPT_BYTES,
+    )?;
+    let value: Value = serde_json::from_slice(&bytes)?;
+    let schema = value
+        .get("schema")
+        .and_then(Value::as_str)
+        .ok_or(MeetingError::Malformed("capture receipt lacks a schema"))?;
+    let inspect_live_files = meeting.retention.state == AudioState::Retained;
+    let expected = receipt_artifacts(meeting_dir, meeting, inspect_live_files)?;
+
+    let actual = match schema {
+        "capture-interruption/1" => {
+            let receipt: CaptureInterruptionReceipt = serde_json::from_value(value)?;
+            if receipt.meeting_id != meeting.meeting_id {
+                return Err(MeetingError::ArtifactMismatch);
+            }
+            receipt.artifacts
+        }
+        "capture-session/2" => {
+            let receipt: CaptureSessionReceipt = serde_json::from_value(value)?;
+            if receipt.status != CaptureSessionStatus::Complete
+                || !receipt.started_at.is_string()
+                || !receipt.finalized_at.is_string()
+                || !receipt.health.is_object()
+                || !receipt.reconciliation.is_object()
+                || references
+                    .iter()
+                    .any(|reference| reference.relative_path.starts_with("capture/."))
+            {
+                return Err(MeetingError::Malformed(
+                    "capture session is not a complete canonical acquisition",
+                ));
+            }
+            receipt.artifacts
+        }
+        _ => {
+            return Err(MeetingError::Malformed(
+                "capture receipt schema is not recognized",
+            ));
+        }
+    };
+
+    if !receipt_artifacts_match(&actual, &expected, inspect_live_files) {
+        return Err(MeetingError::ArtifactMismatch);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureReceiptArtifact {
+    name: String,
+    bytes: u64,
+    sha256: String,
+    mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureInterruptionReceipt {
+    schema: CaptureInterruptionSchema,
+    status: CaptureInterruptionStatus,
+    reason: CaptureInterruptionReason,
+    meeting_id: String,
+    artifacts: Vec<CaptureReceiptArtifact>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum CaptureInterruptionSchema {
+    #[serde(rename = "capture-interruption/1")]
+    V1,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum CaptureInterruptionStatus {
+    #[serde(rename = "interrupted")]
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum CaptureInterruptionReason {
+    #[serde(rename = "fresh-process-recovery")]
+    FreshProcessRecovery,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureSessionReceipt {
+    #[serde(rename = "schema")]
+    _schema: CaptureSessionSchema,
+    status: CaptureSessionStatus,
+    started_at: Value,
+    finalized_at: Value,
+    health: Value,
+    reconciliation: Value,
+    artifacts: Vec<CaptureReceiptArtifact>,
+}
+
+#[derive(Debug, Deserialize)]
+enum CaptureSessionSchema {
+    #[serde(rename = "capture-session/2")]
+    V2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CaptureSessionStatus {
+    Incomplete,
+    Complete,
+    Failed,
+    Abandoned,
+}
+
+fn receipt_artifacts(
+    meeting_dir: &Path,
+    meeting: &MeetingRecord,
+    inspect_live_files: bool,
+) -> Result<Vec<CaptureReceiptArtifact>, MeetingError> {
+    let mut artifacts = Vec::new();
+    for reference in audio_references(meeting) {
+        let name = Path::new(&reference.relative_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(MeetingError::Malformed("audio artifact name is invalid"))?
+            .to_owned();
+        let bytes = if inspect_live_files {
+            verify_artifact_ref(meeting_dir, reference)?;
+            open_private_file(&resolve_artifact(meeting_dir, &reference.relative_path)?)?
+                .metadata()?
+                .len()
+        } else {
+            0
+        };
+        artifacts.push(CaptureReceiptArtifact {
+            name,
+            bytes,
+            sha256: reference.sha256.clone(),
+            mode: "0600".into(),
+        });
+    }
+    artifacts.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(artifacts)
+}
+
+fn audio_references(meeting: &MeetingRecord) -> Vec<&ArtifactRef> {
+    [
+        meeting.artifacts.microphone_audio.as_ref(),
+        meeting.artifacts.system_audio.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn receipt_artifacts_match(
+    actual: &[CaptureReceiptArtifact],
+    expected: &[CaptureReceiptArtifact],
+    compare_bytes: bool,
+) -> bool {
+    actual.len() == expected.len()
+        && actual.iter().zip(expected).all(|(actual, expected)| {
+            actual.name == expected.name
+                && actual.sha256 == expected.sha256
+                && actual.mode == expected.mode
+                && actual.bytes >= 44
+                && (!compare_bytes || actual.bytes == expected.bytes)
+        })
 }
 
 pub fn artifact_ref(meeting_dir: &Path, relative_path: &str) -> Result<ArtifactRef, MeetingError> {
@@ -455,6 +697,59 @@ fn validate_ref(reference: &ArtifactRef, expected_path: &str) -> Result<(), Meet
         ));
     }
     validate_sha256(&reference.sha256)
+}
+
+fn validate_audio_ref(
+    reference: &ArtifactRef,
+    canonical_path: &str,
+    partial_path: &str,
+    allow_partial: bool,
+) -> Result<(), MeetingError> {
+    let accepted = reference.relative_path == canonical_path
+        || (allow_partial && reference.relative_path == partial_path);
+    if !accepted {
+        return Err(MeetingError::Malformed(
+            "audio artifact path does not match its role",
+        ));
+    }
+    validate_sha256(&reference.sha256)
+}
+
+fn validate_interrupted_audio_family(artifacts: &MeetingArtifacts) -> Result<(), MeetingError> {
+    let microphone_path = artifacts
+        .microphone_audio
+        .as_ref()
+        .map(|reference| reference.relative_path.as_str());
+    let system_path = artifacts
+        .system_audio
+        .as_ref()
+        .map(|reference| reference.relative_path.as_str());
+    let canonical_count = [microphone_path, system_path]
+        .into_iter()
+        .flatten()
+        .filter(|path| matches!(*path, MICROPHONE_AUDIO_PATH | SYSTEM_AUDIO_PATH))
+        .count();
+    let partial_count = [microphone_path, system_path]
+        .into_iter()
+        .flatten()
+        .filter(|path| {
+            matches!(
+                *path,
+                MICROPHONE_PARTIAL_AUDIO_PATH | SYSTEM_PARTIAL_AUDIO_PATH
+            )
+        })
+        .count();
+    if canonical_count > 0 && partial_count > 0 {
+        return Err(MeetingError::Malformed(
+            "interrupted audio mixes final and partial names",
+        ));
+    }
+    if canonical_count == 1 {
+        return Err(MeetingError::Malformed(
+            "final audio is not a complete promoted pair",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_digest_named_ref(
@@ -580,6 +875,27 @@ mod tests {
         let mut meeting = captured();
         meeting.artifacts.current_transcript = Some(reference("transcript/current.json", 'f'));
         meeting.lifecycle = MeetingLifecycle::TranscriptReady;
+        assert!(meeting.validate("meeting-a").is_err());
+    }
+
+    #[test]
+    fn partial_audio_names_are_only_valid_for_one_interrupted_family() {
+        let mut meeting = captured();
+        meeting.lifecycle = MeetingLifecycle::RecoveredInterrupted;
+        meeting.artifacts.microphone_audio = Some(reference("capture/.mic.wav.partial", 'd'));
+        meeting.artifacts.system_audio = Some(reference("capture/.system.wav.partial", 'e'));
+        meeting.validate("meeting-a").unwrap();
+
+        meeting.artifacts.system_audio = Some(reference("capture/system.wav", 'e'));
+        assert!(meeting.validate("meeting-a").is_err());
+
+        meeting.artifacts.microphone_audio = Some(reference("capture/mic.wav", 'd'));
+        meeting.artifacts.system_audio = None;
+        assert!(meeting.validate("meeting-a").is_err());
+
+        meeting.lifecycle = MeetingLifecycle::Captured;
+        meeting.artifacts.microphone_audio = Some(reference("capture/.mic.wav.partial", 'd'));
+        meeting.artifacts.system_audio = Some(reference("capture/.system.wav.partial", 'e'));
         assert!(meeting.validate("meeting-a").is_err());
     }
 }

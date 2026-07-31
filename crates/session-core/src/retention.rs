@@ -8,10 +8,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::meeting::{
-    ArtifactRef, AudioState, MAX_RECEIPT_BYTES, MeetingError, MeetingRecord,
-    PendingStorageOperation, artifact_ref, load_meeting, open_private_file, read_private_bytes,
-    require_private_directory, resolve_artifact, verify_artifact_ref, verify_record_artifacts,
-    verify_record_static_artifacts, write_meeting,
+    AUDIO_ARTIFACT_PATHS, ArtifactRef, AudioState, MAX_RECEIPT_BYTES, MeetingError,
+    MeetingLifecycle, MeetingRecord, PendingStorageOperation, artifact_ref, load_meeting,
+    open_private_file, read_private_bytes, require_private_directory, resolve_artifact,
+    verify_artifact_ref, verify_record_artifacts, verify_record_static_artifacts, write_meeting,
 };
 use crate::storage::{
     StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
@@ -125,6 +125,9 @@ pub(crate) fn preflight_meeting_retention(
             return Err(RetentionError::UnexplainedAudioLoss);
         }
         ensure_no_staged_audio_without_receipt(meeting_dir)?;
+        if meeting.lifecycle != MeetingLifecycle::Incomplete {
+            ensure_no_unbound_audio(meeting_dir, meeting)?;
+        }
         verify_record_artifacts(meeting_dir, meeting)?;
         return Ok(());
     }
@@ -367,7 +370,7 @@ fn validate_receipt_storage(
 
 fn ensure_no_staged_audio_without_receipt(meeting_dir: &Path) -> Result<(), RetentionError> {
     let deletion_dir = meeting_dir.join("deletion");
-    for relative in ["capture/mic.wav", "capture/system.wav"] {
+    for relative in AUDIO_ARTIFACT_PATHS {
         if path_present(&staged_path(&deletion_dir, relative)?)? {
             return Err(RetentionError::UnexplainedAudioLoss);
         }
@@ -429,17 +432,12 @@ fn ensure_no_unbound_audio(
     meeting_dir: &Path,
     meeting: &MeetingRecord,
 ) -> Result<(), RetentionError> {
-    for (relative, bound) in [
-        (
-            "capture/mic.wav",
-            meeting.artifacts.microphone_audio.is_some(),
-        ),
-        (
-            "capture/system.wav",
-            meeting.artifacts.system_audio.is_some(),
-        ),
-    ] {
-        if bound {
+    let bound: HashSet<&str> = audio_references(meeting)
+        .into_iter()
+        .map(|reference| reference.relative_path.as_str())
+        .collect();
+    for relative in AUDIO_ARTIFACT_PATHS {
+        if bound.contains(relative) {
             continue;
         }
         let live = meeting_dir.join(relative);
@@ -466,7 +464,7 @@ fn staged_path(deletion_dir: &Path, relative_name: &str) -> Result<PathBuf, Rete
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or(RetentionError::MalformedReceipt)?;
-    if !matches!(relative_name, "capture/mic.wav" | "capture/system.wav") {
+    if !AUDIO_ARTIFACT_PATHS.contains(&relative_name) {
         return Err(RetentionError::MalformedReceipt);
     }
     Ok(deletion_dir.join(format!("{file_name}.staged")))
@@ -554,6 +552,78 @@ mod tests {
                 capture_session: Some(artifact_ref(&directory, "capture/session.json").unwrap()),
                 microphone_audio: Some(artifact_ref(&directory, "capture/mic.wav").unwrap()),
                 system_audio: Some(artifact_ref(&directory, "capture/system.wav").unwrap()),
+                current_transcript: None,
+                current_note: None,
+            },
+            pending_storage_operation: None,
+        };
+        durable_create_new(
+            &directory.join("meeting.json"),
+            &serde_json::to_vec_pretty(&meeting).unwrap(),
+        )
+        .unwrap();
+        (directory, meeting)
+    }
+
+    fn partial_fixture(storage: &StorageRoot, id: &str) -> (PathBuf, MeetingRecord) {
+        let directory = meeting_dir(storage, id).unwrap();
+        create_private_dir(&directory).unwrap();
+        create_private_dir(&directory.join("capture")).unwrap();
+        durable_create_new(&directory.join("attempt.json"), b"attempt").unwrap();
+        durable_create_new(&directory.join("ownership.json"), b"ownership").unwrap();
+        let mic_bytes = vec![1_u8; 44];
+        let system_bytes = vec![2_u8; 44];
+        durable_create_new(&directory.join("capture/.mic.wav.partial"), &mic_bytes).unwrap();
+        durable_create_new(
+            &directory.join("capture/.system.wav.partial"),
+            &system_bytes,
+        )
+        .unwrap();
+        let mic = artifact_ref(&directory, "capture/.mic.wav.partial").unwrap();
+        let system = artifact_ref(&directory, "capture/.system.wav.partial").unwrap();
+        let interruption = serde_json::json!({
+            "schema": "capture-interruption/1",
+            "status": "interrupted",
+            "reason": "fresh-process-recovery",
+            "meeting_id": id,
+            "artifacts": [
+                {
+                    "name": ".mic.wav.partial",
+                    "bytes": mic_bytes.len(),
+                    "sha256": mic.sha256.clone(),
+                    "mode": "0600"
+                },
+                {
+                    "name": ".system.wav.partial",
+                    "bytes": system_bytes.len(),
+                    "sha256": system.sha256.clone(),
+                    "mode": "0600"
+                }
+            ]
+        });
+        durable_create_new(
+            &directory.join("capture/session.json"),
+            &serde_json::to_vec_pretty(&interruption).unwrap(),
+        )
+        .unwrap();
+        let rule = AudioRetentionRule::DeleteAfter { seconds: 10 };
+        let meeting = MeetingRecord {
+            schema: MeetingSchema::V2,
+            meeting_id: id.into(),
+            lifecycle: MeetingLifecycle::RecoveredInterrupted,
+            retention: AudioRetention {
+                policy_sha256: retention_policy_sha256(&rule),
+                rule,
+                next_deletion_at_epoch_seconds: Some(10),
+                state: AudioState::Retained,
+                deletion_receipt: None,
+            },
+            artifacts: MeetingArtifacts {
+                attempt: artifact_ref(&directory, "attempt.json").unwrap(),
+                ownership: Some(artifact_ref(&directory, "ownership.json").unwrap()),
+                capture_session: Some(artifact_ref(&directory, "capture/session.json").unwrap()),
+                microphone_audio: Some(mic),
+                system_audio: Some(system),
                 current_transcript: None,
                 current_note: None,
             },
@@ -736,5 +806,79 @@ mod tests {
             fs::read(directory.join("meeting.json")).unwrap(),
             meeting_before
         );
+    }
+
+    #[test]
+    fn due_retention_atomically_releases_bound_partial_names() {
+        let (_temp, storage) = storage();
+        let (directory, _) = partial_fixture(&storage, "partial-release");
+
+        assert_eq!(
+            execute_due_retention(&storage, 10).unwrap(),
+            vec![RetentionOutcome::AudioReleased("partial-release".into())]
+        );
+        assert!(!directory.join("capture/.mic.wav.partial").exists());
+        assert!(!directory.join("capture/.system.wav.partial").exists());
+        assert!(!directory.join("deletion/.mic.wav.partial.staged").exists());
+        assert!(
+            !directory
+                .join("deletion/.system.wav.partial.staged")
+                .exists()
+        );
+        let meeting = load_meeting(&directory).unwrap();
+        assert_eq!(meeting.lifecycle, MeetingLifecycle::RecoveredInterrupted);
+        assert_eq!(meeting.retention.state, AudioState::Released);
+        let receipt: serde_json::Value = serde_json::from_slice(
+            &fs::read(directory.join("deletion/audio-deletion.json")).unwrap(),
+        )
+        .unwrap();
+        let names: Vec<_> = receipt["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|artifact| artifact["relative_name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["capture/.mic.wav.partial", "capture/.system.wav.partial"]
+        );
+    }
+
+    #[test]
+    fn tampered_partial_pair_is_rejected_before_either_leg_moves() {
+        let (_temp, storage) = storage();
+        let (directory, _) = partial_fixture(&storage, "partial-tamper");
+        durable_replace(&directory.join("capture/.system.wav.partial"), &[9_u8; 44]).unwrap();
+
+        assert_eq!(
+            execute_due_retention(&storage, 10).unwrap(),
+            vec![RetentionOutcome::Quarantined("partial-tamper".into())]
+        );
+        assert!(directory.join("capture/.mic.wav.partial").exists());
+        assert!(directory.join("capture/.system.wav.partial").exists());
+        assert!(!directory.join("deletion/.mic.wav.partial.staged").exists());
+        assert!(
+            !directory
+                .join("deletion/.system.wav.partial.staged")
+                .exists()
+        );
+        assert!(!directory.join("deletion/audio-deletion.json").exists());
+    }
+
+    #[test]
+    fn unbound_duplicate_name_is_rejected_before_retention_mutates_state() {
+        let (_temp, storage) = storage();
+        let (directory, _) = partial_fixture(&storage, "partial-duplicate");
+        durable_create_new(&directory.join("capture/mic.wav"), &[7_u8; 44]).unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+
+        assert_eq!(
+            execute_due_retention(&storage, 10).unwrap(),
+            vec![RetentionOutcome::Quarantined("partial-duplicate".into())]
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(!directory.join("deletion/audio-deletion.json").exists());
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/.mic.wav.partial").exists());
     }
 }
