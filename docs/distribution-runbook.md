@@ -103,12 +103,13 @@ The script follows the same two-submission sequence used by Film Room:
    changing the app.
 2. Sign every nested Mach-O with Developer ID, hardened runtime, and a secure
    timestamp.
-3. Sign and strictly verify the outer app.
-4. Exercise the signed packaged runtime with no entitlements.
-5. Submit the app to Apple, staple it, and pass Gatekeeper.
-6. Build and verify the drag-to-Applications DMG.
-7. Sign, submit, staple, and Gatekeeper-check the DMG.
-8. Recheck the frozen app and DMG without relying on release credentials.
+3. Rebuild the alpha runtime manifest from those exact signed bytes.
+4. Sign and strictly verify the outer app.
+5. Exercise the signed packaged runtime with no entitlements.
+6. Submit the app to Apple, staple it, and pass Gatekeeper.
+7. Build and verify the drag-to-Applications DMG.
+8. Sign, submit, staple, and Gatekeeper-check the DMG.
+9. Recheck the frozen app and DMG without relying on release credentials.
 
 The first control uses no entitlements. Do not copy Film Room's Python
 entitlements into this app. If the signed runtime exercise fails, preserve the
@@ -129,12 +130,14 @@ Anyone with the artifact and Apple command-line tools can run:
 ```bash
 scripts/verify-signed-release.sh \
   "target/release/bundle/macos/Local Meeting Notes.app" \
-  "target/release/bundle/macos/Local-Meeting-Notes-<version>-macos-arm64.dmg"
+  "target/release/bundle/macos/Local-Meeting-Notes-<version>-macos-arm64.dmg" \
+  internal-alpha
 ```
 
 This checks strict signatures, staples, Gatekeeper, the mounted DMG layout, the
 runtime, every Mach-O signing authority, the empty entitlement allowlist, and
-the release hashes.
+the release hashes. Omit the final `internal-alpha` argument only for a product
+release.
 
 ## Prove installation on another Mac
 

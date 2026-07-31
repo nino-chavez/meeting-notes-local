@@ -43,16 +43,26 @@ class DistributionToolingTests(unittest.TestCase):
 
         unsigned_verify = signing.index('verify-release-bundle.py" "$APP"')
         first_mutating_sign = signing.index("codesign --force --options runtime")
+        manifest_refresh = signing.index(
+            'build_manifest.py" \\\n    "$APP/Contents/Resources" --admission "$ADMISSION"'
+        )
+        outer_app_sign = signing.index(
+            'codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"'
+        )
         app_submit = signing.index('notarytool submit "$STAGE/app.zip"')
         app_staple = signing.index('stapler staple "$APP"')
         dmg_build = signing.index('build-dmg.sh" "$APP" "$DMG"')
         dmg_submit = signing.index('notarytool submit "$DMG"')
         final_verify = signing.index('verify-signed-release.sh" "$APP" "$DMG"')
         self.assertLess(unsigned_verify, first_mutating_sign)
+        self.assertLess(first_mutating_sign, manifest_refresh)
+        self.assertLess(manifest_refresh, outer_app_sign)
         self.assertLess(app_submit, app_staple)
         self.assertLess(app_staple, dmg_build)
         self.assertLess(dmg_build, dmg_submit)
         self.assertLess(dmg_submit, final_verify)
+
+        self.assertIn('[[ "$ADMISSION" == "internal-alpha" ]]', signing)
 
     def test_frozen_verifier_covers_app_dmg_layout_and_runtime(self) -> None:
         verifier = source("scripts/verify-signed-release.sh")
@@ -86,6 +96,14 @@ class DistributionToolingTests(unittest.TestCase):
             "not entitlements(path)",
         ):
             self.assertIn(required, verifier)
+
+    def test_frozen_alpha_verification_selects_alpha_admission(self) -> None:
+        runbook = source("docs/distribution-runbook.md")
+        frozen = runbook.split("## Recheck a frozen artifact", 1)[1]
+        self.assertIn(
+            '"target/release/bundle/macos/Local-Meeting-Notes-<version>-macos-arm64.dmg" \\\n  internal-alpha',
+            frozen,
+        )
 
 
 if __name__ == "__main__":

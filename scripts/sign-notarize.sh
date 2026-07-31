@@ -92,6 +92,12 @@ done < "$STAGE/machos"
 [[ "$count" -gt 0 ]] || die "app contains no Mach-O files"
 echo "   $count Mach-O files signed"
 
+if [[ "$ADMISSION" == "internal-alpha" ]]; then
+  echo "== refreshing runtime manifest from signed bytes"
+  "$ROOT/worker/build_manifest.py" \
+    "$APP/Contents/Resources" --admission "$ADMISSION"
+fi
+
 echo "== signing app bundle"
 codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
