@@ -57,11 +57,16 @@ if [[ "$cmd" == "preflight" ]]; then
   exit "$status"
 fi
 
-[[ "$cmd" == "run" ]] || die "usage: sign-notarize.sh [preflight|run] [app]"
+[[ "$cmd" == "run" || "$cmd" == "run-alpha" ]] \
+  || die "usage: sign-notarize.sh [preflight|run|run-alpha] [app]"
 APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
 [[ -d "$APP" ]] || die "no app bundle at $APP"
+ADMISSION="product"
+if [[ "$cmd" == "run-alpha" ]]; then
+  ADMISSION="internal-alpha"
+fi
 
-"$ROOT/scripts/verify-release-bundle.py" "$APP"
+"$ROOT/scripts/verify-release-bundle.py" "$APP" --admission "$ADMISSION"
 IDENTITY="$(identity)"
 [[ -n "$IDENTITY" ]] || die "Developer ID Application identity for Team $EXPECTED_TEAM_ID is unavailable"
 xcrun notarytool history --keychain-profile "$PROFILE" --output-format json \
@@ -90,7 +95,7 @@ echo "   $count Mach-O files signed"
 echo "== signing app bundle"
 codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
-"$ROOT/scripts/verify-release-bundle.py" "$APP" --signed
+"$ROOT/scripts/verify-release-bundle.py" "$APP" --signed --admission "$ADMISSION"
 
 echo "== notarizing app"
 ditto -c -k --keepParent "$APP" "$STAGE/app.zip"
@@ -110,5 +115,5 @@ xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
 xcrun stapler staple "$DMG"
 spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
 
-"$ROOT/scripts/verify-signed-release.sh" "$APP" "$DMG"
+"$ROOT/scripts/verify-signed-release.sh" "$APP" "$DMG" "$ADMISSION"
 echo "DONE: $DMG"

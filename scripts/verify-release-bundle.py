@@ -81,7 +81,7 @@ def verify_metadata(app: Path) -> tuple[Path, dict]:
     return resources, plist
 
 
-def verify_runtime(resources: Path) -> None:
+def verify_runtime(resources: Path, admission: str) -> None:
     manifest_path = resources / "app-runtime.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -89,9 +89,31 @@ def verify_runtime(resources: Path) -> None:
         raise VerificationError(f"runtime manifest is unreadable ({exc})") from None
     require(manifest.get("schema") == "app-runtime/1", "runtime schema is not current")
     require(
-        manifest.get("admission") == "product",
-        "runtime admission is not product; refusing a distribution candidate",
+        manifest.get("admission") == admission,
+        f"runtime admission is not {admission}; refusing this distribution candidate",
     )
+    if admission == "internal-alpha":
+        require(
+            (manifest.get("tap") or {}).get("path") == "bin/meeting-capture",
+            "internal-alpha runtime is not bound to the product capture helper",
+        )
+        expected_models = {
+            "whisper-large-v3-turbo-config": (
+                "models/whisper-large-v3-turbo/config.json"
+            ),
+            "whisper-large-v3-turbo-weights": (
+                "models/whisper-large-v3-turbo/weights.safetensors"
+            ),
+        }
+        actual_models = {
+            model.get("id"): model.get("path")
+            for model in manifest.get("models", [])
+            if isinstance(model, dict)
+        }
+        require(
+            actual_models == expected_models,
+            "internal-alpha model inventory is incomplete or unexpected",
+        )
     python = resources / "python-runtime/bin/python3.12"
     require(python.is_file() and os.access(python, os.X_OK), "bundled Python is missing")
     exercise = """
@@ -107,6 +129,15 @@ np.fft.fft(np.ones(4))
         completed.returncode == 0,
         "bundled Python, worker, manifest, or NumPy runtime exercise failed",
     )
+    if admission == "internal-alpha":
+        alpha_exercise = "import mlx.core, mlx_whisper, worker.transcription"
+        completed = run(
+            str(python), "-E", "-s", "-B", "-c", alpha_exercise, cwd=resources
+        )
+        require(
+            completed.returncode == 0,
+            "internal-alpha offline transcription runtime failed to import",
+        )
 
 
 def macho_inventory(app: Path) -> list[tuple[Path, str]]:
@@ -175,13 +206,13 @@ def verify_signatures(app: Path, inventory: list[tuple[Path, str]]) -> None:
         )
 
 
-def verify(app: Path, *, signed: bool) -> tuple[str, int]:
+def verify(app: Path, *, signed: bool, admission: str) -> tuple[str, int]:
     supplied = app.expanduser()
     require(not supplied.is_symlink(), "app path may not be a symlink")
     app = supplied.resolve()
     require(app.is_dir(), f"app bundle does not exist: {app}")
     resources, plist = verify_metadata(app)
-    verify_runtime(resources)
+    verify_runtime(resources, admission)
     inventory = macho_inventory(app)
     if signed:
         verify_signatures(app, inventory)
@@ -192,16 +223,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("app", type=Path)
     parser.add_argument("--signed", action="store_true")
+    parser.add_argument(
+        "--admission",
+        choices=("product", "internal-alpha"),
+        default="product",
+    )
     args = parser.parse_args()
     try:
-        version, macho_count = verify(args.app, signed=args.signed)
+        version, macho_count = verify(
+            args.app, signed=args.signed, admission=args.admission
+        )
     except VerificationError as exc:
         print(f"release bundle verification: BLOCKED — {exc}", file=sys.stderr)
         return 1
     mode = "signed" if args.signed else "unsigned"
     print(
         f"release bundle verification: PASS ({mode}, version {version}, "
-        f"{macho_count} arm64 Mach-O files)"
+        f"{macho_count} arm64 Mach-O files, {args.admission})"
     )
     return 0
 

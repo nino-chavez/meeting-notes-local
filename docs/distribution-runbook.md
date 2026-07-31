@@ -1,7 +1,7 @@
 # Local Meeting Notes distribution runbook
 
 Status: the Mac release credentials and packaging tools are available. No
-distributable product build exists yet. The current app contains a
+distributable build exists yet. The current staged app contains a
 `boundary-test` runtime, and the release verifier refuses to sign it.
 
 This is a how-to for the release operator. It assumes a clean release commit,
@@ -9,15 +9,25 @@ Apple-silicon macOS, Xcode command-line tools, and access to the existing
 Developer ID and notarization credentials. It does not assume knowledge of the
 project's implementation history.
 
-## Supported first release
+## Two release lanes
 
-The first internal beta is a versioned, signed, notarized DMG for Apple-silicon
-Macs running macOS 14.4 or later. Installation is drag-to-Applications. Updates
-are manual for the first release.
+Both lanes produce a versioned, signed, notarized DMG for Apple-silicon Macs
+running macOS 14.4 or later. Installation is drag-to-Applications. Updates are
+manual for the first release.
 
-The release stays within the accepted operating envelope: manual Start and
-Stop, headphones, one enrolled operator, nobody else in the room, and local
-post-meeting processing. A signed package does not expand that envelope.
+The first lane is an **internal transcript alpha**. It is for capture,
+permission, recovery, retention, and transcript feedback. It carries runtime
+admission `internal-alpha`, shows that label in the application, and never
+presents an automatic note as ready. It requires manual Start and Stop,
+headphones, one operator at the microphone, and nobody else in the room. It is
+not a beta and does not satisfy the automatic-note gate.
+
+The second lane is the **internal beta** described by the accepted vertical
+slice. It carries `product` runtime admission and remains blocked until the
+private automatic-note admission receipt exists for the exact build and model
+digests.
+
+No signed package expands its stated operating envelope.
 
 ## What must be true before signing
 
@@ -38,6 +48,20 @@ The current `worker/build_runtime.sh` intentionally produces
 capture, transcription, note creation, a closed executable inventory, and the
 fixed model set must work before the product-runtime builder may issue product
 admission.
+
+For the transcript-only lane, build the fixed offline runtime and verify the
+explicit alpha admission:
+
+```bash
+worker/build_runtime.sh build-alpha
+scripts/verify-release-bundle.py \
+  --admission internal-alpha \
+  "target/release/bundle/macos/Local Meeting Notes.app"
+```
+
+`internal-alpha` is not an alias for `product`. The default verifier still
+requires `product`, so an alpha can enter the signing path only through the
+explicit alpha command.
 
 ## Check Apple release access
 
@@ -66,9 +90,17 @@ scripts/sign-notarize.sh run \
   "target/release/bundle/macos/Local Meeting Notes.app"
 ```
 
+For the transcript-only lane, use the explicit command:
+
+```bash
+scripts/sign-notarize.sh run-alpha \
+  "target/release/bundle/macos/Local Meeting Notes.app"
+```
+
 The script follows the same two-submission sequence used by Film Room:
 
-1. Refuse a non-product runtime before changing the app.
+1. Refuse a runtime whose admission does not match the selected lane before
+   changing the app.
 2. Sign every nested Mach-O with Developer ID, hardened runtime, and a secure
    timestamp.
 3. Sign and strictly verify the outer app.
@@ -130,6 +162,11 @@ credentials, or private review packets in a Git receipt.
 
 Signing and notarization prove package identity and Apple trust. They do not
 prove that the notes are useful.
+
+Before an internal alpha is shared, the unchanged installed build needs a
+consented, content-free hardware receipt proving two-leg Start and Stop,
+post-meeting transcript creation, quit/reopen recovery, and the configured
+audio deletion. This receipt is mechanical evidence only.
 
 Before an internal beta meeting, the unchanged installed build must also have
 the private automatic-note admission receipt required by

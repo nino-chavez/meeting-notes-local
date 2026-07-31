@@ -25,6 +25,7 @@ pub struct RuntimeManifest {
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeAdmission {
     BoundaryTest,
+    InternalAlpha,
     Product,
 }
 
@@ -117,8 +118,15 @@ impl RuntimeManifest {
         })
     }
 
-    pub fn permits_product_start(&self) -> bool {
-        self.admission == RuntimeAdmission::Product
+    pub fn permits_application_start(&self) -> bool {
+        matches!(
+            self.admission,
+            RuntimeAdmission::InternalAlpha | RuntimeAdmission::Product
+        )
+    }
+
+    pub fn is_internal_alpha(&self) -> bool {
+        self.admission == RuntimeAdmission::InternalAlpha
     }
 }
 
@@ -217,7 +225,8 @@ mod tests {
             crate::protocol::parse_ready(ready_frame.as_bytes(), &std::collections::HashSet::new())
                 .unwrap();
         assert!(loaded.matches_ready(&ready));
-        assert!(loaded.permits_product_start());
+        assert!(loaded.permits_application_start());
+        assert!(!loaded.is_internal_alpha());
         ready.tap.build = "0".repeat(64);
         assert!(!loaded.matches_ready(&ready));
         let mut boundary: serde_json::Value =
@@ -227,8 +236,13 @@ mod tests {
         assert!(
             !RuntimeManifest::load_and_verify(&manifest)
                 .unwrap()
-                .permits_product_start()
+                .permits_application_start()
         );
+        boundary["admission"] = serde_json::json!("internal-alpha");
+        fs::write(&manifest, boundary.to_string()).unwrap();
+        let alpha = RuntimeManifest::load_and_verify(&manifest).unwrap();
+        assert!(alpha.permits_application_start());
+        assert!(alpha.is_internal_alpha());
         fs::write(temp.path().join("tap"), b"changed").unwrap();
         assert!(matches!(
             RuntimeManifest::load_and_verify(&manifest),

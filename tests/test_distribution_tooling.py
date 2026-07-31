@@ -69,10 +69,14 @@ class DistributionToolingTests(unittest.TestCase):
         ):
             self.assertIn(required, verifier)
 
-    def test_bundle_verifier_refuses_boundary_runtime_and_extra_entitlements(self) -> None:
+    def test_bundle_verifier_refuses_unselected_admission_and_extra_entitlements(self) -> None:
         verifier = source("scripts/verify-release-bundle.py")
         for required in (
-            'manifest.get("admission") == "product"',
+            'manifest.get("admission") == admission',
+            'choices=("product", "internal-alpha")',
+            'default="product"',
+            '"whisper-large-v3-turbo-weights"',
+            '"bin/meeting-capture"',
             "NSMicrophoneUsageDescription",
             "NSAudioCaptureUsageDescription",
             'EXPECTED_TEAM_ID = "34VZ63G58M"',

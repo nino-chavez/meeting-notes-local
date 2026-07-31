@@ -1,0 +1,8 @@
+huggingface-hub==1.26.0
+mlx==0.29.3
+more-itertools==11.1.0
+numba==0.66.0
+numpy==2.4.6
+scipy==1.18.0
+tiktoken==0.13.0
+tqdm==4.70.0

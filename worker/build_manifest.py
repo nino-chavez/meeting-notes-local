@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the digest-bound Phase 2 boundary-runtime manifest."""
+"""Write one digest-bound application-runtime manifest."""
 
 from __future__ import annotations
 
@@ -24,22 +24,46 @@ def sha256(path: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
+    parser.add_argument(
+        "--admission",
+        choices=("boundary-test", "internal-alpha"),
+        default="boundary-test",
+    )
     arguments = parser.parse_args()
     root = arguments.root.resolve(strict=True)
     resources = {
         "runtime": Path("python-runtime/bin/python3.12"),
         "worker": Path("worker/main.py"),
-        "tap": Path("bin/audiotee"),
+        "tap": Path(
+            "bin/meeting-capture"
+            if arguments.admission == "internal-alpha"
+            else "bin/audiotee"
+        ),
         "encoder": Path("encoder-unavailable.identity"),
     }
+    models = []
+    if arguments.admission == "internal-alpha":
+        models = [
+            {
+                "id": "whisper-large-v3-turbo-config",
+                "path": "models/whisper-large-v3-turbo/config.json",
+            },
+            {
+                "id": "whisper-large-v3-turbo-weights",
+                "path": "models/whisper-large-v3-turbo/weights.safetensors",
+            },
+        ]
     manifest = {
         "schema": "app-runtime/1",
-        "admission": "boundary-test",
+        "admission": arguments.admission,
         **{
             name: {"path": str(relative), "sha256": sha256(root / relative)}
             for name, relative in resources.items()
         },
-        "models": [],
+        "models": [
+            {**model, "sha256": sha256(root / model["path"])}
+            for model in models
+        ],
     }
     target = root / "app-runtime.json"
     descriptor, temporary_name = tempfile.mkstemp(

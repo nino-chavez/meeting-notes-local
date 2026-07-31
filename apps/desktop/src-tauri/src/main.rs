@@ -69,7 +69,7 @@ fn main() {
             } else {
                 let manifest_path = resource_root.join("app-runtime.json");
                 match RuntimeManifest::load_and_verify(&manifest_path) {
-                    Ok(manifest) if !manifest.permits_product_start() => {
+                    Ok(manifest) if !manifest.permits_application_start() => {
                         *status.0.lock().expect("startup status lock") =
                             StartupState::RuntimeMissing;
                     }
