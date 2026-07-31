@@ -307,6 +307,13 @@ class TapLeg(Leg):
             [str(TAP_BIN), "--sample-rate", str(RATE)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            # Own session, so a terminal Ctrl-C reaches this process only through
+            # stop(), which sets _stop before signalling. Sharing the terminal's
+            # foreground group let SIGINT hit the tap and the parent at once: the
+            # tap closed stdout, the reader saw EOF with _stop still unset, and
+            # filed a fatal "stream ended before capture stop". Every Ctrl-C run
+            # failed its integrity floor with audio that was entirely intact.
+            start_new_session=True,
         )
         self.reader = threading.Thread(target=self._read_audio, daemon=True)
         self.reader.start()
