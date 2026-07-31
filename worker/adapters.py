@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 import sys
+import wave
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .storage import (
@@ -56,33 +59,132 @@ def capture_inspect(root: Path, arguments: object) -> dict[str, str]:
     }
 
 
-def transcript_create(root: Path, arguments: object) -> dict[str, str]:
+def _wav_samples(path: Path) -> int:
+    if path.is_symlink() or not path.is_file():
+        raise AdapterRefused(f"{path.name} is missing or unsafe")
+    if stat.S_IMODE(path.stat().st_mode) != 0o600:
+        raise AdapterRefused(f"{path.name} is not private")
+    try:
+        with wave.open(str(path), "rb") as audio:
+            if (
+                audio.getnchannels() != 1
+                or audio.getsampwidth() != 2
+                or audio.getframerate() != 16_000
+                or audio.getcomptype() != "NONE"
+            ):
+                raise AdapterRefused(
+                    f"{path.name} is not mono 16 kHz 16-bit PCM"
+                )
+            frames = audio.getnframes()
+            encoded = audio.readframes(frames)
+    except (EOFError, OSError, wave.Error) as exc:
+        raise AdapterRefused(f"{path.name} is not a readable WAV ({exc})") from None
+    if len(encoded) != frames * 2:
+        raise AdapterRefused(f"{path.name} is truncated")
+    return frames
+
+
+def capture_stop(root: Path, arguments: object) -> dict[str, str]:
+    values = _exact_arguments(
+        arguments,
+        {"meeting_id", "started_at_epoch_seconds", "capture_elapsed_samples"},
+    )
+    meeting_id = opaque_id(values["meeting_id"], "meeting_id")
+    started_at = values["started_at_epoch_seconds"]
+    elapsed = values["capture_elapsed_samples"]
+    if (
+        isinstance(started_at, bool)
+        or not isinstance(started_at, int)
+        or started_at <= 0
+        or isinstance(elapsed, bool)
+        or not isinstance(elapsed, int)
+        or elapsed <= 0
+        or elapsed > 16_000 * 60 * 60 * 24
+    ):
+        raise AdapterRefused("capture timing is outside the closed schema")
+
+    capture_dir = _meeting_capture(root, meeting_id)
+    names = {path.name for path in capture_dir.iterdir()}
+    if names != {"mic.wav", "system.wav"}:
+        raise AdapterRefused("capture finalization requires exactly two WAV legs")
+    mic_samples = _wav_samples(capture_dir / "mic.wav")
+    system_samples = _wav_samples(capture_dir / "system.wav")
+
+    from capture_health import build as build_capture_health
+    from dual_capture import finalize_session
+    from verify_capture import verify_acquisition
+
+    health = build_capture_health(
+        mic_samples=mic_samples,
+        system_samples=system_samples,
+        capture_elapsed_samples=elapsed,
+        dropouts={"mic": [], "system": []},
+        tap_errors=[],
+        transcription_requested=False,
+        transcript_written=False,
+    )
+    if not health["usable"]:
+        raise AdapterRefused("capture did not pass its integrity floor")
+    timestamp = datetime.fromtimestamp(started_at, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S%z"
+    )
+    finalize_session(
+        capture_dir,
+        timestamp,
+        health,
+        no_overwrite=True,
+    )
+    verify_acquisition(capture_dir)
+    return {
+        "capture-session": sha256(capture_dir / "session.json"),
+        "capture-mic": sha256(capture_dir / "mic.wav"),
+        "capture-system": sha256(capture_dir / "system.wav"),
+    }
+
+
+def transcript_create(
+    root: Path,
+    arguments: object,
+    *,
+    admission: str,
+    model_dir: Path | None,
+) -> dict[str, str]:
     values = _exact_arguments(arguments, {"meeting_id"})
     meeting_id = opaque_id(values["meeting_id"], "meeting_id")
     capture_dir = _meeting_capture(root, meeting_id)
-    source = capture_dir / "transcript.json"
-
-    # Boundary fixtures still carry a precomputed transcript. Product capture
-    # validates acquisition independently; the real ASR adapter will replace
-    # this strict combined-packet bridge when its frozen runtime lands.
-    from verify_capture import verify_capture
-
-    verify_capture(capture_dir)
-
-    from transcript import load
-
-    load(source)
-    transcript_digest = sha256(source)
     target_dir = resolve_below(root, "meetings", meeting_id, "transcript")
     private_directory(target_dir)
-    target = resolve_below(
-        root, "meetings", meeting_id, "transcript", f"{transcript_digest}.json"
+    if admission == "boundary-test":
+        source = capture_dir / "transcript.json"
+        from verify_capture import verify_capture
+
+        verify_capture(capture_dir)
+
+        from transcript import load
+
+        load(source)
+        transcript_digest = sha256(source)
+        target = resolve_below(
+            root, "meetings", meeting_id, "transcript", f"{transcript_digest}.json"
+        )
+        if target.exists():
+            if not target.is_file() or sha256(target) != transcript_digest:
+                raise AdapterRefused(
+                    "existing transcript revision disagrees with its name"
+                )
+        else:
+            durable_create_new(target, source.read_bytes())
+        return {"transcript": transcript_digest}
+
+    if admission not in {"internal-alpha", "product"} or model_dir is None:
+        raise AdapterRefused("runtime admission lacks the fixed transcript model")
+    from .transcription import create_transcript_revision
+
+    transcript_digest, _ = create_transcript_revision(
+        capture_dir,
+        target_dir,
+        model_dir,
     )
-    if target.exists():
-        if not target.is_file() or sha256(target) != transcript_digest:
-            raise AdapterRefused("existing transcript revision disagrees with its name")
-    else:
-        durable_create_new(target, source.read_bytes())
     return {"transcript": transcript_digest}
 
 
@@ -148,15 +250,22 @@ def dispatch(
     arguments: object,
     *,
     encoder_digest: str,
+    admission: str = "boundary-test",
+    model_dir: Path | None = None,
 ) -> dict[str, str]:
     adapters = {
         "profile.inspect": lambda: profile_inspect(root, arguments, encoder_digest),
         "profile.adopt": lambda: profile_adopt(root, arguments, encoder_digest),
         "capture.inspect": lambda: capture_inspect(root, arguments),
-        "transcript.create": lambda: transcript_create(root, arguments),
+        "transcript.create": lambda: transcript_create(
+            root,
+            arguments,
+            admission=admission,
+            model_dir=model_dir,
+        ),
         "note.inspect": lambda: note_inspect(root, arguments),
         "capture.start": lambda: unavailable(root, arguments),
-        "capture.stop": lambda: unavailable(root, arguments),
+        "capture.stop": lambda: capture_stop(root, arguments),
         "note.create": lambda: unavailable(root, arguments),
     }
     try:

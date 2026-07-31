@@ -152,6 +152,7 @@ def create_transcript_revision(
             acoustic,
             gating=None,
             capture_health=health,
+            quiet=True,
         )
         encoded = temporary.read_bytes()
         digest = sha256(temporary)

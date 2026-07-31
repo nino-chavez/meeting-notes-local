@@ -1446,6 +1446,8 @@ def write_session_manifest(
     status: str,
     started_at: str,
     health: dict | None = None,
+    *,
+    no_overwrite: bool = False,
 ) -> dict:
     """Atomically mark whether one unique capture directory is usable.
 
@@ -1502,7 +1504,20 @@ def write_session_manifest(
             handle.write((json.dumps(payload, indent=2) + "\n").encode())
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, target)
+        if no_overwrite:
+            try:
+                os.link(temporary, target, follow_symlinks=False)
+            except FileExistsError:
+                raise ValueError("capture session receipt already exists") from None
+            directory = os.open(out_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+                os.unlink(temporary)
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        else:
+            os.replace(temporary, target)
         target.chmod(0o600)
     finally:
         with contextlib.suppress(FileNotFoundError):
@@ -1516,11 +1531,18 @@ def finalize_session(
     health: dict,
     *,
     abandoned: bool = False,
+    no_overwrite: bool = False,
 ) -> dict:
     """Choose and persist the only final status supported by the evidence."""
     usable = validate_capture_health(health)
     status = "abandoned" if abandoned else ("complete" if usable else "failed")
-    return write_session_manifest(out_dir, status, started_at, health)
+    return write_session_manifest(
+        out_dir,
+        status,
+        started_at,
+        health,
+        no_overwrite=no_overwrite,
+    )
 
 
 # The calibration protocol. An echo-cancellation experiment needs two things no
@@ -1923,7 +1945,15 @@ def voiceprint_provenance(voiceprint, outcome):
     }
 
 
-def write_transcript(path, merged, b, gating=None, capture_health=None):
+def write_transcript(
+    path,
+    merged,
+    b,
+    gating=None,
+    capture_health=None,
+    *,
+    quiet=False,
+):
     """Hand the capture to the notes half with its attribution and health evidence.
 
     The attribution level is derived here rather than downstream, because this
@@ -1987,7 +2017,8 @@ def write_transcript(path, merged, b, gating=None, capture_health=None):
         "unattributed — bleed made the split unusable"
         if unattributed else "Me/Them preserved"
     )
-    print(f"\n  wrote {path} ({verdict})")
+    if not quiet:
+        print(f"\n  wrote {path} ({verdict})")
 
 
 class OutputDirectoryError(ValueError):

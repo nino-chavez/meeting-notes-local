@@ -223,6 +223,50 @@ class WorkerProtocolTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_capture_stop_finalizes_exact_wav_pair_without_overwrite(self) -> None:
+        meeting_id = str(uuid.uuid4())
+        capture = self.root / "meetings" / meeting_id / "capture"
+        capture.mkdir(mode=0o700, parents=True)
+        samples = 3_200
+        for leg in ("mic", "system"):
+            with open_private_binary(capture / f"{leg}.wav") as handle:
+                with wave.open(handle, "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(16_000)
+                    wav.writeframes(b"\x01\0" * samples)
+
+        worker = WorkerProcess(self.root, self.manifest)
+        try:
+            finalized = worker.request(
+                "capture.stop",
+                {
+                    "meeting_id": meeting_id,
+                    "started_at_epoch_seconds": 946684800,
+                    "capture_elapsed_samples": samples,
+                },
+            )
+            self.assertTrue(finalized["ok"])
+            self.assertEqual(
+                set(finalized["artifact_digests"]),
+                {"capture-session", "capture-mic", "capture-system"},
+            )
+            verify_acquisition(capture)
+            original = (capture / "session.json").read_bytes()
+
+            repeated = worker.request(
+                "capture.stop",
+                {
+                    "meeting_id": meeting_id,
+                    "started_at_epoch_seconds": 946684800,
+                    "capture_elapsed_samples": samples,
+                },
+            )
+            self.assertFalse(repeated["ok"])
+            self.assertEqual((capture / "session.json").read_bytes(), original)
+        finally:
+            worker.close()
+
     def test_command_paths_and_research_flags_are_refused(self) -> None:
         worker = WorkerProcess(self.root, self.manifest)
         try:
