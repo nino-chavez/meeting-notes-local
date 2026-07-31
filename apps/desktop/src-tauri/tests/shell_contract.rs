@@ -44,3 +44,27 @@ fn shell_renders_safe_state_before_runtime_preflight() {
     assert!(!script.contains("Command.sidecar"));
     assert!(!script.contains("window.__TAURI__.fs"));
 }
+
+#[test]
+fn macos_bundle_declares_capture_purposes_and_common_resources() {
+    let plist = include_str!("../Info.plist");
+    assert!(plist.contains("NSMicrophoneUsageDescription"));
+    assert!(plist.contains("NSAudioCaptureUsageDescription"));
+    assert!(plist.contains("meetings you start"));
+
+    let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "14.4");
+    assert_eq!(
+        config["bundle"]["resources"]["../runtime/app-runtime.json"],
+        "app-runtime.json"
+    );
+    assert_eq!(
+        config["bundle"]["icon"],
+        serde_json::json!(["icons/icon.png"])
+    );
+
+    let boundary: Value =
+        serde_json::from_str(include_str!("../tauri.boundary.conf.json")).unwrap();
+    assert_eq!(boundary["bundle"]["macOS"]["signingIdentity"], "-");
+    assert!(boundary["bundle"].get("resources").is_none());
+}

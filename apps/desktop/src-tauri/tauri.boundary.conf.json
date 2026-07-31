@@ -2,15 +2,6 @@
   "bundle": {
     "macOS": {
       "signingIdentity": "-"
-    },
-    "resources": {
-      "../runtime/app-runtime.json": "app-runtime.json",
-      "../runtime/bin": "bin",
-      "../runtime/encoder-unavailable.identity": "encoder-unavailable.identity",
-      "../runtime/notes": "notes",
-      "../runtime/python-runtime": "python-runtime",
-      "../runtime/spike": "spike",
-      "../runtime/worker": "worker"
     }
   }
 }

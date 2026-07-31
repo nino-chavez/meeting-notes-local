@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(debug_assertions)]
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
@@ -23,6 +24,7 @@ fn startup_status(status: State<'_, StartupStatus>) -> StartupState {
     *status.0.lock().expect("startup status lock")
 }
 
+#[cfg(debug_assertions)]
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -48,7 +50,12 @@ fn main() {
             *status.0.lock().expect("startup status lock") = StartupState::Checking;
 
             let app_data = app.path().app_data_dir()?;
-            let storage = StorageRoot::create(&app_data, &repository_root())
+            let resource_root = app.path().resource_dir()?;
+            #[cfg(debug_assertions)]
+            let protected_root = repository_root();
+            #[cfg(not(debug_assertions))]
+            let protected_root = resource_root.clone();
+            let storage = StorageRoot::create(&app_data, &protected_root)
                 .map_err(|error| io_error(error.to_string()))?;
             let diagnostics = storage.path().join("diagnostics");
 
@@ -60,7 +67,6 @@ fn main() {
                 );
                 *status.0.lock().expect("startup status lock") = StartupState::DiagnosticWritten;
             } else {
-                let resource_root = app.path().resource_dir()?;
                 let manifest_path = resource_root.join("app-runtime.json");
                 match RuntimeManifest::load_and_verify(&manifest_path) {
                     Ok(manifest) if !manifest.permits_product_start() => {

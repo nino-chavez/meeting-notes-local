@@ -1,6 +1,6 @@
 use std::collections::HashSet;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -148,11 +148,25 @@ fn verify_path_and_digest(
     if resolved.parent().is_none() || (resolved != root && !resolved.starts_with(root)) {
         return Err(RuntimeError::UnsafePath);
     }
-    let actual = format!("{:x}", Sha256::digest(fs::read(resolved)?));
+    let actual = sha256_file(&resolved)?;
     if !actual.eq_ignore_ascii_case(expected_sha256) {
         return Err(RuntimeError::ResourceMismatch);
     }
     Ok(())
+}
+
+fn sha256_file(path: &Path) -> Result<String, io::Error> {
+    let mut file = File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 #[cfg(test)]

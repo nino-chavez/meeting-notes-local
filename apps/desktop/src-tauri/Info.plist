@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Local Meeting Notes records your microphone during meetings you start so it can create local notes on this Mac.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Local Meeting Notes records meeting audio playing on this Mac during meetings you start so it can create local notes on this Mac.</string>
+</dict>
+</plist>
