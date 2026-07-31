@@ -14,6 +14,7 @@ private func require(_ condition: @autoclosure () throws -> Bool, _ message: Str
 private final class FakeSource: MeetingAudioSource, @unchecked Sendable {
   let leg: MeetingCaptureLeg
   let started = DispatchSemaphore(value: 0)
+  var stopTail: Data?
   private let lock = NSLock()
   private var pcm: (@Sendable (Data) -> Void)?
   private var failure: (@Sendable (MeetingCaptureFault) -> Void)?
@@ -35,7 +36,10 @@ private final class FakeSource: MeetingAudioSource, @unchecked Sendable {
   func stop() {
     lock.lock()
     stops += 1
+    let tail = stopTail
+    let callback = pcm
     lock.unlock()
+    if let tail { callback?(tail) }
   }
 
   func emit(_ data: Data) {
@@ -103,6 +107,11 @@ private struct Fixture {
     try require(metadata.st_mode & 0o777 == 0o600, "\(name) mode is not 0600")
   }
 
+  func assertPCM(_ name: String, equals expected: Data) throws {
+    let data = try Data(contentsOf: url.appendingPathComponent(name))
+    try require(Data(data.dropFirst(44)) == expected, "\(name) PCM payload is wrong")
+  }
+
   private func readUInt32(_ data: Data, at offset: Int) -> UInt32 {
     UInt32(data[offset])
       | UInt32(data[offset + 1]) << 8
@@ -140,14 +149,18 @@ private func testOrderedFinalization() throws {
 
   mic.emit(Data([0x11, 0, 0x12, 0, 0x13, 0]))
   system.emit(Data([0x21, 0, 0x22, 0]))
+  system.stopTail = Data([0x23, 0, 0x24, 0])
   let receipt = coordinator.stop()
   try wait(updates.terminal, "stop did not produce a terminal event")
   try require(
-    receipt == MeetingCaptureReceipt(micSamples: 3, systemSamples: 2),
-    "stop did not drain exact frames")
+    receipt == MeetingCaptureReceipt(micSamples: 3, systemSamples: 4),
+    "stop did not preserve the source's synchronous tail frames")
+  system.emit(Data([0x25, 0]))
   try require(try fixture.names() == ["mic.wav", "system.wav"], "stop did not promote pair")
   try fixture.assertWAV("mic.wav", frames: 3)
-  try fixture.assertWAV("system.wav", frames: 2)
+  try fixture.assertWAV("system.wav", frames: 4)
+  try fixture.assertPCM(
+    "system.wav", equals: Data([0x21, 0, 0x22, 0, 0x23, 0, 0x24, 0]))
 }
 
 private func testNoOverwrite() throws {
@@ -172,6 +185,39 @@ private func testNoOverwrite() throws {
   try wait(updates.terminal, "no-overwrite did not fail")
   try require(try Data(contentsOf: existing) == marker, "existing mic.wav changed")
   try require(try fixture.names() == ["mic.wav"], "no-overwrite left new files")
+}
+
+private func testLateSecondLegCollisionRollsBackFirstPromotion() throws {
+  let fixture = try Fixture()
+  defer { fixture.close() }
+  let mic = FakeSource(.mic)
+  let system = FakeSource(.system)
+  let updates = UpdateBox()
+  let coordinator = try MeetingCaptureCoordinator(
+    directoryFD: fixture.directoryFD, mic: mic, system: system,
+    onUpdate: { update in updates.receive(update) })
+  coordinator.activate()
+  try wait(mic.started, "mic did not start")
+  try wait(system.started, "system did not start")
+  mic.emit(Data([1, 0]))
+  system.emit(Data([1, 0]))
+  try wait(updates.recording, "late-collision fixture did not record")
+  mic.emit(Data([0x31, 0]))
+  system.emit(Data([0x41, 0]))
+
+  let marker = Data("existing-system-marker".utf8)
+  let systemFinal = fixture.url.appendingPathComponent("system.wav")
+  try marker.write(to: systemFinal)
+  _ = chmod(systemFinal.path, mode_t(0o600))
+
+  try require(coordinator.stop() == nil, "late collision returned a final receipt")
+  try wait(updates.terminal, "late collision did not produce a terminal event")
+  try require(try Data(contentsOf: systemFinal) == marker, "existing system marker changed")
+  try require(
+    try fixture.names() == [".mic.wav.partial", ".system.wav.partial", "system.wav"],
+    "late collision left a newly-final mic leg")
+  try fixture.assertWAV(".mic.wav.partial", frames: 1)
+  try fixture.assertWAV(".system.wav.partial", frames: 1)
 }
 
 private func testOverflowAndInterrupt() throws {
@@ -263,6 +309,7 @@ private func testCoreBufferOverflowAndTailDrain() throws {
 do {
   try testOrderedFinalization()
   try testNoOverwrite()
+  try testLateSecondLegCollisionRollsBackFirstPromotion()
   try testOverflowAndInterrupt()
   try testCoreBufferOverflowAndTailDrain()
   print("meeting-capture self-test: pass")

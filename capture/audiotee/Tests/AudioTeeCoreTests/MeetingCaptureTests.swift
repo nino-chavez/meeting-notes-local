@@ -7,6 +7,7 @@ import XCTest
 private final class FakeMeetingAudioSource: MeetingAudioSource, @unchecked Sendable {
   let leg: MeetingCaptureLeg
   var onStart: (() -> Void)?
+  var stopTail: Data?
   private let lock = NSLock()
   private var pcm: (@Sendable (Data) -> Void)?
   private var failure: (@Sendable (MeetingCaptureFault) -> Void)?
@@ -28,7 +29,10 @@ private final class FakeMeetingAudioSource: MeetingAudioSource, @unchecked Senda
   func stop() {
     lock.lock()
     stopCount += 1
+    let tail = stopTail
+    let callback = pcm
     lock.unlock()
+    if let tail { callback?(tail) }
   }
 
   func emit(_ data: Data) {
@@ -102,13 +106,17 @@ final class MeetingCaptureTests: XCTestCase {
 
     mic.emit(Data([0x11, 0x00, 0x12, 0x00, 0x13, 0x00]))
     system.emit(Data([0x21, 0x00, 0x22, 0x00]))
+    system.stopTail = Data([0x23, 0x00, 0x24, 0x00])
     let receipt = coordinator.stop()
     wait(for: [finalized], timeout: 2)
 
-    XCTAssertEqual(receipt, MeetingCaptureReceipt(micSamples: 3, systemSamples: 2))
+    XCTAssertEqual(receipt, MeetingCaptureReceipt(micSamples: 3, systemSamples: 4))
+    system.emit(Data([0x25, 0x00]))
     XCTAssertEqual(try contents(), ["mic.wav", "system.wav"])
     try assertWAV("mic.wav", frames: 3)
-    try assertWAV("system.wav", frames: 2)
+    try assertWAV("system.wav", frames: 4)
+    try assertPCM(
+      "system.wav", equals: Data([0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00]))
     try assertMode("mic.wav", 0o600)
     try assertMode("system.wav", 0o600)
     XCTAssertEqual(mic.stopCount, 1)
@@ -138,6 +146,43 @@ final class MeetingCaptureTests: XCTestCase {
 
     XCTAssertEqual(try Data(contentsOf: temporary.appendingPathComponent("mic.wav")), marker)
     XCTAssertEqual(try contents(), ["mic.wav"])
+    XCTAssertEqual(coordinator.state, .terminal)
+  }
+
+  func testLateSystemCollisionRollsMicBackToPartialWithoutTouchingMarker() throws {
+    let mic = FakeMeetingAudioSource(leg: .mic)
+    let system = FakeMeetingAudioSource(leg: .system)
+    let recording = expectation(description: "recording")
+    let failed = expectation(description: "late no-overwrite failure")
+    let coordinator = try MeetingCaptureCoordinator(
+      directoryFD: directoryFD, mic: mic, system: system
+    ) { update in
+      if update == .recording { recording.fulfill() }
+      if case .failed(let fault) = update, fault.code == "capture_no_overwrite",
+        fault.leg == .system
+      {
+        failed.fulfill()
+      }
+    }
+    activateAndWait(coordinator, mic: mic, system: system)
+    mic.emit(Data([1, 0]))
+    system.emit(Data([1, 0]))
+    wait(for: [recording], timeout: 2)
+    mic.emit(Data([0x31, 0]))
+    system.emit(Data([0x41, 0]))
+
+    let marker = Data("existing-system-marker".utf8)
+    let systemFinal = temporary.appendingPathComponent("system.wav")
+    try marker.write(to: systemFinal)
+    XCTAssertEqual(chmod(systemFinal.path, 0o600), 0)
+
+    XCTAssertNil(coordinator.stop())
+    wait(for: [failed], timeout: 2)
+    XCTAssertEqual(try Data(contentsOf: systemFinal), marker)
+    XCTAssertEqual(
+      try contents(), [".mic.wav.partial", ".system.wav.partial", "system.wav"])
+    try assertWAV(".mic.wav.partial", frames: 1)
+    try assertWAV(".system.wav.partial", frames: 1)
     XCTAssertEqual(coordinator.state, .terminal)
   }
 
@@ -229,6 +274,11 @@ final class MeetingCaptureTests: XCTestCase {
     XCTAssertEqual(data[20], 1)
     XCTAssertEqual(data[22], 1)
     XCTAssertEqual(data[34], 16)
+  }
+
+  private func assertPCM(_ name: String, equals expected: Data) throws {
+    let data = try Data(contentsOf: temporary.appendingPathComponent(name))
+    XCTAssertEqual(Data(data.dropFirst(44)), expected)
   }
 
   private func readUInt32(_ data: Data, at offset: Int) -> UInt32 {

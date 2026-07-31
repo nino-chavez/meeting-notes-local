@@ -71,6 +71,8 @@ public final class MeetingCaptureCoordinator: @unchecked Sendable {
 
   private var _state: MeetingCaptureState = .paused
   private var readyLegs: Set<MeetingCaptureLeg> = []
+  private var stopDrainingLegs: Set<MeetingCaptureLeg> = []
+  private var storedFault: MeetingCaptureFault?
   private var pair: PrivateWAVPair?
 
   public init(
@@ -162,41 +164,62 @@ public final class MeetingCaptureCoordinator: @unchecked Sendable {
   private func start(source: MeetingAudioSource) throws {
     try source.start(
       onPCM: { [weak self] data in self?.receive(data, from: source.leg) },
-      onFailure: { [weak self] fault in
-        self?.controlQueue.async { self?.fail(fault) }
-      })
+      onFailure: { [weak self] fault in self?.recordSource(fault, from: source.leg) })
   }
 
   private func receive(_ data: Data, from leg: MeetingCaptureLeg) {
     guard !data.isEmpty else { return }
 
-    let snapshot = lock.withLock { (_state, pair) }
+    let snapshot = lock.withLock { (_state, pair, stopDrainingLegs.contains(leg)) }
     switch snapshot.0 {
     case .arming:
       // Readiness work, including file creation, stays off the real-time audio
       // callback. Blocks arriving before the gate opens are intentionally lost.
       controlQueue.async { [weak self] in self?.markReady(leg) }
     case .recording:
-      guard data.count.isMultiple(of: 2), let pair = snapshot.1 else {
-        controlQueue.async { [weak self] in
-          self?.fail(
-            MeetingCaptureFault(
-              code: "invalid_pcm", leg: leg,
-              detail: "normalized PCM must contain whole signed 16-bit samples"))
-        }
-        return
-      }
-      if !pair.append(data, to: leg) {
-        controlQueue.async { [weak self] in
-          self?.fail(
-            MeetingCaptureFault(
-              code: "writer_queue_overflow", leg: leg,
-              detail: "bounded WAV writer queue refused audio"))
-        }
-      }
+      append(data, to: leg, pair: snapshot.1)
+    case .stopping where snapshot.2:
+      // A source may synchronously emit its already-buffered remainder from
+      // stop(). Accept only while that exact leg's stop path is active; once
+      // stop returns, callbacks from that leg are post-stop and are rejected.
+      append(data, to: leg, pair: snapshot.1)
     case .paused, .stopping, .terminal:
       break
     }
+  }
+
+  private func append(_ data: Data, to leg: MeetingCaptureLeg, pair: PrivateWAVPair?) {
+    guard data.count.isMultiple(of: 2), let pair else {
+      record(
+        MeetingCaptureFault(
+          code: "invalid_pcm", leg: leg,
+          detail: "normalized PCM must contain whole signed 16-bit samples"))
+      return
+    }
+    if !pair.append(data, to: leg) {
+      record(
+        MeetingCaptureFault(
+          code: "writer_queue_overflow", leg: leg,
+          detail: "bounded WAV writer queue refused audio"))
+    }
+  }
+
+  private func record(_ fault: MeetingCaptureFault) {
+    let shouldSchedule = lock.withLock { () -> Bool in
+      guard _state != .terminal else { return false }
+      if storedFault == nil { storedFault = fault }
+      return _state != .stopping
+    }
+    if shouldSchedule {
+      controlQueue.async { [weak self] in self?.fail(fault) }
+    }
+  }
+
+  private func recordSource(_ fault: MeetingCaptureFault, from leg: MeetingCaptureLeg) {
+    let accepted = lock.withLock {
+      _state != .stopping || stopDrainingLegs.contains(leg)
+    }
+    if accepted { record(fault) }
   }
 
   private func markReady(_ leg: MeetingCaptureLeg) {
@@ -208,9 +231,7 @@ public final class MeetingCaptureCoordinator: @unchecked Sendable {
       let newPair = try PrivateWAVPair(
         directoryFD: directoryFD,
         maxPendingBytes: maxPendingBytes,
-        onFailure: { [weak self] fault in
-          self?.controlQueue.async { self?.fail(fault) }
-        })
+        onFailure: { [weak self] fault in self?.record(fault) })
       lock.withLock {
         pair = newPair
         _state = .recording
@@ -236,14 +257,19 @@ public final class MeetingCaptureCoordinator: @unchecked Sendable {
   ) -> MeetingCaptureReceipt? {
     let prior = state
     guard prior != .terminal else { return nil }
-    lock.withLock { _state = .stopping }
+    lock.withLock {
+      _state = .stopping
+      if pair != nil { stopDrainingLegs = Set(MeetingCaptureLeg.allCases) }
+    }
 
     mic.stop()
+    _ = lock.withLock { stopDrainingLegs.remove(.mic) }
     system.stop()
+    _ = lock.withLock { stopDrainingLegs.remove(.system) }
 
     let activePair = lock.withLock { pair }
     var receipt: MeetingCaptureReceipt?
-    var terminalFault = failure
+    var terminalFault = failure ?? lock.withLock { storedFault }
     if let activePair {
       do {
         receipt = try activePair.finish(promote: promote && terminalFault == nil && !interrupted)
@@ -356,14 +382,25 @@ private final class PrivateWAVPair: @unchecked Sendable {
       micSamples: mic.sampleCount, systemSamples: system.sampleCount)
     if promote {
       var promotionError: Error?
+      var micPromoted = false
       do {
         try Self.promote(
           directoryFD: directoryFD, partial: ".mic.wav.partial", final: "mic.wav", leg: .mic)
+        micPromoted = true
         try Self.promote(
           directoryFD: directoryFD, partial: ".system.wav.partial", final: "system.wav",
           leg: .system)
       } catch {
         promotionError = error
+        if micPromoted {
+          do {
+            try Self.rollbackPromotion(
+              directoryFD: directoryFD, final: "mic.wav", partial: ".mic.wav.partial",
+              leg: .mic)
+          } catch {
+            promotionError = error
+          }
+        }
       }
       guard fsync(directoryFD) == 0 else {
         throw MeetingCaptureFault(
@@ -394,6 +431,16 @@ private final class PrivateWAVPair: @unchecked Sendable {
       throw MeetingCaptureFault(
         code: errno == EEXIST ? "capture_no_overwrite" : "wav_promote_failed", leg: leg,
         detail: "cannot promote \(partial) to \(final)")
+    }
+  }
+
+  private static func rollbackPromotion(
+    directoryFD: Int32, final: String, partial: String, leg: MeetingCaptureLeg
+  ) throws {
+    guard renameatx_np(directoryFD, final, directoryFD, partial, UInt32(RENAME_EXCL)) == 0 else {
+      throw MeetingCaptureFault(
+        code: "wav_promotion_rollback_failed", leg: leg,
+        detail: "cannot restore the first leg after pair promotion failed")
     }
   }
 }
