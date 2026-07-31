@@ -1529,7 +1529,17 @@ PROTOCOL_TAIL_S = 2.0    # recorded past the last cue, so the last interval fits
 FAR_END_CHECK_S = 5.0    # into the calibration phase, before a word has been read
 FAR_END_MIN_RMS = 1e-4   # the tap is digital, so real silence is exactly zero
 CALIBRATION_S = 35.0
-SPEAK_S, CONTROL_S = 10.0, 6.0
+# CONTROL_S was 6.0, which yielded zero scorable control segments on the first
+# real protocol take: 0 of 5 intervals contained a segment, while the take's
+# longest microphone segments ran 10.0, 10.0, 9.6 and 8.2 s. The old reasoning —
+# a 6 s interval leaves 4 s, which admits two segments at speaker_gate's 2 s
+# floor — assumed segmentation that lands inside the cue. It does not. The far
+# end plays continuously, so the microphone is voiced throughout and the
+# segmenter emits long spans that straddle cue edges; one segment ran 73.5-83.5 s,
+# covering the end of a speak interval and the whole of the control after it.
+# A control interval has to be longer than the longest segment it must contain,
+# not longer than the shortest it could.
+SPEAK_S, CONTROL_S = 10.0, 16.0
 DEFAULT_PAIRS = 5
 
 
@@ -2417,6 +2427,11 @@ def main():
     )
     ap.add_argument("--protocol-pairs", type=int, default=DEFAULT_PAIRS,
                     help="speak/silent interval pairs after the calibration phase")
+    ap.add_argument("--protocol-control-s", type=float, default=CONTROL_S,
+                    help="length of each silent control interval. Must exceed the "
+                         "longest microphone segment the segmenter produces, plus "
+                         "a margin at each edge, or the interval contains no whole "
+                         "segment and scores nothing")
     ap.add_argument(
         "--voiceprint", type=Path, default=None,
         help="a profile from speaker_gate.py --enroll-out. Removes microphone "
@@ -2451,7 +2466,8 @@ def main():
               "including the room, labelled as the operator.\n")
 
     try:
-        phases = build_schedule(pairs=args.protocol_pairs) if args.protocol else None
+        phases = build_schedule(pairs=args.protocol_pairs,
+                                control_s=args.protocol_control_s) if args.protocol else None
     except ValueError as exc:
         ap.error(str(exc))
     if phases:
