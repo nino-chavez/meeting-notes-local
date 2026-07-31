@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ import unittest
 import uuid
 import wave
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -392,6 +394,52 @@ class WorkerProtocolTests(unittest.TestCase):
         os.close(worker.write_fd)
         worker.closed = True
         worker.close()
+
+    def test_parent_liveness_watchdog_interrupts_blocked_work(self) -> None:
+        read_fd, write_fd = os.pipe()
+        script = """
+import sys
+import time
+from worker.main import start_parent_liveness_watchdog
+start_parent_liveness_watchdog(int(sys.argv[1]))
+while True:
+    time.sleep(60)
+"""
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(read_fd)],
+            cwd=REPO,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            pass_fds=(read_fd,),
+        )
+        os.close(read_fd)
+        os.close(write_fd)
+        process.wait(timeout=3)
+        error = process.stderr.read().decode()
+        process.stderr.close()
+        self.assertEqual(process.returncode, 0, error)
+
+    def test_progress_helper_emits_the_closed_shape(self) -> None:
+        from worker.main import emit_progress
+
+        request_id = str(uuid.uuid4())
+        meeting_id = str(uuid.uuid4())
+        output = io.StringIO()
+        with mock.patch("worker.main.sys.stdout", output):
+            emit_progress(request_id, meeting_id, "recording")
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {
+                "schema": "worker-event/1",
+                "request_id": request_id,
+                "event": "capture.state",
+                "state": "recording",
+                "meeting_id": meeting_id,
+            },
+        )
+        with self.assertRaises(ValueError):
+            emit_progress(request_id, meeting_id, "arming")
 
 
 if __name__ == "__main__":

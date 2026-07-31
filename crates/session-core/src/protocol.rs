@@ -6,7 +6,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
-pub const MAX_PENDING_REQUESTS: usize = 16;
+pub const MAX_PENDING_REQUESTS: usize = 1;
+pub const MAX_QUEUED_OUTPUTS: usize = 32;
+pub const MAX_PROGRESS_EVENTS_PER_SECOND: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Operation {
@@ -41,13 +43,13 @@ pub struct WorkerReady {
     pub operations: HashSet<Operation>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 pub enum WorkerEventSchema {
     #[serde(rename = "worker-event/1")]
     V1,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 pub enum ReadyEvent {
     #[serde(rename = "worker.ready")]
     WorkerReady,
@@ -112,13 +114,13 @@ pub struct WorkerResult {
     pub artifact_digests: HashMap<String, String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 pub enum ResultSchema {
     #[serde(rename = "worker-result/1")]
     V1,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResultCode {
     TapReadyTimeout,
@@ -130,7 +132,7 @@ pub enum ResultCode {
     ProtocolFailure,
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum ProtocolError {
     #[error("protocol frame exceeds its byte limit")]
     FrameTooLarge,
@@ -142,10 +144,51 @@ pub enum ProtocolError {
     OperationMismatch,
     #[error("request limit reached")]
     RequestLimit,
+    #[error("request identifier is already pending")]
+    DuplicateRequest,
     #[error("result refers to an unknown request")]
     UnknownRequest,
     #[error("request already produced a terminal result")]
     DuplicateTerminal,
+    #[error("progress event is invalid for the pending request")]
+    InvalidEvent,
+    #[error("progress event was emitted more than once")]
+    DuplicateProgress,
+    #[error("terminal result has an incoherent shape or event sequence")]
+    InvalidResult,
+    #[error("worker output queue exceeded its bound")]
+    OutputQueueOverflow,
+    #[error("worker progress event rate exceeded its bound")]
+    EventRateExceeded,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+pub enum ProgressEvent {
+    #[serde(rename = "capture.state")]
+    CaptureState,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptureProgressState {
+    Recording,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerProgress {
+    pub schema: WorkerEventSchema,
+    pub request_id: Uuid,
+    pub event: ProgressEvent,
+    pub state: CaptureProgressState,
+    pub meeting_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum WorkerOutput {
+    Progress(WorkerProgress),
+    Result(WorkerResult),
 }
 
 pub fn parse_ready(
@@ -165,40 +208,108 @@ pub fn parse_ready(
     Ok(ready)
 }
 
-pub fn parse_result(frame: &[u8]) -> Result<WorkerResult, ProtocolError> {
+pub fn parse_output(frame: &[u8]) -> Result<WorkerOutput, ProtocolError> {
     if frame.len() > MAX_FRAME_BYTES {
         return Err(ProtocolError::FrameTooLarge);
     }
     serde_json::from_slice(frame).map_err(|_| ProtocolError::Malformed)
 }
 
+struct PendingRequest {
+    request_id: Uuid,
+    operation: Operation,
+    meeting_id: Option<Uuid>,
+    saw_recording: bool,
+}
+
 #[derive(Default)]
 pub struct RequestTracker {
-    pending: HashSet<Uuid>,
-    terminal: HashSet<Uuid>,
+    pending: Option<PendingRequest>,
+    last_terminal: Option<Uuid>,
 }
 
 impl RequestTracker {
-    pub fn register(&mut self, request_id: Uuid) -> Result<(), ProtocolError> {
-        if self.pending.len() >= MAX_PENDING_REQUESTS {
+    pub fn register(&mut self, command: &WorkerCommand) -> Result<(), ProtocolError> {
+        if self.pending.is_some() {
             return Err(ProtocolError::RequestLimit);
         }
-        if self.pending.contains(&request_id) || self.terminal.contains(&request_id) {
+        if self.last_terminal == Some(command.request_id) {
+            return Err(ProtocolError::DuplicateRequest);
+        }
+        let meeting_id = if command.operation == Operation::CaptureStart {
+            let value = command
+                .arguments
+                .get("meeting_id")
+                .and_then(Value::as_str)
+                .ok_or(ProtocolError::Malformed)?;
+            Some(Uuid::parse_str(value).map_err(|_| ProtocolError::Malformed)?)
+        } else {
+            None
+        };
+        self.pending = Some(PendingRequest {
+            request_id: command.request_id,
+            operation: command.operation,
+            meeting_id,
+            saw_recording: false,
+        });
+        Ok(())
+    }
+
+    pub fn progress(&mut self, progress: &WorkerProgress) -> Result<(), ProtocolError> {
+        if self.last_terminal == Some(progress.request_id) {
             return Err(ProtocolError::DuplicateTerminal);
         }
-        self.pending.insert(request_id);
+        let pending = self.pending.as_mut().ok_or(ProtocolError::UnknownRequest)?;
+        if pending.request_id != progress.request_id {
+            return Err(ProtocolError::UnknownRequest);
+        }
+        if pending.operation != Operation::CaptureStart
+            || pending.meeting_id != Some(progress.meeting_id)
+            || progress.event != ProgressEvent::CaptureState
+            || progress.state != CaptureProgressState::Recording
+        {
+            return Err(ProtocolError::InvalidEvent);
+        }
+        if pending.saw_recording {
+            return Err(ProtocolError::DuplicateProgress);
+        }
+        pending.saw_recording = true;
         Ok(())
     }
 
     pub fn terminal(&mut self, result: &WorkerResult) -> Result<(), ProtocolError> {
-        if self.terminal.contains(&result.request_id) {
+        if self.last_terminal == Some(result.request_id) {
             return Err(ProtocolError::DuplicateTerminal);
         }
-        if !self.pending.remove(&result.request_id) {
+        let pending = self.pending.as_ref().ok_or(ProtocolError::UnknownRequest)?;
+        if pending.request_id != result.request_id {
             return Err(ProtocolError::UnknownRequest);
         }
-        self.terminal.insert(result.request_id);
+        let shape_is_valid = if result.ok {
+            result.code.is_none() && result.recoverable.is_none()
+        } else {
+            result.code.is_some()
+                && result.recoverable.is_some()
+                && result.artifact_digests.is_empty()
+        };
+        if !shape_is_valid
+            || (result.ok && pending.operation == Operation::CaptureStart && !pending.saw_recording)
+        {
+            return Err(ProtocolError::InvalidResult);
+        }
+        self.pending = None;
+        self.last_terminal = Some(result.request_id);
         Ok(())
+    }
+
+    pub fn cancel(&mut self, request_id: Uuid) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.request_id == request_id)
+        {
+            self.pending = None;
+        }
     }
 }
 
@@ -227,7 +338,13 @@ mod tests {
             artifact_digests: HashMap::new(),
         };
         let mut tracker = RequestTracker::default();
-        tracker.register(request_id).unwrap();
+        let command = WorkerCommand {
+            schema: "worker-command/1",
+            request_id,
+            operation: Operation::CaptureInspect,
+            arguments: serde_json::json!({"meeting_id": "fixture"}),
+        };
+        tracker.register(&command).unwrap();
         tracker.terminal(&result).unwrap();
         assert_eq!(
             tracker.terminal(&result),
@@ -242,7 +359,60 @@ mod tests {
             "{{\"schema\":\"worker-result/1\",\"request_id\":\"{request_id}\",\"ok\":true,\"code\":null,\"recoverable\":null,\"artifact_digests\":{{}},\"extra\":true}}"
         );
         assert_eq!(
-            parse_result(frame.as_bytes()).unwrap_err(),
+            parse_output(frame.as_bytes()).unwrap_err(),
+            ProtocolError::Malformed
+        );
+    }
+
+    #[test]
+    fn capture_progress_must_match_request_and_precede_success() {
+        let request_id = Uuid::new_v4();
+        let meeting_id = Uuid::new_v4();
+        let command = WorkerCommand {
+            schema: "worker-command/1",
+            request_id,
+            operation: Operation::CaptureStart,
+            arguments: serde_json::json!({
+                "meeting_id": meeting_id,
+                "profile_id": "fixture"
+            }),
+        };
+        let result = WorkerResult {
+            schema: ResultSchema::V1,
+            request_id,
+            ok: true,
+            code: None,
+            recoverable: None,
+            artifact_digests: HashMap::new(),
+        };
+        let mut tracker = RequestTracker::default();
+        tracker.register(&command).unwrap();
+        assert_eq!(tracker.terminal(&result), Err(ProtocolError::InvalidResult));
+
+        let progress = WorkerProgress {
+            schema: WorkerEventSchema::V1,
+            request_id,
+            event: ProgressEvent::CaptureState,
+            state: CaptureProgressState::Recording,
+            meeting_id,
+        };
+        tracker.progress(&progress).unwrap();
+        assert_eq!(
+            tracker.progress(&progress),
+            Err(ProtocolError::DuplicateProgress)
+        );
+        tracker.terminal(&result).unwrap();
+    }
+
+    #[test]
+    fn progress_with_unknown_field_fails_closed() {
+        let request_id = Uuid::new_v4();
+        let meeting_id = Uuid::new_v4();
+        let frame = format!(
+            "{{\"schema\":\"worker-event/1\",\"request_id\":\"{request_id}\",\"event\":\"capture.state\",\"state\":\"recording\",\"meeting_id\":\"{meeting_id}\",\"extra\":true}}"
+        );
+        assert_eq!(
+            parse_output(frame.as_bytes()).unwrap_err(),
             ProtocolError::Malformed
         );
     }

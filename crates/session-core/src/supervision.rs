@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::mpsc;
+use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -14,11 +16,13 @@ use sysinfo::{Pid, ProcessesToUpdate, System};
 use thiserror::Error;
 
 use crate::protocol::{
-    MAX_FRAME_BYTES, Operation, ProtocolError, RequestTracker, WorkerCommand, WorkerReady,
-    WorkerResult, parse_ready, parse_result,
+    MAX_FRAME_BYTES, MAX_PROGRESS_EVENTS_PER_SECOND, MAX_QUEUED_OUTPUTS, Operation, ProtocolError,
+    RequestTracker, WorkerCommand, WorkerOutput, WorkerProgress, WorkerReady, WorkerResult,
+    parse_output, parse_ready,
 };
 
 pub const PARENT_FD_ENV: &str = "LMN_PARENT_LIVENESS_FD";
+pub const MAX_STDERR_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Error)]
 pub enum SupervisionError {
@@ -28,18 +32,45 @@ pub enum SupervisionError {
     ReadyTimeout,
     #[error("worker exited before readiness")]
     EarlyExit,
+    #[error("worker exited before completing its request")]
+    WorkerExited,
+    #[error("worker request exceeded its deadline")]
+    RequestTimeout,
+    #[error("worker standard error exceeded its byte limit")]
+    StderrOverflow,
+    #[error("worker protocol is not ready or is no longer usable")]
+    Unavailable,
     #[error(transparent)]
     Protocol(#[from] ProtocolError),
     #[error(transparent)]
     Io(#[from] io::Error),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum WorkerFault {
+    Protocol(ProtocolError),
+    WorkerExited,
+    StdoutIo,
+    StderrIo,
+    StderrOverflow,
+}
+
+struct DispatchItem {
+    received_at: Instant,
+    output: WorkerOutput,
+}
+
 pub struct OwnedChild {
     child: Child,
     process_group_id: i32,
     liveness_writer: Option<File>,
-    protocol_stdout: Option<BufReader<ChildStdout>>,
-    requests: RequestTracker,
+    output_receiver: Option<mpsc::Receiver<DispatchItem>>,
+    dispatcher_thread: Option<JoinHandle<()>>,
+    stderr_thread: Option<JoinHandle<()>>,
+    requests: Arc<Mutex<RequestTracker>>,
+    fault: Arc<Mutex<Option<WorkerFault>>>,
+    shutting_down: Arc<AtomicBool>,
+    stopped: bool,
 }
 
 impl OwnedChild {
@@ -62,7 +93,7 @@ impl OwnedChild {
                 Ok(())
             });
         }
-        let child = match command.spawn() {
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 unsafe {
@@ -76,12 +107,30 @@ impl OwnedChild {
             libc::close(read_fd);
         }
         let liveness_writer = unsafe { File::from_raw_fd(write_fd) };
+        let process_group_id = child.id() as i32;
+        let fault = Arc::new(Mutex::new(None));
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::other("worker stderr missing"))?;
+        let stderr_thread = Some(spawn_stderr_monitor(
+            stderr,
+            process_group_id,
+            Arc::clone(&fault),
+            Arc::clone(&shutting_down),
+        ));
         Ok(Self {
-            process_group_id: child.id() as i32,
+            process_group_id,
             child,
             liveness_writer: Some(liveness_writer),
-            protocol_stdout: None,
-            requests: RequestTracker::default(),
+            output_receiver: None,
+            dispatcher_thread: None,
+            stderr_thread,
+            requests: Arc::new(Mutex::new(RequestTracker::default())),
+            fault,
+            shutting_down,
+            stopped: false,
         })
     }
 
@@ -93,87 +142,479 @@ impl OwnedChild {
         self.process_group_id
     }
 
+    pub fn check_health(&self) -> Result<(), SupervisionError> {
+        if self.stopped || self.output_receiver.is_none() {
+            return Err(SupervisionError::Unavailable);
+        }
+        match self.current_fault_error() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     pub fn wait_ready(
         &mut self,
         timeout: Duration,
         expected_operations: &HashSet<Operation>,
     ) -> Result<WorkerReady, SupervisionError> {
+        if self.output_receiver.is_some() || self.stopped {
+            return Err(SupervisionError::Unavailable);
+        }
         let stdout = self
             .child
             .stdout
             .take()
             .ok_or_else(|| io::Error::other("worker stdout missing"))?;
         let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
+        let ready_thread = std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let result = read_bounded_frame(&mut reader);
             let _ = sender.send((result, reader));
         });
-        match receiver.recv_timeout(timeout) {
+        let received = receiver.recv_timeout(timeout);
+        match received {
             Ok((Ok(frame), reader)) if !frame.is_empty() => {
+                let _ = ready_thread.join();
+                if let Some(error) = self.current_fault_error() {
+                    let _ = self.abort_and_wait(Duration::from_millis(500));
+                    return Err(error);
+                }
                 match parse_ready(&frame, expected_operations) {
                     Ok(ready) => {
-                        self.protocol_stdout = Some(reader);
+                        self.start_dispatcher(reader);
                         Ok(ready)
                     }
                     Err(error) => {
-                        self.stop_and_wait(Duration::from_millis(500))?;
+                        let _ = self.abort_and_wait(Duration::from_millis(500));
                         Err(error.into())
                     }
                 }
             }
-            Ok((Ok(_), _)) | Ok((Err(_), _)) => {
-                self.stop_and_wait(Duration::from_millis(500))?;
-                Err(SupervisionError::EarlyExit)
+            Ok((Ok(_), _)) => {
+                let _ = ready_thread.join();
+                let error = self
+                    .current_fault_error()
+                    .unwrap_or(SupervisionError::EarlyExit);
+                let _ = self.abort_and_wait(Duration::from_millis(500));
+                Err(error)
+            }
+            Ok((Err(read_error), _)) => {
+                let _ = ready_thread.join();
+                let error = self.current_fault_error().unwrap_or(read_error);
+                let _ = self.abort_and_wait(Duration::from_millis(500));
+                Err(error)
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.stop_and_wait(Duration::from_millis(500))?;
+                let _ = self.abort_and_wait(Duration::from_millis(500));
+                let _ = ready_thread.join();
                 Err(SupervisionError::ReadyTimeout)
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                self.stop_and_wait(Duration::from_millis(500))?;
-                Err(SupervisionError::EarlyExit)
+                let _ = ready_thread.join();
+                let error = self
+                    .current_fault_error()
+                    .unwrap_or(SupervisionError::EarlyExit);
+                let _ = self.abort_and_wait(Duration::from_millis(500));
+                Err(error)
             }
         }
     }
 
-    pub fn request(&mut self, command: &WorkerCommand) -> Result<WorkerResult, SupervisionError> {
-        self.requests.register(command.request_id)?;
+    pub fn request_until<F>(
+        &mut self,
+        command: &WorkerCommand,
+        deadline: Instant,
+        mut on_progress: F,
+    ) -> Result<WorkerResult, SupervisionError>
+    where
+        F: FnMut(&WorkerProgress) -> Result<(), ProtocolError>,
+    {
+        if self.stopped || self.output_receiver.is_none() {
+            return Err(SupervisionError::Unavailable);
+        }
+        if let Some(error) = self.current_fault_error() {
+            return Err(error);
+        }
         let mut frame = serde_json::to_vec(command).map_err(|_| ProtocolError::Malformed)?;
         frame.push(b'\n');
         if frame.len() > MAX_FRAME_BYTES {
             return Err(ProtocolError::FrameTooLarge.into());
         }
+        self.requests
+            .lock()
+            .expect("request tracker lock")
+            .register(command)?;
         let stdin = self
             .child
             .stdin
             .as_mut()
             .ok_or_else(|| io::Error::other("worker stdin missing"))?;
-        stdin.write_all(&frame)?;
-        stdin.flush()?;
-        let stdout = self
-            .protocol_stdout
-            .as_mut()
-            .ok_or_else(|| io::Error::other("worker readiness not complete"))?;
-        let result = parse_result(&read_bounded_frame(stdout)?)?;
-        self.requests.terminal(&result)?;
-        Ok(result)
+        if let Err(error) = stdin.write_all(&frame).and_then(|_| stdin.flush()) {
+            self.cancel_request(command.request_id);
+            let _ = self.abort_and_wait(Duration::from_millis(500));
+            return Err(error.into());
+        }
+
+        loop {
+            if let Some(error) = self.current_fault_error() {
+                self.cancel_request(command.request_id);
+                let _ = self.abort_and_wait(Duration::from_millis(500));
+                return Err(error);
+            }
+            let now = Instant::now();
+            let receiver = self
+                .output_receiver
+                .as_ref()
+                .expect("output receiver checked");
+            let received = match receiver.try_recv() {
+                Ok(item) => Ok(item),
+                Err(mpsc::TryRecvError::Disconnected) => Err(mpsc::RecvTimeoutError::Disconnected),
+                Err(mpsc::TryRecvError::Empty) if now >= deadline => {
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    receiver.recv_timeout(deadline.saturating_duration_since(now))
+                }
+            };
+            let item = match received {
+                Ok(item) => item,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    self.cancel_request(command.request_id);
+                    let _ = self.abort_and_wait(Duration::from_millis(500));
+                    return Err(SupervisionError::RequestTimeout);
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let error = self
+                        .current_fault_error()
+                        .unwrap_or(SupervisionError::WorkerExited);
+                    self.cancel_request(command.request_id);
+                    let _ = self.abort_and_wait(Duration::from_millis(500));
+                    return Err(error);
+                }
+            };
+            if item.received_at > deadline {
+                self.cancel_request(command.request_id);
+                let _ = self.abort_and_wait(Duration::from_millis(500));
+                return Err(SupervisionError::RequestTimeout);
+            }
+            if let Some(error) = self.current_fault_error() {
+                self.cancel_request(command.request_id);
+                let _ = self.abort_and_wait(Duration::from_millis(500));
+                return Err(error);
+            }
+            match item.output {
+                WorkerOutput::Progress(progress) => {
+                    if let Err(error) = on_progress(&progress) {
+                        self.cancel_request(command.request_id);
+                        let _ = self.abort_and_wait(Duration::from_millis(500));
+                        return Err(error.into());
+                    }
+                }
+                WorkerOutput::Result(result) => return Ok(result),
+            }
+        }
+    }
+
+    pub fn shutdown_and_wait(&mut self, grace: Duration) -> io::Result<()> {
+        self.stop_owned_group(grace, false)
     }
 
     pub fn stop_and_wait(&mut self, grace: Duration) -> io::Result<()> {
-        self.liveness_writer.take();
-        signal_group(self.process_group_id, libc::SIGTERM)?;
-        let deadline = Instant::now() + grace;
-        while Instant::now() < deadline {
-            if self.child.try_wait()?.is_some() {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        self.abort_and_wait(grace)
+    }
+
+    fn abort_and_wait(&mut self, grace: Duration) -> io::Result<()> {
+        self.stop_owned_group(grace, true)
+    }
+
+    fn stop_owned_group(&mut self, grace: Duration, abort: bool) -> io::Result<()> {
+        if self.stopped {
+            return Ok(());
         }
-        signal_group(self.process_group_id, libc::SIGKILL)?;
-        self.child.wait()?;
+        self.shutting_down.store(true, Ordering::SeqCst);
+        self.child.stdin.take();
+        self.liveness_writer.take();
+        if !abort && wait_for_group_exit(&mut self.child, self.process_group_id, grace)? {
+            return self.finish_stopped();
+        }
+        let terminate_error = signal_group(self.process_group_id, libc::SIGTERM).err();
+        if wait_for_group_exit(&mut self.child, self.process_group_id, grace)? {
+            return self.finish_stopped();
+        }
+        let kill_error = signal_group(self.process_group_id, libc::SIGKILL).err();
+        if !wait_for_group_exit(
+            &mut self.child,
+            self.process_group_id,
+            grace.max(Duration::from_millis(250)),
+        )? {
+            return Err(kill_error.or(terminate_error).unwrap_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "owned process group did not exit after SIGKILL",
+                )
+            }));
+        }
+        self.finish_stopped()
+    }
+
+    fn finish_stopped(&mut self) -> io::Result<()> {
+        if self.child.try_wait()?.is_none() {
+            self.child.wait()?;
+        }
+        self.output_receiver.take();
+        join_thread(self.dispatcher_thread.take())?;
+        join_thread(self.stderr_thread.take())?;
+        self.stopped = true;
         Ok(())
     }
+
+    fn start_dispatcher(&mut self, reader: BufReader<ChildStdout>) {
+        let (sender, receiver) = mpsc::sync_channel(MAX_QUEUED_OUTPUTS);
+        self.output_receiver = Some(receiver);
+        self.dispatcher_thread = Some(spawn_dispatcher(
+            reader,
+            sender,
+            self.process_group_id,
+            Arc::clone(&self.requests),
+            Arc::clone(&self.fault),
+            Arc::clone(&self.shutting_down),
+        ));
+    }
+
+    fn cancel_request(&self, request_id: uuid::Uuid) {
+        self.requests
+            .lock()
+            .expect("request tracker lock")
+            .cancel(request_id);
+    }
+
+    fn current_fault_error(&self) -> Option<SupervisionError> {
+        self.fault
+            .lock()
+            .expect("worker fault lock")
+            .map(worker_fault_error)
+    }
+}
+
+fn spawn_dispatcher(
+    mut reader: BufReader<ChildStdout>,
+    sender: mpsc::SyncSender<DispatchItem>,
+    process_group_id: i32,
+    requests: Arc<Mutex<RequestTracker>>,
+    fault: Arc<Mutex<Option<WorkerFault>>>,
+    shutting_down: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut progress_window = Instant::now();
+        let mut progress_events = 0_usize;
+        loop {
+            let frame = match read_bounded_frame(&mut reader) {
+                Ok(frame) if frame.is_empty() => {
+                    if !shutting_down.load(Ordering::SeqCst) {
+                        install_fault(
+                            WorkerFault::WorkerExited,
+                            &fault,
+                            &shutting_down,
+                            process_group_id,
+                        );
+                    }
+                    break;
+                }
+                Ok(frame) => frame,
+                Err(SupervisionError::Protocol(error)) => {
+                    install_fault(
+                        WorkerFault::Protocol(error),
+                        &fault,
+                        &shutting_down,
+                        process_group_id,
+                    );
+                    break;
+                }
+                Err(_) => {
+                    install_fault(
+                        WorkerFault::StdoutIo,
+                        &fault,
+                        &shutting_down,
+                        process_group_id,
+                    );
+                    break;
+                }
+            };
+            let output = match parse_output(&frame) {
+                Ok(output) => output,
+                Err(error) => {
+                    install_fault(
+                        WorkerFault::Protocol(error),
+                        &fault,
+                        &shutting_down,
+                        process_group_id,
+                    );
+                    break;
+                }
+            };
+            let received_at = Instant::now();
+            if matches!(output, WorkerOutput::Progress(_)) {
+                if received_at.duration_since(progress_window) >= Duration::from_secs(1) {
+                    progress_window = received_at;
+                    progress_events = 0;
+                }
+                progress_events += 1;
+                if progress_events > MAX_PROGRESS_EVENTS_PER_SECOND {
+                    install_fault(
+                        WorkerFault::Protocol(ProtocolError::EventRateExceeded),
+                        &fault,
+                        &shutting_down,
+                        process_group_id,
+                    );
+                    break;
+                }
+            }
+            let validation = {
+                let mut tracker = requests.lock().expect("request tracker lock");
+                match &output {
+                    WorkerOutput::Progress(progress) => tracker.progress(progress),
+                    WorkerOutput::Result(result) => tracker.terminal(result),
+                }
+            };
+            if let Err(error) = validation {
+                install_fault(
+                    WorkerFault::Protocol(error),
+                    &fault,
+                    &shutting_down,
+                    process_group_id,
+                );
+                break;
+            }
+            match sender.try_send(DispatchItem {
+                received_at,
+                output,
+            }) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(_)) => {
+                    install_fault(
+                        WorkerFault::Protocol(ProtocolError::OutputQueueOverflow),
+                        &fault,
+                        &shutting_down,
+                        process_group_id,
+                    );
+                    break;
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => break,
+            }
+        }
+    })
+}
+
+fn spawn_stderr_monitor(
+    mut stderr: ChildStderr,
+    process_group_id: i32,
+    fault: Arc<Mutex<Option<WorkerFault>>>,
+    shutting_down: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut total = 0_usize;
+        let mut overflowed = false;
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match stderr.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    total = total.saturating_add(read);
+                    if total > MAX_STDERR_BYTES && !overflowed {
+                        overflowed = true;
+                        install_fault(
+                            WorkerFault::StderrOverflow,
+                            &fault,
+                            &shutting_down,
+                            process_group_id,
+                        );
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    if !shutting_down.load(Ordering::SeqCst) {
+                        install_fault(
+                            WorkerFault::StderrIo,
+                            &fault,
+                            &shutting_down,
+                            process_group_id,
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn install_fault(
+    new_fault: WorkerFault,
+    fault: &Arc<Mutex<Option<WorkerFault>>>,
+    shutting_down: &Arc<AtomicBool>,
+    process_group_id: i32,
+) {
+    let installed = {
+        let mut slot = fault.lock().expect("worker fault lock");
+        if slot.is_some() {
+            false
+        } else {
+            *slot = Some(new_fault);
+            true
+        }
+    };
+    if installed && !shutting_down.load(Ordering::SeqCst) {
+        let _ = signal_group(process_group_id, libc::SIGTERM);
+    }
+}
+
+fn worker_fault_error(fault: WorkerFault) -> SupervisionError {
+    match fault {
+        WorkerFault::Protocol(error) => SupervisionError::Protocol(error),
+        WorkerFault::WorkerExited => SupervisionError::WorkerExited,
+        WorkerFault::StdoutIo => SupervisionError::Io(io::Error::other("worker stdout failed")),
+        WorkerFault::StderrIo => SupervisionError::Io(io::Error::other("worker stderr failed")),
+        WorkerFault::StderrOverflow => SupervisionError::StderrOverflow,
+    }
+}
+
+fn wait_for_group_exit(
+    child: &mut Child,
+    process_group_id: i32,
+    grace: Duration,
+) -> io::Result<bool> {
+    let deadline = Instant::now() + grace;
+    loop {
+        let _ = child.try_wait()?;
+        if !process_group_exists(process_group_id)? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn process_group_exists(process_group_id: i32) -> io::Result<bool> {
+    let result = unsafe { libc::kill(-process_group_id, 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        Some(libc::EPERM) => Ok(true),
+        _ => Err(error),
+    }
+}
+
+fn join_thread(thread: Option<JoinHandle<()>>) -> io::Result<()> {
+    if let Some(thread) = thread {
+        thread
+            .join()
+            .map_err(|_| io::Error::other("worker I/O thread panicked"))?;
+    }
+    Ok(())
 }
 
 fn read_bounded_frame(reader: &mut impl BufRead) -> Result<Vec<u8>, SupervisionError> {
@@ -200,9 +641,7 @@ fn read_bounded_frame(reader: &mut impl BufRead) -> Result<Vec<u8>, SupervisionE
 
 impl Drop for OwnedChild {
     fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.stop_and_wait(Duration::from_millis(250));
-        }
+        let _ = self.abort_and_wait(Duration::from_millis(250));
     }
 }
 

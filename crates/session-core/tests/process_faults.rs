@@ -2,7 +2,9 @@ use std::fs;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use local_meeting_notes_session_core::protocol::{Operation, WorkerCommand};
+use local_meeting_notes_session_core::protocol::{
+    CaptureProgressState, Operation, ProtocolError, WorkerCommand,
+};
 use local_meeting_notes_session_core::supervision::{
     OwnedChild, SupervisionError, expected_operations,
 };
@@ -23,9 +25,94 @@ fn supervised_worker_keeps_protocol_after_readiness() {
         Operation::CaptureInspect,
         serde_json::json!({"meeting_id": "fixture"}),
     );
-    let result = child.request(&request).unwrap();
+    let result = child
+        .request_until(
+            &request,
+            Instant::now() + Duration::from_secs(1),
+            |_| Ok(()),
+        )
+        .unwrap();
     assert!(result.ok);
     assert_eq!(result.artifact_digests["fixture"], "digest");
+}
+
+#[test]
+fn supervised_worker_dispatches_progress_before_result() {
+    let mut command = Command::new(FAKE_WORKER);
+    command.args(["--mode", "protocol-progress"]);
+    let mut child = OwnedChild::spawn(&mut command).unwrap();
+    child
+        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .unwrap();
+    let meeting_id = uuid::Uuid::new_v4();
+    let request = WorkerCommand::new(
+        Operation::CaptureStart,
+        serde_json::json!({"meeting_id": meeting_id, "profile_id": "fixture"}),
+    );
+    let mut states = Vec::new();
+    let result = child
+        .request_until(
+            &request,
+            Instant::now() + Duration::from_secs(1),
+            |progress| {
+                states.push((progress.state, progress.meeting_id));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(states, vec![(CaptureProgressState::Recording, meeting_id)]);
+    assert!(result.ok);
+}
+
+#[test]
+fn unknown_progress_request_stops_and_reaps_worker() {
+    let mut command = Command::new(FAKE_WORKER);
+    command.args(["--mode", "wrong-progress"]);
+    let mut child = OwnedChild::spawn(&mut command).unwrap();
+    let pid = child.pid();
+    child
+        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .unwrap();
+    let request = WorkerCommand::new(
+        Operation::CaptureStart,
+        serde_json::json!({
+            "meeting_id": uuid::Uuid::new_v4(),
+            "profile_id": "fixture"
+        }),
+    );
+    assert!(matches!(
+        child.request_until(
+            &request,
+            Instant::now() + Duration::from_secs(1),
+            |_| Ok(())
+        ),
+        Err(SupervisionError::Protocol(ProtocolError::UnknownRequest))
+    ));
+    assert!(wait_until_gone(pid, Duration::from_secs(3)));
+}
+
+#[test]
+fn request_deadline_stops_and_reaps_worker() {
+    let mut command = Command::new(FAKE_WORKER);
+    command.args(["--mode", "never-result"]);
+    let mut child = OwnedChild::spawn(&mut command).unwrap();
+    let pid = child.pid();
+    child
+        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .unwrap();
+    let request = WorkerCommand::new(
+        Operation::CaptureInspect,
+        serde_json::json!({"meeting_id": "fixture"}),
+    );
+    assert!(matches!(
+        child.request_until(
+            &request,
+            Instant::now() + Duration::from_millis(100),
+            |_| Ok(())
+        ),
+        Err(SupervisionError::RequestTimeout)
+    ));
+    assert!(wait_until_gone(pid, Duration::from_secs(1)));
 }
 
 fn process_exists(pid: u32) -> bool {
@@ -90,6 +177,39 @@ fn malformed_handshake_fails_closed_and_reaps_worker() {
         Err(SupervisionError::Protocol(_))
     ));
     assert!(wait_until_gone(pid, Duration::from_secs(1)));
+}
+
+#[test]
+fn stderr_overflow_fails_without_deadlock_and_reaps_worker() {
+    let mut command = Command::new(FAKE_WORKER);
+    command.args(["--mode", "stderr-overflow"]);
+    let mut child = OwnedChild::spawn(&mut command).unwrap();
+    let pid = child.pid();
+    let result = child.wait_ready(Duration::from_secs(1), &expected_operations());
+    assert!(matches!(result, Err(SupervisionError::StderrOverflow)));
+    assert!(wait_until_gone(pid, Duration::from_secs(1)));
+}
+
+#[test]
+fn worker_exit_cleanup_reaps_remaining_tap() {
+    let temp = TempDir::new().unwrap();
+    let pid_file = temp.path().join("children.json");
+    let mut command = Command::new(FAKE_WORKER);
+    command
+        .args(["--mode", "ready-exit-with-tap"])
+        .env("LMN_PID_FILE", &pid_file);
+    let mut child = OwnedChild::spawn(&mut command).unwrap();
+    child
+        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !pid_file.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pids: serde_json::Value = serde_json::from_slice(&fs::read(&pid_file).unwrap()).unwrap();
+    let tap = pids["tap"].as_u64().unwrap() as u32;
+    child.stop_and_wait(Duration::from_millis(100)).unwrap();
+    assert!(wait_until_gone(tap, Duration::from_secs(1)));
 }
 
 #[test]

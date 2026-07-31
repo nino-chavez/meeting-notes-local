@@ -9,6 +9,7 @@ import json
 import os
 import select
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -44,6 +45,22 @@ def emit(value: dict) -> None:
         raise RuntimeError("outbound protocol frame exceeds limit")
     sys.stdout.write(encoded + "\n")
     sys.stdout.flush()
+
+
+def emit_progress(request_id: str, meeting_id: str, state: str) -> None:
+    uuid.UUID(request_id)
+    uuid.UUID(meeting_id)
+    if state != "recording":
+        raise ValueError("progress state is outside the closed protocol")
+    emit(
+        {
+            "schema": "worker-event/1",
+            "request_id": request_id,
+            "event": "capture.state",
+            "state": state,
+            "meeting_id": meeting_id,
+        }
+    )
 
 
 def load_manifest(path: Path) -> dict:
@@ -121,6 +138,27 @@ def parent_is_alive(parent_fd: int) -> bool:
     if not ready:
         return True
     return os.read(parent_fd, 1) != b""
+
+
+def start_parent_liveness_watchdog(parent_fd: int) -> threading.Thread:
+    def exit_at_eof() -> None:
+        while True:
+            try:
+                value = os.read(parent_fd, 1)
+            except InterruptedError:
+                continue
+            except OSError:
+                os._exit(2)
+            if value == b"":
+                os._exit(0)
+
+    thread = threading.Thread(
+        target=exit_at_eof,
+        name="parent-liveness-watchdog",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
@@ -205,6 +243,7 @@ def main() -> int:
             parent_fd = int(os.environ["LMN_PARENT_LIVENESS_FD"])
         except (KeyError, ValueError):
             return 2
+    start_parent_liveness_watchdog(parent_fd)
     try:
         return run(
             arguments.app_data_root,
