@@ -17,6 +17,29 @@ This repository has fresh sanitized history. That does not make meeting content
 source material: no capture, transcript, review packet, or private meeting
 artifact may be committed or pushed.
 
+### Fresh-session continuation
+
+The durable continuation point is branch `codex/product-foundation`. A new session
+should read this Status section, the Cold operator checklist, and
+`vertical-slice.md`'s Status before acting. It does not need the prior chat transcript.
+
+The only input missing from this gate is the operator's cold verdict on the exact
+private page already rendered: `accept`, `revise`, or `decline`. Do not regenerate the
+page merely to start a new session. Do not move its content, paths, manifest, or review
+details into Git or chat.
+
+- `accept` permits recording the human-review receipt against the existing private page
+  digest and then updating the public gate status. It does not approve automatic note
+  quality or the application runtime.
+- `revise` records UI findings without quoting private meeting content. Any interface
+  change requires a new render, digest, and cold review.
+- `decline` leaves application implementation blocked and preserves the reason as a
+  human finding.
+
+The colleague survey is product-research evidence in `journeys.md`; it cannot supply
+this verdict. The evaluation-contribution candidate in J6 is later product research;
+it is not part of the page under review or the first vertical slice.
+
 ## Why this gate uses human-curated real content
 
 Three candidate inputs were compared:
@@ -285,10 +308,11 @@ only route.
 
 The current renderer covers this choreography, including empty-library,
 artifact-specific processing recovery, and ordered shell-startup recovery
-routes. It does not yet consume `encounter-review-content/1`, and no eligible
-real capture exists. Its correction, retention, deletion, and processing
-behaviors are specimens. Cross-meeting search remains outside the supported beta
-and outside this gate.
+routes. Its private-input mode consumes the exact `encounter-review-content/1` and
+digest-bound `encounter-content-approval/1` schemas, and an eligible owner-only packet
+has populated the page awaiting cold review. Its correction, retention, deletion, and
+processing behaviors remain specimens. Cross-meeting search remains outside the
+supported beta and outside this gate.
 
 ## Cold operator checklist
 

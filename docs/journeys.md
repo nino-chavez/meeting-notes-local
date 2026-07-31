@@ -145,6 +145,24 @@ checkbox counts as selections, not as mutually exclusive preferences. Keep free-
 answers as qualitative evidence; do not turn the number of similar phrases into a false
 vote.
 
+#### Observed snapshot — n=2
+
+Two responses exist. That sample is too small to choose a default or support a demand
+claim, and the public repository deliberately does not retain respondent-level rows,
+free text, timestamps, or answer combinations. The source responses remain in the Form.
+
+At the decision level, the snapshot reinforces transcript fidelity, speaker context,
+operator-controlled sharing, useful summaries, and actions with owners. It does not
+resolve the during-meeting surface, retention duration, retrieval entry point, or
+whether customer feedback should remain in the note or become a separately reviewed
+product signal.
+
+This changes no release gate or supported capture mode. It preserves two later
+comparison tests: simple note versus live transcript during capture, and filters versus
+natural-language retrieval after the corpus contains enough reviewed meetings to make
+either test real. The product already retains the transcript as a first-class artifact;
+the snapshot sharpens that priority without expanding beta scope.
+
 The questions may change these product decisions:
 
 | Survey evidence | Decision it may inform | What it cannot authorize |
