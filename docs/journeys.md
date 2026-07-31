@@ -51,9 +51,14 @@ which is why the convergences below mean something.
 **Provenance, stated because it bounds every claim here.** Fetched 2026-07-29 from each
 vendor's own pricing and marketing pages: Granola, Circleback, Otter. Those pages are
 marketing, so they are evidence of **positioning and feature vocabulary — not of
-quality, and not of what the product feels like to use.** Nothing here was seen
-logged in, so the actual information architecture behind a sign-up wall is unobserved.
-Feature names are quoted exactly because the vocabulary is the transferable part.
+quality, and not of what the product feels like to use.** Nothing in that pass was
+seen logged in, so the actual information architecture behind a sign-up wall is
+unobserved. Gong was added 2026-07-31 from its official product documentation rather
+than its marketing pages: the [call page](https://help.gong.io/docs/intro-to-the-call-page),
+[conversation library](https://help.gong.io/docs/find-conversations-and-organize-the-library),
+and [transcript](https://help.gong.io/docs/view-a-call-transcript). Those pages establish
+documented behavior, not usability or quality. Feature names are quoted exactly because
+the vocabulary is the transferable part.
 
 ### Where the market agrees with what was derived here
 
@@ -65,6 +70,11 @@ Feature names are quoted exactly because the vocabulary is the transferable part
   within and across meetings" *on the free tier*; Circleback's is "Ask questions and
   get answers drawn from every conversation you've had". The C → B → A ordering chosen
   below on internal evidence is where the category has already landed.
+- **Gong puts the recording, transcript, outline, highlights, questions, comments and
+  follow-up on one call object.** That supports one meeting-detail surface with several
+  evidence-linked views rather than separate destinations for the transcript, summary
+  and follow-up. Its coaching statistics and deal context are sales-product scope, not a
+  template for this product.
 - **History is the primary paywall in both**, which is the strongest available signal
   that the corpus is where the felt value is: Otter's free and Pro tiers cap at the
   "25 most recent" conversations, Granola's free tier at "limited meeting history".
@@ -79,6 +89,12 @@ Feature names are quoted exactly because the vocabulary is the transferable part
   invent its own, because the operator has met them elsewhere.
 - **Search scope is transcript plus metadata**, not notes alone: Otter free is "Search
   by keywords", Pro is "Advanced search by speakers, date range, and more".
+- **Gong makes retrieval a choice of entry point.** It documents filters for people,
+  accounts, exact words, trackers and call titles, plus saved searches, folders and
+  streams that collect future matching calls. That validates Library as a product
+  surface, but it does not decide whether this product should lead with a question,
+  exact search, filters, a saved collection or recent meetings. The colleague survey
+  below asks that choice directly.
 
 ### Where the whole category is weak, which is where this product can be strong
 
@@ -112,6 +128,42 @@ a meeting from microphone use, which is why its own inventory has a detection su
 and no notion of a counterparty. That is a real architectural consequence of a
 positioning difference, and it is not a small one — "what did we discuss last time"
 requires knowing who "we" are, which no amount of audio supplies.
+
+### Colleague survey — analysis registered before reading responses
+
+The [15-question Google Form](https://docs.google.com/forms/d/e/1FAIpQLSfZRYd2rfnzoAvCGkPIzcZVOxQOhpFUXYQo9Yj3h08M_Amq6g/viewform?usp=dialog)
+opened 2026-07-31. It asks colleagues which meetings and post-meeting problems matter,
+what the app should do during capture, which privacy controls and outputs are important,
+how evidence should be reviewed, how an old meeting should be found, and how customer
+feedback should relate to product work. It collects no email address and asks for no
+confidential meeting content.
+
+This is a convenience sample, not a market-size study. An anonymous response cannot be
+deduplicated reliably or weighted by role, and a small group of colleagues cannot prove
+general demand. Preserve the response count and denominator beside every result. Report
+checkbox counts as selections, not as mutually exclusive preferences. Keep free-text
+answers as qualitative evidence; do not turn the number of similar phrases into a false
+vote.
+
+The questions may change these product decisions:
+
+| Survey evidence | Decision it may inform | What it cannot authorize |
+|---|---|---|
+| Meeting types and post-meeting problems | First pilot scenario and the primary job of the note | Expanding the supported capture envelope |
+| During-meeting behavior and capture capabilities | Whether the first encounter is Start/Stop only, includes operator notes, or exposes transcript state | Claiming live transcription, speaker mode or automatic detection works |
+| Audio and privacy answers | Retention choices, account and calendar defaults, and which controls must be visible | Weakening consent, local ownership, deletion or no-unprompted-sharing boundaries |
+| Useful outputs | Information hierarchy of the note and which outputs deserve prototype variants | Treating every selected output as first-beta scope |
+| Trust requirements | Which evidence, uncertainty and review controls must travel with generated material | Turning an inference into a quote or replacing human authority with confidence |
+| Cross-meeting value and retrieval entry point | Whether Library/Ask follows the note basics, and whether it leads with a question, exact search, filters, collections or recency | Moving cross-meeting retrieval into the current beta before the corpus is trustworthy |
+| Customer-feedback scenario | Whether the product-signal handoff below deserves a later prototype | Creating or changing a requirement, roadmap or backlog item automatically |
+| “Never do” and open text | Prohibitions, missing jobs and language worth testing | Overriding measured defects or product safety gates |
+
+Survey results can reorder hypotheses and decide which alternatives enter the
+click-through. They cannot make a mechanical experiment pass, approve an interaction,
+expand the current beta by themselves, or convert the future product-input research
+below into roadmap work. Record the raw counts, the strongest counterexamples and any
+change to the product brief together; do not quote only the answers that agree with the
+current direction.
 
 ---
 
