@@ -452,6 +452,12 @@ It is also the only grant that is genuinely optional. Capture without a micropho
 not a degraded product, it is no product; capture without a calendar loses J0 and
 nothing else.
 
+**Research contribution must not become a Settings opt-in.** `journeys.md` J6 compares
+the plausible structures and rejects a global “help improve transcription” control.
+Settings may later link to a Research & evaluation admin record, but sharing authority
+belongs to one reviewed meeting packet, one stated purpose, and one separate consent
+receipt. A durable account preference cannot supply any of those.
+
 ---
 
 ## H. First run

@@ -409,6 +409,116 @@ completion, profile reset, or retention change clears it and disables Continue.
 
 ---
 
+### J6 — "Can I help improve this transcript without giving away the meeting?" (evaluation contribution)
+
+**Status: research candidate, not part of the current beta or encounter.** An operator
+may want to tell the project where transcription failed or, with every participant's
+informed consent, provide material for a controlled evaluation. Those are useful jobs.
+They are not ordinary telemetry, and recording consent does not by itself authorize
+research sharing.
+
+Two authorities have to remain separate:
+
+1. **Evaluate locally.** Rate a transcript, tag an error, or write the words that should
+   have appeared. This changes only owner-private material on the Mac.
+2. **Contribute deliberately.** Prepare a named packet for a stated evaluation, inspect
+   its contents, confirm the separate sharing consent, and transfer it through one
+   explicit action.
+
+Calling both actions “send feedback” would hide the only boundary that matters: whether
+meeting content leaves the computer.
+
+#### Three candidate structures
+
+| Candidate | What it gets right | Where it fails |
+|---|---|---|
+| A global “help improve transcription” control in Settings | Easy to find and cheap to implement | A blanket choice cannot authorize future meetings, other participants, or data uses the operator has not yet seen. Rejected. |
+| A “send this” action beside every transcript correction | Keeps the evaluation close to the error | It makes an ordinary correction look like consent to disclose the surrounding meeting. Useful only as a local save action, not as the transfer path. |
+| A meeting-scoped contribution builder plus an admin record | Binds one purpose, one meeting, one reviewed packet, and one consent receipt | Adds deliberate friction. Chosen for later prototyping because that friction is the review. |
+
+The resulting shape is a hybrid. Surface E may eventually offer **Save private
+evaluation** after a correction. Nothing is sent. A separate **Prepare research
+contribution** action starts a meeting-scoped builder. A later Research & evaluation
+admin view lists what is still local, what was transferred, the recipient and purpose,
+the promised deletion date, and any deletion request. It is a record of governed
+actions, not a global participation toggle.
+
+#### What a contribution may contain
+
+The operator chooses the smallest class that can answer the registered evaluation
+question:
+
+| Class | Possible contents | Default |
+|---|---|---|
+| Private evaluation | Model and capture versions, rating, error tags, and an optional human correction | Remains local |
+| Text evaluation packet | Selected transcript spans, the human correction, and only the technical metadata needed to reproduce the error | Not prepared until selected |
+| Recording evaluation packet | Selected audio spans or, only when justified, the recording legs; the reference transcript; capture metadata; and the consent receipt | Not prepared until selected |
+
+A corrected transcript is still private meeting content even when no audio is attached.
+“No recording” is not the same as “anonymous.” Redaction helps a reviewer remove
+obvious names or secrets; it must not be presented as proof that the material can no
+longer identify someone.
+
+The first program should be narrower than the eventual feature: project-owned
+evaluation only, no model training, no publication, no third-party sharing, and a fixed
+deletion deadline stated before transfer. A meeting involving an unconsenting speaker,
+an unaware person in the room, or a purpose the operator cannot explain is ineligible.
+The builder fails closed rather than accepting a broad account-level attestation.
+
+#### Required review and receipts
+
+Before transfer, the interface must show:
+
+- the exact files and selected time ranges;
+- whether they include operator audio, participant audio, transcript text, or technical
+  metadata;
+- the named recipient, registered evaluation purpose, retention deadline, and prohibited
+  uses;
+- confirmation that every recorded participant consented to this sharing purpose, not
+  only to the original meeting recording; and
+- a plain statement that no material has left the Mac yet.
+
+Transfer produces a receipt binding the packet digest, policy version, consent
+attestation, recipient, purpose, time, and deletion deadline. A failed or interrupted
+transfer remains visibly unsubmitted. Before transfer, Discard removes the prepared
+packet. After transfer, the admin view can request deletion and retain the response;
+it must also state any limit honestly. Data can be deleted from the evaluation store,
+but an aggregate already reported cannot be made historically unobserved.
+
+The first implementation should prefer an encrypted export with a separately verified
+delivery channel. Built-in upload adds a remote identity, authentication, storage,
+access, deletion, and incident-response system. That work is not authorized by adding
+a button to this local app.
+
+#### What the receiving side must provide
+
+The project needs its own evaluation administration before the app can offer built-in
+submission. At minimum, it must:
+
+- register the evaluation question, accepted packet classes, permitted uses, retention
+  period, and consent wording before inviting a contribution;
+- quarantine each arrival until its digest and consent receipt validate, without
+  treating receipt as proof that every participant understood or agreed;
+- restrict and log access to the people running that evaluation;
+- preserve the packet and model versions beside every score so a result can be
+  reproduced without turning the recording into a general-purpose dataset;
+- delete the packet and controlled copies at the promised deadline or after an accepted
+  deletion request, then return a deletion receipt; and
+- keep derived aggregate results separate from raw meeting content and state the
+  withdrawal limit before submission.
+
+An inbox of uploaded files is not this system. Neither is a spreadsheet recording that
+someone “said yes.” Until the recipient can execute those controls, the app may prepare
+an encrypted export but must not present the project as a governed upload destination.
+
+Success is not the number of recordings collected. It is whether a submitted packet
+has enough human reference material to score the registered failure, whether the
+recipient can reproduce that score, whether the consent and deletion promises are
+checkable, and whether the contribution teaches the product something that private
+local evaluations could not.
+
+---
+
 ## Future research opportunity — meeting evidence as product input
 
 **Status: research candidate, not a current product commitment.** This note app is
@@ -545,6 +655,7 @@ version's error — it made an undecided item read as scheduled.
 | Who spoke, as opposed to who was invited | J0, J1 | **Open, and possibly unbridgeable.** A calendar gives invitees; the audio gives channels. Nothing in the market bridges it either |
 | The note's own section structure was never designed | J1, J2 | **Decided** — sections are a rendering, not the model's output. See below |
 | A claim's subject is not extracted | J1 | **Open** — the one thing needed to group a note by what it was about, and no measurement supports asking an 8B model for it yet |
+| No governed route for transcript evaluations or consented research material | J6 | **Research candidate, deliberately outside the beta** — local evaluation, packet preparation, transfer consent, and contribution administration are separated above; no network service or upload is authorized |
 
 **The note has four sections and no document chose them.** `notes/summarize.py` emits
 Summary, Decisions, Action items and Open questions. That list appears in no design

@@ -60,7 +60,9 @@ The supported operating envelope remains:
 - local post-meeting processing;
 - no speaker playback, live transcription, automatic meeting detection,
   calendar preparation, named participants, cross-meeting search, sharing, or
-  product-development inference.
+  product-development inference; and
+- no transcript-evaluation submission, recording contribution, telemetry upload, or
+  research-transfer service.
 
 Headphones and an empty room are operator assertions. The application must
 state them before Start; it must not claim it detected conditions it cannot
