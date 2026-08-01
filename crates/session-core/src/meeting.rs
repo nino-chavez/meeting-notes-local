@@ -788,7 +788,7 @@ fn validate_sha256(value: &str) -> Result<(), MeetingError> {
     Ok(())
 }
 
-fn valid_opaque_id(value: &str) -> bool {
+pub(crate) fn valid_opaque_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value != "."

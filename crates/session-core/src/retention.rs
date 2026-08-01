@@ -11,9 +11,11 @@ use crate::meeting::{
     AUDIO_ARTIFACT_PATHS, ArtifactRef, AudioState, MAX_RECEIPT_BYTES, MeetingError,
     MeetingLifecycle, MeetingRecord, PendingStorageOperation, artifact_ref, load_meeting,
     open_private_file, read_private_bytes, require_private_directory, resolve_artifact,
-    verify_artifact_ref, verify_record_artifacts, verify_record_static_artifacts, write_meeting,
+    valid_opaque_id, verify_artifact_ref, verify_record_artifacts, verify_record_static_artifacts,
+    write_meeting,
 };
 use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
+use crate::operation_store::{OperationStore, OperationStoreError, StoredOperationRequest};
 use crate::storage::{
     StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
 };
@@ -64,7 +66,7 @@ pub enum RetentionOutcome {
 /// retention policy nor deletes the meeting record, transcript, note, profile,
 /// or another meeting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManualAudioDeletionOutcome {
+pub(crate) enum ManualAudioDeletionOutcome {
     DeferredActive,
     AudioReleased,
     RecoveredRemoval,
@@ -95,7 +97,7 @@ pub enum RetentionError {
 }
 
 #[derive(Debug, Error)]
-pub enum ManualAudioDeletionError {
+pub(crate) enum ManualAudioDeletionError {
     #[error("meeting storage coordination is unavailable")]
     Coordination(#[from] MeetingCoordinationError),
     #[error(transparent)]
@@ -104,21 +106,32 @@ pub enum ManualAudioDeletionError {
     Retention(#[from] RetentionError),
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error(transparent)]
+    OperationStore(#[from] OperationStoreError),
+    #[error("meeting has a nonterminal product operation")]
+    NonterminalProductOperation,
 }
 
 /// Releases only the bound audio for one exact, non-active meeting.
 ///
-/// The caller supplies the same coordination authority used by capture and
-/// correction operations. This action first claims the target's active-meeting
-/// lease, then holds the storage sequence gate through the staged
-/// deletion/recovery path, so it cannot overlap an active capture or
-/// nonterminal correction/note operation. This is intentionally session-core
-/// only: no command, startup hook, or UI is wired here.
-pub fn delete_meeting_audio_manually(
+/// This crate-private boundary is deliberately not callable by the desktop.
+/// Before a future desktop facade may expose it, that facade must own and hold
+/// the process-lifetime app-data writer lock already used by startup; a
+/// process-local coordinator is not a substitute for that authority.
+///
+/// Within the process, this action first claims the target's active-meeting
+/// lease, then holds the storage sequence gate through the operation scan and
+/// staged deletion/recovery path. It therefore cannot overlap an active capture
+/// or a durable, nonterminal correction/note operation.
+#[allow(dead_code)]
+pub(crate) fn delete_meeting_audio_manually(
     storage: &StorageRoot,
     coordination: &MeetingStorageCoordination,
     meeting_id: &str,
 ) -> Result<ManualAudioDeletionOutcome, ManualAudioDeletionError> {
+    if !valid_opaque_id(meeting_id) {
+        return Err(MeetingError::Malformed("meeting identifier mismatch").into());
+    }
     let _lease = match coordination.acquire(meeting_id) {
         Ok(lease) => lease,
         Err(MeetingCoordinationError::AlreadyActive) => {
@@ -130,6 +143,28 @@ pub fn delete_meeting_audio_manually(
 
     let directory = meeting_dir(storage, meeting_id)?;
     let mut meeting = load_meeting(&directory)?;
+    if meeting.meeting_id != meeting_id {
+        return Err(MeetingError::Malformed("meeting identifier mismatch").into());
+    }
+
+    let operations = OperationStore::open(storage)?;
+    let has_nonterminal = operations.scan()?.values().any(|receipt| {
+        if receipt.commit.is_some() {
+            return false;
+        }
+        match &receipt.request {
+            StoredOperationRequest::Restoration(request) => {
+                request.meeting_id.to_string() == meeting_id
+            }
+            StoredOperationRequest::NoteGeneration(request) => {
+                request.meeting_id.to_string() == meeting_id
+            }
+        }
+    });
+    if has_nonterminal {
+        return Err(ManualAudioDeletionError::NonterminalProductOperation);
+    }
+
     if meeting.retention.state == AudioState::Released {
         // Re-validate the completed receipt before making the idempotent claim.
         // A changed receipt must remain a refusal, not be silently rebound.
@@ -610,7 +645,10 @@ mod tests {
         artifact_ref, retention_policy_sha256,
     };
     use crate::meeting_coordination::MeetingStorageCoordination;
+    use crate::operation_store::StoredOperationResult;
     use crate::storage::{create_private_dir, durable_create_new};
+    use serde::de::DeserializeOwned;
+    use serde_json::Value;
     use tempfile::TempDir;
 
     fn fixture(storage: &StorageRoot, id: &str, deadline: Option<u64>) -> (PathBuf, MeetingRecord) {
@@ -740,6 +778,21 @@ mod tests {
         (temp, storage)
     }
 
+    fn product_operations_fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/product-operations-v1.json"
+        ))
+        .unwrap()
+    }
+
+    fn parse_operation_fixture<T: DeserializeOwned>(fixture: &Value, path: &[&str]) -> T {
+        let mut value = fixture;
+        for segment in path {
+            value = &value[*segment];
+        }
+        serde_json::from_value(value.clone()).unwrap()
+    }
+
     fn begin_audio_deletion(directory: &Path, meeting: &mut MeetingRecord) {
         create_private_dir(&directory.join("deletion")).unwrap();
         let receipt = AudioDeletionReceipt {
@@ -803,13 +856,23 @@ mod tests {
     fn manual_deletion_releases_an_until_manual_meeting_and_preserves_other_private_content() {
         let (_temp, storage) = storage();
         let (target, _) = fixture(&storage, "manual-target", None);
-        let (other, _) = fixture(&storage, "manual-other", Some(1_000));
+        let (other, _) = fixture(
+            &storage,
+            "11111111-1111-4111-8111-111111111111",
+            Some(1_000),
+        );
         create_private_dir(&target.join("transcript")).unwrap();
         create_private_dir(&target.join("notes")).unwrap();
         create_private_dir(&storage.path().join("profile")).unwrap();
         durable_create_new(&target.join("transcript/retained.json"), b"transcript").unwrap();
         durable_create_new(&target.join("notes/retained.md"), b"note").unwrap();
         durable_create_new(&storage.path().join("profile/profile.json"), b"profile").unwrap();
+        OperationStore::open(&storage)
+            .unwrap()
+            .write_request(&StoredOperationRequest::Restoration(
+                parse_operation_fixture(&product_operations_fixture(), &["restoration", "request"]),
+            ))
+            .unwrap();
         let coordination = MeetingStorageCoordination::default();
 
         assert_eq!(
@@ -918,6 +981,177 @@ mod tests {
         assert!(directory.join("capture/mic.wav").exists());
         assert!(directory.join("capture/.mic.wav.partial").exists());
         assert!(!directory.join("deletion/audio-deletion.json").exists());
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum NonterminalOperationCase {
+        RestorationRequestOnly,
+        RestorationResultStored,
+        RestorationAlreadyApplied,
+        NoteRequestOnly,
+        NoteResultStored,
+        NoteAlreadyApplied,
+    }
+
+    #[test]
+    fn manual_deletion_refuses_every_nonterminal_operation_kind_and_durable_state() {
+        const MEETING_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+        for case in [
+            NonterminalOperationCase::RestorationRequestOnly,
+            NonterminalOperationCase::RestorationResultStored,
+            NonterminalOperationCase::RestorationAlreadyApplied,
+            NonterminalOperationCase::NoteRequestOnly,
+            NonterminalOperationCase::NoteResultStored,
+            NonterminalOperationCase::NoteAlreadyApplied,
+        ] {
+            let (_temp, storage) = storage();
+            let (directory, _) = fixture(&storage, MEETING_ID, None);
+            let fixture = product_operations_fixture();
+            let (request, result, applied_meeting): (
+                StoredOperationRequest,
+                Option<StoredOperationResult>,
+                Option<MeetingRecord>,
+            ) = match case {
+                NonterminalOperationCase::RestorationRequestOnly => (
+                    StoredOperationRequest::Restoration(parse_operation_fixture(
+                        &fixture,
+                        &["restoration", "request"],
+                    )),
+                    None,
+                    None,
+                ),
+                NonterminalOperationCase::RestorationResultStored => (
+                    StoredOperationRequest::Restoration(parse_operation_fixture(
+                        &fixture,
+                        &["restoration", "request"],
+                    )),
+                    Some(StoredOperationResult::Restoration(parse_operation_fixture(
+                        &fixture,
+                        &["restoration", "result"],
+                    ))),
+                    None,
+                ),
+                NonterminalOperationCase::RestorationAlreadyApplied => (
+                    StoredOperationRequest::Restoration(parse_operation_fixture(
+                        &fixture,
+                        &["restoration", "request"],
+                    )),
+                    Some(StoredOperationResult::Restoration(parse_operation_fixture(
+                        &fixture,
+                        &["restoration", "result"],
+                    ))),
+                    Some(parse_operation_fixture(
+                        &fixture,
+                        &["committed_meetings", "restoration"],
+                    )),
+                ),
+                NonterminalOperationCase::NoteRequestOnly => (
+                    StoredOperationRequest::NoteGeneration(parse_operation_fixture(
+                        &fixture,
+                        &["accepted_note", "request"],
+                    )),
+                    None,
+                    None,
+                ),
+                NonterminalOperationCase::NoteResultStored => (
+                    StoredOperationRequest::NoteGeneration(parse_operation_fixture(
+                        &fixture,
+                        &["accepted_note", "request"],
+                    )),
+                    Some(StoredOperationResult::NoteGeneration(
+                        parse_operation_fixture(&fixture, &["accepted_note", "result"]),
+                    )),
+                    None,
+                ),
+                NonterminalOperationCase::NoteAlreadyApplied => (
+                    StoredOperationRequest::NoteGeneration(parse_operation_fixture(
+                        &fixture,
+                        &["accepted_note", "request"],
+                    )),
+                    Some(StoredOperationResult::NoteGeneration(
+                        parse_operation_fixture(&fixture, &["accepted_note", "result"]),
+                    )),
+                    Some(parse_operation_fixture(
+                        &fixture,
+                        &["committed_meetings", "accepted_note"],
+                    )),
+                ),
+            };
+            let operations = OperationStore::open(&storage).unwrap();
+            let operation_id = request.operation_id();
+            operations.write_request(&request).unwrap();
+            if let Some(result) = &result {
+                operations.write_result(operation_id, result).unwrap();
+            }
+            if let Some(applied_meeting) = &applied_meeting {
+                write_meeting(&directory, applied_meeting).unwrap();
+            }
+            let meeting_before = fs::read(directory.join("meeting.json")).unwrap();
+            let microphone_before = fs::read(directory.join("capture/mic.wav")).unwrap();
+            let system_before = fs::read(directory.join("capture/system.wav")).unwrap();
+
+            assert!(
+                matches!(
+                    delete_meeting_audio_manually(
+                        &storage,
+                        &MeetingStorageCoordination::default(),
+                        MEETING_ID,
+                    ),
+                    Err(ManualAudioDeletionError::NonterminalProductOperation)
+                ),
+                "case {case:?} must refuse before deletion"
+            );
+            assert_eq!(
+                fs::read(directory.join("meeting.json")).unwrap(),
+                meeting_before
+            );
+            assert_eq!(
+                fs::read(directory.join("capture/mic.wav")).unwrap(),
+                microphone_before
+            );
+            assert_eq!(
+                fs::read(directory.join("capture/system.wav")).unwrap(),
+                system_before
+            );
+            assert!(!directory.join("deletion/audio-deletion.json").exists());
+        }
+    }
+
+    #[test]
+    fn invalid_manual_deletion_ids_are_refused_before_lease_or_path_access() {
+        let (_temp, storage) = storage();
+        let nested_alias = storage.path().join("meetings/nested/meeting");
+        create_private_dir(&nested_alias).unwrap();
+        durable_create_new(&nested_alias.join("meeting.json"), b"alias-sentinel").unwrap();
+        let alias_before = fs::read(nested_alias.join("meeting.json")).unwrap();
+        let invalid_ids = [
+            "nested/meeting".to_owned(),
+            ".".to_owned(),
+            "a".repeat(129),
+            "malformed id".to_owned(),
+        ];
+        let coordination = MeetingStorageCoordination::default();
+        let _existing_alias_leases: Vec<_> = invalid_ids
+            .iter()
+            .map(|meeting_id| coordination.acquire(meeting_id).unwrap())
+            .collect();
+
+        for meeting_id in &invalid_ids {
+            assert!(matches!(
+                delete_meeting_audio_manually(&storage, &coordination, meeting_id),
+                Err(ManualAudioDeletionError::Meeting(MeetingError::Malformed(
+                    "meeting identifier mismatch"
+                )))
+            ));
+        }
+
+        assert_eq!(
+            fs::read(nested_alias.join("meeting.json")).unwrap(),
+            alias_before
+        );
+        assert!(!nested_alias.join("deletion").exists());
+        assert!(!storage.path().join("operations").exists());
     }
 
     #[test]
