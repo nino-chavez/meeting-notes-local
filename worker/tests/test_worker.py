@@ -543,6 +543,22 @@ class WorkerProtocolTests(unittest.TestCase):
 
         worker = WorkerProcess(self.root, self.manifest)
         try:
+            overflow_id = str(uuid.uuid4())
+            overflow_dir = candidate_dir.parent / overflow_id
+            overflow_dir.mkdir(mode=0o700)
+            overflow_bytes = profile_path.read_bytes().replace(
+                b'"n_enrolled": 100', b'"n_enrolled": 1e10000', 1
+            )
+            self.assertNotEqual(overflow_bytes, profile_path.read_bytes())
+            private_file(overflow_dir / "voiceprint.json", overflow_bytes)
+            refused = worker.request(
+                "profile.inspect", {"profile_id": overflow_id}
+            )
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["artifact_digests"], {})
+
+            # The same worker remains available after load_profile raises an
+            # OverflowError while converting the hostile numeric count.
             inspected = worker.request("profile.inspect", {"profile_id": profile_id})
             self.assertTrue(inspected["ok"])
             self.assertEqual(inspected["artifact_digests"]["profile"], expected_digest)
@@ -1281,6 +1297,23 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
         self.assertEqual(installed.read_bytes(), expected)
         self.assertFalse((self.root / "profile-candidates" / second_id).exists())
 
+    def test_adopt_sets_exact_private_modes_under_a_restrictive_umask(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id)
+        expected = candidate.read_bytes()
+        prior_umask = os.umask(0o777)
+        try:
+            result = self._adopt(profile_id)
+        finally:
+            os.umask(prior_umask)
+        profile_dir = self.root / "profile"
+        installed = profile_dir / "voiceprint.json"
+        self.assertEqual(result, {"profile": hashlib.sha256(expected).hexdigest()})
+        self.assertEqual(installed.read_bytes(), expected)
+        self.assertEqual(stat.S_IMODE(profile_dir.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(installed.stat().st_mode), 0o600)
+        self.assertFalse(candidate.parent.exists())
+
     def test_adopt_refuses_missing_malformed_oversized_and_symlink_candidates(self) -> None:
         missing = str(uuid.uuid4())
         with self.assertRaises(AdapterRefused):
@@ -1307,8 +1340,7 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
         candidate.symlink_to(external)
         with self.assertRaises(AdapterRefused):
             self._adopt(profile_id)
-        self.assertTrue(candidate.is_symlink())
-        self.assertTrue(candidate.parent.exists())
+        self.assertFalse(candidate.parent.exists())
         self.assertEqual(external.read_bytes(), b"{}\n")
 
     def test_inspect_and_adopt_refuse_nonprivate_quarantine_chain_pre_read(self) -> None:
@@ -1453,12 +1485,57 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
             return (metadata.st_dev, metadata.st_ino) != rejected_identity
 
         with mock.patch.object(
-            worker_storage, "_owned_by_effective_user", side_effect=owns
+            adapters, "_owned_by_effective_user", side_effect=owns
         ):
             with self.assertRaises(AdapterRefused):
                 self._adopt(profile_id)
         self.assertEqual(installed.read_bytes(), installed_bytes)
         self.assertFalse(candidate.parent.exists())
+
+    def test_unsafe_installed_profile_directory_refuses_before_candidate_cleanup(self) -> None:
+        profile_dir = self.root / "profile"
+        profile_dir.mkdir(mode=0o755)
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id)
+        expected = candidate.read_bytes()
+        with self.assertRaises(AdapterRefused):
+            self._adopt(profile_id)
+        self.assertEqual(stat.S_IMODE(profile_dir.stat().st_mode), 0o755)
+        self.assertEqual(candidate.read_bytes(), expected)
+        self.assertFalse((profile_dir / "voiceprint.json").exists())
+
+        profile_dir.rmdir()
+        outside = Path(self.temporary.name) / "outside-profile"
+        outside.mkdir(mode=0o700)
+        sentinel = outside / "sentinel"
+        private_file(sentinel, b"outside profile directory")
+        profile_dir.symlink_to(outside, target_is_directory=True)
+        second_id = str(uuid.uuid4())
+        second = self._candidate(second_id)
+        second_expected = second.read_bytes()
+        with self.assertRaises(AdapterRefused):
+            self._adopt(second_id)
+        self.assertTrue(profile_dir.is_symlink())
+        self.assertEqual(sentinel.read_bytes(), b"outside profile directory")
+        self.assertEqual(second.read_bytes(), second_expected)
+
+        profile_dir.unlink()
+        profile_dir.mkdir(mode=0o700)
+        third_id = str(uuid.uuid4())
+        third = self._candidate(third_id)
+        third_expected = third.read_bytes()
+        rejected_identity = (profile_dir.stat().st_dev, profile_dir.stat().st_ino)
+
+        def owns(metadata: os.stat_result) -> bool:
+            return (metadata.st_dev, metadata.st_ino) != rejected_identity
+
+        with mock.patch.object(
+            adapters, "_owned_by_effective_user", side_effect=owns
+        ):
+            with self.assertRaises(AdapterRefused):
+                self._adopt(third_id)
+        self.assertEqual(third.read_bytes(), third_expected)
+        self.assertFalse((profile_dir / "voiceprint.json").exists())
 
     def test_adopt_uses_the_validated_snapshot_when_candidate_changes(self) -> None:
         profile_id = str(uuid.uuid4())
@@ -1487,6 +1564,27 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
             (self.root / "profile" / "voiceprint.json").read_bytes(), expected
         )
         self.assertFalse(candidate.parent.exists())
+
+    def test_candidate_changed_during_read_is_refused_and_quarantine_removed(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id)
+        original_read = adapters.os.read
+        changed = False
+
+        def read_then_change_mode(descriptor: int, count: int) -> bytes:
+            nonlocal changed
+            chunk = original_read(descriptor, count)
+            if not changed:
+                changed = True
+                os.fchmod(descriptor, 0o400)
+            return chunk
+
+        with mock.patch.object(adapters.os, "read", side_effect=read_then_change_mode):
+            with self.assertRaises(AdapterRefused):
+                self._adopt(profile_id)
+        self.assertTrue(changed)
+        self.assertFalse(candidate.parent.exists())
+        self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
 
     def test_adopt_refuses_a_profile_from_another_encoder_space(self) -> None:
         profile_id = str(uuid.uuid4())

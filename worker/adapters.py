@@ -9,6 +9,7 @@ import os
 import stat
 import sys
 import tempfile
+import uuid
 import wave
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -466,7 +467,12 @@ class _ProfileQuarantine:
     root_fd: int
     candidates_fd: int
     candidate_fd: int
-    profile_fd: int
+
+
+@dataclass
+class _InstalledProfileDirectory:
+    root_fd: int
+    profile_fd: int | None
 
 
 def _owned_by_effective_user(metadata: os.stat_result) -> bool:
@@ -523,14 +529,7 @@ def _open_profile_quarantine(root: Path, profile_id: str):
         )
         descriptors.append(candidate_fd)
         _require_private_directory_fd(candidate_fd, "profile quarantine")
-        profile_fd = os.open(
-            "voiceprint.json",
-            os.O_RDONLY | no_follow,
-            dir_fd=candidate_fd,
-        )
-        descriptors.append(profile_fd)
-        _require_private_file_fd(profile_fd, "profile candidate")
-        yield _ProfileQuarantine(root_fd, candidates_fd, candidate_fd, profile_fd)
+        yield _ProfileQuarantine(root_fd, candidates_fd, candidate_fd)
     except AdapterRefused:
         raise
     except OSError as exc:
@@ -540,8 +539,51 @@ def _open_profile_quarantine(root: Path, profile_id: str):
             os.close(descriptor)
 
 
-def _read_profile_candidate(quarantine: _ProfileQuarantine) -> bytes:
-    descriptor = quarantine.profile_fd
+@contextlib.contextmanager
+def _open_profile_candidate(quarantine: _ProfileQuarantine):
+    """Open a valid leaf, or surface a symlink that adopt may safely unlink."""
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise AdapterRefused("profile candidate requires no-follow support")
+    try:
+        leaf = os.stat(
+            "voiceprint.json",
+            dir_fd=quarantine.candidate_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise AdapterRefused("profile candidate is missing or unsafe") from exc
+    if stat.S_ISLNK(leaf.st_mode):
+        # The parent chain is already pinned and private. Yielding a sentinel lets
+        # adopt remove this directory entry without opening or following its target.
+        yield None
+        return
+    if (
+        not stat.S_ISREG(leaf.st_mode)
+        or stat.S_IMODE(leaf.st_mode) != 0o600
+        or not _owned_by_effective_user(leaf)
+    ):
+        raise AdapterRefused("profile candidate is not an owner-private regular file")
+    try:
+        descriptor = os.open(
+            "voiceprint.json",
+            os.O_RDONLY | no_follow,
+            dir_fd=quarantine.candidate_fd,
+        )
+    except OSError as exc:
+        raise AdapterRefused("profile candidate changed before it was opened") from exc
+    try:
+        opened = _require_private_file_fd(descriptor, "profile candidate")
+        if opened.st_dev != leaf.st_dev or opened.st_ino != leaf.st_ino:
+            raise AdapterRefused("profile candidate changed before it was opened")
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def _read_profile_candidate(descriptor: int | None) -> bytes:
+    if descriptor is None:
+        raise AdapterRefused("profile candidate may not be a symlink")
     before = _require_private_file_fd(descriptor, "profile candidate")
     if before.st_size > MAX_PROFILE_BYTES:
         raise AdapterRefused("profile candidate exceeds its bounded read limit")
@@ -640,6 +682,218 @@ def _remove_profile_quarantine(
     os.fsync(quarantine.root_fd)
 
 
+@contextlib.contextmanager
+def _open_installed_profile_directory(root: Path):
+    """Pin and validate a pre-existing profile directory before adoption."""
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory is None:
+        raise AdapterRefused("installed profile requires no-follow directory support")
+    descriptors: list[int] = []
+    target: _InstalledProfileDirectory | None = None
+    try:
+        root_fd = os.open(root, os.O_RDONLY | directory | no_follow)
+        descriptors.append(root_fd)
+        _require_private_directory_fd(root_fd, "app data root")
+        try:
+            profile_fd = os.open(
+                "profile",
+                os.O_RDONLY | directory | no_follow,
+                dir_fd=root_fd,
+            )
+        except FileNotFoundError:
+            profile_fd = None
+        if profile_fd is not None:
+            descriptors.append(profile_fd)
+            metadata = _require_private_directory_fd(
+                profile_fd, "installed profile directory"
+            )
+            _require_directory_link(
+                root_fd,
+                "profile",
+                metadata,
+                "installed profile directory",
+            )
+        target = _InstalledProfileDirectory(root_fd, profile_fd)
+        yield target
+    except AdapterRefused:
+        raise
+    except OSError as exc:
+        raise AdapterRefused("installed profile directory is unsafe") from exc
+    finally:
+        if target is not None and target.profile_fd is not None:
+            descriptors.append(target.profile_fd)
+        for descriptor in reversed(list(dict.fromkeys(descriptors))):
+            os.close(descriptor)
+
+
+def _ensure_installed_profile_directory(target: _InstalledProfileDirectory) -> int:
+    if target.profile_fd is not None:
+        metadata = _require_private_directory_fd(
+            target.profile_fd, "installed profile directory"
+        )
+        _require_directory_link(
+            target.root_fd,
+            "profile",
+            metadata,
+            "installed profile directory",
+        )
+        return target.profile_fd
+    try:
+        os.mkdir("profile", mode=0o700, dir_fd=target.root_fd)
+        os.chmod(
+            "profile",
+            0o700,
+            dir_fd=target.root_fd,
+            follow_symlinks=False,
+        )
+        os.fsync(target.root_fd)
+        profile_fd = os.open(
+            "profile",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=target.root_fd,
+        )
+    except OSError as exc:
+        raise AdapterRefused("installed profile directory could not be created") from exc
+    try:
+        metadata = _require_private_directory_fd(
+            profile_fd, "installed profile directory"
+        )
+        _require_directory_link(
+            target.root_fd,
+            "profile",
+            metadata,
+            "installed profile directory",
+        )
+    except BaseException:
+        os.close(profile_fd)
+        raise
+    target.profile_fd = profile_fd
+    return profile_fd
+
+
+def _read_private_file_at(
+    directory_fd: int, name: str, *, max_bytes: int, label: str
+) -> bytes:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+    except OSError as exc:
+        raise AdapterRefused(f"{label} is missing or unsafe") from exc
+    try:
+        before = _require_private_file_fd(descriptor, label)
+        if before.st_size > max_bytes:
+            raise AdapterRefused(f"{label} exceeds its bounded read limit")
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise AdapterRefused(f"{label} changed while being read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev != after.st_dev
+            or before.st_ino != after.st_ino
+            or before.st_mode != after.st_mode
+            or before.st_uid != after.st_uid
+            or before.st_size != after.st_size
+            or not _owned_by_effective_user(after)
+        ):
+            raise AdapterRefused(f"{label} changed while being read")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _install_profile_bytes(
+    target: _InstalledProfileDirectory, profile_bytes: bytes
+) -> bytes:
+    profile_fd = _ensure_installed_profile_directory(target)
+    try:
+        os.stat("voiceprint.json", dir_fd=profile_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise AdapterRefused("installed profile is unsafe") from exc
+    else:
+        existing = _read_private_file_at(
+            profile_fd,
+            "voiceprint.json",
+            max_bytes=len(profile_bytes),
+            label="installed profile",
+        )
+        if existing != profile_bytes:
+            raise AdapterRefused(
+                "canonical artifact differs from its requested bytes"
+            )
+        _ensure_installed_profile_directory(target)
+        return existing
+    temporary = f".voiceprint.json.{uuid.uuid4()}.tmp"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=profile_fd,
+        )
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(profile_bytes)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise AdapterRefused("installed profile write did not advance")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        try:
+            os.link(
+                temporary,
+                "voiceprint.json",
+                src_dir_fd=profile_fd,
+                dst_dir_fd=profile_fd,
+                follow_symlinks=False,
+            )
+            os.fsync(profile_fd)
+        except FileExistsError:
+            existing = _read_private_file_at(
+                profile_fd,
+                "voiceprint.json",
+                max_bytes=len(profile_bytes),
+                label="installed profile",
+            )
+            if existing != profile_bytes:
+                raise AdapterRefused(
+                    "canonical artifact differs from its requested bytes"
+                )
+        installed = _read_private_file_at(
+            profile_fd,
+            "voiceprint.json",
+            max_bytes=len(profile_bytes),
+            label="installed profile",
+        )
+        _ensure_installed_profile_directory(target)
+        return installed
+    except AdapterRefused:
+        raise
+    except OSError as exc:
+        raise AdapterRefused("installed profile could not be written safely") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=profile_fd)
+            os.fsync(profile_fd)
+        except FileNotFoundError:
+            pass
+
+
 def _validate_profile_bytes(
     root: Path, profile_bytes: bytes, encoder_digest: str
 ) -> None:
@@ -671,16 +925,24 @@ def _validate_profile_bytes(
                 )
         except AdapterRefused:
             raise
-        except (AttributeError, KeyError, OSError, SystemExit, TypeError, ValueError) as exc:
+        except (
+            AttributeError,
+            KeyError,
+            OSError,
+            OverflowError,
+            SystemExit,
+            TypeError,
+            ValueError,
+        ) as exc:
             raise AdapterRefused(str(exc)) from None
 
 
 def _read_valid_profile_candidate(
     root: Path,
-    quarantine: _ProfileQuarantine,
+    descriptor: int | None,
     encoder_digest: str,
 ) -> tuple[bytes, str]:
-    profile_bytes = _read_profile_candidate(quarantine)
+    profile_bytes = _read_profile_candidate(descriptor)
     _validate_profile_bytes(root, profile_bytes, encoder_digest)
     return profile_bytes, hashlib.sha256(profile_bytes).hexdigest()
 
@@ -697,7 +959,8 @@ def profile_inspect(root: Path, arguments: object, encoder_digest: str) -> dict[
     values = _exact_arguments(arguments, {"profile_id"})
     profile_id = opaque_id(values["profile_id"], "profile_id")
     with _open_profile_quarantine(root, profile_id) as quarantine:
-        _, digest = _read_valid_profile_candidate(root, quarantine, encoder_digest)
+        with _open_profile_candidate(quarantine) as descriptor:
+            _, digest = _read_valid_profile_candidate(root, descriptor, encoder_digest)
     return {"profile": digest}
 
 
@@ -705,38 +968,31 @@ def profile_adopt(root: Path, arguments: object, encoder_digest: str) -> dict[st
     root = _private_profile_root(root)
     values = _exact_arguments(arguments, {"profile_id"})
     profile_id = opaque_id(values["profile_id"], "profile_id")
-    with _open_profile_quarantine(root, profile_id) as quarantine:
-        # Consume the exact safe quarantine before any installed state changes.
-        # A cleanup refusal therefore cannot leave both an installed profile and
-        # an untrusted candidate behind.
-        try:
-            profile_bytes, digest = _read_valid_profile_candidate(
-                root, quarantine, encoder_digest
+    with _open_installed_profile_directory(root) as installed:
+        with _open_profile_quarantine(root, profile_id) as quarantine:
+            with _open_profile_candidate(quarantine) as descriptor:
+                # Consume the exact safe quarantine before any installed state
+                # changes. A cleanup refusal therefore cannot leave both an
+                # installed profile and an untrusted candidate behind.
+                try:
+                    profile_bytes, digest = _read_valid_profile_candidate(
+                        root, descriptor, encoder_digest
+                    )
+                finally:
+                    _remove_profile_quarantine(quarantine, profile_id)
+        installed_bytes = _install_profile_bytes(installed, profile_bytes)
+        if (
+            installed_bytes != profile_bytes
+            or hashlib.sha256(installed_bytes).hexdigest() != digest
+        ):
+            raise AdapterRefused(
+                "installed profile differs from the validated candidate"
             )
-        finally:
-            _remove_profile_quarantine(quarantine, profile_id)
-    profile_dir = resolve_below(root, "profile")
-    private_directory(profile_dir)
-    target = resolve_below(root, "profile", "voiceprint.json")
-    try:
-        durable_create_or_verify_identical(target, profile_bytes)
-        installed_bytes = read_private_file(
-            target,
-            max_bytes=len(profile_bytes),
-            label="installed profile",
-        )
-    except StorageRefused as exc:
-        raise AdapterRefused(str(exc)) from None
-    if (
-        installed_bytes != profile_bytes
-        or hashlib.sha256(installed_bytes).hexdigest() != digest
-    ):
-        raise AdapterRefused("installed profile differs from the validated candidate")
-    # The worker result binds only these installed bytes.  Re-run the
-    # canonical semantic loader after the durable write rather than treating
-    # the earlier candidate verdict as authority for a different pathname.
-    _validate_profile_bytes(root, installed_bytes, encoder_digest)
-    return {"profile": digest}
+        # The worker result binds only these installed bytes. Re-run the
+        # canonical semantic loader after the durable write rather than treating
+        # the earlier candidate verdict as authority for a different pathname.
+        _validate_profile_bytes(root, installed_bytes, encoder_digest)
+        return {"profile": digest}
 
 
 def note_inspect(root: Path, arguments: object) -> dict[str, str]:
