@@ -1195,7 +1195,7 @@ fn verify_authority_slots(
             let l = inspect_slot(&root.join("profile/voiceprint.json"), true)?;
             let r = inspect_slot(&root.join("profile/lifecycle/reset.tombstone"), true)?;
             if !((l == *profile && r == *reset_zero)
-                || (l == *reset_zero && (r == *profile || is_zero(&r))))
+                || (l == *reset_zero && (r == *profile || is_zero_of(&r, profile))))
             {
                 return Err(ProfileLifecycleError::Quarantined);
             }
@@ -1407,12 +1407,23 @@ fn darwin_safe_fd(_: &File) -> Result<(), ProfileLifecycleError> {
 }
 #[cfg(all(target_os = "macos", not(test)))]
 fn darwin_safe_fd(f: &File) -> Result<(), ProfileLifecycleError> {
+    darwin_safe_fd_real(f)
+}
+#[cfg(target_os = "macos")]
+fn darwin_safe_fd_real(f: &File) -> Result<(), ProfileLifecycleError> {
     use std::os::fd::AsRawFd;
     let fd = f.as_raw_fd();
     let n = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0, libc::XATTR_SHOWCOMPRESSION) };
     if n != 0 {
         return Err(ProfileLifecycleError::Quarantined);
     }
+    darwin_acl_empty_fd(f)
+}
+
+#[cfg(target_os = "macos")]
+fn darwin_acl_empty_fd(f: &File) -> Result<(), ProfileLifecycleError> {
+    use std::os::fd::AsRawFd;
+    let fd = f.as_raw_fd();
     unsafe extern "C" {
         fn acl_get_fd(fd: i32) -> *mut libc::c_void;
         fn acl_get_entry(
@@ -1986,6 +1997,19 @@ mod tests {
     use crate::storage::create_private_dir;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
+
+    #[cfg(target_os = "macos")]
+    fn scrub_test_root(path: &Path) {
+        let status = std::process::Command::new("xattr")
+            .args(["-cr"])
+            .arg(path)
+            .status()
+            .expect("xattr must be available on macOS");
+        assert!(
+            status.success(),
+            "could not scrub dedicated test root xattrs"
+        );
+    }
     struct FakePlatform;
     impl SwapPlatform for FakePlatform {
         fn check(&self, _: &Path) -> Result<(), ProfileLifecycleError> {
@@ -2024,6 +2048,67 @@ mod tests {
         create_private_dir(&repo).unwrap();
         let root = StorageRoot::create(&t.path().join("app"), &repo).unwrap();
         (t, root)
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "manual clean-APFS integration: runs real capability, swap, full-sync, ACL, and xattr gates"]
+    fn manual_apfs_profile_lifecycle_primitives() {
+        let temp = TempDir::new().unwrap();
+        scrub_test_root(temp.path());
+        let root = temp.path().join("apfs-root");
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        scrub_test_root(&root);
+        if let Err(error) = SystemPlatform.check(&root) {
+            eprintln!("SKIP: temporary root lacks required APFS swap capability: {error}");
+            return;
+        }
+        let left = root.join("left");
+        let right = root.join("right");
+        fs::write(&left, b"P").unwrap();
+        fs::write(&right, b"Z").unwrap();
+        for path in [&left, &right] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+            scrub_test_root(path);
+        }
+        let parent = open_dir(&root).unwrap();
+        let left_fd = open_rw(&left).unwrap();
+        let right_fd = open_rw(&right).unwrap();
+        let acl_empty = darwin_acl_empty_fd(&left_fd);
+        eprintln!("ACL empty probe on dedicated temporary file: {acl_empty:?}");
+        if let Err(error) = darwin_safe_fd_real(&left_fd) {
+            eprintln!(
+                "SKIP: clean temporary APFS file does not satisfy the production ACL/xattr predicate: {error}"
+            );
+            return;
+        }
+        if let Err(error) = darwin_safe_fd_real(&right_fd) {
+            eprintln!(
+                "SKIP: clean temporary APFS file does not satisfy the production ACL/xattr predicate: {error}"
+            );
+            return;
+        }
+        full_sync(&left_fd).unwrap();
+        full_sync(&right_fd).unwrap();
+        SystemPlatform
+            .swap(&parent, "left", &parent, "right", &left, &right)
+            .unwrap();
+        full_sync(&parent).unwrap();
+        assert_eq!(fs::read(&left).unwrap(), b"Z");
+        assert_eq!(fs::read(&right).unwrap(), b"P");
+        let status = std::process::Command::new("xattr")
+            .args(["-w", "com.example.profile-lifecycle-test", "x"])
+            // After the exchange, `right` names P while `right_fd` still
+            // pins Z (now named by `left`).
+            .arg(&right)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(matches!(darwin_safe_fd_real(&right_fd), Ok(())));
+        let right_after = open_rw(&right).unwrap();
+        assert!(matches!(
+            darwin_safe_fd_real(&right_after),
+            Err(ProfileLifecycleError::Quarantined)
+        ));
     }
     #[test]
     fn baseline_is_fixed_and_canonical() {
@@ -2133,6 +2218,37 @@ mod tests {
                 Payload::ResetRemoved { .. }
             ));
         }
+    }
+    #[test]
+    fn reset_posttruncate_refuses_a_different_zero_inode() {
+        let (_t, s) = storage();
+        let live = s.path().join("profile/voiceprint.json");
+        fs::write(&live, b"safe profile bytes").unwrap();
+        fs::set_permissions(&live, fs::Permissions::from_mode(0o600)).unwrap();
+        let c = MeetingStorageCoordination::default();
+        assert!(matches!(
+            reset_with_platform(
+                &s,
+                &c,
+                ProfileResetRequest {
+                    operation_id: "123e4567-e89b-12d3-a456-426614174000",
+                    requested_at_epoch_seconds: 1,
+                    completed_at_epoch_seconds: 2,
+                    fail_after: Some(InjectedFailurePhase::Swap),
+                },
+                &FakePlatform,
+            ),
+            Err(ProfileLifecycleError::InjectedInterruption)
+        ));
+        let lifecycle = s.path().join("profile/lifecycle");
+        let reset = lifecycle.join("reset.tombstone");
+        let replacement = lifecycle.join("replacement-zero");
+        create_zero(&replacement).unwrap();
+        fs::rename(&replacement, &reset).unwrap();
+        assert!(matches!(
+            authority(&s),
+            Err(ProfileLifecycleError::Quarantined)
+        ));
     }
     #[test]
     fn unsafe_hard_link_and_two_torn_slots_quarantine() {
