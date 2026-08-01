@@ -32,11 +32,22 @@ def digest(path: Path) -> str:
 
 
 class NoteBridgeProcess:
-    def __init__(self, root: Path, manifest: Path, *, executable: Path, bridge: Path):
+    def __init__(
+        self,
+        root: Path,
+        manifest: Path,
+        *,
+        executable: Path,
+        bridge: Path,
+        isolated: bool = True,
+        parent_environment: dict[str, str] | None = None,
+    ):
         read_fd, self._write_fd = os.pipe()
-        self._process = subprocess.Popen(
-            [
-                str(executable),
+        command = [str(executable)]
+        if isolated:
+            command.extend(("-I", "-S", "-E", "-s", "-B"))
+        command.extend(
+            (
                 str(bridge),
                 "--temporary-private-root",
                 str(root),
@@ -44,8 +55,12 @@ class NoteBridgeProcess:
                 str(manifest),
                 "--parent-liveness-fd",
                 str(read_fd),
-            ],
+            )
+        )
+        self._process = subprocess.Popen(
+            command,
             cwd=manifest.parent,
+            env=self._scrubbed_environment(parent_environment or dict(os.environ)),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -54,6 +69,10 @@ class NoteBridgeProcess:
         os.close(read_fd)
         ready = self._process.stdout.readline()
         self.ready = json.loads(ready) if ready else None
+
+    @staticmethod
+    def _scrubbed_environment(_parent: dict[str, str]) -> dict[str, str]:
+        return {}
 
     def send(self, frame: bytes) -> tuple[dict | None, int, bytes]:
         assert self._process.stdin is not None
@@ -171,12 +190,20 @@ class NoteBridgeHarnessTests(unittest.TestCase):
             directory.chmod(0o700)
         return meeting_id, note_id, transcript_id
 
-    def _start(self, *, executable: Path | None = None) -> NoteBridgeProcess:
+    def _start(
+        self,
+        *,
+        executable: Path | None = None,
+        isolated: bool = True,
+        parent_environment: dict[str, str] | None = None,
+    ) -> NoteBridgeProcess:
         return NoteBridgeProcess(
             self.root,
             self.manifest,
             executable=executable or self.runtime,
             bridge=self.bridge,
+            isolated=isolated,
+            parent_environment=parent_environment,
         )
 
     def _arguments(self) -> dict:
@@ -239,6 +266,50 @@ class NoteBridgeHarnessTests(unittest.TestCase):
         finally:
             bridge.close()
         self.assertEqual(bridge._process.returncode, 2)
+
+    def test_unisolated_launcher_never_reaches_ready(self) -> None:
+        bridge = self._start(isolated=False)
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_parent_pythonpath_sitecustomize_is_scrubbed_before_startup(self) -> None:
+        hostile = self.base / "hostile-startup"
+        hostile.mkdir(mode=0o700)
+        marker = self.base / "sitecustomize-executed"
+        private_file(
+            hostile / "sitecustomize.py",
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n".encode(),
+        )
+        request_id, command = self._command()
+        bridge = self._start(parent_environment={"PYTHONPATH": str(hostile)})
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["request_id"], request_id)
+        self.assertEqual(result["outcome"], "succeeded")
+        self.assertFalse(marker.exists())
+
+    def test_resource_sibling_urllib_cannot_shadow_runtime_standard_library(self) -> None:
+        marker = self.base / "urllib-shadow-executed"
+        private_file(
+            self.resources / "urllib" / "__init__.py",
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n".encode(),
+        )
+        request_id, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["request_id"], request_id)
+        self.assertEqual(result["outcome"], "succeeded")
+        self.assertFalse(marker.exists())
 
     def test_intermediate_resource_symlink_never_reaches_ready(self) -> None:
         document = self._manifest_document()

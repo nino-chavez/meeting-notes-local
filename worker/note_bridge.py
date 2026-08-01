@@ -38,6 +38,14 @@ _VALIDATOR_MODULES = {
     "transcript": "transcript.py",
     "capture_health": "capture_health.py",
 }
+_REQUIRED_FLAGS = {
+    "isolated": 1,
+    "no_site": 1,
+    "ignore_environment": 1,
+    "no_user_site": 1,
+    "safe_path": True,
+    "dont_write_bytecode": 1,
+}
 
 
 class BridgeRefused(ValueError):
@@ -145,6 +153,67 @@ def _open_absolute_directory(path: Path, *, private: bool) -> int:
     except Exception:
         os.close(descriptor)
         raise
+
+
+def _confine_runtime_imports() -> tuple[Path, ...]:
+    for name, expected in _REQUIRED_FLAGS.items():
+        if getattr(sys.flags, name, None) != expected:
+            raise BridgeRefused("note bridge did not start in isolated no-site mode")
+    if "site" in sys.modules or "sitecustomize" in sys.modules or "usercustomize" in sys.modules:
+        raise BridgeRefused("site initialization ran before note bridge verification")
+    base = Path(sys.base_prefix).resolve(strict=True)
+    approved: list[Path] = []
+    for entry in sys.path:
+        if not entry:
+            continue
+        candidate = Path(entry)
+        if not candidate.exists():
+            continue
+        resolved = candidate.resolve(strict=True)
+        if base != resolved and base not in resolved.parents:
+            raise BridgeRefused("runtime import path escapes the interpreter prefix")
+        if "site-packages" in resolved.parts:
+            raise BridgeRefused("site packages are outside the note runtime")
+        approved.append(resolved)
+    if not approved:
+        raise BridgeRefused("attested runtime exposes no standard-library path")
+    sys.path[:] = [str(path) for path in approved]
+    return tuple(approved)
+
+
+def _is_below(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path == root or root in path.parents for root in roots)
+
+
+def _require_loaded_code_confined(
+    runtime: _VerifiedRuntime,
+    standard_library: tuple[Path, ...],
+    bundle_loader: object,
+) -> None:
+    bridge = runtime.resources["bridge"].identity
+    for module in tuple(sys.modules.values()):
+        if module is None:
+            continue
+        if getattr(module, "__loader__", None) is bundle_loader:
+            continue
+        origin = getattr(getattr(module, "__spec__", None), "origin", None)
+        if origin in {None, "built-in", "frozen"}:
+            filename = getattr(module, "__file__", None)
+            if filename is None:
+                continue
+            origin = filename
+        try:
+            resolved = Path(origin).resolve(strict=True)
+        except (OSError, TypeError, ValueError) as exc:
+            raise BridgeRefused("loaded module has no confined code identity") from exc
+        if _is_below(resolved, standard_library):
+            continue
+        try:
+            identity = os.stat(resolved, follow_symlinks=False)
+        except OSError as exc:
+            raise BridgeRefused("loaded module identity is unavailable") from exc
+        if not _same_identity(identity, bridge):
+            raise BridgeRefused("unmanifested code loaded into the note bridge")
 
 
 def _open_beneath(root_fd: int, relative_path: str, expected_digest: str) -> _RetainedFile:
@@ -357,7 +426,7 @@ def load_validator(runtime: _VerifiedRuntime):
         getattr(sys.modules[name], "__loader__", None) is not finder for name in _VALIDATOR_MODULES
     ):
         raise BridgeRefused("validator helper did not load from the verified bundle")
-    return module
+    return module, finder
 
 
 def _canonical_uuid(value: object) -> str:
@@ -460,11 +529,13 @@ def _watch_parent(parent_fd: int) -> None:
 
 
 def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
+    standard_library = _confine_runtime_imports()
     runtime = verify_runtime(manifest_path)
     root_fd = _open_absolute_directory(root_path, private=True)
     try:
-        validator = load_validator(runtime)
+        validator, bundle_loader = load_validator(runtime)
         runtime.require_unchanged()
+        _require_loaded_code_confined(runtime, standard_library, bundle_loader)
         _emit(
             {
                 "schema": "note-bridge-event/1",
@@ -509,6 +580,7 @@ def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
             _refused(request_id, "artifact-invalid", False)
             return 0
         runtime.require_unchanged()
+        _require_loaded_code_confined(runtime, standard_library, bundle_loader)
         _emit(
             {
                 "schema": "note-bridge-result/1",
