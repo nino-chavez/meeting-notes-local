@@ -1,6 +1,18 @@
 use serde_json::Value;
 
 #[test]
+fn single_instance_is_the_first_plugin_and_precedes_app_setup() {
+    let source = include_str!("../src/main.rs");
+    let plugin = source
+        .find(".plugin(tauri_plugin_single_instance::init")
+        .expect("single-instance plugin registration");
+    let setup = source.find(".setup(|app|").expect("startup setup hook");
+
+    assert_eq!(source.find(".plugin("), Some(plugin));
+    assert!(plugin < setup);
+}
+
+#[test]
 fn main_window_has_only_named_commands_and_no_generic_capability() {
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();

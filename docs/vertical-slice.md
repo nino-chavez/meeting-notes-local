@@ -46,8 +46,8 @@ human gate.
 | Wave | Current status and active stream | Join or exit | Human gate | ETA |
 |---|---|---|---|---|
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |
-| B. Shared-contract freeze | Lead-owned inventory and freeze of meeting/artifact records, worker protocol, retention/deletion receipts, correction/regeneration, `note/2`, the UI command boundary, and acceptance fixtures. | One versioned fixture set before independent coding streams branch. | None. | 2–4 days, inside Wave C |
-| C. Trust foundation | Not started beyond the alpha's scheduled audio retention. Planned streams: Rust persistence/trust, Python profile and evidence adapters, and the Tauri surface. | Interruption and fresh-process tests, then an independent audit. | Retention and far-end-notice choices; real withheld-turn restore. | Cumulative 1–2 weeks |
+| B. Shared-contract freeze | In progress. Worker admission now advertises only runnable operations, Rust owns the Swift capture child, and the alpha closure receipt is frozen. Correction/regeneration, `note/2` creation, the successor UI command boundary, and acceptance fixtures remain. | One versioned fixture set before independent coding streams branch. | None. | 2–4 days, inside Wave C |
+| C. Trust foundation | In progress. Active meetings are excluded from retention under a serialized storage scan, and a single-instance guard closes the second-process writer path. Deterministic interleaving tests, profile controls, correction, and deletion actions remain. | Interruption and fresh-process tests, then an independent audit. | Retention-policy wording and far-end-notice choices; real withheld-turn restore. | Cumulative 1–2 weeks |
 | D. Evidence-linked automatic notes | Contract and experiments exist; product generation and admission do not. | Every claim locator resolves; rejected summaries remain transcript-only; deterministic checks precede private semantic review. | Semantic support and usefulness adjudication. | Additional 2–3 weeks |
 | E. Product surfaces and retrieval | Encounter is approved; production library, note reader, commitment view, and exact transcript/metadata search are not built. Design remains retrieval → commitments → capture; build follows dependency order. | Join UI to the frozen command facade and validated local artifacts. | Cold operator review of the working surfaces. | Additional 2–3 weeks, partly parallel with D |
 | F. Beta packaging and admission | Blocked by C–E. | Frozen build/model identities, installed canary, locator resolution, correction/restart/retention/deletion receipts. | Pre-run reference, semantic review, and operator usefulness verdict. | Cumulative 6–9 weeks |
@@ -510,9 +510,14 @@ sequence gate. A scan snapshots the active IDs under that gate and returns
 prevents a retention pass from quarantining a partial create, deleting WAVs
 during transcription, or replacing a newer meeting record with a stale copy.
 A due meeting is reconsidered on the next 30-second pass after its lease clears.
-Before beta admission, the same contract needs a process-lifetime app-data
-writer lock so a second app process fails closed rather than bypassing this
-in-process coordination.
+The official Tauri single-instance plugin is registered first so an ordinary
+second launch returns focus to the existing window before custom app setup. It
+is a UX guard, not storage authority: socket errors can fail open. The storage
+authority is a separate owner-only `.writer.lock` outside `meetings/`, held by
+the process for its lifetime with a nonblocking exclusive `flock`. Contention or
+lock errors fail startup before recovery, capture, or retention can mutate a
+meeting. Source-level tests preserve plugin order and exercise lock contention;
+an installed simultaneous-launch receipt remains a beta gate.
 
 The completed operation receipt has schema `audio-deletion/1`. It binds the
 original `capture-session/2` digest and the exact relative name, byte size, and
@@ -835,7 +840,7 @@ contracts. The installed boundary needs its own evidence.
 | Run under `umask 000` | App root and directories are `0700`; private files are `0600`; nothing is written in the repository |
 | Retention time becomes due while the app is closed | Next launch stages and removes the bound WAVs under a durable receipt, fsyncs removal, then commits `audio-released`; transcript, note, profile, and other meetings remain |
 | Retention time becomes due while that meeting is capturing, finalizing, or transcribing | The scan returns `deferred-active` without opening the meeting; the next pass after the active lease clears performs the due deletion without losing the newer meeting record |
-| A second app process opens the same app-data root | Before beta, one process owns an exclusive writer lock and the other fails closed before recovery, capture, or retention mutation |
+| A second app process opens the same app-data root | The single-instance plugin normally returns focus; independently, the process-lifetime app-data writer lock makes the newcomer fail closed before recovery, capture, or retention mutation |
 | One or both WAVs disappear without a matching completed `audio-deletion/1` receipt | Meeting is quarantined; the reader does not relabel unexplained loss as retention |
 | Restart during correction or deletion | Operation resumes or rolls back from a receipt; no silent partial authority change |
 | Delete audio | WAVs disappear through staged deletion; transcript, evidence, note, profile, and other meetings remain; note reads `audio-released` |

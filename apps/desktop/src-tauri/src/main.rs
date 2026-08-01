@@ -1,9 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -61,6 +62,7 @@ struct ApplicationState {
     worker: Mutex<Option<OwnedChild>>,
     capture_task: Mutex<Option<CaptureTaskControl>>,
     command_lock: Mutex<()>,
+    app_data_writer_lock: Mutex<Option<File>>,
     meeting_storage_sequence: Mutex<()>,
     active_meetings: Mutex<HashSet<String>>,
     retention_started: AtomicBool,
@@ -75,6 +77,7 @@ impl Default for ApplicationState {
             worker: Mutex::new(None),
             capture_task: Mutex::new(None),
             command_lock: Mutex::new(()),
+            app_data_writer_lock: Mutex::new(None),
             meeting_storage_sequence: Mutex::new(()),
             active_meetings: Mutex::new(HashSet::new()),
             retention_started: AtomicBool::new(false),
@@ -711,6 +714,11 @@ fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+        }))
         .manage(ApplicationState::default())
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
@@ -766,6 +774,10 @@ fn initialize_application(app: AppHandle, retry: bool) {
             return;
         }
     };
+    if let Err(error) = ensure_app_data_writer_lock(&state, &storage_context.storage) {
+        finish_startup_failure(&state, retry, StartupFailure::Diagnostic, &error);
+        return;
+    }
     *state.storage.lock().expect("storage context lock") = Some(storage_context.clone());
 
     let storage_sequence = match state.meeting_storage_sequence.lock() {
@@ -1055,6 +1067,48 @@ fn create_storage_context(app: &AppHandle) -> Result<StorageContext, String> {
         storage,
         resource_root,
     })
+}
+
+fn ensure_app_data_writer_lock(
+    state: &ApplicationState,
+    storage: &StorageRoot,
+) -> Result<(), String> {
+    let mut held = state
+        .app_data_writer_lock
+        .lock()
+        .map_err(|_| "the app-data writer lock is unavailable".to_string())?;
+    if held.is_some() {
+        return Ok(());
+    }
+    *held = Some(acquire_app_data_writer_lock(storage)?);
+    Ok(())
+}
+
+fn acquire_app_data_writer_lock(storage: &StorageRoot) -> Result<File, String> {
+    let path = storage
+        .resolve(Path::new(".writer.lock"))
+        .map_err(error_text)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| "the app-data writer lock could not be opened safely".to_string())?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "the app-data writer lock could not be inspected".to_string())?;
+    if !metadata.is_file() {
+        return Err("the app-data writer lock is not a regular file".into());
+    }
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|_| "the app-data writer lock permissions could not be secured".to_string())?;
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        return Err("another app process may already be using private meeting storage".into());
+    }
+    Ok(file)
 }
 
 #[cfg(debug_assertions)]
@@ -2561,6 +2615,17 @@ mod tests {
 
         assert!(state.active_meetings.lock().unwrap().is_empty());
         assert!(ActiveMeetingLease::acquire(&state, "meeting-a").is_ok());
+    }
+
+    #[test]
+    fn app_data_writer_lock_is_exclusive_and_released_with_its_file() {
+        let (_temporary, storage) = test_storage();
+        let held = acquire_app_data_writer_lock(&storage).unwrap();
+
+        assert!(acquire_app_data_writer_lock(&storage).is_err());
+
+        drop(held);
+        assert!(acquire_app_data_writer_lock(&storage).is_ok());
     }
 
     fn fixture_reference(relative_path: &str, byte: char) -> ArtifactRef {
