@@ -128,6 +128,24 @@ pub enum ManualAudioDeletionError {
 /// // acquire AppDataWriterLock and borrow its deletion_authority instead.
 /// # let _ = delete_meeting_audio_manually;
 /// ```
+///
+/// ```compile_fail
+/// use std::sync::Arc;
+/// use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
+/// use local_meeting_notes_session_core::retention::AppDataWriterLock;
+/// use local_meeting_notes_session_core::storage::StorageRoot;
+/// fn inject_registry(root: &StorageRoot, registry: Arc<MeetingStorageCoordination>) {
+///     let _ = AppDataWriterLock::acquire(root, registry);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use local_meeting_notes_session_core::retention::AppDataWriterLock;
+/// use local_meeting_notes_session_core::storage::StorageRoot;
+/// fn redirect_root(lock: &AppDataWriterLock, other_root: &StorageRoot) {
+///     let _ = lock.deletion_authority().delete_audio(other_root, "meeting");
+/// }
+/// ```
 pub struct ManualAudioDeletionAuthority<'a> {
     lock: &'a AppDataWriterLock,
 }
@@ -136,10 +154,13 @@ impl ManualAudioDeletionAuthority<'_> {
     /// Releases only the bound audio for one exact, non-active meeting.
     pub fn delete_audio(
         &self,
-        storage: &StorageRoot,
         meeting_id: &str,
     ) -> Result<ManualAudioDeletionOutcome, ManualAudioDeletionError> {
-        delete_meeting_audio_manually(storage, self.lock.coordination.as_ref(), meeting_id)
+        delete_meeting_audio_manually(
+            &self.lock.storage,
+            self.lock.coordination.as_ref(),
+            meeting_id,
+        )
     }
 }
 
@@ -149,6 +170,7 @@ impl ManualAudioDeletionAuthority<'_> {
 /// means this process holds the canonical nonblocking exclusive `flock`; the
 /// bound coordinator is the same registry used for capture and retention.
 pub struct AppDataWriterLock {
+    storage: StorageRoot,
     _file: File,
     coordination: Arc<MeetingStorageCoordination>,
 }
@@ -170,12 +192,9 @@ pub enum AppDataWriterLockError {
 }
 
 impl AppDataWriterLock {
-    /// Acquires the canonical app-data writer lock and binds it to the one
+    /// Acquires the canonical app-data writer lock and creates the one
     /// process-local registry that serializes capture, recovery, and retention.
-    pub fn acquire(
-        storage: &StorageRoot,
-        coordination: Arc<MeetingStorageCoordination>,
-    ) -> Result<Self, AppDataWriterLockError> {
+    pub fn acquire(storage: &StorageRoot) -> Result<Self, AppDataWriterLockError> {
         let path = storage
             .resolve(Path::new(".writer.lock"))
             .map_err(|_| AppDataWriterLockError::Path)?;
@@ -199,9 +218,17 @@ impl AppDataWriterLock {
             return Err(AppDataWriterLockError::Contended);
         }
         Ok(Self {
+            storage: storage.clone(),
             _file: file,
-            coordination,
+            coordination: Arc::new(MeetingStorageCoordination::default()),
         })
+    }
+
+    /// Returns the sole process-local registry bound to this held lock.
+    /// Callers may clone the handle for capture/recovery work but cannot replace
+    /// the registry stored in this authority.
+    pub fn coordination(&self) -> Arc<MeetingStorageCoordination> {
+        self.coordination.clone()
     }
 
     pub fn deletion_authority(&self) -> ManualAudioDeletionAuthority<'_> {

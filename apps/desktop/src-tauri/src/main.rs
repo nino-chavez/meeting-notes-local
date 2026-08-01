@@ -72,7 +72,6 @@ struct ApplicationState {
     capture_task: Mutex<Option<CaptureTaskControl>>,
     command_lock: Mutex<()>,
     app_data_writer_lock: Mutex<Option<AppDataWriterLock>>,
-    meeting_storage_coordination: Arc<MeetingStorageCoordination>,
     retention_started: AtomicBool,
 }
 
@@ -86,7 +85,6 @@ impl Default for ApplicationState {
             capture_task: Mutex::new(None),
             command_lock: Mutex::new(()),
             app_data_writer_lock: Mutex::new(None),
-            meeting_storage_coordination: Arc::new(MeetingStorageCoordination::default()),
             retention_started: AtomicBool::new(false),
         }
     }
@@ -209,6 +207,15 @@ impl ApplicationState {
     #[allow(dead_code)]
     fn manual_audio_deletion_facade(&self) -> manual_delete_facade::ManualAudioDeletionFacade<'_> {
         manual_delete_facade::ManualAudioDeletionFacade::new(&self.app_data_writer_lock)
+    }
+
+    fn meeting_storage_coordination(&self) -> Result<Arc<MeetingStorageCoordination>, String> {
+        self.app_data_writer_lock
+            .lock()
+            .map_err(|_| "the app-data writer lock is unavailable".to_string())?
+            .as_ref()
+            .map(AppDataWriterLock::coordination)
+            .ok_or_else(|| "the app-data writer lock is unavailable".to_string())
     }
 }
 
@@ -758,7 +765,19 @@ fn initialize_application(app: AppHandle, retry: bool) {
     }
     *state.storage.lock().expect("storage context lock") = Some(storage_context.clone());
 
-    let storage_sequence = match state.meeting_storage_coordination.lock_sequence() {
+    let coordination = match state.meeting_storage_coordination() {
+        Ok(coordination) => coordination,
+        Err(_) => {
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Diagnostic,
+                "meeting storage coordination is unavailable",
+            );
+            return;
+        }
+    };
+    let storage_sequence = match coordination.lock_sequence() {
         Ok(sequence) => sequence,
         Err(_) => {
             finish_startup_failure(
@@ -1058,18 +1077,12 @@ fn ensure_app_data_writer_lock(
     if held.is_some() {
         return Ok(());
     }
-    *held = Some(acquire_app_data_writer_lock(
-        storage,
-        state.meeting_storage_coordination.clone(),
-    )?);
+    *held = Some(acquire_app_data_writer_lock(storage)?);
     Ok(())
 }
 
-fn acquire_app_data_writer_lock(
-    storage: &StorageRoot,
-    coordination: Arc<MeetingStorageCoordination>,
-) -> Result<AppDataWriterLock, String> {
-    AppDataWriterLock::acquire(storage, coordination).map_err(error_text)
+fn acquire_app_data_writer_lock(storage: &StorageRoot) -> Result<AppDataWriterLock, String> {
+    AppDataWriterLock::acquire(storage).map_err(error_text)
 }
 
 #[cfg(debug_assertions)]
@@ -1094,7 +1107,19 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let state = app.state::<ApplicationState>();
-            let storage_sequence = match state.meeting_storage_coordination.lock_sequence() {
+            let coordination = match state.meeting_storage_coordination() {
+                Ok(coordination) => coordination,
+                Err(_) => {
+                    let _ = write_private_diagnostic(
+                        &diagnostics,
+                        "retention_coordination_failed",
+                        "meeting storage coordination is unavailable",
+                    );
+                    mark_retention_unavailable(&app);
+                    continue;
+                }
+            };
+            let storage_sequence = match coordination.lock_sequence() {
                 Ok(sequence) => sequence,
                 Err(_) => {
                     let _ = write_private_diagnostic(
@@ -1226,7 +1251,22 @@ fn run_capture_task(
             return;
         }
     };
-    let _active_meeting_lease = match state.meeting_storage_coordination.acquire(&meeting_id) {
+    let coordination = match state.meeting_storage_coordination() {
+        Ok(coordination) => coordination,
+        Err(error) => {
+            fail_capture_task(
+                &app,
+                Some(&meeting_id),
+                false,
+                true,
+                "capture_storage_coordination_failed",
+                &error,
+                "Private meeting storage could not be reserved safely.",
+            );
+            return;
+        }
+    };
+    let _active_meeting_lease = match coordination.acquire(&meeting_id) {
         Ok(lease) => lease,
         Err(error) => {
             let error = error.to_string();
@@ -2566,18 +2606,18 @@ mod tests {
     #[test]
     fn active_meeting_lease_is_exclusive_and_released_on_drop() {
         let state = ApplicationState::default();
-        let lease = state
-            .meeting_storage_coordination
-            .acquire("meeting-a")
-            .unwrap();
+        let (_temporary, storage) = test_storage();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        let coordination = state.meeting_storage_coordination().unwrap();
+        let lease = coordination.acquire("meeting-a").unwrap();
         assert!(
             state
-                .meeting_storage_coordination
+                .meeting_storage_coordination()
+                .unwrap()
                 .acquire("meeting-a")
                 .is_err()
         );
-        let active = state
-            .meeting_storage_coordination
+        let active = coordination
             .lock_sequence()
             .unwrap()
             .active_meeting_ids()
@@ -2588,8 +2628,7 @@ mod tests {
         drop(lease);
 
         assert!(
-            state
-                .meeting_storage_coordination
+            coordination
                 .lock_sequence()
                 .unwrap()
                 .active_meeting_ids()
@@ -2598,7 +2637,8 @@ mod tests {
         );
         assert!(
             state
-                .meeting_storage_coordination
+                .meeting_storage_coordination()
+                .unwrap()
                 .acquire("meeting-a")
                 .is_ok()
         );
@@ -2607,13 +2647,12 @@ mod tests {
     #[test]
     fn app_data_writer_lock_is_exclusive_and_released_with_its_file() {
         let (_temporary, storage) = test_storage();
-        let coordination = Arc::new(MeetingStorageCoordination::default());
-        let held = acquire_app_data_writer_lock(&storage, coordination.clone()).unwrap();
+        let held = acquire_app_data_writer_lock(&storage).unwrap();
 
-        assert!(acquire_app_data_writer_lock(&storage, coordination.clone()).is_err());
+        assert!(acquire_app_data_writer_lock(&storage).is_err());
 
         drop(held);
-        assert!(acquire_app_data_writer_lock(&storage, coordination).is_ok());
+        assert!(acquire_app_data_writer_lock(&storage).is_ok());
     }
 
     fn fixture_reference(relative_path: &str, byte: char) -> ArtifactRef {

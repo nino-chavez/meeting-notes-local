@@ -11,7 +11,6 @@ use std::sync::Mutex;
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, ManualAudioDeletionError, ManualAudioDeletionOutcome,
 };
-use local_meeting_notes_session_core::storage::StorageRoot;
 
 /// A closed, in-process result of the reviewed destructive confirmation.
 ///
@@ -81,7 +80,6 @@ impl<'a> ManualAudioDeletionFacade<'a> {
     /// reconciliation.
     pub(crate) fn delete_audio(
         &self,
-        storage: &StorageRoot,
         args: ManualAudioDeletionUiArgs,
     ) -> Result<ManualAudioDeletionFacadeOutcome, ManualAudioDeletionFacadeError> {
         if args.review != AudioDeletionReview::Reviewed {
@@ -99,7 +97,7 @@ impl<'a> ManualAudioDeletionFacade<'a> {
         held.as_ref()
             .expect("checked app-data writer lock")
             .deletion_authority()
-            .delete_audio(storage, &args.meeting_id)
+            .delete_audio(&args.meeting_id)
             .map(Into::into)
             .map_err(map_core_error)
     }
@@ -233,15 +231,15 @@ mod tests {
         let directory = write_fixture(&storage, false);
         let before = fs::read(directory.join("meeting.json")).unwrap();
         let state = ApplicationState::default();
+        let unreviewed = ManualAudioDeletionUiArgs {
+            meeting_id: MEETING_ID.into(),
+            review: AudioDeletionReview::NotReviewed,
+        };
 
         assert_eq!(
-            state.manual_audio_deletion_facade().delete_audio(
-                &storage,
-                ManualAudioDeletionUiArgs {
-                    meeting_id: MEETING_ID.into(),
-                    review: AudioDeletionReview::NotReviewed,
-                },
-            ),
+            state
+                .manual_audio_deletion_facade()
+                .delete_audio(unreviewed),
             Err(ManualAudioDeletionFacadeError::ConfirmationRequired)
         );
         assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
@@ -260,19 +258,17 @@ mod tests {
         assert_eq!(
             state
                 .manual_audio_deletion_facade()
-                .delete_audio(&storage, reviewed()),
+                .delete_audio(reviewed()),
             Err(ManualAudioDeletionFacadeError::WriterLockUnavailable)
         );
         assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
 
-        let competing =
-            acquire_app_data_writer_lock(&storage, state.meeting_storage_coordination.clone())
-                .unwrap();
+        let competing = acquire_app_data_writer_lock(&storage).unwrap();
         assert!(ensure_app_data_writer_lock(&state, &storage).is_err());
         assert_eq!(
             state
                 .manual_audio_deletion_facade()
-                .delete_audio(&storage, reviewed()),
+                .delete_audio(reviewed()),
             Err(ManualAudioDeletionFacadeError::WriterLockUnavailable)
         );
         assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
@@ -290,14 +286,12 @@ mod tests {
         let microphone_before = fs::read(directory.join("capture/mic.wav")).unwrap();
         let system_before = fs::read(directory.join("capture/system.wav")).unwrap();
 
-        let lease = state
-            .meeting_storage_coordination
-            .acquire(MEETING_ID)
-            .unwrap();
+        let coordination = state.meeting_storage_coordination().unwrap();
+        let lease = coordination.acquire(MEETING_ID).unwrap();
         assert_eq!(
             state
                 .manual_audio_deletion_facade()
-                .delete_audio(&storage, reviewed()),
+                .delete_audio(reviewed()),
             Ok(ManualAudioDeletionFacadeOutcome::DeferredActive)
         );
         drop(lease);
@@ -316,7 +310,7 @@ mod tests {
         assert_eq!(
             state
                 .manual_audio_deletion_facade()
-                .delete_audio(&storage, reviewed()),
+                .delete_audio(reviewed()),
             Err(ManualAudioDeletionFacadeError::MeetingActionInProgress)
         );
         assert_eq!(
@@ -345,7 +339,7 @@ mod tests {
         assert_eq!(
             state
                 .manual_audio_deletion_facade()
-                .delete_audio(&storage, reviewed()),
+                .delete_audio(reviewed()),
             Err(ManualAudioDeletionFacadeError::StorageUnavailable)
         );
         assert_eq!(
@@ -364,7 +358,7 @@ mod tests {
         assert_eq!(
             state
                 .manual_audio_deletion_facade()
-                .delete_audio(&storage, reviewed()),
+                .delete_audio(reviewed()),
             Err(ManualAudioDeletionFacadeError::StorageUnavailable)
         );
         assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), malformed);
@@ -377,6 +371,36 @@ mod tests {
             system_before
         );
         assert!(!directory.join("deletion").exists());
+    }
+
+    #[test]
+    fn held_writer_authority_cannot_target_a_second_storage_root() {
+        let (temporary, storage_a) = storage();
+        let storage_b = StorageRoot::create(
+            &temporary.path().join("other-app-data"),
+            &temporary.path().join("repository"),
+        )
+        .unwrap();
+        let directory_a = write_fixture(&storage_a, false);
+        let directory_b = write_fixture(&storage_b, false);
+        let meeting_b_before = fs::read(directory_b.join("meeting.json")).unwrap();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage_a).unwrap();
+
+        assert_eq!(
+            state
+                .manual_audio_deletion_facade()
+                .delete_audio(reviewed()),
+            Ok(ManualAudioDeletionFacadeOutcome::AudioReleased)
+        );
+        assert!(!directory_a.join("capture/mic.wav").exists());
+        assert!(!directory_a.join("capture/system.wav").exists());
+        assert_eq!(
+            fs::read(directory_b.join("meeting.json")).unwrap(),
+            meeting_b_before
+        );
+        assert!(directory_b.join("capture/mic.wav").exists());
+        assert!(directory_b.join("capture/system.wav").exists());
     }
 
     #[test]
@@ -422,7 +446,7 @@ mod tests {
         assert_eq!(
             state
                 .manual_audio_deletion_facade()
-                .delete_audio(&storage, reviewed()),
+                .delete_audio(reviewed()),
             Ok(ManualAudioDeletionFacadeOutcome::AudioReleased)
         );
         let committed = fs::read(directory.join("meeting.json")).unwrap();
@@ -435,7 +459,7 @@ mod tests {
         assert_eq!(
             state
                 .manual_audio_deletion_facade()
-                .delete_audio(&storage, reviewed()),
+                .delete_audio(reviewed()),
             Ok(ManualAudioDeletionFacadeOutcome::AlreadyReleased)
         );
         assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), committed);
