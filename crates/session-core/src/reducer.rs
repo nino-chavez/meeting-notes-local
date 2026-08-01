@@ -160,6 +160,24 @@ impl Reducer {
         self.capture = to;
         Ok(())
     }
+
+    pub fn restore_capture_projection(&mut self, to: CaptureState) -> Result<(), ReducerError> {
+        let valid = self.exclusive.is_none()
+            && matches!(
+                self.startup,
+                StartupState::Checking | StartupState::Retrying
+            )
+            && self.capture == CaptureState::Idle
+            && to == CaptureState::TranscriptReady;
+        if !valid {
+            return Err(ReducerError::InvalidCaptureTransition {
+                from: self.capture,
+                to,
+            });
+        }
+        self.capture = to;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -189,6 +207,30 @@ mod tests {
             .transition_capture(CaptureState::Summarizing)
             .unwrap();
         reducer.transition_capture(CaptureState::Ready).unwrap();
+    }
+
+    #[test]
+    fn startup_restoration_allows_only_a_transcript_projection() {
+        let mut reducer = Reducer::default();
+        reducer.transition_startup(StartupState::Checking).unwrap();
+        reducer
+            .restore_capture_projection(CaptureState::TranscriptReady)
+            .unwrap();
+        assert_eq!(reducer.capture(), CaptureState::TranscriptReady);
+
+        let mut idle = Reducer::default();
+        idle.transition_startup(StartupState::Checking).unwrap();
+        assert!(
+            idle.restore_capture_projection(CaptureState::Ready)
+                .is_err()
+        );
+
+        let mut shell = Reducer::default();
+        assert!(
+            shell
+                .restore_capture_projection(CaptureState::TranscriptReady)
+                .is_err()
+        );
     }
 
     #[test]

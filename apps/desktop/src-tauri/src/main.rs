@@ -46,6 +46,7 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 const CAPTURE_EVENT_MAX_BYTES: usize = 64 * 1024;
+const ATTEMPT_MAX_BYTES: u64 = 256 * 1024;
 const TRANSCRIPT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const CAPTURE_ARM_TIMEOUT: Duration = Duration::from_secs(120);
 const CAPTURE_STOP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -162,6 +163,26 @@ struct TranscriptTurn {
     text: String,
 }
 
+struct RestoredTranscriptProjection {
+    meeting_id: String,
+    turns: Vec<TranscriptTurn>,
+    warnings: Vec<String>,
+}
+
+fn apply_restored_transcript_projection(
+    model: &mut AppModel,
+    projection: RestoredTranscriptProjection,
+) -> Result<(), String> {
+    model
+        .reducer
+        .restore_capture_projection(CaptureState::TranscriptReady)
+        .map_err(error_text)?;
+    model.meeting_id = Some(projection.meeting_id);
+    model.turns = projection.turns;
+    model.warnings = projection.warnings;
+    Ok(())
+}
+
 #[derive(Clone)]
 struct StorageContext {
     storage: StorageRoot,
@@ -208,15 +229,15 @@ struct StartAttestation {
     operator_alone: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CaptureAttemptReceipt {
-    schema: &'static str,
+    schema: String,
     meeting_id: String,
     attempt_id: String,
     created_at_epoch_seconds: u64,
     application_build_sha256: String,
-    participant_notice_version: &'static str,
+    participant_notice_version: String,
     operator_attestation: StartAttestation,
     retention_policy_sha256: String,
 }
@@ -707,11 +728,15 @@ fn initialize_application(app: AppHandle, retry: bool) {
         &SystemGroupSignaler,
         Duration::from_millis(750),
     );
-    let recovery_ready = match recovery {
+    let (recovery_ready, restorable_meetings) = match recovery {
         Ok(report) => {
             let mut retention_ready = true;
+            let mut restorable_meetings = Vec::new();
             for meeting in &report.meetings {
                 match meeting.disposition {
+                    RecoveryDisposition::Valid | RecoveryDisposition::RecoveredAudioDeletion => {
+                        restorable_meetings.push(meeting.meeting_id.clone());
+                    }
                     RecoveryDisposition::Quarantined(code) => {
                         if code == RecoveryCode::RetentionMismatch {
                             retention_ready = false;
@@ -738,7 +763,10 @@ fn initialize_application(app: AppHandle, retry: bool) {
                     _ => {}
                 }
             }
-            !report.blocks_capture && retention_ready
+            (
+                !report.blocks_capture && retention_ready,
+                restorable_meetings,
+            )
         }
         Err(error) => {
             let _ = write_private_diagnostic(
@@ -746,7 +774,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
                 "meeting_recovery_failed",
                 &error.to_string(),
             );
-            false
+            (false, Vec::new())
         }
     };
     if !recovery_ready {
@@ -758,6 +786,24 @@ fn initialize_application(app: AppHandle, retry: bool) {
         );
         return;
     }
+    let restored_transcript =
+        match load_latest_transcript_projection(&storage_context.storage, &restorable_meetings) {
+            Ok(projection) => projection,
+            Err(error) => {
+                let _ = write_private_diagnostic(
+                    &storage_context.diagnostics,
+                    "transcript_restore_failed",
+                    &error,
+                );
+                finish_startup_failure(
+                    &state,
+                    retry,
+                    StartupFailure::Diagnostic,
+                    "a retained transcript could not be reopened safely",
+                );
+                return;
+            }
+        };
     {
         let mut model = state.model.lock().expect("application model lock");
         model.retention_operational = true;
@@ -895,6 +941,13 @@ fn initialize_application(app: AppHandle, retry: bool) {
     *state.runtime.lock().expect("runtime identity lock") = Some(runtime.clone());
     let mut model = state.model.lock().expect("application model lock");
     model.admission = runtime.admission;
+    if let Some(projection) = restored_transcript
+        && let Err(error) = apply_restored_transcript_projection(&mut model, projection)
+    {
+        model.error = Some(error);
+        let _ = transition_startup(&mut model, StartupState::DiagnosticWritten);
+        return;
+    }
     if let Err(error) = transition_startup(&mut model, StartupState::Ready) {
         model.error = Some(error);
     }
@@ -1695,12 +1748,12 @@ fn create_attempt(
         let application_build_sha256 =
             sha256_file(&std::env::current_exe().map_err(error_text)?).map_err(error_text)?;
         let attempt = CaptureAttemptReceipt {
-            schema: "capture-attempt/1",
+            schema: "capture-attempt/1".into(),
             meeting_id: meeting_id.into(),
             attempt_id: attempt_id.into(),
             created_at_epoch_seconds,
             application_build_sha256: application_build_sha256.clone(),
-            participant_notice_version: PARTICIPANT_NOTICE_VERSION,
+            participant_notice_version: PARTICIPANT_NOTICE_VERSION.into(),
             operator_attestation: attestation,
             retention_policy_sha256: policy_sha256.clone(),
         };
@@ -1817,17 +1870,17 @@ fn exact_digests(
 ) -> Result<HashMap<String, String>, String> {
     let actual = values.keys().map(String::as_str).collect::<HashSet<_>>();
     let expected = expected.iter().copied().collect::<HashSet<_>>();
-    if actual != expected
-        || values.values().any(|digest| {
-            digest.len() != 64
-                || !digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
-    {
+    if actual != expected || values.values().any(|digest| !valid_sha256(digest)) {
         return Err("worker artifact digest set is invalid".into());
     }
     Ok(values.clone())
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn commit_captured_meeting(
@@ -1898,10 +1951,99 @@ struct TranscriptInputTurn {
     gate_reason: Option<String>,
 }
 
+fn load_latest_transcript_projection(
+    storage: &StorageRoot,
+    eligible_meeting_ids: &[String],
+) -> Result<Option<RestoredTranscriptProjection>, String> {
+    let mut latest: Option<(u64, String, PathBuf, ArtifactRef, AudioState)> = None;
+    for meeting_id in eligible_meeting_ids {
+        let directory = meeting_dir(storage, meeting_id).map_err(error_text)?;
+        let meeting = load_meeting(&directory).map_err(error_text)?;
+        if !matches!(
+            meeting.lifecycle,
+            MeetingLifecycle::TranscriptReady
+                | MeetingLifecycle::SummaryFailed
+                | MeetingLifecycle::Ready
+        ) {
+            continue;
+        }
+        let transcript = meeting
+            .artifacts
+            .current_transcript
+            .clone()
+            .ok_or_else(|| "transcript-bearing meeting has no current transcript".to_string())?;
+        let created_at_epoch_seconds = load_attempt_created_at(&directory, &meeting)?;
+        let replace = match &latest {
+            Some((latest_created, latest_id, ..)) => {
+                created_at_epoch_seconds > *latest_created
+                    || (created_at_epoch_seconds == *latest_created
+                        && meeting.meeting_id > *latest_id)
+            }
+            None => true,
+        };
+        if replace {
+            latest = Some((
+                created_at_epoch_seconds,
+                meeting.meeting_id,
+                directory,
+                transcript,
+                meeting.retention.state,
+            ));
+        }
+    }
+
+    let Some((_created, meeting_id, directory, transcript, audio_state)) = latest else {
+        return Ok(None);
+    };
+    let (turns, mut warnings) = load_transcript_projection(&directory, &transcript)?;
+    if audio_state == AudioState::Released {
+        warnings.push(
+            "Meeting audio was deleted under the selected retention period. The transcript remains."
+                .into(),
+        );
+    }
+    Ok(Some(RestoredTranscriptProjection {
+        meeting_id,
+        turns,
+        warnings,
+    }))
+}
+
+fn load_attempt_created_at(meeting_dir: &Path, meeting: &MeetingRecord) -> Result<u64, String> {
+    let actual =
+        artifact_ref(meeting_dir, &meeting.artifacts.attempt.relative_path).map_err(error_text)?;
+    if actual != meeting.artifacts.attempt {
+        return Err("capture attempt no longer matches its meeting record".into());
+    }
+    let bytes = read_private_bytes(
+        &meeting_dir.join(&meeting.artifacts.attempt.relative_path),
+        ATTEMPT_MAX_BYTES,
+    )
+    .map_err(error_text)?;
+    let attempt: CaptureAttemptReceipt = serde_json::from_slice(&bytes).map_err(error_text)?;
+    if attempt.schema != "capture-attempt/1"
+        || attempt.meeting_id != meeting.meeting_id
+        || Uuid::parse_str(&attempt.attempt_id).is_err()
+        || !valid_sha256(&attempt.application_build_sha256)
+        || attempt.participant_notice_version != PARTICIPANT_NOTICE_VERSION
+        || !attempt.operator_attestation.participants_consented
+        || !attempt.operator_attestation.headphones
+        || !attempt.operator_attestation.operator_alone
+        || attempt.retention_policy_sha256 != meeting.retention.policy_sha256
+    {
+        return Err("capture attempt metadata is invalid".into());
+    }
+    Ok(attempt.created_at_epoch_seconds)
+}
+
 fn load_transcript_projection(
     meeting_dir: &Path,
     reference: &ArtifactRef,
 ) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
+    let actual = artifact_ref(meeting_dir, &reference.relative_path).map_err(error_text)?;
+    if &actual != reference {
+        return Err("retained transcript no longer matches its meeting record".into());
+    }
     let path = meeting_dir.join(&reference.relative_path);
     let bytes = read_private_bytes(&path, TRANSCRIPT_MAX_BYTES).map_err(error_text)?;
     parse_transcript_projection(&bytes)
@@ -2282,6 +2424,7 @@ fn io_error(error: io::Error) -> Box<dyn std::error::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     fn valid_attestation() -> StartAttestation {
         StartAttestation {
@@ -2289,6 +2432,94 @@ mod tests {
             headphones: true,
             operator_alone: true,
         }
+    }
+
+    fn test_storage() -> (TempDir, StorageRoot) {
+        let temporary = TempDir::new().unwrap();
+        let repository = temporary.path().join("repository");
+        fs::create_dir(&repository).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("app-data"), &repository).unwrap();
+        (temporary, storage)
+    }
+
+    fn fixture_reference(relative_path: &str, byte: char) -> ArtifactRef {
+        ArtifactRef {
+            relative_path: relative_path.into(),
+            sha256: byte.to_string().repeat(64),
+        }
+    }
+
+    fn write_transcript_fixture(
+        storage: &StorageRoot,
+        meeting_id: &str,
+        created_at_epoch_seconds: u64,
+        audio_state: AudioState,
+        text: &str,
+    ) -> PathBuf {
+        let directory = meeting_dir(storage, meeting_id).unwrap();
+        create_private_dir(&directory).unwrap();
+        create_private_dir(&directory.join("transcript")).unwrap();
+        let rule = AudioRetentionRule::DeleteAfter { seconds: 86_400 };
+        let policy_sha256 = retention_policy_sha256(&rule);
+        let attempt = CaptureAttemptReceipt {
+            schema: "capture-attempt/1".into(),
+            meeting_id: meeting_id.into(),
+            attempt_id: Uuid::new_v4().to_string(),
+            created_at_epoch_seconds,
+            application_build_sha256: "a".repeat(64),
+            participant_notice_version: PARTICIPANT_NOTICE_VERSION.into(),
+            operator_attestation: valid_attestation(),
+            retention_policy_sha256: policy_sha256.clone(),
+        };
+        durable_create_new(
+            &directory.join("attempt.json"),
+            &serde_json::to_vec_pretty(&attempt).unwrap(),
+        )
+        .unwrap();
+        let transcript_bytes = serde_json::to_vec_pretty(&json!({
+            "schema": "capture-transcript/1",
+            "source": "synthetic-restart-fixture",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": [{
+                "start": 0.0,
+                "end": 1.0,
+                "speaker": "Me",
+                "text": text,
+            }],
+        }))
+        .unwrap();
+        let transcript_digest = format!("{:x}", Sha256::digest(&transcript_bytes));
+        let transcript_relative = format!("transcript/{transcript_digest}.json");
+        let transcript_path = directory.join(&transcript_relative);
+        durable_create_new(&transcript_path, &transcript_bytes).unwrap();
+        let meeting = MeetingRecord {
+            schema: MeetingSchema::V2,
+            meeting_id: meeting_id.into(),
+            lifecycle: MeetingLifecycle::TranscriptReady,
+            retention: AudioRetention {
+                rule,
+                policy_sha256,
+                next_deletion_at_epoch_seconds: Some(created_at_epoch_seconds + 86_400),
+                state: audio_state,
+                deletion_receipt: (audio_state == AudioState::Released)
+                    .then(|| fixture_reference("deletion/audio-deletion.json", 'f')),
+            },
+            artifacts: MeetingArtifacts {
+                attempt: artifact_ref(&directory, "attempt.json").unwrap(),
+                ownership: Some(fixture_reference("ownership.json", 'b')),
+                capture_session: Some(fixture_reference("capture/session.json", 'c')),
+                microphone_audio: Some(fixture_reference("capture/mic.wav", 'd')),
+                system_audio: Some(fixture_reference("capture/system.wav", 'e')),
+                current_transcript: Some(artifact_ref(&directory, &transcript_relative).unwrap()),
+                current_note: None,
+            },
+            pending_storage_operation: None,
+        };
+        write_meeting(&directory, &meeting).unwrap();
+        transcript_path
     }
 
     #[test]
@@ -2364,5 +2595,105 @@ mod tests {
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].text, "visible");
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn fresh_process_projects_latest_valid_transcript() {
+        let (_temporary, storage) = test_storage();
+        let older = Uuid::new_v4().to_string();
+        let newer = Uuid::new_v4().to_string();
+        write_transcript_fixture(&storage, &older, 10, AudioState::Retained, "older");
+        write_transcript_fixture(&storage, &newer, 20, AudioState::Retained, "newer");
+
+        let projection = load_latest_transcript_projection(&storage, &[newer.clone(), older])
+            .unwrap()
+            .unwrap();
+        assert_eq!(projection.meeting_id, newer);
+        assert_eq!(projection.turns[0].text, "newer");
+    }
+
+    #[test]
+    fn restored_projection_becomes_the_ready_startup_snapshot() {
+        let mut model = AppModel::default();
+        transition_startup(&mut model, StartupState::Checking).unwrap();
+        apply_restored_transcript_projection(
+            &mut model,
+            RestoredTranscriptProjection {
+                meeting_id: "meeting-fixture".into(),
+                turns: vec![TranscriptTurn {
+                    speaker: Some("Me".into()),
+                    start: 0.0,
+                    text: "visible".into(),
+                }],
+                warnings: Vec::new(),
+            },
+        )
+        .unwrap();
+        transition_startup(&mut model, StartupState::Ready).unwrap();
+
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.startup, StartupState::Ready);
+        assert_eq!(snapshot.capture, CaptureState::TranscriptReady);
+        assert_eq!(snapshot.meeting_id.as_deref(), Some("meeting-fixture"));
+        assert_eq!(snapshot.turns[0].text, "visible");
+    }
+
+    #[test]
+    fn equal_attempt_times_choose_the_greatest_meeting_id() {
+        let (_temporary, storage) = test_storage();
+        let mut ids = [Uuid::new_v4().to_string(), Uuid::new_v4().to_string()];
+        ids.sort();
+        write_transcript_fixture(&storage, &ids[0], 10, AudioState::Retained, "lower");
+        write_transcript_fixture(&storage, &ids[1], 10, AudioState::Retained, "higher");
+
+        let projection =
+            load_latest_transcript_projection(&storage, &[ids[1].clone(), ids[0].clone()])
+                .unwrap()
+                .unwrap();
+        assert_eq!(projection.meeting_id, ids[1]);
+        assert_eq!(projection.turns[0].text, "higher");
+    }
+
+    #[test]
+    fn fresh_process_keeps_transcript_visible_after_audio_release() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4().to_string();
+        write_transcript_fixture(
+            &storage,
+            &meeting_id,
+            10,
+            AudioState::Released,
+            "still here",
+        );
+
+        let projection =
+            load_latest_transcript_projection(&storage, std::slice::from_ref(&meeting_id))
+                .unwrap()
+                .unwrap();
+        assert_eq!(projection.turns[0].text, "still here");
+        assert!(projection.warnings.iter().any(|warning| {
+            warning.contains("audio was deleted") && warning.contains("transcript remains")
+        }));
+    }
+
+    #[test]
+    fn fresh_process_with_no_transcript_remains_idle() {
+        let (_temporary, storage) = test_storage();
+        assert!(
+            load_latest_transcript_projection(&storage, &[])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn changed_transcript_is_not_projected() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4().to_string();
+        let transcript_path =
+            write_transcript_fixture(&storage, &meeting_id, 10, AudioState::Retained, "before");
+        fs::write(transcript_path, b"changed").unwrap();
+
+        assert!(load_latest_transcript_projection(&storage, &[meeting_id]).is_err());
     }
 }
