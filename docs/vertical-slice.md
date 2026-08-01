@@ -47,7 +47,7 @@ human gate.
 |---|---|---|---|---|
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |
 | B. Shared-contract freeze | In progress. Worker admission now advertises only runnable operations, Rust owns the Swift capture child, and the alpha closure receipt is frozen. Correction/regeneration, `note/2` creation, the successor UI command boundary, and acceptance fixtures remain. | One versioned fixture set before independent coding streams branch. | None. | 2–4 days, inside Wave C |
-| C. Trust foundation | In progress. Active meetings are excluded from retention under a serialized storage scan, and a single-instance guard closes the second-process writer path. Deterministic interleaving tests, profile controls, correction, and deletion actions remain. | Interruption and fresh-process tests, then an independent audit. | Retention-policy wording and far-end-notice choices; real withheld-turn restore. | Cumulative 1–2 weeks |
+| C. Trust foundation | In progress. Active meetings are excluded from retention under a serialized storage scan, and a process-lifetime writer lock closes the second-process storage path. Deterministic interleaving tests, profile controls, correction, and deletion actions remain. | Interruption and fresh-process tests, then an independent audit. | Retention-policy wording and far-end-notice choices; real withheld-turn restore. | Cumulative 1–2 weeks |
 | D. Evidence-linked automatic notes | Contract and experiments exist; product generation and admission do not. | Every claim locator resolves; rejected summaries remain transcript-only; deterministic checks precede private semantic review. | Semantic support and usefulness adjudication. | Additional 2–3 weeks |
 | E. Product surfaces and retrieval | Encounter is approved; production library, note reader, commitment view, and exact transcript/metadata search are not built. Design remains retrieval → commitments → capture; build follows dependency order. | Join UI to the frozen command facade and validated local artifacts. | Cold operator review of the working surfaces. | Additional 2–3 weeks, partly parallel with D |
 | F. Beta packaging and admission | Blocked by C–E. | Frozen build/model identities, installed canary, locator resolution, correction/restart/retention/deletion receipts. | Pre-run reference, semantic review, and operator usefulness verdict. | Cumulative 6–9 weeks |
@@ -467,6 +467,74 @@ it may not leave a committed pointer to absent bytes. Existing capture and note
 validators remain the source for artifact meaning. Rust does not reproduce
 them.
 
+### Correction and regeneration revisions
+
+Three persistence shapes were compared against the real withheld-turn and
+rejected-note cases:
+
+| Shape | Consequence | Decision |
+|---|---|---|
+| Rewrite the current transcript and add a stale boolean | Smallest surface, but destroys the original gate decision and permits a ready note to bind words that changed underneath it. | Rejected. |
+| Immutable transcript views plus immutable operation receipts | Preserves the captured transcript, makes stale-note status derivable, and fits the existing current-artifact pointers. | Chosen. |
+| Event-source every meeting mutation in `meeting/3` | Strong recovery model, but adds a migration and a second indexing system before one correction path works. | Defer until measured need. |
+
+The first-beta correction is deliberately narrow: restore a turn that the
+voice gate withheld. It is not free-form transcript editing. The Tauri command
+`restore_withheld_turn` and worker operation `transcript.restore` carry only
+`meeting_id`, the exact current transcript SHA-256, and the source turn index;
+they cannot carry replacement meeting text or a path. The worker
+re-validates that the source revision is current and the selected source turn
+is actually withheld, then creates a content-addressed `transcript-view/1`
+overlay. The overlay binds the original capture-transcript digest, its parent
+view digest, and the cumulative sorted set of restored source-turn indices. It
+copies no meeting text. Readers resolve that overlay against the immutable base
+transcript and refuse a missing, changed, cyclic, non-withheld, or already
+restored source-turn reference. A restore must add exactly one new base-turn
+index; it cannot produce a no-op successor chain.
+
+Publishing the new transcript pointer clears `current_note` and returns the
+meeting to `transcript-ready`. The old note files remain immutable. The
+correction receipt binds their exact references and the successor transcript,
+which is the durable statement that they are stale; stale notes never enter the
+current library projection. `regenerate_note` is a separate Tauri command bound
+to the exact current transcript digest and dispatches `note.create`. A passing
+`note/2` pair may advance the meeting to `ready`. A rejected run advances to
+`summary-failed` with no current note, rendered claims, or claim-derived counts.
+The first beta shows one fixed product message: the transcript is available, a
+note was not accepted, and regeneration can be retried. Its terminal operation
+receipt keeps a bounded failure code for diagnostics and retry analysis, but
+`meeting/2` does not select one historical failure receipt as current UI
+authority. A research-only `passed: false` diagnostic never enters the product
+notes directory.
+
+Correction and generation each use an owner-private
+`operations/<operation_id>/` directory with immutable `request.json`, optional
+validated `result.json`, and terminal `commit.json` receipts. Recovery applies
+an uncommitted result only when `meeting.json` still names the request's source
+revision. If `meeting.json` already names the result's successor, has the
+expected lifecycle, and has cleared or replaced the exact prior note as the
+operation requires, recovery writes the missing terminal commit instead. Every
+other source/result/pointer combination is refused without mutation. Request
+alone is retryable; a validated result can be committed after reinspection; a
+commit must reconcile with `meeting.json`. An orphan artifact without a bound
+result remains private but has no product authority. More than one nonterminal
+operation for a meeting is quarantined rather than ordered by guesswork. Future correction,
+generation, and deletion writers must take the same active-meeting lease and
+storage sequence gate as capture.
+
+Note JSON and Markdown have independent content identities. Product storage is
+`notes/<json_sha256>.json` and `notes/<markdown_sha256>.md`; the JSON's
+`render.path` must name the latter digest, and its `transcript` field must be
+exactly `../transcript/<current_transcript_sha256>.json`. The Markdown digest is
+known first, then the JSON is encoded and named by its own digest. This avoids
+the impossible earlier rule in which the JSON embedded a Markdown filename
+derived from the still-unknown JSON hash. Product `note/2` also sets
+`meeting.id` to the enclosing application meeting ID; the research writer's
+transcript-stem fallback has no product authority. `note.inspect` accepts digest IDs,
+recomputes all three files, validates the `note/2` pair and claim locators, and
+returns only those digests. `note.create` is not advertised until it implements
+this exact publication contract.
+
 The library is rebuilt by scanning and validating meeting records at startup.
 That is adequate for the bounded, single-user beta and avoids a transaction
 split between a database and immutable files. A future SQLite index may be
@@ -833,6 +901,9 @@ contracts. The installed boundary needs its own evidence.
 | Tap exits, device changes, or permission disappears mid-capture | Audio already written remains; final health cannot say complete; the meeting cannot become a ready note |
 | Transcription fails | Capture stays readable and retry begins from the capture |
 | Summary is rejected or crashes | Transcript stays readable; no canonical ready-note record is created; retry begins from the transcript |
+| A note JSON, Markdown, transcript, or meeting identity does not match its content-addressed path and request | `note.inspect` refuses every digest; `meeting.json` cannot advance to `ready` |
+| A self-consistent `passed: false` research diagnostic is placed in product note storage | Product inspection refuses it; no claim, count, or note pointer gains authority |
+| A withheld-turn restore completes before the terminal operation receipt is written | Fresh recovery either applies the validated successor to the still-current source or recognizes the already-applied exact successor and writes the missing commit; every other pointer combination is left untouched |
 | Profile is missing, malformed, experimental, or fingerprint-mismatched | Start is disabled before tap launch |
 | Adopted profile is oversized, a symlink, changes after selection, or fails strict validation | Quarantine is removed, installed profile is unchanged, and the webview learns no source path |
 | `passed: false` note or mismatched Markdown sibling is injected | Reader refuses ready state and reports a bounded artifact error |

@@ -176,8 +176,7 @@ impl MeetingRecord {
         if let Some(note) = &self.artifacts.current_note {
             validate_digest_named_ref(&note.json, "notes", "json")?;
             validate_sha256(&note.source_transcript_sha256)?;
-            let markdown_path = format!("notes/{}.md", note.json.sha256);
-            validate_ref(&note.markdown, &markdown_path)?;
+            validate_digest_named_ref(&note.markdown, "notes", "md")?;
         }
 
         let complete_capture = self.artifacts.capture_session.is_some()
@@ -849,12 +848,22 @@ mod tests {
         assert!(meeting.validate("meeting-a").is_err());
 
         let note_digest = digest('1');
+        let markdown_digest = digest('2');
         meeting.artifacts.current_note = Some(NoteRevisionRef {
             json: reference(format!("notes/{note_digest}.json"), '1'),
-            markdown: reference(format!("notes/{note_digest}.md"), '2'),
+            markdown: reference(format!("notes/{markdown_digest}.md"), '2'),
             source_transcript_sha256: transcript_digest,
         });
         meeting.validate("meeting-a").unwrap();
+
+        meeting
+            .artifacts
+            .current_note
+            .as_mut()
+            .unwrap()
+            .markdown
+            .relative_path = format!("notes/{note_digest}.md");
+        assert!(meeting.validate("meeting-a").is_err());
     }
 
     #[test]

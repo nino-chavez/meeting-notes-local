@@ -35,6 +35,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def content_digest_id(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise AdapterRefused(f"{label} must be a lowercase SHA-256 digest")
+    return value
+
+
 def _exact_arguments(arguments: object, names: set[str]) -> dict:
     if not isinstance(arguments, dict) or set(arguments) != names:
         raise AdapterRefused("operation arguments do not match the closed schema")
@@ -218,8 +228,8 @@ def profile_adopt(root: Path, arguments: object, encoder_digest: str) -> dict[st
 def note_inspect(root: Path, arguments: object) -> dict[str, str]:
     values = _exact_arguments(arguments, {"meeting_id", "note_id", "transcript_id"})
     meeting_id = opaque_id(values["meeting_id"], "meeting_id")
-    note_id = opaque_id(values["note_id"], "note_id")
-    transcript_id = opaque_id(values["transcript_id"], "transcript_id")
+    note_id = content_digest_id(values["note_id"], "note_id")
+    transcript_id = content_digest_id(values["transcript_id"], "transcript_id")
     artifact = resolve_below(root, "meetings", meeting_id, "notes", f"{note_id}.json")
     transcript_path = resolve_below(
         root, "meetings", meeting_id, "transcript", f"{transcript_id}.json"
@@ -227,15 +237,34 @@ def note_inspect(root: Path, arguments: object) -> dict[str, str]:
     if not artifact.is_file() or not transcript_path.is_file():
         raise AdapterRefused("note pair or retained transcript is missing")
 
-    from summarize import validate_artifact_pair
+    from summarize import structured_artifact_citations, validate_artifact_pair
     from transcript import load
 
     document = json.loads(artifact.read_text(encoding="utf-8"))
-    validate_artifact_pair(document, artifact, load(transcript_path))
+    if document.get("schema") != "note/2":
+        raise AdapterRefused("product note inspection requires note/2")
+    if document.get("passed") is not True:
+        raise AdapterRefused("rejected note output has no product authority")
+    if document.get("meeting", {}).get("id") != meeting_id:
+        raise AdapterRefused("note belongs to another meeting")
+    if document.get("transcript") != f"../transcript/{transcript_id}.json":
+        raise AdapterRefused("note does not name the requested retained transcript")
+    if sha256(artifact) != note_id or sha256(transcript_path) != transcript_id:
+        raise AdapterRefused("content-addressed note or transcript changed")
+    transcript = load(transcript_path)
+    markdown = validate_artifact_pair(document, artifact, transcript)
+    if markdown is None:
+        raise AdapterRefused("note/2 is missing its Markdown rendering")
+    citations = structured_artifact_citations(document, transcript)
+    if document.get("checks", {}).get("citations") != citations:
+        raise AdapterRefused("note claim locators disagree with retained checks")
+    markdown_digest = sha256(markdown)
+    if markdown.name != f"{markdown_digest}.md":
+        raise AdapterRefused("note Markdown is not content-addressed")
     return {
-        "note": sha256(artifact),
-        "note-markdown": sha256(artifact.parent / document["render"]["path"]),
-        "transcript": sha256(transcript_path),
+        "note": note_id,
+        "note-markdown": markdown_digest,
+        "transcript": transcript_id,
     }
 
 

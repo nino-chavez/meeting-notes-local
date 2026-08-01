@@ -350,22 +350,27 @@ class WorkerProtocolTests(unittest.TestCase):
             (REPO / "docs/prototype/fixtures/accepted-note2.fixture").read_text()
         )
         meeting_id = str(uuid.uuid4())
-        note_id = str(uuid.uuid4())
         transcript_bytes = (json.dumps(pack["transcript"], indent=2) + "\n").encode()
         transcript_id = hashlib.sha256(transcript_bytes).hexdigest()
+        markdown_bytes = pack["markdown"].encode()
+        markdown_id = hashlib.sha256(markdown_bytes).hexdigest()
+        note = json.loads(json.dumps(pack["note"]))
+        note["meeting"]["id"] = meeting_id
+        note["transcript"] = f"../transcript/{transcript_id}.json"
+        note["render"]["path"] = f"{markdown_id}.md"
+        note_bytes = (json.dumps(note, ensure_ascii=False, indent=2) + "\n").encode()
+        note_id = hashlib.sha256(note_bytes).hexdigest()
         transcript_dir = self.root / "meetings" / meeting_id / "transcript"
         notes_dir = self.root / "meetings" / meeting_id / "notes"
         transcript_dir.mkdir(mode=0o700, parents=True)
         notes_dir.mkdir(mode=0o700)
         transcript_path = transcript_dir / f"{transcript_id}.json"
         note_path = notes_dir / f"{note_id}.json"
-        markdown_path = notes_dir / pack["markdown_filename"]
+        markdown_path = notes_dir / f"{markdown_id}.md"
         private_file(transcript_path, transcript_bytes)
-        private_file(
-            note_path, (json.dumps(pack["note"], ensure_ascii=False, indent=2) + "\n").encode()
-        )
-        private_file(markdown_path, pack["markdown"].encode())
-        validate_artifact_pair(pack["note"], note_path, load(transcript_path))
+        private_file(note_path, note_bytes)
+        private_file(markdown_path, markdown_bytes)
+        validate_artifact_pair(note, note_path, load(transcript_path))
 
         worker = WorkerProcess(self.root, self.manifest)
         try:
@@ -383,6 +388,76 @@ class WorkerProtocolTests(unittest.TestCase):
                 result["artifact_digests"]["note-markdown"], digest(markdown_path)
             )
             self.assertEqual(result["artifact_digests"]["transcript"], transcript_id)
+
+            refused = worker.request(
+                "note.inspect",
+                {
+                    "meeting_id": meeting_id,
+                    "note_id": str(uuid.uuid4()),
+                    "transcript_id": transcript_id,
+                },
+            )
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["code"], "protocol_failure")
+            self.assertEqual(refused["artifact_digests"], {})
+
+            wrong_meeting = json.loads(json.dumps(note))
+            wrong_meeting["meeting"]["id"] = str(uuid.uuid4())
+            wrong_meeting_bytes = (
+                json.dumps(wrong_meeting, ensure_ascii=False, indent=2) + "\n"
+            ).encode()
+            wrong_meeting_id = hashlib.sha256(wrong_meeting_bytes).hexdigest()
+            private_file(notes_dir / f"{wrong_meeting_id}.json", wrong_meeting_bytes)
+            refused = worker.request(
+                "note.inspect",
+                {
+                    "meeting_id": meeting_id,
+                    "note_id": wrong_meeting_id,
+                    "transcript_id": transcript_id,
+                },
+            )
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["code"], "protocol_failure")
+            self.assertEqual(refused["artifact_digests"], {})
+
+            rejected = json.loads(json.dumps(note))
+            rejected["checks"]["context"]["ok"] = False
+            rejected["passed"] = False
+            rejected_bytes = (
+                json.dumps(rejected, ensure_ascii=False, indent=2) + "\n"
+            ).encode()
+            rejected_id = hashlib.sha256(rejected_bytes).hexdigest()
+            private_file(notes_dir / f"{rejected_id}.json", rejected_bytes)
+            refused = worker.request(
+                "note.inspect",
+                {
+                    "meeting_id": meeting_id,
+                    "note_id": rejected_id,
+                    "transcript_id": transcript_id,
+                },
+            )
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["code"], "protocol_failure")
+            self.assertEqual(refused["artifact_digests"], {})
+
+            changed_locator = json.loads(json.dumps(note))
+            changed_locator["claims"][0]["turn"] += 1
+            changed_bytes = (
+                json.dumps(changed_locator, ensure_ascii=False, indent=2) + "\n"
+            ).encode()
+            changed_id = hashlib.sha256(changed_bytes).hexdigest()
+            private_file(notes_dir / f"{changed_id}.json", changed_bytes)
+            refused = worker.request(
+                "note.inspect",
+                {
+                    "meeting_id": meeting_id,
+                    "note_id": changed_id,
+                    "transcript_id": transcript_id,
+                },
+            )
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["code"], "protocol_failure")
+            self.assertEqual(refused["artifact_digests"], {})
         finally:
             worker.close()
 
