@@ -50,6 +50,7 @@ struct DeletedArtifact {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetentionOutcome {
+    DeferredActive(String),
     NotDue(String),
     AudioReleased(String),
     RecoveredRemoval(String),
@@ -83,6 +84,14 @@ pub fn execute_due_retention(
     storage: &StorageRoot,
     now_epoch_seconds: u64,
 ) -> Result<Vec<RetentionOutcome>, RetentionError> {
+    execute_due_retention_excluding(storage, now_epoch_seconds, &HashSet::new())
+}
+
+pub fn execute_due_retention_excluding(
+    storage: &StorageRoot,
+    now_epoch_seconds: u64,
+    active_meeting_ids: &HashSet<String>,
+) -> Result<Vec<RetentionOutcome>, RetentionError> {
     let meetings = storage
         .resolve(Path::new("meetings"))
         .map_err(|error| io::Error::other(error.to_string()))?;
@@ -90,6 +99,10 @@ pub fn execute_due_retention(
     for entry in fs::read_dir(meetings)? {
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
+        if active_meeting_ids.contains(&id) {
+            outcomes.push(RetentionOutcome::DeferredActive(id));
+            continue;
+        }
         if !entry.file_type()?.is_dir() {
             outcomes.push(RetentionOutcome::Quarantined(id));
             continue;
@@ -690,6 +703,23 @@ mod tests {
         assert_eq!(final_meeting.lifecycle, MeetingLifecycle::Captured);
         assert_eq!(final_meeting.retention.state, AudioState::Released);
         verify_record_artifacts(&directory, &final_meeting).unwrap();
+    }
+
+    #[test]
+    fn active_meeting_is_deferred_without_read_or_mutation() {
+        let (_temp, storage) = storage();
+        let (directory, _) = fixture(&storage, "meeting-active", Some(10));
+        durable_replace(&directory.join("meeting.json"), b"write-in-progress").unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+        let active = HashSet::from(["meeting-active".to_string()]);
+
+        assert_eq!(
+            execute_due_retention_excluding(&storage, 10, &active).unwrap(),
+            vec![RetentionOutcome::DeferredActive("meeting-active".into())]
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/system.wav").exists());
     }
 
     #[test]

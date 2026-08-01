@@ -487,8 +487,9 @@ no raw enrolment audio. This bridge is disabled in beta; in-app enrolment and
 its immediate raw-data deletion contract must replace it first.
 
 The automatic retention executor is part of the first human-capture slice.
-Rust records the next deletion time in `meeting.json`, scans due work on launch
-and while running, and first writes a durable deletion receipt. Before the first
+Rust records the next deletion time from durable attempt creation in
+`meeting.json`, scans due work on launch and while running, and first writes a
+durable deletion receipt. Before the first
 rename, it validates the existence, regular-file type, private mode, byte size,
 and digest of every bound WAV. It then stages the complete validated set by
 same-volume rename, fsyncs both directories, and advances the receipt from
@@ -500,6 +501,18 @@ remaining artifact against the durable phase before advancing it. This also
 covers the one-leg subset preserved from an interrupted capture. Manual
 deletion, disk accounting, policy change, and whole-meeting deletion reuse the
 mechanism in the later trust-action slice.
+
+An active-meeting lease is registered before its storage directory can be
+published and remains held through the final transcript or failure record.
+Startup recovery and every retention scan share the same process-local storage
+sequence gate. A scan snapshots the active IDs under that gate and returns
+`deferred-active` for them without opening or mutating their directories. This
+prevents a retention pass from quarantining a partial create, deleting WAVs
+during transcription, or replacing a newer meeting record with a stale copy.
+A due meeting is reconsidered on the next 30-second pass after its lease clears.
+Before beta admission, the same contract needs a process-lifetime app-data
+writer lock so a second app process fails closed rather than bypassing this
+in-process coordination.
 
 The completed operation receipt has schema `audio-deletion/1`. It binds the
 original `capture-session/2` digest and the exact relative name, byte size, and
@@ -821,6 +834,8 @@ contracts. The installed boundary needs its own evidence.
 | State file write, `fsync`, replace, or parent `fsync` fails | Status does not advance from an error; a fresh process accepts only one complete state whose referenced bytes reconcile; temporary material remains private and is cleaned or recoverable |
 | Run under `umask 000` | App root and directories are `0700`; private files are `0600`; nothing is written in the repository |
 | Retention time becomes due while the app is closed | Next launch stages and removes the bound WAVs under a durable receipt, fsyncs removal, then commits `audio-released`; transcript, note, profile, and other meetings remain |
+| Retention time becomes due while that meeting is capturing, finalizing, or transcribing | The scan returns `deferred-active` without opening the meeting; the next pass after the active lease clears performs the due deletion without losing the newer meeting record |
+| A second app process opens the same app-data root | Before beta, one process owns an exclusive writer lock and the other fails closed before recovery, capture, or retention mutation |
 | One or both WAVs disappear without a matching completed `audio-deletion/1` receipt | Meeting is quarantined; the reader does not relabel unexplained loss as retention |
 | Restart during correction or deletion | Operation resumes or rolls back from a receipt; no silent partial authority change |
 | Delete audio | WAVs disappear through staged deletion; transcript, evidence, note, profile, and other meetings remain; note reads `audio-released` |
