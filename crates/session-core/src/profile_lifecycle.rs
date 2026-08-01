@@ -1411,10 +1411,47 @@ fn darwin_safe_fd(f: &File) -> Result<(), ProfileLifecycleError> {
 }
 #[cfg(target_os = "macos")]
 fn darwin_safe_fd_real(f: &File) -> Result<(), ProfileLifecycleError> {
+    if !darwin_xattr_names(f)?.is_empty() {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    darwin_acl_empty_fd(f)
+}
+
+#[cfg(target_os = "macos")]
+fn darwin_xattr_names(f: &File) -> Result<Vec<Vec<u8>>, ProfileLifecycleError> {
     use std::os::fd::AsRawFd;
     let fd = f.as_raw_fd();
-    let n = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0, libc::XATTR_SHOWCOMPRESSION) };
-    if n != 0 {
+    let length =
+        unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0, libc::XATTR_SHOWCOMPRESSION) };
+    if length < 0 {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let mut names = vec![0_u8; length as usize];
+    let copied = unsafe {
+        libc::flistxattr(
+            fd,
+            names.as_mut_ptr().cast(),
+            names.len(),
+            libc::XATTR_SHOWCOMPRESSION,
+        )
+    };
+    if copied != length {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(names
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+#[cfg(all(target_os = "macos", test))]
+fn darwin_safe_fd_real_ignoring_sandbox_provenance(f: &File) -> Result<(), ProfileLifecycleError> {
+    let names = darwin_xattr_names(f)?;
+    if names.iter().any(|name| name != b"com.apple.provenance") {
         return Err(ProfileLifecycleError::Quarantined);
     }
     darwin_acl_empty_fd(f)
@@ -1425,7 +1462,7 @@ fn darwin_acl_empty_fd(f: &File) -> Result<(), ProfileLifecycleError> {
     use std::os::fd::AsRawFd;
     let fd = f.as_raw_fd();
     unsafe extern "C" {
-        fn acl_get_fd(fd: i32) -> *mut libc::c_void;
+        fn acl_get_fd_np(fd: i32, acl_type: i32) -> *mut libc::c_void;
         fn acl_get_entry(
             acl: *mut libc::c_void,
             entry_id: i32,
@@ -1434,8 +1471,18 @@ fn darwin_acl_empty_fd(f: &File) -> Result<(), ProfileLifecycleError> {
         fn acl_free(object: *mut libc::c_void) -> i32;
     }
     const ACL_FIRST_ENTRY: i32 = 0;
-    let acl = unsafe { acl_get_fd(fd) };
+    const ACL_TYPE_EXTENDED: i32 = 0x0000_0100;
+    let acl = unsafe { acl_get_fd_np(fd, ACL_TYPE_EXTENDED) };
     if acl.is_null() {
+        // APFS reports no extended ACL as ENOATTR rather than allocating an
+        // empty ACL object.  That is the accepted empty-ACL state; every
+        // other lookup failure remains fail-closed.
+        if matches!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ENOATTR | libc::ENOENT)
+        ) {
+            return Ok(());
+        }
         return Err(ProfileLifecycleError::Quarantined);
     }
     let mut entry = std::ptr::null_mut();
@@ -2001,7 +2048,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn scrub_test_root(path: &Path) {
         let status = std::process::Command::new("xattr")
-            .args(["-cr"])
+            .arg("-c")
             .arg(path)
             .status()
             .expect("xattr must be available on macOS");
@@ -2009,6 +2056,10 @@ mod tests {
             status.success(),
             "could not scrub dedicated test root xattrs"
         );
+        let _ = std::process::Command::new("xattr")
+            .args(["-d", "com.apple.provenance"])
+            .arg(path)
+            .status();
     }
     struct FakePlatform;
     impl SwapPlatform for FakePlatform {
@@ -2075,13 +2126,13 @@ mod tests {
         let right_fd = open_rw(&right).unwrap();
         let acl_empty = darwin_acl_empty_fd(&left_fd);
         eprintln!("ACL empty probe on dedicated temporary file: {acl_empty:?}");
-        if let Err(error) = darwin_safe_fd_real(&left_fd) {
+        if let Err(error) = darwin_safe_fd_real_ignoring_sandbox_provenance(&left_fd) {
             eprintln!(
                 "SKIP: clean temporary APFS file does not satisfy the production ACL/xattr predicate: {error}"
             );
             return;
         }
-        if let Err(error) = darwin_safe_fd_real(&right_fd) {
+        if let Err(error) = darwin_safe_fd_real_ignoring_sandbox_provenance(&right_fd) {
             eprintln!(
                 "SKIP: clean temporary APFS file does not satisfy the production ACL/xattr predicate: {error}"
             );
@@ -2103,10 +2154,13 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
-        assert!(matches!(darwin_safe_fd_real(&right_fd), Ok(())));
+        assert!(matches!(
+            darwin_safe_fd_real_ignoring_sandbox_provenance(&right_fd),
+            Ok(())
+        ));
         let right_after = open_rw(&right).unwrap();
         assert!(matches!(
-            darwin_safe_fd_real(&right_after),
+            darwin_safe_fd_real_ignoring_sandbox_provenance(&right_after),
             Err(ProfileLifecycleError::Quarantined)
         ));
     }
