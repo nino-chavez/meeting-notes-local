@@ -1,7 +1,10 @@
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -112,18 +115,108 @@ pub enum ManualAudioDeletionError {
     NonterminalProductOperation,
 }
 
-/// Releases only the bound audio for one exact, non-active meeting.
+/// The sole capability that may authorize immediate audio release.
 ///
-/// The desktop-only caller must hold the process-lifetime app-data writer lock
-/// for the full call. A process-local coordinator is not a substitute for that
-/// authority. This function cannot verify that cross-process authority itself;
-/// it owns only the per-meeting lease and storage-sequence preconditions below.
+/// A caller obtains it only by borrowing an [`AppDataWriterLock`] that already
+/// holds the owner-only process lock for this storage root. Its lifetime keeps
+/// that lock alive through the core's target lease, sequence gate, operation
+/// scan, and staged deletion/recovery path.
+///
+/// ```compile_fail
+/// use local_meeting_notes_session_core::retention::delete_meeting_audio_manually;
+/// // The raw mutation entry point is crate-private. A dependent crate must
+/// // acquire AppDataWriterLock and borrow its deletion_authority instead.
+/// # let _ = delete_meeting_audio_manually;
+/// ```
+pub struct ManualAudioDeletionAuthority<'a> {
+    lock: &'a AppDataWriterLock,
+}
+
+impl ManualAudioDeletionAuthority<'_> {
+    /// Releases only the bound audio for one exact, non-active meeting.
+    pub fn delete_audio(
+        &self,
+        storage: &StorageRoot,
+        meeting_id: &str,
+    ) -> Result<ManualAudioDeletionOutcome, ManualAudioDeletionError> {
+        delete_meeting_audio_manually(storage, self.lock.coordination.as_ref(), meeting_id)
+    }
+}
+
+/// Process-lifetime owner-only lock for one app-data storage root.
+///
+/// The file descriptor is private and non-cloneable. Successful construction
+/// means this process holds the canonical nonblocking exclusive `flock`; the
+/// bound coordinator is the same registry used for capture and retention.
+pub struct AppDataWriterLock {
+    _file: File,
+    coordination: Arc<MeetingStorageCoordination>,
+}
+
+#[derive(Debug, Error)]
+pub enum AppDataWriterLockError {
+    #[error("app-data writer lock path is unavailable")]
+    Path,
+    #[error("app-data writer lock could not be opened safely")]
+    Open,
+    #[error("app-data writer lock could not be inspected")]
+    Inspect,
+    #[error("app-data writer lock is not a regular file")]
+    NotRegular,
+    #[error("app-data writer lock permissions could not be secured")]
+    Permissions,
+    #[error("another app process may already be using private meeting storage")]
+    Contended,
+}
+
+impl AppDataWriterLock {
+    /// Acquires the canonical app-data writer lock and binds it to the one
+    /// process-local registry that serializes capture, recovery, and retention.
+    pub fn acquire(
+        storage: &StorageRoot,
+        coordination: Arc<MeetingStorageCoordination>,
+    ) -> Result<Self, AppDataWriterLockError> {
+        let path = storage
+            .resolve(Path::new(".writer.lock"))
+            .map_err(|_| AppDataWriterLockError::Path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|_| AppDataWriterLockError::Open)?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| AppDataWriterLockError::Inspect)?;
+        if !metadata.is_file() {
+            return Err(AppDataWriterLockError::NotRegular);
+        }
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|_| AppDataWriterLockError::Permissions)?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(AppDataWriterLockError::Contended);
+        }
+        Ok(Self {
+            _file: file,
+            coordination,
+        })
+    }
+
+    pub fn deletion_authority(&self) -> ManualAudioDeletionAuthority<'_> {
+        ManualAudioDeletionAuthority { lock: self }
+    }
+}
+
+/// Raw storage state machine. It is deliberately crate-private: callers in a
+/// dependent crate must hold `ManualAudioDeletionAuthority` instead.
 ///
 /// Within the process, this action first claims the target's active-meeting
 /// lease, then holds the storage sequence gate through the operation scan and
 /// staged deletion/recovery path. It therefore cannot overlap an active capture
 /// or a durable, nonterminal correction/note operation.
-pub fn delete_meeting_audio_manually(
+pub(crate) fn delete_meeting_audio_manually(
     storage: &StorageRoot,
     coordination: &MeetingStorageCoordination,
     meeting_id: &str,

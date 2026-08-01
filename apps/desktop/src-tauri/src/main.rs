@@ -10,10 +10,9 @@ mod product_facade;
 mod manual_delete_facade;
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -39,7 +38,7 @@ use local_meeting_notes_session_core::reducer::{
     CaptureState, ExclusiveOperation, Reducer, StartupState,
 };
 use local_meeting_notes_session_core::retention::{
-    RetentionOutcome, execute_due_retention_excluding, meeting_dir,
+    AppDataWriterLock, RetentionOutcome, execute_due_retention_excluding, meeting_dir,
 };
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::{
@@ -206,21 +205,10 @@ struct StorageContext {
     diagnostics: PathBuf,
 }
 
-/// Owns the open file description that carries the process-lifetime exclusive
-/// app-data lock. It is deliberately unconstructable outside this module: a
-/// private facade may borrow only an instance that `acquire_app_data_writer_lock`
-/// successfully created.
-struct AppDataWriterLock {
-    _file: File,
-}
-
 impl ApplicationState {
     #[allow(dead_code)]
     fn manual_audio_deletion_facade(&self) -> manual_delete_facade::ManualAudioDeletionFacade<'_> {
-        manual_delete_facade::ManualAudioDeletionFacade::new(
-            &self.app_data_writer_lock,
-            &self.meeting_storage_coordination,
-        )
+        manual_delete_facade::ManualAudioDeletionFacade::new(&self.app_data_writer_lock)
     }
 }
 
@@ -1070,35 +1058,18 @@ fn ensure_app_data_writer_lock(
     if held.is_some() {
         return Ok(());
     }
-    *held = Some(acquire_app_data_writer_lock(storage)?);
+    *held = Some(acquire_app_data_writer_lock(
+        storage,
+        state.meeting_storage_coordination.clone(),
+    )?);
     Ok(())
 }
 
-fn acquire_app_data_writer_lock(storage: &StorageRoot) -> Result<AppDataWriterLock, String> {
-    let path = storage
-        .resolve(Path::new(".writer.lock"))
-        .map_err(error_text)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|_| "the app-data writer lock could not be opened safely".to_string())?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| "the app-data writer lock could not be inspected".to_string())?;
-    if !metadata.is_file() {
-        return Err("the app-data writer lock is not a regular file".into());
-    }
-    file.set_permissions(fs::Permissions::from_mode(0o600))
-        .map_err(|_| "the app-data writer lock permissions could not be secured".to_string())?;
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if result != 0 {
-        return Err("another app process may already be using private meeting storage".into());
-    }
-    Ok(AppDataWriterLock { _file: file })
+fn acquire_app_data_writer_lock(
+    storage: &StorageRoot,
+    coordination: Arc<MeetingStorageCoordination>,
+) -> Result<AppDataWriterLock, String> {
+    AppDataWriterLock::acquire(storage, coordination).map_err(error_text)
 }
 
 #[cfg(debug_assertions)]
@@ -2636,12 +2607,13 @@ mod tests {
     #[test]
     fn app_data_writer_lock_is_exclusive_and_released_with_its_file() {
         let (_temporary, storage) = test_storage();
-        let held = acquire_app_data_writer_lock(&storage).unwrap();
+        let coordination = Arc::new(MeetingStorageCoordination::default());
+        let held = acquire_app_data_writer_lock(&storage, coordination.clone()).unwrap();
 
-        assert!(acquire_app_data_writer_lock(&storage).is_err());
+        assert!(acquire_app_data_writer_lock(&storage, coordination.clone()).is_err());
 
         drop(held);
-        assert!(acquire_app_data_writer_lock(&storage).is_ok());
+        assert!(acquire_app_data_writer_lock(&storage, coordination).is_ok());
     }
 
     fn fixture_reference(relative_path: &str, byte: char) -> ArtifactRef {

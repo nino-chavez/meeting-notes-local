@@ -8,13 +8,10 @@
 
 use std::sync::Mutex;
 
-use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 use local_meeting_notes_session_core::retention::{
-    ManualAudioDeletionError, ManualAudioDeletionOutcome, delete_meeting_audio_manually,
+    AppDataWriterLock, ManualAudioDeletionError, ManualAudioDeletionOutcome,
 };
 use local_meeting_notes_session_core::storage::StorageRoot;
-
-use crate::AppDataWriterLock;
 
 /// A closed, in-process result of the reviewed destructive confirmation.
 ///
@@ -70,18 +67,11 @@ pub(crate) enum ManualAudioDeletionFacadeError {
 /// and the core's target lease/sequence acquisition.
 pub(crate) struct ManualAudioDeletionFacade<'a> {
     writer_lock: &'a Mutex<Option<AppDataWriterLock>>,
-    coordination: &'a MeetingStorageCoordination,
 }
 
 impl<'a> ManualAudioDeletionFacade<'a> {
-    pub(crate) fn new(
-        writer_lock: &'a Mutex<Option<AppDataWriterLock>>,
-        coordination: &'a MeetingStorageCoordination,
-    ) -> Self {
-        Self {
-            writer_lock,
-            coordination,
-        }
+    pub(crate) fn new(writer_lock: &'a Mutex<Option<AppDataWriterLock>>) -> Self {
+        Self { writer_lock }
     }
 
     /// Executes the existing `audio-deletion/1` state machine only after a
@@ -106,7 +96,10 @@ impl<'a> ManualAudioDeletionFacade<'a> {
             return Err(ManualAudioDeletionFacadeError::WriterLockUnavailable);
         }
 
-        delete_meeting_audio_manually(storage, self.coordination, &args.meeting_id)
+        held.as_ref()
+            .expect("checked app-data writer lock")
+            .deletion_authority()
+            .delete_audio(storage, &args.meeting_id)
             .map(Into::into)
             .map_err(map_core_error)
     }
@@ -272,7 +265,9 @@ mod tests {
         );
         assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
 
-        let competing = acquire_app_data_writer_lock(&storage).unwrap();
+        let competing =
+            acquire_app_data_writer_lock(&storage, state.meeting_storage_coordination.clone())
+                .unwrap();
         assert!(ensure_app_data_writer_lock(&state, &storage).is_err());
         assert_eq!(
             state
