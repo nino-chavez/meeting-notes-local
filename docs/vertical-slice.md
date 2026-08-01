@@ -48,7 +48,7 @@ human gate.
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |
 | B. Shared-contract freeze | Complete and independently audited. Rust owns the exact correction/regeneration records, JavaScript-facing command shapes, worker shapes, recovery classification, artifact joins, and terminal meeting-byte receipt. Both runtimes parse the shared `product-operations-v1.json` fixture. The operations remain unadvertised until their implementations exist. | Implementation streams may branch from the audited revision; each must return through the fixture and full verification join. | None. | Complete 2026-08-01 |
 | C. Trust foundation | In progress. The independently audited restoration coordinator covers every durable phase and refuses simultaneous storage mutation. The development-only profile bridge now validates and consumes quarantined candidates without following links, trusting unsafe ownership or modes, overwriting installed bytes, or crashing the worker on malformed data. An audited crate-private manual action reuses `audio-deletion/1` for not-yet-due audio and refuses active or crashed product operations. None is registered. The durable profile-reset contract is frozen; reset, guided enrolment, and writer-lock-owning desktop deletion remain. | Implement reset and enrolment, bind manual deletion behind the process writer lock and reviewed confirmation, then exercise real profile and withheld-turn paths before command admission. | Retention-policy wording and far-end-notice choices; real profile and withheld-turn decisions. | Cumulative 1–2 weeks |
-| D. Evidence-linked automatic notes | In progress. An independently audited private coordinator now carries an injected note request through worker result, exact artifact reinspection, meeting-pointer update, and terminal commit. Accepted notes advance to `ready`; artifact-free rejection advances to `summary-failed`; every durable phase has fresh-coordinator recovery. No real generator, model identity, runtime bridge, command, startup hook, or UI is admitted. | Add the fixed generator/model identity, concrete Rust-to-Python bridge, locator landing, and installed transcript-only rejected fallback; deterministic checks precede private semantic review. | Semantic support and usefulness adjudication. | Additional 2–3 weeks |
+| D. Evidence-linked automatic notes | In progress. An independently audited private coordinator now carries an injected note request through worker result, exact artifact reinspection, meeting-pointer update, and terminal commit. Accepted notes advance to `ready`; artifact-free rejection advances to `summary-failed`; every durable phase has fresh-coordinator recovery. No real generator, model identity, runtime bridge, command, startup hook, or UI is admitted. | Add the fixed generator/model identity and one-shot bridge, then locator landing. Before generator admission, a harness-only transport/inspection probe creates no app-data or generation receipt; an installed rejection receipt follows only after the admitted generator can honestly reject the exact request. Deterministic checks precede private semantic review. | Semantic support and usefulness adjudication. | Additional 2–3 weeks |
 | E. Product surfaces and retrieval | The frozen Tauri correction/regeneration facade now compiles against the shared fixture but remains deliberately unregistered and has no alpha UI. Production library, note reader, commitment view, and exact transcript/metadata search are not built. Design remains retrieval → commitments → capture; build follows dependency order. | Install the storage-backed coordinator, then review the working interaction before intentionally registering commands. | Cold operator review of the working surfaces. | Additional 2–3 weeks, partly parallel with D |
 | F. Beta packaging and admission | Blocked by C–E. | Frozen build/model identities, installed canary, locator resolution, correction/restart/retention/deletion receipts. | Pre-run reference, semantic review, and operator usefulness verdict. | Cumulative 6–9 weeks |
 | G. Production hardening and GA | Not started. | Clean accounts/Macs, upgrade/migration/rollback, fault injection, privacy/security, and content-free diagnostics. | Explicit beta admission and later GA release decisions. | Cumulative 9–14 weeks |
@@ -178,10 +178,12 @@ $APP_DATA
   meeting records | canonical capture/transcript/note artifacts | profile
 ```
 
-Rust starts both packaged children and owns their process group. It may create the
-Swift tap only after an approved attempt receipt is durable, and the tap stays in the
-same owned group as the application-scoped worker. Stopping, timing out, or exiting
-the application must stop and wait for the whole group. The worker never starts or
+Rust starts the application-scoped worker and attempt-scoped Swift tap and owns
+their alpha process group. It may create the Swift tap only after an approved
+attempt receipt is durable, and the tap stays in that group. Stopping, timing
+out, or exiting the application must stop and wait for the alpha group. A
+one-shot note child uses its own separately owned process group under the rules
+below; it never joins or changes alpha ownership. The worker never starts or
 stops capture; after Swift closes both WAV legs, `capture.finalize` validates them and
 creates the canonical capture-session receipt.
 
@@ -217,6 +219,157 @@ There is no `launchd` job. A job that can restart or outlive the Tauri
 application conflicts with per-attempt consent and makes process ownership
 ambiguous after a crash.
 
+### Private one-shot note bridge
+
+Wave D does not add `note.create` to the transcript-alpha worker or introduce a
+second application-scoped service. Rust may spawn a separately manifested,
+one-shot Python note child after alpha readiness. Each child sends one
+`note-bridge-event/1` ready frame, accepts exactly one
+`note-bridge-command/1` request, emits exactly one `note-bridge-result/1`, and
+exits. The create role advertises only `note.create`; the independent inspection
+role advertises only `note.inspect`. A create child and the fresh child that
+inspects its output are separate processes.
+
+The app fixes the private storage root and verifies one closed `note-runtime/1`
+manifest before spawn. Its fields, in canonical order, are `schema`, `role`,
+`runtime`, `bridge`, `validator`, `generator`, and `models`. Runtime, bridge, and
+validator each contain only `relative_path` then lowercase `sha256`, in that
+order. Generator is either null or an object containing `id`, `relative_path`,
+and `sha256`, in that order. Each model uses that same field order. Bundle-relative paths must resolve below
+the verified resource root without links. IDs are unique, model rows are sorted
+by ID, unknown fields are refused, and every identifier and relative path is
+ASCII restricted to letters, digits, `.`, `_`, `-`, and `/`; empty components,
+`.`/`..`, backslashes, control characters, and JSON escapes are refused. The manifest identity is the SHA-256 of
+two-space pretty UTF-8 JSON in this field order with no terminal newline.
+`role: inspect` requires `generator: null` and `models: []`; `role: create`
+requires an admitted generator and its complete nonempty model inventory.
+Before spawn, Rust opens every listed resource without following links, requires
+a regular bundle-owned file, hashes its bytes, and compares the result with the
+manifest. The child independently repeats those checks before ready. It must
+load the generator and model only from those resolved verified files, keep their
+file identity stable through load, and recheck size, owner, mode, device, inode,
+and digest before emitting ready. A library that can only reopen an unpinned
+pathname does not meet this contract. Ready echoes the digest of verified
+manifest bytes only after the actual loaded resources pass; echoing a supplied
+digest is not evidence.
+
+The ready frame is exactly:
+
+```json
+{
+  "schema": "note-bridge-event/1",
+  "event": "ready",
+  "protocol": 1,
+  "role": "inspect",
+  "manifest_sha256": "<note-runtime/1 digest>",
+  "operations": ["note.inspect"]
+}
+```
+
+The create role substitutes `create` and the one-element operation list
+`["note.create"]`. Role, manifest digest, and operation list must exactly match
+the verified manifest. Unknown fields, enum values, duplicate operations, or a
+different order are protocol failure.
+
+The single command has fields `schema`, `request_id`, `operation`, and
+`arguments`. `request_id` is a UUID and must match the terminal result. Create
+arguments are exactly the frozen `meeting_id` and
+`source_transcript_sha256`. Inspect arguments are exactly `meeting_id`,
+`note_id`, and `transcript_id`. All IDs are opaque or lowercase SHA-256 values;
+no path, prompt, model name, or storage root crosses the frame.
+
+The terminal result has fields `schema: note-bridge-result/1`, `request_id`,
+`operation`, `outcome`, `artifact_digests`, and `failure`. Outcome is the closed
+enum `succeeded`, `note-rejected`, or `refused`. Success has `failure: null` and
+exactly the three frozen digest keys `note`, `note-markdown`, and `transcript`.
+Only create may return `note-rejected`; it has empty digests and exactly
+`{"code":"note_rejected","recoverable":true}`. Refusal has empty digests and
+one content-free failure code from `invalid-request`, `artifact-missing`,
+`artifact-changed`, `artifact-invalid`, `runtime-unavailable`,
+`generator-unavailable`, or `internal-error`, plus a Boolean `recoverable`.
+Refusal never becomes a persisted note rejection. Unknown or missing fields,
+wrong role/operation combinations, a second result, or success at end-of-file
+without the exact result are protocol failure.
+
+Role fixes the refusal codes and their mapping. Create accepts only
+`invalid-request` with `recoverable: false`, which maps to
+`NoteGenerationWorkerError::Refused`; and `runtime-unavailable`,
+`generator-unavailable`, or `internal-error` with `recoverable: true`, which map
+to `NoteGenerationWorkerError::Unavailable`. Inspect accepts only
+`invalid-request`/false and `artifact-invalid`/false, which map to
+`NoteArtifactError::Malformed`; `artifact-missing`/true, which maps to
+`NoteArtifactError::Missing`; and `artifact-changed`/false, which maps to
+`NoteArtifactError::Changed`. Transport, timeout, or child-runtime failure is not
+a refusal frame; the concrete inspector must add and return an internal
+`NoteArtifactError::Unavailable` before it may bind to the coordinator. The
+inspect-only probe therefore cannot implement that trait yet. A create
+`note-rejected` result reconstructs exactly `NoteCreateWorkerFailure` with code
+`NoteRejected`, `recoverable: true`, and an empty artifact-digest map. The command
+schema must be exactly `note-bridge-command/1`, and the result's request ID and
+operation must equal that command.
+
+A frame is at most 65,536 bytes including its newline; stderr is capped at 16
+KiB and may not contain meeting text. Ready is bounded to 10 seconds and
+inspection to 30 seconds. The initial 15-minute creation ceiling is provisional
+until cold-start measurement. Timeout, cancellation, malformed output, extra
+frames, or identity mismatch terminates the one-shot process group, waits 750
+milliseconds, then kills and waits if needed. Closing the parent's liveness pipe
+also ends the child. The child may not detach, create a new session, or mask or
+close the liveness signal. The first bridge version forbids generator/model
+subprocesses, so the owned group contains only the direct one-shot child;
+admitting descendants later requires a new ownership contract. Normal
+shutdown closes liveness, stops, and waits for the one-shot group.
+
+Each spawn gets a UUID request directory below the durable note operation:
+`children/<request-id>/`. Before Rust sends the command, it writes an immutable,
+owner-private `ownership.json` with schema `note-child-ownership/1`, operation
+ID, request ID, role, manifest SHA-256, PID, process start time, process-group ID,
+and executable relative path and SHA-256. After Rust has waited for that exact
+child, it writes `exit.json` with schema `note-child-exit/1`, the same operation,
+request, manifest, and process identity, completion time, and the closed outcome
+`observed-exit`, `terminated`, or `absent-after-crash`. The phase-specific
+`observed-exit` shape alone carries an integer exit code from 0 through 255; the
+other shapes omit that field. Both receipts are content-free and refuse unknown,
+explicit-null, or phase-forbidden fields. A new attempt
+uses a new request ID and directory; it never overwrites an earlier child
+receipt.
+
+Fresh recovery scans child ownership before retrying a request or inspecting a
+stored result. An ownership receipt without an exit receipt requires the same
+independent PID existence and exact start-time, group, executable-path, and
+digest comparison used for capture recovery. Rust signals and waits only for an
+exact match. `ESRCH` is absent; `EPERM`, a live mismatched PID, or an identity
+that cannot be inspected is ambiguous and blocks note recovery without
+signalling. Recovery writes the exit receipt only after absence or exact cleanup
+is established. It cannot begin worker retry or meeting mutation while an
+identity-bound child remains live or ambiguous.
+
+Rust alone owns `.writer.lock`, the active-meeting lease, durable operation
+receipts, meeting publication, and recovery. The one-shot child never receives
+or contends for the writer lock. The lease spans request persistence, child
+execution, fresh inspection, meeting publication, and terminal commit. Success
+is exactly the frozen three-digest result. Generator rejection is exactly
+`note_rejected`, `recoverable: true`, and no artifact digests. Missing runtime or
+model, timeout, malformed output, or protocol failure is worker unavailability,
+not note rejection. A crash after immutable artifact creation but before result
+storage leaves those bytes without product authority.
+
+Note recovery runs only after existing ownership recovery, interrupted deletion,
+newly due retention, and unchanged transcript-alpha readiness have completed,
+but before note-library exposure. Note-runtime
+failure may quarantine the affected operation and disable note work; it cannot
+change alpha readiness. No command, UI capability, semantic-quality claim, or
+beta admission follows from this private bridge.
+
+The create role is not implemented or advertised until a fixed generator and
+model identity are admitted. Before then, an inspect-only one-shot may exist
+only in the repository test harness, using a temporary private root that the
+harness removes after the child has exited. It is not packaged, installed,
+started by the app, or permitted to write app-data or an ownership/generation
+receipt. It may prove framing, confinement, liveness, timeout, and
+changed-artifact refusal, but may not implement `NoteGenerationWorker`, enter
+the note coordinator, or translate missing generation into `note_rejected`.
+
 Tauri's current canonical patterns support this boundary:
 
 - [embedded external binaries](https://v2.tauri.app/develop/sidecar/) for
@@ -238,6 +391,7 @@ facility does not authorize its JavaScript API.
 | Tauri webview | Rendering, local interaction state, accessible focus and announcements | Process launch, storage paths, artifact acceptance, consent persistence |
 | Rust session core | Startup and capture reducer, one-at-a-time operation lock, attestation lifetime, policy checks, process group, private diagnostics, meeting index projection, deletion orchestration | Transcription, voice scoring, note claims, or a second interpretation of artifact validity |
 | Python worker | Versioned operations over capture finalization and the existing profile, transcript, and note validators | Capture-child launch or Stop, product readiness, arbitrary commands or paths, retention policy, UI state |
+| One-shot note child | One manifested create or inspect operation, immutable note publication, and Python-owned note semantics | Application lifetime, alpha readiness, writer lock, meeting pointers, recovery ordering, commands, or UI state |
 | Swift tap | System and microphone audio acquisition for the current capture | Restart policy, meeting identity, transcript or note behavior |
 | Canonical artifacts | Durable evidence and the accepted result of each completed stage | Live child state or permission state |
 
@@ -500,7 +654,9 @@ The executable contract is owned by
 `crates/session-core/src/operations.rs` and the single cross-runtime fixture
 `tests/fixtures/product-operations-v1.json`. The Tauri/JavaScript boundary uses
 the command names above with `camelCase` argument and response fields. Worker
-commands use `snake_case` fields under `worker-command/2`. Both sides refuse
+commands for the application-scoped worker use `snake_case` fields under
+`worker-command/2`. The one-shot note bridge is the sole exception and uses its
+closed `note-bridge-command/1` shape below. Both sides refuse
 unknown fields. Rust additionally binds request, result, view, and commit
 digests and identities, including the canonical `meeting.json` bytes named by
 the terminal commit. Python independently validates the worker-facing
