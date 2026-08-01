@@ -9,10 +9,15 @@ import sys
 import tempfile
 import unittest
 import uuid
+import zipfile
 from pathlib import Path
 
+from worker.note_validator import ArtifactFailure
+from worker.note_validator import inspect as inspect_snapshot
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "notes"))
+sys.path.insert(0, str(REPO / "spike"))
 
 
 def private_file(path: Path, data: bytes) -> None:
@@ -27,13 +32,12 @@ def digest(path: Path) -> str:
 
 
 class NoteBridgeProcess:
-    def __init__(self, root: Path, manifest: Path):
+    def __init__(self, root: Path, manifest: Path, *, executable: Path, bridge: Path):
         read_fd, self._write_fd = os.pipe()
         self._process = subprocess.Popen(
             [
-                sys.executable,
-                "-m",
-                "worker.note_bridge",
+                str(executable),
+                str(bridge),
                 "--temporary-private-root",
                 str(root),
                 "--note-runtime-manifest",
@@ -41,7 +45,7 @@ class NoteBridgeProcess:
                 "--parent-liveness-fd",
                 str(read_fd),
             ],
-            cwd=REPO,
+            cwd=manifest.parent,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -51,28 +55,17 @@ class NoteBridgeProcess:
         ready = self._process.stdout.readline()
         self.ready = json.loads(ready) if ready else None
 
-    def inspect(self, arguments: dict) -> dict:
+    def send(self, frame: bytes) -> tuple[dict | None, int, bytes]:
         assert self._process.stdin is not None
         assert self._process.stdout is not None
-        command = {
-            "schema": "note-bridge-command/1",
-            "request_id": str(uuid.uuid4()),
-            "operation": "note.inspect",
-            "arguments": arguments,
-        }
-        self._process.stdin.write(json.dumps(command).encode("utf-8") + b"\n")
+        assert self._process.stderr is not None
+        self._process.stdin.write(frame)
         self._process.stdin.close()
-        result = self._process.stdout.readline()
+        line = self._process.stdout.readline()
         self._process.wait(timeout=3)
-        os.close(self._write_fd)
-        self._write_fd = -1
-        if self._process.returncode != 0:
-            error = self._process.stderr.read().decode("utf-8", "replace")
-            raise AssertionError(error)
-        parsed = json.loads(result)
-        if parsed["request_id"] != command["request_id"]:
-            raise AssertionError("bridge result request ID mismatch")
-        return parsed
+        result = json.loads(line) if line else None
+        error = self._process.stderr.read()
+        return result, self._process.returncode, error
 
     def close(self) -> None:
         if self._write_fd >= 0:
@@ -90,58 +83,75 @@ class NoteBridgeProcess:
 class NoteBridgeHarnessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.base = Path(self.temporary.name)
+        self.base = Path(self.temporary.name).resolve()
         self.root = self.base / "app"
         self.root.mkdir(mode=0o700)
         self.resources = self.base / "resources"
         self.resources.mkdir(mode=0o700)
-        for source, target in (
-            (REPO / "worker/note_bridge.py", self.resources / "bridge.py"),
-            (REPO / "worker/adapters.py", self.resources / "validator.py"),
-        ):
-            shutil.copyfile(source, target)
-            target.chmod(0o600)
-        private_file(self.resources / "runtime.py", b"harness runtime only\n")
+        self.runtime = self.resources / "python-runtime"
+        shutil.copyfile(sys.executable, self.runtime)
+        self.runtime.chmod(0o700)
+        self.bridge = self.resources / "note_bridge.py"
+        shutil.copyfile(REPO / "worker/note_bridge.py", self.bridge)
+        self.bridge.chmod(0o600)
+        self.validator = self.resources / "note-validator.zip"
+        self._write_validator_bundle(self.validator)
         self.manifest = self.resources / "note-runtime.json"
-        manifest = {
-            "schema": "note-runtime/1",
-            "role": "inspect",
-            "runtime": {
-                "relative_path": "runtime.py",
-                "sha256": digest(self.resources / "runtime.py"),
-            },
-            "bridge": {
-                "relative_path": "bridge.py",
-                "sha256": digest(self.resources / "bridge.py"),
-            },
-            "validator": {
-                "relative_path": "validator.py",
-                "sha256": digest(self.resources / "validator.py"),
-            },
-            "generator": None,
-            "models": [],
-        }
-        private_file(
-            self.manifest,
-            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
-        )
+        self._write_manifest()
         self.meeting_id, self.note_id, self.transcript_id = self._write_note_pair()
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    @staticmethod
+    def _write_validator_bundle(path: Path) -> None:
+        sources = {
+            "note_validator.py": REPO / "worker/note_validator.py",
+            "summarize.py": REPO / "notes/summarize.py",
+            "transcript.py": REPO / "notes/transcript.py",
+            "capture_health.py": REPO / "spike/capture_health.py",
+        }
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+            for name, source in sources.items():
+                archive.writestr(name, source.read_bytes())
+        path.chmod(0o600)
+
+    def _manifest_document(self) -> dict:
+        return {
+            "schema": "note-runtime/1",
+            "role": "inspect",
+            "runtime": {
+                "relative_path": self.runtime.name,
+                "sha256": digest(self.runtime),
+            },
+            "bridge": {
+                "relative_path": self.bridge.name,
+                "sha256": digest(self.bridge),
+            },
+            "validator": {
+                "relative_path": self.validator.name,
+                "sha256": digest(self.validator),
+            },
+            "generator": None,
+            "models": [],
+        }
+
+    def _write_manifest(self, document: dict | None = None) -> None:
+        self.manifest.unlink(missing_ok=True)
+        manifest = document or self._manifest_document()
+        private_file(
+            self.manifest,
+            json.dumps(manifest, ensure_ascii=False, indent=2).encode(),
+        )
+
     def _write_note_pair(self) -> tuple[str, str, str]:
         meeting_id = str(uuid.uuid4())
-        pack = json.loads(
-            (REPO / "docs/prototype/fixtures/accepted-note2.fixture").read_text()
-        )
+        pack = json.loads((REPO / "docs/prototype/fixtures/accepted-note2.fixture").read_text())
         transcript_bytes = (json.dumps(pack["transcript"], indent=2) + "\n").encode()
         transcript_id = hashlib.sha256(transcript_bytes).hexdigest()
-        transcript = (
-            self.root / "meetings" / meeting_id / "transcript" / f"{transcript_id}.json"
-        )
+        transcript = self.root / "meetings" / meeting_id / "transcript" / f"{transcript_id}.json"
         private_file(transcript, transcript_bytes)
-        markdown_bytes = pack["markdown"].encode("utf-8")
+        markdown_bytes = pack["markdown"].encode()
         markdown_id = hashlib.sha256(markdown_bytes).hexdigest()
         note = pack["note"]
         note["meeting"]["id"] = meeting_id
@@ -152,14 +162,22 @@ class NoteBridgeHarnessTests(unittest.TestCase):
         notes = self.root / "meetings" / meeting_id / "notes"
         private_file(notes / f"{markdown_id}.md", markdown_bytes)
         private_file(notes / f"{note_id}.json", note_bytes)
+        for directory in (
+            self.root / "meetings",
+            self.root / "meetings" / meeting_id,
+            self.root / "meetings" / meeting_id / "transcript",
+            notes,
+        ):
+            directory.chmod(0o700)
         return meeting_id, note_id, transcript_id
 
-    def _tree(self) -> dict[str, str]:
-        return {
-            str(path.relative_to(self.root)): digest(path)
-            for path in sorted(self.root.rglob("*"))
-            if path.is_file()
-        }
+    def _start(self, *, executable: Path | None = None) -> NoteBridgeProcess:
+        return NoteBridgeProcess(
+            self.root,
+            self.manifest,
+            executable=executable or self.runtime,
+            bridge=self.bridge,
+        )
 
     def _arguments(self) -> dict:
         return {
@@ -168,13 +186,27 @@ class NoteBridgeHarnessTests(unittest.TestCase):
             "transcript_id": self.transcript_id,
         }
 
-    def _markdown_id(self) -> str:
-        note_path = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
-        return json.loads(note_path.read_text())["render"]["path"].removesuffix(".md")
+    def _command(self, arguments: dict | None = None) -> tuple[str, bytes]:
+        request_id = str(uuid.uuid4())
+        command = {
+            "schema": "note-bridge-command/1",
+            "request_id": request_id,
+            "operation": "note.inspect",
+            "arguments": arguments or self._arguments(),
+        }
+        return request_id, json.dumps(command).encode() + b"\n"
 
-    def test_inspection_succeeds_without_writing_app_data_or_receipts(self) -> None:
+    def _tree(self) -> dict[str, str]:
+        return {
+            str(path.relative_to(self.root)): digest(path)
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file()
+        }
+
+    def test_attested_runtime_bridge_and_validator_inspect_without_app_data_writes(self) -> None:
         before = self._tree()
-        bridge = NoteBridgeProcess(self.root, self.manifest)
+        request_id, command = self._command()
+        bridge = self._start()
         try:
             self.assertEqual(
                 bridge.ready,
@@ -187,39 +219,161 @@ class NoteBridgeHarnessTests(unittest.TestCase):
                     "operations": ["note.inspect"],
                 },
             )
-            result = bridge.inspect(self._arguments())
+            result, returncode, error = bridge.send(command)
         finally:
             bridge.close()
+        self.assertEqual(returncode, 0)
+        self.assertEqual(error, b"")
+        self.assertEqual(result["request_id"], request_id)
         self.assertEqual(result["outcome"], "succeeded")
-        self.assertIsNone(result["failure"])
-        self.assertEqual(
-            result["artifact_digests"],
-            {
-                "note": self.note_id,
-                "note-markdown": self._markdown_id(),
-                "transcript": self.transcript_id,
-            },
-        )
+        self.assertEqual(result["artifact_digests"]["note"], self.note_id)
+        self.assertEqual(result["artifact_digests"]["transcript"], self.transcript_id)
         self.assertEqual(self._tree(), before)
         self.assertFalse(list(self.root.rglob("operations")))
         self.assertFalse(list(self.root.rglob("children")))
 
-    def test_changed_artifact_is_refused_without_harness_mutation(self) -> None:
-        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
-        note.chmod(0o600)
-        note.write_bytes(note.read_bytes() + b" ")
-        before = self._tree()
-        bridge = NoteBridgeProcess(self.root, self.manifest)
+    def test_unattested_interpreter_never_reaches_ready(self) -> None:
+        bridge = self._start(executable=Path(sys.executable))
         try:
-            result = bridge.inspect(self._arguments())
+            self.assertIsNone(bridge.ready)
         finally:
             bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_intermediate_resource_symlink_never_reaches_ready(self) -> None:
+        document = self._manifest_document()
+        real = self.resources / "real"
+        real.mkdir(mode=0o700)
+        moved = real / self.validator.name
+        self.validator.rename(moved)
+        (self.resources / "linked").symlink_to(real, target_is_directory=True)
+        document["validator"] = {
+            "relative_path": f"linked/{moved.name}",
+            "sha256": digest(moved),
+        }
+        self._write_manifest(document)
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_json_array_artifact_returns_closed_invalid_refusal_without_traceback(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        note.write_bytes(b"[]")
+        request_id, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual(returncode, 0)
+        self.assertEqual(error, b"")
+        self.assertEqual(result["request_id"], request_id)
         self.assertEqual(result["outcome"], "refused")
+        self.assertEqual(result["failure"], {"code": "artifact-invalid", "recoverable": False})
+
+    def test_missing_artifact_keeps_its_frozen_refusal_code(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        note.unlink()
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "refused")
+        self.assertEqual(result["failure"], {"code": "artifact-missing", "recoverable": True})
+
+    def test_changed_artifact_keeps_its_frozen_refusal_code(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        note.write_bytes(note.read_bytes() + b" ")
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "refused")
+        self.assertEqual(result["failure"], {"code": "artifact-changed", "recoverable": False})
+
+    def test_intermediate_artifact_symlink_returns_closed_invalid_refusal(self) -> None:
+        real_meetings = self.base / "real-meetings"
+        (self.root / "meetings").rename(real_meetings)
+        (self.root / "meetings").symlink_to(real_meetings, target_is_directory=True)
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "refused")
+        self.assertEqual(result["failure"], {"code": "artifact-invalid", "recoverable": False})
+
+    def test_retained_snapshot_refuses_same_bytes_rename_race(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        original = note.read_bytes()
+
+        def replace_after_open() -> None:
+            note.rename(note.with_suffix(".old"))
+            private_file(note, original)
+
+        root_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with self.assertRaises(ArtifactFailure) as failure:
+                inspect_snapshot(root_fd, self._arguments(), after_open=replace_after_open)
+        finally:
+            os.close(root_fd)
         self.assertEqual(
-            result["failure"], {"code": "artifact-changed", "recoverable": False}
+            (failure.exception.code, failure.exception.recoverable),
+            (
+                "artifact-changed",
+                False,
+            ),
         )
-        self.assertEqual(result["artifact_digests"], {})
-        self.assertEqual(self._tree(), before)
+
+    def test_invalid_arguments_return_only_invalid_request(self) -> None:
+        invalid = self._arguments()
+        invalid["note_id"] = 7
+        request_id, command = self._command(invalid)
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["request_id"], request_id)
+        self.assertEqual(result["failure"], {"code": "invalid-request", "recoverable": False})
+
+    def test_duplicate_keys_and_second_frames_are_protocol_failures(self) -> None:
+        request_id = str(uuid.uuid4())
+        duplicate = (
+            '{"schema":"note-bridge-command/1","request_id":"'
+            + request_id
+            + '","operation":"note.inspect","arguments":'
+            + '{"meeting_id":"'
+            + self.meeting_id
+            + '","note_id":"'
+            + self.note_id
+            + '","note_id":"'
+            + self.note_id
+            + '","transcript_id":"'
+            + self.transcript_id
+            + '"}}\n'
+        ).encode()
+        for frame in (duplicate, self._command()[1] + self._command()[1]):
+            bridge = self._start()
+            try:
+                result, returncode, error = bridge.send(frame)
+            finally:
+                bridge.close()
+            self.assertIsNone(result)
+            self.assertEqual(returncode, 2)
+            self.assertEqual(error, b"")
 
 
 if __name__ == "__main__":
