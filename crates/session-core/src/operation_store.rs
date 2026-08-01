@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{self, DirEntry};
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -13,10 +13,9 @@ use crate::meeting::{
     MAX_RECEIPT_BYTES, MeetingError, MeetingRecord, read_private_bytes, require_private_directory,
 };
 use crate::operations::{
-    IncompleteOperationRecovery, MeetingOperationCommit, NoteGenerationRequest,
-    NoteGenerationResult, NoteGenerationStatus, OperationContractError, ProductOperationKind,
-    ProductOperationOutcome, TranscriptRestorationRequest, TranscriptRestorationResult,
-    classify_note_recovery, classify_restoration_recovery,
+    MeetingOperationCommit, NoteGenerationRequest, NoteGenerationResult, NoteGenerationStatus,
+    OperationContractError, ProductOperationKind, ProductOperationOutcome,
+    TranscriptRestorationRequest, TranscriptRestorationResult,
 };
 use crate::storage::{StorageRoot, durable_create_new, sync_directory};
 
@@ -81,7 +80,7 @@ pub struct StoredOperationReceipt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationReceiptState {
     RequestOnly,
-    ValidatedResult,
+    ResultStored,
     Committed,
 }
 
@@ -130,63 +129,9 @@ impl StoredOperationReceipt {
     pub fn state(&self) -> OperationReceiptState {
         match (&self.result, &self.commit) {
             (None, None) => OperationReceiptState::RequestOnly,
-            (Some(_), None) => OperationReceiptState::ValidatedResult,
+            (Some(_), None) => OperationReceiptState::ResultStored,
             (Some(_), Some(_)) => OperationReceiptState::Committed,
             (None, Some(_)) => unreachable!("receipt validation refuses a commit without a result"),
-        }
-    }
-
-    pub fn classify_incomplete(
-        &self,
-        lifecycle: crate::meeting::MeetingLifecycle,
-        current_transcript_sha256: &str,
-        current_note: Option<&crate::meeting::NoteRevisionRef>,
-    ) -> Result<IncompleteOperationRecovery, OperationStoreError> {
-        if self.commit.is_some() {
-            return Err(OperationStoreError::Malformed(
-                "completed receipt cannot be classified as incomplete",
-            ));
-        }
-        match (&self.request, &self.result) {
-            (StoredOperationRequest::Restoration(request), None) => {
-                Ok(classify_restoration_recovery(
-                    request,
-                    None,
-                    lifecycle,
-                    current_transcript_sha256,
-                    current_note,
-                )?)
-            }
-            (
-                StoredOperationRequest::Restoration(request),
-                Some(StoredOperationResult::Restoration(result)),
-            ) => Ok(classify_restoration_recovery(
-                request,
-                Some(result),
-                lifecycle,
-                current_transcript_sha256,
-                current_note,
-            )?),
-            (StoredOperationRequest::NoteGeneration(request), None) => Ok(classify_note_recovery(
-                request,
-                None,
-                lifecycle,
-                current_transcript_sha256,
-                current_note,
-            )?),
-            (
-                StoredOperationRequest::NoteGeneration(request),
-                Some(StoredOperationResult::NoteGeneration(result)),
-            ) => Ok(classify_note_recovery(
-                request,
-                Some(result),
-                lifecycle,
-                current_transcript_sha256,
-                current_note,
-            )?),
-            _ => Err(OperationStoreError::Malformed(
-                "request and result schemas disagree",
-            )),
         }
     }
 }
@@ -279,12 +224,11 @@ impl OperationStore {
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                fs::create_dir(&path)?;
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-                sync_directory(&self.operations_dir)?;
+                create_new_private_directory(&path, &self.operations_dir)?;
             }
             Err(error) => return Err(error.into()),
         }
+        require_private_directory(&path)?;
         Ok(path)
     }
 
@@ -359,15 +303,23 @@ fn create_private_operation_root(path: &Path) -> Result<(), OperationStoreError>
             }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(path)?;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
             let parent = path
                 .parent()
                 .ok_or(OperationStoreError::InvalidPrivateStorage)?;
-            sync_directory(parent)?;
+            create_new_private_directory(path, parent)?;
         }
         Err(error) => return Err(error.into()),
     }
+    Ok(())
+}
+
+fn create_new_private_directory(path: &Path, parent: &Path) -> Result<(), OperationStoreError> {
+    require_private_directory(parent)?;
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(path)?;
+    require_private_directory(path)?;
+    sync_directory(parent)?;
     Ok(())
 }
 
@@ -579,6 +531,8 @@ fn operation_id_from_entry(entry: &DirEntry) -> Result<Uuid, OperationStoreError
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use serde::de::DeserializeOwned;
@@ -586,7 +540,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::meeting::MeetingLifecycle;
+
+    static UMASK_LOCK: Mutex<()> = Mutex::new(());
 
     fn fixtures() -> Value {
         serde_json::from_str(include_str!(
@@ -661,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_classifies_request_only_and_validated_result_without_ordering() {
+    fn scan_reports_request_only_and_result_stored_without_ordering() {
         let fixture = fixtures();
         let (_temp, store) = store();
         let request = restoration_request(&fixture);
@@ -677,35 +632,64 @@ mod tests {
         let scanned = store.scan().unwrap();
         assert_eq!(
             scanned[&operation_id].state(),
-            OperationReceiptState::ValidatedResult
+            OperationReceiptState::ResultStored
         );
         assert_eq!(scanned.len(), 1);
     }
 
     #[test]
-    fn incomplete_classifier_identifies_missing_commit_without_mutation() {
+    fn result_stored_does_not_claim_artifact_validation_or_recovery_authority() {
         let fixture = fixtures();
-        let (_temp, store) = store();
-        let request = StoredOperationRequest::Restoration(parse(
-            &fixture,
-            &["already_applied_restoration", "request"],
-        ));
-        let result = StoredOperationResult::Restoration(parse(
-            &fixture,
-            &["already_applied_restoration", "result"],
-        ));
+        let (temp, store) = store();
+        let request = restoration_request(&fixture);
+        let result = restoration_result(&fixture);
         let operation_id = request.operation_id();
         store.write_request(&request).unwrap();
         store.write_result(operation_id, &result).unwrap();
         let receipt = store.load(operation_id).unwrap();
-        let StoredOperationResult::Restoration(result) = result else {
-            unreachable!();
-        };
+        assert_eq!(receipt.state(), OperationReceiptState::ResultStored);
+        assert!(receipt.commit.is_none());
+        assert!(!temp.path().join("app").join("transcript").exists());
+        // This store has no recovery classifier: a coordinator must re-inspect
+        // the referenced artifacts and use the frozen classifier separately.
+    }
+
+    #[test]
+    fn operation_directories_are_private_when_the_umask_is_open() {
+        let _umask_lock = UMASK_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        fs::set_permissions(&repo, fs::Permissions::from_mode(0o700)).unwrap();
+        let root = StorageRoot::create(&temp.path().join("app"), &repo).unwrap();
+        let previous_umask = unsafe { libc::umask(0) };
+        struct RestoreUmask(libc::mode_t);
+        impl Drop for RestoreUmask {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::umask(self.0);
+                }
+            }
+        }
+        let _restore_umask = RestoreUmask(previous_umask);
+
+        let store = OperationStore::open(&root).unwrap();
+        let request = restoration_request(&fixtures());
+        let operation_id = request.operation_id();
+        store.write_request(&request).unwrap();
+
+        let operations_dir = temp.path().join("app").join(OPERATIONS_DIRECTORY);
         assert_eq!(
-            receipt
-                .classify_incomplete(MeetingLifecycle::TranscriptReady, &result.view.sha256, None)
-                .unwrap(),
-            IncompleteOperationRecovery::WriteMissingCommit
+            fs::metadata(&operations_dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(operations_dir.join(operation_id.to_string()))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
         );
     }
 
