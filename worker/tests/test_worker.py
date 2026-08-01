@@ -38,7 +38,14 @@ from worker.product_contracts import (
     validate_transcript_restore_join,
     validate_transcript_view,
 )
-from worker.adapters import AdapterRefused, note_create, resolve_transcript, transcript_restore
+from worker.adapters import (
+    MAX_MEETING_RECEIPT_BYTES,
+    MAX_TRANSCRIPT_REVISION_BYTES,
+    AdapterRefused,
+    note_create,
+    resolve_transcript,
+    transcript_restore,
+)
 
 
 def digest(path: Path) -> str:
@@ -835,16 +842,65 @@ class ProductArtifactAdapterTests(unittest.TestCase):
         self.assertEqual([turn.text for turn in resolved.turns], ["fixture one", "fixture two"])
         self.assertEqual(resolved.gated_turns, [])
         view_before = view_path.read_bytes()
+        retried = transcript_restore(
+            self.root,
+            {
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": source_id,
+                "source_turn_index": 1,
+            },
+        )
+        self.assertEqual(retried, result)
+        self.assertEqual(view_path.read_bytes(), view_before)
+
+    def test_restore_repairs_an_identical_orphan_but_refuses_collision_bytes(self) -> None:
+        meeting_id = str(uuid.uuid4())
+        _, source_id = self._write_gated_transcript(meeting_id)
+        view = {
+            "schema": "transcript-view/1",
+            "meeting_id": meeting_id,
+            "base_transcript_sha256": source_id,
+            "parent_transcript_sha256": source_id,
+            "restored_source_turn_indices": [1],
+        }
+        view_bytes = json.dumps(view, indent=2).encode()
+        view_id = transcript_view_digest(view)
+        view_path = self.root / "meetings" / meeting_id / "transcript" / (view_id + ".json")
+        private_file(view_path, view_bytes)
+        result = transcript_restore(
+            self.root,
+            {
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": source_id,
+                "source_turn_index": 1,
+            },
+        )
+        self.assertEqual(result["transcript"], view_id)
+        self.assertEqual(view_path.read_bytes(), view_bytes)
+
+        collision_meeting = str(uuid.uuid4())
+        _, collision_source = self._write_gated_transcript(collision_meeting)
+        collision_view = {
+            **view,
+            "meeting_id": collision_meeting,
+            "base_transcript_sha256": collision_source,
+            "parent_transcript_sha256": collision_source,
+        }
+        collision_id = transcript_view_digest(collision_view)
+        collision_path = self.root / "meetings" / collision_meeting / "transcript" / (
+            collision_id + ".json"
+        )
+        private_file(collision_path, b"different bytes")
         with self.assertRaises(AdapterRefused):
             transcript_restore(
                 self.root,
                 {
-                    "meeting_id": meeting_id,
-                    "source_transcript_sha256": source_id,
+                    "meeting_id": collision_meeting,
+                    "source_transcript_sha256": collision_source,
                     "source_turn_index": 1,
                 },
             )
-        self.assertEqual(view_path.read_bytes(), view_before)
+        self.assertEqual(collision_path.read_bytes(), b"different bytes")
 
     def test_restore_refuses_stale_or_non_withheld_sources_without_mutation(self) -> None:
         meeting_id = str(uuid.uuid4())
@@ -897,17 +953,100 @@ class ProductArtifactAdapterTests(unittest.TestCase):
         self.assertNotEqual(result["note"], result["note-markdown"])
         self.assertEqual(result["transcript"], transcript_id)
         note_before, markdown_before = note_path.read_bytes(), markdown_path.read_bytes()
+        retried = note_create(
+            self.root,
+            {
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": transcript_id,
+            },
+            generator=accepted,
+        )
+        self.assertEqual(retried, result)
+        self.assertEqual(note_path.read_bytes(), note_before)
+        self.assertEqual(markdown_path.read_bytes(), markdown_before)
+
+    def test_note_publication_repairs_orphan_markdown_but_refuses_collision_bytes(self) -> None:
+        meeting_id = str(uuid.uuid4())
+        _, transcript_id, pack = self._write_note_transcript(meeting_id)
+
+        def accepted(_transcript):
+            note = json.loads(json.dumps(pack["note"]))
+            note["meeting"]["id"] = meeting_id
+            note["transcript"] = f"../transcript/{transcript_id}.json"
+            markdown_id = hashlib.sha256(pack["markdown"].encode()).hexdigest()
+            note["render"]["path"] = f"{markdown_id}.md"
+            return note
+
+        markdown_id = hashlib.sha256(pack["markdown"].encode()).hexdigest()
+        notes = self.root / "meetings" / meeting_id / "notes"
+        notes.mkdir(mode=0o700)
+        markdown_path = notes / (markdown_id + ".md")
+        private_file(markdown_path, pack["markdown"].encode())
+        repaired = note_create(
+            self.root,
+            {
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": transcript_id,
+            },
+            generator=accepted,
+        )
+        self.assertTrue((notes / (repaired["note"] + ".json")).is_file())
+        self.assertEqual(markdown_path.read_bytes(), pack["markdown"].encode())
+
+        collision_meeting = str(uuid.uuid4())
+        _, collision_transcript, collision_pack = self._write_note_transcript(collision_meeting)
+
+        def collision_candidate(_transcript):
+            note = json.loads(json.dumps(collision_pack["note"]))
+            note["meeting"]["id"] = collision_meeting
+            note["transcript"] = f"../transcript/{collision_transcript}.json"
+            note["render"]["path"] = f"{markdown_id}.md"
+            return note
+
+        collision_notes = self.root / "meetings" / collision_meeting / "notes"
+        collision_notes.mkdir(mode=0o700)
+        collision_markdown = collision_notes / (markdown_id + ".md")
+        private_file(collision_markdown, b"different bytes")
         with self.assertRaises(AdapterRefused):
             note_create(
                 self.root,
                 {
-                    "meeting_id": meeting_id,
-                    "source_transcript_sha256": transcript_id,
+                    "meeting_id": collision_meeting,
+                    "source_transcript_sha256": collision_transcript,
                 },
-                generator=accepted,
+                generator=collision_candidate,
             )
-        self.assertEqual(note_path.read_bytes(), note_before)
-        self.assertEqual(markdown_path.read_bytes(), markdown_before)
+        self.assertEqual(collision_markdown.read_bytes(), b"different bytes")
+        self.assertFalse(list(collision_notes.glob("*.json")))
+
+    def test_bounded_private_read_refuses_oversized_meeting_and_transcript(self) -> None:
+        meeting_id = str(uuid.uuid4())
+        meeting_dir = self.root / "meetings" / meeting_id
+        meeting_dir.mkdir(mode=0o700, parents=True)
+        private_file(
+            meeting_dir / "meeting.json", b"x" * (MAX_MEETING_RECEIPT_BYTES + 1)
+        )
+        with self.assertRaises(AdapterRefused):
+            transcript_restore(
+                self.root,
+                {
+                    "meeting_id": meeting_id,
+                    "source_transcript_sha256": "a" * 64,
+                    "source_turn_index": 0,
+                },
+            )
+
+        transcript_id = "a" * 64
+        oversized_meeting = str(uuid.uuid4())
+        transcript_dir = self.root / "meetings" / oversized_meeting / "transcript"
+        transcript_dir.mkdir(mode=0o700, parents=True)
+        private_file(
+            transcript_dir / (transcript_id + ".json"),
+            b"x" * (MAX_TRANSCRIPT_REVISION_BYTES + 1),
+        )
+        self._bind_current(oversized_meeting, transcript_id)
+        with self.assertRaises(AdapterRefused):
+            resolve_transcript(self.root, oversized_meeting, transcript_id)
 
     def test_note_publication_refuses_rejected_or_misbound_candidates_before_write(self) -> None:
         meeting_id = str(uuid.uuid4())

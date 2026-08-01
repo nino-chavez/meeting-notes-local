@@ -6,6 +6,7 @@ import hashlib
 import json
 import stat
 import sys
+import tempfile
 import wave
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,9 +24,11 @@ from .product_contracts import (
 )
 from .storage import (
     StorageRefused,
+    durable_create_or_verify_identical,
     durable_create_new,
     opaque_id,
     private_directory,
+    read_private_file,
     require_private_root,
     resolve_below,
 )
@@ -39,6 +42,13 @@ class AdapterRefused(ValueError):
     pass
 
 
+MAX_MEETING_RECEIPT_BYTES = 256 * 1024
+# A long meeting transcript is normally well below one MiB. Sixteen MiB leaves
+# ample room for timestamps and gate metadata while refusing attacker-sized JSON
+# before schema parsing or any canonical loader gets a path to it.
+MAX_TRANSCRIPT_REVISION_BYTES = 16 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class _ResolvedTranscript:
     """One immutable transcript revision, resolved back to its capture source."""
@@ -46,6 +56,7 @@ class _ResolvedTranscript:
     base_path: Path
     base_sha256: str
     base_document: dict
+    base_transcript: object
     restored_source_turn_indices: tuple[int, ...]
 
 
@@ -92,10 +103,13 @@ def _transcript_path(root: Path, meeting_id: str, transcript_sha256: str) -> Pat
 def _current_transcript_sha256(root: Path, meeting_id: str) -> str:
     """Read only the immutable-current binding the worker needs to enforce."""
     meeting_path = resolve_below(root, "meetings", meeting_id, "meeting.json")
-    _private_regular_file(meeting_path, "meeting receipt")
     try:
-        meeting = json.loads(meeting_path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        meeting = json.loads(read_private_file(
+            meeting_path,
+            max_bytes=MAX_MEETING_RECEIPT_BYTES,
+            label="meeting receipt",
+        ))
+    except (StorageRefused, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AdapterRefused("meeting receipt is not valid UTF-8 JSON") from exc
     if (
         not isinstance(meeting, dict)
@@ -111,6 +125,18 @@ def _current_transcript_sha256(root: Path, meeting_id: str) -> str:
     if current["relative_path"] != f"transcript/{digest}.json":
         raise AdapterRefused("meeting receipt current transcript path is not canonical")
     return digest
+
+
+def _load_bounded_base_transcript(data: bytes):
+    """Give the canonical path-based loader only a private bounded byte copy."""
+    from transcript import load
+
+    with tempfile.TemporaryDirectory() as temporary_name:
+        temporary = Path(temporary_name)
+        private_directory(temporary)
+        path = temporary / "transcript.json"
+        durable_create_new(path, data)
+        return load(path)
 
 
 def _base_gated_turn_indices(document: dict) -> set[int]:
@@ -140,11 +166,18 @@ def _resolve_transcript_revision(
     if transcript_sha256 in ancestors:
         raise AdapterRefused("transcript view chain is cyclic")
     path = _transcript_path(root, meeting_id, transcript_sha256)
-    _private_regular_file(path, "transcript revision")
-    if sha256(path) != transcript_sha256:
+    try:
+        revision_bytes = read_private_file(
+            path,
+            max_bytes=MAX_TRANSCRIPT_REVISION_BYTES,
+            label="transcript revision",
+        )
+    except StorageRefused as exc:
+        raise AdapterRefused(str(exc)) from None
+    if hashlib.sha256(revision_bytes).hexdigest() != transcript_sha256:
         raise AdapterRefused("transcript revision changed from its content address")
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(revision_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AdapterRefused("transcript revision is not valid UTF-8 JSON") from exc
 
@@ -179,22 +212,22 @@ def _resolve_transcript_revision(
             base_path=parent.base_path,
             base_sha256=parent.base_sha256,
             base_document=parent.base_document,
+            base_transcript=parent.base_transcript,
             restored_source_turn_indices=restored,
         )
 
     # `load` remains the canonical capture-transcript parser. It is deliberately
     # invoked only for base bytes; a view stores no meeting words of its own.
-    from transcript import load
-
     try:
-        load(path)
-    except (KeyError, ValueError, TypeError) as exc:
+        base_transcript = _load_bounded_base_transcript(revision_bytes)
+    except (KeyError, ValueError, TypeError, OSError) as exc:
         raise AdapterRefused(f"base transcript is invalid: {exc}") from None
     _base_gated_turn_indices(document)
     return _ResolvedTranscript(
         base_path=path,
         base_sha256=transcript_sha256,
         base_document=document,
+        base_transcript=base_transcript,
         restored_source_turn_indices=(),
     )
 
@@ -204,9 +237,9 @@ def resolve_transcript(root: Path, meeting_id: str, transcript_sha256: str):
     root = require_private_root(root)
     meeting_id = opaque_id(meeting_id, "meeting_id")
     resolved = _resolve_transcript_revision(root, meeting_id, transcript_sha256)
-    from transcript import Transcript, Turn, load
+    from transcript import Transcript, Turn
 
-    base = load(resolved.base_path)
+    base = resolved.base_transcript
     restored = set(resolved.restored_source_turn_indices)
     visible: list[Turn] = []
     still_withheld: list[Turn] = []
@@ -258,7 +291,7 @@ def transcript_restore(root: Path, arguments: object) -> dict[str, str]:
     view_sha256 = transcript_view_digest(view)
     target = _transcript_path(root, meeting_id, view_sha256)
     try:
-        durable_create_new(
+        durable_create_or_verify_identical(
             target, json.dumps(view, ensure_ascii=False, indent=2).encode("utf-8")
         )
     except StorageRefused as exc:
@@ -514,8 +547,6 @@ def note_create(
     transcript_id = values["source_transcript_sha256"]
     if _current_transcript_sha256(root, meeting_id) != transcript_id:
         raise AdapterRefused("requested transcript is not this meeting's current revision")
-    transcript_path = _transcript_path(root, meeting_id, transcript_id)
-    _private_regular_file(transcript_path, "current transcript")
     transcript = resolve_transcript(root, meeting_id, transcript_id)
     try:
         document = generator(transcript)
@@ -567,8 +598,8 @@ def note_create(
     # Each final name is exclusive: a retry may inspect an existing pair but may
     # never replace it.
     try:
-        durable_create_new(markdown_path, canonical_markdown.encode("utf-8"))
-        durable_create_new(note_path, document_bytes)
+        durable_create_or_verify_identical(markdown_path, canonical_markdown.encode("utf-8"))
+        durable_create_or_verify_identical(note_path, document_bytes)
     except StorageRefused as exc:
         raise AdapterRefused(str(exc)) from None
     try:

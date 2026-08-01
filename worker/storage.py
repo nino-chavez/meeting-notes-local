@@ -61,6 +61,45 @@ def _sync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def read_private_file(path: Path, *, max_bytes: int, label: str) -> bytes:
+    """Read one small immutable artifact without following a replacement symlink."""
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
+        raise StorageRefused("private read bound is invalid")
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise StorageRefused("private reads require no-follow support")
+    flags = os.O_RDONLY | no_follow
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise StorageRefused(f"{label} is missing or unsafe") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o600:
+            raise StorageRefused(f"{label} is missing or unsafe")
+        if before.st_size > max_bytes:
+            raise StorageRefused(f"{label} exceeds its bounded read limit")
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise StorageRefused(f"{label} changed while being read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev != after.st_dev
+            or before.st_ino != after.st_ino
+            or before.st_mode != after.st_mode
+            or before.st_size != after.st_size
+        ):
+            raise StorageRefused(f"{label} changed while being read")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
 def durable_create_new(path: Path, data: bytes) -> None:
     private_directory(path.parent)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -80,3 +119,24 @@ def durable_create_new(path: Path, data: bytes) -> None:
         _sync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def durable_create_or_verify_identical(path: Path, data: bytes) -> None:
+    """Create immutable bytes, or accept only an exact private prior write.
+
+    A crash can leave an artifact installed before its caller records the next
+    receipt. Retrying that operation must repair the missing successor without
+    replacing the installed bytes or accepting a same-name collision.
+    """
+    try:
+        durable_create_new(path, data)
+        return
+    except StorageRefused as exc:
+        if str(exc) != "canonical artifact already exists":
+            raise
+    existing = read_private_file(
+        path, max_bytes=len(data), label="canonical artifact"
+    )
+    if existing != data:
+        raise StorageRefused("canonical artifact differs from its requested bytes")
+    _sync_directory(path.parent)
