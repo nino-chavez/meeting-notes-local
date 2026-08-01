@@ -528,11 +528,12 @@ does not add SQLite.
 $APP_DATA/                         0700
   diagnostics/                    0700
   profile/                        0700
-    voiceprint.json               0600
-    reset-operations/             0700
-      <operation-id>/             0700
-        receipt.json              0600
-        voiceprint.staged         0600, transient
+    voiceprint.json               0600, profile bytes or zero-byte absence marker
+    lifecycle/                    0700
+      receipt.a.json              0600, alternating journal slot
+      receipt.b.json              0600, alternating journal slot
+      reset.tombstone             0600, zero when idle
+      enrollment.staged          0600, zero when idle
   meetings/                       0700
     <meeting-id>/                 0700
       meeting.json                0600
@@ -733,63 +734,218 @@ installs a passing profile by digest and deletes the quarantine copy. It imports
 no raw enrolment audio. This bridge is disabled in beta; in-app enrolment and
 its immediate raw-data deletion contract must replace it first.
 
-Profile reset uses a separate Rust-owned `profile-reset/1` journal rather than
-the meeting operation store. The generic store terminates against exact
-`meeting.json` bytes, while reset owns one account-level profile and must not
-invent a meeting authority. Each reset has an owner-private
-`profile/reset-operations/<operation-id>/receipt.json`. A nonterminal receipt
-binds the operation ID, request time, installed relative path, byte size,
-SHA-256, and phase `deleting` or `staged`; it contains no score, threshold,
-source manifest, or other profile content. Rust validates the installed file
-without following links, creates `deleting` before mutation, same-volume renames
-the exact bytes to `voiceprint.staged`, fsyncs both directories, advances to
-`staged`, removes the staged bytes, and fsyncs again. The terminal `removed`
-receipt then drops the target path, size, and digest. It retains only its schema,
-operation ID, request time, removal time, and phase `removed`. The reset confirmation
-names that this content-free event record remains after the profile and its
-enrolment provenance are gone.
+Profile reset uses a separate Rust-owned `profile-lifecycle/1` rolling journal
+rather than the meeting operation store. The generic store terminates against
+exact `meeting.json` bytes, while reset owns one account-level profile and must
+not invent a meeting authority. Three candidate persistence shapes were
+compared against reset, restart, reenrolment, and low-disk cases:
 
-Recovery uses this closed matrix:
+| Shape | Consequence | Decision |
+|---|---|---|
+| One immutable operation directory and tombstone per reset | Simple recovery and complete event history, but directories, receipts, and inodes grow without bound until they can prevent the next privacy action. | Rejected. |
+| Collect old terminal directories | Eventually bounded, but pathname unlink recreates the swapped-entry deletion race and destroys the evidence being collected. | Rejected. |
+| Fixed live, reset, and enrolment slots plus an alternating rolling journal | Constant storage, no data-path unlink, and closed reset/restart states; it preserves the completion count and latest event rather than an immutable history of every reset. | Chosen. |
 
-| Receipt phase | Live profile | Exact staged profile | Result |
+After profile-storage initialization, `voiceprint.json`,
+`lifecycle/reset.tombstone`, and `lifecycle/enrollment.staged` always exist.
+Each is a distinct inode on the same volume. A zero-byte `voiceprint.json` means
+that no profile is installed. Reset and guided enrolment reuse the other two
+zero-byte slots; they never create per-operation tombstones.
+
+Initialization runs under the writer and storage-sequence locks. Rust first
+descriptor-binds `profile`, then create-new and full-syncs its sibling
+`voiceprint.json` as a safe zero live slot when absent, or pins and validates an
+existing safe live file. It next builds both receipt files and the reset and
+enrolment zero slots under `profile/.lifecycle.initializing`, writes and
+full-syncs a sequence-zero `baseline` receipt bound to the already pinned live
+descriptor, syncs the initializing directory, then no-overwrite renames that
+directory to `profile/lifecycle` with
+`renameatx_np(RENAME_EXCL | RENAME_NOFOLLOW_ANY)` and syncs `profile`. The baseline binds all
+three data-slot identities and records whether the live slot is zero or binds
+the exact size and digest of an existing legacy profile. A safe semantically
+invalid legacy file may be recorded as present so reset can remove it; the
+baseline does not admit it for Start. A crash before publication leaves the
+safe live sibling and at most the fixed initializing directory, which may
+resume if every present object matches the closed initialization shape. Once
+`profile/lifecycle` exists, a valid baseline or later receipt is mandatory.
+Missing fixed objects or two invalid/empty receipt slots then quarantine
+profile work; they are never reinterpreted as a fresh store.
+
+`lifecycle/receipt.a.json` and `lifecycle/receipt.b.json` are permanent
+alternating slots, each bounded to 16,384 bytes before read or parse. A virgin
+slot is exactly zero length. Each valid nonempty slot contains canonical JSON
+with no terminal newline and the exact envelope fields `schema`,
+`payload_sha256`, and `payload`, in that order. `schema` is
+`profile-lifecycle-slot/1`; `payload_sha256` is lowercase SHA-256 over the
+two-space-pretty UTF-8 encoding of `payload` alone. The payload is a closed
+`profile-lifecycle/1` object whose first fields are `schema`,
+`receipt_sequence`, `operation`, and `phase`; its remaining phase-specific
+fields are ordered as defined below. The allowed operation/phase pairs are
+exactly `baseline/ready`, `reset/deleting`, `reset/staged`, `reset/removed`,
+`enrollment/writing`, `enrollment/ready`, and `enrollment/active`.
+
+To publish the next phase, Rust retains and verifies both fixed receipt-file
+descriptors. It truncates and write-alls only the lower-sequence slot, a virgin
+inactive slot, or a nonempty invalid inactive slot whose peer is the sole valid
+authority. It then full-syncs and rereads that descriptor, revalidates its
+pathname-to-fd identity, and only then selects the unique highest complete
+valid sequence. A torn slot is ignored only while the other slot is complete.
+Two virgin slots exist only inside the unpublished initializing directory; the
+published lifecycle begins with one valid sequence-zero baseline. Equal
+sequences, two different valid payloads at one sequence, overflow, or no valid
+slot after publication quarantine the profile lifecycle. The sole highest
+valid slot is never truncated. Every phase has its own closed decoder, so a
+forbidden field is refused even when its JSON value is `null`.
+
+A baseline payload then has `completed_reset_count`, `live`, `reset_slot`, and
+`enrollment_slot`; its `receipt_sequence` and `completed_reset_count` are both
+exactly zero. Reset `deleting` and `staged` payloads then have
+`operation_id`, `requested_at`, `prior_completed_reset_count`, optional
+`prior_last_reset` only when that count is nonzero, `profile`, and `reset_zero`.
+Reset `removed` then has `completed_reset_count`, `last_reset`, `live_zero`, and
+`reset_zero`. Every reset phase also has the exact untouched
+`enrollment_zero`. Each non-baseline payload also binds
+`predecessor_payload_sha256` immediately after `phase`.
+
+An identity object has the exact fields `device`, `inode`, `generation`,
+`birth_seconds`, `birth_nanoseconds`, `owner`, `mode`, `link_count`, and
+`flags`. A slot object then has `identity`, `size`, and `sha256`; an exact
+profile requires its bound size and digest, while a safe zero requires size
+zero and the SHA-256 of an empty file. A reset `removed` payload drops the
+profile size, digest, and all profile data. It retains the completed count,
+last operation UUID and completion time, and both now-zero slot objects. Those
+are filesystem identity metadata, not profile or enrolment provenance.
+Recovery of one UUID sets the count to exactly
+`prior_completed_reset_count + 1`; it never increments the same reset twice.
+Sequences and counts are unsigned 64-bit integers and refuse overflow.
+Operation IDs are canonical lowercase UUID strings. Times are integer Unix
+epoch seconds. A `last_reset` object has exactly `operation_id` and
+`completed_at`; it is absent, never null, when the completed count is zero.
+
+Reset opens and retains both data-slot descriptors with
+`O_RDWR | O_NOFOLLOW | O_CLOEXEC`. It writes and full-syncs `deleting` before
+calling same-volume `renameatx_np(RENAME_SWAP | RENAME_NOFOLLOW_ANY)`. The
+target volume must report `VOL_CAP_INT_RENAME_SWAP`; absence or runtime failure
+blocks before content mutation. The swap exchanges the live profile and known
+zero tombstone without overwriting or unlinking either inode. Rust then proves
+that both pathnames name the retained opposite descriptors, syncs both
+directories, and writes `staged`. It truncates only the retained original
+profile descriptor to zero, full-syncs that descriptor, revalidates both paths
+and objects, and writes `removed`. It never performs a rollback swap and never
+calls unlink on a profile data slot.
+
+Recovery uses this closed matrix. `P` is the receipt-bound original profile
+inode and `Z` is the receipt-bound zero reset-slot inode:
+
+| Receipt phase | Live `voiceprint.json` | Reset tombstone | Result |
 |---|---|---|---|
-| `deleting` | Exact target | Absent | Rename, fsync, advance to `staged` |
-| `deleting` | Absent | Exact target | Recognize the completed rename, fsync the profile and operation directories, then advance to `staged` |
-| `staged` | Absent | Exact target | Remove, fsync, advance to `removed` |
-| `staged` | Absent | Absent | Recognize the completed unlink, fsync the operation directory, then advance to `removed` |
-| `removed` | Any later profile or none | Absent | Terminal and inert; never inspect or mutate the live path |
+| `deleting` | `P`, exact bound profile bytes | `Z`, safe zero | Pre-swap: retain both descriptors, swap once, verify, sync, and advance to `staged` |
+| `deleting` | `Z`, safe zero | `P`, exact bound profile bytes | Swap completed: verify and advance to `staged` |
+| `deleting` | `Z`, safe zero | `P`, safe zero | Swap and truncate survived an older phase receipt: full-sync and write this UUID's `removed` state with exactly the prior count plus one |
+| `staged` | `Z`, safe zero | `P`, exact bound profile bytes | Truncate only the retained or exactly reopened `P` descriptor, full-sync, and advance to `removed` |
+| `staged` | `Z`, safe zero | `P`, safe zero | Truncate completed: full-sync and advance to `removed` |
+| `removed` | `Z`, safe zero | `P`, safe zero | Profile is absent and the latest reset is terminal |
+| Any | Any other identity or content arrangement | Any other identity or content arrangement | Quarantine without swap, rollback, truncate, unlink, or receipt advancement |
 
-Every other live/staged combination is quarantined without mutation. This
-includes both paths present, neither path present while `deleting`, a live path
-while `staged`, a staged path after `removed`, a changed target, an orphan staged
-file, or more than one nonterminal reset. Retrying the same nonterminal
-operation resumes it; retry after `removed` reports that operation complete. A
-new reset receives a new operation ID. A later identical or different profile
-is never owned by an older terminal receipt.
+An exact profile object requires the receipt identity and original digest. A
+safe zero object requires its receipt identity, zero size, and the SHA-256 of
+an empty file. A reset can start only when the live profile and reset tombstone
+are different inodes. The `deleting` post-truncate row is deliberate: it closes
+a crash in which the data transition persisted more strongly than the phase
+receipt. A crash during swap exposes only the recognized pre- or post-swap
+layout. A crash around truncate exposes exact original bytes, a safe zero, or an
+unrecognized state that quarantines.
 
-Reset holds the global storage sequence and refuses while any meeting lease is
-active; a new capture cannot enter while that sequence is held. Profile adoption
-uses the same gate, so it cannot replace the file during reset. Startup finishes
-or quarantines reset recovery before profile inspection, adoption, enrolment,
-or Start becomes available. Start holds that sequence while the strict Python
-loader revalidates the installed bytes and Rust registers the active meeting
-lease; the durable attempt binds the returned profile digest before the sequence
-is released. Reset therefore cannot enter between profile preflight and capture
-ownership.
+One FD-bound `safe profile tree` predicate governs initialization, reset, and
+recovery. Rust descriptor-binds `$APP_DATA`, `$APP_DATA/profile`, the published
+`profile/lifecycle` or fixed `profile/.lifecycle.initializing`, both receipt
+slots, `reset.tombstone`, `enrollment.staged`, and the live `voiceprint.json`
+without following links. Each directory is
+current-effective-user-owned, exact `0700`, and has no extended ACL or extended
+attributes. Each receipt or data slot is a current-effective-user-owned,
+non-symlink regular file with one link, exact `0600`, `st_flags == 0`, no
+extended ACL entries, and no extended attributes or resource fork. Profile
+bytes must also remain within the profile size bound. ACL checks use the open
+descriptor; `flistxattr(..., XATTR_SHOWCOMPRESSION)` prevents a compressed or
+resource-fork attribute from hiding from the empty-attribute test. Unsafe or
+swapped parent directories, receipt files, and leaves block before mutation.
 
-Reset removes semantically malformed, stale, experimental, or
-fingerprint-mismatched `voiceprint.json` bytes when the installed object is still
-a current-user-owned, `0600`, non-symlink regular file within the profile size
-bound. Those semantic failures must not trap the operator in a profile they
-cannot reset. A symlink, oversized file, wrong owner, wrong mode, changed file,
-or ambiguous reset journal is quarantined without following, changing, or
-deleting it; that storage block disables Start and adoption until an explicit
-repair path resolves it. If no installed profile and no nonterminal receipt
-exists, reset returns `already-absent` without creating a self-attesting receipt.
-Reset removes only `voiceprint.json`, whose strict `voiceprint/2` bytes carry the
-calibrated threshold and enrolment provenance; it never opens or changes a
-meeting directory. Every reset or successful adoption clears the one-attempt
-participant attestation.
+The process-lifetime writer lock and global storage-sequence lock serialize one
+profile-lifecycle coordinator across reset, enrolment, adoption, profile load,
+and capture admission. Reset refuses while any meeting lease is active; a new
+capture cannot enter while reset holds the sequence. Startup completes or
+quarantines profile-lifecycle recovery before profile inspection, enrolment, or
+Start. Start holds the same sequence while the strict Python loader revalidates
+the nonzero installed bytes; a safe zero live slot is `not-enrolled`, never a
+malformed profile. Rust then registers the active meeting lease; the
+durable attempt binds the returned profile digest before the sequence is
+released.
+
+Guided enrolment publishes through the same rolling lifecycle journal, not an
+independent authority. Its `writing` and `ready` payloads then have
+`operation_id`, `requested_at`, `predecessor_reset` containing the completed
+count and optional last UUID, `live_zero`, and the exact untouched `reset_zero`;
+`writing` adds `enrollment_zero` while `ready` adds `staged_profile`. Its `active` payload
+then has `operation_id`, `requested_at`, `completed_at`, `predecessor_reset`,
+`live_profile`, `reset_zero`, and `enrollment_zero`. Each follows the common prefix and
+predecessor hash above.
+
+Enrolment starts only with exact receipt-bound safe zeros in the live and fixed
+staged slots. It writes candidate bytes only through the retained staged-slot
+descriptor after `writing` is durable. A fresh process seeing `writing` and
+partial or uncommitted bytes truncates only that exact staged inode back to
+zero, full-syncs it, and leaves the same operation recoverable for an explicit
+retry; it never promotes bytes without a `ready` digest and strict profile verdict.
+After validation and full sync, `ready` is durable before
+`renameatx_np(RENAME_SWAP | RENAME_NOFOLLOW_ANY)` exchanges the staged profile
+and live zero. With `L` as the bound live-zero inode and `E` as the bound
+enrolment-slot inode, recovery is closed:
+
+| Receipt phase | Live slot | Enrolment slot | Result |
+|---|---|---|---|
+| `writing` | `L`, safe zero | `E`, safe zero or uncommitted bytes | Truncate only exact `E` to zero when needed, full-sync, and leave this operation retryable |
+| `ready` | `L`, safe zero | `E`, exact admitted profile | Swap once, verify, sync both directories, and write `active` |
+| `ready` | `E`, exact admitted profile | `L`, safe zero | Recognize the completed swap, verify, and write `active` |
+| `active` | `E`, exact admitted profile | `L`, safe zero | Terminal enrolled profile |
+| Any | Any other identity or content arrangement | Any other identity or content arrangement | Quarantine without rollback, live-byte truncation, or receipt advancement |
+
+Every reset row also requires its receipt-bound `enrollment_zero` to remain
+unchanged, and every enrolment row requires its receipt-bound `reset_zero` to
+remain unchanged. Thus every payload is complete current authority for all
+three fixed slots even after the alternating journal overwrites older phases.
+`active`, not an older `removed` payload, authorizes the nonzero live profile
+and carries forward the predecessor reset count/UUID. The staged slot is again
+a receipt-bound safe zero.
+
+The current Python `_install_profile_bytes` no-overwrite bridge cannot replace
+a lifecycle-owned zero absence marker and is retired when lifecycle storage is
+initialized. It remains only a development-only legacy-store bridge and is not
+beta profile authority. Future Rust-owned enrolment or adoption must use the
+serialized lifecycle transition.
+
+Reset logically removes semantically malformed, stale, experimental, or
+fingerprint-mismatched `voiceprint.json` bytes when the installed object still
+satisfies the safe-object predicate. Those semantic failures must not trap the
+operator in a profile they cannot reset. A symlink, oversized file, wrong owner,
+wrong mode, extra hard link, nonzero file flag, extended ACL, extended
+attribute or resource fork, changed file, unsafe tree component, or ambiguous
+journal is quarantined without following or mutating it. That storage block
+disables Start and enrolment until an explicit repair path resolves it. A safe
+zero live slot returns `already-absent` without creating a self-attesting reset
+receipt.
+
+Reset never opens or changes a meeting directory. Every reset or successful
+enrolment clears the one-attempt participant attestation. The fixed journal and
+zero slots count toward disk accounting and remain operator-visible. Reset
+preflights and full-syncs the next inactive receipt slot before profile
+mutation; allocation failure reports that no reset occurred. The rolling
+journal is crash-recoverable latest-state evidence, not immutable history or a
+tamper-evident log. Same-user receipt replay, concurrent hard-link creation,
+whole-volume rollback, extra copies, APFS clones or snapshots, backups, and SSD
+remnants are outside its guarantee. This is logical application-storage
+deletion, not forensic secure erasure. The confirmation names those limits and
+that the completion count, latest event, fixed zero slots, and filesystem
+metadata remain.
 
 The automatic retention executor is part of the first human-capture slice.
 Rust records the next deletion time from durable attempt creation in
@@ -1143,6 +1299,10 @@ contracts. The installed boundary needs its own evidence.
 | A withheld-turn restore completes before the terminal operation receipt is written | Fresh recovery either applies the validated successor to the still-current source or recognizes the already-applied exact successor and writes the missing commit; every other pointer combination is left untouched |
 | Profile is missing, malformed, experimental, or fingerprint-mismatched | Start is disabled before tap launch |
 | Adopted profile is oversized, a symlink, changes after selection, or fails strict validation | Quarantine is removed, installed profile is unchanged, and the webview learns no source path |
+| Lifecycle initialization stops before publication | Fresh startup resumes only the exact private initializing tree, publishes one sequence-zero baseline, and never mistakes two empty published receipts for a fresh store |
+| Reset stops before swap, after swap, or after descriptor truncation | Fresh startup accepts only the bound pre-swap, post-swap, or safe-zero row; it increments the reset count once and never rolls back, unlinks a slot, or truncates a substituted inode |
+| A lifecycle parent, receipt, or data slot has a symlink, wrong owner/mode, hard link, flag, ACL, attribute, resource fork, missing identity, or conflicting receipt sequence | Profile loading, enrolment, reset, and Start quarantine before mutation |
+| Enrolment stops while writing or after its publish swap | Fresh startup truncates only the exact uncommitted staged inode or recognizes the exact ready/active layout; a nonzero live profile has no authority without `enrollment/active` |
 | `passed: false` note or mismatched Markdown sibling is injected | Reader refuses ready state and reports a bounded artifact error |
 | State file write, `fsync`, replace, or parent `fsync` fails | Status does not advance from an error; a fresh process accepts only one complete state whose referenced bytes reconcile; temporary material remains private and is cleaned or recoverable |
 | Run under `umask 000` | App root and directories are `0700`; private files are `0600`; nothing is written in the repository |

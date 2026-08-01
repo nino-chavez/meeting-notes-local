@@ -1977,7 +1977,11 @@ def encounter() -> str:
     <button type="button" id="reset-profile-now">reset voice profile</button>
     <div class="confirm-box" id="reset-profile-confirm" hidden>
       <strong>Delete the local voice profile?</strong>
-      <p>The profile, calibrated threshold, and enrollment provenance go. Existing
+      <p>The application removes the profile, calibrated threshold, and enrollment
+        provenance from use. The reset count, latest content-free event, fixed
+        zero-byte storage slots, and filesystem metadata remain. This is logical
+        deletion, not forensic erasure: backups, snapshots, or copies outside the
+        application may remain. Existing
         notes, transcripts, meeting audio, and meeting retention choices remain.
         Dedicated calibration raw was already deleted after its owner-only derived
         material was stored. The application blocks capture until enrollment completes
@@ -4057,6 +4061,9 @@ def check_encounter_wiring(page_html: str) -> int:
         or "The application blocks capture until enrollment completes again"
         not in flat_reset
         or "only the research CLI may run ungated outside the beta" not in flat_reset
+        or "logical deletion, not forensic erasure" not in flat_reset
+        or "reset count, latest content-free event" not in flat_reset
+        or "fixed zero-byte storage slots" not in flat_reset
     ):
         raise SystemExit("profile reset no longer states its exact independent consequence")
     reset_panel = re.search(
