@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// The correction/regeneration facade is intentionally compiled but not wired
+// into the current internal-alpha command set.
+#[allow(dead_code)]
+mod product_facade;
+
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};

@@ -38,6 +38,23 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
 }
 
 #[test]
+fn product_operation_facade_remains_unregistered() {
+    let source = include_str!("../src/main.rs");
+    let handler_start = source
+        .find(".invoke_handler(tauri::generate_handler![")
+        .expect("named command handler");
+    let handler_end = source[handler_start..]
+        .find("])")
+        .expect("named command handler end")
+        + handler_start;
+    let handler = &source[handler_start..handler_end];
+
+    assert!(source.contains("mod product_facade;"));
+    assert!(!handler.contains("restore_withheld_turn"));
+    assert!(!handler.contains("regenerate_note"));
+}
+
+#[test]
 fn bundled_shell_uses_restrictive_local_csp() {
     let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
     let security = &config["app"]["security"];
