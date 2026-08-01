@@ -22,8 +22,13 @@ REQUIRED_PURPOSES = (
     "NSAudioCaptureUsageDescription",
 )
 PYTHON_EXECUTABLE = Path("Contents/Resources/python-runtime/bin/python3.12")
+MAIN_EXECUTABLE = Path("Contents/MacOS/local-meeting-notes-desktop")
+CAPTURE_EXECUTABLE = Path("Contents/Resources/bin/meeting-capture")
 PYTHON_ENTITLEMENTS = {
     "com.apple.security.cs.allow-unsigned-executable-memory": True,
+}
+CAPTURE_ENTITLEMENTS = {
+    "com.apple.security.device.audio-input": True,
 }
 
 
@@ -214,9 +219,12 @@ def verify_signatures(app: Path, inventory: list[tuple[Path, str]]) -> None:
                 f"executable lacks hardened runtime: {path.relative_to(app)}",
             )
         relative = path.relative_to(app)
-        expected_entitlements = (
-            PYTHON_ENTITLEMENTS if relative == PYTHON_EXECUTABLE else {}
-        )
+        if relative == PYTHON_EXECUTABLE:
+            expected_entitlements = PYTHON_ENTITLEMENTS
+        elif relative in {MAIN_EXECUTABLE, CAPTURE_EXECUTABLE}:
+            expected_entitlements = CAPTURE_ENTITLEMENTS
+        else:
+            expected_entitlements = {}
         require(
             entitlements(path) == expected_entitlements,
             f"unexpected entitlement: {path.relative_to(app)}",

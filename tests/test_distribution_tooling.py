@@ -48,7 +48,8 @@ class DistributionToolingTests(unittest.TestCase):
             'build_manifest.py" \\\n    "$APP/Contents/Resources" --admission "$ADMISSION"'
         )
         outer_app_sign = signing.index(
-            'codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"'
+            'codesign --force --options runtime --timestamp \\\n'
+            '  --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$APP"'
         )
         app_submit = signing.index('notarytool submit "$STAGE/app.zip"')
         app_staple = signing.index('stapler staple "$APP"')
@@ -65,6 +66,7 @@ class DistributionToolingTests(unittest.TestCase):
 
         self.assertIn('[[ "$ADMISSION" == "internal-alpha" ]]', signing)
         self.assertIn('--entitlements "$PYTHON_ENTITLEMENTS"', signing)
+        self.assertIn('--entitlements "$CAPTURE_ENTITLEMENTS"', signing)
 
         entitlements = plistlib.loads(
             (ROOT / "apps/desktop/src-tauri/python-entitlements.plist").read_bytes()
@@ -72,6 +74,13 @@ class DistributionToolingTests(unittest.TestCase):
         self.assertEqual(
             entitlements,
             {"com.apple.security.cs.allow-unsigned-executable-memory": True},
+        )
+        capture_entitlements = plistlib.loads(
+            (ROOT / "apps/desktop/src-tauri/capture-entitlements.plist").read_bytes()
+        )
+        self.assertEqual(
+            capture_entitlements,
+            {"com.apple.security.device.audio-input": True},
         )
 
     def test_frozen_verifier_covers_app_dmg_layout_and_runtime(self) -> None:
@@ -106,6 +115,8 @@ class DistributionToolingTests(unittest.TestCase):
             "np.linalg.svd(np.eye(2))",
             "np.fft.fft(np.ones(4))",
             "entitlements(path) == expected_entitlements",
+            "CAPTURE_EXECUTABLE",
+            '"com.apple.security.device.audio-input": True',
         ):
             self.assertIn(required, verifier)
 

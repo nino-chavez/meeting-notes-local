@@ -7,6 +7,7 @@ PROFILE="filmroom-notary"
 EXPECTED_TEAM_ID="34VZ63G58M"
 VOLNAME="Local Meeting Notes"
 PYTHON_ENTITLEMENTS="$ROOT/apps/desktop/src-tauri/python-entitlements.plist"
+CAPTURE_ENTITLEMENTS="$ROOT/apps/desktop/src-tauri/capture-entitlements.plist"
 
 die() { echo "sign-notarize: $*" >&2; exit 1; }
 
@@ -63,6 +64,7 @@ fi
 APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
 [[ -d "$APP" ]] || die "no app bundle at $APP"
 [[ -f "$PYTHON_ENTITLEMENTS" ]] || die "missing Python entitlements"
+[[ -f "$CAPTURE_ENTITLEMENTS" ]] || die "missing capture entitlements"
 ADMISSION="product"
 if [[ "$cmd" == "run-alpha" ]]; then
   ADMISSION="internal-alpha"
@@ -91,6 +93,9 @@ while IFS= read -r -d '' path; do
   sign_args=(--force --options runtime --timestamp --sign "$IDENTITY")
   if [[ "$path" == "$APP/Contents/Resources/python-runtime/bin/python3.12" ]]; then
     sign_args+=(--entitlements "$PYTHON_ENTITLEMENTS")
+  elif [[ "$path" == "$APP/Contents/MacOS/local-meeting-notes-desktop" \
+      || "$path" == "$APP/Contents/Resources/bin/meeting-capture" ]]; then
+    sign_args+=(--entitlements "$CAPTURE_ENTITLEMENTS")
   fi
   codesign "${sign_args[@]}" "$path"
   count=$((count + 1))
@@ -105,7 +110,8 @@ if [[ "$ADMISSION" == "internal-alpha" ]]; then
 fi
 
 echo "== signing app bundle"
-codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+codesign --force --options runtime --timestamp \
+  --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 "$ROOT/scripts/verify-release-bundle.py" "$APP" --signed --admission "$ADMISSION"
 
