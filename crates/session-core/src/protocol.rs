@@ -24,6 +24,8 @@ pub enum Operation {
     CaptureInspect,
     #[serde(rename = "transcript.create")]
     TranscriptCreate,
+    #[serde(rename = "transcript.restore")]
+    TranscriptRestore,
     #[serde(rename = "note.create")]
     NoteCreate,
     #[serde(rename = "note.inspect")]

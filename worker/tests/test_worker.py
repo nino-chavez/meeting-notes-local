@@ -25,6 +25,18 @@ from verify_capture import verify_acquisition, verify_capture
 from summarize import validate_artifact_pair
 from speaker_gate import Profile, load_profile, save_profile
 from transcript import load
+from worker.product_contracts import (
+    ProductContractRefused,
+    transcript_view_digest,
+    validate_note_create_arguments,
+    validate_note_create_digests,
+    validate_note_create_error,
+    validate_note_create_join,
+    validate_transcript_restore_arguments,
+    validate_transcript_restore_digests,
+    validate_transcript_restore_join,
+    validate_transcript_view,
+)
 
 
 def digest(path: Path) -> str:
@@ -600,6 +612,139 @@ while True:
 
         self.assertEqual(result, {"transcript": "a" * 64})
         self.assertEqual(protocol.getvalue(), "")
+
+
+class ProductOperationContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture = json.loads(
+            (REPO / "tests/fixtures/product-operations-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_shared_fixture_matches_closed_worker_schemas(self) -> None:
+        restoration = self.fixture["restoration"]
+        restore_arguments, view, restore_digests = validate_transcript_restore_join(
+            restoration["worker_arguments"],
+            restoration["view"],
+            restoration["worker_artifact_digests"],
+        )
+        self.assertEqual(
+            transcript_view_digest(view), restore_digests["transcript"]
+        )
+        self.assertEqual(
+            transcript_view_digest(dict(reversed(list(view.items())))),
+            restore_digests["transcript"],
+        )
+        self.assertEqual(
+            view["parent_transcript_sha256"],
+            restore_arguments["source_transcript_sha256"],
+        )
+        self.assertEqual(
+            view["restored_source_turn_indices"],
+            [restore_arguments["source_turn_index"]],
+        )
+
+        accepted = self.fixture["accepted_note"]
+        note = accepted["result"]["note"]
+        validate_note_create_join(
+            accepted["worker_arguments"],
+            accepted["worker_artifact_digests"],
+            note_sha256=note["json"]["sha256"],
+            markdown_sha256=note["markdown"]["sha256"],
+        )
+        rejected = self.fixture["rejected_note"]
+        validate_note_create_arguments(rejected["worker_arguments"])
+        self.assertEqual(
+            validate_note_create_error(rejected["worker_error"]), "note-rejected"
+        )
+
+    def test_worker_schemas_refuse_unknown_fields_and_drift(self) -> None:
+        cases = [
+            (
+                validate_transcript_restore_arguments,
+                self.fixture["restoration"]["worker_arguments"],
+            ),
+            (validate_transcript_view, self.fixture["restoration"]["view"]),
+            (
+                validate_note_create_arguments,
+                self.fixture["accepted_note"]["worker_arguments"],
+            ),
+        ]
+        for validator, source in cases:
+            changed = dict(source)
+            changed["unexpected"] = True
+            with self.subTest(validator=validator.__name__):
+                with self.assertRaises(ProductContractRefused):
+                    validator(changed)
+
+        changed_turn = dict(self.fixture["restoration"]["worker_arguments"])
+        changed_turn["source_turn_index"] = True
+        with self.assertRaises(ProductContractRefused):
+            validate_transcript_restore_arguments(changed_turn)
+
+        changed_view = dict(self.fixture["restoration"]["view"])
+        changed_view["restored_source_turn_indices"] = [7, 7]
+        with self.assertRaises(ProductContractRefused):
+            validate_transcript_view(changed_view)
+
+        extra_restore_digest = dict(
+            self.fixture["restoration"]["worker_artifact_digests"]
+        )
+        extra_restore_digest["unexpected"] = "a" * 64
+        with self.assertRaises(ProductContractRefused):
+            validate_transcript_restore_digests(extra_restore_digest, "a" * 64)
+
+        changed_note_digest = dict(
+            self.fixture["accepted_note"]["worker_artifact_digests"]
+        )
+        changed_note_digest["transcript"] = "b" * 64
+        with self.assertRaises(ProductContractRefused):
+            validate_note_create_digests(
+                changed_note_digest,
+                self.fixture["accepted_note"]["worker_arguments"][
+                    "source_transcript_sha256"
+                ],
+            )
+
+        restoration = self.fixture["restoration"]
+        for key in ("base-transcript", "parent-transcript", "transcript"):
+            changed = dict(restoration["worker_artifact_digests"])
+            changed[key] = "b" * 64
+            with self.subTest(restore_digest=key):
+                with self.assertRaises(ProductContractRefused):
+                    validate_transcript_restore_join(
+                        restoration["worker_arguments"],
+                        restoration["view"],
+                        changed,
+                    )
+
+        accepted = self.fixture["accepted_note"]
+        note = accepted["result"]["note"]
+        for key in ("note", "note-markdown", "transcript"):
+            changed = dict(accepted["worker_artifact_digests"])
+            changed[key] = "b" * 64
+            with self.subTest(note_digest=key):
+                with self.assertRaises(ProductContractRefused):
+                    validate_note_create_join(
+                        accepted["worker_arguments"],
+                        changed,
+                        note_sha256=note["json"]["sha256"],
+                        markdown_sha256=note["markdown"]["sha256"],
+                    )
+
+        for field, value in (
+            ("code", "protocol_failure"),
+            ("recoverable", False),
+            ("artifact_digests", {"note": "a" * 64}),
+            ("unexpected", True),
+        ):
+            changed = dict(self.fixture["rejected_note"]["worker_error"])
+            changed[field] = value
+            with self.subTest(rejected_field=field):
+                with self.assertRaises(ProductContractRefused):
+                    validate_note_create_error(changed)
 
 
 if __name__ == "__main__":

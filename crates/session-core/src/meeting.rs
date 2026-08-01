@@ -98,11 +98,29 @@ pub struct NoteRevisionRef {
     pub source_transcript_sha256: String,
 }
 
+impl NoteRevisionRef {
+    pub fn validate(&self) -> Result<(), MeetingError> {
+        validate_digest_named_ref(&self.json, "notes", "json")?;
+        validate_digest_named_ref(&self.markdown, "notes", "md")?;
+        validate_sha256(&self.source_transcript_sha256)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactRef {
     pub relative_path: String,
     pub sha256: String,
+}
+
+impl ArtifactRef {
+    pub fn validate_digest_named(
+        &self,
+        directory: &str,
+        extension: &str,
+    ) -> Result<(), MeetingError> {
+        validate_digest_named_ref(self, directory, extension)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,9 +192,7 @@ impl MeetingRecord {
             validate_digest_named_ref(transcript, "transcript", "json")?;
         }
         if let Some(note) = &self.artifacts.current_note {
-            validate_digest_named_ref(&note.json, "notes", "json")?;
-            validate_sha256(&note.source_transcript_sha256)?;
-            validate_digest_named_ref(&note.markdown, "notes", "md")?;
+            note.validate()?;
         }
 
         let complete_capture = self.artifacts.capture_session.is_some()

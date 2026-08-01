@@ -46,7 +46,7 @@ human gate.
 | Wave | Current status and active stream | Join or exit | Human gate | ETA |
 |---|---|---|---|---|
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |
-| B. Shared-contract freeze | In progress. Worker admission now advertises only runnable operations, Rust owns the Swift capture child, and the alpha closure receipt is frozen. Correction/regeneration, `note/2` creation, the successor UI command boundary, and acceptance fixtures remain. | One versioned fixture set before independent coding streams branch. | None. | 2–4 days, inside Wave C |
+| B. Shared-contract freeze | Complete and independently audited. Rust owns the exact correction/regeneration records, JavaScript-facing command shapes, worker shapes, recovery classification, artifact joins, and terminal meeting-byte receipt. Both runtimes parse the shared `product-operations-v1.json` fixture. The operations remain unadvertised until their implementations exist. | Implementation streams may branch from the audited revision; each must return through the fixture and full verification join. | None. | Complete 2026-08-01 |
 | C. Trust foundation | In progress. Active meetings are excluded from retention under a serialized storage scan, and a process-lifetime writer lock closes the second-process storage path. Deterministic interleaving tests, profile controls, correction, and deletion actions remain. | Interruption and fresh-process tests, then an independent audit. | Retention-policy wording and far-end-notice choices; real withheld-turn restore. | Cumulative 1–2 weeks |
 | D. Evidence-linked automatic notes | Contract and experiments exist; product generation and admission do not. | Every claim locator resolves; rejected summaries remain transcript-only; deterministic checks precede private semantic review. | Semantic support and usefulness adjudication. | Additional 2–3 weeks |
 | E. Product surfaces and retrieval | Encounter is approved; production library, note reader, commitment view, and exact transcript/metadata search are not built. Design remains retrieval → commitments → capture; build follows dependency order. | Join UI to the frozen command facade and validated local artifacts. | Cold operator review of the working surfaces. | Additional 2–3 weeks, partly parallel with D |
@@ -491,6 +491,23 @@ copies no meeting text. Readers resolve that overlay against the immutable base
 transcript and refuse a missing, changed, cyclic, non-withheld, or already
 restored source-turn reference. A restore must add exactly one new base-turn
 index; it cannot produce a no-op successor chain.
+
+The executable contract is owned by
+`crates/session-core/src/operations.rs` and the single cross-runtime fixture
+`tests/fixtures/product-operations-v1.json`. The Tauri/JavaScript boundary uses
+the command names above with `camelCase` argument and response fields. Worker
+commands use `snake_case` fields under `worker-command/2`. Both sides refuse
+unknown fields. Rust additionally binds request, result, view, and commit
+digests and identities, including the canonical `meeting.json` bytes named by
+the terminal commit. Python independently validates the worker-facing
+arguments and joins every returned digest to the inspected transcript view or
+note pair. The recoverable `note_rejected` worker result maps only to the
+artifact-free `note-rejected` persisted outcome. These field names, enum values,
+schema tags, and hashing bytes are the Wave B definitions. Content-addressed
+contract objects use their schema field order, two-space pretty JSON, UTF-8,
+and no terminal newline; the fixture freezes those exact bytes across Rust and
+Python. An implementation stream may consume them but may not silently redefine
+them.
 
 Publishing the new transcript pointer clears `current_note` and returns the
 meeting to `transcript-ready`. The old note files remain immutable. The

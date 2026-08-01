@@ -1,0 +1,386 @@
+{
+  "schema": "product-operation-fixtures/1",
+  "committed_meetings": {
+    "restoration": {
+      "schema": "meeting/2",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "lifecycle": "transcript-ready",
+      "retention": {
+        "rule": {
+          "kind": "until-manual-deletion"
+        },
+        "policy_sha256": "9a154ba50a35efb5fe7f25e1f42aa958487126d033a1898da6c1cc4e0d9ec7a2",
+        "next_deletion_at_epoch_seconds": null,
+        "state": "retained",
+        "deletion_receipt": null
+      },
+      "artifacts": {
+        "attempt": {
+          "relative_path": "attempt.json",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "ownership": {
+          "relative_path": "ownership.json",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "capture_session": {
+          "relative_path": "capture/session.json",
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "microphone_audio": {
+          "relative_path": "capture/mic.wav",
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "system_audio": {
+          "relative_path": "capture/system.wav",
+          "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "current_transcript": {
+          "relative_path": "transcript/d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2.json",
+          "sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+        },
+        "current_note": null
+      },
+      "pending_storage_operation": null
+    },
+    "accepted_note": {
+      "schema": "meeting/2",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "lifecycle": "ready",
+      "retention": {
+        "rule": {
+          "kind": "until-manual-deletion"
+        },
+        "policy_sha256": "9a154ba50a35efb5fe7f25e1f42aa958487126d033a1898da6c1cc4e0d9ec7a2",
+        "next_deletion_at_epoch_seconds": null,
+        "state": "retained",
+        "deletion_receipt": null
+      },
+      "artifacts": {
+        "attempt": {
+          "relative_path": "attempt.json",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "ownership": {
+          "relative_path": "ownership.json",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "capture_session": {
+          "relative_path": "capture/session.json",
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "microphone_audio": {
+          "relative_path": "capture/mic.wav",
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "system_audio": {
+          "relative_path": "capture/system.wav",
+          "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "current_transcript": {
+          "relative_path": "transcript/d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2.json",
+          "sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+        },
+        "current_note": {
+          "json": {
+            "relative_path": "notes/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.json",
+            "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          },
+          "markdown": {
+            "relative_path": "notes/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.md",
+            "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          },
+          "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+        }
+      },
+      "pending_storage_operation": null
+    },
+    "rejected_note": {
+      "schema": "meeting/2",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "lifecycle": "summary-failed",
+      "retention": {
+        "rule": {
+          "kind": "until-manual-deletion"
+        },
+        "policy_sha256": "9a154ba50a35efb5fe7f25e1f42aa958487126d033a1898da6c1cc4e0d9ec7a2",
+        "next_deletion_at_epoch_seconds": null,
+        "state": "retained",
+        "deletion_receipt": null
+      },
+      "artifacts": {
+        "attempt": {
+          "relative_path": "attempt.json",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "ownership": {
+          "relative_path": "ownership.json",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "capture_session": {
+          "relative_path": "capture/session.json",
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "microphone_audio": {
+          "relative_path": "capture/mic.wav",
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "system_audio": {
+          "relative_path": "capture/system.wav",
+          "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "current_transcript": {
+          "relative_path": "transcript/d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2.json",
+          "sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+        },
+        "current_note": null
+      },
+      "pending_storage_operation": null
+    }
+  },
+  "restoration": {
+    "ui_arguments": {
+      "meetingId": "11111111-1111-4111-8111-111111111111",
+      "sourceTranscriptSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sourceTurnIndex": 7
+    },
+    "ui_response": {
+      "schema": "ui-operation/1",
+      "operationId": "22222222-2222-4222-8222-222222222222",
+      "meetingId": "11111111-1111-4111-8111-111111111111",
+      "kind": "restore-withheld-turn",
+      "state": "correcting"
+    },
+    "worker_arguments": {
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "source_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_turn_index": 7
+    },
+    "worker_artifact_digests": {
+      "base-transcript": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent-transcript": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "transcript": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+    },
+    "request": {
+      "schema": "transcript-restoration-request/1",
+      "operation_id": "22222222-2222-4222-8222-222222222222",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "requested_at_epoch_seconds": 1785686400,
+      "source_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_turn_index": 7,
+      "prior_note": {
+        "json": {
+          "relative_path": "notes/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.json",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "markdown": {
+          "relative_path": "notes/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.md",
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "source_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "view": {
+      "schema": "transcript-view/1",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "base_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "restored_source_turn_indices": [
+        7
+      ]
+    },
+    "result": {
+      "schema": "transcript-restoration-result/1",
+      "operation_id": "22222222-2222-4222-8222-222222222222",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "source_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "view": {
+        "relative_path": "transcript/d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2.json",
+        "sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+      },
+      "base_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "restored_source_turn_indices": [
+        7
+      ]
+    },
+    "commit": {
+      "schema": "meeting-operation-commit/1",
+      "operation_id": "22222222-2222-4222-8222-222222222222",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "kind": "restore-withheld-turn",
+      "outcome": "transcript-restored",
+      "request_sha256": "a967288171860280111aebf0c8a098902d7cd6572dcd2dfa73c7f836ecdf76ea",
+      "result_sha256": "72ab8217c5b358ea8970ee3b4f2244bc989d4c1968eedba4c63e6b2d68358a18",
+      "committed_meeting_sha256": "adc08626eb55f4afd8722fe584291db26276925f74244ee2ccd838d4cdd4dfad",
+      "committed_at_epoch_seconds": 1785686401,
+      "lifecycle": "transcript-ready",
+      "current_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2",
+      "current_note": null
+    }
+  },
+  "already_applied_restoration": {
+    "request": {
+      "schema": "transcript-restoration-request/1",
+      "operation_id": "22222222-2222-4222-8222-222222222222",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "requested_at_epoch_seconds": 1785686400,
+      "source_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_turn_index": 7,
+      "prior_note": {
+        "json": {
+          "relative_path": "notes/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.json",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "markdown": {
+          "relative_path": "notes/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.md",
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "source_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "result": {
+      "schema": "transcript-restoration-result/1",
+      "operation_id": "22222222-2222-4222-8222-222222222222",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "source_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "view": {
+        "relative_path": "transcript/d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2.json",
+        "sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+      },
+      "base_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "restored_source_turn_indices": [
+        7
+      ]
+    },
+    "meeting_lifecycle": "transcript-ready",
+    "current_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2",
+    "current_note": null,
+    "expected_recovery_action": "write-missing-commit"
+  },
+  "accepted_note": {
+    "ui_arguments": {
+      "meetingId": "11111111-1111-4111-8111-111111111111",
+      "sourceTranscriptSha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+    },
+    "ui_response": {
+      "schema": "ui-operation/1",
+      "operationId": "33333333-3333-4333-8333-333333333333",
+      "meetingId": "11111111-1111-4111-8111-111111111111",
+      "kind": "generate-note",
+      "state": "summarizing"
+    },
+    "worker_arguments": {
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+    },
+    "worker_artifact_digests": {
+      "note": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "note-markdown": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "transcript": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+    },
+    "request": {
+      "schema": "note-generation-request/1",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "requested_at_epoch_seconds": 1785686500,
+      "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+    },
+    "result": {
+      "schema": "note-generation-result/1",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2",
+      "status": "accepted",
+      "note": {
+        "json": {
+          "relative_path": "notes/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.json",
+          "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "markdown": {
+          "relative_path": "notes/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.md",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+      },
+      "failure_code": null
+    },
+    "commit": {
+      "schema": "meeting-operation-commit/1",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "kind": "generate-note",
+      "outcome": "note-accepted",
+      "request_sha256": "cdb408354cc876c02d8c9f588b2f1163ebc8725f00bb5ae1e9c540ee94f5e7a0",
+      "result_sha256": "35b205c7ebc75906d3dbf9ac67ae43f7f4a277f3b3e7838258eb70bbe418f8f5",
+      "committed_meeting_sha256": "336afe5032f077859c6049c9dba723340c72ce319d7f87ab8b3179e7b0ec8415",
+      "committed_at_epoch_seconds": 1785686501,
+      "lifecycle": "ready",
+      "current_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2",
+      "current_note": {
+        "json": {
+          "relative_path": "notes/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.json",
+          "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "markdown": {
+          "relative_path": "notes/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.md",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+      }
+    }
+  },
+  "rejected_note": {
+    "ui_arguments": {
+      "meetingId": "11111111-1111-4111-8111-111111111111",
+      "sourceTranscriptSha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+    },
+    "ui_response": {
+      "schema": "ui-operation/1",
+      "operationId": "44444444-4444-4444-8444-444444444444",
+      "meetingId": "11111111-1111-4111-8111-111111111111",
+      "kind": "generate-note",
+      "state": "summarizing"
+    },
+    "worker_arguments": {
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+    },
+    "worker_error": {
+      "code": "note_rejected",
+      "recoverable": true,
+      "artifact_digests": {}
+    },
+    "request": {
+      "schema": "note-generation-request/1",
+      "operation_id": "44444444-4444-4444-8444-444444444444",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "requested_at_epoch_seconds": 1785686600,
+      "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2"
+    },
+    "result": {
+      "schema": "note-generation-result/1",
+      "operation_id": "44444444-4444-4444-8444-444444444444",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "source_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2",
+      "status": "rejected",
+      "note": null,
+      "failure_code": "note-rejected"
+    },
+    "commit": {
+      "schema": "meeting-operation-commit/1",
+      "operation_id": "44444444-4444-4444-8444-444444444444",
+      "meeting_id": "11111111-1111-4111-8111-111111111111",
+      "kind": "generate-note",
+      "outcome": "note-rejected",
+      "request_sha256": "97324151cb5751cbfbb6298f29d5d883ad5c584cd3f3a478b2f0e3338fee2452",
+      "result_sha256": "4935d37de73427994568c68b3200006a19744cbb0811471a4407776bf56faaf7",
+      "committed_meeting_sha256": "8db394928d7503c386c0e31a00428be54fdb6fd104b1fa1e77ff75f8ff1ee83a",
+      "committed_at_epoch_seconds": 1785686601,
+      "lifecycle": "summary-failed",
+      "current_transcript_sha256": "d42672de4c26edbb0ef19ae63630c16bb8d9f0948775974ea979eb467ca278d2",
+      "current_note": null
+    }
+  }
+}

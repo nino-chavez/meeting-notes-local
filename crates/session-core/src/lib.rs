@@ -1,5 +1,6 @@
 pub mod diagnostic;
 pub mod meeting;
+pub mod operations;
 pub mod protocol;
 pub mod recovery;
 pub mod reducer;
