@@ -177,25 +177,35 @@ impl ProductOperationFacade {
 
 /// Unregistered Tauri command. Do not add it to `invoke_handler` until a
 /// storage-backed coordinator has joined the frozen operation receipts.
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) fn restore_withheld_turn(
-    args: RestoreWithheldTurnUiArgs,
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    source_turn_index: u32,
     facade: State<'_, ProductOperationFacade>,
 ) -> Result<UiOperationAccepted, String> {
     facade
-        .restore_withheld_turn(args)
+        .restore_withheld_turn(RestoreWithheldTurnUiArgs {
+            meeting_id,
+            source_transcript_sha256,
+            source_turn_index,
+        })
         .map_err(ProductOperationFacadeError::safe_copy)
         .map_err(str::to_owned)
 }
 
 /// Unregistered Tauri command. See `restore_withheld_turn` above.
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) fn regenerate_note(
-    args: RegenerateNoteUiArgs,
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
     facade: State<'_, ProductOperationFacade>,
 ) -> Result<UiOperationAccepted, String> {
     facade
-        .regenerate_note(args)
+        .regenerate_note(RegenerateNoteUiArgs {
+            meeting_id,
+            source_transcript_sha256,
+        })
         .map_err(ProductOperationFacadeError::safe_copy)
         .map_err(str::to_owned)
 }

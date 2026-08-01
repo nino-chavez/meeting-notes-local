@@ -55,6 +55,26 @@ fn product_operation_facade_remains_unregistered() {
 }
 
 #[test]
+fn product_operation_facade_uses_top_level_frozen_ui_arguments() {
+    let facade = include_str!("../src/product_facade.rs");
+
+    assert_eq!(
+        facade
+            .matches("#[tauri::command(rename_all = \"camelCase\")]")
+            .count(),
+        2
+    );
+    assert!(facade.contains(
+        "fn restore_withheld_turn(\n    meeting_id: Uuid,\n    source_transcript_sha256: String,\n    source_turn_index: u32,"
+    ));
+    assert!(facade.contains(
+        "fn regenerate_note(\n    meeting_id: Uuid,\n    source_transcript_sha256: String,"
+    ));
+    assert!(!facade.contains("fn restore_withheld_turn(\n    args:"));
+    assert!(!facade.contains("fn regenerate_note(\n    args:"));
+}
+
+#[test]
 fn bundled_shell_uses_restrictive_local_csp() {
     let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
     let security = &config["app"]["security"];
