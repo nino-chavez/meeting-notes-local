@@ -543,6 +543,20 @@ class WorkerProtocolTests(unittest.TestCase):
 
         worker = WorkerProcess(self.root, self.manifest)
         try:
+            unsafe_mode_id = str(uuid.uuid4())
+            unsafe_mode_dir = candidate_dir.parent / unsafe_mode_id
+            unsafe_mode_dir.mkdir(mode=0o700)
+            unsafe_mode_path = unsafe_mode_dir / "voiceprint.json"
+            private_file(unsafe_mode_path, profile_path.read_bytes())
+            unsafe_mode_path.chmod(0o644)
+            refused = worker.request(
+                "profile.adopt", {"profile_id": unsafe_mode_id}
+            )
+            self.assertFalse(refused["ok"])
+            self.assertEqual(refused["artifact_digests"], {})
+            self.assertFalse(unsafe_mode_dir.exists())
+            self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+
             overflow_id = str(uuid.uuid4())
             overflow_dir = candidate_dir.parent / overflow_id
             overflow_dir.mkdir(mode=0o700)
@@ -1332,6 +1346,14 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
                 self.assertFalse(candidate.parent.exists())
                 self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
 
+        wrong_mode_id = str(uuid.uuid4())
+        wrong_mode = self._candidate(wrong_mode_id)
+        wrong_mode.chmod(0o644)
+        with self.assertRaises(AdapterRefused):
+            self._adopt(wrong_mode_id)
+        self.assertFalse(wrong_mode.parent.exists())
+        self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+
         profile_id = str(uuid.uuid4())
         candidate = self._candidate(profile_id, b"placeholder")
         candidate.unlink()
@@ -1342,6 +1364,49 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
             self._adopt(profile_id)
         self.assertFalse(candidate.parent.exists())
         self.assertEqual(external.read_bytes(), b"{}\n")
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO probe requires mkfifo")
+    def test_adopt_removes_a_nonregular_leaf_under_safe_parents(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate_dir = self.root / "profile-candidates" / profile_id
+        candidate_dir.mkdir(mode=0o700, parents=True)
+        candidate_dir.parent.chmod(0o700)
+        candidate = candidate_dir / "voiceprint.json"
+        os.mkfifo(candidate, mode=0o600)
+        candidate.chmod(0o600)
+        with self.assertRaises(AdapterRefused):
+            self._adopt(profile_id)
+        self.assertFalse(candidate_dir.exists())
+        self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+
+    def test_adopt_removes_an_lstat_to_open_replacement(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id)
+        replacement = candidate.with_name("replacement.json")
+        private_file(replacement, candidate.read_bytes())
+        original_open = adapters.os.open
+        swapped = False
+
+        def replace_before_open(
+            path, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+        ) -> int:
+            nonlocal swapped
+            if not swapped and path == "voiceprint.json" and dir_fd is not None:
+                swapped = True
+                os.replace(
+                    replacement.name,
+                    candidate.name,
+                    src_dir_fd=dir_fd,
+                    dst_dir_fd=dir_fd,
+                )
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        with mock.patch.object(adapters.os, "open", side_effect=replace_before_open):
+            with self.assertRaises(AdapterRefused):
+                self._adopt(profile_id)
+        self.assertTrue(swapped)
+        self.assertFalse(candidate.parent.exists())
+        self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
 
     def test_inspect_and_adopt_refuse_nonprivate_quarantine_chain_pre_read(self) -> None:
         for unsafe_level in ("root", "candidate"):

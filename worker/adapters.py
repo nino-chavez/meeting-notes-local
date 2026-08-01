@@ -970,16 +970,16 @@ def profile_adopt(root: Path, arguments: object, encoder_digest: str) -> dict[st
     profile_id = opaque_id(values["profile_id"], "profile_id")
     with _open_installed_profile_directory(root) as installed:
         with _open_profile_quarantine(root, profile_id) as quarantine:
-            with _open_profile_candidate(quarantine) as descriptor:
-                # Consume the exact safe quarantine before any installed state
-                # changes. A cleanup refusal therefore cannot leave both an
-                # installed profile and an untrusted candidate behind.
-                try:
+            # Once the full parent chain is pinned and verified private, consume
+            # its exact quarantine on every leaf verdict. Unsafe parent chains
+            # fail before entering this scope and remain untouched.
+            try:
+                with _open_profile_candidate(quarantine) as descriptor:
                     profile_bytes, digest = _read_valid_profile_candidate(
                         root, descriptor, encoder_digest
                     )
-                finally:
-                    _remove_profile_quarantine(quarantine, profile_id)
+            finally:
+                _remove_profile_quarantine(quarantine, profile_id)
         installed_bytes = _install_profile_bytes(installed, profile_bytes)
         if (
             installed_bytes != profile_bytes
