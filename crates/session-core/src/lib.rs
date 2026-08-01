@@ -1,5 +1,6 @@
 pub mod diagnostic;
 pub mod meeting;
+pub mod operation_store;
 pub mod operations;
 pub mod protocol;
 pub mod recovery;
