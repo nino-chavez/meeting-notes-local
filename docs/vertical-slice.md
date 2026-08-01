@@ -14,11 +14,13 @@ be described as beta-ready from this approval.
 
 The transcript-only internal-alpha path is implemented and packaged with the real
 local worker runtime. Commit
-`29a7cd7238f300e90cb832660f587adbf595ea7c` has a signed and notarized DMG that
+`4b4cc02a85b9f6d497a737df18feb3c2083b023e` has a signed and notarized DMG that
 passes the mechanical release suite and independent Gatekeeper verification.
-The first hardware attempt correctly failed closed when macOS denied microphone
-access; it exposed a generic recovery message, which this commit replaces with
-the specific permission failure after restart. The unchanged installed build
+The first hardware attempts correctly failed closed when macOS denied microphone
+access. They exposed two release defects: recovery lost the specific permission
+message, and the executable requesting microphone access lacked Apple's required
+audio-input entitlement, so the app never appeared in System Settings. Both are
+fixed and enforced by the signed-bundle verifier. The unchanged installed build
 still needs its content-free two-leg capture, transcript, fresh-process reopen,
 and configured audio-deletion receipt. Until that receipt exists, the alpha is
 not cleared for distribution. Automatic-note admission remains a separate,

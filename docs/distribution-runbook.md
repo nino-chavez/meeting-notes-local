@@ -1,10 +1,11 @@
 # Local Meeting Notes distribution runbook
 
 Status: a signed and notarized internal transcript-alpha DMG now exists for
-commit `29a7cd7238f300e90cb832660f587adbf595ea7c`. Its SHA-256 is
-`bb72d4bc5bc44d4fc0e2a20fbaab12c81d8955405126ae2e56a48d335c007ce5`.
+commit `4b4cc02a85b9f6d497a737df18feb3c2083b023e`. Its SHA-256 is
+`ba1a18eb957667585383f91b4ef1d9b107e863d4e1d4cc649017e9a4c3e412d8`.
 The frozen app and DMG pass independent signature, Gatekeeper, runtime, and DMG
-layout verification. This artifact is not yet cleared for team distribution:
+layout verification. The main app and capture helper carry Apple's required
+audio-input entitlement. This artifact is not yet cleared for team distribution:
 the unchanged installed build still needs the content-free hardware, restart,
 and configured audio-deletion receipt described below.
 
