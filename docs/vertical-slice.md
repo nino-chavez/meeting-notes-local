@@ -12,15 +12,17 @@ receipt do not permit private meeting artifacts in Git. They also do not prove
 the application runtime or automatic-note quality, so no application build may
 be described as beta-ready from this approval.
 
-Phase 1, the executable safety skeleton, now exists. The static Tauri shell and
-Rust core compile. The mechanical suite covers the closed reducer and protocol,
-private storage and diagnostics, exact-identity recovery, process-group shutdown,
-parent-death cleanup, automatic retention, interrupted-deletion integrity, and
-the named-command/CSP boundary. It uses fake worker and tap binaries only; it does
-not import a model or touch capture hardware. The shell therefore reports the
-real packaged runtime as missing. This is safety-foundation evidence, not a
-working meeting path, installed-runtime evidence, note-quality evidence, or beta
-readiness.
+The transcript-only internal-alpha path is implemented and packaged with the real
+local worker runtime. Commit
+`29a7cd7238f300e90cb832660f587adbf595ea7c` has a signed and notarized DMG that
+passes the mechanical release suite and independent Gatekeeper verification.
+The first hardware attempt correctly failed closed when macOS denied microphone
+access; it exposed a generic recovery message, which this commit replaces with
+the specific permission failure after restart. The unchanged installed build
+still needs its content-free two-leg capture, transcript, fresh-process reopen,
+and configured audio-deletion receipt. Until that receipt exists, the alpha is
+not cleared for distribution. Automatic-note admission remains a separate,
+unmet beta gate.
 
 The contract exists now so the first implementation does not have to settle
 process ownership, persistence, recovery, and security while it is also trying
@@ -632,30 +634,16 @@ durable writer. Keep research CLI options out of the operation registry.
 Exit: prerecorded fixtures travel through one protocol and produce the same
 digests and verdicts as the direct validated functions.
 
-Status: in progress. A protocol-only Python worker now resolves opaque IDs under
-the fixed app-data root and calls the strict profile, capture, transcript, and
-note-pair validators directly. Prerecorded controls produce the same profile,
-capture-session, transcript, note, and Markdown digests through that worker as
-they do through the direct functions. Rust verifies a closed runtime manifest,
-starts the worker in its owned process group, preserves the protocol stream after
-readiness, and stops it through the parent-liveness channel. The Swift tap now
-acknowledges a non-capturing paused state and exits on parent death before Core
-Audio is opened.
-
-The Phase 2 exit is not yet met. Live capture start and stop, app-owned capture
-finalization, model-backed transcript and note creation, and a self-contained
-product runtime remain open.
-
-The arm64 packaging mechanism now has a narrower proof. It downloads a pinned,
-digest-checked CPython 3.12 install-only archive, installs the hash-locked NumPy
-wheel used by the current adapters, copies only the required worker and validator
-modules, adds the compiled Swift tap, and writes a closed digest manifest. All eight
-worker-boundary controls pass both from that staged runtime and from the resources
-inside a 154 MB Tauri `.app`. The bundle passes strict ad hoc signature validation.
-Its manifest is deliberately marked `boundary-test`; Rust refuses that admission
-class for product startup, so the app still reports `runtime-missing`. It has no
-ASR, note model, encoder model, Developer ID signature, notarization, or fresh-Mac
-install receipt. This proves reproducible packaging, not a distributable product.
+Status: implemented for the transcript-only internal alpha. The closed worker
+protocol now owns capture finalization and model-backed offline transcription;
+the packaged arm64 runtime includes pinned CPython, the Swift two-leg capture
+helper, and the admitted Whisper model inventory. Rust verifies the runtime
+manifest, owns the worker and helper process groups, and validates the resulting
+transcript before presenting it. The signed installed build has not yet passed
+the real hardware receipt, so this is implementation and mechanical release
+evidence rather than a successful-capture claim. Note generation and `product`
+runtime admission remain intentionally outside this alpha and still block the
+Phase 2 exit for beta.
 
 The detached research CLI tap now uses the same parent-liveness primitive. Its
 own session still prevents terminal `Ctrl-C` from racing the ordered stop path,
@@ -679,6 +667,13 @@ proves automatic audio expiry before another person's build can use it.
 
 An honest failure validates the failure path. It does not satisfy the pre-beta
 automatic-note gate below.
+
+Status: implemented only for the internal transcript alpha. Its approved surface
+covers consent, two-leg capture, processing, transcript success, explicit
+failure, restart recovery, and scheduled audio retention. A first permission-
+denial attempt validated the closed failure path, but the successful hardware,
+fresh-process reopen, and configured deletion receipt remains open. Library,
+automatic-note, and evidence-adjudication surfaces remain later beta work.
 
 ### 4. Trust actions
 

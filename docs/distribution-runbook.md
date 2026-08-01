@@ -1,8 +1,12 @@
 # Local Meeting Notes distribution runbook
 
-Status: the Mac release credentials and packaging tools are available. No
-distributable build exists yet. The current staged app contains a
-`boundary-test` runtime, and the release verifier refuses to sign it.
+Status: a signed and notarized internal transcript-alpha DMG now exists for
+commit `29a7cd7238f300e90cb832660f587adbf595ea7c`. Its SHA-256 is
+`bb72d4bc5bc44d4fc0e2a20fbaab12c81d8955405126ae2e56a48d335c007ce5`.
+The frozen app and DMG pass independent signature, Gatekeeper, runtime, and DMG
+layout verification. This artifact is not yet cleared for team distribution:
+the unchanged installed build still needs the content-free hardware, restart,
+and configured audio-deletion receipt described below.
 
 This is a how-to for the release operator. It assumes a clean release commit,
 Apple-silicon macOS, Xcode command-line tools, and access to the existing
