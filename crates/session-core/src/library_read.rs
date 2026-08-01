@@ -913,7 +913,14 @@ mod tests {
 
     #[test]
     fn open_fails_closed_when_any_bound_artifact_drifts() {
-        for target in ["meeting", "attempt", "transcript"] {
+        for target in [
+            "meeting",
+            "attempt",
+            "ownership",
+            "capture",
+            "deletion",
+            "transcript",
+        ] {
             let fixture = Fixture::new();
             let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
             let projection =
@@ -922,6 +929,11 @@ mod tests {
             match target {
                 "meeting" => fs::write(directory.join("meeting.json"), b"{}").unwrap(),
                 "attempt" => fs::write(directory.join("attempt.json"), b"{}").unwrap(),
+                "ownership" => fs::write(directory.join("ownership.json"), b"{}").unwrap(),
+                "capture" => fs::write(directory.join("capture/session.json"), b"{}").unwrap(),
+                "deletion" => {
+                    fs::write(directory.join("deletion/audio-deletion.json"), b"{}").unwrap()
+                }
                 "transcript" => {
                     let current = load_meeting(&directory)
                         .unwrap()
@@ -983,6 +995,26 @@ mod tests {
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         let handle = projection.search("stable").unwrap().remove(0);
         let mut record = load_meeting(&directory).unwrap();
+        durable_create_new(&directory.join("capture/mic.wav"), b"mic").unwrap();
+        durable_create_new(&directory.join("capture/system.wav"), b"system").unwrap();
+        record.artifacts.microphone_audio =
+            Some(artifact_ref(&directory, "capture/mic.wav").unwrap());
+        record.artifacts.system_audio =
+            Some(artifact_ref(&directory, "capture/system.wav").unwrap());
+        record.retention.state = AudioState::Retained;
+        record.retention.deletion_receipt = None;
+        write_meeting(&directory, &record).unwrap();
+        assert_eq!(
+            projection.open(&fixture.storage, &handle),
+            Err(LibraryReadError::SnapshotStale)
+        );
+
+        let fixture = Fixture::new();
+        let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let handle = projection.search("stable").unwrap().remove(0);
+        let mut record = load_meeting(&directory).unwrap();
         let original = record.artifacts.current_transcript.clone().unwrap();
         let bytes = fs::read(directory.join(&original.relative_path)).unwrap();
         let alternate = format!("{}\n", String::from_utf8(bytes).unwrap());
@@ -1032,6 +1064,18 @@ mod tests {
             normalize_query(" \n token"),
             Err(LibraryReadError::InvalidRequest)
         );
+    }
+
+    #[test]
+    fn pinned_rust_compiler_matches_normalization_contract() {
+        let output = std::process::Command::new("rustc")
+            .arg("-Vv")
+            .output()
+            .expect("rustc must be on PATH for Rust tests");
+        let version = String::from_utf8(output.stdout).expect("rustc version is UTF-8");
+        assert!(output.status.success());
+        assert!(version.contains("release: 1.94.0"));
+        assert!(version.contains(SEARCH_NORMALIZATION_RUST_COMMIT));
     }
 
     fn tree_digest(path: &Path) -> Vec<(String, String)> {
