@@ -9,8 +9,8 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::meeting::{
-    AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts, MeetingSchema, artifact_ref,
-    retention_policy_sha256,
+    AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts, MeetingSchema,
+    PendingStorageOperation, artifact_ref, retention_policy_sha256,
 };
 use crate::operation_store::OperationReceiptState;
 use crate::storage::{create_private_dir, durable_create_new, durable_replace};
@@ -367,6 +367,18 @@ fn current_transcript(meeting_dir: &Path) -> String {
         .sha256
 }
 
+fn meeting_bytes(meeting_dir: &Path) -> Vec<u8> {
+    read_private_bytes(&meeting_dir.join("meeting.json"), MAX_MEETING_RECORD_BYTES).unwrap()
+}
+
+fn begin_pending_audio_deletion(fixture: &Fixture) -> Vec<u8> {
+    let mut meeting = load_meeting(&fixture.meeting_dir).unwrap();
+    meeting.retention.state = AudioState::Deleting;
+    meeting.pending_storage_operation = Some(PendingStorageOperation::AudioDeletionV1);
+    write_meeting(&fixture.meeting_dir, &meeting).unwrap();
+    meeting_bytes(&fixture.meeting_dir)
+}
+
 fn receipt(fixture: &Fixture) -> StoredOperationReceipt {
     OperationStore::open(&fixture.storage)
         .unwrap()
@@ -416,6 +428,90 @@ fn happy_path_clears_the_exact_prior_note_then_commits_exact_meeting_bytes() {
     );
     assert_committed_successor(&fixture);
     assert_eq!(fixture.worker.calls(), 1);
+}
+
+#[test]
+fn pending_audio_deletion_refuses_a_new_request_without_worker_or_mutation() {
+    let fixture = Fixture::new(true);
+    let before = begin_pending_audio_deletion(&fixture);
+
+    assert!(matches!(
+        fixture
+            .reconstructed()
+            .restore_withheld_turn(&fixture.arguments(7)),
+        Err(TranscriptRestorationCoordinatorError::Ambiguous(
+            "meeting has a pending storage operation"
+        ))
+    ));
+
+    assert_eq!(fixture.worker.calls(), 0);
+    assert_eq!(meeting_bytes(&fixture.meeting_dir), before);
+    assert!(
+        OperationStore::open(&fixture.storage)
+            .unwrap()
+            .scan()
+            .unwrap()
+            .is_empty()
+    );
+    let meeting = load_meeting(&fixture.meeting_dir).unwrap();
+    assert_eq!(
+        meeting.artifacts.current_transcript.unwrap().sha256,
+        fixture.base_sha256
+    );
+    assert_eq!(meeting.artifacts.current_note, fixture.prior_note);
+}
+
+#[test]
+fn pending_audio_deletion_quarantines_every_incomplete_recovery_state_untouched() {
+    for phase in [
+        RestorationDurablePhase::RequestStored,
+        RestorationDurablePhase::ResultStored,
+        RestorationDurablePhase::MeetingPublished,
+    ] {
+        let fixture = Fixture::new(true);
+        let coordinator = fixture.coordinator(Arc::new(CrashOnce::new(phase)));
+        assert!(matches!(
+            coordinator.restore_withheld_turn(&fixture.arguments(7)),
+            Err(TranscriptRestorationCoordinatorError::InjectedCrash(actual)) if actual == phase
+        ));
+        let worker_calls_before_recovery = fixture.worker.calls();
+        let transcript_before_deletion = current_transcript(&fixture.meeting_dir);
+        let note_before_deletion = load_meeting(&fixture.meeting_dir)
+            .unwrap()
+            .artifacts
+            .current_note;
+        let meeting_before_recovery = begin_pending_audio_deletion(&fixture);
+
+        let report = fixture.reconstructed().recover_incomplete().unwrap();
+
+        assert_eq!(
+            report.operations,
+            vec![RestorationRecoveryDisposition::Quarantined {
+                meeting_id: fixture.meeting_id,
+                operation_id: Some(Uuid::parse_str(OPERATION_ID).unwrap()),
+                reason: RestorationQuarantineReason::SourceOrPriorNoteChanged,
+            }]
+        );
+        assert_eq!(fixture.worker.calls(), worker_calls_before_recovery);
+        assert_eq!(meeting_bytes(&fixture.meeting_dir), meeting_before_recovery);
+        let meeting = load_meeting(&fixture.meeting_dir).unwrap();
+        assert_eq!(
+            meeting.artifacts.current_transcript.unwrap().sha256,
+            transcript_before_deletion
+        );
+        assert_eq!(meeting.artifacts.current_note, note_before_deletion);
+        let receipt = receipt(&fixture);
+        assert!(receipt.commit.is_none());
+        assert_eq!(
+            receipt.state(),
+            match phase {
+                RestorationDurablePhase::RequestStored => OperationReceiptState::RequestOnly,
+                RestorationDurablePhase::ResultStored
+                | RestorationDurablePhase::MeetingPublished => OperationReceiptState::ResultStored,
+                _ => unreachable!(),
+            }
+        );
+    }
 }
 
 #[test]

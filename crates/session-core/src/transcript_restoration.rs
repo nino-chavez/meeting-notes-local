@@ -405,6 +405,7 @@ impl TranscriptRestorationCoordinator {
     ) -> Result<RestorationRecoveryAction, TranscriptRestorationCoordinatorError> {
         let meeting_dir = self.meeting_dir(request.meeting_id)?;
         let meeting = self.load_and_verify_meeting(&meeting_dir)?;
+        require_no_pending_storage(&meeting)?;
         let current = meeting.artifacts.current_transcript.as_ref().ok_or(
             TranscriptRestorationCoordinatorError::Ambiguous("meeting has no current transcript"),
         )?;
@@ -550,6 +551,7 @@ impl TranscriptRestorationCoordinator {
         result: &TranscriptRestorationResult,
     ) -> Result<(), TranscriptRestorationCoordinatorError> {
         let mut meeting = self.load_and_verify_meeting(meeting_dir)?;
+        require_no_pending_storage(&meeting)?;
         let current = meeting.artifacts.current_transcript.as_ref().ok_or(
             TranscriptRestorationCoordinatorError::Ambiguous("meeting has no current transcript"),
         )?;
@@ -581,6 +583,7 @@ impl TranscriptRestorationCoordinator {
         result: &TranscriptRestorationResult,
     ) -> Result<(), TranscriptRestorationCoordinatorError> {
         let meeting = self.load_and_verify_meeting(meeting_dir)?;
+        require_no_pending_storage(&meeting)?;
         let current = meeting.artifacts.current_transcript.as_ref().ok_or(
             TranscriptRestorationCoordinatorError::Ambiguous("meeting has no current transcript"),
         )?;
@@ -632,6 +635,7 @@ impl TranscriptRestorationCoordinator {
         source_turn_index: u32,
         expected_prior_note: Option<Option<&NoteRevisionRef>>,
     ) -> Result<InspectedTranscriptRevision, TranscriptRestorationCoordinatorError> {
+        require_no_pending_storage(meeting)?;
         if meeting.meeting_id != meeting_id.to_string() {
             return Err(TranscriptRestorationCoordinatorError::Ambiguous(
                 "meeting identity changed",
@@ -740,6 +744,17 @@ impl TranscriptRestorationCoordinator {
             .after_phase(phase)
             .map_err(|_| TranscriptRestorationCoordinatorError::InjectedCrash(phase))
     }
+}
+
+fn require_no_pending_storage(
+    meeting: &MeetingRecord,
+) -> Result<(), TranscriptRestorationCoordinatorError> {
+    if meeting.pending_storage_operation.is_some() {
+        return Err(TranscriptRestorationCoordinatorError::Ambiguous(
+            "meeting has a pending storage operation",
+        ));
+    }
+    Ok(())
 }
 
 fn inspect_stored_revision(
