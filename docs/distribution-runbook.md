@@ -1,13 +1,17 @@
 # Local Meeting Notes distribution runbook
 
 Status: a signed and notarized internal transcript-alpha DMG now exists for
-commit `4b4cc02a85b9f6d497a737df18feb3c2083b023e`. Its SHA-256 is
-`ba1a18eb957667585383f91b4ef1d9b107e863d4e1d4cc649017e9a4c3e412d8`.
+commit `5fe9aecd4f53204dc6e82573fd4b4dde37efd6d1`. Its SHA-256 is
+`f5f091811d337acae4c7dc25db5638e2675e30552ed1793af1dc82c7c734385a`.
 The frozen app and DMG pass independent signature, Gatekeeper, runtime, and DMG
 layout verification. The main app and capture helper carry Apple's required
-audio-input entitlement. This artifact is not yet cleared for team distribution:
-the unchanged installed build still needs the content-free hardware, restart,
-and configured audio-deletion receipt described below.
+audio-input entitlement. A hardware attempt reached local transcription and
+then failed closed because human-readable library output entered the worker's
+JSON-only protocol channel. The corrected worker isolates protocol output, and
+the packaged-runtime regression now invokes the real transcript model. This
+artifact is not yet cleared for team distribution: it still needs installation
+followed by the content-free hardware, restart, and configured audio-deletion
+receipt described below.
 
 This is a how-to for the release operator. It assumes a clean release commit,
 Apple-silicon macOS, Xcode command-line tools, and access to the existing

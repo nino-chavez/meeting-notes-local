@@ -14,17 +14,21 @@ be described as beta-ready from this approval.
 
 The transcript-only internal-alpha path is implemented and packaged with the real
 local worker runtime. Commit
-`4b4cc02a85b9f6d497a737df18feb3c2083b023e` has a signed and notarized DMG that
+`5fe9aecd4f53204dc6e82573fd4b4dde37efd6d1` has a signed and notarized DMG that
 passes the mechanical release suite and independent Gatekeeper verification.
 The first hardware attempts correctly failed closed when macOS denied microphone
 access. They exposed two release defects: recovery lost the specific permission
 message, and the executable requesting microphone access lacked Apple's required
 audio-input entitlement, so the app never appeared in System Settings. Both are
-fixed and enforced by the signed-bundle verifier. The unchanged installed build
-still needs its content-free two-leg capture, transcript, fresh-process reopen,
-and configured audio-deletion receipt. Until that receipt exists, the alpha is
-not cleared for distribution. Automatic-note admission remains a separate,
-unmet beta gate.
+fixed and enforced by the signed-bundle verifier. The next hardware attempt
+reached transcription and exposed a third defect: data-dependent library output
+entered the worker's JSON-only protocol channel. Commit `8a2359f` isolates all
+operation output from that channel, and commit `5fe9aec` strengthens the packaged
+runtime regression so it invokes the real transcript model. The corrected build
+still needs installation followed by a content-free two-leg capture, transcript,
+fresh-process reopen, and configured audio-deletion receipt. Until that receipt
+exists, the alpha is not cleared for distribution. Automatic-note admission
+remains a separate, unmet beta gate.
 
 The contract exists now so the first implementation does not have to settle
 process ownership, persistence, recovery, and security while it is also trying
