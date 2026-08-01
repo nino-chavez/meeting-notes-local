@@ -1,4 +1,5 @@
 pub mod diagnostic;
+pub mod library_contract;
 pub mod meeting;
 pub mod meeting_coordination;
 pub mod note_generation;

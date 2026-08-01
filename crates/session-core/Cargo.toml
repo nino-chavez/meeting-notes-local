@@ -7,11 +7,13 @@ description = "Rust-owned safety, storage, protocol, and process boundary"
 
 [dependencies]
 libc.workspace = true
+icu_normalizer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true
 thiserror.workspace = true
+unicode-segmentation.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
