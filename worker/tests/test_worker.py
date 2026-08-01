@@ -39,7 +39,9 @@ def private_file(path: Path, data: bytes) -> None:
 
 def build_capture(capture_dir: Path) -> None:
     capture_dir.mkdir(mode=0o700, parents=True)
-    samples = 3200
+    # Cross the model adapter's half-second floor so packaged-runtime tests
+    # exercise real transcription and its data-dependent filter output.
+    samples = 16_000
     for leg in ("mic", "system"):
         with open_private_binary(capture_dir / f"{leg}.wav") as handle:
             with wave.open(handle, "wb") as wav:
