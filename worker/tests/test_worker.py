@@ -40,6 +40,7 @@ from worker.product_contracts import (
     validate_transcript_view,
 )
 import worker.adapters as adapters
+import worker.storage as worker_storage
 from worker.adapters import (
     MAX_MEETING_RECEIPT_BYTES,
     MAX_PROFILE_BYTES,
@@ -47,6 +48,7 @@ from worker.adapters import (
     AdapterRefused,
     note_create,
     profile_adopt,
+    profile_inspect,
     resolve_transcript,
     transcript_restore,
 )
@@ -490,6 +492,7 @@ class WorkerProtocolTests(unittest.TestCase):
         profile_id = str(uuid.uuid4())
         candidate_dir = self.root / "profile-candidates" / profile_id
         candidate_dir.mkdir(mode=0o700, parents=True)
+        candidate_dir.parent.chmod(0o700)
         profile_path = candidate_dir / "voiceprint.json"
         centroid = np.zeros(192)
         centroid[0] = 1.0
@@ -557,6 +560,7 @@ class WorkerProtocolTests(unittest.TestCase):
         profile_id = str(uuid.uuid4())
         candidate_dir = self.root / "profile-candidates" / profile_id
         candidate_dir.mkdir(mode=0o700, parents=True)
+        candidate_dir.parent.chmod(0o700)
         profile_path = candidate_dir / "voiceprint.json"
         centroid = np.zeros(192)
         centroid[0] = 1.0
@@ -610,6 +614,31 @@ class WorkerProtocolTests(unittest.TestCase):
             self.assertEqual(result["artifact_digests"], {})
             self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
             self.assertFalse(candidate_dir.exists())
+        finally:
+            worker.close()
+
+    def test_malformed_profile_top_levels_do_not_crash_worker(self) -> None:
+        candidates = self.root / "profile-candidates"
+        candidates.mkdir(mode=0o700)
+        meeting_id = str(uuid.uuid4())
+        build_capture(self.root / "meetings" / meeting_id / "capture")
+        worker = WorkerProcess(self.root, self.manifest)
+        try:
+            for payload in (b"[]\n", b"null\n", b"1\n", b'"text"\n'):
+                profile_id = str(uuid.uuid4())
+                candidate_dir = candidates / profile_id
+                candidate_dir.mkdir(mode=0o700)
+                private_file(candidate_dir / "voiceprint.json", payload)
+                refused = worker.request(
+                    "profile.inspect", {"profile_id": profile_id}
+                )
+                self.assertFalse(refused["ok"])
+                self.assertEqual(refused["artifact_digests"], {})
+
+            # A subsequent successful request proves the singleton process did
+            # not die on AttributeError/TypeError from the canonical loader.
+            healthy = worker.request("capture.inspect", {"meeting_id": meeting_id})
+            self.assertTrue(healthy["ok"])
         finally:
             worker.close()
 
@@ -1167,6 +1196,7 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
     def _candidate(self, profile_id: str, payload: bytes | None = None) -> Path:
         directory = self.root / "profile-candidates" / profile_id
         directory.mkdir(mode=0o700, parents=True)
+        directory.parent.chmod(0o700)
         directory.chmod(0o700)
         path = directory / "voiceprint.json"
         if payload is not None:
@@ -1223,6 +1253,15 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
             self.root, {"profile_id": profile_id}, self.encoder_digest
         )
 
+    def _valid_profile_bytes(self) -> bytes:
+        profile_id = str(uuid.uuid4())
+        path = self._candidate(profile_id)
+        payload = path.read_bytes()
+        path.unlink()
+        path.parent.rmdir()
+        path.parent.parent.rmdir()
+        return payload
+
     def test_adopt_is_digest_bound_idempotent_and_consumes_quarantine(self) -> None:
         first_id = str(uuid.uuid4())
         first = self._candidate(first_id)
@@ -1268,20 +1307,170 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
         candidate.symlink_to(external)
         with self.assertRaises(AdapterRefused):
             self._adopt(profile_id)
-        self.assertFalse(candidate.parent.exists())
+        self.assertTrue(candidate.is_symlink())
+        self.assertTrue(candidate.parent.exists())
         self.assertEqual(external.read_bytes(), b"{}\n")
+
+    def test_inspect_and_adopt_refuse_nonprivate_quarantine_chain_pre_read(self) -> None:
+        for unsafe_level in ("root", "candidate"):
+            with self.subTest(unsafe_level=unsafe_level):
+                profile_id = str(uuid.uuid4())
+                candidate = self._candidate(profile_id)
+                expected = candidate.read_bytes()
+                unsafe = (
+                    candidate.parent.parent
+                    if unsafe_level == "root"
+                    else candidate.parent
+                )
+                unsafe.chmod(0o755)
+                with mock.patch.object(adapters, "_read_profile_candidate") as read:
+                    with self.assertRaises(AdapterRefused):
+                        profile_inspect(
+                            self.root,
+                            {"profile_id": profile_id},
+                            self.encoder_digest,
+                        )
+                    with self.assertRaises(AdapterRefused):
+                        self._adopt(profile_id)
+                    read.assert_not_called()
+                self.assertEqual(candidate.read_bytes(), expected)
+                self.assertTrue(candidate.parent.exists())
+                self.assertFalse(
+                    (self.root / "profile" / "voiceprint.json").exists()
+                )
+                candidate.parent.parent.chmod(0o700)
+                candidate.parent.chmod(0o700)
+
+    def test_symlinked_quarantine_chain_is_never_read_or_cleaned(self) -> None:
+        payload = self._valid_profile_bytes()
+        outside_root = Path(self.temporary.name) / "outside-candidates"
+        outside_root.mkdir(mode=0o700)
+        profile_id = str(uuid.uuid4())
+        outside_candidate = outside_root / profile_id
+        outside_candidate.mkdir(mode=0o700)
+        outside_profile = outside_candidate / "voiceprint.json"
+        private_file(outside_profile, payload)
+
+        candidates_link = self.root / "profile-candidates"
+        candidates_link.symlink_to(outside_root, target_is_directory=True)
+        with mock.patch.object(adapters, "_read_profile_candidate") as read:
+            with self.assertRaises(AdapterRefused):
+                profile_inspect(
+                    self.root,
+                    {"profile_id": profile_id},
+                    self.encoder_digest,
+                )
+            with self.assertRaises(AdapterRefused):
+                self._adopt(profile_id)
+            read.assert_not_called()
+        self.assertTrue(candidates_link.is_symlink())
+        self.assertEqual(outside_profile.read_bytes(), payload)
+        self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+
+        candidates_link.unlink()
+        candidates_link.mkdir(mode=0o700)
+        child_link = candidates_link / profile_id
+        child_link.symlink_to(outside_candidate, target_is_directory=True)
+        with mock.patch.object(adapters, "_read_profile_candidate") as read:
+            with self.assertRaises(AdapterRefused):
+                profile_inspect(
+                    self.root,
+                    {"profile_id": profile_id},
+                    self.encoder_digest,
+                )
+            with self.assertRaises(AdapterRefused):
+                self._adopt(profile_id)
+            read.assert_not_called()
+        self.assertTrue(child_link.is_symlink())
+        self.assertEqual(outside_profile.read_bytes(), payload)
+        self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+
+    def test_cleanup_refuses_unknown_nested_state_without_partial_removal(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id)
+        expected = candidate.read_bytes()
+        unexpected = candidate.parent / "unexpected"
+        unexpected.mkdir(mode=0o700)
+        sentinel = unexpected / "sentinel"
+        private_file(sentinel, b"outside the closed quarantine shape")
+        with self.assertRaises(AdapterRefused):
+            self._adopt(profile_id)
+        self.assertEqual(candidate.read_bytes(), expected)
+        self.assertEqual(sentinel.read_bytes(), b"outside the closed quarantine shape")
+        self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+
+    def test_wrong_owner_seams_refuse_each_profile_boundary_without_mutation(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id)
+        expected = candidate.read_bytes()
+        boundaries = {
+            "root": self.root,
+            "quarantine-root": candidate.parent.parent,
+            "quarantine": candidate.parent,
+            "candidate": candidate,
+        }
+        for label, path in boundaries.items():
+            with self.subTest(label=label):
+                rejected_identity = (path.stat().st_dev, path.stat().st_ino)
+
+                def owns(metadata: os.stat_result) -> bool:
+                    return (metadata.st_dev, metadata.st_ino) != rejected_identity
+
+                with mock.patch.object(
+                    adapters, "_owned_by_effective_user", side_effect=owns
+                ):
+                    with self.assertRaises(AdapterRefused):
+                        profile_inspect(
+                            self.root,
+                            {"profile_id": profile_id},
+                            self.encoder_digest,
+                        )
+                    with self.assertRaises(AdapterRefused):
+                        self._adopt(profile_id)
+                self.assertEqual(candidate.read_bytes(), expected)
+                self.assertFalse(
+                    (self.root / "profile" / "voiceprint.json").exists()
+                )
+
+        with mock.patch.object(
+            worker_storage, "_owned_by_effective_user", return_value=False
+        ):
+            with self.assertRaises(AdapterRefused):
+                self._adopt(profile_id)
+        self.assertEqual(candidate.read_bytes(), expected)
+
+    def test_wrong_owner_installed_profile_is_not_reused_or_overwritten(self) -> None:
+        installed_bytes = self._valid_profile_bytes()
+        profile_dir = self.root / "profile"
+        profile_dir.mkdir(mode=0o700)
+        installed = profile_dir / "voiceprint.json"
+        private_file(installed, installed_bytes)
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id, installed_bytes)
+        rejected_identity = (installed.stat().st_dev, installed.stat().st_ino)
+
+        def owns(metadata: os.stat_result) -> bool:
+            return (metadata.st_dev, metadata.st_ino) != rejected_identity
+
+        with mock.patch.object(
+            worker_storage, "_owned_by_effective_user", side_effect=owns
+        ):
+            with self.assertRaises(AdapterRefused):
+                self._adopt(profile_id)
+        self.assertEqual(installed.read_bytes(), installed_bytes)
+        self.assertFalse(candidate.parent.exists())
 
     def test_adopt_uses_the_validated_snapshot_when_candidate_changes(self) -> None:
         profile_id = str(uuid.uuid4())
         candidate = self._candidate(profile_id)
         expected = candidate.read_bytes()
-        original_read = adapters.read_private_file
+        original_read = adapters._read_profile_candidate
         mutated = False
 
-        def read_then_replace(path: Path, **kwargs) -> bytes:
+        def read_then_replace(quarantine) -> bytes:
             nonlocal mutated
-            value = original_read(path, **kwargs)
-            if path.resolve() == candidate.resolve() and not mutated:
+            value = original_read(quarantine)
+            if not mutated:
                 mutated = True
                 replacement = candidate.with_name("replacement.json")
                 private_file(replacement, b"{}\n")
@@ -1289,7 +1478,7 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
             return value
 
         with mock.patch.object(
-            adapters, "read_private_file", side_effect=read_then_replace
+            adapters, "_read_profile_candidate", side_effect=read_then_replace
         ):
             result = self._adopt(profile_id)
         self.assertTrue(mutated)

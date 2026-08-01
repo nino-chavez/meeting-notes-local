@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -460,8 +461,183 @@ def transcript_create(
     return {"transcript": transcript_digest}
 
 
-def _profile_candidate_path(root: Path, profile_id: str) -> Path:
-    return resolve_below(root, "profile-candidates", profile_id, "voiceprint.json")
+@dataclass(frozen=True)
+class _ProfileQuarantine:
+    root_fd: int
+    candidates_fd: int
+    candidate_fd: int
+    profile_fd: int
+
+
+def _owned_by_effective_user(metadata: os.stat_result) -> bool:
+    effective_user = getattr(os, "geteuid", None)
+    owner = getattr(metadata, "st_uid", None)
+    return effective_user is None or owner is None or owner == effective_user()
+
+
+def _require_private_directory_fd(descriptor: int, label: str) -> os.stat_result:
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or not _owned_by_effective_user(metadata)
+    ):
+        raise AdapterRefused(f"{label} is not an owner-private directory")
+    return metadata
+
+
+def _require_private_file_fd(descriptor: int, label: str) -> os.stat_result:
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or not _owned_by_effective_user(metadata)
+    ):
+        raise AdapterRefused(f"{label} is not an owner-private regular file")
+    return metadata
+
+
+@contextlib.contextmanager
+def _open_profile_quarantine(root: Path, profile_id: str):
+    """Open an existing private quarantine chain without following symlinks."""
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory is None:
+        raise AdapterRefused("profile quarantine requires no-follow directory support")
+    descriptors: list[int] = []
+    try:
+        root_fd = os.open(root, os.O_RDONLY | directory | no_follow)
+        descriptors.append(root_fd)
+        _require_private_directory_fd(root_fd, "app data root")
+        candidates_fd = os.open(
+            "profile-candidates",
+            os.O_RDONLY | directory | no_follow,
+            dir_fd=root_fd,
+        )
+        descriptors.append(candidates_fd)
+        _require_private_directory_fd(candidates_fd, "profile quarantine root")
+        candidate_fd = os.open(
+            profile_id,
+            os.O_RDONLY | directory | no_follow,
+            dir_fd=candidates_fd,
+        )
+        descriptors.append(candidate_fd)
+        _require_private_directory_fd(candidate_fd, "profile quarantine")
+        profile_fd = os.open(
+            "voiceprint.json",
+            os.O_RDONLY | no_follow,
+            dir_fd=candidate_fd,
+        )
+        descriptors.append(profile_fd)
+        _require_private_file_fd(profile_fd, "profile candidate")
+        yield _ProfileQuarantine(root_fd, candidates_fd, candidate_fd, profile_fd)
+    except AdapterRefused:
+        raise
+    except OSError as exc:
+        raise AdapterRefused("profile quarantine is missing or unsafe") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _read_profile_candidate(quarantine: _ProfileQuarantine) -> bytes:
+    descriptor = quarantine.profile_fd
+    before = _require_private_file_fd(descriptor, "profile candidate")
+    if before.st_size > MAX_PROFILE_BYTES:
+        raise AdapterRefused("profile candidate exceeds its bounded read limit")
+    chunks: list[bytes] = []
+    remaining = before.st_size
+    while remaining:
+        chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+        if not chunk:
+            raise AdapterRefused("profile candidate changed while being read")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    after = os.fstat(descriptor)
+    if (
+        before.st_dev != after.st_dev
+        or before.st_ino != after.st_ino
+        or before.st_mode != after.st_mode
+        or before.st_uid != after.st_uid
+        or before.st_size != after.st_size
+        or not _owned_by_effective_user(after)
+    ):
+        raise AdapterRefused("profile candidate changed while being read")
+    return b"".join(chunks)
+
+
+def _require_directory_link(
+    parent_fd: int,
+    name: str,
+    expected: os.stat_result,
+    label: str,
+) -> None:
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise AdapterRefused(f"{label} changed before cleanup") from exc
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or current.st_dev != expected.st_dev
+        or current.st_ino != expected.st_ino
+        or stat.S_IMODE(current.st_mode) != 0o700
+        or not _owned_by_effective_user(current)
+    ):
+        raise AdapterRefused(f"{label} changed before cleanup")
+
+
+def _remove_profile_quarantine(
+    quarantine: _ProfileQuarantine, profile_id: str
+) -> None:
+    """Remove only the exact private directory opened during preflight."""
+    _require_private_directory_fd(quarantine.root_fd, "app data root")
+    candidates_metadata = _require_private_directory_fd(
+        quarantine.candidates_fd, "profile quarantine root"
+    )
+    candidate_metadata = _require_private_directory_fd(
+        quarantine.candidate_fd, "profile quarantine"
+    )
+    _require_directory_link(
+        quarantine.root_fd,
+        "profile-candidates",
+        candidates_metadata,
+        "profile quarantine root",
+    )
+    _require_directory_link(
+        quarantine.candidates_fd,
+        profile_id,
+        candidate_metadata,
+        "profile quarantine",
+    )
+    # Preflight every entry before deleting any of them. A nested directory is
+    # outside the native picker's closed shape and must remain untouched.
+    entries = os.listdir(quarantine.candidate_fd)
+    for entry in entries:
+        metadata = os.stat(
+            entry, dir_fd=quarantine.candidate_fd, follow_symlinks=False
+        )
+        if stat.S_ISDIR(metadata.st_mode) or not _owned_by_effective_user(metadata):
+            raise AdapterRefused("profile quarantine has an unsafe directory")
+    for entry in entries:
+        os.unlink(entry, dir_fd=quarantine.candidate_fd)
+    os.fsync(quarantine.candidate_fd)
+    _require_directory_link(
+        quarantine.root_fd,
+        "profile-candidates",
+        candidates_metadata,
+        "profile quarantine root",
+    )
+    _require_directory_link(
+        quarantine.candidates_fd,
+        profile_id,
+        candidate_metadata,
+        "profile quarantine",
+    )
+    os.rmdir(profile_id, dir_fd=quarantine.candidates_fd)
+    os.fsync(quarantine.candidates_fd)
+    # Keep the root descriptor live through the final parent sync. This also
+    # makes the root metadata check above part of the same anchored chain.
+    os.fsync(quarantine.root_fd)
 
 
 def _validate_profile_bytes(
@@ -485,118 +661,82 @@ def _validate_profile_bytes(
             _, _, document = load_profile(
                 snapshot, expected_encoder_fingerprint=encoder_digest
             )
-        except (OSError, ValueError, SystemExit) as exc:
+            # `load_profile` decides whether the receipt is structurally valid.
+            # Admission decides whether that valid receipt is a supported profile:
+            # experimental calibration is deliberately available to the research CLI
+            # but never enables the product capture path.
+            if document["operating_point"]["experimental"]:
+                raise AdapterRefused(
+                    "experimental profile cannot enable application capture"
+                )
+        except AdapterRefused:
+            raise
+        except (AttributeError, KeyError, OSError, SystemExit, TypeError, ValueError) as exc:
             raise AdapterRefused(str(exc)) from None
-        # `load_profile` decides whether the receipt is structurally valid.
-        # Admission decides whether that valid receipt is a supported profile:
-        # experimental calibration is deliberately available to the research CLI
-        # but never enables the product capture path.
-        if document["operating_point"]["experimental"]:
-            raise AdapterRefused("experimental profile cannot enable application capture")
 
 
 def _read_valid_profile_candidate(
-    root: Path, profile_id: str, encoder_digest: str
+    root: Path,
+    quarantine: _ProfileQuarantine,
+    encoder_digest: str,
 ) -> tuple[bytes, str]:
-    try:
-        candidate = _profile_candidate_path(root, profile_id)
-        profile_bytes = read_private_file(
-            candidate,
-            max_bytes=MAX_PROFILE_BYTES,
-            label="profile candidate",
-        )
-    except (OSError, StorageRefused) as exc:
-        raise AdapterRefused(str(exc)) from None
+    profile_bytes = _read_profile_candidate(quarantine)
     _validate_profile_bytes(root, profile_bytes, encoder_digest)
     return profile_bytes, hashlib.sha256(profile_bytes).hexdigest()
 
 
-def _remove_profile_candidate(root: Path, profile_id: str) -> None:
-    """Remove a quarantine without following its entries after a failed adopt.
-
-    The native picker is the only writer of a candidate directory.  It may still
-    contain malformed or hostile bytes, so cleanup unlinks entries through open
-    directory descriptors rather than recursively resolving paths.
-    """
-    candidates = resolve_below(root, "profile-candidates")
+def _private_profile_root(root: Path) -> Path:
     try:
-        candidates_fd = os.open(
-            candidates,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        )
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise AdapterRefused("profile quarantine is unsafe") from exc
-    try:
-        try:
-            candidate_fd = os.open(
-                profile_id,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=candidates_fd,
-            )
-        except FileNotFoundError:
-            return
-        except OSError as exc:
-            raise AdapterRefused("profile quarantine is unsafe") from exc
-        try:
-            candidate_stat = os.fstat(candidate_fd)
-            if stat.S_IMODE(candidate_stat.st_mode) != 0o700:
-                raise AdapterRefused("profile quarantine is unsafe")
-            for entry in os.listdir(candidate_fd):
-                entry_stat = os.stat(entry, dir_fd=candidate_fd, follow_symlinks=False)
-                if stat.S_ISDIR(entry_stat.st_mode):
-                    raise AdapterRefused("profile quarantine has an unsafe directory")
-                os.unlink(entry, dir_fd=candidate_fd)
-            os.fsync(candidate_fd)
-        finally:
-            os.close(candidate_fd)
-        os.rmdir(profile_id, dir_fd=candidates_fd)
-        os.fsync(candidates_fd)
-    finally:
-        os.close(candidates_fd)
+        return require_private_root(root)
+    except StorageRefused as exc:
+        raise AdapterRefused(str(exc)) from None
 
 
 def profile_inspect(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
-    root = require_private_root(root)
+    root = _private_profile_root(root)
     values = _exact_arguments(arguments, {"profile_id"})
     profile_id = opaque_id(values["profile_id"], "profile_id")
-    _, digest = _read_valid_profile_candidate(root, profile_id, encoder_digest)
+    with _open_profile_quarantine(root, profile_id) as quarantine:
+        _, digest = _read_valid_profile_candidate(root, quarantine, encoder_digest)
     return {"profile": digest}
 
 
 def profile_adopt(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
-    root = require_private_root(root)
+    root = _private_profile_root(root)
     values = _exact_arguments(arguments, {"profile_id"})
     profile_id = opaque_id(values["profile_id"], "profile_id")
-    try:
-        profile_bytes, digest = _read_valid_profile_candidate(
-            root, profile_id, encoder_digest
-        )
-        profile_dir = resolve_below(root, "profile")
-        private_directory(profile_dir)
-        target = resolve_below(root, "profile", "voiceprint.json")
+    with _open_profile_quarantine(root, profile_id) as quarantine:
+        # Consume the exact safe quarantine before any installed state changes.
+        # A cleanup refusal therefore cannot leave both an installed profile and
+        # an untrusted candidate behind.
         try:
-            durable_create_or_verify_identical(target, profile_bytes)
-            installed_bytes = read_private_file(
-                target,
-                max_bytes=len(profile_bytes),
-                label="installed profile",
+            profile_bytes, digest = _read_valid_profile_candidate(
+                root, quarantine, encoder_digest
             )
-        except StorageRefused as exc:
-            raise AdapterRefused(str(exc)) from None
-        if (
-            installed_bytes != profile_bytes
-            or hashlib.sha256(installed_bytes).hexdigest() != digest
-        ):
-            raise AdapterRefused("installed profile differs from the validated candidate")
-        # The worker result binds only these installed bytes.  Re-run the
-        # canonical semantic loader after the durable write rather than treating
-        # the earlier candidate verdict as authority for a different pathname.
-        _validate_profile_bytes(root, installed_bytes, encoder_digest)
-        return {"profile": digest}
-    finally:
-        _remove_profile_candidate(root, profile_id)
+        finally:
+            _remove_profile_quarantine(quarantine, profile_id)
+    profile_dir = resolve_below(root, "profile")
+    private_directory(profile_dir)
+    target = resolve_below(root, "profile", "voiceprint.json")
+    try:
+        durable_create_or_verify_identical(target, profile_bytes)
+        installed_bytes = read_private_file(
+            target,
+            max_bytes=len(profile_bytes),
+            label="installed profile",
+        )
+    except StorageRefused as exc:
+        raise AdapterRefused(str(exc)) from None
+    if (
+        installed_bytes != profile_bytes
+        or hashlib.sha256(installed_bytes).hexdigest() != digest
+    ):
+        raise AdapterRefused("installed profile differs from the validated candidate")
+    # The worker result binds only these installed bytes.  Re-run the
+    # canonical semantic loader after the durable write rather than treating
+    # the earlier candidate verdict as authority for a different pathname.
+    _validate_profile_bytes(root, installed_bytes, encoder_digest)
+    return {"profile": digest}
 
 
 def note_inspect(root: Path, arguments: object) -> dict[str, str]:

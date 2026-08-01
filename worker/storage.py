@@ -12,11 +12,22 @@ class StorageRefused(ValueError):
     pass
 
 
+def _owned_by_effective_user(metadata: os.stat_result) -> bool:
+    effective_user = getattr(os, "geteuid", None)
+    owner = getattr(metadata, "st_uid", None)
+    return effective_user is None or owner is None or owner == effective_user()
+
+
 def require_private_root(path: Path) -> Path:
     if not path.is_absolute() or path.is_symlink():
         raise StorageRefused("app data root must be an absolute non-symlink directory")
     resolved = path.resolve(strict=True)
-    if not resolved.is_dir() or stat.S_IMODE(resolved.stat().st_mode) != 0o700:
+    metadata = resolved.stat()
+    if (
+        not resolved.is_dir()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or not _owned_by_effective_user(metadata)
+    ):
         raise StorageRefused("app data root must be an owner-private directory")
     return resolved
 
@@ -75,7 +86,11 @@ def read_private_file(path: Path, *, max_bytes: int, label: str) -> bytes:
         raise StorageRefused(f"{label} is missing or unsafe") from exc
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o600:
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or not _owned_by_effective_user(before)
+        ):
             raise StorageRefused(f"{label} is missing or unsafe")
         if before.st_size > max_bytes:
             raise StorageRefused(f"{label} exceeds its bounded read limit")
@@ -92,7 +107,9 @@ def read_private_file(path: Path, *, max_bytes: int, label: str) -> bytes:
             before.st_dev != after.st_dev
             or before.st_ino != after.st_ino
             or before.st_mode != after.st_mode
+            or before.st_uid != after.st_uid
             or before.st_size != after.st_size
+            or not _owned_by_effective_user(after)
         ):
             raise StorageRefused(f"{label} changed while being read")
         return b"".join(chunks)
