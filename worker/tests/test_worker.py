@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,7 @@ from worker.product_contracts import (
     validate_transcript_restore_join,
     validate_transcript_view,
 )
+from worker.adapters import AdapterRefused, note_create, resolve_transcript, transcript_restore
 
 
 def digest(path: Path) -> str:
@@ -745,6 +747,194 @@ class ProductOperationContractTests(unittest.TestCase):
             with self.subTest(rejected_field=field):
                 with self.assertRaises(ProductContractRefused):
                     validate_note_create_error(changed)
+
+
+class ProductArtifactAdapterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "app"
+        self.root.mkdir(mode=0o700)
+        self.root = self.root.resolve()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _bind_current(self, meeting_id: str, transcript_id: str) -> None:
+        meeting_dir = self.root / "meetings" / meeting_id
+        meeting_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        meeting = {
+            "schema": "meeting/2",
+            "meeting_id": meeting_id,
+            "artifacts": {
+                "current_transcript": {
+                    "relative_path": f"transcript/{transcript_id}.json",
+                    "sha256": transcript_id,
+                }
+            },
+        }
+        private_file(
+            meeting_dir / "meeting.json",
+            (json.dumps(meeting, indent=2) + "\n").encode(),
+        )
+
+    def _write_gated_transcript(self, meeting_id: str) -> tuple[Path, str]:
+        capture = self.root / "meetings" / meeting_id / "capture"
+        build_capture(capture)
+        source = json.loads((capture / "transcript.json").read_text())
+        source["turns"][1]["gated"] = True
+        data = (json.dumps(source, indent=2) + "\n").encode()
+        transcript_id = hashlib.sha256(data).hexdigest()
+        target = self.root / "meetings" / meeting_id / "transcript" / (
+            transcript_id + ".json"
+        )
+        target.parent.mkdir(mode=0o700)
+        private_file(target, data)
+        self._bind_current(meeting_id, transcript_id)
+        return target, transcript_id
+
+    def _write_note_transcript(self, meeting_id: str) -> tuple[Path, str, dict]:
+        pack = json.loads(
+            (REPO / "docs/prototype/fixtures/accepted-note2.fixture").read_text()
+        )
+        data = (json.dumps(pack["transcript"], indent=2) + "\n").encode()
+        transcript_id = hashlib.sha256(data).hexdigest()
+        target = self.root / "meetings" / meeting_id / "transcript" / (
+            transcript_id + ".json"
+        )
+        target.parent.mkdir(mode=0o700, parents=True)
+        private_file(target, data)
+        self._bind_current(meeting_id, transcript_id)
+        return target, transcript_id, pack
+
+    def test_restore_creates_a_text_free_one_turn_view_and_resolves_it(self) -> None:
+        meeting_id = str(uuid.uuid4())
+        base, source_id = self._write_gated_transcript(meeting_id)
+        before = base.read_bytes()
+        result = transcript_restore(
+            self.root,
+            {
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": source_id,
+                "source_turn_index": 1,
+            },
+        )
+        view_path = self.root / "meetings" / meeting_id / "transcript" / (
+            result["transcript"] + ".json"
+        )
+        view = json.loads(view_path.read_text())
+        self.assertEqual(set(view), {
+            "schema",
+            "meeting_id",
+            "base_transcript_sha256",
+            "parent_transcript_sha256",
+            "restored_source_turn_indices",
+        })
+        self.assertNotIn("text", view_path.read_text())
+        self.assertEqual(base.read_bytes(), before)
+        resolved = resolve_transcript(self.root, meeting_id, result["transcript"])
+        self.assertEqual([turn.text for turn in resolved.turns], ["fixture one", "fixture two"])
+        self.assertEqual(resolved.gated_turns, [])
+        view_before = view_path.read_bytes()
+        with self.assertRaises(AdapterRefused):
+            transcript_restore(
+                self.root,
+                {
+                    "meeting_id": meeting_id,
+                    "source_transcript_sha256": source_id,
+                    "source_turn_index": 1,
+                },
+            )
+        self.assertEqual(view_path.read_bytes(), view_before)
+
+    def test_restore_refuses_stale_or_non_withheld_sources_without_mutation(self) -> None:
+        meeting_id = str(uuid.uuid4())
+        base, source_id = self._write_gated_transcript(meeting_id)
+        before = base.read_bytes()
+        for arguments in (
+            {
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": "a" * 64,
+                "source_turn_index": 1,
+            },
+            {
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": source_id,
+                "source_turn_index": 0,
+            },
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(AdapterRefused):
+                transcript_restore(self.root, arguments)
+        self.assertEqual(base.read_bytes(), before)
+        self.assertEqual(list(base.parent.glob("*.json")), [base])
+
+    def test_note_publication_accepts_only_exact_passing_pair_without_overwrite(self) -> None:
+        meeting_id = str(uuid.uuid4())
+        _, transcript_id, pack = self._write_note_transcript(meeting_id)
+
+        def accepted(_transcript):
+            note = json.loads(json.dumps(pack["note"]))
+            note["meeting"]["id"] = meeting_id
+            note["transcript"] = f"../transcript/{transcript_id}.json"
+            markdown_id = hashlib.sha256(pack["markdown"].encode()).hexdigest()
+            note["render"]["path"] = f"{markdown_id}.md"
+            return note
+
+        result = note_create(
+            self.root,
+            {
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": transcript_id,
+            },
+            generator=accepted,
+        )
+        notes = self.root / "meetings" / meeting_id / "notes"
+        note_path = notes / (result["note"] + ".json")
+        markdown_path = notes / (result["note-markdown"] + ".md")
+        self.assertTrue(note_path.is_file())
+        self.assertTrue(markdown_path.is_file())
+        self.assertEqual(stat.S_IMODE(note_path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(markdown_path.stat().st_mode), 0o600)
+        self.assertNotEqual(result["note"], result["note-markdown"])
+        self.assertEqual(result["transcript"], transcript_id)
+        note_before, markdown_before = note_path.read_bytes(), markdown_path.read_bytes()
+        with self.assertRaises(AdapterRefused):
+            note_create(
+                self.root,
+                {
+                    "meeting_id": meeting_id,
+                    "source_transcript_sha256": transcript_id,
+                },
+                generator=accepted,
+            )
+        self.assertEqual(note_path.read_bytes(), note_before)
+        self.assertEqual(markdown_path.read_bytes(), markdown_before)
+
+    def test_note_publication_refuses_rejected_or_misbound_candidates_before_write(self) -> None:
+        meeting_id = str(uuid.uuid4())
+        _, transcript_id, pack = self._write_note_transcript(meeting_id)
+
+        def rejected(_transcript):
+            note = json.loads(json.dumps(pack["note"]))
+            note["passed"] = False
+            return note
+
+        def wrong_source(_transcript):
+            note = json.loads(json.dumps(pack["note"]))
+            note["meeting"]["id"] = meeting_id
+            note["transcript"] = "../transcript/" + "a" * 64 + ".json"
+            return note
+
+        for generator in (None, rejected, wrong_source):
+            with self.subTest(generator=generator), self.assertRaises(AdapterRefused):
+                note_create(
+                    self.root,
+                    {
+                        "meeting_id": meeting_id,
+                        "source_transcript_sha256": transcript_id,
+                    },
+                    generator=generator,
+                )
+        self.assertFalse((self.root / "meetings" / meeting_id / "notes").exists())
 
 
 if __name__ == "__main__":
