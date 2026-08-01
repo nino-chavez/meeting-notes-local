@@ -27,6 +27,7 @@ from summarize import validate_artifact_pair
 from speaker_gate import Profile, load_profile, save_profile
 from transcript import load
 from worker.product_contracts import (
+    MAX_SOURCE_TURN_INDEX,
     ProductContractRefused,
     transcript_view_digest,
     validate_note_create_arguments,
@@ -693,8 +694,19 @@ class ProductOperationContractTests(unittest.TestCase):
         with self.assertRaises(ProductContractRefused):
             validate_transcript_restore_arguments(changed_turn)
 
+        changed_turn["source_turn_index"] = MAX_SOURCE_TURN_INDEX
+        validate_transcript_restore_arguments(changed_turn)
+        changed_turn["source_turn_index"] = MAX_SOURCE_TURN_INDEX + 1
+        with self.assertRaises(ProductContractRefused):
+            validate_transcript_restore_arguments(changed_turn)
+
         changed_view = dict(self.fixture["restoration"]["view"])
         changed_view["restored_source_turn_indices"] = [7, 7]
+        with self.assertRaises(ProductContractRefused):
+            validate_transcript_view(changed_view)
+        changed_view["restored_source_turn_indices"] = [MAX_SOURCE_TURN_INDEX]
+        validate_transcript_view(changed_view)
+        changed_view["restored_source_turn_indices"] = [MAX_SOURCE_TURN_INDEX + 1]
         with self.assertRaises(ProductContractRefused):
             validate_transcript_view(changed_view)
 

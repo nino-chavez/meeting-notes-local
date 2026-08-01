@@ -11,6 +11,9 @@ class ProductContractRefused(ValueError):
     pass
 
 
+MAX_SOURCE_TURN_INDEX = (1 << 32) - 1
+
+
 def _exact_object(value: object, names: set[str], label: str) -> dict:
     if not isinstance(value, dict) or set(value) != names:
         raise ProductContractRefused(f"{label} does not match the closed schema")
@@ -48,8 +51,13 @@ def validate_transcript_restore_arguments(value: object) -> dict:
     _uuid(arguments["meeting_id"], "meeting_id")
     _digest(arguments["source_transcript_sha256"], "source_transcript_sha256")
     turn_index = arguments["source_turn_index"]
-    if isinstance(turn_index, bool) or not isinstance(turn_index, int) or turn_index < 0:
-        raise ProductContractRefused("source_turn_index must be a nonnegative integer")
+    if (
+        isinstance(turn_index, bool)
+        or not isinstance(turn_index, int)
+        or turn_index < 0
+        or turn_index > MAX_SOURCE_TURN_INDEX
+    ):
+        raise ProductContractRefused("source_turn_index must be an unsigned 32-bit integer")
     return arguments
 
 
@@ -85,7 +93,13 @@ def validate_transcript_view(value: object) -> dict:
     if (
         not isinstance(indices, list)
         or not indices
-        or any(isinstance(index, bool) or not isinstance(index, int) or index < 0 for index in indices)
+        or any(
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or index < 0
+            or index > MAX_SOURCE_TURN_INDEX
+            for index in indices
+        )
         or indices != sorted(set(indices))
     ):
         raise ProductContractRefused(

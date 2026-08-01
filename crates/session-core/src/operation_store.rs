@@ -324,6 +324,11 @@ fn create_new_private_directory(path: &Path, parent: &Path) -> Result<(), Operat
 }
 
 fn write_receipt(path: &Path, bytes: &[u8]) -> Result<(), OperationStoreError> {
+    if bytes.len() as u64 > MAX_RECEIPT_BYTES {
+        return Err(OperationStoreError::Malformed(
+            "operation receipt exceeds its bounded size",
+        ));
+    }
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink()
@@ -635,6 +640,40 @@ mod tests {
             OperationReceiptState::ResultStored
         );
         assert_eq!(scanned.len(), 1);
+    }
+
+    #[test]
+    fn oversized_result_is_refused_before_installation() {
+        let fixture = fixtures();
+        let (temp, store) = store();
+        let request = restoration_request(&fixture);
+        let operation_id = request.operation_id();
+        store.write_request(&request).unwrap();
+
+        let StoredOperationResult::Restoration(mut result) = restoration_result(&fixture) else {
+            unreachable!();
+        };
+        result.restored_source_turn_indices = (0..30_000).collect();
+        let result = StoredOperationResult::Restoration(result);
+        assert!(matches!(
+            store.write_result(operation_id, &result),
+            Err(OperationStoreError::Malformed(
+                "operation receipt exceeds its bounded size"
+            ))
+        ));
+        assert!(
+            !temp
+                .path()
+                .join("app")
+                .join(OPERATIONS_DIRECTORY)
+                .join(operation_id.to_string())
+                .join(RESULT_FILE)
+                .exists()
+        );
+        assert_eq!(
+            store.load(operation_id).unwrap().state(),
+            OperationReceiptState::RequestOnly
+        );
     }
 
     #[test]
