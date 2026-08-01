@@ -14,7 +14,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -24,6 +24,7 @@ use local_meeting_notes_session_core::meeting::{
     MeetingLifecycle, MeetingRecord, MeetingSchema, artifact_ref, load_meeting, read_private_bytes,
     retention_policy_sha256, write_meeting,
 };
+use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 use local_meeting_notes_session_core::protocol::{
     Operation, ProtocolError, WorkerCommand, WorkerResult,
 };
@@ -68,8 +69,7 @@ struct ApplicationState {
     capture_task: Mutex<Option<CaptureTaskControl>>,
     command_lock: Mutex<()>,
     app_data_writer_lock: Mutex<Option<File>>,
-    meeting_storage_sequence: Mutex<()>,
-    active_meetings: Mutex<HashSet<String>>,
+    meeting_storage_coordination: Arc<MeetingStorageCoordination>,
     retention_started: AtomicBool,
 }
 
@@ -83,45 +83,8 @@ impl Default for ApplicationState {
             capture_task: Mutex::new(None),
             command_lock: Mutex::new(()),
             app_data_writer_lock: Mutex::new(None),
-            meeting_storage_sequence: Mutex::new(()),
-            active_meetings: Mutex::new(HashSet::new()),
+            meeting_storage_coordination: Arc::new(MeetingStorageCoordination::default()),
             retention_started: AtomicBool::new(false),
-        }
-    }
-}
-
-struct ActiveMeetingLease<'a> {
-    state: &'a ApplicationState,
-    meeting_id: String,
-}
-
-impl<'a> ActiveMeetingLease<'a> {
-    fn acquire(state: &'a ApplicationState, meeting_id: &str) -> Result<Self, String> {
-        let _sequence = state
-            .meeting_storage_sequence
-            .lock()
-            .map_err(|_| "meeting storage sequence lock is unavailable".to_string())?;
-        let mut active = state
-            .active_meetings
-            .lock()
-            .map_err(|_| "active meeting registry is unavailable".to_string())?;
-        if !active.insert(meeting_id.to_string()) {
-            return Err("meeting is already active".into());
-        }
-        Ok(Self {
-            state,
-            meeting_id: meeting_id.to_string(),
-        })
-    }
-}
-
-impl Drop for ActiveMeetingLease<'_> {
-    fn drop(&mut self) {
-        let Ok(_sequence) = self.state.meeting_storage_sequence.lock() else {
-            return;
-        };
-        if let Ok(mut active) = self.state.active_meetings.lock() {
-            active.remove(&self.meeting_id);
         }
     }
 }
@@ -785,7 +748,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
     }
     *state.storage.lock().expect("storage context lock") = Some(storage_context.clone());
 
-    let storage_sequence = match state.meeting_storage_sequence.lock() {
+    let storage_sequence = match state.meeting_storage_coordination.lock_sequence() {
         Ok(sequence) => sequence,
         Err(_) => {
             finish_startup_failure(
@@ -1138,7 +1101,7 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let state = app.state::<ApplicationState>();
-            let storage_sequence = match state.meeting_storage_sequence.lock() {
+            let storage_sequence = match state.meeting_storage_coordination.lock_sequence() {
                 Ok(sequence) => sequence,
                 Err(_) => {
                     let _ = write_private_diagnostic(
@@ -1150,8 +1113,8 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
                     continue;
                 }
             };
-            let active_meetings = match state.active_meetings.lock() {
-                Ok(active) => active.clone(),
+            let active_meetings = match storage_sequence.active_meeting_ids() {
+                Ok(active) => active,
                 Err(_) => {
                     drop(storage_sequence);
                     let _ = write_private_diagnostic(
@@ -1270,9 +1233,10 @@ fn run_capture_task(
             return;
         }
     };
-    let _active_meeting_lease = match ActiveMeetingLease::acquire(&state, &meeting_id) {
+    let _active_meeting_lease = match state.meeting_storage_coordination.acquire(&meeting_id) {
         Ok(lease) => lease,
         Err(error) => {
+            let error = error.to_string();
             fail_capture_task(
                 &app,
                 Some(&meeting_id),
@@ -2609,17 +2573,42 @@ mod tests {
     #[test]
     fn active_meeting_lease_is_exclusive_and_released_on_drop() {
         let state = ApplicationState::default();
-        let lease = ActiveMeetingLease::acquire(&state, "meeting-a").unwrap();
-        assert!(ActiveMeetingLease::acquire(&state, "meeting-a").is_err());
-        let active = state.active_meetings.lock().unwrap();
+        let lease = state
+            .meeting_storage_coordination
+            .acquire("meeting-a")
+            .unwrap();
+        assert!(
+            state
+                .meeting_storage_coordination
+                .acquire("meeting-a")
+                .is_err()
+        );
+        let active = state
+            .meeting_storage_coordination
+            .lock_sequence()
+            .unwrap()
+            .active_meeting_ids()
+            .unwrap();
         assert_eq!(active.len(), 1);
         assert!(active.contains("meeting-a"));
-        drop(active);
 
         drop(lease);
 
-        assert!(state.active_meetings.lock().unwrap().is_empty());
-        assert!(ActiveMeetingLease::acquire(&state, "meeting-a").is_ok());
+        assert!(
+            state
+                .meeting_storage_coordination
+                .lock_sequence()
+                .unwrap()
+                .active_meeting_ids()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            state
+                .meeting_storage_coordination
+                .acquire("meeting-a")
+                .is_ok()
+        );
     }
 
     #[test]

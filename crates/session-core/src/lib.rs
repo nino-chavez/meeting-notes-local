@@ -1,5 +1,6 @@
 pub mod diagnostic;
 pub mod meeting;
+pub mod meeting_coordination;
 pub mod operation_store;
 pub mod operations;
 pub mod protocol;
@@ -9,3 +10,4 @@ pub mod retention;
 pub mod runtime;
 pub mod storage;
 pub mod supervision;
+pub mod transcript_restoration;
