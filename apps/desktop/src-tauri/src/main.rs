@@ -619,6 +619,14 @@ fn dismiss_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
     Ok(model.snapshot())
 }
 
+fn prepare_startup_retry(model: &mut AppModel) -> Result<(), String> {
+    transition_startup(model, StartupState::Retrying)?;
+    if model.reducer.capture() == CaptureState::Idle {
+        model.error = None;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
     let state = app.state::<ApplicationState>();
@@ -641,8 +649,7 @@ fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
         ) {
             return Err("The installation check is not waiting for a retry.".into());
         }
-        transition_startup(&mut model, StartupState::Retrying)?;
-        model.error = None;
+        prepare_startup_retry(&mut model)?;
         model.snapshot()
     };
     let task_app = app.clone();
@@ -2636,6 +2643,39 @@ mod tests {
         assert_eq!(snapshot.capture, CaptureState::TranscriptReady);
         assert_eq!(snapshot.meeting_id.as_deref(), Some("meeting-fixture"));
         assert_eq!(snapshot.turns[0].text, "visible");
+    }
+
+    #[test]
+    fn startup_retry_preserves_the_specific_attempt_failure() {
+        let mut model = AppModel::default();
+        transition_startup(&mut model, StartupState::Checking).unwrap();
+        transition_startup(&mut model, StartupState::Ready).unwrap();
+        transition_capture(&mut model, CaptureState::Arming).unwrap();
+        transition_capture(&mut model, CaptureState::RecoveredInterrupted).unwrap();
+        transition_startup(&mut model, StartupState::DiagnosticWritten).unwrap();
+        model.error =
+            Some("Microphone access was not granted. Nothing was marked complete.".into());
+
+        prepare_startup_retry(&mut model).unwrap();
+
+        assert_eq!(model.reducer.startup(), StartupState::Retrying);
+        assert_eq!(
+            model.error.as_deref(),
+            Some("Microphone access was not granted. Nothing was marked complete.")
+        );
+    }
+
+    #[test]
+    fn startup_retry_clears_an_idle_installation_failure() {
+        let mut model = AppModel::default();
+        transition_startup(&mut model, StartupState::Checking).unwrap();
+        transition_startup(&mut model, StartupState::DiagnosticWritten).unwrap();
+        model.error = Some("stale installation failure".into());
+
+        prepare_startup_retry(&mut model).unwrap();
+
+        assert_eq!(model.reducer.startup(), StartupState::Retrying);
+        assert!(model.error.is_none());
     }
 
     #[test]
