@@ -13,6 +13,7 @@ use crate::meeting::{
     open_private_file, read_private_bytes, require_private_directory, resolve_artifact,
     verify_artifact_ref, verify_record_artifacts, verify_record_static_artifacts, write_meeting,
 };
+use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
 use crate::storage::{
     StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
 };
@@ -57,6 +58,19 @@ pub enum RetentionOutcome {
     Quarantined(String),
 }
 
+/// Result of the application-private, per-meeting audio-release action.
+///
+/// This deliberately reports only storage authority states. It neither changes a
+/// retention policy nor deletes the meeting record, transcript, note, profile,
+/// or another meeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManualAudioDeletionOutcome {
+    DeferredActive,
+    AudioReleased,
+    RecoveredRemoval,
+    AlreadyReleased,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MeetingRetentionResult {
     NotDue,
@@ -78,6 +92,62 @@ pub enum RetentionError {
     Io(#[from] io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum ManualAudioDeletionError {
+    #[error("meeting storage coordination is unavailable")]
+    Coordination(#[from] MeetingCoordinationError),
+    #[error(transparent)]
+    Meeting(#[from] MeetingError),
+    #[error(transparent)]
+    Retention(#[from] RetentionError),
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+/// Releases only the bound audio for one exact, non-active meeting.
+///
+/// The caller supplies the same coordination authority used by capture and
+/// correction operations. This action first claims the target's active-meeting
+/// lease, then holds the storage sequence gate through the staged
+/// deletion/recovery path, so it cannot overlap an active capture or
+/// nonterminal correction/note operation. This is intentionally session-core
+/// only: no command, startup hook, or UI is wired here.
+pub fn delete_meeting_audio_manually(
+    storage: &StorageRoot,
+    coordination: &MeetingStorageCoordination,
+    meeting_id: &str,
+) -> Result<ManualAudioDeletionOutcome, ManualAudioDeletionError> {
+    let _lease = match coordination.acquire(meeting_id) {
+        Ok(lease) => lease,
+        Err(MeetingCoordinationError::AlreadyActive) => {
+            return Ok(ManualAudioDeletionOutcome::DeferredActive);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let _sequence = coordination.lock_sequence()?;
+
+    let directory = meeting_dir(storage, meeting_id)?;
+    let mut meeting = load_meeting(&directory)?;
+    if meeting.retention.state == AudioState::Released {
+        // Re-validate the completed receipt before making the idempotent claim.
+        // A changed receipt must remain a refusal, not be silently rebound.
+        preflight_meeting_retention(&directory, &meeting)?;
+        return Ok(ManualAudioDeletionOutcome::AlreadyReleased);
+    }
+
+    match reconcile_meeting_audio_deletion(&directory, &mut meeting, true)? {
+        MeetingRetentionResult::NotDue => {
+            // A retained meeting cannot reach this path because manual deletion
+            // authorizes release independently of its policy or deadline.
+            Err(RetentionError::UnexplainedAudioLoss.into())
+        }
+        MeetingRetentionResult::AudioReleased => Ok(ManualAudioDeletionOutcome::AudioReleased),
+        MeetingRetentionResult::RecoveredRemoval => {
+            Ok(ManualAudioDeletionOutcome::RecoveredRemoval)
+        }
+    }
 }
 
 pub fn execute_due_retention(
@@ -167,6 +237,21 @@ pub(crate) fn reconcile_meeting_retention(
     now_epoch_seconds: u64,
     execute_due: bool,
 ) -> Result<MeetingRetentionResult, RetentionError> {
+    let due = meeting
+        .retention
+        .next_deletion_at_epoch_seconds
+        .is_some_and(|deadline| deadline <= now_epoch_seconds);
+    reconcile_meeting_audio_deletion(meeting_dir, meeting, execute_due && due)
+}
+
+/// Runs the audited `audio-deletion/1` recovery and staged-removal state
+/// machine. `release_retained_audio` controls only the authority to begin a
+/// new deletion; receipts already on disk are always reconciled first.
+fn reconcile_meeting_audio_deletion(
+    meeting_dir: &Path,
+    meeting: &mut MeetingRecord,
+    release_retained_audio: bool,
+) -> Result<MeetingRetentionResult, RetentionError> {
     preflight_meeting_retention(meeting_dir, meeting)?;
     let receipt_path = meeting_dir.join("deletion/audio-deletion.json");
     let receipt_present = deletion_receipt_present(&receipt_path)?;
@@ -205,11 +290,7 @@ pub(crate) fn reconcile_meeting_retention(
     if meeting.retention.state == AudioState::NeverCreated {
         return Ok(MeetingRetentionResult::NotDue);
     }
-    let due = meeting
-        .retention
-        .next_deletion_at_epoch_seconds
-        .is_some_and(|deadline| deadline <= now_epoch_seconds);
-    if !execute_due || !due {
+    if !release_retained_audio {
         return Ok(MeetingRetentionResult::NotDue);
     }
 
@@ -528,6 +609,7 @@ mod tests {
         AudioRetention, AudioRetentionRule, MeetingArtifacts, MeetingLifecycle, MeetingSchema,
         artifact_ref, retention_policy_sha256,
     };
+    use crate::meeting_coordination::MeetingStorageCoordination;
     use crate::storage::{create_private_dir, durable_create_new};
     use tempfile::TempDir;
 
@@ -683,6 +765,159 @@ mod tests {
         meeting.retention.state = AudioState::Deleting;
         meeting.pending_storage_operation = Some(PendingStorageOperation::AudioDeletionV1);
         write_meeting(directory, meeting).unwrap();
+    }
+
+    fn advance_interrupted_deletion_to_staged(directory: &Path) {
+        fs::rename(
+            directory.join("capture/mic.wav"),
+            directory.join("deletion/mic.wav.staged"),
+        )
+        .unwrap();
+        fs::rename(
+            directory.join("capture/system.wav"),
+            directory.join("deletion/system.wav.staged"),
+        )
+        .unwrap();
+        sync_directory(&directory.join("capture")).unwrap();
+        sync_directory(&directory.join("deletion")).unwrap();
+        let receipt_path = directory.join("deletion/audio-deletion.json");
+        let mut receipt: AudioDeletionReceipt =
+            serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+        receipt.state = DeletionState::Staged;
+        durable_replace(&receipt_path, &serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    }
+
+    fn advance_interrupted_deletion_to_removed(directory: &Path) {
+        advance_interrupted_deletion_to_staged(directory);
+        fs::remove_file(directory.join("deletion/mic.wav.staged")).unwrap();
+        fs::remove_file(directory.join("deletion/system.wav.staged")).unwrap();
+        sync_directory(&directory.join("deletion")).unwrap();
+        let receipt_path = directory.join("deletion/audio-deletion.json");
+        let mut receipt: AudioDeletionReceipt =
+            serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+        receipt.state = DeletionState::Removed;
+        durable_replace(&receipt_path, &serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn manual_deletion_releases_an_until_manual_meeting_and_preserves_other_private_content() {
+        let (_temp, storage) = storage();
+        let (target, _) = fixture(&storage, "manual-target", None);
+        let (other, _) = fixture(&storage, "manual-other", Some(1_000));
+        create_private_dir(&target.join("transcript")).unwrap();
+        create_private_dir(&target.join("notes")).unwrap();
+        create_private_dir(&storage.path().join("profile")).unwrap();
+        durable_create_new(&target.join("transcript/retained.json"), b"transcript").unwrap();
+        durable_create_new(&target.join("notes/retained.md"), b"note").unwrap();
+        durable_create_new(&storage.path().join("profile/profile.json"), b"profile").unwrap();
+        let coordination = MeetingStorageCoordination::default();
+
+        assert_eq!(
+            delete_meeting_audio_manually(&storage, &coordination, "manual-target").unwrap(),
+            ManualAudioDeletionOutcome::AudioReleased
+        );
+
+        assert!(!target.join("capture/mic.wav").exists());
+        assert!(!target.join("capture/system.wav").exists());
+        assert!(target.join("transcript/retained.json").exists());
+        assert!(target.join("notes/retained.md").exists());
+        assert!(storage.path().join("profile/profile.json").exists());
+        assert!(other.join("capture/mic.wav").exists());
+        assert!(other.join("capture/system.wav").exists());
+        assert_eq!(
+            load_meeting(&target).unwrap().retention.state,
+            AudioState::Released
+        );
+    }
+
+    #[test]
+    fn manual_deletion_ignores_a_not_yet_due_deadline_and_is_idempotent() {
+        let (_temp, storage) = storage();
+        let (directory, _) = fixture(&storage, "manual-before-deadline", Some(u64::MAX));
+        let coordination = MeetingStorageCoordination::default();
+
+        assert_eq!(
+            delete_meeting_audio_manually(&storage, &coordination, "manual-before-deadline")
+                .unwrap(),
+            ManualAudioDeletionOutcome::AudioReleased
+        );
+        let committed = fs::read(directory.join("meeting.json")).unwrap();
+        assert_eq!(
+            delete_meeting_audio_manually(&storage, &coordination, "manual-before-deadline")
+                .unwrap(),
+            ManualAudioDeletionOutcome::AlreadyReleased
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), committed);
+    }
+
+    #[test]
+    fn manual_deletion_defers_an_active_meeting_without_opening_its_directory() {
+        let (_temp, storage) = storage();
+        let (directory, _) = fixture(&storage, "manual-active", None);
+        durable_replace(&directory.join("meeting.json"), b"write-in-progress").unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+        let coordination = MeetingStorageCoordination::default();
+        let _lease = coordination.acquire("manual-active").unwrap();
+
+        assert_eq!(
+            delete_meeting_audio_manually(&storage, &coordination, "manual-active").unwrap(),
+            ManualAudioDeletionOutcome::DeferredActive
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/system.wav").exists());
+    }
+
+    #[test]
+    fn manual_deletion_recovers_each_interrupted_receipt_phase() {
+        let (_temp, storage) = storage();
+        let coordination = MeetingStorageCoordination::default();
+
+        for (id, advance) in [
+            ("manual-deleting", None),
+            (
+                "manual-staged",
+                Some(advance_interrupted_deletion_to_staged as fn(&Path)),
+            ),
+            (
+                "manual-removed",
+                Some(advance_interrupted_deletion_to_removed as fn(&Path)),
+            ),
+        ] {
+            let (directory, mut meeting) = fixture(&storage, id, None);
+            begin_audio_deletion(&directory, &mut meeting);
+            if let Some(advance) = advance {
+                advance(&directory);
+            }
+
+            assert_eq!(
+                delete_meeting_audio_manually(&storage, &coordination, id).unwrap(),
+                ManualAudioDeletionOutcome::RecoveredRemoval
+            );
+            assert_eq!(
+                load_meeting(&directory).unwrap().retention.state,
+                AudioState::Released
+            );
+            assert!(!directory.join("capture/mic.wav").exists());
+            assert!(!directory.join("capture/system.wav").exists());
+            assert!(!directory.join("deletion/mic.wav.staged").exists());
+            assert!(!directory.join("deletion/system.wav.staged").exists());
+        }
+    }
+
+    #[test]
+    fn manual_deletion_refuses_unbound_or_missing_audio_without_rewrite() {
+        let (_temp, storage) = storage();
+        let (directory, _) = partial_fixture(&storage, "manual-unbound");
+        durable_create_new(&directory.join("capture/mic.wav"), &[7_u8; 44]).unwrap();
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+        let coordination = MeetingStorageCoordination::default();
+
+        assert!(delete_meeting_audio_manually(&storage, &coordination, "manual-unbound").is_err());
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/.mic.wav.partial").exists());
+        assert!(!directory.join("deletion/audio-deletion.json").exists());
     }
 
     #[test]
