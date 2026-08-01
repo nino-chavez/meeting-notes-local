@@ -84,13 +84,12 @@ impl ProductOperationFacade {
             &args.source_transcript_sha256,
             ProductOperationKind::RestoreWithheldTurn,
             UiOperationState::Correcting,
-            |source| {
-                matches!(
-                    source.lifecycle,
-                    MeetingLifecycle::TranscriptReady
-                        | MeetingLifecycle::SummaryFailed
-                        | MeetingLifecycle::Ready
-                )
+            |source| match source.lifecycle {
+                MeetingLifecycle::Ready => source.has_current_note,
+                MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed => {
+                    !source.has_current_note
+                }
+                _ => false,
             },
             || self.coordinator.accept_restore(&args),
         )
@@ -370,6 +369,36 @@ mod tests {
             Err(ProductOperationFacadeError::OperationUnavailable)
         );
         assert_eq!(*coordinator.restore_calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn restore_refuses_lifecycle_and_note_pointer_mismatches() {
+        let fixture = fixture();
+        let args: RestoreWithheldTurnUiArgs = parse(&fixture, &["restoration", "ui_arguments"]);
+        let expected: UiOperationAccepted = parse(&fixture, &["restoration", "ui_response"]);
+
+        for (lifecycle, has_current_note) in [
+            (MeetingLifecycle::Ready, false),
+            (MeetingLifecycle::TranscriptReady, true),
+            (MeetingLifecycle::SummaryFailed, true),
+        ] {
+            let coordinator = Arc::new(FakeCoordinator::accepting(
+                source_for(
+                    args.meeting_id,
+                    args.source_transcript_sha256.clone(),
+                    lifecycle,
+                    has_current_note,
+                ),
+                expected.operation_id,
+                Uuid::nil(),
+            ));
+            let facade = ProductOperationFacade::new(coordinator.clone());
+            assert_eq!(
+                facade.restore_withheld_turn(args.clone()),
+                Err(ProductOperationFacadeError::SourceChanged)
+            );
+            assert_eq!(*coordinator.restore_calls.lock().unwrap(), 0);
+        }
     }
 
     #[test]
