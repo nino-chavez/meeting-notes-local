@@ -6,7 +6,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 #[cfg(target_os = "macos")]
@@ -19,7 +19,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
-use crate::storage::{StorageRoot, sync_directory};
+use crate::storage::StorageRoot;
 
 const MAX_PROFILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RECEIPT_BYTES: u64 = 16 * 1024;
@@ -545,14 +545,11 @@ fn reset_with_platform(
                 reset_zero: reset,
                 enrollment_zero: enrollment,
             };
-            publish(storage, &deleting)?;
+            let published = publish(storage, &deleting)?;
             interrupt(request.fail_after, InjectedFailurePhase::Deleting)?;
             finish_reset(
                 storage,
-                Authority {
-                    payload: deleting,
-                    digest: payload_digest(&current.payload.to_value())?,
-                },
+                published,
                 request.completed_at_epoch_seconds,
                 request.fail_after,
                 platform,
@@ -597,6 +594,73 @@ struct Authority {
     digest: String,
 }
 
+/// The destructive path never truncates a pathname reopened after inspection.
+/// These descriptors are pinned before phase interpretation and survive the
+/// swap, so `reset` remains the original profile inode after the names trade.
+struct BoundTree {
+    _root: File,
+    profile_dir: File,
+    lifecycle_dir: File,
+    live: File,
+    reset: File,
+    enrollment: File,
+    receipt_a: File,
+    receipt_b: File,
+}
+
+fn open_dir(path: &Path) -> Result<File, ProfileLifecycleError> {
+    safe_dir(path)?;
+    let dir = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    if !same_path_fd(path, &dir)? {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(dir)
+}
+
+fn bind_tree(storage: &StorageRoot) -> Result<BoundTree, ProfileLifecycleError> {
+    let root_path = storage.path();
+    let profile_path = root_path.join("profile");
+    let lifecycle_path = profile_path.join("lifecycle");
+    let root = open_dir(root_path)?;
+    let profile_dir = open_dir(&profile_path)?;
+    let lifecycle_dir = open_dir(&lifecycle_path)?;
+    let live_path = profile_path.join("voiceprint.json");
+    let reset_path = lifecycle_path.join("reset.tombstone");
+    let enrollment_path = lifecycle_path.join("enrollment.staged");
+    let receipt_a_path = lifecycle_path.join(RECEIPT_A);
+    let receipt_b_path = lifecycle_path.join(RECEIPT_B);
+    let live = open_rw(&live_path)?;
+    let reset = open_rw(&reset_path)?;
+    let enrollment = open_rw(&enrollment_path)?;
+    let receipt_a = open_rw(&receipt_a_path)?;
+    let receipt_b = open_rw(&receipt_b_path)?;
+    for (path, file, profile) in [
+        (&live_path, &live, true),
+        (&reset_path, &reset, false),
+        (&enrollment_path, &enrollment, false),
+        (&receipt_a_path, &receipt_a, false),
+        (&receipt_b_path, &receipt_b, false),
+    ] {
+        safe_file(path, profile)?;
+        if !same_path_fd(path, file)? {
+            return Err(ProfileLifecycleError::Quarantined);
+        }
+    }
+    Ok(BoundTree {
+        _root: root,
+        profile_dir,
+        lifecycle_dir,
+        live,
+        reset,
+        enrollment,
+        receipt_a,
+        receipt_b,
+    })
+}
+
 fn initialize_with_platform(
     storage: &StorageRoot,
     platform: &dyn SwapPlatform,
@@ -608,7 +672,7 @@ fn initialize_with_platform(
     let live = profile.join("voiceprint.json");
     if !live.exists() {
         create_zero(&live)?;
-        sync_directory(&profile)?;
+        sync_directory_full(&profile)?;
     }
     let live_slot = inspect_slot(&live, true)?;
     let lifecycle = profile.join("lifecycle");
@@ -618,17 +682,10 @@ fn initialize_with_platform(
         return Ok(());
     }
     let initializing = profile.join(".lifecycle.initializing");
-    if initializing.exists() {
-        validate_initializing(&initializing)?;
-    } else {
-        fs::create_dir(&initializing)?;
-        fs::set_permissions(&initializing, fs::Permissions::from_mode(0o700))?;
-        create_zero(&initializing.join(RECEIPT_A))?;
-        create_zero(&initializing.join(RECEIPT_B))?;
-        create_zero(&initializing.join("reset.tombstone"))?;
-        create_zero(&initializing.join("enrollment.staged"))?;
+    if !initializing.exists() {
+        fs::DirBuilder::new().mode(0o700).create(&initializing)?;
     }
-    safe_dir(&initializing)?;
+    prepare_initializing(&initializing)?;
     let reset = inspect_slot(&initializing.join("reset.tombstone"), false)?;
     let enrollment = inspect_slot(&initializing.join("enrollment.staged"), false)?;
     let baseline = Payload::Baseline {
@@ -644,20 +701,42 @@ fn initialize_with_platform(
     if fs::metadata(initializing.join(RECEIPT_B))?.len() != 0 {
         return Err(ProfileLifecycleError::Quarantined);
     }
-    sync_directory(&initializing)?;
-    platform.publish_lifecycle(&initializing, &lifecycle)?;
-    sync_directory(&profile)?;
+    sync_directory_full(&initializing)?;
+    let profile_fd = open_dir(&profile)?;
+    platform.publish_lifecycle(
+        &profile_fd,
+        ".lifecycle.initializing",
+        "lifecycle",
+        &initializing,
+        &lifecycle,
+    )?;
+    sync_directory_full(&profile)?;
     Ok(())
 }
 
-fn validate_initializing(dir: &Path) -> Result<(), ProfileLifecycleError> {
+fn prepare_initializing(dir: &Path) -> Result<(), ProfileLifecycleError> {
     safe_dir(dir)?;
-    for name in [RECEIPT_A, RECEIPT_B, "reset.tombstone", "enrollment.staged"] {
-        let p = dir.join(name);
-        if !p.exists() {
+    let allowed = [RECEIPT_A, RECEIPT_B, "reset.tombstone", "enrollment.staged"];
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or(ProfileLifecycleError::Quarantined)?;
+        if !allowed.contains(&name) || !seen.insert(name.to_owned()) {
             return Err(ProfileLifecycleError::Quarantined);
         }
+    }
+    for name in allowed {
+        let p = dir.join(name);
+        if !p.exists() {
+            create_zero(&p)?;
+        }
         safe_file(&p, false)?;
+        if (name == RECEIPT_B || name == "reset.tombstone" || name == "enrollment.staged")
+            && fs::metadata(&p)?.len() != 0
+        {
+            return Err(ProfileLifecycleError::Quarantined);
+        }
     }
     Ok(())
 }
@@ -668,7 +747,7 @@ fn create_zero(path: &Path) -> Result<(), ProfileLifecycleError> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)?;
-    file.sync_all()?;
+    full_sync(&file)?;
     Ok(())
 }
 
@@ -688,15 +767,25 @@ fn authority(storage: &StorageRoot) -> Result<Authority, ProfileLifecycleError> 
         return Err(ProfileLifecycleError::Quarantined);
     }
     valid.sort_by_key(|(p, _)| p.sequence());
-    if valid.len() == 2 && valid[0].0.sequence() == valid[1].0.sequence() {
-        return Err(ProfileLifecycleError::Quarantined);
+    if valid.len() == 2 {
+        let (older, older_digest) = &valid[0];
+        let (newer, _) = &valid[1];
+        if newer.sequence()
+            != older
+                .sequence()
+                .checked_add(1)
+                .ok_or(ProfileLifecycleError::Quarantined)?
+            || predecessor_digest(newer) != Some(older_digest.as_str())
+        {
+            return Err(ProfileLifecycleError::Quarantined);
+        }
     }
     let (payload, digest) = valid.pop().expect("nonempty");
     verify_authority_slots(storage, &payload)?;
     Ok(Authority { payload, digest })
 }
 
-fn publish(storage: &StorageRoot, payload: &Payload) -> Result<(), ProfileLifecycleError> {
+fn publish(storage: &StorageRoot, payload: &Payload) -> Result<Authority, ProfileLifecycleError> {
     let lifecycle = storage.path().join("profile/lifecycle");
     let a_path = lifecycle.join(RECEIPT_A);
     let b_path = lifecycle.join(RECEIPT_B);
@@ -710,10 +799,41 @@ fn publish(storage: &StorageRoot, payload: &Payload) -> Result<(), ProfileLifecy
     };
     write_slot(if choose_a { &a_path } else { &b_path }, payload)?;
     let current = authority(storage)?;
-    if current.payload.sequence() != payload.sequence() {
+    if current.payload.sequence() != payload.sequence()
+        || current.digest != payload_digest(&payload.to_value())?
+    {
         return Err(ProfileLifecycleError::Quarantined);
     }
-    Ok(())
+    Ok(current)
+}
+
+fn publish_bound(
+    storage: &StorageRoot,
+    bound: &mut BoundTree,
+    payload: &Payload,
+) -> Result<Authority, ProfileLifecycleError> {
+    let a = read_slot_open(&mut bound.receipt_a)?;
+    let b = read_slot_open(&mut bound.receipt_b)?;
+    let write_a = match (&a, &b) {
+        (SlotRead::Valid(x, _), SlotRead::Valid(y, _)) => x.sequence() < y.sequence(),
+        (SlotRead::Valid(_, _), _) => false,
+        (_, SlotRead::Valid(_, _)) => true,
+        _ => return Err(ProfileLifecycleError::Quarantined),
+    };
+    if write_a {
+        write_slot_open(&mut bound.receipt_a, payload)?;
+    } else {
+        write_slot_open(&mut bound.receipt_b, payload)?;
+    }
+    // The retained descriptors still have to name their immutable slots after
+    // publication; this catches an entry exchange before any data transition.
+    let lifecycle = storage.path().join("profile/lifecycle");
+    if !same_path_fd(&lifecycle.join(RECEIPT_A), &bound.receipt_a)?
+        || !same_path_fd(&lifecycle.join(RECEIPT_B), &bound.receipt_b)?
+    {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    authority(storage)
 }
 
 fn write_slot(path: &Path, payload: &Payload) -> Result<(), ProfileLifecycleError> {
@@ -722,11 +842,26 @@ fn write_slot(path: &Path, payload: &Payload) -> Result<(), ProfileLifecycleErro
     f.set_len(0)?;
     f.seek(SeekFrom::Start(0))?;
     f.write_all(&bytes)?;
-    f.sync_all()?;
+    full_sync(&f)?;
     f.seek(SeekFrom::Start(0))?;
     let mut back = Vec::new();
     f.read_to_end(&mut back)?;
     if back != bytes || !same_path_fd(path, &f)? {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(())
+}
+
+fn write_slot_open(file: &mut File, payload: &Payload) -> Result<(), ProfileLifecycleError> {
+    let bytes = receipt_bytes(payload)?;
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&bytes)?;
+    full_sync(file)?;
+    file.seek(SeekFrom::Start(0))?;
+    let mut back = Vec::new();
+    file.read_to_end(&mut back)?;
+    if back != bytes {
         return Err(ProfileLifecycleError::Quarantined);
     }
     Ok(())
@@ -753,6 +888,23 @@ fn read_slot(path: &Path) -> Result<SlotRead, ProfileLifecycleError> {
     }
 }
 
+fn read_slot_open(file: &mut File) -> Result<SlotRead, ProfileLifecycleError> {
+    let len = file.metadata()?.len();
+    if len == 0 {
+        return Ok(SlotRead::Virgin);
+    }
+    if len > MAX_RECEIPT_BYTES {
+        return Ok(SlotRead::Invalid);
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.read_to_end(&mut bytes)?;
+    match decode_receipt(&bytes) {
+        Ok((payload, digest)) => Ok(SlotRead::Valid(Box::new(payload), digest)),
+        Err(_) => Ok(SlotRead::Invalid),
+    }
+}
+
 fn finish_reset(
     storage: &StorageRoot,
     current: Authority,
@@ -762,7 +914,7 @@ fn finish_reset(
 ) -> Result<(), ProfileLifecycleError> {
     let (
         sequence,
-        predecessor,
+        _previous_predecessor,
         operation_id,
         requested_at,
         prior_count,
@@ -820,19 +972,35 @@ fn finish_reset(
     };
     let profile_path = storage.path().join("profile/voiceprint.json");
     let reset_path = storage.path().join("profile/lifecycle/reset.tombstone");
-    let enrollment_path = storage.path().join("profile/lifecycle/enrollment.staged");
-    exact_slot(&enrollment_path, &enrollment_zero)?;
-    let live = inspect_slot(&profile_path, true)?;
-    let reset = inspect_slot(&reset_path, false)?;
+    let mut bound = bind_tree(storage)?;
+    let enrollment = inspect_open_slot(&mut bound.enrollment, false)?;
+    if enrollment != enrollment_zero {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let live = inspect_open_slot(&mut bound.live, true)?;
+    let reset = inspect_open_slot(&mut bound.reset, false)?;
     if phase == "deleting" && live == profile && reset == reset_zero {
         platform.check(storage.path())?;
-        platform.swap(&profile_path, &reset_path)?;
-        if inspect_slot(&profile_path, true)? != reset_zero
-            || inspect_slot(&reset_path, true)? != profile
+        platform.swap(
+            &bound.profile_dir,
+            "voiceprint.json",
+            &bound.lifecycle_dir,
+            "reset.tombstone",
+            &profile_path,
+            &reset_path,
+        )?;
+        // The descriptors retain their inodes while the names exchange:
+        // `live` is the original profile P now named by reset.tombstone, and
+        // `reset` is the original zero Z now named by voiceprint.json.
+        if !same_path_fd(&profile_path, &bound.reset)?
+            || !same_path_fd(&reset_path, &bound.live)?
+            || inspect_open_slot(&mut bound.live, true)? != profile
+            || inspect_open_slot(&mut bound.reset, false)? != reset_zero
         {
             return Err(ProfileLifecycleError::Quarantined);
         }
-        sync_directory(profile_path.parent().expect("parent"))?;
+        full_sync(&bound.profile_dir)?;
+        full_sync(&bound.lifecycle_dir)?;
         interrupt(failure, InjectedFailurePhase::Swap)?;
         let staged = Payload::ResetStaged {
             sequence: sequence
@@ -847,36 +1015,64 @@ fn finish_reset(
             reset_zero: reset_zero.clone(),
             enrollment_zero: enrollment_zero.clone(),
         };
-        publish(storage, &staged)?;
+        let staged_authority = publish_bound(storage, &mut bound, &staged)?;
         interrupt(failure, InjectedFailurePhase::Staged)?;
-        return finish_reset(
-            storage,
-            Authority {
-                digest: payload_digest(&staged.to_value())?,
-                payload: staged,
+        // Continue with the retained P descriptor. Reopening reset.tombstone
+        // here would recreate the pathname race this design exists to avoid.
+        if !same_path_fd(&profile_path, &bound.reset)?
+            || !same_path_fd(&reset_path, &bound.live)?
+            || inspect_open_slot(&mut bound.live, true)? != profile
+            || inspect_open_slot(&mut bound.reset, false)? != reset_zero
+        {
+            return Err(ProfileLifecycleError::Quarantined);
+        }
+        bound.live.set_len(0)?;
+        full_sync(&bound.live)?;
+        interrupt(failure, InjectedFailurePhase::Truncate)?;
+        let live_zero = inspect_open_slot(&mut bound.reset, false)?;
+        let reset_after = inspect_open_slot(&mut bound.live, false)?;
+        if live_zero != reset_zero || !is_zero_of(&reset_after, &profile) {
+            return Err(ProfileLifecycleError::Quarantined);
+        }
+        let removed = Payload::ResetRemoved {
+            sequence: staged_authority
+                .payload
+                .sequence()
+                .checked_add(1)
+                .ok_or(ProfileLifecycleError::Quarantined)?,
+            predecessor: staged_authority.digest,
+            completed_count: prior_count
+                .checked_add(1)
+                .ok_or(ProfileLifecycleError::Quarantined)?,
+            last_reset: LastReset {
+                operation_id,
+                completed_at,
             },
-            completed_at,
-            failure,
-            platform,
-        );
+            live_zero,
+            reset_zero: reset_after,
+            enrollment_zero,
+        };
+        let _ = publish_bound(storage, &mut bound, &removed)?;
+        return Ok(());
     }
-    let post_swap = live == reset_zero && (reset == profile || is_zero(&reset));
+    let post_swap = live == reset_zero && (reset == profile || is_zero_of(&reset, &profile));
     if !post_swap {
         return Err(ProfileLifecycleError::Quarantined);
     }
     if reset == profile {
-        let f = open_rw(&reset_path)?;
-        if !same_path_fd(&reset_path, &f)? {
+        if !same_path_fd(&reset_path, &bound.reset)? {
             return Err(ProfileLifecycleError::Quarantined);
         }
-        f.set_len(0)?;
-        f.sync_all()?;
+        bound.reset.set_len(0)?;
+        full_sync(&bound.reset)?;
         interrupt(failure, InjectedFailurePhase::Truncate)?;
     }
-    let live_zero = inspect_slot(&profile_path, false)?;
-    let reset_after = inspect_slot(&reset_path, false)?;
-    if !is_zero(&live_zero) || !is_zero(&reset_after) || live_zero.identity == reset_after.identity
-    {
+    if !same_path_fd(&profile_path, &bound.live)? || !same_path_fd(&reset_path, &bound.reset)? {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let live_zero = inspect_open_slot(&mut bound.live, false)?;
+    let reset_after = inspect_open_slot(&mut bound.reset, false)?;
+    if live_zero != reset_zero || !is_zero_of(&reset_after, &profile) {
         return Err(ProfileLifecycleError::Quarantined);
     }
     let count = prior_count
@@ -886,7 +1082,7 @@ fn finish_reset(
         sequence: sequence
             .checked_add(1)
             .ok_or(ProfileLifecycleError::Quarantined)?,
-        predecessor,
+        predecessor: current.digest,
         completed_count: count,
         last_reset: LastReset {
             operation_id,
@@ -896,7 +1092,20 @@ fn finish_reset(
         reset_zero: reset_after,
         enrollment_zero,
     };
-    publish(storage, &removed)
+    let _ = publish_bound(storage, &mut bound, &removed)?;
+    Ok(())
+}
+
+fn predecessor_digest(payload: &Payload) -> Option<&str> {
+    match payload {
+        Payload::Baseline { .. } => None,
+        Payload::ResetDeleting { predecessor, .. }
+        | Payload::ResetStaged { predecessor, .. }
+        | Payload::ResetRemoved { predecessor, .. }
+        | Payload::EnrollmentWriting { predecessor, .. }
+        | Payload::EnrollmentReady { predecessor, .. }
+        | Payload::EnrollmentActive { predecessor, .. } => Some(predecessor),
+    }
 }
 
 fn slots_for_terminal(payload: &Payload) -> Result<(Slot, Slot, Slot), ProfileLifecycleError> {
@@ -932,6 +1141,10 @@ fn slots_for_terminal(payload: &Payload) -> Result<(Slot, Slot, Slot), ProfileLi
 }
 fn is_zero(slot: &Slot) -> bool {
     slot.size == 0 && slot.sha256 == EMPTY_SHA256
+}
+
+fn is_zero_of(slot: &Slot, original: &Slot) -> bool {
+    slot.identity == original.identity && is_zero(slot)
 }
 fn interrupt(
     actual: Option<InjectedFailurePhase>,
@@ -1070,6 +1283,22 @@ fn inspect_slot(path: &Path, bound_profile: bool) -> Result<Slot, ProfileLifecyc
         sha256: format!("{:x}", h.finalize()),
     })
 }
+
+fn inspect_open_slot(file: &mut File, bound_profile: bool) -> Result<Slot, ProfileLifecycleError> {
+    let metadata = file.metadata()?;
+    let size = metadata.len();
+    if bound_profile && size > MAX_PROFILE_BYTES {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut h = Sha256::new();
+    io::copy(file, &mut h)?;
+    Ok(Slot {
+        identity: identity(&metadata),
+        size,
+        sha256: format!("{:x}", h.finalize()),
+    })
+}
 #[cfg(target_os = "macos")]
 fn identity(metadata: &fs::Metadata) -> Identity {
     Identity {
@@ -1106,6 +1335,25 @@ fn open_rw(path: &Path) -> io::Result<File> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
 }
+
+#[cfg(target_os = "macos")]
+fn full_sync(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_FULLFSYNC) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn full_sync(file: &File) -> io::Result<()> {
+    file.sync_all()
+}
+
+fn sync_directory_full(path: &Path) -> io::Result<()> {
+    full_sync(&File::open(path)?)
+}
 fn same_path_fd(path: &Path, file: &File) -> Result<bool, ProfileLifecycleError> {
     let a = fs::symlink_metadata(path)?;
     let b = file.metadata()?;
@@ -1116,11 +1364,18 @@ fn safe_dir(path: &Path) -> Result<(), ProfileLifecycleError> {
     if !m.is_dir()
         || m.file_type().is_symlink()
         || m.uid() != unsafe { libc::geteuid() }
-        || (m.mode() & 0o777) != 0o700
+        || (m.mode() & 0o7777) != 0o700
     {
         return Err(ProfileLifecycleError::Quarantined);
     }
-    darwin_safe_directory(path)?;
+    let dir = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    if !same_path_fd(path, &dir)? {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    darwin_safe_fd(&dir)?;
     Ok(())
 }
 fn safe_file(path: &Path, profile: bool) -> Result<(), ProfileLifecycleError> {
@@ -1128,7 +1383,7 @@ fn safe_file(path: &Path, profile: bool) -> Result<(), ProfileLifecycleError> {
     if !m.is_file()
         || m.file_type().is_symlink()
         || m.uid() != unsafe { libc::geteuid() }
-        || (m.mode() & 0o777) != 0o600
+        || (m.mode() & 0o7777) != 0o600
         || m.nlink() != 1
         || (profile && m.len() > MAX_PROFILE_BYTES)
     {
@@ -1138,34 +1393,21 @@ fn safe_file(path: &Path, profile: bool) -> Result<(), ProfileLifecycleError> {
     if m.st_flags() != 0 {
         return Err(ProfileLifecycleError::Quarantined);
     }
-    darwin_safe_file(path)?;
+    let file = open_rw(path)?;
+    if !same_path_fd(path, &file)? {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    darwin_safe_fd(&file)?;
     Ok(())
 }
 
 #[cfg(any(not(target_os = "macos"), test))]
-fn darwin_safe_directory(_: &Path) -> Result<(), ProfileLifecycleError> {
-    Ok(())
-}
-#[cfg(any(not(target_os = "macos"), test))]
-fn darwin_safe_file(_: &Path) -> Result<(), ProfileLifecycleError> {
+fn darwin_safe_fd(_: &File) -> Result<(), ProfileLifecycleError> {
     Ok(())
 }
 #[cfg(all(target_os = "macos", not(test)))]
-fn darwin_safe_directory(path: &Path) -> Result<(), ProfileLifecycleError> {
-    darwin_no_xattrs_or_acl(path, true)
-}
-#[cfg(all(target_os = "macos", not(test)))]
-fn darwin_safe_file(path: &Path) -> Result<(), ProfileLifecycleError> {
-    darwin_no_xattrs_or_acl(path, false)
-}
-#[cfg(all(target_os = "macos", not(test)))]
-fn darwin_no_xattrs_or_acl(path: &Path, directory: bool) -> Result<(), ProfileLifecycleError> {
+fn darwin_safe_fd(f: &File) -> Result<(), ProfileLifecycleError> {
     use std::os::fd::AsRawFd;
-    let f = if directory {
-        File::open(path)?
-    } else {
-        open_rw(path)?
-    };
     let fd = f.as_raw_fd();
     let n = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0, libc::XATTR_SHOWCOMPRESSION) };
     if n != 0 {
@@ -1196,9 +1438,20 @@ fn darwin_no_xattrs_or_acl(path: &Path, directory: bool) -> Result<(), ProfileLi
 
 trait SwapPlatform {
     fn check(&self, app_root: &Path) -> Result<(), ProfileLifecycleError>;
-    fn swap(&self, left: &Path, right: &Path) -> Result<(), ProfileLifecycleError>;
+    fn swap(
+        &self,
+        left_dir: &File,
+        left_name: &str,
+        right_dir: &File,
+        right_name: &str,
+        left_path: &Path,
+        right_path: &Path,
+    ) -> Result<(), ProfileLifecycleError>;
     fn publish_lifecycle(
         &self,
+        parent: &File,
+        initializing_name: &str,
+        lifecycle_name: &str,
         initializing: &Path,
         lifecycle: &Path,
     ) -> Result<(), ProfileLifecycleError>;
@@ -1209,10 +1462,25 @@ impl SwapPlatform for SystemPlatform {
     fn check(&self, _: &Path) -> Result<(), ProfileLifecycleError> {
         Err(ProfileLifecycleError::SwapUnsupported)
     }
-    fn swap(&self, _: &Path, _: &Path) -> Result<(), ProfileLifecycleError> {
+    fn swap(
+        &self,
+        _: &File,
+        _: &str,
+        _: &File,
+        _: &str,
+        _: &Path,
+        _: &Path,
+    ) -> Result<(), ProfileLifecycleError> {
         Err(ProfileLifecycleError::SwapUnsupported)
     }
-    fn publish_lifecycle(&self, _: &Path, _: &Path) -> Result<(), ProfileLifecycleError> {
+    fn publish_lifecycle(
+        &self,
+        _: &File,
+        _: &str,
+        _: &str,
+        _: &Path,
+        _: &Path,
+    ) -> Result<(), ProfileLifecycleError> {
         Err(ProfileLifecycleError::SwapUnsupported)
     }
 }
@@ -1221,33 +1489,60 @@ impl SwapPlatform for SystemPlatform {
     fn check(&self, app_root: &Path) -> Result<(), ProfileLifecycleError> {
         macos_swap_capable(app_root)
     }
-    fn swap(&self, left: &Path, right: &Path) -> Result<(), ProfileLifecycleError> {
-        renameatx(left, right, 0x0000_0002 | 0x0000_0010)
+    fn swap(
+        &self,
+        left_dir: &File,
+        left_name: &str,
+        right_dir: &File,
+        right_name: &str,
+        _: &Path,
+        _: &Path,
+    ) -> Result<(), ProfileLifecycleError> {
+        renameatx_at(
+            left_dir,
+            left_name,
+            right_dir,
+            right_name,
+            0x0000_0002 | 0x0000_0010,
+        )
     }
     fn publish_lifecycle(
         &self,
-        initializing: &Path,
-        lifecycle: &Path,
+        parent: &File,
+        initializing_name: &str,
+        lifecycle_name: &str,
+        _: &Path,
+        _: &Path,
     ) -> Result<(), ProfileLifecycleError> {
-        renameatx(initializing, lifecycle, 0x0000_0004 | 0x0000_0010)
+        renameatx_at(
+            parent,
+            initializing_name,
+            parent,
+            lifecycle_name,
+            0x0000_0004 | 0x0000_0010,
+        )
     }
 }
 #[cfg(target_os = "macos")]
-fn renameatx(left: &Path, right: &Path, flags: u32) -> Result<(), ProfileLifecycleError> {
+fn renameatx_at(
+    left_dir: &File,
+    left_name: &str,
+    right_dir: &File,
+    right_name: &str,
+    flags: u32,
+) -> Result<(), ProfileLifecycleError> {
     use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
+    use std::os::fd::AsRawFd;
     unsafe extern "C" {
         fn renameatx_np(fromfd: i32, from: *const i8, tofd: i32, to: *const i8, flags: u32) -> i32;
     }
-    let l = CString::new(left.as_os_str().as_bytes())
-        .map_err(|_| ProfileLifecycleError::Quarantined)?;
-    let r = CString::new(right.as_os_str().as_bytes())
-        .map_err(|_| ProfileLifecycleError::Quarantined)?;
+    let l = CString::new(left_name).map_err(|_| ProfileLifecycleError::Quarantined)?;
+    let r = CString::new(right_name).map_err(|_| ProfileLifecycleError::Quarantined)?;
     if unsafe {
         renameatx_np(
-            libc::AT_FDCWD,
+            left_dir.as_raw_fd(),
             l.as_ptr(),
-            libc::AT_FDCWD,
+            right_dir.as_raw_fd(),
             r.as_ptr(),
             flags,
         )
@@ -1689,20 +1984,36 @@ fn valid_sha(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::storage::create_private_dir;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
     struct FakePlatform;
     impl SwapPlatform for FakePlatform {
         fn check(&self, _: &Path) -> Result<(), ProfileLifecycleError> {
             Ok(())
         }
-        fn swap(&self, l: &Path, r: &Path) -> Result<(), ProfileLifecycleError> {
+        fn swap(
+            &self,
+            _: &File,
+            _: &str,
+            _: &File,
+            _: &str,
+            l: &Path,
+            r: &Path,
+        ) -> Result<(), ProfileLifecycleError> {
             let t = l.with_extension("swap-test");
             fs::rename(l, &t)?;
             fs::rename(r, l)?;
             fs::rename(t, r)?;
             Ok(())
         }
-        fn publish_lifecycle(&self, i: &Path, l: &Path) -> Result<(), ProfileLifecycleError> {
+        fn publish_lifecycle(
+            &self,
+            _: &File,
+            _: &str,
+            _: &str,
+            i: &Path,
+            l: &Path,
+        ) -> Result<(), ProfileLifecycleError> {
             fs::rename(i, l)?;
             Ok(())
         }
@@ -1844,13 +2155,13 @@ mod tests {
         ));
     }
     #[test]
-    fn sequence_overflow_and_enrollment_authority_refuse_reset() {
+    fn enrollment_authority_refuses_reset() {
         let (_t, s) = storage();
         initialize_with_platform(&s, &FakePlatform).unwrap();
         let a = authority(&s).unwrap();
         let (live, reset, enroll) = slots_for_terminal(&a.payload).unwrap();
         let p = Payload::EnrollmentWriting {
-            sequence: u64::MAX,
+            sequence: 1,
             predecessor: a.digest,
             operation_id: "123e4567-e89b-12d3-a456-426614174000".into(),
             requested_at: 1,
