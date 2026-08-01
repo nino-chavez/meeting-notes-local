@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use icu_normalizer::ComposingNormalizer;
@@ -16,8 +17,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
 use crate::meeting::{
-    AudioState, MAX_MEETING_RECORD_BYTES, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref,
-    load_meeting, read_private_bytes, require_private_directory, verify_artifact_ref,
+    MAX_MEETING_RECORD_BYTES, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref, load_meeting,
+    open_private_file, require_private_directory, verify_artifact_ref,
     verify_record_static_artifacts,
 };
 use crate::storage::StorageRoot;
@@ -60,7 +61,7 @@ pub enum LibraryReadError {
     ArtifactUnavailable,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct LibraryProjection {
     snapshot_id: Uuid,
     rows: Vec<LibraryRow>,
@@ -74,7 +75,6 @@ pub struct LibraryRow {
     pub meeting_id: String,
     pub created_at_epoch_seconds: u64,
     pub transcript_sha256: String,
-    pub audio_state: AudioState,
     lifecycle: MeetingLifecycle,
     meeting_record_sha256: String,
     transcript_relative_path: String,
@@ -119,7 +119,6 @@ struct HitAuthority {
     created_at_epoch_seconds: u64,
     meeting_record_sha256: String,
     lifecycle: MeetingLifecycle,
-    audio_state: AudioState,
     attempt_sha256: String,
     transcript_sha256: String,
     transcript_relative_path: String,
@@ -339,7 +338,6 @@ impl LibraryProjection {
             created_at_epoch_seconds: row.created_at_epoch_seconds,
             meeting_record_sha256: row.meeting_record_sha256.clone(),
             lifecycle: row.lifecycle,
-            audio_state: row.audio_state,
             attempt_sha256: row.attempt_sha256.clone(),
             transcript_sha256: row.transcript_sha256.clone(),
             transcript_relative_path: row.transcript_relative_path.clone(),
@@ -463,7 +461,6 @@ fn inspect_meeting(
         meeting_id: meeting.meeting_id.clone(),
         created_at_epoch_seconds: attempt_data.created_at_epoch_seconds,
         transcript_sha256: current.sha256.clone(),
-        audio_state: meeting.retention.state,
         lifecycle: meeting.lifecycle,
         meeting_record_sha256: meeting_record.sha256,
         transcript_relative_path: current.relative_path.clone(),
@@ -478,13 +475,25 @@ fn bounded_read(
     total: &mut u64,
     limits: ReadLimits,
 ) -> Result<Vec<u8>, LibraryReadError> {
-    let bytes =
-        read_private_bytes(path, maximum).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    let mut file = open_private_file(path).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    let length = file
+        .metadata()
+        .map_err(|_| LibraryReadError::ArtifactUnavailable)?
+        .len();
+    if length > maximum {
+        return Err(LibraryReadError::CapacityExceeded);
+    }
     *total = total
-        .checked_add(bytes.len() as u64)
+        .checked_add(length)
         .ok_or(LibraryReadError::CapacityExceeded)?;
     if *total > limits.max_total_bytes {
         return Err(LibraryReadError::CapacityExceeded);
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    if bytes.len() as u64 != length {
+        return Err(LibraryReadError::ArtifactUnavailable);
     }
     Ok(bytes)
 }
@@ -576,6 +585,9 @@ fn validate_transcript(document: Transcript) -> Result<Vec<StoredTurn>, LibraryR
                         .speaker
                         .as_deref()
                         .is_some_and(|speaker| !matches!(speaker, "Me" | "Them")))
+                || (document.attribution == "channel"
+                    && turn.gated == Some(true)
+                    && turn.speaker.as_deref() != Some("Me"))
                 || ((turn.gate_score.is_some() || turn.gate_reason.is_some())
                     && turn.gated != Some(true))
             {
@@ -750,8 +762,8 @@ mod tests {
 
     use super::*;
     use crate::meeting::{
-        ArtifactRef, AudioRetention, AudioRetentionRule, MeetingArtifacts, MeetingRecord,
-        MeetingSchema, artifact_ref, retention_policy_sha256, write_meeting,
+        ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
+        MeetingRecord, MeetingSchema, artifact_ref, retention_policy_sha256, write_meeting,
     };
     use crate::storage::{create_private_dir, durable_create_new};
 
@@ -912,6 +924,39 @@ mod tests {
     }
 
     #[test]
+    fn channel_attribution_withholds_only_microphone_turns() {
+        let fixture = Fixture::new();
+        let directory = fixture.meeting("meeting-a", 10, &[("hidden token", true)]);
+        let mut record = load_meeting(&directory).unwrap();
+        let transcript = serde_json::to_vec_pretty(&json!({
+            "schema": "capture-transcript/1",
+            "source": "synthetic",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": [{
+                "start": 0.0,
+                "end": 0.5,
+                "speaker": "Them",
+                "text": "hidden token",
+                "gated": true,
+            }],
+        }))
+        .unwrap();
+        let digest = format!("{:x}", Sha256::digest(&transcript));
+        let relative = format!("transcript/{digest}.json");
+        durable_create_new(&directory.join(&relative), &transcript).unwrap();
+        record.artifacts.current_transcript = Some(artifact_ref(&directory, &relative).unwrap());
+        write_meeting(&directory, &record).unwrap();
+
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert!(projection.rows().is_empty());
+        assert_eq!(projection.quarantined_meetings(), 1);
+    }
+
+    #[test]
     fn open_fails_closed_when_any_bound_artifact_drifts() {
         for target in [
             "meeting",
@@ -1032,7 +1077,7 @@ mod tests {
     #[test]
     fn transcript_search_and_limits_refuse_whole_build() {
         let fixture = Fixture::new();
-        fixture.meeting("meeting-a", 10, &[("token", false)]);
+        let directory = fixture.meeting("meeting-a", 10, &[("token", false)]);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         assert_eq!(projection.search("token").unwrap().len(), 1);
@@ -1041,6 +1086,30 @@ mod tests {
                 &fixture.storage,
                 ReadLimits {
                     max_total_bytes: 1,
+                    ..ReadLimits::default()
+                }
+            ),
+            Err(LibraryReadError::CapacityExceeded)
+        ));
+        assert!(matches!(
+            LibraryProjection::rebuild(
+                &fixture.storage,
+                ReadLimits {
+                    max_transcript_bytes: 1,
+                    ..ReadLimits::default()
+                }
+            ),
+            Err(LibraryReadError::CapacityExceeded)
+        ));
+        let meeting_bytes = fs::metadata(directory.join("meeting.json")).unwrap().len();
+        let deletion_bytes = fs::metadata(directory.join("deletion/audio-deletion.json"))
+            .unwrap()
+            .len();
+        assert!(matches!(
+            LibraryProjection::rebuild(
+                &fixture.storage,
+                ReadLimits {
+                    max_total_bytes: meeting_bytes + deletion_bytes,
                     ..ReadLimits::default()
                 }
             ),
