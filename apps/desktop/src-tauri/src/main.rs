@@ -4,6 +4,10 @@
 // into the current internal-alpha command set.
 #[allow(dead_code)]
 mod product_facade;
+// The manual audio-deletion facade is intentionally compiled but not wired
+// into the current internal-alpha command set.
+#[allow(dead_code)]
+mod manual_delete_facade;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -68,7 +72,7 @@ struct ApplicationState {
     worker: Mutex<Option<OwnedChild>>,
     capture_task: Mutex<Option<CaptureTaskControl>>,
     command_lock: Mutex<()>,
-    app_data_writer_lock: Mutex<Option<File>>,
+    app_data_writer_lock: Mutex<Option<AppDataWriterLock>>,
     meeting_storage_coordination: Arc<MeetingStorageCoordination>,
     retention_started: AtomicBool,
 }
@@ -200,6 +204,24 @@ struct StorageContext {
     resource_root: PathBuf,
     manifest_path: PathBuf,
     diagnostics: PathBuf,
+}
+
+/// Owns the open file description that carries the process-lifetime exclusive
+/// app-data lock. It is deliberately unconstructable outside this module: a
+/// private facade may borrow only an instance that `acquire_app_data_writer_lock`
+/// successfully created.
+struct AppDataWriterLock {
+    _file: File,
+}
+
+impl ApplicationState {
+    #[allow(dead_code)]
+    fn manual_audio_deletion_facade(&self) -> manual_delete_facade::ManualAudioDeletionFacade<'_> {
+        manual_delete_facade::ManualAudioDeletionFacade::new(
+            &self.app_data_writer_lock,
+            &self.meeting_storage_coordination,
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -1052,7 +1074,7 @@ fn ensure_app_data_writer_lock(
     Ok(())
 }
 
-fn acquire_app_data_writer_lock(storage: &StorageRoot) -> Result<File, String> {
+fn acquire_app_data_writer_lock(storage: &StorageRoot) -> Result<AppDataWriterLock, String> {
     let path = storage
         .resolve(Path::new(".writer.lock"))
         .map_err(error_text)?;
@@ -1076,7 +1098,7 @@ fn acquire_app_data_writer_lock(storage: &StorageRoot) -> Result<File, String> {
     if result != 0 {
         return Err("another app process may already be using private meeting storage".into());
     }
-    Ok(file)
+    Ok(AppDataWriterLock { _file: file })
 }
 
 #[cfg(debug_assertions)]

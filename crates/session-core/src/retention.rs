@@ -66,7 +66,7 @@ pub enum RetentionOutcome {
 /// retention policy nor deletes the meeting record, transcript, note, profile,
 /// or another meeting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ManualAudioDeletionOutcome {
+pub enum ManualAudioDeletionOutcome {
     DeferredActive,
     AudioReleased,
     RecoveredRemoval,
@@ -97,7 +97,7 @@ pub enum RetentionError {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum ManualAudioDeletionError {
+pub enum ManualAudioDeletionError {
     #[error("meeting storage coordination is unavailable")]
     Coordination(#[from] MeetingCoordinationError),
     #[error(transparent)]
@@ -114,17 +114,16 @@ pub(crate) enum ManualAudioDeletionError {
 
 /// Releases only the bound audio for one exact, non-active meeting.
 ///
-/// This crate-private boundary is deliberately not callable by the desktop.
-/// Before a future desktop facade may expose it, that facade must own and hold
-/// the process-lifetime app-data writer lock already used by startup; a
-/// process-local coordinator is not a substitute for that authority.
+/// The desktop-only caller must hold the process-lifetime app-data writer lock
+/// for the full call. A process-local coordinator is not a substitute for that
+/// authority. This function cannot verify that cross-process authority itself;
+/// it owns only the per-meeting lease and storage-sequence preconditions below.
 ///
 /// Within the process, this action first claims the target's active-meeting
 /// lease, then holds the storage sequence gate through the operation scan and
 /// staged deletion/recovery path. It therefore cannot overlap an active capture
 /// or a durable, nonterminal correction/note operation.
-#[allow(dead_code)]
-pub(crate) fn delete_meeting_audio_manually(
+pub fn delete_meeting_audio_manually(
     storage: &StorageRoot,
     coordination: &MeetingStorageCoordination,
     meeting_id: &str,
