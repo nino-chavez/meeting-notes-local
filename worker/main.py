@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -180,6 +181,32 @@ def start_parent_liveness_watchdog(parent_fd: int) -> threading.Thread:
     return thread
 
 
+def dispatch_without_protocol_output(
+    root: Path,
+    operation: str,
+    arguments: object,
+    *,
+    encoder_digest: str,
+    admission: str,
+    model_dir: Path | None,
+) -> dict:
+    # The worker owns stdout as a newline-delimited JSON protocol. Research
+    # adapters and model libraries may print progress on data-dependent paths;
+    # letting one such line escape makes a valid operation look like a malformed
+    # protocol frame. Discard operation stdout at the boundary. emit() runs
+    # outside this context and remains the only writer to the protocol stream.
+    with open(os.devnull, "w", encoding="utf-8") as discarded:
+        with contextlib.redirect_stdout(discarded):
+            return dispatch(
+                root,
+                operation,
+                arguments,
+                encoder_digest=encoder_digest,
+                admission=admission,
+                model_dir=model_dir,
+            )
+
+
 def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
     root = require_private_root(root)
     manifest = load_manifest(manifest_path)
@@ -214,7 +241,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
             return 0
         try:
             request_id, operation, arguments = parse_command(frame)
-            digests = dispatch(
+            digests = dispatch_without_protocol_output(
                 root,
                 operation,
                 arguments,

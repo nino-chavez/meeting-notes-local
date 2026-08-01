@@ -489,6 +489,28 @@ while True:
         with self.assertRaises(ValueError):
             emit_progress(request_id, meeting_id, "arming")
 
+    def test_operation_stdout_cannot_enter_protocol(self) -> None:
+        from worker.main import dispatch_without_protocol_output
+
+        def noisy_dispatch(*_args, **_kwargs):
+            print("not a protocol frame")
+            return {"transcript": "a" * 64}
+
+        protocol = io.StringIO()
+        with mock.patch("worker.main.dispatch", side_effect=noisy_dispatch):
+            with mock.patch("worker.main.sys.stdout", protocol):
+                result = dispatch_without_protocol_output(
+                    self.root,
+                    "transcript.create",
+                    {"meeting_id": str(uuid.uuid4())},
+                    encoder_digest=self.encoder_digest,
+                    admission="internal-alpha",
+                    model_dir=None,
+                )
+
+        self.assertEqual(result, {"transcript": "a" * 64})
+        self.assertEqual(protocol.getvalue(), "")
+
 
 if __name__ == "__main__":
     unittest.main()
