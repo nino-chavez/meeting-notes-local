@@ -375,6 +375,10 @@ $APP_DATA/                         0700
   diagnostics/                    0700
   profile/                        0700
     voiceprint.json               0600
+    reset-operations/             0700
+      <operation-id>/             0700
+        receipt.json              0600
+        voiceprint.staged         0600, transient
   meetings/                       0700
     <meeting-id>/                 0700
       meeting.json                0600
@@ -572,6 +576,64 @@ encoder fingerprint, enrolment provenance, and experimental status. Rust
 installs a passing profile by digest and deletes the quarantine copy. It imports
 no raw enrolment audio. This bridge is disabled in beta; in-app enrolment and
 its immediate raw-data deletion contract must replace it first.
+
+Profile reset uses a separate Rust-owned `profile-reset/1` journal rather than
+the meeting operation store. The generic store terminates against exact
+`meeting.json` bytes, while reset owns one account-level profile and must not
+invent a meeting authority. Each reset has an owner-private
+`profile/reset-operations/<operation-id>/receipt.json`. A nonterminal receipt
+binds the operation ID, request time, installed relative path, byte size,
+SHA-256, and phase `deleting` or `staged`; it contains no score, threshold,
+source manifest, or other profile content. Rust validates the installed file
+without following links, creates `deleting` before mutation, same-volume renames
+the exact bytes to `voiceprint.staged`, fsyncs both directories, advances to
+`staged`, removes the staged bytes, and fsyncs again. The terminal `removed`
+receipt then drops the target path, size, and digest. It retains only its schema,
+operation ID, request time, removal time, and phase `removed`. The reset confirmation
+names that this content-free event record remains after the profile and its
+enrolment provenance are gone.
+
+Recovery uses this closed matrix:
+
+| Receipt phase | Live profile | Exact staged profile | Result |
+|---|---|---|---|
+| `deleting` | Exact target | Absent | Rename, fsync, advance to `staged` |
+| `deleting` | Absent | Exact target | Recognize the completed rename, fsync the profile and operation directories, then advance to `staged` |
+| `staged` | Absent | Exact target | Remove, fsync, advance to `removed` |
+| `staged` | Absent | Absent | Recognize the completed unlink, fsync the operation directory, then advance to `removed` |
+| `removed` | Any later profile or none | Absent | Terminal and inert; never inspect or mutate the live path |
+
+Every other live/staged combination is quarantined without mutation. This
+includes both paths present, neither path present while `deleting`, a live path
+while `staged`, a staged path after `removed`, a changed target, an orphan staged
+file, or more than one nonterminal reset. Retrying the same nonterminal
+operation resumes it; retry after `removed` reports that operation complete. A
+new reset receives a new operation ID. A later identical or different profile
+is never owned by an older terminal receipt.
+
+Reset holds the global storage sequence and refuses while any meeting lease is
+active; a new capture cannot enter while that sequence is held. Profile adoption
+uses the same gate, so it cannot replace the file during reset. Startup finishes
+or quarantines reset recovery before profile inspection, adoption, enrolment,
+or Start becomes available. Start holds that sequence while the strict Python
+loader revalidates the installed bytes and Rust registers the active meeting
+lease; the durable attempt binds the returned profile digest before the sequence
+is released. Reset therefore cannot enter between profile preflight and capture
+ownership.
+
+Reset removes semantically malformed, stale, experimental, or
+fingerprint-mismatched `voiceprint.json` bytes when the installed object is still
+a current-user-owned, `0600`, non-symlink regular file within the profile size
+bound. Those semantic failures must not trap the operator in a profile they
+cannot reset. A symlink, oversized file, wrong owner, wrong mode, changed file,
+or ambiguous reset journal is quarantined without following, changing, or
+deleting it; that storage block disables Start and adoption until an explicit
+repair path resolves it. If no installed profile and no nonterminal receipt
+exists, reset returns `already-absent` without creating a self-attesting receipt.
+Reset removes only `voiceprint.json`, whose strict `voiceprint/2` bytes carry the
+calibrated threshold and enrolment provenance; it never opens or changes a
+meeting directory. Every reset or successful adoption clears the one-attempt
+participant attestation.
 
 The automatic retention executor is part of the first human-capture slice.
 Rust records the next deletion time from durable attempt creation in
