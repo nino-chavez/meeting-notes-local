@@ -39,11 +39,14 @@ from worker.product_contracts import (
     validate_transcript_restore_join,
     validate_transcript_view,
 )
+import worker.adapters as adapters
 from worker.adapters import (
     MAX_MEETING_RECEIPT_BYTES,
+    MAX_PROFILE_BYTES,
     MAX_TRANSCRIPT_REVISION_BYTES,
     AdapterRefused,
     note_create,
+    profile_adopt,
     resolve_transcript,
     transcript_restore,
 )
@@ -546,6 +549,67 @@ class WorkerProtocolTests(unittest.TestCase):
             adopted_path = self.root / "profile" / "voiceprint.json"
             self.assertEqual(digest(adopted_path), expected_digest)
             load_profile(adopted_path, expected_encoder_fingerprint=self.encoder_digest)
+            self.assertFalse(candidate_dir.exists())
+        finally:
+            worker.close()
+
+    def test_profile_adoption_refuses_experimental_calibration(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate_dir = self.root / "profile-candidates" / profile_id
+        candidate_dir.mkdir(mode=0o700, parents=True)
+        profile_path = candidate_dir / "voiceprint.json"
+        centroid = np.zeros(192)
+        centroid[0] = 1.0
+        save_profile(
+            profile_path,
+            Profile(
+                centroid=centroid,
+                n_enrolled=100,
+                n_excluded=0,
+                seconds=400.0,
+                cohesion=0.8,
+                spread=0.1,
+            ),
+            selected_target=0.05,
+            operator_scores=np.linspace(0.60, 0.90, 100).tolist(),
+            negative_scores=np.linspace(0.20, 0.50, 20).tolist(),
+            held_out="leave-one-sitting-out",
+            sittings=[
+                {
+                    "audio": "a.wav",
+                    "audio_sha256": "a" * 64,
+                    "captured_at": "2026-07-20T09:00:00+0000",
+                },
+                {
+                    "audio": "b.wav",
+                    "audio_sha256": "b" * 64,
+                    "captured_at": "2026-07-22T14:00:00+0000",
+                },
+            ],
+            negative_sources=[
+                {
+                    "source_class": "public-or-licensed",
+                    "audio": "negative.wav",
+                    "segments": "negative-segments.json",
+                    "audio_sha256": "c" * 64,
+                    "audio_samples": 1_280_000,
+                    "segments_sha256": "d" * 64,
+                    "segments_schema": "mic-segments/1",
+                    "captured_at": "2026-07-22T15:00:00+0000",
+                    "scorable_segments": 20,
+                    "scorable_seconds": 80.0,
+                }
+            ],
+            experimental=True,
+            encoder_fingerprint_value=self.encoder_digest,
+        )
+        worker = WorkerProcess(self.root, self.manifest)
+        try:
+            result = worker.request("profile.adopt", {"profile_id": profile_id})
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["artifact_digests"], {})
+            self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+            self.assertFalse(candidate_dir.exists())
         finally:
             worker.close()
 
@@ -1086,6 +1150,181 @@ class ProductArtifactAdapterTests(unittest.TestCase):
                     generator=generator,
                 )
         self.assertFalse((self.root / "meetings" / meeting_id / "notes").exists())
+
+
+class ProfileAdoptionSafetyTests(unittest.TestCase):
+    """The bridge accepts one private byte snapshot or changes nothing."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "app"
+        self.root.mkdir(mode=0o700)
+        self.encoder_digest = "e" * 64
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _candidate(self, profile_id: str, payload: bytes | None = None) -> Path:
+        directory = self.root / "profile-candidates" / profile_id
+        directory.mkdir(mode=0o700, parents=True)
+        directory.chmod(0o700)
+        path = directory / "voiceprint.json"
+        if payload is not None:
+            private_file(path, payload)
+            return path
+        centroid = np.zeros(192)
+        centroid[0] = 1.0
+        save_profile(
+            path,
+            Profile(
+                centroid=centroid,
+                n_enrolled=100,
+                n_excluded=0,
+                seconds=400.0,
+                cohesion=0.8,
+                spread=0.1,
+            ),
+            selected_target=0.05,
+            operator_scores=np.linspace(0.60, 0.90, 100).tolist(),
+            negative_scores=np.linspace(0.20, 0.50, 20).tolist(),
+            held_out="leave-one-sitting-out",
+            sittings=[
+                {
+                    "audio": "first.wav",
+                    "audio_sha256": "a" * 64,
+                    "captured_at": "2026-07-20T09:00:00+0000",
+                },
+                {
+                    "audio": "second.wav",
+                    "audio_sha256": "b" * 64,
+                    "captured_at": "2026-07-22T14:00:00+0000",
+                },
+            ],
+            negative_sources=[
+                {
+                    "source_class": "public-or-licensed",
+                    "audio": "negative.wav",
+                    "segments": "negative-segments.json",
+                    "audio_sha256": "c" * 64,
+                    "audio_samples": 1_280_000,
+                    "segments_sha256": "d" * 64,
+                    "segments_schema": "mic-segments/1",
+                    "captured_at": "2026-07-22T15:00:00+0000",
+                    "scorable_segments": 20,
+                    "scorable_seconds": 80.0,
+                }
+            ],
+            encoder_fingerprint_value=self.encoder_digest,
+        )
+        return path
+
+    def _adopt(self, profile_id: str) -> dict[str, str]:
+        return profile_adopt(
+            self.root, {"profile_id": profile_id}, self.encoder_digest
+        )
+
+    def test_adopt_is_digest_bound_idempotent_and_consumes_quarantine(self) -> None:
+        first_id = str(uuid.uuid4())
+        first = self._candidate(first_id)
+        expected = first.read_bytes()
+        result = self._adopt(first_id)
+        installed = self.root / "profile" / "voiceprint.json"
+        self.assertEqual(result, {"profile": hashlib.sha256(expected).hexdigest()})
+        self.assertEqual(installed.read_bytes(), expected)
+        self.assertEqual(stat.S_IMODE(installed.stat().st_mode), 0o600)
+        self.assertFalse(first.parent.exists())
+
+        # Retrying after a crash uses a new quarantine copy, but it must bind to
+        # the already installed exact bytes instead of overwriting them.
+        second_id = str(uuid.uuid4())
+        self._candidate(second_id, expected)
+        self.assertEqual(self._adopt(second_id), result)
+        self.assertEqual(installed.read_bytes(), expected)
+        self.assertFalse((self.root / "profile-candidates" / second_id).exists())
+
+    def test_adopt_refuses_missing_malformed_oversized_and_symlink_candidates(self) -> None:
+        missing = str(uuid.uuid4())
+        with self.assertRaises(AdapterRefused):
+            self._adopt(missing)
+
+        cases = (
+            (b"{}\n", "malformed"),
+            (b"x" * (MAX_PROFILE_BYTES + 1), "oversized"),
+        )
+        for payload, label in cases:
+            with self.subTest(label=label):
+                profile_id = str(uuid.uuid4())
+                candidate = self._candidate(profile_id, payload)
+                with self.assertRaises(AdapterRefused):
+                    self._adopt(profile_id)
+                self.assertFalse(candidate.parent.exists())
+                self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id, b"placeholder")
+        candidate.unlink()
+        external = self.root / "outside.json"
+        private_file(external, b"{}\n")
+        candidate.symlink_to(external)
+        with self.assertRaises(AdapterRefused):
+            self._adopt(profile_id)
+        self.assertFalse(candidate.parent.exists())
+        self.assertEqual(external.read_bytes(), b"{}\n")
+
+    def test_adopt_uses_the_validated_snapshot_when_candidate_changes(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id)
+        expected = candidate.read_bytes()
+        original_read = adapters.read_private_file
+        mutated = False
+
+        def read_then_replace(path: Path, **kwargs) -> bytes:
+            nonlocal mutated
+            value = original_read(path, **kwargs)
+            if path.resolve() == candidate.resolve() and not mutated:
+                mutated = True
+                replacement = candidate.with_name("replacement.json")
+                private_file(replacement, b"{}\n")
+                os.replace(replacement, candidate)
+            return value
+
+        with mock.patch.object(
+            adapters, "read_private_file", side_effect=read_then_replace
+        ):
+            result = self._adopt(profile_id)
+        self.assertTrue(mutated)
+        self.assertEqual(result["profile"], hashlib.sha256(expected).hexdigest())
+        self.assertEqual(
+            (self.root / "profile" / "voiceprint.json").read_bytes(), expected
+        )
+        self.assertFalse(candidate.parent.exists())
+
+    def test_adopt_refuses_a_profile_from_another_encoder_space(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate = self._candidate(profile_id)
+        with self.assertRaises(AdapterRefused):
+            profile_adopt(
+                self.root, {"profile_id": profile_id}, "f" * 64
+            )
+        self.assertFalse(candidate.parent.exists())
+        self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
+
+    def test_adopt_never_overwrites_a_different_installed_profile(self) -> None:
+        initial_id = str(uuid.uuid4())
+        initial = self._candidate(initial_id)
+        initial_bytes = initial.read_bytes()
+        self._adopt(initial_id)
+
+        different_id = str(uuid.uuid4())
+        # Whitespace changes preserve the valid JSON/profile semantics while
+        # creating a different immutable artifact identity.
+        different_bytes = initial_bytes.replace(b"\n", b" \n", 1)
+        self._candidate(different_id, different_bytes)
+        with self.assertRaises(AdapterRefused):
+            self._adopt(different_id)
+        installed = self.root / "profile" / "voiceprint.json"
+        self.assertEqual(installed.read_bytes(), initial_bytes)
+        self.assertFalse((self.root / "profile-candidates" / different_id).exists())
 
 
 if __name__ == "__main__":

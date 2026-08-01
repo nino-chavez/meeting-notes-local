@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -47,6 +48,10 @@ MAX_MEETING_RECEIPT_BYTES = 256 * 1024
 # ample room for timestamps and gate metadata while refusing attacker-sized JSON
 # before schema parsing or any canonical loader gets a path to it.
 MAX_TRANSCRIPT_REVISION_BYTES = 16 * 1024 * 1024
+# A profile is owner-only derived enrollment material, not capture audio. Four
+# MiB accommodates a substantial private score receipt while refusing a file
+# large enough to make the strict JSON loader an unbounded parsing surface.
+MAX_PROFILE_BYTES = 4 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -455,31 +460,143 @@ def transcript_create(
     return {"transcript": transcript_digest}
 
 
-def profile_inspect(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
-    values = _exact_arguments(arguments, {"profile_id"})
-    profile_id = opaque_id(values["profile_id"], "profile_id")
-    profile = resolve_below(root, "profile-candidates", profile_id, "voiceprint.json")
-    if not profile.is_file():
-        raise AdapterRefused("profile candidate is missing")
+def _profile_candidate_path(root: Path, profile_id: str) -> Path:
+    return resolve_below(root, "profile-candidates", profile_id, "voiceprint.json")
 
+
+def _validate_profile_bytes(
+    root: Path, profile_bytes: bytes, encoder_digest: str
+) -> None:
+    """Give the canonical loader only a private, immutable byte snapshot.
+
+    `load_profile` remains the semantic authority for the voiceprint schema,
+    provenance, experimental status, and encoder fingerprint.  This adapter
+    deliberately does not reproduce any of those checks.  Its responsibility is
+    to ensure the loader sees the same bounded bytes that can later be installed.
+    """
     from speaker_gate import load_profile
 
-    load_profile(profile, expected_encoder_fingerprint=encoder_digest)
-    return {"profile": sha256(profile)}
+    with tempfile.TemporaryDirectory(dir=root) as temporary_name:
+        temporary = Path(temporary_name)
+        private_directory(temporary)
+        snapshot = temporary / "voiceprint.json"
+        durable_create_new(snapshot, profile_bytes)
+        try:
+            _, _, document = load_profile(
+                snapshot, expected_encoder_fingerprint=encoder_digest
+            )
+        except (OSError, ValueError, SystemExit) as exc:
+            raise AdapterRefused(str(exc)) from None
+        # `load_profile` decides whether the receipt is structurally valid.
+        # Admission decides whether that valid receipt is a supported profile:
+        # experimental calibration is deliberately available to the research CLI
+        # but never enables the product capture path.
+        if document["operating_point"]["experimental"]:
+            raise AdapterRefused("experimental profile cannot enable application capture")
+
+
+def _read_valid_profile_candidate(
+    root: Path, profile_id: str, encoder_digest: str
+) -> tuple[bytes, str]:
+    try:
+        candidate = _profile_candidate_path(root, profile_id)
+        profile_bytes = read_private_file(
+            candidate,
+            max_bytes=MAX_PROFILE_BYTES,
+            label="profile candidate",
+        )
+    except (OSError, StorageRefused) as exc:
+        raise AdapterRefused(str(exc)) from None
+    _validate_profile_bytes(root, profile_bytes, encoder_digest)
+    return profile_bytes, hashlib.sha256(profile_bytes).hexdigest()
+
+
+def _remove_profile_candidate(root: Path, profile_id: str) -> None:
+    """Remove a quarantine without following its entries after a failed adopt.
+
+    The native picker is the only writer of a candidate directory.  It may still
+    contain malformed or hostile bytes, so cleanup unlinks entries through open
+    directory descriptors rather than recursively resolving paths.
+    """
+    candidates = resolve_below(root, "profile-candidates")
+    try:
+        candidates_fd = os.open(
+            candidates,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise AdapterRefused("profile quarantine is unsafe") from exc
+    try:
+        try:
+            candidate_fd = os.open(
+                profile_id,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=candidates_fd,
+            )
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise AdapterRefused("profile quarantine is unsafe") from exc
+        try:
+            candidate_stat = os.fstat(candidate_fd)
+            if stat.S_IMODE(candidate_stat.st_mode) != 0o700:
+                raise AdapterRefused("profile quarantine is unsafe")
+            for entry in os.listdir(candidate_fd):
+                entry_stat = os.stat(entry, dir_fd=candidate_fd, follow_symlinks=False)
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    raise AdapterRefused("profile quarantine has an unsafe directory")
+                os.unlink(entry, dir_fd=candidate_fd)
+            os.fsync(candidate_fd)
+        finally:
+            os.close(candidate_fd)
+        os.rmdir(profile_id, dir_fd=candidates_fd)
+        os.fsync(candidates_fd)
+    finally:
+        os.close(candidates_fd)
+
+
+def profile_inspect(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
+    root = require_private_root(root)
+    values = _exact_arguments(arguments, {"profile_id"})
+    profile_id = opaque_id(values["profile_id"], "profile_id")
+    _, digest = _read_valid_profile_candidate(root, profile_id, encoder_digest)
+    return {"profile": digest}
 
 
 def profile_adopt(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
+    root = require_private_root(root)
     values = _exact_arguments(arguments, {"profile_id"})
     profile_id = opaque_id(values["profile_id"], "profile_id")
-    digest = profile_inspect(root, values, encoder_digest)["profile"]
-    source = resolve_below(root, "profile-candidates", profile_id, "voiceprint.json")
-    profile_dir = resolve_below(root, "profile")
-    private_directory(profile_dir)
-    target = resolve_below(root, "profile", "voiceprint.json")
-    durable_create_new(target, source.read_bytes())
-    if sha256(target) != digest:
-        raise AdapterRefused("adopted profile changed during the durable write")
-    return {"profile": digest}
+    try:
+        profile_bytes, digest = _read_valid_profile_candidate(
+            root, profile_id, encoder_digest
+        )
+        profile_dir = resolve_below(root, "profile")
+        private_directory(profile_dir)
+        target = resolve_below(root, "profile", "voiceprint.json")
+        try:
+            durable_create_or_verify_identical(target, profile_bytes)
+            installed_bytes = read_private_file(
+                target,
+                max_bytes=len(profile_bytes),
+                label="installed profile",
+            )
+        except StorageRefused as exc:
+            raise AdapterRefused(str(exc)) from None
+        if (
+            installed_bytes != profile_bytes
+            or hashlib.sha256(installed_bytes).hexdigest() != digest
+        ):
+            raise AdapterRefused("installed profile differs from the validated candidate")
+        # The worker result binds only these installed bytes.  Re-run the
+        # canonical semantic loader after the durable write rather than treating
+        # the earlier candidate verdict as authority for a different pathname.
+        _validate_profile_bytes(root, installed_bytes, encoder_digest)
+        return {"profile": digest}
+    finally:
+        _remove_profile_candidate(root, profile_id)
 
 
 def note_inspect(root: Path, arguments: object) -> dict[str, str]:
