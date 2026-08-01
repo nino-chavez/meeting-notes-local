@@ -7,11 +7,15 @@ the meeting, and the audio never leaves the Mac — system audio comes through a
 Core Audio process tap, your microphone comes through the same path
 `local-dictation` already uses, and the two arrive as separate streams.
 
-> **Status: product definition, an accepted private real-content encounter, an
-> executable safety skeleton, capture and note experiments, but no working capture
-> app.** What exists is a working two-leg research capture —
-> validated end to end over a 75-minute meeting — a voiceprint gate wired into
-> that capture but never yet run on a real meeting, and a local summarizer whose
+> **Status: product definition, an accepted private real-content encounter, and a
+> working internal transcript-alpha app.** The signed and notarized alpha has
+> completed two-leg capture, local transcription, and true quit/fresh-launch recovery
+> on real hardware. It is not cleared for distribution until the unchanged build
+> proves its scheduled audio deletion and clean transfer to another Mac or genuinely
+> clean account. The wider product remains unbuilt. What also exists is a working
+> two-leg research capture — validated end to end over a 75-minute meeting — a
+> voiceprint gate wired into that capture but never yet run on a real meeting, and a
+> local summarizer whose
 > evidence graph completes, rechecks and fails closed. Two bounded corpus runs
 > under the current list-generating model contract produced rejected diagnostics,
 > not an accepted note. By default, a failed run writes no note. Explicitly
@@ -38,17 +42,14 @@ Core Audio process tap, your microphone comes through the same path
 > an owner-only local click-through without putting meeting content or packet metadata
 > in Git. It labels populated words as human-curated and automatic extraction as
 > untested. The operator accepted the exact digest-bound click-through in a cold
-> review on 2026-07-31. The Phase 1 Tauri/Rust safety skeleton now compiles and its
+> review on 2026-07-31. The Phase 1 Tauri/Rust safety skeleton compiles and its
 > deterministic fault suite passes without importing a model or touching hardware.
-> It deliberately reports the packaged runtime as missing. Phase 2 now has a
-> protocol-only source worker, direct-validator fixture equivalence, Rust runtime
-> manifest and process supervision, and a non-capturing paused handshake from the
-> Swift tap. Live capture finalization, transcription, note generation, and the
-> product model set remain open. A pinned arm64 CPython boundary runtime now builds
-> reproducibly and passes the same controls from inside an ad hoc signed Tauri
-> `.app`, but its manifest deliberately blocks product startup. It is packaging
-> evidence, not a build for another person's meetings. An unedited automatic note
-> remains a separate pre-beta gate.
+> The transcript-only Phase 2 path packages the real local worker, fixed Whisper
+> model, and Swift capture helper behind the Rust-owned protocol. The signed installed
+> alpha has completed capture, transcription, and fresh-process transcript recovery.
+> It does not generate notes, expose the product library, or carry `product`
+> admission. An unedited evidence-linked automatic note remains a separate pre-beta
+> gate.
 > [The capture commands are
 > here](#keeping-the-room-out-of-your-half).
 >

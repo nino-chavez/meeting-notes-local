@@ -37,6 +37,23 @@ The contract exists now so the first implementation does not have to settle
 process ownership, persistence, recovery, and security while it is also trying
 to prove a real meeting path.
 
+## Current milestone plan
+
+Status as of 2026-08-01. ETA ranges assume timely human review and no major reset in
+automatic-note quality. Passing tests are bounded evidence; they do not advance a
+human gate.
+
+| Wave | Current status and active stream | Join or exit | Human gate | ETA |
+|---|---|---|---|---|
+| A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |
+| B. Shared-contract freeze | Lead-owned inventory and freeze of meeting/artifact records, worker protocol, retention/deletion receipts, correction/regeneration, `note/2`, the UI command boundary, and acceptance fixtures. | One versioned fixture set before independent coding streams branch. | None. | 2–4 days, inside Wave C |
+| C. Trust foundation | Not started beyond the alpha's scheduled audio retention. Planned streams: Rust persistence/trust, Python profile and evidence adapters, and the Tauri surface. | Interruption and fresh-process tests, then an independent audit. | Retention and far-end-notice choices; real withheld-turn restore. | Cumulative 1–2 weeks |
+| D. Evidence-linked automatic notes | Contract and experiments exist; product generation and admission do not. | Every claim locator resolves; rejected summaries remain transcript-only; deterministic checks precede private semantic review. | Semantic support and usefulness adjudication. | Additional 2–3 weeks |
+| E. Product surfaces and retrieval | Encounter is approved; production library, note reader, commitment view, and exact transcript/metadata search are not built. Design remains retrieval → commitments → capture; build follows dependency order. | Join UI to the frozen command facade and validated local artifacts. | Cold operator review of the working surfaces. | Additional 2–3 weeks, partly parallel with D |
+| F. Beta packaging and admission | Blocked by C–E. | Frozen build/model identities, installed canary, locator resolution, correction/restart/retention/deletion receipts. | Pre-run reference, semantic review, and operator usefulness verdict. | Cumulative 6–9 weeks |
+| G. Production hardening and GA | Not started. | Clean accounts/Macs, upgrade/migration/rollback, fault injection, privacy/security, and content-free diagnostics. | Explicit beta admission and later GA release decisions. | Cumulative 9–14 weeks |
+| H. Later extensions | Outside v1: optional EventKit brief, operator-authored live note, detection, and conversational cross-meeting retrieval. Speaker playback/AEC remains research. | Each extension receives its own contract and evidence. | Separate scope and release decisions. | 1–4 weeks each after v1; no AEC ETA before feasibility passes |
+
 ## Reader and job
 
 This document is for the implementer and reviewer who pick up the application
@@ -123,6 +140,20 @@ checks, child cleanup, private diagnostics, startup timeouts, and a window that
 renders without its worker. Its loopback server is not copied because the
 transport need is different.
 
+The alpha exposed a smaller ownership fork inside the chosen shape. It was checked
+against permission attribution, a Rust `SIGKILL`, a worker crash, the durable attempt
+and ownership receipts, capture finalization, and fresh-process recovery:
+
+| Capture-child candidate | Result |
+|---|---|
+| Python spawns and controls Swift | Rejected. It inserts the model process between Rust's consent/reducer authority and the permission-bearing capture child, while Rust still has to inspect both identities and recover their shared process group. |
+| Rust spawns and controls Swift; Python validates finalized artifacts | **Chosen and implemented by the alpha.** It follows Tauri's Rust-side external-binary pattern, keeps Start/Stop under the same authority as consent and recovery, and leaves Python as the canonical capture/transcript/note validator. |
+| A separate capture daemon owns Swift | Rejected. It adds another lifetime, readiness surface, and recovery authority without removing either existing child. |
+
+The shipped alpha code is the internal reference implementation for the chosen
+sub-boundary. The earlier Python-owned diagram below was a stale design claim, not
+authority to rewrite the working capture path.
+
 ## Chosen process shape
 
 ```text
@@ -132,24 +163,27 @@ Tauri webview
           v
 Rust session core
   reducer | tray | consent | policy | recovery | diagnostics
+          |\
+          | \ attempt-scoped control bytes and capture events
+          |  v
+          |  Swift Core Audio tap
+          |  microphone + system acquisition only
           |
           | versioned JSON lines over stdin/stdout
           v
-Python worker process group
-  capture adapter | transcript adapter | note adapter | profile inspection
-          |
-          | capture.start only, after the attempt receipt is durable
-          v
-Swift Core Audio tap (capture-attempt scoped)
+Python worker
+  capture finalization/inspection | transcript | note | profile validation
 
 $APP_DATA
   meeting records | canonical capture/transcript/note artifacts | profile
 ```
 
-Rust starts the worker as an embedded external binary and owns the worker's
-process group. The worker may create the Swift tap only for an approved capture
-request, and that tap stays in the same owned group. Stopping, timing out, or
-exiting the application must stop and wait for the whole group.
+Rust starts both packaged children and owns their process group. It may create the
+Swift tap only after an approved attempt receipt is durable, and the tap stays in the
+same owned group as the application-scoped worker. Stopping, timing out, or exiting
+the application must stop and wait for the whole group. The worker never starts or
+stops capture; after Swift closes both WAV legs, `capture.finalize` validates them and
+creates the canonical capture-session receipt.
 
 The Python worker is application-scoped and may stay ready while the
 application is open. Ready does not mean recording. The Swift tap is
@@ -203,7 +237,7 @@ facility does not authorize its JavaScript API.
 |---|---|---|
 | Tauri webview | Rendering, local interaction state, accessible focus and announcements | Process launch, storage paths, artifact acceptance, consent persistence |
 | Rust session core | Startup and capture reducer, one-at-a-time operation lock, attestation lifetime, policy checks, process group, private diagnostics, meeting index projection, deletion orchestration | Transcription, voice scoring, note claims, or a second interpretation of artifact validity |
-| Python worker | Versioned operations over the existing capture, profile, transcript, and note validators | Product readiness, arbitrary commands or paths, retention policy, UI state |
+| Python worker | Versioned operations over capture finalization and the existing profile, transcript, and note validators | Capture-child launch or Stop, product readiness, arbitrary commands or paths, retention policy, UI state |
 | Swift tap | System and microphone audio acquisition for the current capture | Restart policy, meeting identity, transcript or note behavior |
 | Canonical artifacts | Durable evidence and the accepted result of each completed stage | Live child state or permission state |
 
@@ -222,9 +256,10 @@ The first child message is a readiness handshake:
 
 ```json
 {
-  "schema": "worker-event/1",
+  "schema": "worker-event/2",
   "event": "worker.ready",
-  "protocol": 1,
+  "protocol": 2,
+  "admission": "internal-alpha",
   "build": "<worker build digest>",
   "runtime": {
     "kind": "bundled",
@@ -242,14 +277,9 @@ The first child message is a readiness handshake:
     }
   ],
   "operations": [
-    "profile.inspect",
-    "profile.adopt",
-    "capture.start",
-    "capture.stop",
+    "capture.finalize",
     "capture.inspect",
-    "transcript.create",
-    "note.create",
-    "note.inspect"
+    "transcript.create"
   ]
 }
 ```
@@ -258,35 +288,32 @@ Every command has one request identifier and one terminal result:
 
 ```json
 {
-  "schema": "worker-command/1",
+  "schema": "worker-command/2",
   "request_id": "<uuid>",
-  "operation": "capture.start",
+  "operation": "capture.finalize",
   "arguments": {
     "meeting_id": "<uuid>",
-    "profile_id": "<opaque local id>"
+    "started_at_epoch_seconds": 1785600000,
+    "capture_elapsed_samples": 960000
   }
 }
 ```
 
-Progress and results use the same request identifier:
+The worker does not emit capture progress; Rust receives capture events directly from
+Swift. Results use the command's request identifier:
 
 ```json
 {
-  "schema": "worker-event/1",
+  "schema": "worker-result/2",
   "request_id": "<uuid>",
-  "event": "capture.state",
-  "state": "recording",
-  "meeting_id": "<uuid>"
-}
-```
-
-```json
-{
-  "schema": "worker-result/1",
-  "request_id": "<uuid>",
-  "ok": false,
-  "code": "tap_ready_timeout",
-  "recoverable": true
+  "ok": true,
+  "code": null,
+  "recoverable": null,
+  "artifact_digests": {
+    "capture-session": "<sha256>",
+    "capture-mic": "<sha256>",
+    "capture-system": "<sha256>"
+  }
 }
 ```
 
@@ -314,6 +341,10 @@ Rules:
   operation may hold the reducer lock.
 - The worker protocol is not a public plugin API. Adding an operation requires
   a schema and a failure test.
+- `operations` lists runnable operations for the stated runtime admission. A
+  reserved name or adapter that always refuses is not a capability and must not
+  appear. `note.create` joins the product-admission list only with its executable
+  implementation and acceptance fixtures.
 
 The thin worker should call extracted library functions, not parse the existing
 CLI's human-readable output. Research flags such as protocol capture, AEC

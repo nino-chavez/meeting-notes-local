@@ -84,7 +84,7 @@ def _wav_samples(path: Path) -> int:
     return frames
 
 
-def capture_stop(root: Path, arguments: object) -> dict[str, str]:
+def capture_finalize(root: Path, arguments: object) -> dict[str, str]:
     values = _exact_arguments(
         arguments,
         {"meeting_id", "started_at_epoch_seconds", "capture_elapsed_samples"},
@@ -239,11 +239,6 @@ def note_inspect(root: Path, arguments: object) -> dict[str, str]:
     }
 
 
-def unavailable(_root: Path, arguments: object) -> dict[str, str]:
-    _exact_arguments(arguments, {"meeting_id"})
-    raise AdapterRefused("operation requires the later hardware or model slice")
-
-
 def dispatch(
     root: Path,
     operation: str,
@@ -264,9 +259,7 @@ def dispatch(
             model_dir=model_dir,
         ),
         "note.inspect": lambda: note_inspect(root, arguments),
-        "capture.start": lambda: unavailable(root, arguments),
-        "capture.stop": lambda: capture_stop(root, arguments),
-        "note.create": lambda: unavailable(root, arguments),
+        "capture.finalize": lambda: capture_finalize(root, arguments),
     }
     try:
         return adapters[operation]()

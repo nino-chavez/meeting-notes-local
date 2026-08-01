@@ -6,7 +6,7 @@ use local_meeting_notes_session_core::protocol::{
     CaptureProgressState, Operation, ProtocolError, WorkerCommand,
 };
 use local_meeting_notes_session_core::supervision::{
-    OwnedChild, SupervisionError, expected_operations,
+    OwnedChild, SupervisionError, protocol_fixture_operations,
 };
 use tempfile::TempDir;
 
@@ -19,7 +19,7 @@ fn supervised_worker_keeps_protocol_after_readiness() {
     command.args(["--mode", "protocol"]);
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     child
-        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
         .unwrap();
     let request = WorkerCommand::new(
         Operation::CaptureInspect,
@@ -42,7 +42,7 @@ fn supervised_worker_dispatches_progress_before_result() {
     command.args(["--mode", "protocol-progress"]);
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     child
-        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
         .unwrap();
     let meeting_id = uuid::Uuid::new_v4();
     let request = WorkerCommand::new(
@@ -71,7 +71,7 @@ fn unknown_progress_request_stops_and_reaps_worker() {
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     let pid = child.pid();
     child
-        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
         .unwrap();
     let request = WorkerCommand::new(
         Operation::CaptureStart,
@@ -98,7 +98,7 @@ fn request_deadline_stops_and_reaps_worker() {
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     let pid = child.pid();
     child
-        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
         .unwrap();
     let request = WorkerCommand::new(
         Operation::CaptureInspect,
@@ -125,7 +125,7 @@ fn expired_deadline_writes_no_command() {
         .env("LMN_COMMAND_FILE", &command_file);
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     child
-        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
         .unwrap();
     let request = WorkerCommand::new(
         Operation::CaptureInspect,
@@ -147,7 +147,7 @@ fn blocked_worker_stdin_obeys_deadline_and_reaps_worker() {
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     let pid = child.pid();
     child
-        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
         .unwrap();
     let request = WorkerCommand::new(
         Operation::CaptureInspect,
@@ -172,7 +172,7 @@ fn validated_result_precedes_and_survives_following_eof() {
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let pid = child.pid();
         child
-            .wait_ready(Duration::from_secs(1), &expected_operations())
+            .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
             .unwrap();
         let request = WorkerCommand::new(
             Operation::CaptureInspect,
@@ -206,7 +206,7 @@ fn queued_progress_and_result_both_precede_following_eof() {
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let pid = child.pid();
         child
-            .wait_ready(Duration::from_secs(1), &expected_operations())
+            .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
             .unwrap();
         let meeting_id = uuid::Uuid::new_v4();
         let request = WorkerCommand::new(
@@ -269,7 +269,7 @@ fn readiness_timeout_stops_and_reaps_worker() {
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     let pid = child.pid();
     assert!(matches!(
-        child.wait_ready(Duration::from_millis(100), &expected_operations()),
+        child.wait_ready(Duration::from_millis(100), &protocol_fixture_operations()),
         Err(SupervisionError::ReadyTimeout)
     ));
     assert!(wait_until_gone(pid, Duration::from_secs(1)));
@@ -282,7 +282,7 @@ fn forced_exit_escalates_and_reaps_stubborn_worker() {
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     let pid = child.pid();
     child
-        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
         .unwrap();
     child.stop_and_wait(Duration::from_millis(100)).unwrap();
     assert!(wait_until_gone(pid, Duration::from_secs(1)));
@@ -295,7 +295,7 @@ fn malformed_handshake_fails_closed_and_reaps_worker() {
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     let pid = child.pid();
     assert!(matches!(
-        child.wait_ready(Duration::from_secs(1), &expected_operations()),
+        child.wait_ready(Duration::from_secs(1), &protocol_fixture_operations()),
         Err(SupervisionError::Protocol(_))
     ));
     assert!(wait_until_gone(pid, Duration::from_secs(1)));
@@ -307,7 +307,7 @@ fn stderr_overflow_fails_without_deadlock_and_reaps_worker() {
     command.args(["--mode", "stderr-overflow"]);
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     let pid = child.pid();
-    let result = child.wait_ready(Duration::from_secs(1), &expected_operations());
+    let result = child.wait_ready(Duration::from_secs(1), &protocol_fixture_operations());
     assert!(matches!(result, Err(SupervisionError::StderrOverflow)));
     assert!(wait_until_gone(pid, Duration::from_secs(1)));
 }
@@ -322,7 +322,7 @@ fn worker_exit_cleanup_reaps_remaining_tap() {
         .env("LMN_PID_FILE", &pid_file);
     let mut child = OwnedChild::spawn(&mut command).unwrap();
     child
-        .wait_ready(Duration::from_secs(1), &expected_operations())
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(1);
     while !pid_file.exists() && Instant::now() < deadline {
@@ -350,7 +350,7 @@ fn idle_protocol_and_stderr_faults_autonomously_reap_the_group() {
             .env("LMN_PID_FILE", &pid_file);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         child
-            .wait_ready(Duration::from_secs(1), &expected_operations())
+            .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
             .unwrap();
         let pids: serde_json::Value =
             serde_json::from_slice(&fs::read(&pid_file).unwrap()).unwrap();

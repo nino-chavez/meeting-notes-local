@@ -1223,17 +1223,20 @@ pub fn read_parent_liveness(fd: RawFd) -> io::Result<()> {
     }
 }
 
-pub fn expected_operations() -> HashSet<Operation> {
+pub fn internal_alpha_operations() -> HashSet<Operation> {
+    use Operation::*;
+    [CaptureFinalize, CaptureInspect, TranscriptCreate]
+        .into_iter()
+        .collect()
+}
+
+pub fn protocol_fixture_operations() -> HashSet<Operation> {
     use Operation::*;
     [
-        ProfileInspect,
-        ProfileAdopt,
         CaptureStart,
-        CaptureStop,
+        CaptureFinalize,
         CaptureInspect,
         TranscriptCreate,
-        NoteCreate,
-        NoteInspect,
     ]
     .into_iter()
     .collect()
@@ -1467,7 +1470,7 @@ mod tests {
             .inject_cleanup_failure(&io::Error::other("injected readiness cleanup failure"));
 
         let ready_error = child
-            .wait_ready(Duration::from_millis(50), &expected_operations())
+            .wait_ready(Duration::from_millis(50), &protocol_fixture_operations())
             .unwrap_err();
         assert!(matches!(
             ready_error,
@@ -1484,12 +1487,12 @@ mod tests {
 
     #[test]
     fn cleanup_failure_overrides_request_timeout_and_remains_terminal() {
-        let script = r#"printf '%s\n' '{"schema":"worker-event/1","event":"worker.ready","protocol":1,"build":"test-worker","runtime":{"kind":"bundled","digest":"test-runtime"},"tap":{"build":"test-tap","available":true},"models":[{"id":"test-model","digest":"test-model-digest","available":true}],"operations":["profile.inspect","profile.adopt","capture.start","capture.stop","capture.inspect","transcript.create","note.create","note.inspect"]}'; IFS= read -r command; exec sleep 30"#;
+        let script = r#"printf '%s\n' '{"schema":"worker-event/2","event":"worker.ready","protocol":2,"admission":"boundary-test","build":"test-worker","runtime":{"kind":"bundled","digest":"test-runtime"},"tap":{"build":"test-tap","available":true},"models":[{"id":"test-model","digest":"test-model-digest","available":true}],"operations":["capture.start","capture.finalize","capture.inspect","transcript.create"]}'; IFS= read -r command; exec sleep 30"#;
         let mut command = Command::new("/bin/sh");
         command.args(["-c", script]);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         child
-            .wait_ready(Duration::from_secs(1), &expected_operations())
+            .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
             .unwrap();
         child
             .control

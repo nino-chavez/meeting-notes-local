@@ -18,18 +18,20 @@ from worker.adapters import AdapterRefused, dispatch
 from worker.storage import StorageRefused, require_private_root
 
 MAX_FRAME_BYTES = 64 * 1024
-OPERATIONS = frozenset(
-    {
-        "profile.inspect",
-        "profile.adopt",
-        "capture.start",
-        "capture.stop",
-        "capture.inspect",
-        "transcript.create",
-        "note.create",
-        "note.inspect",
-    }
+ALPHA_OPERATIONS = frozenset(
+    {"capture.finalize", "capture.inspect", "transcript.create"}
 )
+BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
+    {"profile.inspect", "profile.adopt", "note.inspect"}
+)
+
+
+def operations_for(admission: str) -> frozenset[str]:
+    if admission == "internal-alpha":
+        return ALPHA_OPERATIONS
+    if admission in {"boundary-test", "product"}:
+        return BOUNDARY_OPERATIONS
+    raise ValueError("runtime admission is not current")
 
 
 def file_sha256(path: Path) -> str:
@@ -55,7 +57,7 @@ def emit_progress(request_id: str, meeting_id: str, state: str) -> None:
         raise ValueError("progress state is outside the closed protocol")
     emit(
         {
-            "schema": "worker-event/1",
+            "schema": "worker-event/2",
             "request_id": request_id,
             "event": "capture.state",
             "state": state,
@@ -136,7 +138,9 @@ def transcript_model_dir(manifest_path: Path, manifest: dict) -> Path | None:
     return parents.pop()
 
 
-def parse_command(frame: bytes) -> tuple[str, str, object]:
+def parse_command(
+    frame: bytes, operations: frozenset[str]
+) -> tuple[str, str, object]:
     if len(frame) > MAX_FRAME_BYTES:
         raise ValueError("protocol frame exceeds limit")
     command = json.loads(frame)
@@ -147,7 +151,7 @@ def parse_command(frame: bytes) -> tuple[str, str, object]:
         "arguments",
     }:
         raise ValueError("command has the wrong shape")
-    if command["schema"] != "worker-command/1" or command["operation"] not in OPERATIONS:
+    if command["schema"] != "worker-command/2" or command["operation"] not in operations:
         raise ValueError("command schema or operation is unsupported")
     uuid.UUID(command["request_id"])
     return command["request_id"], command["operation"], command["arguments"]
@@ -211,11 +215,13 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
     root = require_private_root(root)
     manifest = load_manifest(manifest_path)
     model_dir = transcript_model_dir(manifest_path, manifest)
+    operations = operations_for(manifest["admission"])
     emit(
         {
-            "schema": "worker-event/1",
+            "schema": "worker-event/2",
             "event": "worker.ready",
-            "protocol": 1,
+            "protocol": 2,
+            "admission": manifest["admission"],
             "build": manifest["worker"]["sha256"],
             "runtime": {"kind": "bundled", "digest": manifest["runtime"]["sha256"]},
             "tap": {"build": manifest["tap"]["sha256"], "available": True},
@@ -227,7 +233,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                 }
                 for model in manifest["models"]
             ],
-            "operations": sorted(OPERATIONS),
+            "operations": sorted(operations),
         }
     )
     while parent_is_alive(parent_fd):
@@ -240,7 +246,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
         if not frame:
             return 0
         try:
-            request_id, operation, arguments = parse_command(frame)
+            request_id, operation, arguments = parse_command(frame, operations)
             digests = dispatch_without_protocol_output(
                 root,
                 operation,
@@ -251,7 +257,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
             )
             emit(
                 {
-                    "schema": "worker-result/1",
+                    "schema": "worker-result/2",
                     "request_id": request_id,
                     "ok": True,
                     "code": None,
@@ -269,7 +275,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                 return 2
             emit(
                 {
-                    "schema": "worker-result/1",
+                    "schema": "worker-result/2",
                     "request_id": known_request,
                     "ok": False,
                     "code": "protocol_failure",

@@ -18,16 +18,16 @@ fn ready() {
     println!(
         "{}",
         serde_json::json!({
-            "schema": "worker-event/1",
+            "schema": "worker-event/2",
             "event": "worker.ready",
-            "protocol": 1,
+            "protocol": 2,
+            "admission": "boundary-test",
             "build": "fake-worker-build",
             "runtime": {"kind": "bundled", "digest": "fake-runtime"},
             "tap": {"build": "fake-tap", "available": true},
             "models": [{"id": "fake-model", "digest": "fake-model-digest", "available": true}],
             "operations": [
-                "profile.inspect", "profile.adopt", "capture.start", "capture.stop",
-                "capture.inspect", "transcript.create", "note.create", "note.inspect"
+                "capture.start", "capture.finalize", "capture.inspect", "transcript.create"
             ]
         })
     );
@@ -84,7 +84,7 @@ fn main() {
                 println!(
                     "{}",
                     serde_json::json!({
-                        "schema": "worker-result/1",
+                        "schema": "worker-result/2",
                         "request_id": command["request_id"],
                         "ok": true,
                         "code": null,
@@ -102,7 +102,7 @@ fn main() {
                 println!(
                     "{}",
                     serde_json::json!({
-                        "schema": "worker-event/1",
+                        "schema": "worker-event/2",
                         "request_id": command["request_id"],
                         "event": "capture.state",
                         "state": "recording",
@@ -112,7 +112,7 @@ fn main() {
                 println!(
                     "{}",
                     serde_json::json!({
-                        "schema": "worker-result/1",
+                        "schema": "worker-result/2",
                         "request_id": command["request_id"],
                         "ok": true,
                         "code": null,
@@ -130,7 +130,7 @@ fn main() {
             println!(
                 "{}",
                 serde_json::json!({
-                    "schema": "worker-event/1",
+                    "schema": "worker-event/2",
                     "request_id": Uuid::new_v4(),
                     "event": "capture.state",
                     "state": "recording",
@@ -165,7 +165,7 @@ fn main() {
             println!(
                 "{}",
                 serde_json::json!({
-                    "schema": "worker-result/1",
+                    "schema": "worker-result/2",
                     "request_id": command["request_id"],
                     "ok": true,
                     "code": null,
@@ -182,7 +182,7 @@ fn main() {
             println!(
                 "{}",
                 serde_json::json!({
-                    "schema": "worker-event/1",
+                    "schema": "worker-event/2",
                     "request_id": command["request_id"],
                     "event": "capture.state",
                     "state": "recording",
@@ -192,7 +192,7 @@ fn main() {
             println!(
                 "{}",
                 serde_json::json!({
-                    "schema": "worker-result/1",
+                    "schema": "worker-result/2",
                     "request_id": command["request_id"],
                     "ok": true,
                     "code": null,

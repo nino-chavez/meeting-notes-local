@@ -7,7 +7,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::protocol::{RuntimeKind, WorkerReady};
+use crate::protocol::{RuntimeKind, WorkerAdmission, WorkerReady};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,6 +98,7 @@ impl RuntimeManifest {
 
     pub fn matches_ready(&self, ready: &WorkerReady) -> bool {
         if !matches!(ready.runtime.kind, RuntimeKind::Bundled)
+            || ready.admission != WorkerAdmission::from(&self.admission)
             || !ready
                 .runtime
                 .digest
@@ -127,6 +128,16 @@ impl RuntimeManifest {
 
     pub fn is_internal_alpha(&self) -> bool {
         self.admission == RuntimeAdmission::InternalAlpha
+    }
+}
+
+impl From<&RuntimeAdmission> for WorkerAdmission {
+    fn from(admission: &RuntimeAdmission) -> Self {
+        match admission {
+            RuntimeAdmission::BoundaryTest => Self::BoundaryTest,
+            RuntimeAdmission::InternalAlpha => Self::InternalAlpha,
+            RuntimeAdmission::Product => Self::Product,
+        }
     }
 }
 
@@ -211,9 +222,10 @@ mod tests {
         .unwrap();
         let loaded = RuntimeManifest::load_and_verify(&manifest).unwrap();
         let ready_frame = serde_json::json!({
-            "schema": "worker-event/1",
+            "schema": "worker-event/2",
             "event": "worker.ready",
-            "protocol": 1,
+            "protocol": 2,
+            "admission": "product",
             "build": loaded.worker.sha256,
             "runtime": {"kind": "bundled", "digest": loaded.runtime.sha256},
             "tap": {"build": loaded.tap.sha256, "available": true},
@@ -227,6 +239,9 @@ mod tests {
         assert!(loaded.matches_ready(&ready));
         assert!(loaded.permits_application_start());
         assert!(!loaded.is_internal_alpha());
+        ready.admission = WorkerAdmission::BoundaryTest;
+        assert!(!loaded.matches_ready(&ready));
+        ready.admission = WorkerAdmission::Product;
         ready.tap.build = "0".repeat(64);
         assert!(!loaded.matches_ready(&ready));
         let mut boundary: serde_json::Value =

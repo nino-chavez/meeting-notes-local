@@ -359,9 +359,10 @@ the tool owns follow-through and the operator has two task systems.
 
 ### J3 — The meeting itself (capture)
 
-Crosses **B → A → C → D → E**, fully inventoried. The two-leg CLI capture substrate
-exists and the state choreography is reviewable in `docs/prototype/build.py`; there is
-still no application that owns the journey end to end.
+Crosses **B → A → C → D → E**, fully inventoried. The signed internal
+transcript alpha owns consent, two-leg capture, post-meeting transcription, and
+fresh-process transcript recovery. It does not yet own the evidence-linked note and
+library end of the journey, so the beta journey is still incomplete.
 
 Two beats worth restating as journey rather than state. **Consent** is the highest-
 stakes interaction in the product and the only one with legal weight in roughly a
@@ -386,15 +387,17 @@ change the note corrects nothing.
 
 ### J5 — "How long is this keeping recordings of other people?" (retention)
 
-**The lifecycle is now specified and prototyped, but not implemented; it remains the
-highest-stakes application gap.**
+**The lifecycle is specified and prototyped, and scheduled audio deletion is
+implemented in the internal alpha. Its first real due-deletion receipt is still open;
+the remaining trust actions are not implemented. This remains the highest-stakes
+application gap.**
 
 Every capture writes two WAVs and a transcript of a conversation involving people who
 are not the operator. Surface K and the interaction prototype now require a
 no-default retention choice, disk accounting, per-meeting audio deletion, whole-meeting
-deletion, and a separately resettable owner-only voice profile. The CLI still leaves
-artifacts on disk until the operator removes them, and no application enforces the
-specified lifecycle.
+deletion, and a separately resettable owner-only voice profile. The internal alpha
+persists a one-day policy and runs due deletion at startup, but the first real deletion
+event is not yet a receipt and the other trust actions remain later work.
 
 This outranks every interface question above, for three reasons. It is a promise the
 product implicitly makes and does not keep — "the audio never leaves the Mac" says
@@ -656,12 +659,13 @@ Derived by walking each journey against `screens-and-states.md`, not by inspecti
 *Specified* means a surface and its states exist in the inventory; *prototyped* means
 the transition is reviewable but does not touch real product state; *decided* means the
 design question is answered here and the surface work follows; *open* means nobody has
-answered it yet. There is still no app. Collapsing those into a severity was the first
-version's error — it made an undecided item read as scheduled.
+answered it yet. The internal transcript alpha is an app, but it does not implement the
+beta surfaces below. Collapsing those states into a severity was the first version's
+error — it made an undecided item read as scheduled.
 
 | Gap | Journey | Status |
 |---|---|---|
-| Retention, deletion, disk accounting | J5 | **Prototyped, not implemented** — surface K and the encounter state exact deletion consequences, including the independent voice-profile lifecycle |
+| Retention, deletion, disk accounting | J5 | **Scheduled deletion implemented; first real receipt open; other actions prototyped** — surface K and the encounter state exact deletion consequences, including the independent voice-profile lifecycle |
 | A claim in a note has no path to the words behind it | J1 | **Prototyped, repair still open** — `note/1` and surface E carry the claim-to-transcript path, while the current evidence-transport repair fails closed before a new quality result |
 | No way to overrule a gate decision | J4 | **Prototyped, not wired** — the specimen restores a turn, marks the note stale, and regenerates; no app performs it on a real capture |
 | "Not captured" and "never said" look identical | J1 | **Prototyped, not measured on a capture** — the specimen distinguishes a withheld turn and capture limits; QMSum has no real gate report |

@@ -18,8 +18,8 @@ pub enum Operation {
     ProfileAdopt,
     #[serde(rename = "capture.start")]
     CaptureStart,
-    #[serde(rename = "capture.stop")]
-    CaptureStop,
+    #[serde(rename = "capture.finalize")]
+    CaptureFinalize,
     #[serde(rename = "capture.inspect")]
     CaptureInspect,
     #[serde(rename = "transcript.create")]
@@ -36,6 +36,7 @@ pub struct WorkerReady {
     pub schema: WorkerEventSchema,
     pub event: ReadyEvent,
     pub protocol: u16,
+    pub admission: WorkerAdmission,
     pub build: String,
     pub runtime: RuntimeStatus,
     pub tap: TapStatus,
@@ -45,8 +46,16 @@ pub struct WorkerReady {
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 pub enum WorkerEventSchema {
-    #[serde(rename = "worker-event/1")]
-    V1,
+    #[serde(rename = "worker-event/2")]
+    V2,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerAdmission {
+    BoundaryTest,
+    InternalAlpha,
+    Product,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -94,7 +103,7 @@ pub struct WorkerCommand {
 impl WorkerCommand {
     pub fn new(operation: Operation, arguments: Value) -> Self {
         Self {
-            schema: "worker-command/1",
+            schema: "worker-command/2",
             request_id: Uuid::new_v4(),
             operation,
             arguments,
@@ -116,8 +125,8 @@ pub struct WorkerResult {
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 pub enum ResultSchema {
-    #[serde(rename = "worker-result/1")]
-    V1,
+    #[serde(rename = "worker-result/2")]
+    V2,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -199,7 +208,7 @@ pub fn parse_ready(
         return Err(ProtocolError::FrameTooLarge);
     }
     let ready: WorkerReady = serde_json::from_slice(frame).map_err(|_| ProtocolError::Malformed)?;
-    if ready.protocol != 1 {
+    if ready.protocol != 2 {
         return Err(ProtocolError::UnsupportedProtocol);
     }
     if &ready.operations != expected {
@@ -319,7 +328,7 @@ mod tests {
 
     #[test]
     fn unknown_ready_field_fails_closed() {
-        let frame = br#"{"schema":"worker-event/1","event":"worker.ready","protocol":1,"build":"x","runtime":{"kind":"bundled","digest":"x"},"tap":{"build":"x","available":true},"models":[],"operations":[],"surprise":true}"#;
+        let frame = br#"{"schema":"worker-event/2","event":"worker.ready","protocol":2,"admission":"boundary-test","build":"x","runtime":{"kind":"bundled","digest":"x"},"tap":{"build":"x","available":true},"models":[],"operations":[],"surprise":true}"#;
         assert_eq!(
             parse_ready(frame, &HashSet::new()).unwrap_err(),
             ProtocolError::Malformed
@@ -330,7 +339,7 @@ mod tests {
     fn duplicate_terminal_result_is_refused() {
         let request_id = Uuid::new_v4();
         let result = WorkerResult {
-            schema: ResultSchema::V1,
+            schema: ResultSchema::V2,
             request_id,
             ok: true,
             code: None,
@@ -339,7 +348,7 @@ mod tests {
         };
         let mut tracker = RequestTracker::default();
         let command = WorkerCommand {
-            schema: "worker-command/1",
+            schema: "worker-command/2",
             request_id,
             operation: Operation::CaptureInspect,
             arguments: serde_json::json!({"meeting_id": "fixture"}),
@@ -356,7 +365,7 @@ mod tests {
     fn result_with_unknown_field_fails_closed() {
         let request_id = Uuid::new_v4();
         let frame = format!(
-            "{{\"schema\":\"worker-result/1\",\"request_id\":\"{request_id}\",\"ok\":true,\"code\":null,\"recoverable\":null,\"artifact_digests\":{{}},\"extra\":true}}"
+            "{{\"schema\":\"worker-result/2\",\"request_id\":\"{request_id}\",\"ok\":true,\"code\":null,\"recoverable\":null,\"artifact_digests\":{{}},\"extra\":true}}"
         );
         assert_eq!(
             parse_output(frame.as_bytes()).unwrap_err(),
@@ -369,7 +378,7 @@ mod tests {
         let request_id = Uuid::new_v4();
         let meeting_id = Uuid::new_v4();
         let command = WorkerCommand {
-            schema: "worker-command/1",
+            schema: "worker-command/2",
             request_id,
             operation: Operation::CaptureStart,
             arguments: serde_json::json!({
@@ -378,7 +387,7 @@ mod tests {
             }),
         };
         let result = WorkerResult {
-            schema: ResultSchema::V1,
+            schema: ResultSchema::V2,
             request_id,
             ok: true,
             code: None,
@@ -390,7 +399,7 @@ mod tests {
         assert_eq!(tracker.terminal(&result), Err(ProtocolError::InvalidResult));
 
         let progress = WorkerProgress {
-            schema: WorkerEventSchema::V1,
+            schema: WorkerEventSchema::V2,
             request_id,
             event: ProgressEvent::CaptureState,
             state: CaptureProgressState::Recording,
@@ -409,7 +418,7 @@ mod tests {
         let request_id = Uuid::new_v4();
         let meeting_id = Uuid::new_v4();
         let frame = format!(
-            "{{\"schema\":\"worker-event/1\",\"request_id\":\"{request_id}\",\"event\":\"capture.state\",\"state\":\"recording\",\"meeting_id\":\"{meeting_id}\",\"extra\":true}}"
+            "{{\"schema\":\"worker-event/2\",\"request_id\":\"{request_id}\",\"event\":\"capture.state\",\"state\":\"recording\",\"meeting_id\":\"{meeting_id}\",\"extra\":true}}"
         );
         assert_eq!(
             parse_output(frame.as_bytes()).unwrap_err(),

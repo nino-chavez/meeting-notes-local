@@ -129,7 +129,7 @@ class WorkerProcess:
     def request(self, operation: str, arguments: dict) -> dict:
         request_id = str(uuid.uuid4())
         command = {
-            "schema": "worker-command/1",
+            "schema": "worker-command/2",
             "request_id": request_id,
             "operation": operation,
             "arguments": arguments,
@@ -207,8 +207,21 @@ class WorkerProtocolTests(unittest.TestCase):
 
         worker = WorkerProcess(self.root, self.manifest)
         try:
-            self.assertEqual(worker.ready["schema"], "worker-event/1")
-            self.assertEqual(len(worker.ready["operations"]), 8)
+            self.assertEqual(worker.ready["schema"], "worker-event/2")
+            self.assertEqual(worker.ready["protocol"], 2)
+            self.assertEqual(worker.ready["admission"], self.admission)
+            expected_operations = {
+                "capture.finalize",
+                "capture.inspect",
+                "transcript.create",
+            }
+            if self.admission != "internal-alpha":
+                expected_operations |= {
+                    "profile.inspect",
+                    "profile.adopt",
+                    "note.inspect",
+                }
+            self.assertEqual(set(worker.ready["operations"]), expected_operations)
             inspected = worker.request("capture.inspect", {"meeting_id": meeting_id})
             self.assertTrue(inspected["ok"])
             self.assertEqual(
@@ -261,7 +274,7 @@ class WorkerProtocolTests(unittest.TestCase):
         loaded = load_manifest(alpha_manifest)
         self.assertEqual(transcript_model_dir(alpha_manifest, loaded), model_dir.resolve())
 
-    def test_capture_stop_finalizes_exact_wav_pair_without_overwrite(self) -> None:
+    def test_capture_finalize_creates_exact_receipt_without_overwrite(self) -> None:
         meeting_id = str(uuid.uuid4())
         capture = self.root / "meetings" / meeting_id / "capture"
         capture.mkdir(mode=0o700, parents=True)
@@ -277,7 +290,7 @@ class WorkerProtocolTests(unittest.TestCase):
         worker = WorkerProcess(self.root, self.manifest)
         try:
             finalized = worker.request(
-                "capture.stop",
+                "capture.finalize",
                 {
                     "meeting_id": meeting_id,
                     "started_at_epoch_seconds": 946684800,
@@ -293,7 +306,7 @@ class WorkerProtocolTests(unittest.TestCase):
             original = (capture / "session.json").read_bytes()
 
             repeated = worker.request(
-                "capture.stop",
+                "capture.finalize",
                 {
                     "meeting_id": meeting_id,
                     "started_at_epoch_seconds": 946684800,
@@ -481,7 +494,7 @@ while True:
         self.assertEqual(
             json.loads(output.getvalue()),
             {
-                "schema": "worker-event/1",
+                "schema": "worker-event/2",
                 "request_id": request_id,
                 "event": "capture.state",
                 "state": "recording",

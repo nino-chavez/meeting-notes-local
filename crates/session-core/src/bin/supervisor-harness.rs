@@ -2,7 +2,7 @@ use std::env;
 use std::process::Command;
 use std::time::Duration;
 
-use local_meeting_notes_session_core::supervision::{OwnedChild, expected_operations};
+use local_meeting_notes_session_core::supervision::{OwnedChild, protocol_fixture_operations};
 
 fn main() {
     let worker = env::args().nth(1).expect("fake worker path");
@@ -13,7 +13,7 @@ fn main() {
         .env("LMN_PID_FILE", pid_file);
     let mut child = OwnedChild::spawn(&mut command).expect("spawn fake worker");
     child
-        .wait_ready(Duration::from_secs(2), &expected_operations())
+        .wait_ready(Duration::from_secs(2), &protocol_fixture_operations())
         .expect("fake worker ready");
     loop {
         std::thread::sleep(Duration::from_secs(1));

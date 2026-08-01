@@ -175,6 +175,64 @@ Record only release evidence:
 Do not put meeting audio, transcript text, notes, voice profiles, Apple
 credentials, or private review packets in a Git receipt.
 
+### Content-free closure receipt
+
+Keep the completed receipt outside Git beside the frozen artifact. It records only
+release identity and outcomes; it must not contain a meeting identifier, app-data
+path, audio, transcript text, note text, profile material, or credential material.
+An agent may verify this shape and the public hashes. It may not invent the observed
+outcomes or the release verdict.
+
+```json
+{
+  "schema": "transcript-alpha-release-receipt/1",
+  "recorded_at": "<RFC 3339>",
+  "release": {
+    "commit": "5fe9aecd4f53204dc6e82573fd4b4dde37efd6d1",
+    "app_version": "0.1.0",
+    "admission": "internal-alpha",
+    "dmg_sha256": "f5f091811d337acae4c7dc25db5638e2675e30552ed1793af1dc82c7c734385a"
+  },
+  "automatic_deletion": {
+    "observed_at": "<RFC 3339>",
+    "installed_build_unchanged": true,
+    "receipt_schema": "audio-deletion/1",
+    "receipt_sha256": "<sha256>",
+    "microphone_audio_absent": true,
+    "system_audio_absent": true,
+    "transcript_retained": true
+  },
+  "consented_hardware_run": {
+    "participant_attestation_recorded": true,
+    "headphones_attested": true,
+    "operator_alone_attested": true,
+    "two_leg_start_stop_succeeded": true,
+    "post_meeting_transcript_created": true,
+    "true_quit_fresh_launch_recovered_transcript": true,
+    "transcript_text_inspected_for_receipt": false
+  },
+  "clean_transfer": {
+    "target": "another-mac-or-clean-account",
+    "quarantine_intact": true,
+    "gatekeeper_opened_without_override": true,
+    "drag_to_applications_succeeded": true,
+    "prompts_attributed_to_app": true,
+    "permission_denials_failed_closed": true,
+    "two_leg_start_stop_succeeded": true,
+    "post_meeting_transcript_created": true,
+    "true_quit_fresh_launch_recovered_transcript": true,
+    "retention_deletion_succeeded": true,
+    "external_runtime_or_network_required": false
+  },
+  "operator_release_verdict": "accept-or-decline"
+}
+```
+
+The deletion observation belongs to the original unchanged installed run. The clean
+transfer may use the same exact DMG on the separate target. Rebuilding, reinstalling,
+changing retention, manually deleting audio, or removing quarantine does not close
+either gate; it starts a new evidence chain or records a failure.
+
 ## Human release gates
 
 Signing and notarization prove package identity and Apple trust. They do not

@@ -37,7 +37,7 @@ use local_meeting_notes_session_core::storage::{
 use local_meeting_notes_session_core::supervision::{
     OwnedChild, OwnershipReceipt, OwnershipSchema, ProcessIdentity, ProcessInspection,
     ProcessInspector, SupervisionError, SystemGroupSignaler, SystemProcessInspector,
-    expected_operations,
+    internal_alpha_operations,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -864,7 +864,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
             return;
         }
     };
-    let ready = worker.wait_ready(Duration::from_secs(10), &expected_operations());
+    let ready = worker.wait_ready(Duration::from_secs(10), &internal_alpha_operations());
     match ready {
         Ok(ready) if manifest.matches_ready(&ready) => {}
         Err(SupervisionError::ReadyTimeout) => {
@@ -1525,7 +1525,7 @@ fn run_capture_task(
 
     let capture_result = request_worker(
         &state,
-        Operation::CaptureStop,
+        Operation::CaptureFinalize,
         json!({
             "meeting_id": meeting_id,
             "started_at_epoch_seconds": started_at_epoch_seconds,

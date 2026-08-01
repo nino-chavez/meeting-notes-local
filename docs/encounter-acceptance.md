@@ -309,9 +309,9 @@ The current renderer covers this choreography, including empty-library,
 artifact-specific processing recovery, and ordered shell-startup recovery
 routes. Its private-input mode consumes the exact `encounter-review-content/1` and
 digest-bound `encounter-content-approval/1` schemas, and an eligible owner-only packet
-has populated the page awaiting cold review. Its correction, retention, deletion, and
-processing behaviors remain specimens. Cross-meeting search remains outside the
-supported beta and outside this gate.
+populated the exact page accepted in the 2026-07-31 cold review. Its correction,
+retention, deletion, and processing behaviors remain specimens. Cross-meeting search
+remains outside the supported beta and outside this gate.
 
 ## Cold operator checklist
 
