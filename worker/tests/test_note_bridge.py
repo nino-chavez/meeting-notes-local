@@ -123,7 +123,7 @@ class NoteBridgeHarnessTests(unittest.TestCase):
         self.temporary.cleanup()
 
     @staticmethod
-    def _write_validator_bundle(path: Path) -> None:
+    def _write_validator_bundle(path: Path, note_validator_suffix: bytes = b"") -> None:
         sources = {
             "note_validator.py": REPO / "worker/note_validator.py",
             "summarize.py": REPO / "notes/summarize.py",
@@ -132,8 +132,16 @@ class NoteBridgeHarnessTests(unittest.TestCase):
         }
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
             for name, source in sources.items():
-                archive.writestr(name, source.read_bytes())
+                data = source.read_bytes()
+                if name == "note_validator.py":
+                    data += note_validator_suffix
+                archive.writestr(name, data)
         path.chmod(0o600)
+
+    def _replace_validator(self, note_validator_suffix: str) -> None:
+        self.validator.unlink()
+        self._write_validator_bundle(self.validator, note_validator_suffix.encode())
+        self._write_manifest()
 
     def _manifest_document(self) -> dict:
         return {
@@ -406,6 +414,89 @@ class NoteBridgeHarnessTests(unittest.TestCase):
                 False,
             ),
         )
+
+    def test_retained_snapshot_refuses_same_inode_same_size_mutation(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        original = note.read_bytes()
+        replacement = bytearray(original)
+        replacement[0] = ord("[") if replacement[0] != ord("[") else ord("{")
+        original_identity = note.stat()
+
+        def overwrite_after_open() -> None:
+            with note.open("r+b") as handle:
+                handle.write(replacement)
+                handle.flush()
+                os.fsync(handle.fileno())
+            current_identity = note.stat()
+            self.assertEqual(current_identity.st_ino, original_identity.st_ino)
+            self.assertEqual(current_identity.st_size, original_identity.st_size)
+
+        root_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with self.assertRaises(ArtifactFailure) as failure:
+                inspect_snapshot(root_fd, self._arguments(), after_open=overwrite_after_open)
+        finally:
+            os.close(root_fd)
+        self.assertEqual(
+            (failure.exception.code, failure.exception.recoverable),
+            ("artifact-changed", False),
+        )
+
+    def test_identity_drift_during_artifact_refusal_emits_no_result(self) -> None:
+        self._replace_validator(
+            "\n"
+            "def inspect(*args, **kwargs):\n"
+            "    from pathlib import Path\n"
+            f"    target = Path({str(self.bridge)!r})\n"
+            "    with target.open('r+b') as handle:\n"
+            "        first = handle.read(1)\n"
+            "        handle.seek(0)\n"
+            "        handle.write(b'#' if first != b'#' else b'!')\n"
+            "        handle.flush()\n"
+            "    raise ArtifactFailure('artifact-invalid', False)\n"
+        )
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertIsNone(result)
+        self.assertEqual((returncode, error), (2, b""))
+
+    def test_internal_validator_failure_emits_no_artifact_result(self) -> None:
+        self._replace_validator(
+            "\ndef inspect(*args, **kwargs):\n    raise RuntimeError('injected internal failure')\n"
+        )
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertIsNone(result)
+        self.assertEqual((returncode, error), (2, b""))
+
+    def test_temporary_storage_failure_emits_no_artifact_result(self) -> None:
+        self._replace_validator(
+            "\n"
+            "class _UnavailableTemporaryDirectory:\n"
+            "    def __init__(self, *args, **kwargs):\n"
+            "        pass\n"
+            "    def __enter__(self):\n"
+            "        raise OSError('injected temporary storage failure')\n"
+            "    def __exit__(self, *args):\n"
+            "        return False\n"
+            "tempfile.TemporaryDirectory = _UnavailableTemporaryDirectory\n"
+        )
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertIsNone(result)
+        self.assertEqual((returncode, error), (2, b""))
 
     def test_invalid_arguments_return_only_invalid_request(self) -> None:
         invalid = self._arguments()

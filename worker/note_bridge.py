@@ -528,14 +528,23 @@ def _watch_parent(parent_fd: int) -> None:
     threading.Thread(target=exit_at_eof, daemon=True).start()
 
 
+def _require_execution_identity(
+    runtime: _VerifiedRuntime,
+    standard_library: tuple[Path, ...],
+    bundle_loader: object,
+) -> None:
+    _require_runtime_identity(runtime)
+    runtime.require_unchanged()
+    _require_loaded_code_confined(runtime, standard_library, bundle_loader)
+
+
 def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
     standard_library = _confine_runtime_imports()
     runtime = verify_runtime(manifest_path)
     root_fd = _open_absolute_directory(root_path, private=True)
     try:
         validator, bundle_loader = load_validator(runtime)
-        runtime.require_unchanged()
-        _require_loaded_code_confined(runtime, standard_library, bundle_loader)
+        _require_execution_identity(runtime, standard_library, bundle_loader)
         _emit(
             {
                 "schema": "note-bridge-event/1",
@@ -546,7 +555,11 @@ def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
                 "operations": ["note.inspect"],
             }
         )
-        frame = _read_frame(parent_fd)
+        try:
+            frame = _read_frame(parent_fd)
+        except Exception:
+            _require_execution_identity(runtime, standard_library, bundle_loader)
+            return 2
         request_id: str | None = None
         try:
             parsed = json.loads(frame, object_pairs_hook=_reject_duplicate_keys)
@@ -555,16 +568,20 @@ def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
             request_id, arguments = _parse_command(frame)
         except InvalidArguments:
             if request_id is None:
+                _require_execution_identity(runtime, standard_library, bundle_loader)
                 return 2
             try:
                 request_id = _canonical_uuid(request_id)
             except InvalidArguments:
+                _require_execution_identity(runtime, standard_library, bundle_loader)
                 return 2
+            _require_execution_identity(runtime, standard_library, bundle_loader)
             _refused(request_id, "invalid-request", False)
             return 0
         except (BridgeRefused, UnicodeDecodeError, json.JSONDecodeError):
+            _require_execution_identity(runtime, standard_library, bundle_loader)
             return 2
-        runtime.require_unchanged()
+        _require_execution_identity(runtime, standard_library, bundle_loader)
         try:
             digests = validator.inspect(root_fd, arguments)
         except validator.ArtifactFailure as exc:
@@ -573,14 +590,15 @@ def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
                 ("artifact-missing", True),
                 ("artifact-changed", False),
             }:
+                _require_execution_identity(runtime, standard_library, bundle_loader)
                 return 2
+            _require_execution_identity(runtime, standard_library, bundle_loader)
             _refused(request_id, exc.code, exc.recoverable)
             return 0
         except Exception:
-            _refused(request_id, "artifact-invalid", False)
-            return 0
-        runtime.require_unchanged()
-        _require_loaded_code_confined(runtime, standard_library, bundle_loader)
+            _require_execution_identity(runtime, standard_library, bundle_loader)
+            return 2
+        _require_execution_identity(runtime, standard_library, bundle_loader)
         _emit(
             {
                 "schema": "note-bridge-result/1",

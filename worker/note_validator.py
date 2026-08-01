@@ -129,6 +129,12 @@ def _require_links(directories: list[_DirectoryLink], files: list[_FileLink]) ->
             raise ArtifactFailure("artifact-changed", False)
 
 
+def _require_snapshot(link: _FileLink, expected: bytes, expected_digest: str) -> None:
+    current = _read_file(link)
+    if current != expected or hashlib.sha256(current).hexdigest() != expected_digest:
+        raise ArtifactFailure("artifact-changed", False)
+
+
 def _write_snapshot(path: Path, data: bytes) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as handle:
@@ -156,27 +162,39 @@ def _validate_snapshot(
         _write_snapshot(note_path, note_bytes)
         _write_snapshot(transcript_path, transcript_bytes)
         _write_snapshot(markdown_path, markdown_bytes)
-        document = json.loads(note_bytes)
-        if not isinstance(document, dict):
-            raise ArtifactFailure("artifact-invalid", False)
-        if document.get("schema") != "note/2" or document.get("passed") is not True:
-            raise ArtifactFailure("artifact-invalid", False)
-        meeting = document.get("meeting")
-        if not isinstance(meeting, dict) or meeting.get("id") != meeting_id:
-            raise ArtifactFailure("artifact-invalid", False)
-        if document.get("transcript") != f"../transcript/{transcript_id}.json":
-            raise ArtifactFailure("artifact-invalid", False)
-        render = document.get("render")
-        if not isinstance(render, dict) or render.get("path") != f"{markdown_id}.md":
-            raise ArtifactFailure("artifact-invalid", False)
-        transcript = load(transcript_path)
-        validated_markdown = validate_artifact_pair(document, note_path, transcript)
-        if validated_markdown != markdown_path:
-            raise ArtifactFailure("artifact-invalid", False)
-        citations = structured_artifact_citations(document, transcript)
-        checks = document.get("checks")
-        if not isinstance(checks, dict) or checks.get("citations") != citations:
-            raise ArtifactFailure("artifact-invalid", False)
+        try:
+            document = json.loads(note_bytes)
+            if not isinstance(document, dict):
+                raise ArtifactFailure("artifact-invalid", False)
+            if document.get("schema") != "note/2" or document.get("passed") is not True:
+                raise ArtifactFailure("artifact-invalid", False)
+            meeting = document.get("meeting")
+            if not isinstance(meeting, dict) or meeting.get("id") != meeting_id:
+                raise ArtifactFailure("artifact-invalid", False)
+            if document.get("transcript") != f"../transcript/{transcript_id}.json":
+                raise ArtifactFailure("artifact-invalid", False)
+            render = document.get("render")
+            if not isinstance(render, dict) or render.get("path") != f"{markdown_id}.md":
+                raise ArtifactFailure("artifact-invalid", False)
+            transcript = load(transcript_path)
+            validated_markdown = validate_artifact_pair(document, note_path, transcript)
+            if validated_markdown != markdown_path:
+                raise ArtifactFailure("artifact-invalid", False)
+            citations = structured_artifact_citations(document, transcript)
+            checks = document.get("checks")
+            if not isinstance(checks, dict) or checks.get("citations") != citations:
+                raise ArtifactFailure("artifact-invalid", False)
+        except ArtifactFailure:
+            raise
+        except (
+            UnicodeError,
+            ValueError,
+            KeyError,
+            TypeError,
+            IndexError,
+            SystemExit,
+        ) as exc:
+            raise ArtifactFailure("artifact-invalid", False) from exc
 
 
 def inspect(
@@ -234,20 +252,19 @@ def inspect(
             raise ArtifactFailure("artifact-changed", False)
         if hashlib.sha256(markdown_bytes).hexdigest() != markdown_id:
             raise ArtifactFailure("artifact-changed", False)
-        try:
-            _validate_snapshot(
-                meeting_id,
-                note_id,
-                transcript_id,
-                markdown_id,
-                note_bytes,
-                transcript_bytes,
-                markdown_bytes,
-            )
-        except ArtifactFailure:
-            raise
-        except Exception as exc:
-            raise ArtifactFailure("artifact-invalid", False) from exc
+        _validate_snapshot(
+            meeting_id,
+            note_id,
+            transcript_id,
+            markdown_id,
+            note_bytes,
+            transcript_bytes,
+            markdown_bytes,
+        )
+        _require_links(directories, files)
+        _require_snapshot(note, note_bytes, note_id)
+        _require_snapshot(transcript, transcript_bytes, transcript_id)
+        _require_snapshot(markdown, markdown_bytes, markdown_id)
         _require_links(directories, files)
         return {
             "note": note_id,
