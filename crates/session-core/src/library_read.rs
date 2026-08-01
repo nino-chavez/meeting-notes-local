@@ -16,6 +16,7 @@ use thiserror::Error;
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
+use crate::library_metadata::{MetadataIdentity, MetadataState, read_library_metadata};
 use crate::meeting::{
     MAX_MEETING_RECORD_BYTES, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref, load_meeting,
     open_private_file, require_private_directory, verify_artifact_ref,
@@ -67,6 +68,7 @@ pub struct LibraryProjection {
     rows: Vec<LibraryRow>,
     quarantined_meetings: usize,
     limits: ReadLimits,
+    metadata: MetadataState,
     hits: RefCell<BTreeMap<String, SealedHit>>,
 }
 
@@ -80,6 +82,8 @@ pub struct LibraryRow {
     transcript_relative_path: String,
     turns: Vec<StoredTurn>,
     attempt_sha256: String,
+    title: Option<String>,
+    folder: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -95,7 +99,7 @@ pub struct LibraryHit {
     key: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum SealedHit {
     Transcript {
         key: String,
@@ -111,9 +115,14 @@ enum SealedHit {
         source_turn_index: u32,
         normalized_query: String,
     },
+    Meeting {
+        key: String,
+        authority: HitAuthority,
+        normalized_query: String,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct HitAuthority {
     meeting_id: String,
     created_at_epoch_seconds: u64,
@@ -122,6 +131,7 @@ struct HitAuthority {
     attempt_sha256: String,
     transcript_sha256: String,
     transcript_relative_path: String,
+    metadata_identity: MetadataIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +146,11 @@ pub enum OpenedLibraryHit {
     Withheld {
         meeting_id: String,
         source_turn_index: u32,
+    },
+    Meeting {
+        meeting_id: String,
+        title: Option<String>,
+        folder: Option<String>,
     },
 }
 
@@ -191,11 +206,47 @@ impl LibraryProjection {
             }
         }
         rows.sort_by(meeting_order);
+        let metadata = read_library_metadata(storage);
+        if let Some(document) = metadata.document() {
+            // Metadata gains authority only when every row targets a safely
+            // projected meeting.  A sparse record may omit any meeting.
+            if document.meetings.iter().all(|row| {
+                rows.iter()
+                    .any(|meeting| meeting.meeting_id == row.meeting_id)
+            }) {
+                for row in &mut rows {
+                    if let Some(label) = document
+                        .meetings
+                        .iter()
+                        .find(|label| label.meeting_id == row.meeting_id)
+                    {
+                        row.title = label.title.clone();
+                        row.folder = label
+                            .folder_id
+                            .as_ref()
+                            .and_then(|id| document.folders.iter().find(|folder| &folder.id == id))
+                            .map(|folder| folder.name.clone());
+                    }
+                }
+            } else {
+                // Metadata rows cannot hide invalid or unavailable meetings.
+                // Preserve a content-free unavailable state instead.
+                return Ok(Self {
+                    snapshot_id: Uuid::new_v4(),
+                    rows,
+                    quarantined_meetings: quarantined,
+                    limits,
+                    metadata: metadata.unavailable_after_relative_validation(),
+                    hits: RefCell::new(BTreeMap::new()),
+                });
+            }
+        }
         Ok(Self {
             snapshot_id: Uuid::new_v4(),
             rows,
             quarantined_meetings: quarantined,
             limits,
+            metadata,
             hits: RefCell::new(BTreeMap::new()),
         })
     }
@@ -232,6 +283,21 @@ impl LibraryProjection {
                         });
                     }
                 }
+            }
+            if row
+                .title
+                .as_ref()
+                .is_some_and(|title| !normalized_matches(title, &normalized).is_empty())
+                || row
+                    .folder
+                    .as_ref()
+                    .is_some_and(|folder| !normalized_matches(folder, &normalized).is_empty())
+            {
+                hits.push(SealedHit::Meeting {
+                    key: format!("{}:m", row.meeting_id),
+                    authority: authority.clone(),
+                    normalized_query: normalized.clone(),
+                });
             }
         }
         hits.sort_by(hit_order);
@@ -329,6 +395,25 @@ impl LibraryProjection {
                     source_turn_index,
                 })
             }
+            SealedHit::Meeting {
+                normalized_query, ..
+            } => {
+                if row
+                    .title
+                    .as_ref()
+                    .is_none_or(|title| normalized_matches(title, &normalized_query).is_empty())
+                    && row.folder.as_ref().is_none_or(|folder| {
+                        normalized_matches(folder, &normalized_query).is_empty()
+                    })
+                {
+                    return Err(LibraryReadError::SnapshotStale);
+                }
+                Ok(OpenedLibraryHit::Meeting {
+                    meeting_id: row.meeting_id.clone(),
+                    title: row.title.clone(),
+                    folder: row.folder.clone(),
+                })
+            }
         }
     }
 
@@ -341,6 +426,7 @@ impl LibraryProjection {
             attempt_sha256: row.attempt_sha256.clone(),
             transcript_sha256: row.transcript_sha256.clone(),
             transcript_relative_path: row.transcript_relative_path.clone(),
+            metadata_identity: self.metadata.identity(),
         }
     }
 
@@ -466,6 +552,8 @@ fn inspect_meeting(
         transcript_relative_path: current.relative_path.clone(),
         turns,
         attempt_sha256: attempt.sha256,
+        title: None,
+        folder: None,
     }))
 }
 
@@ -659,7 +747,7 @@ fn normalize(value: &str) -> (String, Vec<(u64, u64)>) {
 fn is_forbidden(character: char) -> bool {
     character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
 }
-fn valid_opaque_id(value: &str) -> bool {
+pub(crate) fn valid_opaque_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value != "."
@@ -701,21 +789,23 @@ fn meeting_order(left: &LibraryRow, right: &LibraryRow) -> std::cmp::Ordering {
 }
 fn hit_key(hit: &SealedHit) -> &str {
     match hit {
-        SealedHit::Transcript { key, .. } | SealedHit::Withheld { key, .. } => key,
+        SealedHit::Transcript { key, .. }
+        | SealedHit::Withheld { key, .. }
+        | SealedHit::Meeting { key, .. } => key,
     }
 }
 fn hit_meeting_id(hit: &SealedHit) -> &str {
     match hit {
-        SealedHit::Transcript { authority, .. } | SealedHit::Withheld { authority, .. } => {
-            &authority.meeting_id
-        }
+        SealedHit::Transcript { authority, .. }
+        | SealedHit::Withheld { authority, .. }
+        | SealedHit::Meeting { authority, .. } => &authority.meeting_id,
     }
 }
 fn hit_authority(hit: &SealedHit) -> &HitAuthority {
     match hit {
-        SealedHit::Transcript { authority, .. } | SealedHit::Withheld { authority, .. } => {
-            authority
-        }
+        SealedHit::Transcript { authority, .. }
+        | SealedHit::Withheld { authority, .. }
+        | SealedHit::Meeting { authority, .. } => authority,
     }
 }
 fn hit_order(left: &SealedHit, right: &SealedHit) -> std::cmp::Ordering {
@@ -745,6 +835,7 @@ fn hit_sort(hit: &SealedHit) -> (u64, u64) {
             authority_created(authority),
             ((*source_turn_index as u64) << 32) | u32::MAX as u64,
         ),
+        SealedHit::Meeting { authority, .. } => (authority_created(authority), u64::MAX),
     }
 }
 fn authority_created(authority: &HitAuthority) -> u64 {
@@ -853,6 +944,17 @@ mod tests {
             write_meeting(&directory, &record).unwrap();
             directory
         }
+
+        fn metadata(&self, bytes: &[u8]) -> PathBuf {
+            let library = self.storage.path().join("library");
+            create_private_dir(&library).unwrap();
+            let path = library.join("metadata.json");
+            if path.exists() {
+                fs::remove_file(&path).unwrap();
+            }
+            durable_create_new(&path, bytes).unwrap();
+            path
+        }
     }
 
     #[test]
@@ -868,6 +970,126 @@ mod tests {
         assert_eq!(projection.quarantined_meetings(), 1);
         assert_eq!(before, tree_digest(fixture.storage.path()));
         assert!(fixture.temp.path().exists());
+    }
+
+    #[test]
+    fn missing_metadata_keeps_transcript_authority_and_valid_metadata_coalesces_meeting_hits() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 10, &[("transcript token", false)]);
+        let missing = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert_eq!(missing.search("transcript").unwrap().len(), 1);
+        assert!(missing.search("project").unwrap().is_empty());
+
+        fixture.metadata(br#"{"schema":"library-metadata/1","revision":4,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"Project Atlas"}],"meetings":[{"meeting_id":"meeting-a","title":"Project kickoff","folder_id":"11111111-1111-4111-8111-111111111111"}]}"#);
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let title = projection.search("project").unwrap();
+        assert_eq!(title.len(), 1, "title and folder are one meeting hit");
+        assert!(
+            matches!(projection.open(&fixture.storage, &title[0]).unwrap(), OpenedLibraryHit::Meeting { ref title, ref folder, .. } if title.as_deref() == Some("Project kickoff") && folder.as_deref() == Some("Project Atlas"))
+        );
+        assert_eq!(projection.search("transcript").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn malformed_metadata_loses_only_label_authority() {
+        let cases: &[&[u8]] = &[
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[],"extra":true}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":null}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"name":"x","id":"11111111-1111-4111-8111-111111111111"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"e\u0301"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"a"},{"id":"00000000-0000-4000-8000-000000000000","name":"b"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"a"},{"id":"11111111-1111-4111-8111-111111111111","name":"b"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-4111-111111111111","name":"a"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-11111111111A","name":"a"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"a"}],"meetings":[{"meeting_id":"meeting-a","title":null,"folder_id":"11111111-1111-4111-8111-111111111111"},{"meeting_id":"meeting-a","title":null,"folder_id":null}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"a"}],"meetings":[{"meeting_id":"meeting-a","title":null,"folder_id":"11111111-1111-4111-8111-111111111111"},{"meeting_id":"meeting-a","title":null,"folder_id":null}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"a"}],"meetings":[{"meeting_id":"meeting-a","title":null,"folder_id":"22222222-2222-4222-8222-222222222222"}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"unknown","title":"x","folder_id":null}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"x/y","folder_id":null}]}"#,
+        ];
+        for bytes in cases {
+            let fixture = Fixture::new();
+            fixture.meeting("meeting-a", 10, &[("transcript token", false)]);
+            fixture.metadata(bytes);
+            let projection =
+                LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+            assert!(projection.search("x").unwrap().is_empty());
+            assert_eq!(projection.search("transcript").unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn every_metadata_state_change_stales_prior_hits() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 10, &[("transcript token", false)]);
+        let missing = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let missing_hit = missing.search("transcript").unwrap().remove(0);
+        fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"first","folder_id":null}]}"#);
+        assert_eq!(
+            missing.open(&fixture.storage, &missing_hit),
+            Err(LibraryReadError::SnapshotStale)
+        );
+
+        let variants: &[Option<&[u8]>] = &[
+            Some(br#"{ "schema" : "library-metadata/1", "revision" : 1, "folders" : [], "meetings" : [{ "meeting_id" : "meeting-a", "title" : "first", "folder_id" : null }] }"#),
+            Some(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"other","folder_id":null}]}"#),
+            Some(br#"{"schema":"library-metadata/1","revision":2,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"first","folder_id":null}]}"#),
+            None,
+        ];
+        for replacement in variants {
+            let fixture = Fixture::new();
+            fixture.meeting("meeting-a", 10, &[("transcript token", false)]);
+            fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"first","folder_id":null}]}"#);
+            let projection =
+                LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+            let hit = projection.search("first").unwrap().remove(0);
+            let path = fixture.storage.path().join("library/metadata.json");
+            match replacement {
+                Some(bytes) => {
+                    fs::remove_file(&path).unwrap();
+                    durable_create_new(&path, bytes).unwrap();
+                }
+                None => fs::remove_file(&path).unwrap(),
+            }
+            assert_eq!(
+                projection.open(&fixture.storage, &hit),
+                Err(LibraryReadError::SnapshotStale)
+            );
+        }
+    }
+
+    #[test]
+    fn unsafe_metadata_nodes_fail_closed_without_losing_transcript_rows() {
+        for fault in ["symlink", "hard-link", "mode", "oversize"] {
+            let fixture = Fixture::new();
+            fixture.meeting("meeting-a", 10, &[("transcript token", false)]);
+            let path = fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"private title","folder_id":null}]}"#);
+            match fault {
+                "symlink" => {
+                    let target = fixture.storage.path().join("library/target.json");
+                    fs::rename(&path, &target).unwrap();
+                    std::os::unix::fs::symlink("target.json", &path).unwrap();
+                }
+                "hard-link" => {
+                    fs::hard_link(&path, fixture.storage.path().join("library/other.json"))
+                        .unwrap();
+                }
+                "mode" => {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+                }
+                "oversize" => {
+                    fs::write(&path, vec![b'x'; 1024 * 1024 + 1]).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let projection =
+                LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+            assert!(projection.search("private").unwrap().is_empty(), "{fault}");
+            assert_eq!(projection.search("transcript").unwrap().len(), 1, "{fault}");
+        }
     }
 
     #[test]

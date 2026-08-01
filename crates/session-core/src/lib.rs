@@ -1,4 +1,5 @@
 pub mod diagnostic;
+pub(crate) mod library_metadata;
 pub mod library_read;
 pub mod meeting;
 pub mod meeting_coordination;
