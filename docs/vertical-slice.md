@@ -24,11 +24,14 @@ fixed and enforced by the signed-bundle verifier. The next hardware attempt
 reached transcription and exposed a third defect: data-dependent library output
 entered the worker's JSON-only protocol channel. Commit `8a2359f` isolates all
 operation output from that channel, and commit `5fe9aec` strengthens the packaged
-runtime regression so it invokes the real transcript model. The corrected build
-still needs installation followed by a content-free two-leg capture, transcript,
-fresh-process reopen, and configured audio-deletion receipt. Until that receipt
-exists, the alpha is not cleared for distribution. Automatic-note admission
-remains a separate, unmet beta gate.
+runtime regression so it invokes the real transcript model. The corrected
+installed build subsequently completed two-leg capture and local transcription
+on real hardware. Its completed transcript screen returned after a true quit and
+fresh launch without emitting transcript text into the release receipt. The
+one-day retention deadline is recorded locally; automatic deletion at that
+deadline and clean transfer remain open. Until both pass, the alpha is not
+cleared for distribution. Automatic-note admission remains a separate, unmet
+beta gate.
 
 The contract exists now so the first implementation does not have to settle
 process ownership, persistence, recovery, and security while it is also trying
@@ -645,11 +648,11 @@ protocol now owns capture finalization and model-backed offline transcription;
 the packaged arm64 runtime includes pinned CPython, the Swift two-leg capture
 helper, and the admitted Whisper model inventory. Rust verifies the runtime
 manifest, owns the worker and helper process groups, and validates the resulting
-transcript before presenting it. The signed installed build has not yet passed
-the real hardware receipt, so this is implementation and mechanical release
-evidence rather than a successful-capture claim. Note generation and `product`
-runtime admission remain intentionally outside this alpha and still block the
-Phase 2 exit for beta.
+transcript before presenting it. The signed installed build has now completed a
+real two-leg capture, local transcript, and fresh-process transcript recovery.
+Its automatic audio-deletion and clean-transfer receipts remain open. Note
+generation and `product` runtime admission remain intentionally outside this
+alpha and still block the Phase 2 exit for beta.
 
 The detached research CLI tap now uses the same parent-liveness primitive. Its
 own session still prevents terminal `Ctrl-C` from racing the ordered stop path,
@@ -676,10 +679,12 @@ automatic-note gate below.
 
 Status: implemented only for the internal transcript alpha. Its approved surface
 covers consent, two-leg capture, processing, transcript success, explicit
-failure, restart recovery, and scheduled audio retention. A first permission-
-denial attempt validated the closed failure path, but the successful hardware,
-fresh-process reopen, and configured deletion receipt remains open. Library,
-automatic-note, and evidence-adjudication surfaces remain later beta work.
+failure, restart recovery, and scheduled audio retention. A permission-denial
+attempt validated the closed failure path. The corrected signed build has since
+completed hardware capture, transcription, and fresh-process recovery. Its
+one-day deletion deadline is recorded locally, but the automatic deletion event
+and clean-transfer receipt remain open. Library, automatic-note, and evidence-
+adjudication surfaces remain later beta work.
 
 ### 4. Trust actions
 

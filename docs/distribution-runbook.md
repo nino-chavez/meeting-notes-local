@@ -8,10 +8,12 @@ layout verification. The main app and capture helper carry Apple's required
 audio-input entitlement. A hardware attempt reached local transcription and
 then failed closed because human-readable library output entered the worker's
 JSON-only protocol channel. The corrected worker isolates protocol output, and
-the packaged-runtime regression now invokes the real transcript model. This
-artifact is not yet cleared for team distribution: it still needs installation
-followed by the content-free hardware, restart, and configured audio-deletion
-receipt described below.
+the packaged-runtime regression now invokes the real transcript model. The
+corrected installed build then completed two-leg capture and local transcription
+on real hardware, and the completed transcript screen returned after a true quit
+and fresh launch. Its one-day audio-retention deadline is recorded locally. This
+artifact is not yet cleared for team distribution: automatic deletion at that
+deadline and clean transfer to another Mac or account remain open.
 
 This is a how-to for the release operator. It assumes a clean release commit,
 Apple-silicon macOS, Xcode command-line tools, and access to the existing
@@ -179,9 +181,11 @@ Signing and notarization prove package identity and Apple trust. They do not
 prove that the notes are useful.
 
 Before an internal alpha is shared, the unchanged installed build needs a
-consented, content-free hardware receipt proving two-leg Start and Stop,
-post-meeting transcript creation, quit/reopen recovery, and the configured
-audio deletion. This receipt is mechanical evidence only.
+consented hardware receipt proving two-leg Start and Stop, post-meeting
+transcript creation, quit/reopen recovery, and the configured audio deletion.
+The current build has passed capture, transcript creation, and fresh-process
+recovery. Its automatic deletion and clean-machine transfer remain open. This
+receipt is mechanical evidence only.
 
 Before an internal beta meeting, the unchanged installed build must also have
 the private automatic-note admission receipt required by
