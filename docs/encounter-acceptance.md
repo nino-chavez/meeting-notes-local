@@ -311,7 +311,10 @@ routes. Its private-input mode consumes the exact `encounter-review-content/1` a
 digest-bound `encounter-content-approval/1` schemas, and an eligible owner-only packet
 populated the exact page accepted in the 2026-07-31 cold review. Its correction,
 retention, deletion, and processing behaviors remain specimens. Cross-meeting search
-remains outside the supported beta and outside this gate.
+was not present in the accepted encounter and remains outside this gate. Exact,
+non-generative transcript and metadata search is later beta work that requires its own
+cold review; conversational or semantic cross-meeting retrieval remains outside the
+supported beta.
 
 ## Cold operator checklist
 

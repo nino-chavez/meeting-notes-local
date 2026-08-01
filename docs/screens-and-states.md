@@ -397,11 +397,11 @@ drawer.
 
 | State | Trigger |
 |---|---|
-| `first-run` | No notes yet |
+| `first-run` | No valid meeting rows yet |
 | `populated` | Default |
 | `searching` | Query active |
 | `no-results` | Query returns nothing |
-| `filtered` | Narrowed by date, participant, or tag |
+| `filtered` | Narrowed by folder, UTC date range, or Recorded actions |
 
 **Open IA decisions this surface owns.** Two of the three are now answered by the
 market check in `journeys.md`, which is a weaker kind of evidence than a measurement

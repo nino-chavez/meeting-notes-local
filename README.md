@@ -86,8 +86,9 @@ The first supported beta is deliberately narrow:
 - an owner-only voice profile that can be reset without deleting meetings.
 
 Speaker playback, live transcription, calendar preparation, automatic meeting
-detection, named participants, cross-meeting search and product-development
-inference stay outside that promise. They remain research or later product work.
+detection, named participants, conversational or semantic cross-meeting retrieval,
+and product-development inference stay outside that promise. Exact, non-generative
+transcript and metadata search inside the validated local library remains in beta.
 
 | Phase | Work an agent can complete | Human gate |
 |---|---|---|

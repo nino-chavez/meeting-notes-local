@@ -48,7 +48,7 @@ human gate.
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |
 | B. Shared-contract freeze | Complete and independently audited. Rust owns the exact correction/regeneration records, JavaScript-facing command shapes, worker shapes, recovery classification, artifact joins, and terminal meeting-byte receipt. Both runtimes parse the shared `product-operations-v1.json` fixture. The operations remain unadvertised until their implementations exist. | Implementation streams may branch from the audited revision; each must return through the fixture and full verification join. | None. | Complete 2026-08-01 |
 | C. Trust foundation | In progress. The independently audited restoration coordinator covers every durable phase and refuses simultaneous storage mutation. The development-only profile bridge now validates and consumes quarantined candidates without following links, trusting unsafe ownership or modes, overwriting installed bytes, or crashing the worker on malformed data. An audited crate-private manual action reuses `audio-deletion/1` for not-yet-due audio and refuses active or crashed product operations. A private, unregistered desktop facade now requires a closed reviewed confirmation and holds the process writer lock through the target lease, operation scan, and staged deletion/recovery path. No Tauri command or alpha UI is registered. The durable profile-reset contract is frozen; reset and guided enrolment remain. | Implement reset and enrolment, then exercise real profile, withheld-turn, and reviewed deletion paths before command admission. | Retention-policy wording and far-end-notice choices; real profile and withheld-turn decisions. | Cumulative 1–2 weeks |
-| D. Evidence-linked automatic notes | In progress. An independently audited private coordinator carries an injected note request through worker result, exact artifact reinspection, meeting-pointer update, and terminal commit. Accepted notes advance to `ready`; artifact-free rejection advances to `summary-failed`; every durable phase has fresh-coordinator recovery. An independently audited, inspect-only harness now also proves the closed one-shot worker transport, retained artifact snapshots, actual runtime/resource identity, path confinement, and content-free refusal mapping without creating app data or receipts. No real generator, fixed model identity, create bridge, command, startup hook, or UI is admitted. | Add the fixed generator/model identity and create bridge, then locator landing. The inspect-only harness is mechanical evidence only; an installed rejection receipt follows only after the admitted generator can honestly reject the exact request. Deterministic checks precede private semantic review. | Semantic support and usefulness adjudication. | Additional 2–3 weeks |
+| D. Evidence-linked automatic notes | In progress. An independently audited private coordinator carries an injected note request through worker result, exact artifact reinspection, meeting-pointer update, and terminal commit. Accepted notes advance to `ready`; artifact-free rejection advances to `summary-failed`; every durable phase has fresh-coordinator recovery. An independently audited, inspect-only harness now also proves the closed one-shot worker transport, retained artifact snapshots, actual runtime/resource identity, path confinement, and content-free refusal mapping without creating app data or receipts. No generator/model candidate is admitted: the prior list-generating runs failed attribution, compactness, latency, or context bounds, while the registered broad candidate-first classifier has not run. | Obtain human approval of the exact pending event-ledger lock, run the preregistered broad classifier experiment, and build a fixed-cardinality claim-writing experiment only if every registered gate passes. Choose a bundle-owned runtime/model and add the create bridge only after that evidence; the inspect-only harness remains mechanical evidence. | Event-ledger lock approval, then semantic support and usefulness adjudication. | Additional 2–3 weeks after the registered experiment passes |
 | E. Product surfaces and retrieval | The frozen Tauri correction/regeneration facade now compiles against the shared fixture but remains deliberately unregistered and has no alpha UI. Production library, note reader, commitment view, and exact transcript/metadata search are not built. Design remains retrieval → commitments → capture; build follows dependency order. | Install the storage-backed coordinator, then review the working interaction before intentionally registering commands. | Cold operator review of the working surfaces. | Additional 2–3 weeks, partly parallel with D |
 | F. Beta packaging and admission | Blocked by C–E. | Frozen build/model identities, installed canary, locator resolution, correction/restart/retention/deletion receipts. | Pre-run reference, semantic review, and operator usefulness verdict. | Cumulative 6–9 weeks |
 | G. Production hardening and GA | Not started. | Clean accounts/Macs, upgrade/migration/rollback, fault injection, privacy/security, and content-free diagnostics. | Explicit beta admission and later GA release decisions. | Cumulative 9–14 weeks |
@@ -527,6 +527,8 @@ does not add SQLite.
 ```text
 $APP_DATA/                         0700
   diagnostics/                    0700
+  library/                        0700
+    metadata.json                 0600, optional organization record
   profile/                        0700
     voiceprint.json               0600, profile bytes or zero-byte absence marker
     lifecycle/                    0700
@@ -720,6 +722,291 @@ That is adequate for the bounded, single-user beta and avoids a transaction
 split between a database and immutable files. A future SQLite index may be
 added only as a rebuildable cache after measured library size makes the scan a
 problem. It cannot become the sole copy of transcript, note, or evidence data.
+
+### Exact library retrieval
+
+The first beta includes exact, non-generative search across the validated local
+library. It does not include conversational or semantic cross-meeting retrieval.
+The accepted 2026-07-31 encounter contained no cross-meeting search; the working
+library and search surface therefore needs its own cold review before command
+registration. Calling exact search and generated retrieval by one name obscures
+a beta requirement behind an excluded research capability.
+
+Rust rebuilds one in-memory `library-projection/1` after every fresh launch from
+canonical meeting records and their current validated artifacts. The projection
+is never persisted. SQLite, full-text indexes, embeddings, and per-meeting
+search sidecars are deferred until a measured corpus exceeds the bounded scan
+envelope. No derived index may become the sole copy of a meeting, transcript,
+note, locator, or library label.
+
+Library organization has one separate canonical record at
+`library/metadata.json`. Its `library-metadata/1` fields are exactly `schema`,
+`revision`, `folders`, and `meetings`, in that order. `revision` is an unsigned
+64-bit integer. `folders` is sorted by `id`; each row has exactly `id` then
+`name`. Folder IDs are unique lowercase UUIDs generated by Rust. `meetings` is a
+sparse list sorted by `meeting_id`; each unique row has exactly `meeting_id`,
+`title`, and `folder_id`. `meeting_id` follows the existing `meeting/2` opaque-ID
+contract rather than a new UUID-only rule. `title` and `folder_id` are nullable;
+null folder means `Unfiled`, and a nonnull folder must name a row in the same
+record. A row for a meeting that has no safe current `meeting/2` is malformed,
+not a hidden archive.
+
+Names and titles are trimmed NFC Unicode strings from 1 through 120 scalar
+values with no control characters, `/`, `\\`, or Unicode line separators. The
+record contains no transcript, note, query, locator, participant, or profile
+text. `library/` is `0700`; the record is a regular owner-owned `0600` file with
+link count one and no symlink, hard-link, flags, ACL, xattr, or resource fork.
+It is capped at 1 MiB, refuses unknown or duplicate JSON fields and duplicate or
+unsorted rows, and is replaced atomically under the process writer lock only
+when `expected_revision` equals the retained record. A changing mutation writes
+exactly `revision + 1`; overflow refuses. A semantic no-op returns the unchanged
+revision and writes nothing. A missing record means revision zero with no rows.
+A malformed record is left untouched; meetings remain readable under generated
+date-based labels in `Unfiled`, while organization mutation is disabled and a
+content-free recovery diagnostic is shown.
+
+Creating, renaming, or deleting a folder and assigning, unfiling, or titling a
+meeting changes only this record. Deleting a folder atomically sets every row
+that names it to `folder_id: null`. Whole-meeting deletion is not admitted until
+its staged operation removes the metadata row in the same recoverable sequence
+as the meeting bytes; leaving title or folder text behind is not successful
+whole-meeting deletion.
+
+Startup constructs no partial search authority. It first:
+
+1. enumerates directories whose names satisfy the existing opaque meeting-ID
+   predicate, without following links;
+2. validates each `meeting/2`, re-inspects its exact `capture-attempt/1`, and
+   uses only that receipt's `created_at_epoch_seconds` as capture time;
+3. applies the closed lifecycle table below, inspecting transcript or note bytes
+   only when that lifecycle requires them;
+4. re-reads the meeting pointer, attempt identity, and metadata revision after
+   inspection so a concurrent committed operation cannot publish a stale view;
+   and
+5. excludes an inconsistent meeting without moving or rewriting it, while
+   continuing to validate the rest of the corpus.
+
+| `meeting/2` lifecycle | Library row | Search authority |
+|---|---|---|
+| `incomplete` | `incomplete` | Metadata only; no transcript or claims |
+| `captured` | `captured` | Metadata only; the live reducer may separately show `transcribing` |
+| `transcription-failed` | `transcription-failed` | Metadata only; retry remains available |
+| `recovered-interrupted` | `recovered-interrupted` | Metadata only; recovery remains available |
+| `transcript-ready` | `transcript-only` | Validated current transcript; no claims |
+| `summary-failed` | `summary-failed` | Validated current transcript; no claims |
+| `ready` | `ready` | Validated current transcript and current `note/2` claims |
+
+`empty` means no valid meeting rows, not “no accepted notes.” Invalid records
+contribute only to the quarantined count. Only after the complete bounded scan
+does Rust publish an opaque `snapshot_id`. Search over a rebuilding,
+capacity-exceeded, or wholly failed projection returns that state; it never
+searches a prefix and calls the absence a result.
+
+Every authoritative change invalidates the current snapshot before mutation:
+correction, regeneration, metadata replacement, retention, audio deletion, and
+whole-meeting deletion. A new snapshot is published only after the operation is
+terminal and the complete affected projection has been rebuilt. Every snapshot,
+hit, and cursor binds the exact metadata revision. Retention or audio deletion
+keeps transcript/note search authority but refreshes audio state. Whole-meeting
+deletion removes the row and its metadata only after its deletion receipt is
+terminal.
+
+Beta search is one literal mode. Query bytes must be valid UTF-8, contain 1
+through 256 Unicode scalar values after trimming Unicode whitespace, and
+contain no control or line-separator characters. `search-normalization/1` is
+pinned to Unicode 17.0.0, `unicode-segmentation` 1.13.3 with crate checksum
+`c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8`,
+`icu_normalizer` and `icu_normalizer_data` 2.2.0 with checksums
+`c56e5ee99d6e3d33bd91c5d85458b6005a22140021cc324cea84dd0e72cff3b4`
+and `da3be0ae77ea334f4da67c12f149704f19f81d1adf7c51cf482943e84a2bad38`,
+and Rust 1.94.0 commit
+`4a4ef493e3a1488c6e321570238084b38948f6db` for `char::to_lowercase`.
+Changing any one requires a new normalization schema and fixture.
+
+The transform segments each field into extended grapheme clusters, records
+each cluster's half-open original Unicode-scalar range, applies ICU NFC and
+Rust Unicode lowercase conversion per cluster, and maps every normalized scalar
+back to that complete original range. A match is one contiguous normalized
+substring inside one canonical field; its displayed span is the minimum start
+through maximum end of the matched origin ranges. This is a grapheme-safe
+displayed source span, not a claim that normalization preserved the exact
+matched scalar boundary. Query normalization uses the same transform without an
+origin map. The canonical fixture covers composed and decomposed `é`, expanding
+`İ`, emoji sequences, and repeated text. Search does not stem, fuzz, join turns,
+infer synonyms or subjects, or generate an answer.
+
+The searched fields are current accepted claim text, each retained transcript
+turn, operator title, and folder name. Fixed `Me` and `Them` labels are indexed
+only when the validated transcript declares `attribution: channel`. A withheld
+microphone turn is searchable only as `withheld`; it receives no `Me` authority,
+binds the base transcript digest, source-turn index, current view digest, and
+unresolved gate state, and opens only the correction decision. Attribution
+`none` adds no channel labels. Capture time is an inclusive UTC epoch-second
+range over the validated attempt receipt, not formatted text search. Named
+participants, inferred counterparties, tags, and generated subjects are absent.
+
+Result precedence is closed. A claim-text match, or a transcript match already
+cited by a current accepted claim, yields one `claim` hit. An unmatched retained
+turn yields `transcript` or `withheld`. A title, folder, or channel-only match
+yields `meeting`. One source span cannot produce both a claim and transcript
+hit. Stale notes and rejected summaries contribute no claims. Claim and
+transcript/withheld hits bind the exact current transcript digest; meeting-only
+hits do not invent one. Claim hits additionally bind current note JSON and
+Markdown digests, claim digest, and validated locator set. Transcript hits bind
+the source turn and mapped original character span. Opening any hit re-inspects
+all bound meeting, attempt, metadata, transcript, note, and gate identities;
+drift returns `snapshot-stale` and no content.
+
+The commitment-organized library is `view: recorded-actions`, not a separate
+surface or task database. It filters current accepted claims whose existing
+typed-claim value is exactly `action`. “Recorded actions” says what the note
+classified; it does not claim a person accepted an obligation or that the app
+owns follow-through. There are no checkboxes, assignees, due dates, reminders,
+or completion state. Copy/export remains disabled until the separate redaction
+and export decision closes.
+
+The private Rust/UI boundary uses the canonical
+`tests/fixtures/library-operations-v1.fixture` JSON fixture and remains unregistered
+until the working surface and corpus benchmark pass. Every request and response
+refuses unknown or duplicate fields. Schema values, enum values, and key order
+are frozen by the fixture. Runtime contract objects use canonical two-space
+UTF-8 JSON bytes with no terminal newline; the aggregate fixture is a normal
+text file and ends with one newline. Its operations and exact fields are:
+
+- `library_snapshot` has no arguments. `library_snapshot_page` arguments are
+  exactly `snapshot_id` and required nonnull `cursor`. Both return fields `schema`,
+  `snapshot_id`, `metadata_revision`, `state`, `counts`, `folders`, `meetings`,
+  and `next_cursor`. State is `empty` or `populated`. Counts contain exactly
+  `valid_meetings`, `searchable_meetings`, `quarantined_meetings`,
+  `degraded_capture_meetings`, `unknown_capture_meetings`, and
+  `withheld_turns`. Folder rows contain exactly `id` and `name`. Each meeting
+  row contains `meeting_id`, `content_state`, `created_at_epoch_seconds`,
+  nullable `title`, nullable `folder_id`, `audio_state`, nullable
+  `capture_health`, `withheld_turn_count`, and `searchable`.
+  Counts and folders describe the immutable whole snapshot and therefore remain
+  byte-identical on every page.
+- `library_search` arguments are `snapshot_id`, `query`, nullable `folder_id`,
+  nullable `start_epoch_seconds`, nullable `end_epoch_seconds`, `view`, and
+  nullable `cursor`. View is `all` or `recorded-actions`. Its result fields are
+  `schema`, `snapshot_id`, `metadata_revision`, `state`, `counts`, `hits`, and
+  `next_cursor`; state is `results` or `no-results`. Search hit rows are the
+  same four closed tagged variants as `open_library_hit`, but claim and
+  transcript variants carry `preview` instead of full locator/span content;
+  withheld rows carry no meeting text.
+- `open_library_hit` arguments are exactly `snapshot_id` and `hit_id`. The
+  result is the closed tagged union `meeting`, `claim`, `transcript`, or
+  `withheld`. Every variant contains `schema`, `kind`, `snapshot_id`, `hit_id`,
+  `metadata_revision`, `meeting_id`, and `created_at_epoch_seconds`. `meeting`
+  adds nullable `title`, nullable `folder_id`, `content_state`, and
+  `audio_state`; `claim` adds `content_state`, `audio_state`, the
+  transcript, note JSON, note Markdown, and claim digests plus its exact locator
+  rows, evidence state, and current claim text; `transcript` adds
+  `content_state`, `audio_state`, transcript digest, source-turn index, original
+  scalar start/end, and exact retained span; `withheld` adds `content_state`,
+  `audio_state`, the base/current-view digests, source-turn index, unresolved
+  gate state, and no ordinary transcript landing.
+- `create_folder`, `rename_folder`, `delete_folder`,
+  `assign_meeting_folder`, and `set_meeting_title` are distinct named commands;
+  their argument objects do not repeat the operation name. Each carries
+  `expected_revision` plus only the exact semantic fields shown in the fixture.
+  `assign_meeting_folder` accepts nullable `folder_id` to unfile; title is
+  nullable to restore the generated date label. Every mutation returns exactly
+  `schema`, `revision`, `changed`, and nullable `folder_id`. A changed
+  `create_folder` result returns the generated ID; every other result returns
+  the affected folder ID when one exists and null for title-only mutation. The
+  UI refreshes the revision-bound snapshot after every changed mutation.
+
+The error enum is exactly `invalid-request`, `snapshot-stale`,
+`library-rebuilding`, `library-capacity-exceeded`, `metadata-unavailable`,
+`artifact-unavailable`, `metadata-revision-conflict`, and `internal-error`.
+Error fields are exactly `schema`, `code`, `recoverable`, and nullable
+`current_revision`; only a metadata revision conflict carries the retained
+current revision. Errors contain no private text. Snapshot pages contain at
+most 100 meetings; search pages contain at most 100 hits.
+
+Both orders are total. Meeting pages order newest
+`created_at_epoch_seconds` first, then meeting ID by UTF-8 byte order. Search
+orders by that meeting key, then by the earliest validated locator's source turn
+and original scalar start, hit kind in `claim`, `transcript`, `withheld`,
+`meeting` order, claim digest, and hit ID. A claim with no locator and a meeting
+hit use unsigned-64 maximum for turn and start. A withheld hit uses its source
+turn and unsigned-64 maximum for the private sort start; that sentinel is not
+returned as an evidence span. Each unique current claim digest
+produces at most one hit; claim-text and cited-span matches for the same claim
+deduplicate. If several claims cite one source span, each claim remains a
+separate hit ordered by claim digest. Rust keeps cursors inside the immutable
+snapshot and generates opaque cursor IDs bound to snapshot, metadata revision,
+query digest, filter digest, and last sort key. A cursor is not frontend data
+authority and cannot be reused with another query or filter.
+
+Rust generates snapshot, hit, cursor, and folder IDs. Existing meeting IDs come
+only from validated canonical records. The webview never supplies a filesystem
+path, digest, note ID, transcript ID, artifact locator, executable, model, or
+storage root. The exact corpus and latency bounds are pinned by a synthetic
+no-private-text benchmark before registration. Crossing the corpus bound yields
+`library-capacity-exceeded`; it never silently omits meetings.
+
+The screen vocabulary is `first-run`, `populated`, `searching`, `no-results`,
+and `filtered`, where filtered means folder, UTC date range, or Recorded actions.
+Within rows, `content_state` is exactly `incomplete`, `captured`,
+`transcription-failed`,
+`recovered-interrupted`, `transcript-only`, `summary-failed`, `ready`, and
+`audio_state` independently carries `never-created`, `retained`, `deleting`, or
+`released`. Thus ready content with released audio remains
+`content_state: ready, audio_state: released`; neither axis overwrites the
+other. Every no-results response comes only from a complete projection and
+includes the fixed counts above. The product says “No
+exact match in the available record,” never “This was never said.” Diagnostics
+may contain only a fixed code, component, opaque meeting ID, artifact kind,
+digest, and counts. They never contain query, title, folder, transcript, note,
+claim, snippet, or evidence text.
+
+For a transcript-bearing row, nullable `capture_health` is either absent only
+for legacy unknown integrity or has exact fields `status`, `mic_dropouts`,
+`system_dropouts`, `tap_errors`, `leg_span_mismatch`,
+`mic_wall_shortfall`, and `system_wall_shortfall`. Counts are the lengths of the
+validated `capture-health/1` event arrays. The three Booleans are the negations
+of `legs_cover_same_capture_span` and the mic/system comparisons of
+`wall_shortfall_samples` with `allowed_wall_shortfall_samples`. Status is
+`clean` only when all counts are zero, all three flags are false, and the
+re-derived health verdict passes; otherwise it is `degraded`. A legacy
+transcript with unknown integrity uses null and increments
+`unknown_capture_meetings`. Non-transcript rows use null but increment neither
+capture count. Labels never replace these persisted facts.
+
+The fixture is the contract source, not evidence that an implementation exists.
+Before implementation may call this boundary frozen, an executable parser and
+suite must consume the fixture, reject field and enum drift in both directions,
+and pass deterministic cases for every lifecycle row, first-run, no-results,
+transcript-only, summary-failed, ready, stale-note exclusion, audio-released,
+malformed metadata, invalid attempt, malformed meeting, changed artifact,
+withheld hit, attribution `none`, capture gap, capacity overrun, metadata change,
+whole-meeting deletion, and snapshot/cursor drift. The cases prove claim-first
+precedence, normalization-to-origin mapping, exact locator landing,
+current-note-only indexing, revision conflicts and no-ops, unfile/folder-delete
+semantics, no prefix search during rebuild, and unchanged canonical meeting
+bytes during every read. A synthetic corpus pins supported meeting/searchable
+byte counts plus cold-rebuild and warm-query latency. Passing these checks does
+not register a command or approve the interaction; the operator must still
+review the running library and note reader cold.
+
+That pending executable suite must also cover meeting 101 pagination, folder-ID
+discovery, every mutation's exact-field rejection, revision-conflict payloads,
+query/filter cursor reuse, every content/audio cross-product, several claims
+citing one span, claim-text/citation deduplication, normalization dependency
+drift and origin mapping, capture-health derivation, and stale metadata/title
+hits.
+
+Transcript, claim, preview, and span strings in the checked-in fixture are empty
+redaction sentinels used only to freeze field presence and order; executable
+validators must reject those sentinels wherever runtime content is required.
+Metadata and query examples use non-prose tokens that satisfy their runtime
+shape. No meeting or synthetic meeting prose is stored in the fixture.
+
+Note-to-note links, saved searches, tags, smart folders, inferred subjects,
+named-participant search, semantic/fuzzy search, generated answers, and any
+persisted search index remain deferred. Their absence is not silently filled by
+model inference.
 
 No private output may be created inside the source repository. Running under
 `umask 000` must still yield `0700` directories and `0600` private files.

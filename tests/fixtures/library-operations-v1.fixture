@@ -1,0 +1,468 @@
+{
+  "schema": "library-operations/1",
+  "normalization": {
+    "schema": "search-normalization/1",
+    "unicode_version": "17.0.0",
+    "unicode_segmentation": "1.13.3",
+    "unicode_segmentation_checksum": "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8",
+    "icu_normalizer": "2.2.0",
+    "icu_normalizer_checksum": "c56e5ee99d6e3d33bd91c5d85458b6005a22140021cc324cea84dd0e72cff3b4",
+    "icu_normalizer_data": "2.2.0",
+    "icu_normalizer_data_checksum": "da3be0ae77ea334f4da67c12f149704f19f81d1adf7c51cf482943e84a2bad38",
+    "rustc_commit": "4a4ef493e3a1488c6e321570238084b38948f6db"
+  },
+  "operations": [
+    {
+      "operation": "library_snapshot",
+      "arguments": {},
+      "result": {
+        "schema": "library-snapshot/1",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "metadata_revision": 3,
+        "state": "populated",
+        "counts": {
+          "valid_meetings": 101,
+          "searchable_meetings": 100,
+          "quarantined_meetings": 1,
+          "degraded_capture_meetings": 1,
+          "unknown_capture_meetings": 1,
+          "withheld_turns": 2
+        },
+        "folders": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "folder-a"
+          }
+        ],
+        "meetings": [
+          {
+            "meeting_id": "meeting-0001",
+            "content_state": "ready",
+            "created_at_epoch_seconds": 1785600000,
+            "title": "title-a",
+            "folder_id": "22222222-2222-4222-8222-222222222222",
+            "audio_state": "released",
+            "capture_health": {
+              "status": "clean",
+              "mic_dropouts": 0,
+              "system_dropouts": 0,
+              "tap_errors": 0,
+              "leg_span_mismatch": false,
+              "mic_wall_shortfall": false,
+              "system_wall_shortfall": false
+            },
+            "withheld_turn_count": 0,
+            "searchable": true
+          }
+        ],
+        "next_cursor": "33333333-3333-4333-8333-333333333333"
+      }
+    },
+    {
+      "operation": "library_snapshot_page",
+      "arguments": {
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "cursor": "33333333-3333-4333-8333-333333333333"
+      },
+      "result": {
+        "schema": "library-snapshot/1",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "metadata_revision": 3,
+        "state": "populated",
+        "counts": {
+          "valid_meetings": 101,
+          "searchable_meetings": 100,
+          "quarantined_meetings": 1,
+          "degraded_capture_meetings": 1,
+          "unknown_capture_meetings": 1,
+          "withheld_turns": 2
+        },
+        "folders": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "folder-a"
+          }
+        ],
+        "meetings": [
+          {
+            "meeting_id": "meeting-0101",
+            "content_state": "captured",
+            "created_at_epoch_seconds": 1785590000,
+            "title": null,
+            "folder_id": null,
+            "audio_state": "retained",
+            "capture_health": null,
+            "withheld_turn_count": 0,
+            "searchable": false
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "operation": "library_search",
+      "arguments": {
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "query": "query-token",
+        "folder_id": "22222222-2222-4222-8222-222222222222",
+        "start_epoch_seconds": 1785500000,
+        "end_epoch_seconds": 1785700000,
+        "view": "all",
+        "cursor": null
+      },
+      "result": {
+        "schema": "library-search-result/1",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "metadata_revision": 3,
+        "state": "results",
+        "counts": {
+          "valid_meetings": 101,
+          "searchable_meetings": 100,
+          "quarantined_meetings": 1,
+          "degraded_capture_meetings": 1,
+          "unknown_capture_meetings": 1,
+          "withheld_turns": 2
+        },
+        "hits": [
+          {
+            "schema": "library-search-hit/1",
+            "kind": "claim",
+            "snapshot_id": "11111111-1111-4111-8111-111111111111",
+            "hit_id": "44444444-4444-4444-8444-444444444444",
+            "metadata_revision": 3,
+            "meeting_id": "meeting-0001",
+            "created_at_epoch_seconds": 1785600000,
+            "content_state": "ready",
+            "audio_state": "released",
+            "preview": "",
+            "transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "note_json_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "note_markdown_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "claim_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "source_turn": 12,
+            "source_start": 4,
+            "source_end": 23
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    {
+      "operation": "open_library_hit",
+      "arguments": {
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "hit_id": "44444444-4444-4444-8444-444444444444"
+      },
+      "result": {
+        "schema": "library-hit/1",
+        "kind": "claim",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "hit_id": "44444444-4444-4444-8444-444444444444",
+        "metadata_revision": 3,
+        "meeting_id": "meeting-0001",
+        "created_at_epoch_seconds": 1785600000,
+        "content_state": "ready",
+        "audio_state": "released",
+        "transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "note_json_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "note_markdown_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "claim_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "locators": [
+          {
+            "turn": 12,
+            "start": 4,
+            "end": 23,
+            "text_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        ],
+        "evidence_state": "located",
+        "claim": ""
+      }
+    },
+    {
+      "operation": "create_folder",
+      "arguments": {
+        "expected_revision": 3,
+        "name": "folder-b"
+      },
+      "result": {
+        "schema": "library-metadata-result/1",
+        "revision": 4,
+        "changed": true,
+        "folder_id": "55555555-5555-4555-8555-555555555555"
+      }
+    },
+    {
+      "operation": "rename_folder",
+      "arguments": {
+        "folder_id": "55555555-5555-4555-8555-555555555555",
+        "expected_revision": 4,
+        "name": "folder-c"
+      },
+      "result": {
+        "schema": "library-metadata-result/1",
+        "revision": 5,
+        "changed": true,
+        "folder_id": "55555555-5555-4555-8555-555555555555"
+      }
+    },
+    {
+      "operation": "delete_folder",
+      "arguments": {
+        "folder_id": "55555555-5555-4555-8555-555555555555",
+        "expected_revision": 5
+      },
+      "result": {
+        "schema": "library-metadata-result/1",
+        "revision": 6,
+        "changed": true,
+        "folder_id": "55555555-5555-4555-8555-555555555555"
+      }
+    },
+    {
+      "operation": "assign_meeting_folder",
+      "arguments": {
+        "meeting_id": "meeting-0001",
+        "folder_id": null,
+        "expected_revision": 6
+      },
+      "result": {
+        "schema": "library-metadata-result/1",
+        "revision": 7,
+        "changed": true,
+        "folder_id": null
+      }
+    },
+    {
+      "operation": "set_meeting_title",
+      "arguments": {
+        "meeting_id": "meeting-0001",
+        "expected_revision": 7,
+        "title": null
+      },
+      "result": {
+        "schema": "library-metadata-result/1",
+        "revision": 8,
+        "changed": true,
+        "folder_id": null
+      }
+    }
+  ],
+  "search_hit_variants": [
+    {
+      "schema": "library-search-hit/1",
+      "kind": "meeting",
+      "snapshot_id": "11111111-1111-4111-8111-111111111111",
+      "hit_id": "66666666-6666-4666-8666-666666666666",
+      "metadata_revision": 3,
+      "meeting_id": "meeting-0001",
+      "created_at_epoch_seconds": 1785600000,
+      "content_state": "ready",
+      "audio_state": "released",
+      "title": "title-a",
+      "folder_id": "22222222-2222-4222-8222-222222222222"
+    },
+    {
+      "schema": "library-search-hit/1",
+      "kind": "claim",
+      "snapshot_id": "11111111-1111-4111-8111-111111111111",
+      "hit_id": "44444444-4444-4444-8444-444444444444",
+      "metadata_revision": 3,
+      "meeting_id": "meeting-0001",
+      "created_at_epoch_seconds": 1785600000,
+      "content_state": "ready",
+      "audio_state": "released",
+      "preview": "",
+      "transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "note_json_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "note_markdown_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "claim_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "source_turn": 12,
+      "source_start": 4,
+      "source_end": 23
+    },
+    {
+      "schema": "library-search-hit/1",
+      "kind": "transcript",
+      "snapshot_id": "11111111-1111-4111-8111-111111111111",
+      "hit_id": "77777777-7777-4777-8777-777777777777",
+      "metadata_revision": 3,
+      "meeting_id": "meeting-0001",
+      "created_at_epoch_seconds": 1785600000,
+      "content_state": "ready",
+      "audio_state": "released",
+      "preview": "",
+      "transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_turn": 14,
+      "source_start": 0,
+      "source_end": 9
+    },
+    {
+      "schema": "library-search-hit/1",
+      "kind": "withheld",
+      "snapshot_id": "11111111-1111-4111-8111-111111111111",
+      "hit_id": "88888888-8888-4888-8888-888888888888",
+      "metadata_revision": 3,
+      "meeting_id": "meeting-0001",
+      "created_at_epoch_seconds": 1785600000,
+      "content_state": "transcript-only",
+      "audio_state": "retained",
+      "base_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "current_view_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "source_turn": 15,
+      "gate_state": "unresolved"
+    }
+  ],
+  "open_hit_variants": [
+    {
+      "schema": "library-hit/1",
+      "kind": "meeting",
+      "snapshot_id": "11111111-1111-4111-8111-111111111111",
+      "hit_id": "66666666-6666-4666-8666-666666666666",
+      "metadata_revision": 3,
+      "meeting_id": "meeting-0001",
+      "created_at_epoch_seconds": 1785600000,
+      "title": "title-a",
+      "folder_id": "22222222-2222-4222-8222-222222222222",
+      "content_state": "ready",
+      "audio_state": "released"
+    },
+    {
+      "schema": "library-hit/1",
+      "kind": "transcript",
+      "snapshot_id": "11111111-1111-4111-8111-111111111111",
+      "hit_id": "77777777-7777-4777-8777-777777777777",
+      "metadata_revision": 3,
+      "meeting_id": "meeting-0001",
+      "created_at_epoch_seconds": 1785600000,
+      "content_state": "ready",
+      "audio_state": "released",
+      "transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_turn": 14,
+      "source_start": 0,
+      "source_end": 9,
+      "span": ""
+    },
+    {
+      "schema": "library-hit/1",
+      "kind": "withheld",
+      "snapshot_id": "11111111-1111-4111-8111-111111111111",
+      "hit_id": "88888888-8888-4888-8888-888888888888",
+      "metadata_revision": 3,
+      "meeting_id": "meeting-0001",
+      "created_at_epoch_seconds": 1785600000,
+      "content_state": "transcript-only",
+      "audio_state": "retained",
+      "base_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "current_view_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "source_turn": 15,
+      "gate_state": "unresolved"
+    }
+  ],
+  "errors": [
+    {
+      "schema": "library-error/1",
+      "code": "invalid-request",
+      "recoverable": false,
+      "current_revision": null
+    },
+    {
+      "schema": "library-error/1",
+      "code": "snapshot-stale",
+      "recoverable": true,
+      "current_revision": null
+    },
+    {
+      "schema": "library-error/1",
+      "code": "library-rebuilding",
+      "recoverable": true,
+      "current_revision": null
+    },
+    {
+      "schema": "library-error/1",
+      "code": "library-capacity-exceeded",
+      "recoverable": false,
+      "current_revision": null
+    },
+    {
+      "schema": "library-error/1",
+      "code": "metadata-unavailable",
+      "recoverable": true,
+      "current_revision": null
+    },
+    {
+      "schema": "library-error/1",
+      "code": "artifact-unavailable",
+      "recoverable": true,
+      "current_revision": null
+    },
+    {
+      "schema": "library-error/1",
+      "code": "metadata-revision-conflict",
+      "recoverable": true,
+      "current_revision": 8
+    },
+    {
+      "schema": "library-error/1",
+      "code": "internal-error",
+      "recoverable": true,
+      "current_revision": null
+    }
+  ],
+  "normalization_cases": [
+    {
+      "name": "composed-and-decomposed-e-acute",
+      "query": "é",
+      "source": "é",
+      "normalized": "é",
+      "source_start": 0,
+      "source_end": 2
+    },
+    {
+      "name": "expanding-uppercase-i-dot",
+      "query": "i̇",
+      "source": "İ",
+      "normalized": "i̇",
+      "source_start": 0,
+      "source_end": 1
+    },
+    {
+      "name": "emoji-grapheme-sequence",
+      "query": "👩‍💻",
+      "source": "👩‍💻",
+      "normalized": "👩‍💻",
+      "source_start": 0,
+      "source_end": 3
+    },
+    {
+      "name": "repeated-text-first-match",
+      "query": "aba",
+      "source": "aba aba",
+      "normalized": "aba aba",
+      "source_start": 0,
+      "source_end": 3
+    },
+    {
+      "name": "repeated-text-second-match",
+      "query": "aba",
+      "source": "aba aba",
+      "normalized": "aba aba",
+      "source_start": 4,
+      "source_end": 7
+    }
+  ],
+  "required_cases": [
+    "meeting-101-pagination",
+    "folder-id-discovery",
+    "unknown-and-duplicate-field-refusal",
+    "metadata-revision-conflict",
+    "cursor-query-filter-binding",
+    "content-audio-cross-product",
+    "multiple-claims-one-span",
+    "claim-match-deduplication",
+    "normalization-pin-drift",
+    "capture-health-derivation",
+    "stale-metadata-hit",
+    "whole-meeting-metadata-cleanup"
+  ]
+}
