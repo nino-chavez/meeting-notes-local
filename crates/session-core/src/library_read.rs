@@ -2,11 +2,12 @@
 //!
 //! This is deliberately not a command or persistence API.  It owns no writer,
 //! persists no index, and refuses to turn malformed private bytes into search
-//! authority.  Metadata is consumed only as optional title/folder labels.
+//! authority.  Library metadata is deliberately outside this transcript-only slice.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use icu_normalizer::ComposingNormalizer;
 use serde::Deserialize;
@@ -15,15 +16,18 @@ use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
 use crate::meeting::{
-    AudioState, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref, load_meeting,
-    read_private_bytes, require_private_directory,
+    AudioState, MAX_MEETING_RECORD_BYTES, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref,
+    load_meeting, read_private_bytes, require_private_directory, verify_artifact_ref,
+    verify_record_static_artifacts,
 };
 use crate::storage::StorageRoot;
 
-const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TURNS: usize = 20_000;
 const NOTICE_VERSION: &str = "internal-transcript-alpha/1";
+/// Rust 1.94.0 source identity used by `char::to_lowercase` in
+/// `search-normalization/1`.
+pub const SEARCH_NORMALIZATION_RUST_COMMIT: &str = "4a4ef493e3a1488c6e321570238084b38948f6db";
 
 /// Bounds every input this reader accepts.  A bound failure rejects the complete
 /// build; a caller must not expose a prefix as a library.
@@ -56,34 +60,29 @@ pub enum LibraryReadError {
     ArtifactUnavailable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LibraryProjection {
-    metadata_revision: u64,
-    metadata_identity: MetadataIdentity,
+    snapshot_id: Uuid,
     rows: Vec<LibraryRow>,
     quarantined_meetings: usize,
     limits: ReadLimits,
+    hits: RefCell<BTreeMap<String, SealedHit>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum MetadataIdentity {
-    Absent,
-    Bytes(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LibraryRow {
     pub meeting_id: String,
     pub created_at_epoch_seconds: u64,
-    pub title: Option<String>,
-    pub folder: Option<String>,
     pub transcript_sha256: String,
     pub audio_state: AudioState,
+    lifecycle: MeetingLifecycle,
+    meeting_record_sha256: String,
+    transcript_relative_path: String,
     turns: Vec<StoredTurn>,
     attempt_sha256: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct StoredTurn {
     index: u32,
     text: String,
@@ -91,25 +90,16 @@ struct StoredTurn {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LibraryHit {
-    Meeting {
-        key: String,
-        meeting_id: String,
-        created_at_epoch_seconds: u64,
-        metadata_revision: u64,
-        field: MetadataField,
-        attempt_sha256: String,
-        title: Option<String>,
-        folder: Option<String>,
-        normalized_query: String,
-    },
+pub struct LibraryHit {
+    projection_id: Uuid,
+    key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SealedHit {
     Transcript {
         key: String,
-        meeting_id: String,
-        created_at_epoch_seconds: u64,
-        metadata_revision: u64,
-        transcript_sha256: String,
-        attempt_sha256: String,
+        authority: HitAuthority,
         source_turn_index: u32,
         original_scalar_start: u64,
         original_scalar_end: u64,
@@ -117,29 +107,26 @@ pub enum LibraryHit {
     },
     Withheld {
         key: String,
-        meeting_id: String,
-        created_at_epoch_seconds: u64,
-        metadata_revision: u64,
-        transcript_sha256: String,
-        attempt_sha256: String,
+        authority: HitAuthority,
         source_turn_index: u32,
         normalized_query: String,
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum MetadataField {
-    Title,
-    Folder,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HitAuthority {
+    meeting_id: String,
+    created_at_epoch_seconds: u64,
+    meeting_record_sha256: String,
+    lifecycle: MeetingLifecycle,
+    audio_state: AudioState,
+    attempt_sha256: String,
+    transcript_sha256: String,
+    transcript_relative_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenedLibraryHit {
-    Meeting {
-        meeting_id: String,
-        title: Option<String>,
-        folder: Option<String>,
-    },
     Transcript {
         meeting_id: String,
         source_turn_index: u32,
@@ -191,19 +178,12 @@ impl LibraryProjection {
             return Err(LibraryReadError::CapacityExceeded);
         }
 
-        let (metadata_revision, metadata_identity, labels) = load_metadata(storage, &directories)?;
         let mut total = 0_u64;
         let mut rows = Vec::new();
         let mut quarantined = 0;
-        for (id, directory) in directories {
-            match inspect_meeting(&directory, limits, &mut total) {
-                Ok(Some(mut row)) => {
-                    if let Some(label) = labels.get(&id) {
-                        row.title = label.title.clone();
-                        row.folder = label.folder.clone();
-                    }
-                    rows.push(row);
-                }
+        for (_, directory) in &directories {
+            match inspect_meeting(directory, limits, &mut total) {
+                Ok(Some(row)) => rows.push(row),
                 Ok(None) => continue,
                 Err(LibraryReadError::CapacityExceeded) => {
                     return Err(LibraryReadError::CapacityExceeded);
@@ -211,29 +191,16 @@ impl LibraryProjection {
                 Err(_) => quarantined += 1,
             }
         }
-        // Metadata references are authority only when every row names a valid,
-        // transcript-bearing meeting in this projection.  Otherwise labels vanish.
-        let valid_ids: BTreeSet<_> = rows.iter().map(|row| row.meeting_id.as_str()).collect();
-        let labels_valid = labels.keys().all(|id| valid_ids.contains(id.as_str()));
-        if !labels_valid {
-            for row in &mut rows {
-                row.title = None;
-                row.folder = None;
-            }
-        }
         rows.sort_by(meeting_order);
         Ok(Self {
-            metadata_revision: if labels_valid { metadata_revision } else { 0 },
-            metadata_identity,
+            snapshot_id: Uuid::new_v4(),
             rows,
             quarantined_meetings: quarantined,
             limits,
+            hits: RefCell::new(BTreeMap::new()),
         })
     }
 
-    pub fn metadata_revision(&self) -> u64 {
-        self.metadata_revision
-    }
     pub fn rows(&self) -> &[LibraryRow] {
         &self.rows
     }
@@ -245,27 +212,20 @@ impl LibraryProjection {
         let normalized = normalize_query(query)?;
         let mut hits = Vec::new();
         for row in &self.rows {
+            let authority = self.authority(row);
             for turn in &row.turns {
                 for (start, end) in normalized_matches(&turn.text, &normalized) {
                     if turn.gated {
-                        hits.push(LibraryHit::Withheld {
+                        hits.push(SealedHit::Withheld {
                             key: format!("{}:w:{}", row.meeting_id, turn.index),
-                            meeting_id: row.meeting_id.clone(),
-                            created_at_epoch_seconds: row.created_at_epoch_seconds,
-                            metadata_revision: self.metadata_revision,
-                            transcript_sha256: row.transcript_sha256.clone(),
-                            attempt_sha256: row.attempt_sha256.clone(),
+                            authority: authority.clone(),
                             source_turn_index: turn.index,
                             normalized_query: normalized.clone(),
                         });
                     } else {
-                        hits.push(LibraryHit::Transcript {
+                        hits.push(SealedHit::Transcript {
                             key: format!("{}:t:{}:{}:{}", row.meeting_id, turn.index, start, end),
-                            meeting_id: row.meeting_id.clone(),
-                            created_at_epoch_seconds: row.created_at_epoch_seconds,
-                            metadata_revision: self.metadata_revision,
-                            transcript_sha256: row.transcript_sha256.clone(),
-                            attempt_sha256: row.attempt_sha256.clone(),
+                            authority: authority.clone(),
                             source_turn_index: turn.index,
                             original_scalar_start: start,
                             original_scalar_end: end,
@@ -274,139 +234,121 @@ impl LibraryProjection {
                     }
                 }
             }
-            for (field, value) in [
-                (MetadataField::Title, row.title.as_ref()),
-                (MetadataField::Folder, row.folder.as_ref()),
-            ] {
-                if let Some(value) = value
-                    && !normalized_matches(value, &normalized).is_empty()
-                {
-                    hits.push(LibraryHit::Meeting {
-                        key: format!("{}:m:{field:?}", row.meeting_id),
-                        meeting_id: row.meeting_id.clone(),
-                        created_at_epoch_seconds: row.created_at_epoch_seconds,
-                        metadata_revision: self.metadata_revision,
-                        field,
-                        attempt_sha256: row.attempt_sha256.clone(),
-                        title: row.title.clone(),
-                        folder: row.folder.clone(),
-                        normalized_query: normalized.clone(),
-                    });
-                }
-            }
         }
         hits.sort_by(hit_order);
         hits.dedup_by(|left, right| hit_key(left) == hit_key(right));
-        Ok(hits)
+        let mut retained = self.hits.borrow_mut();
+        Ok(hits
+            .into_iter()
+            .map(|hit| {
+                let key = format!("{}:{}", self.snapshot_id, hit_key(&hit));
+                retained.insert(key.clone(), hit);
+                LibraryHit {
+                    projection_id: self.snapshot_id,
+                    key,
+                }
+            })
+            .collect())
     }
 
     pub fn open(
         &self,
         storage: &StorageRoot,
-        hit: &LibraryHit,
+        handle: &LibraryHit,
     ) -> Result<OpenedLibraryHit, LibraryReadError> {
-        let rebuilt =
-            Self::rebuild(storage, self.limits).map_err(|_| LibraryReadError::SnapshotStale)?;
-        if rebuilt.metadata_revision != self.metadata_revision
-            || rebuilt.metadata_identity != self.metadata_identity
-        {
+        if handle.projection_id != self.snapshot_id {
             return Err(LibraryReadError::SnapshotStale);
         }
+        let hit = self
+            .hits
+            .borrow()
+            .get(&handle.key)
+            .cloned()
+            .ok_or(LibraryReadError::SnapshotStale)?;
+        let rebuilt =
+            Self::rebuild(storage, self.limits).map_err(|_| LibraryReadError::SnapshotStale)?;
         let row = rebuilt
             .rows
             .iter()
-            .find(|row| row.meeting_id == hit_meeting_id(hit))
+            .find(|row| row.meeting_id == hit_meeting_id(&hit))
             .ok_or(LibraryReadError::SnapshotStale)?;
-        if row.attempt_sha256 != hit_attempt_sha(hit) {
+        if rebuilt.authority(row) != *hit_authority(&hit) {
             return Err(LibraryReadError::SnapshotStale);
         }
         match hit {
-            LibraryHit::Meeting {
-                title,
-                folder,
-                field,
-                normalized_query,
-                ..
-            } => {
-                if row.title != *title || row.folder != *folder {
-                    return Err(LibraryReadError::SnapshotStale);
-                }
-                let field_value = match field {
-                    MetadataField::Title => row.title.as_deref(),
-                    MetadataField::Folder => row.folder.as_deref(),
-                };
-                if field_value
-                    .is_none_or(|value| normalized_matches(value, normalized_query).is_empty())
-                {
-                    return Err(LibraryReadError::SnapshotStale);
-                }
-                Ok(OpenedLibraryHit::Meeting {
-                    meeting_id: row.meeting_id.clone(),
-                    title: row.title.clone(),
-                    folder: row.folder.clone(),
-                })
-            }
-            LibraryHit::Transcript {
-                transcript_sha256,
+            SealedHit::Transcript {
                 source_turn_index,
                 original_scalar_start,
                 original_scalar_end,
                 normalized_query,
                 ..
             } => {
-                if &row.transcript_sha256 != transcript_sha256 {
-                    return Err(LibraryReadError::SnapshotStale);
-                }
                 let turn = row
                     .turns
                     .iter()
-                    .find(|turn| turn.index == *source_turn_index && !turn.gated)
+                    .find(|turn| turn.index == source_turn_index && !turn.gated)
                     .ok_or(LibraryReadError::SnapshotStale)?;
-                if !span_is_valid(&turn.text, *original_scalar_start, *original_scalar_end) {
+                if !span_is_valid(&turn.text, original_scalar_start, original_scalar_end) {
                     return Err(LibraryReadError::SnapshotStale);
                 }
-                if !normalized_matches(&turn.text, normalized_query)
-                    .contains(&(*original_scalar_start, *original_scalar_end))
+                if !normalized_matches(&turn.text, &normalized_query)
+                    .contains(&(original_scalar_start, original_scalar_end))
                 {
                     return Err(LibraryReadError::SnapshotStale);
                 }
                 Ok(OpenedLibraryHit::Transcript {
                     meeting_id: row.meeting_id.clone(),
-                    source_turn_index: *source_turn_index,
-                    original_scalar_start: *original_scalar_start,
-                    original_scalar_end: *original_scalar_end,
-                    text: scalar_slice(&turn.text, *original_scalar_start, *original_scalar_end)
+                    source_turn_index,
+                    original_scalar_start,
+                    original_scalar_end,
+                    text: scalar_slice(&turn.text, original_scalar_start, original_scalar_end)
                         .ok_or(LibraryReadError::SnapshotStale)?,
                 })
             }
-            LibraryHit::Withheld {
-                transcript_sha256,
+            SealedHit::Withheld {
                 source_turn_index,
                 normalized_query,
                 ..
             } => {
-                if &row.transcript_sha256 != transcript_sha256
-                    || !row
-                        .turns
-                        .iter()
-                        .any(|turn| turn.index == *source_turn_index && turn.gated)
+                if !row
+                    .turns
+                    .iter()
+                    .any(|turn| turn.index == source_turn_index && turn.gated)
                 {
                     return Err(LibraryReadError::SnapshotStale);
                 }
                 let turn = row
                     .turns
                     .iter()
-                    .find(|turn| turn.index == *source_turn_index)
+                    .find(|turn| turn.index == source_turn_index)
                     .ok_or(LibraryReadError::SnapshotStale)?;
-                if normalized_matches(&turn.text, normalized_query).is_empty() {
+                if normalized_matches(&turn.text, &normalized_query).is_empty() {
                     return Err(LibraryReadError::SnapshotStale);
                 }
                 Ok(OpenedLibraryHit::Withheld {
                     meeting_id: row.meeting_id.clone(),
-                    source_turn_index: *source_turn_index,
+                    source_turn_index,
                 })
             }
         }
+    }
+
+    fn authority(&self, row: &LibraryRow) -> HitAuthority {
+        HitAuthority {
+            meeting_id: row.meeting_id.clone(),
+            created_at_epoch_seconds: row.created_at_epoch_seconds,
+            meeting_record_sha256: row.meeting_record_sha256.clone(),
+            lifecycle: row.lifecycle,
+            audio_state: row.audio_state,
+            attempt_sha256: row.attempt_sha256.clone(),
+            transcript_sha256: row.transcript_sha256.clone(),
+            transcript_relative_path: row.transcript_relative_path.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    fn sealed(&self, handle: &LibraryHit) -> Option<SealedHit> {
+        self.hits.borrow().get(&handle.key).cloned()
     }
 }
 
@@ -415,7 +357,41 @@ fn inspect_meeting(
     limits: ReadLimits,
     total: &mut u64,
 ) -> Result<Option<LibraryRow>, LibraryReadError> {
+    let _meeting_bytes = bounded_read(
+        &directory.join("meeting.json"),
+        MAX_MEETING_RECORD_BYTES,
+        total,
+        limits,
+    )?;
     let meeting = load_meeting(directory).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    verify_record_static_artifacts(directory, &meeting)
+        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    if let Some(receipt) = &meeting.retention.deletion_receipt {
+        verify_artifact_ref(directory, receipt)
+            .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+        account_reference(directory, receipt, total, limits)?;
+    }
+    for reference in [
+        meeting.artifacts.ownership.as_ref(),
+        meeting.artifacts.capture_session.as_ref(),
+        meeting
+            .artifacts
+            .current_note
+            .as_ref()
+            .map(|note| &note.json),
+        meeting
+            .artifacts
+            .current_note
+            .as_ref()
+            .map(|note| &note.markdown),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        account_reference(directory, reference, total, limits)?;
+    }
+    let meeting_record = artifact_ref(directory, "meeting.json")
+        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
     let attempt = artifact_ref(directory, "attempt.json")
         .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
     if attempt != meeting.artifacts.attempt {
@@ -471,6 +447,9 @@ fn inspect_meeting(
     // Re-read the pointers after inspection before allowing this candidate into a snapshot.
     let again = load_meeting(directory).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
     if again != meeting
+        || artifact_ref(directory, "meeting.json")
+            .map_err(|_| LibraryReadError::ArtifactUnavailable)?
+            != meeting_record
         || artifact_ref(directory, "attempt.json")
             .map_err(|_| LibraryReadError::ArtifactUnavailable)?
             != attempt
@@ -483,10 +462,11 @@ fn inspect_meeting(
     Ok(Some(LibraryRow {
         meeting_id: meeting.meeting_id.clone(),
         created_at_epoch_seconds: attempt_data.created_at_epoch_seconds,
-        title: None,
-        folder: None,
         transcript_sha256: current.sha256.clone(),
         audio_state: meeting.retention.state,
+        lifecycle: meeting.lifecycle,
+        meeting_record_sha256: meeting_record.sha256,
+        transcript_relative_path: current.relative_path.clone(),
         turns,
         attempt_sha256: attempt.sha256,
     }))
@@ -507,6 +487,21 @@ fn bounded_read(
         return Err(LibraryReadError::CapacityExceeded);
     }
     Ok(bytes)
+}
+
+fn account_reference(
+    directory: &Path,
+    reference: &crate::meeting::ArtifactRef,
+    total: &mut u64,
+    limits: ReadLimits,
+) -> Result<(), LibraryReadError> {
+    let _ = bounded_read(
+        &directory.join(&reference.relative_path),
+        limits.max_total_bytes,
+        total,
+        limits,
+    )?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -595,155 +590,12 @@ fn validate_transcript(document: Transcript) -> Result<Vec<StoredTurn>, LibraryR
         .collect()
 }
 
-#[derive(Clone)]
-struct Label {
-    title: Option<String>,
-    folder: Option<String>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Metadata {
-    schema: String,
-    revision: u64,
-    folders: Vec<Folder>,
-    meetings: Vec<MetadataMeeting>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Folder {
-    id: String,
-    name: String,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MetadataMeeting {
-    meeting_id: String,
-    title: serde_json::Value,
-    folder_id: serde_json::Value,
-}
-
-fn load_metadata(
-    storage: &StorageRoot,
-    directories: &[(String, PathBuf)],
-) -> Result<(u64, MetadataIdentity, BTreeMap<String, Label>), LibraryReadError> {
-    let library = storage
-        .resolve(Path::new("library"))
-        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
-    let path = storage
-        .resolve(Path::new("library/metadata.json"))
-        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
-    if !path.exists() {
-        return Ok((0, MetadataIdentity::Absent, BTreeMap::new()));
-    }
-    if require_private_directory(&library).is_err() {
-        return Ok((
-            0,
-            MetadataIdentity::Bytes("unavailable".into()),
-            BTreeMap::new(),
-        ));
-    }
-    let bytes = match read_private_bytes(&path, MAX_METADATA_BYTES) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return Ok((
-                0,
-                MetadataIdentity::Bytes("unavailable".into()),
-                BTreeMap::new(),
-            ));
-        }
-    };
-    let metadata: Metadata = match serde_json::from_slice(&bytes) {
-        Ok(metadata) => metadata,
-        Err(_) => {
-            return Ok((
-                0,
-                MetadataIdentity::Bytes(digest_bytes(&bytes)),
-                BTreeMap::new(),
-            ));
-        }
-    };
-    if metadata.schema != "library-metadata/1" {
-        return Ok((
-            0,
-            MetadataIdentity::Bytes(digest_bytes(&bytes)),
-            BTreeMap::new(),
-        ));
-    }
-    let mut folders = BTreeMap::new();
-    let mut last = None;
-    for folder in metadata.folders {
-        if !valid_lower_uuid(&folder.id)
-            || !valid_label(&folder.name)
-            || last
-                .as_ref()
-                .is_some_and(|value: &String| value >= &folder.id)
-            || folders.insert(folder.id.clone(), folder.name).is_some()
-        {
-            return Ok((
-                0,
-                MetadataIdentity::Bytes(digest_bytes(&bytes)),
-                BTreeMap::new(),
-            ));
-        }
-        last = Some(folder.id);
-    }
-    let known: BTreeSet<_> = directories.iter().map(|(id, _)| id.as_str()).collect();
-    let mut labels = BTreeMap::new();
-    let mut last = None;
-    for meeting in metadata.meetings {
-        let Some(title) = nullable_string(&meeting.title) else {
-            return Ok((
-                0,
-                MetadataIdentity::Bytes(digest_bytes(&bytes)),
-                BTreeMap::new(),
-            ));
-        };
-        let Some(folder_id) = nullable_string(&meeting.folder_id) else {
-            return Ok((
-                0,
-                MetadataIdentity::Bytes(digest_bytes(&bytes)),
-                BTreeMap::new(),
-            ));
-        };
-        if !valid_opaque_id(&meeting.meeting_id)
-            || !known.contains(meeting.meeting_id.as_str())
-            || last
-                .as_ref()
-                .is_some_and(|value: &String| value >= &meeting.meeting_id)
-            || title.as_ref().is_some_and(|title| !valid_label(title))
-            || folder_id
-                .as_ref()
-                .is_some_and(|id| !folders.contains_key(id))
-            || labels.contains_key(&meeting.meeting_id)
-        {
-            return Ok((
-                0,
-                MetadataIdentity::Bytes(digest_bytes(&bytes)),
-                BTreeMap::new(),
-            ));
-        }
-        let folder = folder_id.as_ref().and_then(|id| folders.get(id)).cloned();
-        labels.insert(meeting.meeting_id.clone(), Label { title, folder });
-        last = Some(meeting.meeting_id);
-    }
-    Ok((
-        metadata.revision,
-        MetadataIdentity::Bytes(digest_bytes(&bytes)),
-        labels,
-    ))
-}
-
-fn nullable_string(value: &serde_json::Value) -> Option<Option<String>> {
-    match value {
-        serde_json::Value::Null => Some(None),
-        serde_json::Value::String(value) => Some(Some(value.clone())),
-        _ => None,
-    }
-}
-
 fn normalize_query(query: &str) -> Result<String, LibraryReadError> {
+    if query.chars().any(is_forbidden) {
+        return Err(LibraryReadError::InvalidRequest);
+    }
     let trimmed = query.trim_matches(char::is_whitespace);
-    if trimmed.is_empty() || trimmed.chars().count() > 256 || trimmed.chars().any(is_forbidden) {
+    if trimmed.is_empty() || trimmed.chars().count() > 256 {
         return Err(LibraryReadError::InvalidRequest);
     }
     Ok(normalize(trimmed).0)
@@ -792,20 +644,8 @@ fn normalize(value: &str) -> (String, Vec<(u64, u64)>) {
     (normalized, origins)
 }
 
-fn valid_label(value: &str) -> bool {
-    let trimmed = value.trim_matches(char::is_whitespace);
-    !trimmed.is_empty()
-        && trimmed == value
-        && value.chars().count() <= 120
-        && !value
-            .chars()
-            .any(|c| is_forbidden(c) || matches!(c, '/' | '\\'))
-}
 fn is_forbidden(character: char) -> bool {
     character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
-}
-fn valid_lower_uuid(value: &str) -> bool {
-    Uuid::parse_str(value).is_ok() && value == value.to_ascii_lowercase()
 }
 fn valid_opaque_id(value: &str) -> bool {
     !value.is_empty()
@@ -836,6 +676,7 @@ fn scalar_slice(text: &str, start: u64, end: u64) -> Option<String> {
             .collect(),
     )
 }
+#[cfg(test)]
 fn digest_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(bytes))
@@ -846,28 +687,26 @@ fn meeting_order(left: &LibraryRow, right: &LibraryRow) -> std::cmp::Ordering {
         .cmp(&left.created_at_epoch_seconds)
         .then_with(|| left.meeting_id.cmp(&right.meeting_id))
 }
-fn hit_key(hit: &LibraryHit) -> &str {
+fn hit_key(hit: &SealedHit) -> &str {
     match hit {
-        LibraryHit::Meeting { key, .. }
-        | LibraryHit::Transcript { key, .. }
-        | LibraryHit::Withheld { key, .. } => key,
+        SealedHit::Transcript { key, .. } | SealedHit::Withheld { key, .. } => key,
     }
 }
-fn hit_meeting_id(hit: &LibraryHit) -> &str {
+fn hit_meeting_id(hit: &SealedHit) -> &str {
     match hit {
-        LibraryHit::Meeting { meeting_id, .. }
-        | LibraryHit::Transcript { meeting_id, .. }
-        | LibraryHit::Withheld { meeting_id, .. } => meeting_id,
+        SealedHit::Transcript { authority, .. } | SealedHit::Withheld { authority, .. } => {
+            &authority.meeting_id
+        }
     }
 }
-fn hit_attempt_sha(hit: &LibraryHit) -> &str {
+fn hit_authority(hit: &SealedHit) -> &HitAuthority {
     match hit {
-        LibraryHit::Meeting { attempt_sha256, .. }
-        | LibraryHit::Transcript { attempt_sha256, .. }
-        | LibraryHit::Withheld { attempt_sha256, .. } => attempt_sha256,
+        SealedHit::Transcript { authority, .. } | SealedHit::Withheld { authority, .. } => {
+            authority
+        }
     }
 }
-fn hit_order(left: &LibraryHit, right: &LibraryHit) -> std::cmp::Ordering {
+fn hit_order(left: &SealedHit, right: &SealedHit) -> std::cmp::Ordering {
     let (lc, li) = hit_sort(left);
     let (rc, ri) = hit_sort(right);
     rc.cmp(&lc)
@@ -875,35 +714,35 @@ fn hit_order(left: &LibraryHit, right: &LibraryHit) -> std::cmp::Ordering {
         .then_with(|| li.cmp(&ri))
         .then_with(|| hit_key(left).cmp(hit_key(right)))
 }
-fn hit_sort(hit: &LibraryHit) -> (u64, u64) {
+fn hit_sort(hit: &SealedHit) -> (u64, u64) {
     match hit {
-        LibraryHit::Meeting {
-            created_at_epoch_seconds,
-            ..
-        } => (*created_at_epoch_seconds, u64::MAX),
-        LibraryHit::Transcript {
-            created_at_epoch_seconds,
+        SealedHit::Transcript {
+            authority,
             source_turn_index,
             original_scalar_start,
             ..
         } => (
-            *created_at_epoch_seconds,
+            authority_created(authority),
             ((*source_turn_index as u64) << 32) | *original_scalar_start,
         ),
-        LibraryHit::Withheld {
-            created_at_epoch_seconds,
+        SealedHit::Withheld {
+            authority,
             source_turn_index,
             ..
         } => (
-            *created_at_epoch_seconds,
+            authority_created(authority),
             ((*source_turn_index as u64) << 32) | u32::MAX as u64,
         ),
     }
+}
+fn authority_created(authority: &HitAuthority) -> u64 {
+    authority.created_at_epoch_seconds
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::{Path, PathBuf};
 
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -927,7 +766,6 @@ mod tests {
             let repository = temp.path().join("repository");
             create_private_dir(&repository).unwrap();
             let storage = StorageRoot::create(&temp.path().join("data"), &repository).unwrap();
-            create_private_dir(&storage.path().join("library")).unwrap();
             Self { temp, storage }
         }
 
@@ -1003,14 +841,6 @@ mod tests {
             write_meeting(&directory, &record).unwrap();
             directory
         }
-
-        fn metadata(&self, value: serde_json::Value) {
-            durable_create_new(
-                &self.storage.path().join("library/metadata.json"),
-                &serde_json::to_vec_pretty(&value).unwrap(),
-            )
-            .unwrap();
-        }
     }
 
     #[test]
@@ -1019,15 +849,12 @@ mod tests {
         fixture.meeting("meeting-a", 10, &[("safe token", false)]);
         let bad = fixture.meeting("meeting-b", 9, &[("tampered token", false)]);
         fs::write(bad.join("attempt.json"), b"not a receipt").unwrap();
-        let before = fs::read_dir(fixture.storage.path()).unwrap().count();
+        let before = tree_digest(fixture.storage.path());
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         assert_eq!(projection.rows().len(), 1);
         assert_eq!(projection.quarantined_meetings(), 1);
-        assert_eq!(
-            before,
-            fs::read_dir(fixture.storage.path()).unwrap().count()
-        );
+        assert_eq!(before, tree_digest(fixture.storage.path()));
         assert!(fixture.temp.path().exists());
     }
 
@@ -1035,38 +862,25 @@ mod tests {
     fn normalized_overlapping_search_has_stable_natural_keys() {
         let fixture = Fixture::new();
         fixture.meeting("meeting-a", 10, &[("e\u{301}chooooo", false)]);
-        fixture.metadata(json!({"schema":"library-metadata/1","revision":7,"folders":[{"id":"22222222-2222-4222-8222-222222222222","name":"Écho folder"}],"meetings":[{"meeting_id":"meeting-a","title":"Écho title","folder_id":"22222222-2222-4222-8222-222222222222"}]}));
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        assert_eq!(projection.metadata_revision(), 7);
-        assert_eq!(projection.rows()[0].title.as_deref(), Some("Écho title"));
         let hits = projection.search(" ÉCHO ").unwrap();
-        assert_eq!(hits.len(), 3);
+        assert_eq!(hits.len(), 1);
         assert!(matches!(
-            hits[0],
-            LibraryHit::Transcript {
+            projection.sealed(&hits[0]),
+            Some(SealedHit::Transcript {
                 original_scalar_start: 0,
                 original_scalar_end: 5,
                 ..
-            }
+            })
         ));
-        assert!(hits.iter().any(|hit| matches!(
-            hit,
-            LibraryHit::Meeting {
-                field: MetadataField::Title,
-                ..
-            }
-        )));
-        assert!(hits.iter().any(|hit| matches!(
-            hit,
-            LibraryHit::Meeting {
-                field: MetadataField::Folder,
-                ..
-            }
-        )));
         assert_eq!(
-            hit_key(&hits[0]),
-            hit_key(&projection.search("écho").unwrap()[0])
+            hit_key(&projection.sealed(&hits[0]).unwrap()),
+            hit_key(
+                &projection
+                    .sealed(&projection.search("écho").unwrap()[0])
+                    .unwrap()
+            )
         );
         assert_eq!(normalized_matches("oooo", "oo").len(), 3);
     }
@@ -1099,7 +913,7 @@ mod tests {
 
     #[test]
     fn open_fails_closed_when_any_bound_artifact_drifts() {
-        for target in ["meeting", "attempt", "metadata", "transcript"] {
+        for target in ["meeting", "attempt", "transcript"] {
             let fixture = Fixture::new();
             let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
             let projection =
@@ -1108,9 +922,6 @@ mod tests {
             match target {
                 "meeting" => fs::write(directory.join("meeting.json"), b"{}").unwrap(),
                 "attempt" => fs::write(directory.join("attempt.json"), b"{}").unwrap(),
-                "metadata" => fixture.metadata(
-                    json!({"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[]}),
-                ),
                 "transcript" => {
                     let current = load_meeting(&directory)
                         .unwrap()
@@ -1129,22 +940,71 @@ mod tests {
     }
 
     #[test]
-    fn missing_or_malformed_metadata_keeps_transcripts_searchable_and_limits_refuse_whole_build() {
+    fn handles_are_projection_owned_and_unknown_handles_are_stale() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 10, &[("stable token", false)]);
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let handle = projection.search("stable").unwrap().remove(0);
+        let forged = LibraryHit {
+            projection_id: projection.snapshot_id,
+            key: "forged".into(),
+        };
+        assert_eq!(
+            projection.open(&fixture.storage, &forged),
+            Err(LibraryReadError::SnapshotStale)
+        );
+        let other = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert_eq!(
+            projection.open(&fixture.storage, &other.search("stable").unwrap()[0]),
+            Err(LibraryReadError::SnapshotStale)
+        );
+        assert!(projection.open(&fixture.storage, &handle).is_ok());
+    }
+
+    #[test]
+    fn lifecycle_and_current_transcript_pointer_drift_are_stale() {
+        let fixture = Fixture::new();
+        let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let handle = projection.search("stable").unwrap().remove(0);
+        let mut record = load_meeting(&directory).unwrap();
+        record.lifecycle = MeetingLifecycle::SummaryFailed;
+        write_meeting(&directory, &record).unwrap();
+        assert_eq!(
+            projection.open(&fixture.storage, &handle),
+            Err(LibraryReadError::SnapshotStale)
+        );
+
+        let fixture = Fixture::new();
+        let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let handle = projection.search("stable").unwrap().remove(0);
+        let mut record = load_meeting(&directory).unwrap();
+        let original = record.artifacts.current_transcript.clone().unwrap();
+        let bytes = fs::read(directory.join(&original.relative_path)).unwrap();
+        let alternate = format!("{}\n", String::from_utf8(bytes).unwrap());
+        let digest = format!("{:x}", Sha256::digest(alternate.as_bytes()));
+        let relative = format!("transcript/{digest}.json");
+        durable_create_new(&directory.join(&relative), alternate.as_bytes()).unwrap();
+        record.artifacts.current_transcript = Some(artifact_ref(&directory, &relative).unwrap());
+        write_meeting(&directory, &record).unwrap();
+        assert_eq!(
+            projection.open(&fixture.storage, &handle),
+            Err(LibraryReadError::SnapshotStale)
+        );
+    }
+
+    #[test]
+    fn transcript_search_and_limits_refuse_whole_build() {
         let fixture = Fixture::new();
         fixture.meeting("meeting-a", 10, &[("token", false)]);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         assert_eq!(projection.search("token").unwrap().len(), 1);
-        fixture.metadata(json!({"schema":"wrong","revision":1,"folders":[],"meetings":[]}));
-        assert_eq!(
-            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default())
-                .unwrap()
-                .search("token")
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
+        assert!(matches!(
             LibraryProjection::rebuild(
                 &fixture.storage,
                 ReadLimits {
@@ -1153,14 +1013,60 @@ mod tests {
                 }
             ),
             Err(LibraryReadError::CapacityExceeded)
-        );
-        assert_eq!(normalize("é").0, normalize("e\u{301}").0);
-        assert_eq!(normalize("e\u{301}").1, vec![(0, 2)]);
-        assert_eq!(normalize("İ"), ("i\u{307}".into(), vec![(0, 1), (0, 1)]));
-        assert_eq!(normalize("👩‍💻").1, vec![(0, 3); 3]);
+        ));
+        for (input, expected, origins) in NORMALIZATION_FIXTURES {
+            let actual = normalize(input);
+            assert_eq!(actual.0, *expected);
+            assert_eq!(actual.1, *origins);
+        }
         assert_eq!(
             normalized_matches("aaaa", "aa"),
             vec![(0, 2), (1, 3), (2, 4)]
         );
+        assert!(normalize_query(&"a".repeat(256)).is_ok());
+        assert_eq!(
+            normalize_query(&"a".repeat(257)),
+            Err(LibraryReadError::InvalidRequest)
+        );
+        assert_eq!(
+            normalize_query(" \n token"),
+            Err(LibraryReadError::InvalidRequest)
+        );
     }
+
+    fn tree_digest(path: &Path) -> Vec<(String, String)> {
+        fn walk(root: &Path, path: &Path, output: &mut Vec<(String, String)>) {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            let relative = path.strip_prefix(root).unwrap().display().to_string();
+            if metadata.is_dir() {
+                output.push((
+                    format!("d:{relative}"),
+                    format!("{:o}", metadata.permissions().mode() & 0o777),
+                ));
+                let mut children: Vec<_> =
+                    fs::read_dir(path).unwrap().map(Result::unwrap).collect();
+                children.sort_by_key(|entry| entry.file_name());
+                for child in children {
+                    walk(root, &child.path(), output);
+                }
+            } else {
+                output.push((
+                    format!("f:{relative}"),
+                    digest_bytes(&fs::read(path).unwrap()),
+                ));
+            }
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let mut output = Vec::new();
+        walk(path, path, &mut output);
+        output
+    }
+
+    type NormalizationFixture = (&'static str, &'static str, &'static [(u64, u64)]);
+    const NORMALIZATION_FIXTURES: &[NormalizationFixture] = &[
+        ("é", "é", &[(0, 1)]),
+        ("e\u{301}", "é", &[(0, 2)]),
+        ("İ", "i\u{307}", &[(0, 1), (0, 1)]),
+        ("👩‍💻", "👩‍💻", &[(0, 3), (0, 3), (0, 3)]),
+    ];
 }
