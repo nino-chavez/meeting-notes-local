@@ -154,6 +154,7 @@ fn open_note_response(handle: &str, state: &DevSurfaceState) -> LibraryNoteRespo
         return unavailable_note("", state);
     };
     let mut response = library.reader.open_note(handle);
+    response.audio_deletion_handle = None;
     response.message = match response.state {
         "note" => "Words located in the transcript. Semantic support has not been reviewed.",
         "summary-failed" => {

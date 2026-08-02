@@ -189,6 +189,24 @@
           "markdownDescription": "Enables the dismiss_meeting command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_delete_meeting_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-delete-meeting-audio",
+          "markdownDescription": "Enables the preview_delete_meeting_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_library_open_evidence command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-library-open-evidence",
+          "markdownDescription": "Enables the preview_library_open_evidence command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_library_open_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-library-open-note",
+          "markdownDescription": "Enables the preview_library_open_note command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_library_open_search_result command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-library-open-search-result",
@@ -241,6 +259,24 @@
           "type": "string",
           "const": "deny-dismiss-meeting",
           "markdownDescription": "Denies the dismiss_meeting command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_delete_meeting_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-delete-meeting-audio",
+          "markdownDescription": "Denies the preview_delete_meeting_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_library_open_evidence command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-library-open-evidence",
+          "markdownDescription": "Denies the preview_library_open_evidence command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_library_open_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-library-open-note",
+          "markdownDescription": "Denies the preview_library_open_note command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_library_open_search_result command without any pre-configured scope.",

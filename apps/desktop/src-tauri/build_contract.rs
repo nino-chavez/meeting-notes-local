@@ -33,6 +33,7 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "preview_library_open_note",
     "preview_library_open_evidence",
     "preview_library_open_transcript",
+    "preview_delete_meeting_audio",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]

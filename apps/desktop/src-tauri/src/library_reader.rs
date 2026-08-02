@@ -28,6 +28,7 @@ pub(crate) struct LibraryReader {
     storage: StorageRoot,
     projection: LibraryProjection,
     handles: HashMap<String, LibraryHit>,
+    audio_deletion_handles: HashMap<String, LibraryHit>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +92,7 @@ pub(crate) struct LibrarySearchOpenResponse {
 pub(crate) struct LibraryNoteResponse {
     pub(crate) state: &'static str,
     pub(crate) transcript_handle: Option<String>,
+    pub(crate) audio_deletion_handle: Option<String>,
     pub(crate) meeting_id: String,
     pub(crate) claims: Vec<LibraryClaim>,
     pub(crate) audio_retention: LibraryAudioRetention,
@@ -107,6 +109,13 @@ pub(crate) struct LibraryAudioRetention {
     pub(crate) policy: &'static str,
     pub(crate) deadline_epoch_seconds: Option<u64>,
     pub(crate) retained_bytes: Option<u64>,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LibraryAudioDeletionAccess {
+    pub(crate) state: &'static str,
+    pub(crate) meeting_id: Option<String>,
     pub(crate) message: String,
 }
 
@@ -150,11 +159,12 @@ impl LibraryReader {
             storage,
             projection,
             handles: HashMap::new(),
+            audio_deletion_handles: HashMap::new(),
         }
     }
 
     pub(crate) fn snapshot(&mut self) -> LibrarySnapshot {
-        self.handles.clear();
+        self.clear_handles();
         let unavailable_count = self.projection.quarantined_meetings();
         if self.projection.rows().is_empty() {
             return LibrarySnapshot {
@@ -217,7 +227,7 @@ impl LibraryReader {
     pub(crate) fn search(&mut self, query: &str) -> LibrarySearchResponse {
         // A handle is valid only for the response that returned it. Keeping old
         // handles would retain an unbounded amount of private snapshot state.
-        self.handles.clear();
+        self.clear_handles();
         let unavailable_count = self.projection.quarantined_meetings();
         match self.projection.search(query) {
             Ok(hits) if hits.is_empty() => LibrarySearchResponse {
@@ -340,10 +350,10 @@ impl LibraryReader {
     /// Search terms never become filesystem or transcript-enumeration authority.
     pub(crate) fn open_search_result(&mut self, handle: &str) -> LibrarySearchOpenResponse {
         let Some(hit) = self.handles.get(handle).cloned() else {
-            self.handles.clear();
+            self.clear_handles();
             return Self::stale_search_open();
         };
-        self.handles.clear();
+        self.clear_handles();
         match self.projection.open(&self.storage, &hit) {
             Ok(OpenedLibraryHit::Transcript {
                 meeting_id,
@@ -404,10 +414,10 @@ impl LibraryReader {
     pub(crate) fn open_note(&mut self, handle: &str) -> LibraryNoteResponse {
         // Opening a note establishes the next evidence-response boundary.
         let Some(hit) = self.handles.get(handle).cloned() else {
-            self.handles.clear();
+            self.clear_handles();
             return Self::stale_note("");
         };
-        self.handles.clear();
+        self.clear_handles();
         let meeting_id = match self.projection.open(&self.storage, &hit) {
             Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
             Ok(_) | Err(_) => return Self::stale_note(""),
@@ -422,11 +432,14 @@ impl LibraryReader {
             return Self::stale_note(&meeting_id);
         };
         let audio_retention = self.audio_retention(&meeting_id);
+        let audio_deletion_handle =
+            self.retain_audio_deletion_handle(&meeting_id, audio_retention.state == "retained");
         match lifecycle {
             MeetingLifecycle::SummaryFailed => {
                 return LibraryNoteResponse {
                     state: "summary-failed",
                     transcript_handle: self.retain_transcript_handle(&meeting_id),
+                    audio_deletion_handle,
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
                     audio_retention,
@@ -440,6 +453,7 @@ impl LibraryReader {
                 return LibraryNoteResponse {
                     state: "transcript-only",
                     transcript_handle: transcript_handle.clone(),
+                    audio_deletion_handle,
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
                     audio_retention,
@@ -481,6 +495,7 @@ impl LibraryReader {
         LibraryNoteResponse {
             state: "note",
             transcript_handle: self.retain_transcript_handle(&meeting_id),
+            audio_deletion_handle,
             meeting_id: meeting_id.into(),
             claims,
             audio_retention,
@@ -494,10 +509,10 @@ impl LibraryReader {
         locator_ordinal: usize,
     ) -> LibraryEvidenceResponse {
         let Some(hit) = self.handles.get(handle).cloned() else {
-            self.handles.clear();
+            self.clear_handles();
             return Self::stale_evidence();
         };
-        self.handles.clear();
+        self.clear_handles();
         match self
             .projection
             .open_claim_evidence(&self.storage, &hit, locator_ordinal)
@@ -521,10 +536,10 @@ impl LibraryReader {
 
     pub(crate) fn open_transcript(&mut self, handle: &str) -> LibraryTranscriptAccess {
         let Some(hit) = self.handles.get(handle).cloned() else {
-            self.handles.clear();
+            self.clear_handles();
             return Self::stale_transcript();
         };
-        self.handles.clear();
+        self.clear_handles();
         let response = match self.projection.open(&self.storage, &hit) {
             Ok(OpenedLibraryHit::Transcript {
                 meeting_id,
@@ -580,6 +595,7 @@ impl LibraryReader {
         LibraryNoteResponse {
             state: "unavailable",
             transcript_handle: None,
+            audio_deletion_handle: None,
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
             audio_retention: Self::unavailable_audio_retention(),
@@ -606,6 +622,60 @@ impl LibraryReader {
         handle
     }
 
+    fn retain_audio_deletion_handle(&mut self, meeting_id: &str, retained: bool) -> Option<String> {
+        if !retained {
+            return None;
+        }
+        let hit = self.projection.meeting_handle(meeting_id).ok()?;
+        let handle = Uuid::new_v4().to_string();
+        self.audio_deletion_handles.insert(handle.clone(), hit);
+        Some(handle)
+    }
+
+    pub(crate) fn authorize_audio_deletion(&mut self, handle: &str) -> LibraryAudioDeletionAccess {
+        let hit = self.audio_deletion_handles.get(handle).cloned();
+        self.clear_handles();
+        let Some(hit) = hit else {
+            return Self::stale_audio_deletion();
+        };
+        let meeting_id = match self.projection.open(&self.storage, &hit) {
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
+            Ok(_) | Err(_) => return Self::stale_audio_deletion(),
+        };
+        match Self::read_audio_retention(&self.storage, &meeting_id).state {
+            "retained" => LibraryAudioDeletionAccess {
+                state: "authorized",
+                meeting_id: Some(meeting_id),
+                message: "The reviewed meeting recording may be deleted.".into(),
+            },
+            "released" => LibraryAudioDeletionAccess {
+                state: "already-released",
+                meeting_id: Some(meeting_id),
+                message: "This meeting recording was already deleted.".into(),
+            },
+            "deleting" => LibraryAudioDeletionAccess {
+                state: "deleting",
+                meeting_id: Some(meeting_id),
+                message: "This meeting recording is already being deleted.".into(),
+            },
+            "not-recorded" => LibraryAudioDeletionAccess {
+                state: "not-recorded",
+                meeting_id: Some(meeting_id),
+                message: "This meeting has no retained recording to delete.".into(),
+            },
+            _ => LibraryAudioDeletionAccess {
+                state: "unavailable",
+                meeting_id: None,
+                message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
+            },
+        }
+    }
+
+    fn clear_handles(&mut self) {
+        self.handles.clear();
+        self.audio_deletion_handles.clear();
+    }
+
     fn retain_transcript_handle(&mut self, meeting_id: &str) -> Option<String> {
         if !self.meeting_has_transcript(meeting_id) {
             return None;
@@ -627,7 +697,10 @@ impl LibraryReader {
         Self::read_audio_retention(&self.storage, meeting_id)
     }
 
-    fn read_audio_retention(storage: &StorageRoot, meeting_id: &str) -> LibraryAudioRetention {
+    pub(crate) fn read_audio_retention(
+        storage: &StorageRoot,
+        meeting_id: &str,
+    ) -> LibraryAudioRetention {
         let Ok(directory) = meeting_dir(storage, meeting_id) else {
             return Self::unavailable_audio_retention();
         };
@@ -726,7 +799,7 @@ impl LibraryReader {
         end: Option<u64>,
         message: &'static str,
     ) -> LibrarySearchOpenResponse {
-        self.handles.clear();
+        self.clear_handles();
         LibrarySearchOpenResponse {
             state,
             transcript_handle: Some(self.retain_handle(hit)),
@@ -768,9 +841,18 @@ impl LibraryReader {
         LibraryNoteResponse {
             state: "stale",
             transcript_handle: None,
+            audio_deletion_handle: None,
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
             audio_retention: Self::unavailable_audio_retention(),
+            message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn stale_audio_deletion() -> LibraryAudioDeletionAccess {
+        LibraryAudioDeletionAccess {
+            state: "stale",
+            meeting_id: None,
             message: STALE_MESSAGE.into(),
         }
     }
@@ -843,6 +925,7 @@ mod tests {
     use local_meeting_notes_session_core::storage::{
         StorageRoot, create_private_dir, durable_create_new,
     };
+    use serde_json::json;
     use sha2::Digest;
     use tempfile::TempDir;
 
@@ -869,17 +952,49 @@ mod tests {
         let directory = storage.path().join("meetings").join(MEETING_ID);
         create_private_dir(&directory).unwrap();
         create_private_dir(&directory.join("capture")).unwrap();
-        durable_create_new(&directory.join("attempt.json"), b"attempt").unwrap();
+        let policy_sha256 = retention_policy_sha256(&rule);
+        let attempt = serde_json::to_vec_pretty(&json!({
+            "schema": "capture-attempt/1",
+            "meeting_id": MEETING_ID,
+            "attempt_id": "22222222-2222-4222-8222-222222222222",
+            "created_at_epoch_seconds": 1_728_000_000_u64,
+            "application_build_sha256": "a".repeat(64),
+            "participant_notice_version": "internal-transcript-alpha/1",
+            "operator_attestation": {
+                "participantsConsented": true,
+                "headphones": true,
+                "operatorAlone": true
+            },
+            "retention_policy_sha256": policy_sha256,
+        }))
+        .unwrap();
+        durable_create_new(&directory.join("attempt.json"), &attempt).unwrap();
+        let transcript_bytes = serde_json::to_vec_pretty(&json!({
+            "schema": "capture-transcript/1",
+            "source": "synthetic",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": []
+        }))
+        .unwrap();
+        let transcript_relative = format!(
+            "transcript/{:x}.json",
+            sha2::Sha256::digest(&transcript_bytes)
+        );
 
         let lifecycle = if state == AudioState::NeverCreated {
             MeetingLifecycle::Incomplete
         } else {
             create_private_dir(&directory.join("deletion")).unwrap();
+            create_private_dir(&directory.join("transcript")).unwrap();
             durable_create_new(&directory.join("ownership.json"), b"ownership").unwrap();
             durable_create_new(&directory.join("capture/session.json"), b"session").unwrap();
             durable_create_new(&directory.join("capture/mic.wav"), microphone).unwrap();
             durable_create_new(&directory.join("capture/system.wav"), system).unwrap();
-            MeetingLifecycle::Captured
+            durable_create_new(&directory.join(&transcript_relative), &transcript_bytes).unwrap();
+            MeetingLifecycle::TranscriptReady
         };
         let deletion_receipt = if state == AudioState::Released {
             fs::remove_file(directory.join("capture/mic.wav")).unwrap();
@@ -903,7 +1018,7 @@ mod tests {
             meeting_id: MEETING_ID.into(),
             lifecycle,
             retention: AudioRetention {
-                policy_sha256: retention_policy_sha256(&rule),
+                policy_sha256,
                 rule,
                 next_deletion_at_epoch_seconds,
                 state,
@@ -923,7 +1038,8 @@ mod tests {
                     relative_path: "capture/system.wav".into(),
                     sha256: format!("{:x}", sha2::Sha256::digest(system)),
                 }),
-                current_transcript: None,
+                current_transcript: (state != AudioState::NeverCreated)
+                    .then(|| artifact_ref(&directory, &transcript_relative).unwrap()),
                 current_note: None,
             },
             pending_storage_operation: (state == AudioState::Deleting).then_some(
@@ -958,6 +1074,54 @@ mod tests {
                 .unwrap()
                 .contains("capture/")
         );
+    }
+
+    #[test]
+    fn retained_meeting_gets_a_single_use_deletion_handle_not_generic_handle_authority() {
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
+        let snapshot = reader.snapshot();
+        let generic_handle = snapshot.rows[0].handle.clone();
+
+        let refused = reader.authorize_audio_deletion(&generic_handle);
+        assert_eq!(refused.state, "stale");
+        assert_eq!(refused.meeting_id, None);
+
+        let snapshot = reader.snapshot();
+        let note = reader.open_note(&snapshot.rows[0].handle);
+        let deletion_handle = note
+            .audio_deletion_handle
+            .expect("retained meeting deletion handle");
+        let authorized = reader.authorize_audio_deletion(&deletion_handle);
+        assert_eq!(authorized.state, "authorized");
+        assert_eq!(authorized.meeting_id.as_deref(), Some(MEETING_ID));
+
+        let reused = reader.authorize_audio_deletion(&deletion_handle);
+        assert_eq!(reused.state, "stale");
+        assert_eq!(reused.meeting_id, None);
+    }
+
+    #[test]
+    fn released_meeting_has_no_audio_deletion_handle() {
+        let fixture = fixture(
+            AudioState::Released,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage, projection);
+        let snapshot = reader.snapshot();
+        let note = reader.open_note(&snapshot.rows[0].handle);
+
+        assert_eq!(note.audio_retention.state, "released");
+        assert_eq!(note.audio_deletion_handle, None);
     }
 
     #[test]

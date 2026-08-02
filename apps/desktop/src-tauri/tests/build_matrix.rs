@@ -41,7 +41,7 @@ fn isolated_development_config_with_feature_is_development_only() {
 }
 
 #[test]
-fn preview_config_with_feature_adds_only_the_read_only_library_boundary() {
+fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boundary() {
     let preview = config(include_str!("../tauri.preview.conf.json"));
     let plan = plan(BuildMode::Preview);
     assert!(validate(BuildMode::Preview, &preview).is_ok());
@@ -61,6 +61,7 @@ fn preview_config_with_feature_adds_only_the_read_only_library_boundary() {
             "preview_library_open_note",
             "preview_library_open_evidence",
             "preview_library_open_transcript",
+            "preview_delete_meeting_audio",
         ]
     );
 }
