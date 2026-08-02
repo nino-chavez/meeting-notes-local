@@ -76,6 +76,23 @@ stay out of current Find and Promises results while restored transcript words be
 searchable. This proves the proposed interaction and browser-state reconstruction, not
 native persistence or installed-app recovery.
 
+The next trust slice is a distinct **whole-meeting deletion** path on the synthetic
+discovery meeting. It is deliberately separate from the already-reviewed immediate
+audio-only release. Step 1 names exactly what terminal deletion removes: meeting
+metadata; the canonical transcript and every revision; notes and stale history;
+evidence links; and retained audio, if any. It also names what remains: the separate
+voice profile, retention policy, and other meetings. Step 2 requires a plain-language
+acknowledgement before the terminal action is enabled, and cancellation keeps the
+meeting unchanged. A reviewer-only control persists a content-free, request-only
+receipt (`schema`, `scenario`, synthetic meeting ID, operation ID), reloads the
+document before terminal completion, and returns to one safe action: resume that same
+deletion. While that receipt exists, the affected meeting and every derived promise
+and search hit are unavailable from Find, Meetings, and Promises; a second reload
+reconstructs the same recovery surface. Terminal completion clears the receipt and
+removes only that synthetic meeting for the current prototype session. This models
+idempotent browser-state recovery, not native deletion, durable installed recovery,
+or recoverability after terminal deletion.
+
 It is a design instrument, not a second application runtime. It does not read or write
 Preview data, record audio, invoke a model, or prove note usefulness or semantic
 support. The synthetic corpus is frozen as of May 9, 2026 so relative retention states
@@ -94,4 +111,5 @@ long meeting and transcript content scrolls inside its reading pane.
 JavaScript under review. Its `compositionApproval` preserves the operator's explicit
 decision and the exact artifact digests it covered. Later content changes do not widen
 that approval: mechanical checks and agent audits still cannot approve automatic-note
-quality, installed behavior, beta admission, or release.
+quality, native deletion, installed behavior or recovery, private content, beta
+admission, or release. The whole-meeting deletion slice is pending operator review.

@@ -237,12 +237,14 @@ const footerDirection = document.querySelector("#footer-direction");
 const captureLayer = document.querySelector("#capture-layer");
 const toast = document.querySelector("#toast");
 const recoveryFixtureKey = "local-meeting-notes:walking-skeleton-recovery";
+const meetingDeletionRecoveryKey = "local-meeting-notes:walking-skeleton-meeting-deletion-recovery";
 
 let loadTimer;
 let transitionTimer;
 let captureTimer;
 let toastTimer;
-let state = freshState(readDirection(), readRecoveryFixture());
+const persistedFixtures = readPersistedFixtures();
+let state = freshState(readDirection(), persistedFixtures.regeneration, persistedFixtures.meetingDeletion);
 
 function readDirection() {
   const direction = new URLSearchParams(window.location.search).get("direction");
@@ -273,6 +275,41 @@ function readRecoveryFixture() {
   }
 }
 
+function readMeetingDeletionRecoveryReceipt() {
+  try {
+    const raw = window.sessionStorage.getItem(meetingDeletionRecoveryKey);
+    if (!raw) return null;
+    const receipt = JSON.parse(raw);
+    const keys = Object.keys(receipt ?? {}).sort().join(",");
+    if (
+      keys !== "meetingId,operationId,scenario,schema"
+      || receipt.schema !== "walking-skeleton-meeting-deletion/1"
+      || receipt.scenario !== "whole-meeting-deletion-request-only"
+      || receipt.meetingId !== "m-05"
+      || receipt.operationId !== "synthetic-delete-m05-v1"
+    ) {
+      clearMeetingDeletionRecoveryReceipt();
+      return null;
+    }
+    return receipt;
+  } catch {
+    clearMeetingDeletionRecoveryReceipt();
+    return null;
+  }
+}
+
+function readPersistedFixtures() {
+  const regeneration = readRecoveryFixture();
+  const meetingDeletion = readMeetingDeletionRecoveryReceipt();
+  // One recovery operation at a time. A mixed or unknown state is not resumed.
+  if (regeneration && meetingDeletion) {
+    clearRecoveryFixture();
+    clearMeetingDeletionRecoveryReceipt();
+    return { regeneration: null, meetingDeletion: null };
+  }
+  return { regeneration, meetingDeletion };
+}
+
 function clearRecoveryFixture() {
   try {
     window.sessionStorage.removeItem(recoveryFixtureKey);
@@ -281,13 +318,22 @@ function clearRecoveryFixture() {
   }
 }
 
-function freshState(defaultDirection, recoveryFixture = null) {
+function clearMeetingDeletionRecoveryReceipt() {
+  try {
+    window.sessionStorage.removeItem(meetingDeletionRecoveryKey);
+  } catch {
+    // The prototype remains usable when browser storage is unavailable.
+  }
+}
+
+function freshState(defaultDirection, recoveryFixture = null, meetingDeletionReceipt = null) {
   const recoveringRegeneration = recoveryFixture?.scenario === "note-regeneration-request-only";
+  const recoveringMeetingDeletion = meetingDeletionReceipt?.scenario === "whole-meeting-deletion-request-only";
   return {
     defaultDirection,
     view: defaultDirection,
     loading: true,
-    route: recoveringRegeneration ? "meeting" : "home",
+    route: recoveringMeetingDeletion ? "meeting-deletion-recovery" : recoveringRegeneration ? "meeting" : "home",
     query: "",
     selectedMeetingId: recoveringRegeneration ? "m-02" : null,
     selectedClaimId: null,
@@ -322,7 +368,11 @@ function freshState(defaultDirection, recoveryFixture = null) {
     enrollmentNegativeSource: null,
     enrollmentPolicy: null,
     enrollmentBuildPhase: null,
-    enrollmentDiscardConfirming: false
+    enrollmentDiscardConfirming: false,
+    meetingDeletionStage: "none",
+    meetingDeletionAcknowledged: false,
+    meetingDeletionId: recoveringMeetingDeletion ? "m-05" : null,
+    meetingDeletionRecoveryState: recoveringMeetingDeletion ? "interrupted" : "none"
   };
 }
 
@@ -371,6 +421,7 @@ function evidenceLabel(claim) {
 }
 
 function claimsFor(meeting) {
+  if (meetingIsUnavailable(meeting)) return [];
   if (meeting.id === "m-02" && state.restored && !state.regenerated) return [];
   const claims = [...meeting.claims];
   if (meeting.id === "m-02" && state.regenerated) claims.push(meeting.regeneratedClaim);
@@ -384,19 +435,28 @@ function turnsFor(meeting) {
 }
 
 function allClaims() {
-  return meetings.flatMap((meeting) => claimsFor(meeting).map((claim) => ({ meeting, claim })));
+  return activeMeetings().flatMap((meeting) => claimsFor(meeting).map((claim) => ({ meeting, claim })));
 }
 
 function findMeeting(id) {
-  return meetings.find((meeting) => meeting.id === id);
+  return activeMeetings().find((meeting) => meeting.id === id);
 }
 
 function findClaim(id) {
-  for (const meeting of meetings) {
+  for (const meeting of activeMeetings()) {
     const claim = claimsFor(meeting).find((item) => item.id === id);
     if (claim) return { meeting, claim };
   }
   return null;
+}
+
+function meetingIsUnavailable(meeting) {
+  return meeting.id === state.meetingDeletionId
+    && ["interrupted", "resuming", "completed"].includes(state.meetingDeletionRecoveryState);
+}
+
+function activeMeetings() {
+  return meetings.filter((meeting) => !meetingIsUnavailable(meeting));
 }
 
 function currentAudio(meeting) {
@@ -437,6 +497,9 @@ function assertFixtureIntegrity() {
   if (!discovery.claims.every((claim) => claim.supportType === "stated" || claim.supportType === "inferred")) {
     throw new Error("Synthetic discovery claims require explicit stated or inferred labels");
   }
+  if (discovery.audio.state !== "held" || !discovery.turns.length || !discovery.claims.length) {
+    throw new Error("Synthetic deletion specimen requires retained audio, transcript, and note evidence");
+  }
 }
 
 function startLoading() {
@@ -453,6 +516,7 @@ function resetPrototype(direction = state.defaultDirection) {
   window.clearTimeout(transitionTimer);
   window.clearTimeout(captureTimer);
   clearRecoveryFixture();
+  clearMeetingDeletionRecoveryReceipt();
   state = freshState(direction);
   startLoading();
 }
@@ -500,7 +564,8 @@ function syncChrome() {
     transcribing: { status: "Transcribing locally", action: "Show status", className: "is-transcribing" },
     ready: { status: "Meeting ready", action: "Open meeting", className: "is-ready" }
   };
-  const recoveryPending = state.recoveryState === "interrupted" || state.recoveryState === "resuming";
+  const recoveryPending = state.recoveryState === "interrupted" || state.recoveryState === "resuming"
+    || state.meetingDeletionRecoveryState === "interrupted" || state.meetingDeletionRecoveryState === "resuming";
   const captureChrome = state.enrollmentRecording
     ? { status: "Recording · voice enrollment", action: "Show enrollment", className: "is-recording" }
     : state.captureDegraded && state.capturePhase === "recording"
@@ -514,7 +579,11 @@ function syncChrome() {
   productState.className = `product-state ${captureChrome.className}`.trim();
   document.querySelector("#product-state-text").textContent = captureChrome.status;
   document.querySelector("#capture-action").textContent = captureChrome.action;
-  workspace.setAttribute("aria-label", state.route === "settings" ? "Settings" : `${viewLabels[state.view]} view`);
+  workspace.setAttribute("aria-label", state.route === "settings"
+    ? "Settings"
+    : state.route === "meeting-deletion-recovery"
+      ? "Interrupted meeting deletion recovery"
+      : `${viewLabels[state.view]} view`);
   footerDirection.textContent = `Viewing ${viewLabels[state.view]} · opens on ${viewLabels[state.defaultDirection]}`;
 }
 
@@ -561,6 +630,8 @@ function render() {
 
   if (state.route === "settings") {
     renderSettings();
+  } else if (state.route === "meeting-deletion-recovery") {
+    renderMeetingDeletionRecovery();
   } else if (state.route === "transcript") {
     renderTranscript();
   } else if (state.route === "meeting") {
@@ -1046,7 +1117,7 @@ function renderSettings() {
 }
 
 function meetingsNewestFirst() {
-  return [...meetings].sort((a, b) => meetingTimestamp(b) - meetingTimestamp(a));
+  return [...activeMeetings()].sort((a, b) => meetingTimestamp(b) - meetingTimestamp(a));
 }
 
 function meetingTimestamp(meeting) {
@@ -1087,10 +1158,10 @@ function renderMeetingsHome() {
         <h2 class="rail-title">Browse meetings</h2>
         <p class="rail-copy">Begin with the meeting, then find the claim inside it.</p>
         <div class="filter-stack" aria-label="Meeting folders">
-          <button class="filter-button" type="button" data-action="clear-query" aria-pressed="${state.folderFilter === null}"><span>All meetings</span><small>${meetings.length}</small></button>
-          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Operations"}" data-action="folder-filter" data-folder="Operations"><span>Operations</span><small>${meetings.filter((meeting) => meeting.folder === "Operations").length}</small></button>
-          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Partnerships"}" data-action="folder-filter" data-folder="Partnerships"><span>Partnerships</span><small>${meetings.filter((meeting) => meeting.folder === "Partnerships").length}</small></button>
-          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Sales"}" data-action="folder-filter" data-folder="Sales"><span>Sales</span><small>${meetings.filter((meeting) => meeting.folder === "Sales").length}</small></button>
+          <button class="filter-button" type="button" data-action="clear-query" aria-pressed="${state.folderFilter === null}"><span>All meetings</span><small>${activeMeetings().length}</small></button>
+          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Operations"}" data-action="folder-filter" data-folder="Operations"><span>Operations</span><small>${activeMeetings().filter((meeting) => meeting.folder === "Operations").length}</small></button>
+          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Partnerships"}" data-action="folder-filter" data-folder="Partnerships"><span>Partnerships</span><small>${activeMeetings().filter((meeting) => meeting.folder === "Partnerships").length}</small></button>
+          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Sales"}" data-action="folder-filter" data-folder="Sales"><span>Sales</span><small>${activeMeetings().filter((meeting) => meeting.folder === "Sales").length}</small></button>
         </div>
         ${taskMarkup()}
       </aside>
@@ -1102,7 +1173,7 @@ function renderMeetingsHome() {
         </div>
         ${searchFormMarkup()}
         ${state.query ? meetingSearchResultsMarkup(results) : `
-          <div class="section-heading"><h2>Recent meetings</h2><span>${meetings.length} retained</span></div>
+          <div class="section-heading"><h2>Recent meetings</h2><span>${activeMeetings().length} retained</span></div>
           <div class="meeting-list">${meetingRowsMarkup()}</div>`}
       </section>
     </div>`;
@@ -1215,7 +1286,7 @@ function search(query) {
   for (const { meeting, claim } of allClaims()) {
     if (claim.text.toLocaleLowerCase().includes(needle)) results.push({ type: "claim", meeting, claim });
   }
-  for (const meeting of meetings) {
+  for (const meeting of activeMeetings()) {
     for (const turn of turnsFor(meeting)) {
       const normalizedTurn = turn.text?.toLocaleLowerCase();
       const start = normalizedTurn?.indexOf(needle) ?? -1;
@@ -1559,7 +1630,8 @@ function meetingDetailMarkup(meeting) {
     ${revisionHistoryMarkup(meeting)}
     <div class="section-heading"><h2>${stale ? "Prior note" : "Meeting note"}</h2><span>Version ${meeting.id === "m-02" && state.regenerated ? "2" : "1"} · ${stale ? "history · " : ""}${claims.length} claims</span></div>
     <div class="${stale ? "historical-note" : "current-note"}">${meetingNoteMarkup(meeting, claims)}</div>
-    ${retentionActionMarkup(meeting)}`;
+    ${retentionActionMarkup(meeting)}
+    ${meetingDeletionActionMarkup(meeting)}`;
 }
 
 function partnerFailureMarkup(meeting) {
@@ -1582,7 +1654,7 @@ function partnerFailureMarkup(meeting) {
 }
 
 function retentionFactsMarkup() {
-  const held = meetings.filter((meeting) => ["held", "expiring"].includes(currentAudio(meeting).state));
+  const held = activeMeetings().filter((meeting) => ["held", "expiring"].includes(currentAudio(meeting).state));
   const audioMegabytes = { "m-02": 18.4, "m-03": 9.2, "m-04": 6.3, "m-05": 12.7 };
   const bytes = held.reduce((total, meeting) => total + (audioMegabytes[meeting.id] ?? 0), 0);
   return `
@@ -1615,6 +1687,70 @@ function retentionActionMarkup(meeting) {
           </div>
         </div>` : `<button class="secondary-button" type="button" data-action="release-audio">Release audio now</button>`}
     </section>`;
+}
+
+function meetingDeletionActionMarkup(meeting) {
+  if (meeting.id !== "m-05") return "";
+  if (state.meetingDeletionStage === "none") {
+    return `
+      <section class="destructive-card whole-meeting-delete">
+        <p class="label">Permanent deletion</p>
+        <h2>Delete this entire meeting</h2>
+        <p>This is different from deleting the recording. It removes the meeting and its written record together.</p>
+        <button class="secondary-button danger-outline" type="button" data-action="review-meeting-deletion">Review what will be deleted</button>
+      </section>`;
+  }
+  if (state.meetingDeletionStage === "review") {
+    return `
+      <section class="destructive-card whole-meeting-delete" aria-labelledby="meeting-deletion-heading">
+        <p class="label">Step 1 of 2 · review scope</p>
+        <h2 id="meeting-deletion-heading">What permanent deletion removes</h2>
+        <div class="deletion-scope">
+          <div><strong>Will be removed</strong><ul><li>Meeting metadata</li><li>Canonical transcript and every transcript revision</li><li>Notes and stale note history</li><li>Evidence links</li><li>Retained audio, if any</li></ul></div>
+          <div><strong>Will remain</strong><ul><li>Your separate voice profile</li><li>Your audio-retention policy</li><li>Every other meeting</li></ul></div>
+        </div>
+        <p>This does not just release audio. After terminal deletion, this prototype does not offer undo or imply that the meeting content can be recovered.</p>
+        <div class="confirmation-actions">
+          <button class="primary-button" type="button" data-action="continue-meeting-deletion">Continue to confirmation</button>
+          <button class="secondary-button" type="button" data-action="cancel-meeting-deletion">Cancel — keep this meeting</button>
+        </div>
+      </section>`;
+  }
+  return `
+    <section class="destructive-card whole-meeting-delete" aria-labelledby="meeting-deletion-confirm-heading">
+      <p class="label">Step 2 of 2 · explicit confirmation</p>
+      <h2 id="meeting-deletion-confirm-heading">Permanently delete this whole meeting?</h2>
+      <p>The meeting, canonical transcript and revisions, notes and stale history, evidence links, and retained audio will be removed. Your separate voice profile, retention policy, and other meetings remain.</p>
+      <label class="consent-check deletion-check" for="meeting-deletion-acknowledged">
+        <input id="meeting-deletion-acknowledged" type="checkbox" ${state.meetingDeletionAcknowledged ? "checked" : ""} />
+        <span><strong>I understand this permanently deletes the entire meeting.</strong><small>This cannot be undone after terminal completion.</small></span>
+      </label>
+      <div class="confirmation-actions">
+        <button class="danger-button" type="button" data-action="confirm-meeting-deletion" ${state.meetingDeletionAcknowledged ? "" : "disabled"}>Permanently delete entire meeting</button>
+        <button class="secondary-button" type="button" data-action="cancel-meeting-deletion">Cancel — keep this meeting</button>
+      </div>
+      <button class="text-button prototype-action" type="button" data-action="preview-meeting-deletion-interruption" ${state.meetingDeletionAcknowledged ? "" : "disabled"}>Reviewer control: interrupt after deletion request</button>
+      <p class="prototype-boundary">The reviewer control writes a content-free synthetic receipt, makes this meeting unavailable, and reloads before terminal completion.</p>
+    </section>`;
+}
+
+function renderMeetingDeletionRecovery() {
+  const resuming = state.meetingDeletionRecoveryState === "resuming";
+  workspace.innerHTML = `
+    <div class="recovery-layout">
+      <section class="recovery-pane" aria-busy="${resuming}">
+        <p class="kicker">Recovered after a document reload</p>
+        <h1>Finish deleting this meeting?</h1>
+        <p class="lede">The deletion request was saved, but terminal deletion did not finish. The affected meeting is unavailable in Find, Meetings, and Promises until this operation reaches a terminal state.</p>
+        <section class="state-panel">
+          <p class="label">One safe action</p>
+          <h2>${resuming ? "Deleting the whole meeting…" : "Resume the same permanent deletion"}</h2>
+          <p>${resuming ? "The synthetic operation is finishing. The receipt remains until completion." : "Resume removes meeting metadata, canonical transcript and revisions, notes and stale history, evidence links, and retained audio. Your separate voice profile, retention policy, and other meetings remain."}</p>
+          <button class="danger-button" type="button" data-action="resume-meeting-deletion" ${resuming ? "disabled" : ""}>${resuming ? "Deleting…" : "Resume whole-meeting deletion"}</button>
+        </section>
+        <p class="prototype-boundary">Synthetic recovery only. The receipt contains schema, scenario, synthetic meeting ID, and operation ID—no meeting title, transcript, note, evidence, audio, or private content.</p>
+      </section>
+    </div>`;
 }
 
 function renderTranscript() {
@@ -1808,6 +1944,77 @@ function regenerateNote() {
     state.focusRequest = "heading";
     render();
   }, 650);
+}
+
+function reviewMeetingDeletion() {
+  if (!findMeeting("m-05") || state.meetingDeletionRecoveryState !== "none") return;
+  state.meetingDeletionStage = "review";
+  state.meetingDeletionAcknowledged = false;
+  state.focusRequest = "status";
+  render();
+}
+
+function continueMeetingDeletion() {
+  if (state.meetingDeletionStage !== "review") return;
+  state.meetingDeletionStage = "confirm";
+  state.meetingDeletionAcknowledged = false;
+  state.focusRequest = "status";
+  render();
+}
+
+function cancelMeetingDeletion() {
+  if (!state.meetingDeletionStage || state.meetingDeletionRecoveryState !== "none") return;
+  state.meetingDeletionStage = "none";
+  state.meetingDeletionAcknowledged = false;
+  state.focusRequest = "status";
+  showToast("Deletion canceled. This meeting remains available.");
+  render();
+}
+
+function finishMeetingDeletion() {
+  state.meetingDeletionRecoveryState = "completed";
+  state.meetingDeletionStage = "none";
+  state.meetingDeletionAcknowledged = false;
+  state.selectedMeetingId = null;
+  state.selectedClaimId = null;
+  state.selectedTranscriptLocator = null;
+  state.query = "";
+  state.folderFilter = null;
+  state.route = "home";
+  state.focusRequest = "heading";
+  clearMeetingDeletionRecoveryReceipt();
+  showToast("Synthetic meeting deletion complete. Other meetings and settings remain.");
+  render();
+}
+
+function confirmMeetingDeletion() {
+  if (state.meetingDeletionStage !== "confirm" || !state.meetingDeletionAcknowledged) return;
+  state.meetingDeletionId = "m-05";
+  finishMeetingDeletion();
+}
+
+function previewMeetingDeletionInterruption() {
+  if (state.meetingDeletionStage !== "confirm" || !state.meetingDeletionAcknowledged) return;
+  const receipt = {
+    schema: "walking-skeleton-meeting-deletion/1",
+    scenario: "whole-meeting-deletion-request-only",
+    meetingId: "m-05",
+    operationId: "synthetic-delete-m05-v1"
+  };
+  try {
+    window.sessionStorage.setItem(meetingDeletionRecoveryKey, JSON.stringify(receipt));
+    window.location.reload();
+  } catch {
+    showToast("This browser blocked the synthetic deletion receipt; the prototype was not reloaded.");
+  }
+}
+
+function resumeMeetingDeletion() {
+  if (state.meetingDeletionRecoveryState !== "interrupted") return;
+  state.meetingDeletionRecoveryState = "resuming";
+  state.focusRequest = "status";
+  render();
+  transitionTimer = window.setTimeout(() => finishMeetingDeletion(), 650);
 }
 
 async function copyText(text, message) {
@@ -2030,6 +2237,13 @@ function showCapture() {
     showToast("Finish the recovered note regeneration before starting another meeting.");
     return;
   }
+  if (state.meetingDeletionRecoveryState === "interrupted" || state.meetingDeletionRecoveryState === "resuming") {
+    state.route = "meeting-deletion-recovery";
+    state.focusRequest = "status";
+    render();
+    showToast("Finish the recovered whole-meeting deletion before starting another meeting.");
+    return;
+  }
   if (state.capturePhase === "ready") {
     openCapturedMeeting();
     return;
@@ -2146,6 +2360,7 @@ document.addEventListener("keydown", (event) => {
     state.focusRequest = "heading";
     render();
   }
+  if (event.key === "Escape" && ["review", "confirm"].includes(state.meetingDeletionStage)) cancelMeetingDeletion();
 });
 
 document.addEventListener("submit", (event) => {
@@ -2184,6 +2399,13 @@ document.addEventListener("change", (event) => {
     state.enrollmentPolicy = event.target.value;
     const buildButton = document.querySelector("[data-action=build-enrollment-profile]");
     if (buildButton) buildButton.disabled = false;
+  }
+  if (event.target.id === "meeting-deletion-acknowledged") {
+    state.meetingDeletionAcknowledged = event.target.checked;
+    const confirmButton = document.querySelector("[data-action=confirm-meeting-deletion]");
+    const interruptionButton = document.querySelector("[data-action=preview-meeting-deletion-interruption]");
+    if (confirmButton) confirmButton.disabled = !state.meetingDeletionAcknowledged;
+    if (interruptionButton) interruptionButton.disabled = !state.meetingDeletionAcknowledged;
   }
 });
 
@@ -2291,6 +2513,12 @@ document.addEventListener("click", (event) => {
   if (action === "restore-turn") restoreTurn();
   if (action === "preview-document-reload-interruption") previewDocumentReloadInterruption();
   if (action === "regenerate-note") regenerateNote();
+  if (action === "review-meeting-deletion") reviewMeetingDeletion();
+  if (action === "continue-meeting-deletion") continueMeetingDeletion();
+  if (action === "cancel-meeting-deletion") cancelMeetingDeletion();
+  if (action === "confirm-meeting-deletion") confirmMeetingDeletion();
+  if (action === "preview-meeting-deletion-interruption") previewMeetingDeletionInterruption();
+  if (action === "resume-meeting-deletion") resumeMeetingDeletion();
   if (action === "claim-filter") {
     state.claimFilter = button.dataset.filter;
     state.focusRequest = "results";

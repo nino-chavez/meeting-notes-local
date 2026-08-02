@@ -1,6 +1,6 @@
 {
-  "reviewScope": "walking-skeleton-correction-document-reload-recovery",
-  "reviewQuestion": "After restoring withheld speech, can the operator distinguish the current transcript from stale note history, survive an interrupted regeneration request across repeated document reloads, and safely publish one replacement note?",
+  "reviewScope": "walking-skeleton-whole-meeting-deletion-and-request-only-recovery",
+  "reviewQuestion": "Can an operator distinguish whole-meeting deletion from audio-only release, understand the exact terminal scope, cancel safely, and resume one interrupted deletion without exposing the affected meeting in current Find, Meetings, or Promises results?",
   "approvedDefault": "retrieval",
   "evidenceBasis": {
     "market": "Corpus retrieval is positioned as core value; documented comparables expose multiple retrieval entry points.",
@@ -20,8 +20,8 @@
   },
   "files": {
     "index.html": "sha256:7ce1c1342a9bd2ead2fe769db138747eef720a06445e915f36d4102dc2f79b45",
-    "styles.css": "sha256:30684b23d58cb601b1c161621fca778e90641efb3762e2724271a140278cf975",
-    "app.js": "sha256:aa3606c9b00742fabdb7d86de23bf086c8082daac00633596e5b9aaa162e3ac0"
+    "styles.css": "sha256:85253197eab73c131feb88c7cfc58f821c1ae089a8ad23d6f6d388a84089b9c4",
+    "app.js": "sha256:08f97ed63f487f0ab2726eed1d44deefe52909211907552a1779a73765dd25a9"
   },
   "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
   "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",
@@ -242,6 +242,74 @@
       "installed fresh-process recovery",
       "real transcript correction",
       "automatic-note semantic support or usefulness",
+      "installed Preview behavior",
+      "beta admission or release"
+    ]
+  },
+  "wholeMeetingDeletionSlice": {
+    "id": "whole-meeting-deletion-request-only-recovery-v1",
+    "status": "pending-operator-review",
+    "source": "synthetic",
+    "fixture": "sales-discovery-note-v1",
+    "placement": "Meeting detail only; distinct from the reviewed immediate audio-only release control.",
+    "states": [
+      "meeting-detail",
+      "scope-review",
+      "explicit-staged-confirmation",
+      "terminal-deletion",
+      "request-only-interruption",
+      "fresh-document-reload",
+      "second-document-reload",
+      "safe-idempotent-resume",
+      "terminal-completion"
+    ],
+    "terminalScope": {
+      "removed": [
+        "meeting metadata",
+        "canonical transcript and revisions",
+        "notes and stale history",
+        "evidence links",
+        "retained audio if any"
+      ],
+      "remains": [
+        "separate voice profile",
+        "retention policy",
+        "other meetings"
+      ]
+    },
+    "contentFreeRecoveryReceipt": [
+      "schema",
+      "scenario",
+      "synthetic-meeting-id",
+      "operation-id"
+    ],
+    "contracts": [
+      "The scope review names every terminal consequence and does not use vague data language.",
+      "A second, explicit acknowledgement is required before either the terminal action or reviewer interruption control is enabled.",
+      "Cancellation leaves the synthetic meeting unchanged and is labelled as keeping the meeting.",
+      "The reviewer interruption persists only a content-free request receipt before document reload; it does not complete deletion or publish a partial current meeting.",
+      "Unknown receipt fields, invalid values, mixed recovery receipts, and unreadable receipts fail closed by clearing the receipt and refusing recovery.",
+      "While request-only recovery is pending, the affected meeting, transcript-derived search hits, note claims, and recorded promises are unavailable in Find, Meetings, and Promises.",
+      "A second reload reconstructs the same one-action recovery surface; resume is idempotent and clears the receipt only after terminal completion.",
+      "Terminal deletion does not offer undo or imply recovery of the removed meeting content."
+    ],
+    "deterministicTestCoverage": {
+      "static": "tests/test_walking_skeleton_meeting_deletion.py",
+      "contracts": [
+        "scope and staged confirmation",
+        "content-free receipt shape and fail-closed reader",
+        "cross-view target removal",
+        "idempotent resume and terminal-only receipt clearance",
+        "manifest file digests and non-approvals",
+        "outer-page overflow contract"
+      ],
+      "browserExercise": "Run the README server at 960x900 and exercise the reviewer interruption, two reloads, and resume. Browser exercise is evidence for review, not approval."
+    },
+    "doesNotApprove": [
+      "native deletion implementation",
+      "native operation persistence or installed fresh-process recovery",
+      "deletion of private content or product records",
+      "recovery or undo after terminal deletion",
       "installed Preview behavior",
       "beta admission or release"
     ]
