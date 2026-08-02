@@ -62,6 +62,7 @@ pub(crate) struct LibrarySearchResult {
     pub(crate) text: Option<String>,
     pub(crate) source_turn_index: Option<u32>,
     pub(crate) claim_ordinal: Option<u64>,
+    pub(crate) transcript_available: bool,
 }
 
 /// A verified search handle can only reopen its current projection target. It
@@ -230,6 +231,7 @@ impl LibraryReader {
                             text: Some(claim),
                             source_turn_index: None,
                             claim_ordinal: Some(claim_ordinal),
+                            transcript_available: true,
                         }),
                         Ok(OpenedLibraryHit::Transcript {
                             meeting_id,
@@ -243,6 +245,7 @@ impl LibraryReader {
                             text: Some(text),
                             source_turn_index: Some(source_turn_index),
                             claim_ordinal: None,
+                            transcript_available: true,
                         }),
                         Ok(OpenedLibraryHit::Withheld {
                             meeting_id,
@@ -254,19 +257,24 @@ impl LibraryReader {
                             text: None,
                             source_turn_index: Some(source_turn_index),
                             claim_ordinal: None,
+                            transcript_available: false,
                         }),
                         Ok(OpenedLibraryHit::Meeting {
                             meeting_id,
                             title,
                             folder,
-                        }) => results.push(LibrarySearchResult {
-                            handle: self.retain_handle(hit),
-                            kind: "meeting",
-                            meeting_id,
-                            text: title.or(folder),
-                            source_turn_index: None,
-                            claim_ordinal: None,
-                        }),
+                        }) => {
+                            let transcript_available = self.meeting_has_transcript(&meeting_id);
+                            results.push(LibrarySearchResult {
+                                handle: self.retain_handle(hit),
+                                kind: "meeting",
+                                meeting_id,
+                                text: title.or(folder),
+                                source_turn_index: None,
+                                claim_ordinal: None,
+                                transcript_available,
+                            });
+                        }
                         Err(_) => return Self::stale_search(),
                     }
                 }
@@ -313,13 +321,25 @@ impl LibraryReader {
                 Some(source_turn_index),
                 "Opening the exact retained transcript turn that matched.",
             ),
-            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => self.retain_search_open(
-                hit,
-                "meeting",
-                Some(meeting_id),
-                None,
-                "Opening this retained meeting's canonical transcript.",
-            ),
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => {
+                if self.meeting_has_transcript(&meeting_id) {
+                    self.retain_search_open(
+                        hit,
+                        "meeting",
+                        Some(meeting_id),
+                        None,
+                        "Opening this retained meeting's canonical transcript.",
+                    )
+                } else {
+                    LibrarySearchOpenResponse {
+                        state: "metadata-only",
+                        transcript_handle: None,
+                        meeting_id: Some(meeting_id),
+                        source_turn_index: None,
+                        message: "No transcript was created for this retained meeting.".into(),
+                    }
+                }
+            }
             Ok(OpenedLibraryHit::Withheld {
                 meeting_id,
                 source_turn_index,
@@ -369,14 +389,18 @@ impl LibraryReader {
             }
             MeetingLifecycle::Ready => {}
             _ => {
+                let transcript_handle = self.retain_transcript_handle(&meeting_id);
                 return LibraryNoteResponse {
                     state: "transcript-only",
-                    transcript_handle: self.retain_transcript_handle(&meeting_id),
+                    transcript_handle: transcript_handle.clone(),
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
-                    message:
+                    message: if transcript_handle.is_some() {
                         "No admitted note is available. Retained transcript text remains available."
-                            .into(),
+                            .into()
+                    } else {
+                        "No transcript was created for this retained meeting.".into()
+                    },
                 };
             }
         }
@@ -453,12 +477,21 @@ impl LibraryReader {
         };
         self.handles.clear();
         let response = match self.projection.open(&self.storage, &hit) {
-            Ok(OpenedLibraryHit::Transcript { meeting_id, .. })
-            | Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => LibraryTranscriptAccess {
+            Ok(OpenedLibraryHit::Transcript { meeting_id, .. }) => LibraryTranscriptAccess {
                 state: "transcript",
                 meeting_id: Some(meeting_id),
                 message: "Opening the retained canonical transcript.".into(),
             },
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. })
+                if self.meeting_has_transcript(&meeting_id) =>
+            {
+                LibraryTranscriptAccess {
+                    state: "transcript",
+                    meeting_id: Some(meeting_id),
+                    message: "Opening the retained canonical transcript.".into(),
+                }
+            }
+            Ok(OpenedLibraryHit::Meeting { .. }) => Self::stale_transcript(),
             Ok(OpenedLibraryHit::Withheld { .. }) => LibraryTranscriptAccess {
                 state: "withheld",
                 meeting_id: None,
@@ -517,10 +550,20 @@ impl LibraryReader {
     }
 
     fn retain_transcript_handle(&mut self, meeting_id: &str) -> Option<String> {
+        if !self.meeting_has_transcript(meeting_id) {
+            return None;
+        }
         self.projection
             .meeting_handle(meeting_id)
             .ok()
             .map(|hit| self.retain_handle(hit))
+    }
+
+    fn meeting_has_transcript(&self, meeting_id: &str) -> bool {
+        self.projection
+            .rows()
+            .iter()
+            .any(|row| row.meeting_id == meeting_id && row.transcript_sha256.is_some())
     }
 
     fn retain_search_open(

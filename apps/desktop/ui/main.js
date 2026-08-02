@@ -207,6 +207,8 @@ function renderLibrarySearch(response) {
     button.type = "button";
     button.className = "library-search-result";
     button.dataset.searchHandle = result.handle;
+    const metadataOnly = result.kind === "meeting" && result.transcriptAvailable !== true;
+    button.disabled = metadataOnly;
     button.addEventListener("click", () => openLibrarySearchResult(result.handle));
     const summary = document.createElement("span");
     const label = document.createElement("strong");
@@ -225,7 +227,11 @@ function renderLibrarySearch(response) {
     }
     summary.append(label, detail);
     const action = document.createElement("span");
-    action.textContent = result.kind === "withheld" ? "Review status" : "Open transcript";
+    action.textContent = metadataOnly
+      ? "No transcript was created"
+      : result.kind === "withheld"
+        ? "Review status"
+        : "Open transcript";
     button.append(summary, action);
     librarySearchResults.append(button);
   }
@@ -323,28 +329,38 @@ function render(snapshot) {
   }
 }
 
-async function openLibrary() {
-  if (!invoke || lastSnapshot?.preview !== true) return;
-  libraryViewActive = true;
-  if (pollTimer) window.clearTimeout(pollTimer);
-  pollTimer = null;
-  librarySearchQuery.value = "";
+async function rebuildLibraryView(resetSearch = false) {
+  if (!invoke) return;
+  if (resetSearch) librarySearchQuery.value = "";
   document.querySelector("#library-copy").textContent = "Opening retained Preview meetings on this Mac.";
   libraryList.replaceChildren();
-  showScreen("library-screen");
+  librarySearchResults.replaceChildren();
   try {
-    renderLibrary(await invoke("preview_library_snapshot"));
+    const snapshot = await invoke("preview_library_snapshot");
+    renderLibrary(snapshot);
+    const query = librarySearchQuery.value.trim();
+    if (query) {
+      libraryList.replaceChildren();
+      renderLibrarySearch(await invoke("preview_library_search", { query }));
+    }
   } catch {
     renderLibrary({ state: "unavailable", rows: [], message: "The Preview library is unavailable right now." });
   }
 }
 
-function returnToLibrary() {
-  // Preserve the current reader snapshot, typed query, and opaque result
-  // handles. Rebuilding here would silently clear the exact search the
-  // operator just opened.
+async function openLibrary() {
+  if (!invoke || lastSnapshot?.preview !== true) return;
+  libraryViewActive = true;
+  if (pollTimer) window.clearTimeout(pollTimer);
+  pollTimer = null;
+  showScreen("library-screen");
+  await rebuildLibraryView(true);
+}
+
+async function returnToLibrary() {
   clearError(libraryNotice);
   showScreen("library-screen");
+  await rebuildLibraryView(false);
 }
 
 async function openLibraryTranscript(handle, matchedSourceTurnIndex = null) {
@@ -411,6 +427,7 @@ function renderMeetingDetail(response) {
 
 async function openMeetingDetail(handle) {
   if (!invoke || !handle) return;
+  libraryList.replaceChildren();
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
   document.querySelector("#meeting-detail-transcript-handle").value = "";
@@ -428,6 +445,7 @@ async function openMeetingDetail(handle) {
 
 async function openMeetingEvidence(handle) {
   if (!invoke || !handle) return;
+  meetingClaimList.replaceChildren();
   message(meetingDetailState, "Opening the claim’s exact retained words…");
   try {
     const result = await invoke("preview_library_open_evidence", { handle, locatorOrdinal: 0 });
@@ -451,9 +469,10 @@ async function searchLibrary(event) {
   const query = librarySearchQuery.value.trim();
   librarySearchResults.replaceChildren();
   if (!query) {
-    clearError(libraryNotice);
+    await rebuildLibraryView(false);
     return;
   }
+  libraryList.replaceChildren();
   setError(libraryNotice, "Searching this retained Preview Library…");
   try {
     renderLibrarySearch(await invoke("preview_library_search", { query }));
@@ -464,6 +483,7 @@ async function searchLibrary(event) {
 
 async function openLibrarySearchResult(handle) {
   if (!invoke || !handle) return;
+  librarySearchResults.replaceChildren();
   setError(libraryNotice, "Opening the selected retained result…");
   try {
     const result = await invoke("preview_library_open_search_result", { handle });
