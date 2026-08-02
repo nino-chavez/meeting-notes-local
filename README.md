@@ -97,6 +97,11 @@ same synthetic corpus and tasks: Meetings, Recorded promises, and Find. All thre
 useful product capabilities and share meeting detail, note, canonical transcript,
 evidence, correction, and regeneration. The decision is which opens first, what earns
 first-class navigation, and how the views relate—not which two capabilities to delete.
+The current evidence ranks Find as the provisional default: corpus retrieval is a
+category headline, and the colleague snapshot (`n=3`) records two natural-language
+entrants versus one person/project/date filter entrant, with cited cross-meeting value
+scored 5, 4, and 5. That ranking shapes the prototype; it does not admit conversational
+search to the first beta or replace operator review.
 The original light/editorial visual system and proven capture, artifact,
 evidence-locator, retention and recovery behavior are inputs. Navigation, page
 hierarchy, note composition and exact geometry remain prototype questions.
@@ -732,7 +737,7 @@ silence, that is what happened.
 | [`notes/EVAL.md`](./notes/EVAL.md) | Whether a local model invents things, measured against human-written summaries. |
 | [`notes/summarize.py`](./notes/summarize.py) | Transcript to notes, with four fabrication checks and controls for the checks. |
 | [`docs/screens-and-states.md`](./docs/screens-and-states.md) | Eleven surfaces, their lifecycle states, and the five templates derived from them. |
-| [`docs/journeys.md`](./docs/journeys.md) | What the operator does across days. Six current journeys plus a governed evaluation-contribution candidate, why the unit is retrieval rather than the meeting, a market check including Gong, the registered colleague-survey analysis and two-response snapshot, and the gaps the state inventory could not show. |
+| [`docs/journeys.md`](./docs/journeys.md) | What the operator does across days. Six current journeys plus a governed evaluation-contribution candidate, why the unit is retrieval rather than the meeting, a market check including Gong, the registered colleague-survey analysis and three-response snapshot, and the gaps the state inventory could not show. |
 | [`docs/vertical-slice.md`](./docs/vertical-slice.md) | The post-approval application boundary: process ownership, worker protocol, private persistence, recovery, workstream split and fault evidence. |
 | [`DIRECTION.md`](./DIRECTION.md) | Pre-surface dark art direction. Its visual clauses are historical during the walking-skeleton comparison because they conflict with the installed alpha; non-visual constraints still inform review. |
 | [`DESIGN.md`](./DESIGN.md) | Pre-surface visual tokens plus binding engineering rules, including the Tauri-over-SwiftUI shell decision. Visual tokens must be reconciled to the approved prototype before implementation. |

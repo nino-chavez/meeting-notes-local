@@ -94,7 +94,10 @@ the vocabulary is the transferable part.
   streams that collect future matching calls. That validates Library as a product
   surface, but it does not decide whether this product should lead with a question,
   exact search, filters, a saved collection or recent meetings. The colleague survey
-  below asks that choice directly.
+  below now gives that choice weak but convergent direction: two of three respondents
+  chose a natural-language question and one chose person/project/date filters. That
+  ranks a Find-led prototype ahead of a chronology-led one; it does not admit
+  conversational search to the first beta.
 
 ### Where the whole category is weak, which is where this product can be strong
 
@@ -145,23 +148,41 @@ checkbox counts as selections, not as mutually exclusive preferences. Keep free-
 answers as qualitative evidence; do not turn the number of similar phrases into a false
 vote.
 
-#### Observed snapshot — n=2
+#### Observed snapshot — n=3, updated 2026-08-02
 
-Two responses exist. That sample is too small to choose a default or support a demand
-claim, and the public repository deliberately does not retain respondent-level rows,
-free text, timestamps, or answer combinations. The source responses remain in the Form.
+Three responses exist. That sample is too small to establish market demand or settle a
+product default by itself. It is enough to reorder prototype hypotheses when it
+converges with the market check and measured product constraints. The public repository
+deliberately does not retain respondent-level rows, timestamps, free text, or answer
+combinations; the source responses remain in the Form.
 
-At the decision level, the snapshot reinforces transcript fidelity, speaker context,
+| Signal | Observed selections | Directional consequence |
+|---|---:|---|
+| First meeting type | Sales or discovery calls: 3/3 | Use sales/discovery as the first pilot and later real-content encounter scenario. |
+| Frequent post-meeting jobs | Actions and owners: 3/3; useful summary: 3/3; decisions: 2/3; past discussion: 2/3 | Notes need typed outputs, but retrieval cannot be treated as a late utility. |
+| Core useful outputs | Summary, decisions, actions and owners, open questions, risks/blockers: 3/3 each | These deserve a coherent note hierarchy; selection does not make every output first-beta scope. |
+| Cross-meeting cited answers | Scores 5, 4, 5; mean 4.7/5 | The corpus is a value center worth designing for now, while admission remains later. |
+| Primary old-meeting entry | Natural-language question: 2/3; person/project/date filters: 1/3 | Rank Find as the provisional Library home and keep filters/Meetings first-class. |
+| Trust ingredients | Quote and timestamp: 2/3; speaker: 2/3; stated-versus-inferred: 2/3; accept/reject/defer: 1/3 | Evidence, provenance, and operator review travel with generated claims. |
+| Prohibited behavior | Share/upload without action: 3/3; hidden audio retention: 2/3; inference presented as quote: 2/3; automatic roadmap change: 2/3 | Local ownership, visible retention, and evidence-state honesty remain product boundaries. |
+| Customer-feedback handling | Keep it in the meeting note: 2/3; propose a cited Product Signal for review: 1/3 | Keep the beta note-scoped; retain Product Signal as governed later research. |
+| During-meeting surface | Simple note: 1/3; live transcript/evidence: 1/3; Start/Stop only: 1/3 | No default is supported; preserve the current narrow beta and test later. |
+| Raw-audio default | Keep until deletion: 1/3; short period: 1/3; ask each meeting: 1/3 | No default is supported; retention must remain visible and operator-controlled. |
+
+This is triangulation, not voting. Market positioning makes corpus retrieval a category
+value center; Gong demonstrates multiple retrieval entry points; the survey ranks Find
+over chronology while preserving filters. Therefore the interaction skeleton should
+open provisionally on **Find**, retain **Meetings** as the source/chronology path, and
+keep **Recorded promises** as a prominent derived view rather than a second task
+manager. The current beta can express that hierarchy with exact transcript-and-metadata
+search. Natural-language answers across meetings remain outside the beta until reviewed
+corpus evidence can support them.
+
+The snapshot also reinforces transcript fidelity, speaker/channel context,
 operator-controlled sharing, useful summaries, and actions with owners. It does not
-resolve the during-meeting surface, retention duration, retrieval entry point, or
-whether customer feedback should remain in the note or become a separately reviewed
-product signal.
-
-This changes no release gate or supported capture mode. It preserves two later
-comparison tests: simple note versus live transcript during capture, and filters versus
-natural-language retrieval after the corpus contains enough reviewed meetings to make
-either test real. The product already retains the transcript as a first-class artifact;
-the snapshot sharpens that priority without expanding beta scope.
+resolve the during-meeting surface or retention duration. This changes no release gate
+or supported capture mode. The product already retains the transcript as a first-class
+artifact; the snapshot sharpens its priority without expanding beta scope.
 
 The questions may change these product decisions:
 

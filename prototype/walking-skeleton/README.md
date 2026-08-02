@@ -13,6 +13,19 @@ Each starting view implements the same thin journey:
 
 `find a decision → inspect its typed claim → open exact transcript words → review a withheld turn → restore it → see the note become stale → regenerate → return to the preserved retrieval context`
 
+Find opens by default as an evidence-ranked hypothesis, not an arbitrary favorite.
+Existing market research treats corpus retrieval as core value; the registered
+colleague snapshot (`n=3`) favors a question-shaped entry 2:1 over filters and scores
+cited cross-meeting value 5, 4, and 5. Meetings and Recorded promises remain in the
+composition. This prototype uses exact synthetic search and does not claim the later
+conversational-search capability.
+
+The current corpus stays frozen through the navigation review so every starting view
+faces the same task and evidence states. After the navigation composition is approved,
+the next flesh-out holds that hierarchy constant and uses a synthetic sales/discovery
+meeting—the first scenario selected by 3/3 respondents—to compare note content and
+evidence treatment.
+
 It is a design instrument, not a second application runtime. It does not read or write
 Preview data, record audio, invoke a model, or prove note usefulness or semantic
 support. The synthetic corpus is frozen as of May 9, 2026 so relative retention states

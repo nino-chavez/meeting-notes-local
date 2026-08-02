@@ -415,10 +415,16 @@ drawer.
 | `no-results` | Query returns nothing |
 | `filtered` | Narrowed by folder, UTC date range, or Recorded actions |
 
-**Open IA decisions this surface owns.** Two of the three are now answered by the
-market check in `journeys.md`, which is a weaker kind of evidence than a measurement
-and a stronger kind than an opinion — it establishes what the operator has already met
-elsewhere, not what is best.
+**Current IA evidence.** The market check in `journeys.md` establishes what operators
+have already met elsewhere, not what is best. The registered colleague snapshot is
+small (`n=3`) and cannot prove demand, but it can rank prototype hypotheses when it
+converges with the market.
+
+- **The provisional default entry is Find.** Retrieval is a category headline; cited
+  cross-meeting answers scored 5, 4, and 5; two respondents chose a natural-language
+  question as their primary old-meeting entry and one chose person/project/date
+  filters. The first beta implements the hierarchy with exact transcript-and-metadata
+  search. Conversational cross-meeting answers remain later scope.
 
 - **The organising primitive: folders, and chronology as the default ordering within
   them.** Granola and Otter both ship "folders"; Otter adds "channels" for sharing.

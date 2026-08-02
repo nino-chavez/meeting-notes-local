@@ -69,6 +69,21 @@ record, regenerating the note and returning to retrieval. Operator approval bind
 exact default, first-class navigation, labels, and transitions. That composition then
 becomes the implementation contract for a real installed vertical slice.
 
+Find is not an equal-weight guess: it is the provisional default because the market
+positions corpus retrieval as core value, Gong documents multiple retrieval entry
+points, and the registered `n=3` colleague snapshot favors a question-shaped entry 2:1
+over filters while scoring cited cross-meeting value 5, 4, and 5. Meetings remains the
+first-class source/filter path; Recorded promises remains a prominent derived view.
+The current beta still uses exact transcript-and-metadata search, not conversational
+cross-meeting answers.
+
+Keep the current synthetic corpus frozen until that navigation comparison closes; it
+exists to hold evidence states and tasks constant. The next prototype flesh-out then
+holds the approved navigation constant and uses a synthetic sales/discovery meeting,
+the first-meeting scenario selected by 3/3 respondents. That slice compares the shared
+note hierarchy—summary, decisions, actions/owners, open questions, risks/blockers—and
+its evidence treatment without confounding the navigation decision.
+
 | Wave | Current status and active stream | Join or exit | Human gate | ETA |
 |---|---|---|---|---|
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |

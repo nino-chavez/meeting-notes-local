@@ -1,6 +1,17 @@
 {
   "reviewScope": "walking-skeleton-navigation-composition",
   "reviewQuestion": "Which view opens by default, what receives first-class navigation, and how do the views relate?",
+  "provisionalDefault": "retrieval",
+  "evidenceBasis": {
+    "market": "Corpus retrieval is positioned as core value; documented comparables expose multiple retrieval entry points.",
+    "surveyResponses": 3,
+    "primaryOldMeetingEntry": {
+      "naturalLanguageQuestion": 2,
+      "personProjectDateFilters": 1
+    },
+    "citedCrossMeetingUsefulnessScores": [5, 4, 5],
+    "scopeBoundary": "The first beta uses exact transcript-and-metadata search; conversational cross-meeting answers remain later scope."
+  },
   "snapshotDate": "2026-08-02",
   "syntheticCorpusAsOf": "2026-05-09",
   "viewport": {
@@ -8,7 +19,7 @@
     "height": 900
   },
   "files": {
-    "index.html": "sha256:5d29cabd4654713c025ebb4c359b305a15a52515b22cdb639f516421c5eb0042",
+    "index.html": "sha256:05015edfe4f3dc750094c39488848a5a869e01a432c4590804b23fc0cde11583",
     "styles.css": "sha256:bf2cb9d60c8b038f4cb89e89944549d77783a23061db0483e3ae96fcff1bd3c0",
     "app.js": "sha256:3a94a7873443382b685cf2054f9506707888699e040b5c3d997d995715dfd224"
   },
