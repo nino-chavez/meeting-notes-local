@@ -160,7 +160,7 @@ fixture text was retained.
 | Strict result | `response-json-syntax` | `response-contract` (wrong root/schema/field shape) |
 | Response receipt | 345 bytes; SHA-256 `e244bd14ed15d32790e93ba6a3583382249cde427c7e3599408a3cab1c7f6338` | 2 bytes; SHA-256 `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | MLX streaming metadata | 496 prompt tokens; 181 generated tokens; finish `stop` | 267 prompt tokens; 2 generated tokens; finish `stop` |
-| Call time | 2.857 s | 0.372 s |
+| Call time | 2.870 s | 0.374 s |
 
 The exact source tree SHA-256 was
 `3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95`
