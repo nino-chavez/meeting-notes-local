@@ -142,6 +142,7 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-stop-meeting",
             "allow-dismiss-meeting",
             "allow-retry-startup",
+            "allow-preview-profile-snapshot",
             "allow-preview-library-snapshot",
             "allow-preview-library-search",
             "allow-preview-library-open-search-result",
@@ -264,15 +265,34 @@ fn preview_library_pauses_capture_polling_and_resumes_on_return() {
     assert!(html.contains("id=\"library-transcript-screen\""));
     assert!(html.contains("id=\"meeting-detail-screen\""));
     assert!(html.contains("id=\"library-search\""));
-    assert!(script.contains("libraryViewActive = true"));
-    assert!(script.contains("if (libraryViewActive) return;"));
-    assert!(script.contains("libraryViewActive = false;\n  refresh();"));
+    assert!(script.contains("secondaryViewActive = true"));
+    assert!(script.contains("if (secondaryViewActive) return;"));
+    assert!(script.contains("secondaryViewActive = false;\n  refresh();"));
     assert!(script.contains("preview_library_snapshot"));
+    assert!(script.contains("preview_profile_snapshot"));
     assert!(script.contains("preview_library_search"));
     assert!(script.contains("preview_library_open_search_result"));
     assert!(script.contains("preview_library_open_note"));
     assert!(script.contains("preview_library_open_evidence"));
     assert!(script.contains("preview_library_open_transcript"));
+}
+
+#[test]
+fn preview_voice_profile_surface_is_honest_and_non_mutating() {
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+
+    assert!(html.contains("id=\"profile-link\""));
+    assert!(html.contains("id=\"profile-screen\""));
+    assert!(html.contains("Two voice sittings, at least one hour apart"));
+    assert!(html.contains("A voice profile does not identify speakers"));
+    assert!(html.contains("id=\"profile-setup\" type=\"button\" disabled>Set up voice profile"));
+    assert!(script.contains("await invoke(\"preview_profile_snapshot\")"));
+    assert!(script.contains("setup-unavailable"));
+    assert!(script.contains("Voice setup is not available yet"));
+    assert!(html.contains("does not open, use, change, or delete it"));
+    assert!(!script.contains("preview_profile_reset"));
+    assert!(!script.contains("preview_profile_enroll"));
 }
 
 #[test]
@@ -387,6 +407,7 @@ fn preview_commands_are_named_and_preserve_the_production_command_boundary() {
     let handler = &source[handler_start..handler_end];
 
     assert!(handler.contains("preview_library_search"));
+    assert!(handler.contains("preview_profile_snapshot"));
     assert!(handler.contains("preview_library_open_search_result"));
     assert!(handler.contains("preview_library_open_note"));
     assert!(handler.contains("preview_library_open_evidence"));

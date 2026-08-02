@@ -12,7 +12,11 @@ Core Audio process tap, your microphone comes through the same path
 > completed two-leg capture, local transcription, and true quit/fresh-launch recovery
 > on real hardware. It is not cleared for distribution until the unchanged build
 > proves its scheduled audio deletion and clean transfer to another Mac or genuinely
-> clean account. The wider product remains unbuilt. What also exists is a working
+> clean account. A separately identified local Preview now continually delivers the
+> product reader: Library, exact search, meeting detail, canonical transcript,
+> retention/disk state, an honest Voice profile capability surface, and an explicitly approved two-step action that can delete
+> only one meeting's retained audio while preserving its transcript and note. That
+> Preview is not the frozen alpha distribution build or a beta. What also exists is a working
 > two-leg research capture — validated end to end over a 75-minute meeting — a
 > voiceprint gate wired into that capture but never yet run on a real meeting, and a
 > local summarizer whose

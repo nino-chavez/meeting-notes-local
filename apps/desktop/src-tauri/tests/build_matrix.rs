@@ -55,6 +55,7 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
             "stop_meeting",
             "dismiss_meeting",
             "retry_startup",
+            "preview_profile_snapshot",
             "preview_library_snapshot",
             "preview_library_search",
             "preview_library_open_search_result",

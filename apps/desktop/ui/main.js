@@ -13,6 +13,12 @@ const stopButton = document.querySelector("#stop-button");
 const stopError = document.querySelector("#stop-error");
 const retryStartup = document.querySelector("#retry-startup");
 const libraryLink = document.querySelector("#library-link");
+const profileLink = document.querySelector("#profile-link");
+const profileKicker = document.querySelector("#profile-kicker");
+const profileTitle = document.querySelector("#profile-title");
+const profileLede = document.querySelector("#profile-lede");
+const profileStatusTitle = document.querySelector("#profile-status-title");
+const profileStatusCopy = document.querySelector("#profile-status-copy");
 const libraryList = document.querySelector("#library-list");
 const libraryNotice = document.querySelector("#library-notice");
 const librarySearch = document.querySelector("#library-search");
@@ -43,10 +49,11 @@ let lastSnapshot = null;
 let pollTimer = null;
 let startedAt = null;
 let elapsedTimer = null;
-let libraryViewActive = false;
+let secondaryViewActive = false;
 let meetingAudioDeletionHandle = "";
 
 function showScreen(id) {
+  document.documentElement.dataset.screen = id;
   for (const [screenId, screen] of screens) {
     screen.classList.toggle("active", screenId === id);
   }
@@ -359,6 +366,7 @@ function render(snapshot) {
   const preview = snapshot.preview === true;
   releaseBadge.textContent = preview ? "Preview" : "Internal alpha";
   libraryLink.hidden = !preview || !["idle", "transcript-ready"].includes(capture) || startup !== "ready";
+  profileLink.hidden = !preview || !["idle", "transcript-ready"].includes(capture) || startup !== "ready";
   meetingLabel.textContent = snapshot.meeting_id ? `Meeting ${snapshot.meeting_id.slice(0, 8)}` : "";
 
   if (startup !== "ready") {
@@ -441,11 +449,41 @@ async function rebuildLibraryView(resetSearch = false) {
 
 async function openLibrary() {
   if (!invoke || lastSnapshot?.preview !== true) return;
-  libraryViewActive = true;
+  secondaryViewActive = true;
   if (pollTimer) window.clearTimeout(pollTimer);
   pollTimer = null;
   showScreen("library-screen");
   await rebuildLibraryView(true);
+}
+
+function renderProfile(snapshot) {
+  const state = snapshot?.state || "unavailable";
+  if (state === "setup-unavailable") {
+    profileKicker.textContent = "Voice profile · Setup required";
+    profileTitle.textContent = "Your voice setup takes two sittings.";
+    profileLede.textContent = "Voice isolation is not active in this Preview. Alpha recording remains limited to one person near the microphone.";
+    profileStatusTitle.textContent = "Voice setup is not available yet";
+    profileStatusCopy.textContent = "Setup is not available in this Preview yet. Current alpha recording remains available under its existing one-operator limits.";
+    return;
+  }
+  profileKicker.textContent = "Voice profile · Needs attention";
+  profileTitle.textContent = "Voice setup status is unavailable.";
+  profileLede.textContent = "This Preview could not read its own voice-setup capability state.";
+  profileStatusTitle.textContent = "Voice isolation is unavailable";
+  profileStatusCopy.textContent = "The app did not open or change profile material. Current retained meetings remain readable.";
+}
+
+async function openProfile() {
+  if (!invoke || lastSnapshot?.preview !== true) return;
+  secondaryViewActive = true;
+  if (pollTimer) window.clearTimeout(pollTimer);
+  pollTimer = null;
+  showScreen("profile-screen");
+  try {
+    renderProfile(await invoke("preview_profile_snapshot"));
+  } catch {
+    renderProfile({ state: "unavailable" });
+  }
 }
 
 async function returnToLibrary() {
@@ -561,7 +599,7 @@ async function openMeetingEvidence(handle) {
 
 async function searchLibrary(event) {
   event.preventDefault();
-  if (!invoke || !libraryViewActive) return;
+  if (!invoke || !secondaryViewActive) return;
   const query = librarySearchQuery.value.trim();
   librarySearchResults.replaceChildren();
   if (!query) {
@@ -605,13 +643,13 @@ async function openLibrarySearchResult(handle) {
 }
 
 function schedulePoll(delay) {
-  if (libraryViewActive) return;
+  if (secondaryViewActive) return;
   if (pollTimer) window.clearTimeout(pollTimer);
   pollTimer = window.setTimeout(refresh, delay);
 }
 
 async function refresh() {
-  if (libraryViewActive) return;
+  if (secondaryViewActive) return;
   if (!invoke) {
     render({ startup: "diagnostic-written", capture: "idle", error: "The local application bridge is unavailable." });
     return;
@@ -699,9 +737,14 @@ retryStartup.addEventListener("click", async () => {
 });
 
 libraryLink.addEventListener("click", openLibrary);
+profileLink.addEventListener("click", openProfile);
 librarySearch.addEventListener("submit", searchLibrary);
 document.querySelector("#library-back").addEventListener("click", () => {
-  libraryViewActive = false;
+  secondaryViewActive = false;
+  refresh();
+});
+document.querySelector("#profile-back").addEventListener("click", () => {
+  secondaryViewActive = false;
   refresh();
 });
 document.querySelector("#library-transcript-back").addEventListener("click", returnToLibrary);
