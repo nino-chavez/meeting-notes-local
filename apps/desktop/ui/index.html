@@ -127,6 +127,21 @@
         <button class="secondary" id="library-back" type="button">Back</button>
       </section>
 
+      <section class="screen" id="meeting-detail-screen" aria-labelledby="meeting-detail-title">
+        <p class="kicker">Retained meeting</p>
+        <h1 id="meeting-detail-title">Note and transcript.</h1>
+        <p class="lede">An admitted note is a reading aid. Every claim opens the exact retained transcript words behind it.</p>
+        <p class="notice" id="meeting-detail-state" role="status" aria-live="polite">Opening this retained meeting…</p>
+        <section id="meeting-claim-list" class="meeting-claim-list" aria-live="polite"></section>
+        <section class="meeting-no-note" id="meeting-no-note" hidden aria-labelledby="meeting-no-note-title">
+          <h2 id="meeting-no-note-title">Transcript only</h2>
+          <p>No admitted automatic note is available for this meeting. The retained transcript remains the source of record.</p>
+          <button class="secondary" id="meeting-open-transcript" type="button">Open retained transcript</button>
+        </section>
+        <input id="meeting-detail-id" type="hidden" />
+        <button class="secondary" id="meeting-detail-back" type="button">Back to Library</button>
+      </section>
+
       <section class="screen transcript-screen" id="library-transcript-screen" aria-labelledby="library-transcript-title">
         <p class="kicker">Retained meeting</p>
         <h1 id="library-transcript-title">Captured words.</h1>

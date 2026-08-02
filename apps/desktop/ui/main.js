@@ -18,6 +18,9 @@ const libraryNotice = document.querySelector("#library-notice");
 const librarySearch = document.querySelector("#library-search");
 const librarySearchQuery = document.querySelector("#library-search-query");
 const librarySearchResults = document.querySelector("#library-search-results");
+const meetingDetailState = document.querySelector("#meeting-detail-state");
+const meetingClaimList = document.querySelector("#meeting-claim-list");
+const meetingNoNote = document.querySelector("#meeting-no-note");
 const retention = document.querySelector("#retention-days");
 const checks = [
   document.querySelector("#consent-check"),
@@ -87,7 +90,24 @@ function renderTranscript(snapshot) {
   );
 }
 
-function renderTurns(container, warning, turns, warnings, matchedSourceTurnIndex = null) {
+function appendTurnText(target, text, locator = null) {
+  if (!locator || !Number.isInteger(locator.start) || !Number.isInteger(locator.end)) {
+    target.textContent = text || "";
+    return;
+  }
+  const characters = Array.from(text || "");
+  if (locator.start < 0 || locator.end <= locator.start || locator.end > characters.length) {
+    target.textContent = text || "";
+    return;
+  }
+  target.append(document.createTextNode(characters.slice(0, locator.start).join("")));
+  const matched = document.createElement("mark");
+  matched.className = "matched-locator";
+  matched.textContent = characters.slice(locator.start, locator.end).join("");
+  target.append(matched, document.createTextNode(characters.slice(locator.end).join("")));
+}
+
+function renderTurns(container, warning, turns, warnings, match = null) {
   container.replaceChildren();
   const safeWarnings = Array.isArray(warnings) ? warnings : [];
   warning.hidden = safeWarnings.length === 0;
@@ -95,9 +115,11 @@ function renderTurns(container, warning, turns, warnings, matchedSourceTurnIndex
   for (const turn of turns || []) {
     const row = document.createElement("section");
     row.className = "turn";
-    if (Number.isInteger(matchedSourceTurnIndex) && turn.sourceTurnIndex === matchedSourceTurnIndex) {
+    const matchesTurn = Number.isInteger(match?.sourceTurnIndex)
+      && turn.sourceTurnIndex === match.sourceTurnIndex;
+    if (matchesTurn) {
       row.classList.add("matched-turn");
-      row.dataset.sourceTurnIndex = String(matchedSourceTurnIndex);
+      row.dataset.sourceTurnIndex = String(match.sourceTurnIndex);
     }
     const meta = document.createElement("div");
     meta.className = "turn-meta";
@@ -107,7 +129,7 @@ function renderTurns(container, warning, turns, warnings, matchedSourceTurnIndex
     time.textContent = formatElapsed(turn.start || 0);
     meta.append(speaker, time);
     const text = document.createElement("p");
-    text.textContent = turn.text || "";
+    appendTurnText(text, turn.text, matchesTurn ? match : null);
     row.append(meta, text);
     container.append(row);
   }
@@ -117,9 +139,9 @@ function renderTurns(container, warning, turns, warnings, matchedSourceTurnIndex
     empty.textContent = "No speech was detected in this capture.";
     container.append(empty);
   }
-  if (Number.isInteger(matchedSourceTurnIndex)) {
+  if (Number.isInteger(match?.sourceTurnIndex)) {
     window.requestAnimationFrame(() => {
-      container.querySelector(`[data-source-turn-index="${matchedSourceTurnIndex}"]`)?.scrollIntoView({ block: "center" });
+      container.querySelector(`[data-source-turn-index="${match.sourceTurnIndex}"]`)?.scrollIntoView({ block: "center" });
     });
   }
 }
@@ -160,7 +182,7 @@ function renderLibrary(snapshot) {
     time.textContent = formatMeetingTime(row.createdAtEpochSeconds);
     summary.append(label, time);
     const action = document.createElement("span");
-    action.textContent = row.transcriptAvailable ? "View transcript" : "Transcript unavailable";
+    action.textContent = row.transcriptAvailable ? "Open meeting" : "Transcript unavailable";
     button.append(summary, action);
     libraryList.append(button);
   }
@@ -339,6 +361,80 @@ async function openLibraryTranscript(meetingId, matchedSourceTurnIndex = null) {
   }
 }
 
+function claimTypeLabel(value) {
+  return {
+    decision: "Decision",
+    action: "Action",
+    question: "Question",
+    proposal: "Proposal",
+  }[value] || "Claim";
+}
+
+function renderMeetingDetail(response) {
+  meetingClaimList.replaceChildren();
+  meetingNoNote.hidden = true;
+  message(meetingDetailState, response.message || "Opening retained meeting…", response.state || "");
+  if (response.state !== "note") {
+    meetingNoNote.hidden = false;
+    return;
+  }
+  for (const claim of response.claims || []) {
+    const card = document.createElement("article");
+    card.className = "meeting-claim";
+    const meta = document.createElement("p");
+    meta.className = "claim-meta";
+    meta.textContent = `${claimTypeLabel(claim.claimType)} · words located`;
+    const text = document.createElement("p");
+    text.className = "claim-text";
+    text.textContent = claim.claim;
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "secondary claim-evidence";
+    open.textContent = "Show exact words in transcript";
+    open.addEventListener("click", () => openMeetingEvidence(claim.handle));
+    card.append(meta, text, open);
+    meetingClaimList.append(card);
+  }
+  if (!meetingClaimList.children.length) {
+    message(meetingDetailState, "This admitted note has no supported claims. The retained transcript remains the source of record.", "note");
+    meetingNoNote.hidden = false;
+  }
+}
+
+async function openMeetingDetail(meetingId) {
+  if (!invoke || !meetingId) return;
+  document.querySelector("#meeting-detail-id").value = meetingId;
+  meetingClaimList.replaceChildren();
+  meetingNoNote.hidden = true;
+  message(meetingDetailState, "Opening this retained meeting…");
+  showScreen("meeting-detail-screen");
+  try {
+    renderMeetingDetail(await invoke("preview_library_open_note", { meetingId }));
+  } catch {
+    message(meetingDetailState, "That meeting could not be opened. Return to Library and try again.", "stale");
+    meetingNoNote.hidden = true;
+  }
+}
+
+async function openMeetingEvidence(handle) {
+  if (!invoke || !handle) return;
+  message(meetingDetailState, "Opening the claim’s exact retained words…");
+  try {
+    const result = await invoke("preview_library_open_evidence", { handle, locatorOrdinal: 0 });
+    if (result.state !== "evidence" || !result.meetingId || !Number.isInteger(result.sourceTurnIndex)) {
+      message(meetingDetailState, result.message || "That claim is no longer current. Return to Library and try again.", result.state || "stale");
+      return;
+    }
+    await openLibraryTranscript(result.meetingId, {
+      sourceTurnIndex: result.sourceTurnIndex,
+      start: result.start,
+      end: result.end,
+    });
+  } catch {
+    message(meetingDetailState, "That claim could not be opened. Return to Library and try again.", "stale");
+  }
+}
+
 async function searchLibrary(event) {
   event.preventDefault();
   if (!invoke || !libraryViewActive) return;
@@ -369,7 +465,10 @@ async function openLibrarySearchResult(handle) {
       setError(libraryNotice, result.message || "That search result is no longer current. Reopen Library and try again.");
       return;
     }
-    await openLibraryTranscript(result.meetingId, Number.isInteger(result.sourceTurnIndex) ? result.sourceTurnIndex : null);
+    await openLibraryTranscript(
+      result.meetingId,
+      Number.isInteger(result.sourceTurnIndex) ? { sourceTurnIndex: result.sourceTurnIndex } : null,
+    );
   } catch {
     setError(libraryNotice, "That search result could not be opened. Reopen Library and try again.");
   }
@@ -473,7 +572,7 @@ libraryLink.addEventListener("click", openLibrary);
 librarySearch.addEventListener("submit", searchLibrary);
 libraryList.addEventListener("click", (event) => {
   const row = event.target.closest("button[data-meeting-id]");
-  if (row) openLibraryTranscript(row.dataset.meetingId);
+  if (row) openMeetingDetail(row.dataset.meetingId);
 });
 librarySearchResults.addEventListener("click", (event) => {
   const result = event.target.closest("button[data-search-handle]");
@@ -484,6 +583,11 @@ document.querySelector("#library-back").addEventListener("click", () => {
   refresh();
 });
 document.querySelector("#library-transcript-back").addEventListener("click", returnToLibrary);
+document.querySelector("#meeting-detail-back").addEventListener("click", returnToLibrary);
+document.querySelector("#meeting-open-transcript").addEventListener("click", () => {
+  const meetingId = document.querySelector("#meeting-detail-id").value;
+  if (meetingId) openLibraryTranscript(meetingId);
+});
 
 renderStartup("shell-rendered");
 refresh();

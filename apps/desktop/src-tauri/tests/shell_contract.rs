@@ -101,6 +101,8 @@ fn preview_window_is_a_separate_real_capture_shell_with_a_read_only_library() {
             "allow-preview-library-snapshot",
             "allow-preview-library-search",
             "allow-preview-library-open-search-result",
+            "allow-preview-library-open-note",
+            "allow-preview-library-open-evidence",
             "allow-preview-library-open-transcript"
         ])
     );
@@ -214,6 +216,7 @@ fn preview_library_pauses_capture_polling_and_resumes_on_return() {
     assert!(html.contains("id=\"library-link\""));
     assert!(html.contains("id=\"library-screen\""));
     assert!(html.contains("id=\"library-transcript-screen\""));
+    assert!(html.contains("id=\"meeting-detail-screen\""));
     assert!(html.contains("id=\"library-search\""));
     assert!(script.contains("libraryViewActive = true"));
     assert!(script.contains("if (libraryViewActive) return;"));
@@ -221,6 +224,8 @@ fn preview_library_pauses_capture_polling_and_resumes_on_return() {
     assert!(script.contains("preview_library_snapshot"));
     assert!(script.contains("preview_library_search"));
     assert!(script.contains("preview_library_open_search_result"));
+    assert!(script.contains("preview_library_open_note"));
+    assert!(script.contains("preview_library_open_evidence"));
     assert!(script.contains("preview_library_open_transcript"));
 }
 
@@ -253,6 +258,8 @@ fn preview_search_is_a_named_read_only_boundary_and_preserves_production_command
 
     assert!(handler.contains("preview_library_search"));
     assert!(handler.contains("preview_library_open_search_result"));
+    assert!(handler.contains("preview_library_open_note"));
+    assert!(handler.contains("preview_library_open_evidence"));
     assert!(source.contains("reader.open_search_result(&handle)"));
     assert!(contract.contains("const PRODUCTION_COMMANDS"));
     assert!(

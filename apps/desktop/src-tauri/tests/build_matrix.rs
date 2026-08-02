@@ -58,6 +58,8 @@ fn preview_config_with_feature_adds_only_the_read_only_library_boundary() {
             "preview_library_snapshot",
             "preview_library_search",
             "preview_library_open_search_result",
+            "preview_library_open_note",
+            "preview_library_open_evidence",
             "preview_library_open_transcript",
         ]
     );

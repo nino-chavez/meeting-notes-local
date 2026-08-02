@@ -248,7 +248,7 @@ fn seed_synthetic_fixture(storage: &StorageRoot) -> Result<(), String> {
         "created_at_epoch_seconds": 1_728_000_000_u64,
         "application_build_sha256": "a".repeat(64),
         "participant_notice_version": NOTICE_VERSION,
-        "operator_attestation": {"participants_consented": true, "headphones": true, "operator_alone": true},
+        "operator_attestation": {"participantsConsented": true, "headphones": true, "operatorAlone": true},
         "retention_policy_sha256": policy,
     });
     write_new(
@@ -489,6 +489,8 @@ mod tests {
         assert_eq!(evidence.state, "evidence");
         assert_eq!(evidence.meeting_id.as_deref(), Some(FIXTURE_MEETING_ID));
         assert_eq!(evidence.source_turn_index, Some(0));
+        assert_eq!(evidence.start, Some(20));
+        assert_eq!(evidence.end, Some(24));
         assert_eq!(evidence.text.as_deref(), Some("café"));
     }
 
@@ -703,6 +705,27 @@ mod tests {
         let note = reader.open_note(FIXTURE_MEETING_ID);
         assert_eq!(note.state, "summary-failed");
         assert!(note.claims.is_empty());
+    }
+
+    #[test]
+    fn private_reader_returns_transcript_only_when_no_current_note_is_admitted() {
+        let temporary = TempDir::new().unwrap();
+        let protected_root = temporary.path().join("protected-root");
+        create_private_dir(&protected_root).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("data"), &protected_root).unwrap();
+        seed_synthetic_fixture(&storage).unwrap();
+        clear_test_xattrs(storage.path());
+        let directory = storage.path().join("meetings").join(FIXTURE_MEETING_ID);
+        let mut meeting = load_meeting(&directory).unwrap();
+        meeting.lifecycle = MeetingLifecycle::TranscriptReady;
+        meeting.artifacts.current_note = None;
+        write_meeting(&directory, &meeting).unwrap();
+
+        let mut reader = project_seeded_library(storage).unwrap().reader;
+        let note = reader.open_note(FIXTURE_MEETING_ID);
+        assert_eq!(note.state, "transcript-only");
+        assert!(note.claims.is_empty());
+        assert!(note.message.contains("No admitted note"));
     }
 
     #[test]
