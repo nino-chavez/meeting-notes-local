@@ -12,6 +12,9 @@ const startError = document.querySelector("#start-error");
 const stopButton = document.querySelector("#stop-button");
 const stopError = document.querySelector("#stop-error");
 const retryStartup = document.querySelector("#retry-startup");
+const libraryLink = document.querySelector("#library-link");
+const libraryList = document.querySelector("#library-list");
+const libraryNotice = document.querySelector("#library-notice");
 const retention = document.querySelector("#retention-days");
 const checks = [
   document.querySelector("#consent-check"),
@@ -23,6 +26,7 @@ let lastSnapshot = null;
 let pollTimer = null;
 let startedAt = null;
 let elapsedTimer = null;
+let libraryViewActive = false;
 
 function showScreen(id) {
   for (const [screenId, screen] of screens) {
@@ -72,13 +76,20 @@ function endElapsed() {
 }
 
 function renderTranscript(snapshot) {
-  const container = document.querySelector("#transcript-turns");
-  const warning = document.querySelector("#transcript-warning");
+  renderTurns(
+    document.querySelector("#transcript-turns"),
+    document.querySelector("#transcript-warning"),
+    snapshot.turns,
+    snapshot.warnings,
+  );
+}
+
+function renderTurns(container, warning, turns, warnings) {
   container.replaceChildren();
-  const warnings = Array.isArray(snapshot.warnings) ? snapshot.warnings : [];
-  warning.hidden = warnings.length === 0;
-  warning.textContent = warnings.join(" ");
-  for (const turn of snapshot.turns || []) {
+  const safeWarnings = Array.isArray(warnings) ? warnings : [];
+  warning.hidden = safeWarnings.length === 0;
+  warning.textContent = safeWarnings.join(" ");
+  for (const turn of turns || []) {
     const row = document.createElement("section");
     row.className = "turn";
     const meta = document.createElement("div");
@@ -99,6 +110,48 @@ function renderTranscript(snapshot) {
     empty.textContent = "No speech was detected in this capture.";
     container.append(empty);
   }
+}
+
+function formatMeetingTime(epochSeconds) {
+  const value = Number(epochSeconds) * 1000;
+  if (!Number.isFinite(value) || value <= 0) return "Retained meeting";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function renderLibrary(snapshot) {
+  libraryList.replaceChildren();
+  libraryNotice.hidden = true;
+  libraryNotice.textContent = "";
+  document.querySelector("#library-copy").textContent = snapshot.message || "Opening retained Preview meetings on this Mac.";
+  if (snapshot.state !== "populated") {
+    const empty = document.createElement("p");
+    empty.className = "library-empty";
+    empty.textContent = snapshot.state === "empty"
+      ? "No retained Preview meetings yet. Finish a Preview recording to see it here."
+      : "The Preview library is not available right now. Reopen the app and try again.";
+    libraryList.append(empty);
+    showScreen("library-screen");
+    return;
+  }
+  for (const row of snapshot.rows || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "library-row";
+    button.dataset.meetingId = row.meetingId;
+    button.dataset.label = row.label || "Untitled meeting";
+    button.disabled = row.transcriptAvailable !== true;
+    const summary = document.createElement("span");
+    const label = document.createElement("strong");
+    label.textContent = row.label || "Untitled meeting";
+    const time = document.createElement("small");
+    time.textContent = formatMeetingTime(row.createdAtEpochSeconds);
+    summary.append(label, time);
+    const action = document.createElement("span");
+    action.textContent = row.transcriptAvailable ? "View transcript" : "Transcript unavailable";
+    button.append(summary, action);
+    libraryList.append(button);
+  }
+  showScreen("library-screen");
 }
 
 function renderStartup(state) {
@@ -128,7 +181,9 @@ function render(snapshot) {
   const capture = snapshot.capture || "idle";
   document.documentElement.dataset.startupState = startup;
   document.documentElement.dataset.captureState = capture;
-  releaseBadge.textContent = "Internal alpha";
+  const preview = snapshot.preview === true;
+  releaseBadge.textContent = preview ? "Preview" : "Internal alpha";
+  libraryLink.hidden = !preview || !["idle", "transcript-ready"].includes(capture) || startup !== "ready";
   meetingLabel.textContent = snapshot.meeting_id ? `Meeting ${snapshot.meeting_id.slice(0, 8)}` : "";
 
   if (startup !== "ready") {
@@ -190,12 +245,49 @@ function render(snapshot) {
   }
 }
 
+async function openLibrary() {
+  if (!invoke || lastSnapshot?.preview !== true) return;
+  libraryViewActive = true;
+  if (pollTimer) window.clearTimeout(pollTimer);
+  pollTimer = null;
+  document.querySelector("#library-copy").textContent = "Opening retained Preview meetings on this Mac.";
+  libraryList.replaceChildren();
+  showScreen("library-screen");
+  try {
+    renderLibrary(await invoke("preview_library_snapshot"));
+  } catch {
+    renderLibrary({ state: "unavailable", rows: [], message: "The Preview library is unavailable right now." });
+  }
+}
+
+async function openLibraryTranscript(meetingId) {
+  if (!invoke || !meetingId) return;
+  try {
+    const result = await invoke("preview_library_open_transcript", { meetingId });
+    if (result.state !== "transcript") {
+      setError(libraryNotice, result.message);
+      return;
+    }
+    renderTurns(
+      document.querySelector("#library-transcript-turns"),
+      document.querySelector("#library-transcript-warning"),
+      result.turns,
+      result.warnings,
+    );
+    showScreen("library-transcript-screen");
+  } catch {
+    setError(libraryNotice, "That transcript could not be opened. Reopen Library and try again.");
+  }
+}
+
 function schedulePoll(delay) {
+  if (libraryViewActive) return;
   if (pollTimer) window.clearTimeout(pollTimer);
   pollTimer = window.setTimeout(refresh, delay);
 }
 
 async function refresh() {
+  if (libraryViewActive) return;
   if (!invoke) {
     render({ startup: "diagnostic-written", capture: "idle", error: "The local application bridge is unavailable." });
     return;
@@ -281,6 +373,17 @@ retryStartup.addEventListener("click", async () => {
   if (invoke) await invoke("retry_startup");
   await refresh();
 });
+
+libraryLink.addEventListener("click", openLibrary);
+libraryList.addEventListener("click", (event) => {
+  const row = event.target.closest("button[data-meeting-id]");
+  if (row) openLibraryTranscript(row.dataset.meetingId);
+});
+document.querySelector("#library-back").addEventListener("click", () => {
+  libraryViewActive = false;
+  refresh();
+});
+document.querySelector("#library-transcript-back").addEventListener("click", openLibrary);
 
 renderStartup("shell-rendered");
 refresh();

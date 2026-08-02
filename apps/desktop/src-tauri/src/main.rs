@@ -36,6 +36,7 @@ use local_meeting_notes_session_core::meeting::{
     MeetingLifecycle, MeetingRecord, MeetingSchema, artifact_ref, load_meeting, read_private_bytes,
     retention_policy_sha256, write_meeting,
 };
+use local_meeting_notes_session_core::library_read::{LibraryProjection, ReadLimits};
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 use local_meeting_notes_session_core::protocol::{
     Operation, ProtocolError, WorkerCommand, WorkerResult,
@@ -82,6 +83,8 @@ struct ApplicationState {
     command_lock: Mutex<()>,
     app_data_writer_lock: Mutex<Option<AppDataWriterLock>>,
     retention_started: AtomicBool,
+    #[cfg(feature = "preview-surface")]
+    preview_library: Mutex<Option<library_reader::LibraryReader>>,
 }
 
 impl Default for ApplicationState {
@@ -95,6 +98,8 @@ impl Default for ApplicationState {
             command_lock: Mutex::new(()),
             app_data_writer_lock: Mutex::new(None),
             retention_started: AtomicBool::new(false),
+            #[cfg(feature = "preview-surface")]
+            preview_library: Mutex::new(None),
         }
     }
 }
@@ -136,6 +141,7 @@ impl AppModel {
         AppSnapshot {
             startup: self.reducer.startup(),
             admission: self.admission.clone(),
+            preview: cfg!(feature = "preview-surface"),
             retention_operational: self.retention_operational,
             capture: self.reducer.capture(),
             meeting_id: self.meeting_id.clone(),
@@ -165,6 +171,7 @@ impl AppModel {
 struct AppSnapshot {
     startup: StartupState,
     admission: String,
+    preview: bool,
     retention_operational: bool,
     capture: CaptureState,
     meeting_id: Option<String>,
@@ -188,6 +195,17 @@ struct RestoredTranscriptProjection {
     meeting_id: String,
     turns: Vec<TranscriptTurn>,
     warnings: Vec<String>,
+}
+
+#[cfg(feature = "preview-surface")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewLibraryTranscript {
+    state: &'static str,
+    meeting_id: Option<String>,
+    turns: Vec<TranscriptTurn>,
+    warnings: Vec<String>,
+    message: String,
 }
 
 fn apply_restored_transcript_projection(
@@ -706,6 +724,101 @@ fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
     Ok(snapshot)
 }
 
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
+fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reader::LibrarySnapshot {
+    let storage = state
+        .storage
+        .lock()
+        .expect("storage context lock")
+        .as_ref()
+        .map(|context| context.storage.clone());
+    let Some(storage) = storage else {
+        return library_reader::LibraryReader::unavailable_snapshot();
+    };
+    let reader = match LibraryProjection::rebuild(&storage, ReadLimits::default()) {
+        Ok(projection) => library_reader::LibraryReader::new(storage, projection),
+        Err(_) => return library_reader::LibraryReader::unavailable_snapshot(),
+    };
+    let snapshot = reader.snapshot();
+    *state
+        .preview_library
+        .lock()
+        .expect("preview library lock") = Some(reader);
+    snapshot
+}
+
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
+fn preview_library_open_transcript(
+    meeting_id: String,
+    state: State<'_, ApplicationState>,
+) -> PreviewLibraryTranscript {
+    let available = state
+        .preview_library
+        .lock()
+        .expect("preview library lock")
+        .as_ref()
+        .is_some_and(|reader| reader.has_transcript(&meeting_id));
+    if !available {
+        return PreviewLibraryTranscript {
+            state: "stale",
+            meeting_id: None,
+            turns: Vec::new(),
+            warnings: Vec::new(),
+            message: "That library view is no longer current. Reopen Library and try again.".into(),
+        };
+    }
+    let storage = state
+        .storage
+        .lock()
+        .expect("storage context lock")
+        .as_ref()
+        .map(|context| context.storage.clone());
+    let Some(storage) = storage else {
+        return PreviewLibraryTranscript {
+            state: "unavailable",
+            meeting_id: None,
+            turns: Vec::new(),
+            warnings: Vec::new(),
+            message: "The local Preview library is unavailable. Reopen the app and try again.".into(),
+        };
+    };
+    let opened = (|| {
+        let directory = meeting_dir(&storage, &meeting_id).map_err(error_text)?;
+        let meeting = load_meeting(&directory).map_err(error_text)?;
+        let transcript = meeting
+            .artifacts
+            .current_transcript
+            .as_ref()
+            .ok_or_else(|| "the selected meeting has no retained transcript".to_string())?;
+        let (turns, mut warnings) = load_transcript_projection(&directory, transcript)?;
+        if meeting.retention.state == AudioState::Released {
+            warnings.push(
+                "Meeting audio was deleted under the selected retention period. The transcript remains."
+                    .into(),
+            );
+        }
+        Ok::<_, String>((turns, warnings))
+    })();
+    match opened {
+        Ok((turns, warnings)) => PreviewLibraryTranscript {
+            state: "transcript",
+            meeting_id: Some(meeting_id),
+            turns,
+            warnings,
+            message: "Retained transcript from this Preview meeting.".into(),
+        },
+        Err(_) => PreviewLibraryTranscript {
+            state: "stale",
+            meeting_id: None,
+            turns: Vec::new(),
+            warnings: Vec::new(),
+            message: "That transcript is no longer available. Reopen Library and try again.".into(),
+        },
+    }
+}
+
 #[cfg(not(feature = "library-dev-surface"))]
 fn main() {
     tauri::Builder::default()
@@ -720,7 +833,11 @@ fn main() {
             start_meeting,
             stop_meeting,
             dismiss_meeting,
-            retry_startup
+            retry_startup,
+            #[cfg(feature = "preview-surface")]
+            preview_library_snapshot,
+            #[cfg(feature = "preview-surface")]
+            preview_library_open_transcript
         ])
         .setup(|app| {
             let handle = app.handle().clone();

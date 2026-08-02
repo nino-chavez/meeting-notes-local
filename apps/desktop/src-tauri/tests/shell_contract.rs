@@ -38,7 +38,7 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
 }
 
 #[test]
-fn preview_window_is_a_separate_real_capture_shell_with_only_alpha_commands() {
+fn preview_window_is_a_separate_real_capture_shell_with_a_read_only_library() {
     let preview: Value = serde_json::from_str(include_str!("../tauri.preview.conf.json")).unwrap();
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/preview.json")).unwrap();
@@ -90,7 +90,9 @@ fn preview_window_is_a_separate_real_capture_shell_with_only_alpha_commands() {
             "allow-start-meeting",
             "allow-stop-meeting",
             "allow-dismiss-meeting",
-            "allow-retry-startup"
+            "allow-retry-startup",
+            "allow-preview-library-snapshot",
+            "allow-preview-library-open-transcript"
         ])
     );
     let serialized = serde_json::to_string(&capability).unwrap();
@@ -193,6 +195,21 @@ fn shell_renders_safe_state_before_runtime_preflight() {
     assert!(!script.contains("Internal beta"));
     assert!(!script.contains("Command.sidecar"));
     assert!(!script.contains("window.__TAURI__.fs"));
+}
+
+#[test]
+fn preview_library_pauses_capture_polling_and_resumes_on_return() {
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+
+    assert!(html.contains("id=\"library-link\""));
+    assert!(html.contains("id=\"library-screen\""));
+    assert!(html.contains("id=\"library-transcript-screen\""));
+    assert!(script.contains("libraryViewActive = true"));
+    assert!(script.contains("if (libraryViewActive) return;"));
+    assert!(script.contains("libraryViewActive = false;\n  refresh();"));
+    assert!(script.contains("preview_library_snapshot"));
+    assert!(script.contains("preview_library_open_transcript"));
 }
 
 #[test]

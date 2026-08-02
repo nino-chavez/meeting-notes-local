@@ -39,6 +39,8 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 
 .app-header p, footer { margin: 0; }
 .app-header > div { display: flex; align-items: baseline; gap: 18px; }
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.library-link { min-height: 34px; padding: 0 13px; font-size: 0.82rem; }
 
 .eyebrow, .label, .kicker, legend, .retention-field > span, footer {
   font-size: 0.76rem;
@@ -164,16 +166,24 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 
 .transcript-screen h1 { max-width: 18ch; }
 #transcript-turns { margin: 38px 0; border-top: 1px solid var(--line); }
+#library-transcript-turns { margin: 38px 0; border-top: 1px solid var(--line); }
 .turn { display: grid; grid-template-columns: 118px 1fr; gap: 20px; padding: 20px 0; border-bottom: 1px solid var(--line); }
 .turn-meta { display: flex; flex-direction: column; gap: 5px; font-size: 0.82rem; }
 .turn-meta time { color: var(--muted); font-variant-numeric: tabular-nums; }
 .turn p { margin: 0; line-height: 1.58; }
 .empty-transcript { padding: 24px 0; color: var(--muted); }
+.library-list { margin: 38px 0 24px; border-top: 1px solid var(--line); }
+.library-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: 100%; min-height: 72px; padding: 16px 0; border: 0; border-radius: 0; border-bottom: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; }
+.library-row strong, .library-row small { display: block; }
+.library-row small { margin-top: 4px; color: var(--muted); }
+.library-row span:last-child { color: var(--accent); font-size: 0.86rem; white-space: nowrap; }
+.library-empty { margin: 0; padding: 24px 0; border-bottom: 1px solid var(--line); color: var(--muted); line-height: 1.52; }
 
 footer { border-top: 1px solid var(--line); border-bottom: 0; color: #66706a; }
 
 @media (max-width: 640px) {
   .app-header > div { display: block; }
+  .header-actions { gap: 8px; }
   .product-state { margin-top: 6px !important; }
   .release-badge { align-self: flex-start; }
   .channel-grid { grid-template-columns: 1fr; }
