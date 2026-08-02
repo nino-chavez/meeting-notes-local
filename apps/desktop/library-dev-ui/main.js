@@ -25,32 +25,46 @@ function button(text, className = "") {
   return element;
 }
 
-async function openNote(meetingId) {
+async function openNote(meetingId, targetClaimOrdinal = null) {
   if (!invoke) return;
   const response = await invoke("library_dev_open_note", { meetingId });
   claimList.replaceChildren();
-  noteTitle.textContent = response.state === "note" ? "Sanitized library sample" : "Reader needs attention";
+  evidenceText.hidden = true;
+  evidenceText.textContent = "";
+  message(evidenceState, "Choose “Show in transcript” from a claim.");
+  noteTitle.textContent = response.state === "note" ? "Sanitized meeting note" : "Meeting needs attention";
   message(noteState, response.message, response.state);
   if (response.state !== "note") return;
+  let targetClaim = null;
   for (const claim of response.claims) {
     const card = document.createElement("article");
     card.className = "claim";
+    card.dataset.claimOrdinal = String(claim.ordinal);
     const meta = document.createElement("p");
     meta.className = "meta";
-    meta.textContent = `${claim.claimType} · ${claim.evidenceState}`;
+    meta.textContent = `${claim.claimType} · words located`;
     const text = document.createElement("p");
     text.textContent = claim.claim;
-    const open = button("Open exact evidence", "quiet");
+    const open = button("Show in transcript", "quiet");
     open.addEventListener("click", () => openEvidence(claim.handle));
     card.append(meta, text, open);
     claimList.append(card);
+    if (claim.ordinal === targetClaimOrdinal) targetClaim = { card, handle: claim.handle };
+  }
+  if (targetClaim) {
+    targetClaim.card.tabIndex = -1;
+    targetClaim.card.focus();
+    targetClaim.card.scrollIntoView({ block: "nearest" });
+    await openEvidence(targetClaim.handle);
+    message(noteState, "Opened the matching claim. Words located in the transcript; semantic support has not been reviewed.", "note");
   }
 }
 
 async function openEvidence(handle) {
   if (!invoke) return;
   const response = await invoke("library_dev_open_evidence", { handle, locatorOrdinal: 0 });
-  message(evidenceState, response.message, response.state);
+  const turn = Number.isInteger(response.sourceTurnIndex) ? ` · turn ${response.sourceTurnIndex + 1}` : "";
+  message(evidenceState, response.text ? `Matched words from transcript${turn}` : response.message, response.state);
   evidenceText.hidden = !response.text;
   evidenceText.textContent = response.text || "";
 }
@@ -70,8 +84,8 @@ function renderSearch(response) {
       : result.text || "No displayable text.";
     card.append(meta, text);
     if (result.kind === "claim" || result.kind === "meeting") {
-      const open = button("Open note", "quiet");
-      open.addEventListener("click", () => openNote(result.meetingId));
+      const open = button(result.kind === "claim" ? "Open claim" : "Open meeting", "quiet");
+      open.addEventListener("click", () => openNote(result.meetingId, result.claimOrdinal));
       card.append(open);
     }
     searchResults.append(card);
@@ -103,11 +117,12 @@ async function load() {
     for (const row of snapshot.rows) {
       const open = button(row.label, "library-row");
       const detail = document.createElement("small");
-      detail.textContent = "Sanitized fixture · transcript available";
+      detail.textContent = "Synthetic meeting · transcript available";
       open.append(detail);
       open.addEventListener("click", () => openNote(row.meetingId));
       libraryList.append(open);
     }
+    if (snapshot.rows.length > 0) await openNote(snapshot.rows[0].meetingId);
   } catch {
     message(libraryState, "The synthetic fixture could not open.", "empty");
   }

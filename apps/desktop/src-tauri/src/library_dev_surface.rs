@@ -29,8 +29,9 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 const DEV_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.library-dev";
-const FIXTURE_MEETING_ID: &str = "library-dev-sample";
-const FIXTURE_MARKER: &str = "library-dev-fixture-v1.json";
+const FIXTURE_STORAGE_GENERATION: &str = "fixture-v2";
+const FIXTURE_MEETING_ID: &str = "library-dev-sample-v2";
+const FIXTURE_MARKER: &str = "library-dev-fixture-v2.json";
 const NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 
 struct DevLibrary {
@@ -78,6 +79,7 @@ struct DevSearchResult {
     meeting_id: String,
     text: Option<String>,
     source_turn_index: Option<u32>,
+    claim_ordinal: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -160,6 +162,15 @@ fn library_dev_snapshot(state: State<'_, DevSurfaceState>) -> DevSnapshot {
 fn snapshot_response(state: &DevSurfaceState) -> DevSnapshot {
     let guard = state.library.lock().expect("development library lock");
     if let Some(library) = guard.as_ref() {
+        if library.projection.rows().is_empty() {
+            return DevSnapshot {
+                state: "empty",
+                rows: Vec::new(),
+                message:
+                    "The synthetic meeting is unavailable. Reopen this development app to retry."
+                        .into(),
+            };
+        }
         let rows = library
             .projection
             .rows()
@@ -213,13 +224,17 @@ fn search_response(query: &str, state: &DevSurfaceState) -> DevSearchResponse {
                 let handle = retain_handle(library, hit.clone());
                 match library.projection.open(&library.storage, &hit) {
                     Ok(OpenedLibraryHit::Claim {
-                        meeting_id, claim, ..
+                        meeting_id,
+                        claim,
+                        claim_ordinal,
+                        ..
                     }) => results.push(DevSearchResult {
                         handle,
                         kind: "claim",
                         meeting_id,
                         text: Some(claim),
                         source_turn_index: None,
+                        claim_ordinal: Some(claim_ordinal),
                     }),
                     Ok(OpenedLibraryHit::Transcript {
                         meeting_id,
@@ -232,6 +247,7 @@ fn search_response(query: &str, state: &DevSurfaceState) -> DevSearchResponse {
                         meeting_id,
                         text: Some(text),
                         source_turn_index: Some(source_turn_index),
+                        claim_ordinal: None,
                     }),
                     Ok(OpenedLibraryHit::Withheld {
                         meeting_id,
@@ -242,6 +258,7 @@ fn search_response(query: &str, state: &DevSurfaceState) -> DevSearchResponse {
                         meeting_id,
                         text: None,
                         source_turn_index: Some(source_turn_index),
+                        claim_ordinal: None,
                     }),
                     Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => {
                         results.push(DevSearchResult {
@@ -250,6 +267,7 @@ fn search_response(query: &str, state: &DevSurfaceState) -> DevSearchResponse {
                             meeting_id,
                             text: Some("Sanitized library sample".into()),
                             source_turn_index: None,
+                            claim_ordinal: None,
                         })
                     }
                     Err(error) => return stale_search(error),
@@ -258,8 +276,7 @@ fn search_response(query: &str, state: &DevSurfaceState) -> DevSearchResponse {
             DevSearchResponse {
                 state: "results",
                 results,
-                message: "Search results are read-only projections of the sanitized fixture."
-                    .into(),
+                message: "Results from the synthetic meeting.".into(),
             }
         }
         Err(error) => stale_search(error),
@@ -307,8 +324,7 @@ fn open_note_response(meeting_id: &str, state: &DevSurfaceState) -> DevNoteRespo
         state: "note",
         meeting_id: meeting_id.into(),
         claims,
-        message: "Located means these words occur in the transcript. It does not mean semantic support was verified."
-            .into(),
+        message: "Words located in the transcript. Semantic support has not been reviewed.".into(),
     }
 }
 
@@ -351,7 +367,8 @@ fn open_evidence_response(
 fn create_dev_library(app: &AppHandle) -> Result<DevLibrary, String> {
     let app_data = app.path().app_data_dir().map_err(error_text)?;
     let protected_root = app.path().resource_dir().map_err(error_text)?;
-    let storage = StorageRoot::create(&app_data, &protected_root).map_err(error_text)?;
+    let storage = StorageRoot::create(&app_data.join(FIXTURE_STORAGE_GENERATION), &protected_root)
+        .map_err(error_text)?;
     create_dev_library_at(storage)
 }
 
@@ -369,6 +386,10 @@ fn project_seeded_library(storage: StorageRoot) -> Result<DevLibrary, String> {
     .map_err(|error| {
         format!("The synthetic development library could not be projected: {error}.")
     })?;
+    let rows = projection.rows();
+    if rows.len() != 1 || rows[0].meeting_id != FIXTURE_MEETING_ID {
+        return Err("The synthetic development fixture is incomplete. Remove only this development app’s data and reopen it.".into());
+    }
     Ok(DevLibrary {
         storage,
         projection,
@@ -460,7 +481,7 @@ fn seed_synthetic_fixture(storage: &StorageRoot) -> Result<(), String> {
         pending_storage_operation: None,
     };
     write_meeting(&directory, &record).map_err(error_text)?;
-    write_new(&marker, b"{\"schema\":\"library-dev-fixture/1\"}\n")
+    write_new(&marker, b"{\"schema\":\"library-dev-fixture/2\"}\n")
 }
 
 struct SyntheticProjector;
@@ -674,6 +695,11 @@ mod tests {
             Some("Use Thursday in the café sample launch date.")
         );
         assert_eq!(search.results[0].source_turn_index, None);
+        assert_eq!(search.results[0].claim_ordinal, Some(0));
+        assert_eq!(
+            serde_json::to_value(&search).unwrap()["results"][0]["claimOrdinal"],
+            0
+        );
         assert!(!search.results[0].handle.is_empty());
 
         let note = open_note_response(FIXTURE_MEETING_ID, &state);
@@ -690,6 +716,22 @@ mod tests {
         assert_eq!(evidence.meeting_id.as_deref(), Some(FIXTURE_MEETING_ID));
         assert_eq!(evidence.source_turn_index, Some(0));
         assert_eq!(evidence.text.as_deref(), Some("café"));
+    }
+
+    #[test]
+    fn stale_fixture_marker_without_expected_meeting_fails_closed() {
+        let temporary = TempDir::new().unwrap();
+        let protected_root = temporary.path().join("protected-root");
+        create_private_dir(&protected_root).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("data"), &protected_root).unwrap();
+        write_new(
+            &storage.path().join(FIXTURE_MARKER),
+            b"{\"schema\":\"library-dev-fixture/2\"}\n",
+        )
+        .unwrap();
+
+        let error = create_dev_library_at(storage).err().unwrap();
+        assert!(error.contains("synthetic development fixture is incomplete"));
     }
 
     #[test]
