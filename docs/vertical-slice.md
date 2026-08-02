@@ -300,9 +300,10 @@ a supplied digest is not evidence.
 
 This boundary protects against stale, linked, replaced, or mismatched bundle
 resources and against sending meeting authority to an unverified child. It does
-not claim to contain a malicious process already running as the owning macOS
-account; that account already has direct authority over the owner-only meeting
-store. A future requirement to defend against that actor would require a
+not claim to close a transient executable-path replace/restore race between the
+bracketed checks. Exploiting that race requires an active same-account attacker,
+which this boundary excludes because that account already has direct authority
+over the owner-only meeting store. Defending against that actor would require a
 separately sandboxed, monolithic signed helper and a new security contract.
 
 Three implementable shapes were compared after the descriptor-execution audit

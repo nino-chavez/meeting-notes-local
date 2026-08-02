@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="filmroom-notary"
 EXPECTED_TEAM_ID="34VZ63G58M"
+EXPECTED_IDENTIFIER="com.ninochavez.local-meeting-notes"
+PYTHON_SIGNING_IDENTIFIER="${EXPECTED_IDENTIFIER}.python-runtime"
 VOLNAME="Local Meeting Notes"
 PYTHON_ENTITLEMENTS="$ROOT/apps/desktop/src-tauri/python-entitlements.plist"
 CAPTURE_ENTITLEMENTS="$ROOT/apps/desktop/src-tauri/capture-entitlements.plist"
@@ -92,7 +94,7 @@ count=0
 while IFS= read -r -d '' path; do
   sign_args=(--force --options runtime --timestamp --sign "$IDENTITY")
   if [[ "$path" == "$APP/Contents/Resources/python-runtime/bin/python3.12" ]]; then
-    sign_args+=(--entitlements "$PYTHON_ENTITLEMENTS")
+    sign_args+=(--identifier "$PYTHON_SIGNING_IDENTIFIER" --entitlements "$PYTHON_ENTITLEMENTS")
   elif [[ "$path" == "$APP/Contents/MacOS/local-meeting-notes-desktop" \
       || "$path" == "$APP/Contents/Resources/bin/meeting-capture" ]]; then
     sign_args+=(--entitlements "$CAPTURE_ENTITLEMENTS")
@@ -103,11 +105,9 @@ done < "$STAGE/machos"
 [[ "$count" -gt 0 ]] || die "app contains no Mach-O files"
 echo "   $count Mach-O files signed"
 
-if [[ "$ADMISSION" == "internal-alpha" ]]; then
-  echo "== refreshing runtime manifest from signed bytes"
-  "$ROOT/worker/build_manifest.py" \
-    "$APP/Contents/Resources" --admission "$ADMISSION"
-fi
+echo "== refreshing runtime manifests from signed bytes"
+"$ROOT/worker/build_manifest.py" \
+  "$APP/Contents/Resources" --admission "$ADMISSION"
 
 echo "== signing app bundle"
 codesign --force --options runtime --timestamp \

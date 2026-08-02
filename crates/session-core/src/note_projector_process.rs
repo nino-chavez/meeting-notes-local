@@ -1,0 +1,2279 @@
+//! Private, read-only `note.project` one-shot transport.
+//!
+//! This module is not registered with Tauri and the default library reader
+//! continues to use `UnavailableProjector`.
+
+#![allow(dead_code)]
+
+use std::ffi::{CString, c_void};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Read, Seek, Write};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
+use std::path::{Component, Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use core_foundation::array::{CFArray, CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
+use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
+use core_foundation::boolean::kCFBooleanTrue;
+use core_foundation::data::{CFData, CFDataRef};
+use core_foundation::dictionary::{
+    CFDictionary, CFDictionaryGetCount, CFDictionaryGetValue, CFDictionaryRef,
+};
+use core_foundation::number::{CFNumber, CFNumberRef};
+use core_foundation::string::{CFString, CFStringRef};
+use core_foundation::url::{CFURL, CFURLRef};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+
+use crate::meeting::valid_opaque_id;
+use crate::note_projection::{
+    MAX_PROJECTION_FRAME_BYTES, NoteProjector, ProjectRequest, ProjectTransportError,
+    ProjectionCancellation, StrictJson, array, exact_object, strict_json, string, u64_value,
+};
+
+const MANIFEST_FD: RawFd = 100;
+const BRIDGE_FD: RawFd = 101;
+const VALIDATOR_FD: RawFd = 102;
+const FIRST_STAGING_FD: RawFd = 103;
+const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_STDERR_BYTES: usize = 16 * 1024;
+const CLEANUP_GRACE: Duration = Duration::from_millis(750);
+const PRODUCT_RUNTIME_PATH: &str = "python-runtime/bin/python3.12";
+const PYTHON_SIGNING_IDENTIFIER_SUFFIX: &str = ".python-runtime";
+const PYTHON_ENTITLEMENT: &str = "com.apple.security.cs.allow-unsigned-executable-memory";
+const CODE_SIGNATURE_RUNTIME: u32 = 0x0001_0000;
+const CODE_DIRECTORY_SHA256: i32 = 2;
+const SECURITY_NO_NETWORK_ACCESS: u32 = 1 << 29;
+const SECURITY_MATCH_GUEST_REQUIREMENT_IN_KERNEL: u32 = 1 << 23;
+const SECURITY_CHECK_ALL_ARCHITECTURES: u32 = 1 << 0;
+const SECURITY_CHECK_NESTED_CODE: u32 = 1 << 3;
+const SECURITY_STRICT_VALIDATE: u32 = 1 << 4;
+const SECURITY_SIGNING_INFORMATION: u32 = 1 << 1;
+const SECURITY_REQUIREMENT_INFORMATION: u32 = 1 << 2;
+const SECURITY_DYNAMIC_INFORMATION: u32 = 1 << 3;
+
+const BOOTSTRAP: &str = r#"import hashlib,json,os,sys,types
+F=('schema','role','runtime','bridge','validator','generator','models')
+def _identity(s): return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_size,s.st_nlink)
+def _read(fd):
+ s=os.fstat(fd)
+ if s.st_mode&0o170000!=0o100000 or s.st_uid!=os.geteuid() or s.st_mode&0o022: raise RuntimeError('unsafe inherited resource')
+ os.lseek(fd,0,os.SEEK_SET); b=b''
+ while len(b)<s.st_size:
+  c=os.read(fd,min(1048576,s.st_size-len(b)))
+  if not c: raise RuntimeError('short inherited resource')
+  b+=c
+ if _identity(os.fstat(fd))!=_identity(s): raise RuntimeError('changed inherited resource')
+ return b
+def _pairs(p):
+ d={}
+ for k,v in p:
+  if k in d: raise RuntimeError('duplicate manifest field')
+  d[k]=v
+ return d
+def _resource(v):
+ if not isinstance(v,dict) or tuple(v)!=('relative_path','sha256'): raise RuntimeError('bad manifest resource')
+ p=v['relative_path']; h=v['sha256']
+ if not isinstance(p,str) or not p or any(c not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/' for c in p) or any(c in ('','.', '..') for c in p.split('/')): raise RuntimeError('bad resource path')
+ if not isinstance(h,str) or len(h)!=64 or any(c not in '0123456789abcdef' for c in h): raise RuntimeError('bad resource digest')
+ return v
+raw=_read(100)
+if b'\\' in raw: raise RuntimeError('manifest escape')
+d=json.loads(raw.decode('utf-8'),object_pairs_hook=_pairs)
+if not isinstance(d,dict) or tuple(d)!=F or d['schema']!='note-runtime/1' or d['role']!='project' or d['generator'] is not None or d['models']!=[]: raise RuntimeError('bad project manifest')
+for n in ('runtime','bridge','validator'): _resource(d[n])
+if json.dumps(d,ensure_ascii=False,indent=2).encode()!=raw: raise RuntimeError('noncanonical manifest')
+b=_read(101); v=_read(102)
+if hashlib.sha256(b).hexdigest()!=d['bridge']['sha256'] or hashlib.sha256(v).hexdigest()!=d['validator']['sha256']: raise RuntimeError('inherited digest mismatch')
+m=types.ModuleType('_lmn_note_bridge_fd'); m.__file__='<verified-bridge-fd>'
+sys.modules[m.__name__]=m
+exec(compile(b,'<verified-bridge-fd>','exec'),m.__dict__)
+raise SystemExit(m.main_from_fds(100,101,102,sys.argv[2],int(sys.argv[1])))
+"#;
+
+#[derive(Clone)]
+enum InterpreterAdmission {
+    DevelopmentHarness,
+    Product(Arc<dyn CodeAdmissionVerifier>),
+}
+
+#[derive(Clone, Copy)]
+struct Deadlines {
+    ready: Duration,
+    project: Duration,
+}
+
+impl Default for Deadlines {
+    fn default() -> Self {
+        Self {
+            ready: Duration::from_secs(10),
+            project: Duration::from_secs(30),
+        }
+    }
+}
+
+pub(crate) struct ProcessNoteProjector {
+    storage_root: PathBuf,
+    manifest_path: PathBuf,
+    admission: InterpreterAdmission,
+    deadlines: Deadlines,
+}
+
+impl ProcessNoteProjector {
+    #[cfg(test)]
+    fn development(storage_root: PathBuf, manifest_path: PathBuf) -> Self {
+        Self {
+            storage_root,
+            manifest_path,
+            admission: InterpreterAdmission::DevelopmentHarness,
+            deadlines: Deadlines::default(),
+        }
+    }
+
+    fn product(storage_root: PathBuf, manifest_path: PathBuf) -> Self {
+        Self {
+            storage_root,
+            manifest_path,
+            admission: InterpreterAdmission::Product(Arc::new(SecurityCodeVerifier)),
+            deadlines: Deadlines::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn product_with_verifier(
+        storage_root: PathBuf,
+        manifest_path: PathBuf,
+        verifier: Arc<dyn CodeAdmissionVerifier>,
+    ) -> Self {
+        Self {
+            storage_root,
+            manifest_path,
+            admission: InterpreterAdmission::Product(verifier),
+            deadlines: Deadlines::default(),
+        }
+    }
+
+    fn project_inner(
+        &self,
+        request: &ProjectRequest,
+        cancellation: &ProjectionCancellation,
+    ) -> Result<Vec<u8>, InternalOutcome> {
+        if cancellation.is_cancelled() {
+            return Err(InternalOutcome::Cancelled);
+        }
+        validate_storage_root(&self.storage_root)?;
+        validate_request(request)?;
+        let mut runtime = verify_manifest(&self.manifest_path)?;
+        let prepared_admission = prepare_interpreter_admission(&runtime, &self.admission)?;
+        runtime.require_unchanged()?;
+
+        let staged = stage_descriptors([
+            runtime.manifest.file.as_raw_fd(),
+            runtime.bridge.file.as_raw_fd(),
+            runtime.validator.file.as_raw_fd(),
+        ])?;
+        let inherited = [
+            (staged[0].as_raw_fd(), MANIFEST_FD),
+            (staged[1].as_raw_fd(), BRIDGE_FD),
+            (staged[2].as_raw_fd(), VALIDATOR_FD),
+        ];
+        let mut command = Command::new(&runtime.executable.path);
+        command
+            .args(["-I", "-S", "-E", "-s", "-B", "-c", BOOTSTRAP])
+            .arg(std::process::id().to_string())
+            .arg(&self.storage_root)
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                install_descriptor_mappings(inherited)
+            });
+        }
+        let mut child = command.spawn().map_err(|_| InternalOutcome::Unavailable)?;
+        let stdin = child.stdin.take().ok_or(InternalOutcome::Unavailable)?;
+        let stdout = child.stdout.take().ok_or(InternalOutcome::Unavailable)?;
+        let stderr = child.stderr.take().ok_or(InternalOutcome::Unavailable)?;
+        let stderr_monitor = StderrMonitor::start(stderr);
+        let mut guard = ChildGuard::new(child, stderr_monitor);
+        let live_code = match prepared_admission.as_deref() {
+            Some(prepared) => Some(bind_live_code(
+                prepared,
+                guard.pid(),
+                &SystemProcessStartTimeInspector,
+                &runtime.executable,
+            )?),
+            None => None,
+        };
+        runtime.require_unchanged()?;
+
+        let ready_deadline = Instant::now() + self.deadlines.ready;
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let ready_thread = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let frame = read_bounded_line(&mut reader);
+            let _ = ready_sender.send((frame, reader));
+        });
+        let (ready, reader) =
+            wait_receiver(&ready_receiver, ready_deadline, cancellation, &mut guard)?;
+        let _ = ready_thread.join();
+        parse_ready(
+            &ready.map_err(|_| InternalOutcome::Unavailable)?,
+            &runtime.manifest.digest,
+        )?;
+        runtime.require_unchanged()?;
+        if let Some(binding) = live_code.as_ref() {
+            binding.require_same_process(
+                guard.pid(),
+                &SystemProcessStartTimeInspector,
+                &runtime.executable,
+            )?;
+        }
+        guard.require_unexited()?;
+        runtime.require_unchanged()?;
+        if let Some(binding) = live_code.as_ref() {
+            binding.require_same_process(
+                guard.pid(),
+                &SystemProcessStartTimeInspector,
+                &runtime.executable,
+            )?;
+        }
+
+        let mut stdin = stdin;
+        stdin
+            .write_all(&project_command(request)?)
+            .map_err(|_| InternalOutcome::Unavailable)?;
+        drop(stdin);
+
+        let result_deadline = Instant::now() + self.deadlines.project;
+        let (result_sender, result_receiver) = mpsc::sync_channel(1);
+        let result_thread = std::thread::spawn(move || {
+            let _ = result_sender.send(read_to_exact_eof(reader));
+        });
+        let result = wait_receiver(&result_receiver, result_deadline, cancellation, &mut guard)?;
+        let _ = result_thread.join();
+        let result = result.map_err(|_| InternalOutcome::Unavailable)?;
+        runtime.require_unchanged()?;
+        if !guard.finish_success(result_deadline, cancellation)? {
+            return Err(InternalOutcome::Unavailable);
+        }
+        Ok(result)
+    }
+}
+
+fn stage_descriptors(sources: [RawFd; 3]) -> Result<[File; 3], InternalOutcome> {
+    let mut staged = Vec::with_capacity(sources.len());
+    let mut minimum = FIRST_STAGING_FD;
+    for source in sources {
+        let descriptor = unsafe { libc::fcntl(source, libc::F_DUPFD_CLOEXEC, minimum) };
+        if descriptor < 0 {
+            return Err(InternalOutcome::Unavailable);
+        }
+        minimum = descriptor
+            .checked_add(1)
+            .ok_or(InternalOutcome::Unavailable)?;
+        staged.push(unsafe { File::from_raw_fd(descriptor) });
+    }
+    staged.try_into().map_err(|_| InternalOutcome::Unavailable)
+}
+
+fn install_descriptor_mappings(inherited: [(RawFd, RawFd); 3]) -> io::Result<()> {
+    for (source, target) in inherited {
+        debug_assert!(source >= FIRST_STAGING_FD);
+        if unsafe { libc::dup2(source, target) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        let flags = unsafe { libc::fcntl(target, libc::F_GETFD) };
+        if flags == -1
+            || unsafe { libc::fcntl(target, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+impl NoteProjector for ProcessNoteProjector {
+    fn project(&self, request: &ProjectRequest) -> Result<Vec<u8>, ProjectTransportError> {
+        self.project_with_cancellation(request, &ProjectionCancellation::default())
+    }
+
+    fn project_with_cancellation(
+        &self,
+        request: &ProjectRequest,
+        cancellation: &ProjectionCancellation,
+    ) -> Result<Vec<u8>, ProjectTransportError> {
+        self.project_inner(request, cancellation)
+            .map_err(Into::into)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InternalOutcome {
+    Unavailable,
+    Cancelled,
+}
+
+impl From<InternalOutcome> for ProjectTransportError {
+    fn from(value: InternalOutcome) -> Self {
+        match value {
+            InternalOutcome::Unavailable => Self::Unavailable,
+            InternalOutcome::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+impl From<()> for InternalOutcome {
+    fn from(_: ()) -> Self {
+        Self::Unavailable
+    }
+}
+
+struct RuntimeManifestResource {
+    relative_path: String,
+    sha256: String,
+}
+
+struct VerifiedRuntime {
+    manifest: PinnedResource,
+    executable: PinnedResource,
+    bridge: PinnedResource,
+    validator: PinnedResource,
+}
+
+impl VerifiedRuntime {
+    fn require_unchanged(&mut self) -> Result<(), InternalOutcome> {
+        self.manifest.require_unchanged()?;
+        self.executable.require_unchanged()?;
+        self.bridge.require_unchanged()?;
+        self.validator.require_unchanged()?;
+        Ok(())
+    }
+}
+
+struct PinnedResource {
+    file: File,
+    path: PathBuf,
+    identity: FileIdentity,
+    digest: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    owner: u32,
+    size: u64,
+}
+
+impl FileIdentity {
+    fn from_file(file: &File) -> Result<Self, InternalOutcome> {
+        let metadata = file.metadata().map_err(|_| InternalOutcome::Unavailable)?;
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(InternalOutcome::Unavailable);
+        }
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            owner: metadata.uid(),
+            size: metadata.len(),
+        })
+    }
+
+    fn matches(self, file: &File) -> bool {
+        file.metadata().is_ok_and(|metadata| {
+            metadata.is_file()
+                && self.device == metadata.dev()
+                && self.inode == metadata.ino()
+                && self.mode == metadata.mode()
+                && self.owner == metadata.uid()
+                && self.size == metadata.len()
+        })
+    }
+}
+
+impl PinnedResource {
+    fn open(
+        root: &File,
+        root_path: &Path,
+        resource: &RuntimeManifestResource,
+    ) -> Result<Self, InternalOutcome> {
+        let file = open_relative(root, &resource.relative_path, false)?;
+        let identity = FileIdentity::from_file(&file)?;
+        let digest = digest_file(&file, identity)?;
+        if digest != resource.sha256 {
+            return Err(InternalOutcome::Unavailable);
+        }
+        Ok(Self {
+            file,
+            path: root_path.join(&resource.relative_path),
+            identity,
+            digest,
+        })
+    }
+
+    fn require_unchanged(&mut self) -> Result<(), InternalOutcome> {
+        if !self.identity.matches(&self.file)
+            || digest_file(&self.file, self.identity)? != self.digest
+        {
+            return Err(InternalOutcome::Unavailable);
+        }
+        Ok(())
+    }
+}
+
+fn verify_manifest(path: &Path) -> Result<VerifiedRuntime, InternalOutcome> {
+    if !path.is_absolute() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let root_path = path.parent().ok_or(InternalOutcome::Unavailable)?;
+    let root = open_absolute_directory(root_path)?;
+    let manifest_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(InternalOutcome::Unavailable)?;
+    let manifest_resource = RuntimeManifestResource {
+        relative_path: manifest_name.to_owned(),
+        sha256: String::new(),
+    };
+    let manifest_file = open_relative(&root, manifest_name, false)?;
+    let manifest_identity = FileIdentity::from_file(&manifest_file)?;
+    if manifest_identity.size > MAX_MANIFEST_BYTES {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let manifest_bytes = read_file(&manifest_file, manifest_identity)?;
+    let manifest_digest = format!("{:x}", Sha256::digest(&manifest_bytes));
+    let manifest = PinnedResource {
+        file: manifest_file,
+        path: root_path.join(&manifest_resource.relative_path),
+        identity: manifest_identity,
+        digest: manifest_digest,
+    };
+    if manifest_bytes.contains(&b'\\') {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let document = strict_json(&manifest_bytes).map_err(|_| InternalOutcome::Unavailable)?;
+    let fields = exact_object(
+        &document,
+        [
+            "schema",
+            "role",
+            "runtime",
+            "bridge",
+            "validator",
+            "generator",
+            "models",
+        ],
+    )
+    .map_err(|_| InternalOutcome::Unavailable)?;
+    if string(fields[0]).map_err(|_| InternalOutcome::Unavailable)? != "note-runtime/1"
+        || string(fields[1]).map_err(|_| InternalOutcome::Unavailable)? != "project"
+        || !matches!(fields[5], StrictJson::Null)
+        || !array(fields[6])
+            .map_err(|_| InternalOutcome::Unavailable)?
+            .is_empty()
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let executable = parse_resource(fields[2])?;
+    let bridge = parse_resource(fields[3])?;
+    let validator = parse_resource(fields[4])?;
+    if canonical_manifest(&executable, &bridge, &validator).as_bytes() != manifest_bytes {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(VerifiedRuntime {
+        manifest,
+        executable: PinnedResource::open(&root, root_path, &executable)?,
+        bridge: PinnedResource::open(&root, root_path, &bridge)?,
+        validator: PinnedResource::open(&root, root_path, &validator)?,
+    })
+}
+
+fn parse_resource(value: &StrictJson) -> Result<RuntimeManifestResource, InternalOutcome> {
+    let fields = exact_object(value, ["relative_path", "sha256"])
+        .map_err(|_| InternalOutcome::Unavailable)?;
+    let relative_path = string(fields[0])
+        .map_err(|_| InternalOutcome::Unavailable)?
+        .to_owned();
+    let sha256 = string(fields[1])
+        .map_err(|_| InternalOutcome::Unavailable)?
+        .to_owned();
+    if !valid_relative_path(&relative_path) || !valid_digest(&sha256) {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(RuntimeManifestResource {
+        relative_path,
+        sha256,
+    })
+}
+
+fn canonical_manifest(
+    runtime: &RuntimeManifestResource,
+    bridge: &RuntimeManifestResource,
+    validator: &RuntimeManifestResource,
+) -> String {
+    format!(
+        "{{\n  \"schema\": \"note-runtime/1\",\n  \"role\": \"project\",\n  \"runtime\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"bridge\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"validator\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"generator\": null,\n  \"models\": []\n}}",
+        runtime.relative_path,
+        runtime.sha256,
+        bridge.relative_path,
+        bridge.sha256,
+        validator.relative_path,
+        validator.sha256,
+    )
+}
+
+fn open_absolute_directory(path: &Path) -> Result<File, InternalOutcome> {
+    let name =
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| InternalOutcome::Unavailable)?;
+    let descriptor = unsafe {
+        libc::open(
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW_ANY,
+        )
+    };
+    if descriptor < 0 {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let metadata = file.metadata().map_err(|_| InternalOutcome::Unavailable)?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(file)
+}
+
+fn open_relative(root: &File, relative: &str, directory: bool) -> Result<File, InternalOutcome> {
+    if !valid_relative_path(relative) {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let name = CString::new(relative).map_err(|_| InternalOutcome::Unavailable)?;
+    let descriptor = unsafe {
+        libc::openat(
+            root.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY
+                | libc::O_CLOEXEC
+                | libc::O_NOFOLLOW_ANY
+                | if directory { libc::O_DIRECTORY } else { 0 },
+        )
+    };
+    if descriptor < 0 {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn read_file(file: &File, identity: FileIdentity) -> Result<Vec<u8>, InternalOutcome> {
+    let mut clone = file.try_clone().map_err(|_| InternalOutcome::Unavailable)?;
+    clone.rewind().map_err(|_| InternalOutcome::Unavailable)?;
+    let mut bytes = Vec::with_capacity(
+        identity
+            .size
+            .try_into()
+            .map_err(|_| InternalOutcome::Unavailable)?,
+    );
+    clone
+        .take(identity.size + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| InternalOutcome::Unavailable)?;
+    if bytes.len() as u64 != identity.size || !identity.matches(file) {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(bytes)
+}
+
+fn digest_file(file: &File, identity: FileIdentity) -> Result<String, InternalOutcome> {
+    Ok(format!("{:x}", Sha256::digest(read_file(file, identity)?)))
+}
+
+trait RetainedLiveCode {
+    fn require_same_executable(&self, executable: &PinnedResource) -> Result<(), InternalOutcome>;
+}
+
+trait PreparedCodeAdmission {
+    fn bind_live(
+        &self,
+        pid: u32,
+        executable: &PinnedResource,
+    ) -> Result<Box<dyn RetainedLiveCode>, InternalOutcome>;
+}
+
+trait CodeAdmissionVerifier: Send + Sync {
+    fn prepare(
+        &self,
+        runtime: &VerifiedRuntime,
+    ) -> Result<Box<dyn PreparedCodeAdmission>, InternalOutcome>;
+}
+
+fn prepare_interpreter_admission(
+    runtime: &VerifiedRuntime,
+    admission: &InterpreterAdmission,
+) -> Result<Option<Box<dyn PreparedCodeAdmission>>, InternalOutcome> {
+    match admission {
+        InterpreterAdmission::DevelopmentHarness => Ok(None),
+        InterpreterAdmission::Product(verifier) => verifier.prepare(runtime).map(Some),
+    }
+}
+
+fn resources_are_inside<'a>(
+    root: &Path,
+    resources: impl IntoIterator<Item = &'a PinnedResource>,
+) -> bool {
+    resources
+        .into_iter()
+        .all(|resource| resource.path.strip_prefix(root).is_ok())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessStartTime {
+    epoch_seconds: u64,
+    microseconds: u64,
+    absolute_time: u64,
+}
+
+impl ProcessStartTime {
+    fn is_valid(self) -> bool {
+        self.epoch_seconds > 0 && self.microseconds < 1_000_000 && self.absolute_time > 0
+    }
+}
+
+trait ProcessStartTimeInspector {
+    fn start_time(&self, pid: u32) -> io::Result<Option<ProcessStartTime>>;
+}
+
+struct SystemProcessStartTimeInspector;
+
+impl ProcessStartTimeInspector for SystemProcessStartTimeInspector {
+    fn start_time(&self, pid: u32) -> io::Result<Option<ProcessStartTime>> {
+        let pid = i32::try_from(pid).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process identifier exceeds the platform range",
+            )
+        })?;
+        if pid <= 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process identifier must be positive",
+            ));
+        }
+        let first = read_bsd_start_time(pid)?;
+        let Some((epoch_seconds, microseconds)) = first else {
+            return Ok(None);
+        };
+        let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v0>::zeroed();
+        let usage_status = unsafe {
+            libc::proc_pid_rusage(
+                pid,
+                libc::RUSAGE_INFO_V0,
+                usage.as_mut_ptr().cast::<libc::rusage_info_t>(),
+            )
+        };
+        if usage_status != 0 {
+            return Ok(None);
+        }
+        let usage = unsafe { usage.assume_init() };
+        if read_bsd_start_time(pid)? != first {
+            return Ok(None);
+        }
+        Ok(Some(ProcessStartTime {
+            epoch_seconds,
+            microseconds,
+            absolute_time: usage.ri_proc_start_abstime,
+        }))
+    }
+}
+
+fn read_bsd_start_time(pid: i32) -> io::Result<Option<(u64, u64)>> {
+    let mut information = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = i32::try_from(std::mem::size_of::<libc::proc_bsdinfo>())
+        .map_err(|_| io::Error::other("process start-time record is too large"))?;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            information.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if read == 0 {
+        return Ok(None);
+    }
+    if read != size {
+        return Err(io::Error::other("partial process start-time record"));
+    }
+    let information = unsafe { information.assume_init() };
+    if information.pbi_pid != pid as u32 {
+        return Err(io::Error::other("process start-time record changed PID"));
+    }
+    Ok(Some((
+        information.pbi_start_tvsec,
+        information.pbi_start_tvusec,
+    )))
+}
+
+fn observed_start_time(
+    inspector: &dyn ProcessStartTimeInspector,
+    pid: u32,
+) -> Result<ProcessStartTime, InternalOutcome> {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match inspector
+            .start_time(pid)
+            .map_err(|_| InternalOutcome::Unavailable)?
+        {
+            Some(start_time) if start_time.is_valid() => return Ok(start_time),
+            Some(_) | None => {
+                if Instant::now() >= deadline {
+                    return Err(InternalOutcome::Unavailable);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+struct BoundLiveCode {
+    _code: Box<dyn RetainedLiveCode>,
+    start_time: ProcessStartTime,
+}
+
+impl BoundLiveCode {
+    fn require_same_process(
+        &self,
+        pid: u32,
+        inspector: &dyn ProcessStartTimeInspector,
+        executable: &PinnedResource,
+    ) -> Result<(), InternalOutcome> {
+        if observed_start_time(inspector, pid)? != self.start_time {
+            return Err(InternalOutcome::Unavailable);
+        }
+        self._code.require_same_executable(executable)?;
+        if observed_start_time(inspector, pid)? != self.start_time {
+            return Err(InternalOutcome::Unavailable);
+        }
+        Ok(())
+    }
+}
+
+fn bind_live_code(
+    admission: &dyn PreparedCodeAdmission,
+    pid: u32,
+    inspector: &dyn ProcessStartTimeInspector,
+    executable: &PinnedResource,
+) -> Result<BoundLiveCode, InternalOutcome> {
+    let before = observed_start_time(inspector, pid)?;
+    let code = admission.bind_live(pid, executable)?;
+    let after = observed_start_time(inspector, pid)?;
+    if before != after {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(BoundLiveCode {
+        _code: code,
+        start_time: after,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CodeIdentity {
+    path: PathBuf,
+    main_executable: PathBuf,
+    designated_requirement: Vec<u8>,
+    sha256_code_directory_identity: [u8; 20],
+    team_identifier: String,
+    signing_identifier: String,
+    signature_flags: u32,
+    python_entitlements_exact: bool,
+}
+
+struct OuterCodeIdentity {
+    bundle_path: PathBuf,
+    main_executable: PathBuf,
+    team_identifier: String,
+    signing_identifier: String,
+}
+
+fn hardened_runtime(identity: &CodeIdentity) -> bool {
+    identity.signature_flags & CODE_SIGNATURE_RUNTIME == CODE_SIGNATURE_RUNTIME
+}
+
+fn verify_outer_identity_pair(
+    static_identity: &CodeIdentity,
+    live_identity: &CodeIdentity,
+) -> Result<OuterCodeIdentity, InternalOutcome> {
+    if static_identity != live_identity
+        || !hardened_runtime(static_identity)
+        || static_identity.team_identifier.is_empty()
+        || static_identity.signing_identifier.is_empty()
+        || static_identity
+            .path
+            .extension()
+            .and_then(|value| value.to_str())
+            != Some("app")
+        || static_identity
+            .main_executable
+            .strip_prefix(&static_identity.path)
+            .is_err()
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let current_executable = std::env::current_exe().map_err(|_| InternalOutcome::Unavailable)?;
+    if current_executable != static_identity.main_executable
+        || !same_regular_file(&current_executable, &static_identity.main_executable)?
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(OuterCodeIdentity {
+        bundle_path: static_identity.path.clone(),
+        main_executable: static_identity.main_executable.clone(),
+        team_identifier: static_identity.team_identifier.clone(),
+        signing_identifier: static_identity.signing_identifier.clone(),
+    })
+}
+
+fn verify_runtime_static_identity(
+    identity: &CodeIdentity,
+    expected_path: &Path,
+    outer: &OuterCodeIdentity,
+) -> Result<(), InternalOutcome> {
+    let expected_identifier = format!(
+        "{}{}",
+        outer.signing_identifier, PYTHON_SIGNING_IDENTIFIER_SUFFIX
+    );
+    if identity.path != expected_path
+        || identity.main_executable != expected_path
+        || identity.team_identifier != outer.team_identifier
+        || identity.signing_identifier != expected_identifier
+        || !hardened_runtime(identity)
+        || !identity.python_entitlements_exact
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(())
+}
+
+fn verify_runtime_identity_pair(
+    static_identity: &CodeIdentity,
+    live_identity: &CodeIdentity,
+    expected_path: &Path,
+    outer: &OuterCodeIdentity,
+) -> Result<(), InternalOutcome> {
+    verify_runtime_static_identity(static_identity, expected_path, outer)?;
+    if live_identity != static_identity {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(())
+}
+
+fn verify_live_executable_file(
+    main_executable: &Path,
+    executable: &PinnedResource,
+) -> Result<(), InternalOutcome> {
+    let file = open_absolute_file(main_executable)?;
+    let file_identity = FileIdentity::from_file(&file)?;
+    let digest = digest_file(&file, file_identity)?;
+    if file_identity != executable.identity || digest != executable.digest {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(())
+}
+
+fn same_regular_file(left: &Path, right: &Path) -> Result<bool, InternalOutcome> {
+    let left = open_absolute_file(left)?;
+    let right = open_absolute_file(right)?;
+    Ok(FileIdentity::from_file(&left)? == FileIdentity::from_file(&right)?)
+}
+
+struct SecurityCodeVerifier;
+
+impl CodeAdmissionVerifier for SecurityCodeVerifier {
+    fn prepare(
+        &self,
+        runtime: &VerifiedRuntime,
+    ) -> Result<Box<dyn PreparedCodeAdmission>, InternalOutcome> {
+        let outer = verified_running_outer_code()?;
+        let resources = outer.bundle_path.join("Contents/Resources");
+        let expected_path = resources.join(PRODUCT_RUNTIME_PATH);
+        if runtime.executable.path != expected_path
+            || !resources_are_inside(
+                &resources,
+                [&runtime.manifest, &runtime.bridge, &runtime.validator],
+            )
+        {
+            return Err(InternalOutcome::Unavailable);
+        }
+
+        let url = CFURL::from_path(&expected_path, false).ok_or(InternalOutcome::Unavailable)?;
+        let static_code = security_static_code(&url)?;
+        security_static_check(
+            static_code.as_ref(),
+            SECURITY_CHECK_ALL_ARCHITECTURES
+                | SECURITY_STRICT_VALIDATE
+                | SECURITY_NO_NETWORK_ACCESS,
+            None,
+        )?;
+        let static_identity = security_code_identity(static_code.as_ref(), true, false)?;
+        verify_runtime_static_identity(&static_identity, &expected_path, &outer)?;
+        let requirement = security_designated_requirement(static_code.as_ref())?;
+        Ok(Box::new(SecurityPreparedAdmission {
+            static_code,
+            requirement,
+            static_identity,
+            expected_path,
+            outer,
+        }))
+    }
+}
+
+struct SecurityPreparedAdmission {
+    static_code: OwnedSecurityRef,
+    requirement: OwnedSecurityRef,
+    static_identity: CodeIdentity,
+    expected_path: PathBuf,
+    outer: OuterCodeIdentity,
+}
+
+impl PreparedCodeAdmission for SecurityPreparedAdmission {
+    fn bind_live(
+        &self,
+        pid: u32,
+        executable: &PinnedResource,
+    ) -> Result<Box<dyn RetainedLiveCode>, InternalOutcome> {
+        let live_code = security_live_code(pid)?;
+        security_dynamic_check(
+            live_code.as_ref(),
+            SECURITY_NO_NETWORK_ACCESS | SECURITY_MATCH_GUEST_REQUIREMENT_IN_KERNEL,
+            Some(self.requirement.as_ref()),
+        )?;
+        let live_identity = security_code_identity(live_code.as_ref(), true, true)?;
+        verify_runtime_identity_pair(
+            &self.static_identity,
+            &live_identity,
+            &self.expected_path,
+            &self.outer,
+        )?;
+        verify_live_executable_file(&live_identity.main_executable, executable)?;
+        // Keep both the static object and the live object retained across the
+        // command. A transient path replacement restored between the bracketed
+        // checks still requires an active same-account attacker, which the
+        // frozen boundary explicitly excludes.
+        let _ = self.static_code.as_ref();
+        Ok(Box::new(SecurityLiveCode {
+            code: live_code,
+            main_executable: live_identity.main_executable,
+        }))
+    }
+}
+
+struct SecurityLiveCode {
+    code: OwnedSecurityRef,
+    main_executable: PathBuf,
+}
+
+impl RetainedLiveCode for SecurityLiveCode {
+    fn require_same_executable(&self, executable: &PinnedResource) -> Result<(), InternalOutcome> {
+        verify_live_executable_file(&self.main_executable, executable)
+    }
+}
+
+impl Drop for SecurityLiveCode {
+    fn drop(&mut self) {
+        let _ = self.code.as_ref();
+    }
+}
+
+struct OwnedSecurityRef(CFTypeRef);
+
+impl OwnedSecurityRef {
+    fn new(value: CFTypeRef) -> Result<Self, InternalOutcome> {
+        if value.is_null() {
+            return Err(InternalOutcome::Unavailable);
+        }
+        Ok(Self(value))
+    }
+
+    fn as_ref(&self) -> CFTypeRef {
+        self.0
+    }
+}
+
+impl Drop for OwnedSecurityRef {
+    fn drop(&mut self) {
+        unsafe { CFRelease(self.0) };
+    }
+}
+
+fn security_status(status: i32) -> Result<(), InternalOutcome> {
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(InternalOutcome::Unavailable)
+    }
+}
+
+fn verified_running_outer_code() -> Result<OuterCodeIdentity, InternalOutcome> {
+    let live = security_self_code()?;
+    security_dynamic_check(live.as_ref(), SECURITY_NO_NETWORK_ACCESS, None)?;
+    let static_code = security_copy_static_code(live.as_ref())?;
+    security_static_check(
+        static_code.as_ref(),
+        SECURITY_CHECK_ALL_ARCHITECTURES
+            | SECURITY_CHECK_NESTED_CODE
+            | SECURITY_STRICT_VALIDATE
+            | SECURITY_NO_NETWORK_ACCESS,
+        None,
+    )?;
+    let static_identity = security_code_identity(static_code.as_ref(), false, false)?;
+    let live_identity = security_code_identity(live.as_ref(), false, true)?;
+    verify_outer_identity_pair(&static_identity, &live_identity)
+}
+
+fn security_self_code() -> Result<OwnedSecurityRef, InternalOutcome> {
+    let mut code = std::ptr::null();
+    security_status(unsafe { SecCodeCopySelf(0, &mut code) })?;
+    OwnedSecurityRef::new(code)
+}
+
+fn security_copy_static_code(code: CFTypeRef) -> Result<OwnedSecurityRef, InternalOutcome> {
+    let mut static_code = std::ptr::null();
+    security_status(unsafe { SecCodeCopyStaticCode(code, 0, &mut static_code) })?;
+    OwnedSecurityRef::new(static_code)
+}
+
+fn security_static_code(url: &CFURL) -> Result<OwnedSecurityRef, InternalOutcome> {
+    let mut code = std::ptr::null();
+    security_status(unsafe {
+        SecStaticCodeCreateWithPath(url.as_concrete_TypeRef(), 0, &mut code)
+    })?;
+    OwnedSecurityRef::new(code)
+}
+
+fn security_static_check(
+    code: CFTypeRef,
+    flags: u32,
+    requirement: Option<CFTypeRef>,
+) -> Result<(), InternalOutcome> {
+    security_status(unsafe {
+        SecStaticCodeCheckValidity(code, flags, requirement.unwrap_or(std::ptr::null()))
+    })
+}
+
+fn security_dynamic_check(
+    code: CFTypeRef,
+    flags: u32,
+    requirement: Option<CFTypeRef>,
+) -> Result<(), InternalOutcome> {
+    security_status(unsafe {
+        SecCodeCheckValidity(code, flags, requirement.unwrap_or(std::ptr::null()))
+    })
+}
+
+fn security_live_code(pid: u32) -> Result<OwnedSecurityRef, InternalOutcome> {
+    let pid = i32::try_from(pid).map_err(|_| InternalOutcome::Unavailable)?;
+    let pid_number = CFNumber::from(pid);
+    let pid_key = unsafe { CFString::wrap_under_get_rule(kSecGuestAttributePid) };
+    let attributes = CFDictionary::from_CFType_pairs(&[(pid_key, pid_number)]);
+    let mut code = std::ptr::null();
+    security_status(unsafe {
+        SecCodeCopyGuestWithAttributes(
+            std::ptr::null(),
+            attributes.as_concrete_TypeRef(),
+            0,
+            &mut code,
+        )
+    })?;
+    OwnedSecurityRef::new(code)
+}
+
+fn security_designated_requirement(code: CFTypeRef) -> Result<OwnedSecurityRef, InternalOutcome> {
+    let mut requirement = std::ptr::null();
+    security_status(unsafe { SecCodeCopyDesignatedRequirement(code, 0, &mut requirement) })?;
+    OwnedSecurityRef::new(requirement)
+}
+
+fn security_code_path(code: CFTypeRef) -> Result<PathBuf, InternalOutcome> {
+    let mut url = std::ptr::null();
+    security_status(unsafe { SecCodeCopyPath(code, 0, &mut url) })?;
+    let url = unsafe { CFURL::wrap_under_create_rule(url) };
+    url.to_path().ok_or(InternalOutcome::Unavailable)
+}
+
+fn security_signing_information(
+    code: CFTypeRef,
+    dynamic: bool,
+) -> Result<CFDictionary<*const c_void, *const c_void>, InternalOutcome> {
+    let mut information = std::ptr::null();
+    let flags = SECURITY_SIGNING_INFORMATION
+        | SECURITY_REQUIREMENT_INFORMATION
+        | if dynamic {
+            SECURITY_DYNAMIC_INFORMATION
+        } else {
+            0
+        };
+    security_status(unsafe { SecCodeCopySigningInformation(code, flags, &mut information) })?;
+    if information.is_null() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(unsafe { CFDictionary::wrap_under_create_rule(information) })
+}
+
+fn dictionary_value(dictionary: CFDictionaryRef, key: CFStringRef) -> Option<CFTypeRef> {
+    let value = unsafe { CFDictionaryGetValue(dictionary, key.cast()) };
+    (!value.is_null()).then_some(value.cast())
+}
+
+fn dictionary_string(
+    dictionary: CFDictionaryRef,
+    key: CFStringRef,
+) -> Result<String, InternalOutcome> {
+    let value = dictionary_value(dictionary, key).ok_or(InternalOutcome::Unavailable)?;
+    if unsafe { core_foundation::base::CFGetTypeID(value) } != CFString::type_id() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let string = unsafe { CFString::wrap_under_get_rule(value.cast()) };
+    let value = string.to_string();
+    if value.is_empty() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(value)
+}
+
+fn dictionary_number(
+    dictionary: CFDictionaryRef,
+    key: CFStringRef,
+) -> Result<i64, InternalOutcome> {
+    let value = dictionary_value(dictionary, key).ok_or(InternalOutcome::Unavailable)?;
+    if unsafe { core_foundation::base::CFGetTypeID(value) } != CFNumber::type_id() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    unsafe { CFNumber::wrap_under_get_rule(value.cast::<c_void>() as CFNumberRef) }
+        .to_i64()
+        .ok_or(InternalOutcome::Unavailable)
+}
+
+/// Select the public CDHash whose CodeDirectory algorithm is SHA-256.
+/// Security.framework intentionally exposes this identity as a 20-byte CDHash;
+/// the private `cdhashes-full` dictionary is not part of the product boundary.
+fn sha256_code_directory_identity(
+    dictionary: CFDictionaryRef,
+) -> Result<[u8; 20], InternalOutcome> {
+    let algorithms = dictionary_value(dictionary, unsafe { kSecCodeInfoDigestAlgorithms })
+        .ok_or(InternalOutcome::Unavailable)?;
+    let hashes = dictionary_value(dictionary, unsafe { kSecCodeInfoCdHashes })
+        .ok_or(InternalOutcome::Unavailable)?;
+    if unsafe { core_foundation::base::CFGetTypeID(algorithms) }
+        != CFArray::<*const c_void>::type_id()
+        || unsafe { core_foundation::base::CFGetTypeID(hashes) }
+            != CFArray::<*const c_void>::type_id()
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let algorithms = algorithms.cast::<c_void>() as CFArrayRef;
+    let hashes = hashes.cast::<c_void>() as CFArrayRef;
+    let count = unsafe { CFArrayGetCount(algorithms) };
+    if count <= 0 || unsafe { CFArrayGetCount(hashes) } != count {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let mut selected = None;
+    for index in 0..count {
+        let algorithm: CFTypeRef = unsafe { CFArrayGetValueAtIndex(algorithms, index) }.cast();
+        if algorithm.is_null()
+            || unsafe { core_foundation::base::CFGetTypeID(algorithm) } != CFNumber::type_id()
+        {
+            return Err(InternalOutcome::Unavailable);
+        }
+        let algorithm =
+            unsafe { CFNumber::wrap_under_get_rule(algorithm.cast::<c_void>() as CFNumberRef) }
+                .to_i64()
+                .ok_or(InternalOutcome::Unavailable)?;
+        let hash: CFTypeRef = unsafe { CFArrayGetValueAtIndex(hashes, index) }.cast();
+        if hash.is_null()
+            || unsafe { core_foundation::base::CFGetTypeID(hash) } != CFData::type_id()
+        {
+            return Err(InternalOutcome::Unavailable);
+        }
+        if algorithm == i64::from(CODE_DIRECTORY_SHA256) {
+            let hash = unsafe { CFData::wrap_under_get_rule(hash.cast::<c_void>() as CFDataRef) };
+            let hash: [u8; 20] = hash
+                .bytes()
+                .try_into()
+                .map_err(|_| InternalOutcome::Unavailable)?;
+            if selected.replace(hash).is_some() {
+                return Err(InternalOutcome::Unavailable);
+            }
+        }
+    }
+    selected.ok_or(InternalOutcome::Unavailable)
+}
+
+fn dictionary_url_path(
+    dictionary: CFDictionaryRef,
+    key: CFStringRef,
+) -> Result<PathBuf, InternalOutcome> {
+    let value = dictionary_value(dictionary, key).ok_or(InternalOutcome::Unavailable)?;
+    if unsafe { core_foundation::base::CFGetTypeID(value) } != CFURL::type_id() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    unsafe { CFURL::wrap_under_get_rule(value.cast::<c_void>() as CFURLRef) }
+        .to_path()
+        .ok_or(InternalOutcome::Unavailable)
+}
+
+fn exact_python_entitlements(dictionary: CFDictionaryRef) -> Result<bool, InternalOutcome> {
+    let entitlements = dictionary_value(dictionary, unsafe { kSecCodeInfoEntitlementsDict })
+        .ok_or(InternalOutcome::Unavailable)?;
+    if unsafe { core_foundation::base::CFGetTypeID(entitlements) }
+        != CFDictionary::<*const c_void, *const c_void>::type_id()
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let entitlements = entitlements.cast::<c_void>() as CFDictionaryRef;
+    if unsafe { CFDictionaryGetCount(entitlements) } != 1 {
+        return Ok(false);
+    }
+    let key = CFString::new(PYTHON_ENTITLEMENT);
+    let value = dictionary_value(entitlements, key.as_concrete_TypeRef());
+    Ok(value == Some(unsafe { kCFBooleanTrue }.cast()))
+}
+
+fn requirement_bytes(requirement: CFTypeRef) -> Result<Vec<u8>, InternalOutcome> {
+    let mut data = std::ptr::null();
+    security_status(unsafe { SecRequirementCopyData(requirement, 0, &mut data) })?;
+    if data.is_null() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(unsafe { CFData::wrap_under_create_rule(data) }
+        .bytes()
+        .to_vec())
+}
+
+fn security_code_identity(
+    code: CFTypeRef,
+    require_python_entitlements: bool,
+    dynamic: bool,
+) -> Result<CodeIdentity, InternalOutcome> {
+    let information = security_signing_information(code, dynamic)?;
+    let dictionary = information.as_concrete_TypeRef();
+    let sha256_code_directory_identity = sha256_code_directory_identity(dictionary)?;
+    let requirement = security_designated_requirement(code)?;
+    let signature_flags =
+        u32::try_from(dictionary_number(dictionary, unsafe { kSecCodeInfoFlags })?)
+            .map_err(|_| InternalOutcome::Unavailable)?;
+    let python_entitlements_exact = if require_python_entitlements {
+        exact_python_entitlements(dictionary)?
+    } else {
+        false
+    };
+    Ok(CodeIdentity {
+        path: security_code_path(code)?,
+        main_executable: dictionary_url_path(dictionary, unsafe { kSecCodeInfoMainExecutable })?,
+        designated_requirement: requirement_bytes(requirement.as_ref())?,
+        sha256_code_directory_identity,
+        team_identifier: dictionary_string(dictionary, unsafe { kSecCodeInfoTeamIdentifier })?,
+        signing_identifier: dictionary_string(dictionary, unsafe { kSecCodeInfoIdentifier })?,
+        signature_flags,
+        python_entitlements_exact,
+    })
+}
+
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {
+    static kSecGuestAttributePid: CFStringRef;
+    static kSecCodeInfoCdHashes: CFStringRef;
+    static kSecCodeInfoDigestAlgorithms: CFStringRef;
+    static kSecCodeInfoEntitlementsDict: CFStringRef;
+    static kSecCodeInfoFlags: CFStringRef;
+    static kSecCodeInfoIdentifier: CFStringRef;
+    static kSecCodeInfoMainExecutable: CFStringRef;
+    static kSecCodeInfoTeamIdentifier: CFStringRef;
+
+    fn SecCodeCopySelf(flags: u32, code: *mut CFTypeRef) -> i32;
+    fn SecCodeCopyStaticCode(code: CFTypeRef, flags: u32, static_code: *mut CFTypeRef) -> i32;
+    fn SecCodeCopyGuestWithAttributes(
+        host: CFTypeRef,
+        attributes: CFDictionaryRef,
+        flags: u32,
+        code: *mut CFTypeRef,
+    ) -> i32;
+    fn SecCodeCheckValidity(code: CFTypeRef, flags: u32, requirement: CFTypeRef) -> i32;
+    fn SecCodeCopyPath(code: CFTypeRef, flags: u32, path: *mut CFURLRef) -> i32;
+    fn SecCodeCopyDesignatedRequirement(
+        code: CFTypeRef,
+        flags: u32,
+        requirement: *mut CFTypeRef,
+    ) -> i32;
+    fn SecCodeCopySigningInformation(
+        code: CFTypeRef,
+        flags: u32,
+        information: *mut CFDictionaryRef,
+    ) -> i32;
+    fn SecStaticCodeCreateWithPath(path: CFURLRef, flags: u32, static_code: *mut CFTypeRef) -> i32;
+    fn SecStaticCodeCheckValidity(code: CFTypeRef, flags: u32, requirement: CFTypeRef) -> i32;
+    fn SecRequirementCopyData(requirement: CFTypeRef, flags: u32, data: *mut CFDataRef) -> i32;
+}
+
+fn open_absolute_file(path: &Path) -> Result<File, InternalOutcome> {
+    let name =
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| InternalOutcome::Unavailable)?;
+    let descriptor = unsafe {
+        libc::open(
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW_ANY,
+        )
+    };
+    if descriptor < 0 {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn validate_storage_root(path: &Path) -> Result<(), InternalOutcome> {
+    if !path.is_absolute() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let directory = open_absolute_directory(path)?;
+    let metadata = directory
+        .metadata()
+        .map_err(|_| InternalOutcome::Unavailable)?;
+    if metadata.mode() & 0o777 != 0o700 {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(())
+}
+
+fn validate_request(request: &ProjectRequest) -> Result<(), InternalOutcome> {
+    if !valid_opaque_id(&request.meeting_id)
+        || !valid_digest(&request.note_json_sha256)
+        || !valid_digest(&request.note_markdown_sha256)
+        || !valid_digest(&request.transcript_sha256)
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(())
+}
+
+fn valid_relative_path(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[derive(Serialize)]
+struct ProjectCommand<'a> {
+    schema: &'static str,
+    request_id: String,
+    operation: &'static str,
+    arguments: ProjectArguments<'a>,
+}
+
+#[derive(Serialize)]
+struct ProjectArguments<'a> {
+    meeting_id: &'a str,
+    note_id: &'a str,
+    transcript_id: &'a str,
+}
+
+fn project_command(request: &ProjectRequest) -> Result<Vec<u8>, InternalOutcome> {
+    let mut bytes = serde_json::to_vec(&ProjectCommand {
+        schema: "note-bridge-command/1",
+        request_id: request.request_id.to_string(),
+        operation: "note.project",
+        arguments: ProjectArguments {
+            meeting_id: &request.meeting_id,
+            note_id: &request.note_json_sha256,
+            transcript_id: &request.transcript_sha256,
+        },
+    })
+    .map_err(|_| InternalOutcome::Unavailable)?;
+    bytes.push(b'\n');
+    if bytes.len() > MAX_PROJECTION_FRAME_BYTES {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(bytes)
+}
+
+fn parse_ready(frame: &[u8], manifest_sha256: &str) -> Result<(), InternalOutcome> {
+    if frame.len() > MAX_PROJECTION_FRAME_BYTES
+        || !frame.ends_with(b"\n")
+        || frame[..frame.len() - 1]
+            .iter()
+            .any(|byte| matches!(byte, b'\n' | b'\r'))
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let root = strict_json(&frame[..frame.len() - 1]).map_err(|_| InternalOutcome::Unavailable)?;
+    let fields = exact_object(
+        &root,
+        [
+            "schema",
+            "event",
+            "protocol",
+            "role",
+            "manifest_sha256",
+            "operations",
+        ],
+    )
+    .map_err(|_| InternalOutcome::Unavailable)?;
+    let operations = array(fields[5]).map_err(|_| InternalOutcome::Unavailable)?;
+    if string(fields[0]).map_err(|_| InternalOutcome::Unavailable)? != "note-bridge-event/1"
+        || string(fields[1]).map_err(|_| InternalOutcome::Unavailable)? != "ready"
+        || u64_value(fields[2]).map_err(|_| InternalOutcome::Unavailable)? != 1
+        || string(fields[3]).map_err(|_| InternalOutcome::Unavailable)? != "project"
+        || string(fields[4]).map_err(|_| InternalOutcome::Unavailable)? != manifest_sha256
+        || operations.len() != 1
+        || string(&operations[0]).map_err(|_| InternalOutcome::Unavailable)? != "note.project"
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(())
+}
+
+fn read_bounded_line(reader: &mut impl BufRead) -> io::Result<Vec<u8>> {
+    let mut frame = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "closed frame"));
+        }
+        let consumed = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |position| position + 1);
+        if frame.len() + consumed > MAX_PROJECTION_FRAME_BYTES {
+            return Err(io::Error::other("oversized frame"));
+        }
+        frame.extend_from_slice(&available[..consumed]);
+        reader.consume(consumed);
+        if frame.ends_with(b"\n") {
+            return Ok(frame);
+        }
+    }
+}
+
+fn read_to_exact_eof(mut reader: impl Read) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .by_ref()
+        .take(MAX_PROJECTION_FRAME_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_PROJECTION_FRAME_BYTES
+        || !bytes.ends_with(b"\n")
+        || bytes[..bytes.len() - 1]
+            .iter()
+            .any(|byte| matches!(byte, b'\n' | b'\r'))
+    {
+        return Err(io::Error::other("invalid terminal frame"));
+    }
+    Ok(bytes)
+}
+
+fn wait_receiver<T>(
+    receiver: &Receiver<T>,
+    deadline: Instant,
+    cancellation: &ProjectionCancellation,
+    guard: &mut ChildGuard,
+) -> Result<T, InternalOutcome> {
+    loop {
+        if cancellation.is_cancelled() {
+            guard.abort();
+            return Err(InternalOutcome::Cancelled);
+        }
+        if guard.stderr_overflowed() {
+            guard.abort();
+            return Err(InternalOutcome::Unavailable);
+        }
+        match receiver.try_recv() {
+            Ok(value) => return Ok(value),
+            Err(TryRecvError::Disconnected) => return Err(InternalOutcome::Unavailable),
+            Err(TryRecvError::Empty) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(TryRecvError::Empty) => {
+                guard.abort();
+                return Err(InternalOutcome::Unavailable);
+            }
+        }
+    }
+}
+
+struct StderrMonitor {
+    overflow: Receiver<()>,
+    thread: Option<JoinHandle<bool>>,
+}
+
+impl StderrMonitor {
+    fn start(mut stderr: impl Read + Send + 'static) -> Self {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let thread = std::thread::spawn(move || {
+            let mut total = 0_usize;
+            let mut sent = false;
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match stderr.read(&mut buffer) {
+                    Ok(0) => return total <= MAX_STDERR_BYTES,
+                    Ok(read) => {
+                        total = total.saturating_add(read);
+                        if total > MAX_STDERR_BYTES && !sent {
+                            let _ = sender.try_send(());
+                            sent = true;
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => return false,
+                }
+            }
+        });
+        Self {
+            overflow: receiver,
+            thread: Some(thread),
+        }
+    }
+}
+
+struct ChildGuard {
+    child: Child,
+    process_group_id: i32,
+    stderr: StderrMonitor,
+    finished: bool,
+}
+
+impl ChildGuard {
+    fn new(child: Child, stderr: StderrMonitor) -> Self {
+        Self {
+            process_group_id: child.id() as i32,
+            child,
+            stderr,
+            finished: false,
+        }
+    }
+
+    fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn stderr_overflowed(&self) -> bool {
+        self.stderr.overflow.try_recv().is_ok()
+    }
+
+    fn require_unexited(&mut self) -> Result<(), InternalOutcome> {
+        if self
+            .child
+            .try_wait()
+            .map_err(|_| InternalOutcome::Unavailable)?
+            .is_some()
+        {
+            return Err(InternalOutcome::Unavailable);
+        }
+        Ok(())
+    }
+
+    fn finish_success(
+        &mut self,
+        deadline: Instant,
+        cancellation: &ProjectionCancellation,
+    ) -> Result<bool, InternalOutcome> {
+        let status = loop {
+            if cancellation.is_cancelled() {
+                self.abort();
+                return Err(InternalOutcome::Cancelled);
+            }
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .map_err(|_| InternalOutcome::Unavailable)?
+            {
+                if cancellation.is_cancelled() {
+                    self.abort();
+                    return Err(InternalOutcome::Cancelled);
+                }
+                break status;
+            }
+            if Instant::now() >= deadline {
+                self.abort();
+                return Ok(false);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        if group_exists(self.process_group_id) {
+            self.abort();
+            return Ok(false);
+        }
+        let stderr_ok = self
+            .stderr
+            .thread
+            .take()
+            .ok_or(InternalOutcome::Unavailable)?
+            .join()
+            .map_err(|_| InternalOutcome::Unavailable)?;
+        self.finished = true;
+        Ok(success(status) && stderr_ok)
+    }
+
+    fn abort(&mut self) {
+        if self.finished {
+            return;
+        }
+        let _ = signal_group(self.process_group_id, libc::SIGTERM);
+        if !wait_for_group_exit(&mut self.child, self.process_group_id, CLEANUP_GRACE) {
+            let _ = signal_group(self.process_group_id, libc::SIGKILL);
+            let _ = self.child.wait();
+        }
+        if let Some(thread) = self.stderr.thread.take() {
+            let _ = thread.join();
+        }
+        self.finished = true;
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
+fn success(status: ExitStatus) -> bool {
+    status.success()
+}
+
+fn wait_for_group_exit(child: &mut Child, group: i32, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    loop {
+        let _ = child.try_wait();
+        if !group_exists(group) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn group_exists(group: i32) -> bool {
+    let result = unsafe { libc::kill(-group, 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+fn signal_group(group: i32, signal: i32) -> io::Result<()> {
+    if unsafe { libc::kill(-group, signal) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Output;
+    use std::sync::{Mutex, mpsc};
+
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn request() -> ProjectRequest {
+        ProjectRequest {
+            request_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+            meeting_id: "meeting-a".into(),
+            note_json_sha256: "a".repeat(64),
+            note_markdown_sha256: "b".repeat(64),
+            transcript_sha256: "c".repeat(64),
+        }
+    }
+
+    const LAUNCH_FIXTURE_BRIDGE: &str = r#"import hashlib,json,os,sys,time
+def _read(fd):
+ os.lseek(fd,0,os.SEEK_SET); return os.read(fd,1048576)
+def _ready(manifest):
+ print(json.dumps({'schema':'note-bridge-event/1','event':'ready','protocol':1,'role':'project','manifest_sha256':hashlib.sha256(manifest).hexdigest(),'operations':['note.project']},separators=(',',':')),flush=True)
+def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_parent_pid):
+ mode=open(storage_root+'/fixture-mode').read()
+ manifest=_read(manifest_fd); bridge=_read(bridge_fd); validator=_read(validator_fd)
+ document=json.loads(manifest)
+ if hashlib.sha256(bridge).hexdigest()!=document['bridge']['sha256'] or hashlib.sha256(validator).hexdigest()!=document['validator']['sha256']: return 7
+ if not all(os.get_inheritable(fd) for fd in (manifest_fd,bridge_fd,validator_fd)): return 8
+ if mode=='ready-timeout': time.sleep(5)
+ _ready(manifest)
+ if mode=='ready-then-exit': os._exit(0)
+ command=sys.stdin.buffer.readline()
+ if mode=='descriptor-binding':
+  open(storage_root+'/bound-command','wb').write(command)
+ if mode=='result-timeout': time.sleep(5)
+ if mode=='cancel-after-result':
+  print('{}',flush=True); sys.stdout.close()
+  open(storage_root+'/result-eof','w').write('closed')
+  time.sleep(5); return 0
+ print('{}',flush=True)
+ return 0
+"#;
+
+    struct LaunchFixture {
+        _temporary: TempDir,
+        storage_root: PathBuf,
+        manifest_path: PathBuf,
+    }
+
+    fn current_python() -> PathBuf {
+        let output = Command::new("python3")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+    }
+
+    fn private_file(path: &Path, bytes: &[u8], executable: bool) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(
+            path,
+            fs::Permissions::from_mode(if executable { 0o700 } else { 0o600 }),
+        )
+        .unwrap();
+    }
+
+    fn launch_fixture(mode: &str) -> LaunchFixture {
+        let temporary = TempDir::new().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let resources = base.join("resources");
+        let storage_root = base.join("storage");
+        fs::create_dir(&resources).unwrap();
+        fs::create_dir(&storage_root).unwrap();
+        fs::set_permissions(&resources, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&storage_root, fs::Permissions::from_mode(0o700)).unwrap();
+        private_file(&storage_root.join("fixture-mode"), mode.as_bytes(), false);
+
+        let runtime_path = resources.join(PRODUCT_RUNTIME_PATH);
+        fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+        fs::copy(current_python(), &runtime_path).unwrap();
+        fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let bridge_path = resources.join("note-bridge.py");
+        let validator_path = resources.join("note-validator.zip");
+        private_file(&bridge_path, LAUNCH_FIXTURE_BRIDGE.as_bytes(), false);
+        private_file(&validator_path, b"validator-fixture", false);
+
+        let runtime = RuntimeManifestResource {
+            relative_path: PRODUCT_RUNTIME_PATH.into(),
+            sha256: format!("{:x}", Sha256::digest(fs::read(&runtime_path).unwrap())),
+        };
+        let bridge = RuntimeManifestResource {
+            relative_path: "note-bridge.py".into(),
+            sha256: format!("{:x}", Sha256::digest(LAUNCH_FIXTURE_BRIDGE.as_bytes())),
+        };
+        let validator = RuntimeManifestResource {
+            relative_path: "note-validator.zip".into(),
+            sha256: format!("{:x}", Sha256::digest(b"validator-fixture")),
+        };
+        let manifest_path = resources.join("note-runtime-project.json");
+        private_file(
+            &manifest_path,
+            canonical_manifest(&runtime, &bridge, &validator).as_bytes(),
+            false,
+        );
+        LaunchFixture {
+            _temporary: temporary,
+            storage_root,
+            manifest_path,
+        }
+    }
+
+    fn projector(fixture: &LaunchFixture, ready_ms: u64, project_ms: u64) -> ProcessNoteProjector {
+        let mut projector = ProcessNoteProjector::development(
+            fixture.storage_root.clone(),
+            fixture.manifest_path.clone(),
+        );
+        projector.deadlines = Deadlines {
+            ready: Duration::from_millis(ready_ms),
+            project: Duration::from_millis(project_ms),
+        };
+        projector
+    }
+
+    fn launch_bootstrap(
+        fixture: &LaunchFixture,
+        claimed_bridge_digest: Option<&str>,
+        occupy_targets: bool,
+    ) -> Output {
+        let mut runtime = verify_manifest(&fixture.manifest_path).unwrap();
+        if let Some(digest) = claimed_bridge_digest {
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+            document["bridge"]["sha256"] = serde_json::Value::String(digest.into());
+            let bytes = serde_json::to_vec_pretty(&document).unwrap();
+            private_file(&fixture.manifest_path, &bytes, false);
+            runtime.manifest.file = File::open(&fixture.manifest_path).unwrap();
+            runtime.manifest.identity = FileIdentity::from_file(&runtime.manifest.file).unwrap();
+            runtime.manifest.digest = format!("{:x}", Sha256::digest(&bytes));
+        }
+        let staged = stage_descriptors([
+            runtime.manifest.file.as_raw_fd(),
+            runtime.bridge.file.as_raw_fd(),
+            runtime.validator.file.as_raw_fd(),
+        ])
+        .unwrap();
+        assert!(
+            staged
+                .iter()
+                .all(|file| file.as_raw_fd() >= FIRST_STAGING_FD)
+        );
+        let inherited = [
+            (staged[0].as_raw_fd(), MANIFEST_FD),
+            (staged[1].as_raw_fd(), BRIDGE_FD),
+            (staged[2].as_raw_fd(), VALIDATOR_FD),
+        ];
+        let sentinel = File::open("/dev/null").unwrap();
+        let sentinel_fd = sentinel.as_raw_fd();
+        let mut command = Command::new(&runtime.executable.path);
+        command
+            .args(["-I", "-S", "-E", "-s", "-B", "-c", BOOTSTRAP])
+            .arg(std::process::id().to_string())
+            .arg(&fixture.storage_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(move || {
+                if occupy_targets {
+                    for target in [MANIFEST_FD, BRIDGE_FD, VALIDATOR_FD] {
+                        if libc::dup2(sentinel_fd, target) == -1 {
+                            return Err(io::Error::last_os_error());
+                        }
+                    }
+                }
+                install_descriptor_mappings(inherited)
+            });
+        }
+        command.output().unwrap()
+    }
+
+    #[test]
+    fn bootstrap_refuses_a_descriptor_digest_mismatch_before_bridge_execution() {
+        let fixture = launch_fixture("descriptor-binding");
+        let marker = fixture.storage_root.join("bound-command");
+        let output = launch_bootstrap(&fixture, Some(&"0".repeat(64)), false);
+        assert!(!output.status.success());
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn staged_descriptors_launch_when_all_final_fd_targets_are_occupied() {
+        let fixture = launch_fixture("descriptor-binding");
+        let marker = fixture.storage_root.join("bound-command");
+        let output = launch_bootstrap(&fixture, None, true);
+        assert!(output.status.success());
+        assert!(marker.exists());
+    }
+
+    #[test]
+    fn rust_launch_binds_manifest_bridge_validator_and_command_descriptors() {
+        let fixture = launch_fixture("descriptor-binding");
+        let result = projector(&fixture, 2_000, 2_000)
+            .project(&request())
+            .unwrap();
+        assert_eq!(result, b"{}\n");
+        assert_eq!(
+            fs::read(fixture.storage_root.join("bound-command")).unwrap(),
+            project_command(&request()).unwrap()
+        );
+    }
+
+    #[test]
+    fn rust_launch_enforces_ready_and_result_timeouts() {
+        let ready = launch_fixture("ready-timeout");
+        assert_eq!(
+            projector(&ready, 50, 2_000).project(&request()),
+            Err(ProjectTransportError::Unavailable)
+        );
+        let result = launch_fixture("result-timeout");
+        assert_eq!(
+            projector(&result, 2_000, 50).project(&request()),
+            Err(ProjectTransportError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn ready_then_exit_is_refused_without_writing_a_command() {
+        let fixture = launch_fixture("ready-then-exit");
+        assert_eq!(
+            projector(&fixture, 2_000, 2_000).project(&request()),
+            Err(ProjectTransportError::Unavailable)
+        );
+        assert!(!fixture.storage_root.join("bound-command").exists());
+    }
+
+    #[test]
+    fn cancellation_after_result_eof_before_child_exit_never_returns_success() {
+        let fixture = launch_fixture("cancel-after-result");
+        let marker = fixture.storage_root.join("result-eof");
+        let cancellation = ProjectionCancellation::default();
+        let child_cancellation = cancellation.clone();
+        let projector = projector(&fixture, 2_000, 2_000);
+        let worker = std::thread::spawn(move || {
+            projector.project_with_cancellation(&request(), &child_cancellation)
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(marker.exists());
+        cancellation.cancel();
+        assert_eq!(
+            worker.join().unwrap(),
+            Err(ProjectTransportError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn project_command_is_closed_and_bounded() {
+        assert_eq!(
+            project_command(&request()).unwrap(),
+            b"{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"arguments\":{\"meeting_id\":\"meeting-a\",\"note_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"transcript_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}\n"
+        );
+    }
+
+    #[test]
+    fn ready_and_terminal_frames_refuse_extra_or_malformed_protocol_bytes() {
+        let digest = "a".repeat(64);
+        let ready = format!(
+            "{{\"schema\":\"note-bridge-event/1\",\"event\":\"ready\",\"protocol\":1,\"role\":\"project\",\"manifest_sha256\":\"{digest}\",\"operations\":[\"note.project\"]}}\n"
+        );
+        assert!(parse_ready(ready.as_bytes(), &digest).is_ok());
+        assert!(parse_ready(format!("{}{{}}\n", ready.trim_end()).as_bytes(), &digest).is_err());
+        assert!(read_to_exact_eof(&b"{}\n{}\n"[..]).is_err());
+        assert!(read_to_exact_eof(&vec![b'x'; MAX_PROJECTION_FRAME_BYTES + 1][..]).is_err());
+    }
+
+    #[test]
+    fn security_framework_live_pid_binding_matches_the_current_sha256_code_directory() {
+        let current = security_self_code().unwrap();
+        security_dynamic_check(current.as_ref(), SECURITY_NO_NETWORK_ACCESS, None).unwrap();
+        let bound = security_live_code(std::process::id()).unwrap();
+        security_dynamic_check(bound.as_ref(), SECURITY_NO_NETWORK_ACCESS, None).unwrap();
+        let current_information = security_signing_information(current.as_ref(), true).unwrap();
+        let bound_information = security_signing_information(bound.as_ref(), true).unwrap();
+        assert_eq!(
+            sha256_code_directory_identity(current_information.as_concrete_TypeRef()).unwrap(),
+            sha256_code_directory_identity(bound_information.as_concrete_TypeRef()).unwrap(),
+        );
+    }
+
+    #[test]
+    fn system_process_start_identity_is_stable_at_microsecond_and_absolute_time_precision() {
+        let inspector = SystemProcessStartTimeInspector;
+        let first = inspector.start_time(std::process::id()).unwrap().unwrap();
+        let second = inspector.start_time(std::process::id()).unwrap().unwrap();
+        assert!(first.is_valid());
+        assert_eq!(first, second);
+    }
+
+    fn injected_outer_identity() -> OuterCodeIdentity {
+        OuterCodeIdentity {
+            bundle_path: PathBuf::from("/Applications/Local Meeting Notes.app"),
+            main_executable: PathBuf::from(
+                "/Applications/Local Meeting Notes.app/Contents/MacOS/local-meeting-notes-desktop",
+            ),
+            team_identifier: "TEAM123456".into(),
+            signing_identifier: "com.ninochavez.local-meeting-notes".into(),
+        }
+    }
+
+    fn injected_runtime_identity() -> CodeIdentity {
+        CodeIdentity {
+            path: PathBuf::from(
+                "/Applications/Local Meeting Notes.app/Contents/Resources/python-runtime/bin/python3.12",
+            ),
+            main_executable: PathBuf::from(
+                "/Applications/Local Meeting Notes.app/Contents/Resources/python-runtime/bin/python3.12",
+            ),
+            designated_requirement: vec![0xfa, 0xde, 0x0c, 0x00],
+            sha256_code_directory_identity: [0x51; 20],
+            team_identifier: "TEAM123456".into(),
+            signing_identifier: "com.ninochavez.local-meeting-notes.python-runtime".into(),
+            signature_flags: CODE_SIGNATURE_RUNTIME | 0x100,
+            python_entitlements_exact: true,
+        }
+    }
+
+    #[test]
+    fn injected_transient_path_swap_and_restore_cannot_reconcile_static_and_live_code() {
+        let outer = injected_outer_identity();
+        let live = injected_runtime_identity();
+        let mut admitted_during_swap = live.clone();
+        admitted_during_swap.sha256_code_directory_identity = [0x52; 20];
+        admitted_during_swap.designated_requirement = vec![0xfa, 0xde, 0x0c, 0x01];
+        assert_eq!(admitted_during_swap.path, live.path);
+        assert_eq!(
+            verify_runtime_identity_pair(&admitted_during_swap, &live, &live.path, &outer),
+            Err(InternalOutcome::Unavailable)
+        );
+    }
+
+    #[test]
+    fn injected_wrong_same_team_bundle_is_not_admitted_by_team_alone() {
+        let outer = injected_outer_identity();
+        let mut wrong = injected_runtime_identity();
+        wrong.signing_identifier = "com.ninochavez.other-app.python-runtime".into();
+        let expected_path = wrong.path.clone();
+        assert_eq!(wrong.team_identifier, outer.team_identifier);
+        assert_eq!(
+            verify_runtime_identity_pair(&wrong, &wrong, &expected_path, &outer),
+            Err(InternalOutcome::Unavailable)
+        );
+    }
+
+    #[test]
+    fn injected_runtime_word_cannot_substitute_for_the_hardened_runtime_bit() {
+        let outer = injected_outer_identity();
+        let mut identity = injected_runtime_identity();
+        identity.designated_requirement = b"identifier contains runtime".to_vec();
+        identity.signature_flags &= !CODE_SIGNATURE_RUNTIME;
+        let expected_path = identity.path.clone();
+        assert_eq!(
+            verify_runtime_identity_pair(&identity, &identity, &expected_path, &outer),
+            Err(InternalOutcome::Unavailable)
+        );
+    }
+
+    #[test]
+    fn injected_entitlement_drift_between_static_and_live_code_is_refused() {
+        let outer = injected_outer_identity();
+        let static_identity = injected_runtime_identity();
+        let mut live_identity = static_identity.clone();
+        live_identity.python_entitlements_exact = false;
+        assert_eq!(
+            verify_runtime_identity_pair(
+                &static_identity,
+                &live_identity,
+                &static_identity.path,
+                &outer,
+            ),
+            Err(InternalOutcome::Unavailable)
+        );
+    }
+
+    #[test]
+    fn injected_dynamic_identity_mismatch_is_refused_before_authority_is_sent() {
+        let outer = injected_outer_identity();
+        let static_identity = injected_runtime_identity();
+        let mut live_identity = static_identity.clone();
+        live_identity.designated_requirement = vec![0xfa, 0xde, 0x0c, 0xff];
+        assert_eq!(
+            verify_runtime_identity_pair(
+                &static_identity,
+                &live_identity,
+                &static_identity.path,
+                &outer,
+            ),
+            Err(InternalOutcome::Unavailable)
+        );
+    }
+
+    #[test]
+    fn persistent_byte_identical_runtime_replacement_is_refused_on_file_identity() {
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let path = root.join("python3.12");
+        let replacement = root.join("replacement");
+        private_file(&path, b"same signed runtime bytes", true);
+        private_file(&replacement, b"same signed runtime bytes", true);
+        let file = File::open(&path).unwrap();
+        let identity = FileIdentity::from_file(&file).unwrap();
+        let digest = digest_file(&file, identity).unwrap();
+        let pinned = PinnedResource {
+            file,
+            path: path.clone(),
+            identity,
+            digest: digest.clone(),
+        };
+        fs::rename(&replacement, &path).unwrap();
+
+        let mut static_identity = injected_runtime_identity();
+        static_identity.path = path.clone();
+        static_identity.main_executable = path.clone();
+        let live_identity = static_identity.clone();
+        assert!(
+            verify_runtime_identity_pair(
+                &static_identity,
+                &live_identity,
+                &path,
+                &injected_outer_identity(),
+            )
+            .is_ok()
+        );
+        let live_file = open_absolute_file(&path).unwrap();
+        let live_file_identity = FileIdentity::from_file(&live_file).unwrap();
+        assert!(live_file_identity != pinned.identity);
+        assert_eq!(digest_file(&live_file, live_file_identity).unwrap(), digest);
+        assert_eq!(
+            verify_live_executable_file(&live_identity.main_executable, &pinned),
+            Err(InternalOutcome::Unavailable)
+        );
+    }
+
+    struct FakeLiveCode;
+
+    impl RetainedLiveCode for FakeLiveCode {
+        fn require_same_executable(&self, _: &PinnedResource) -> Result<(), InternalOutcome> {
+            Ok(())
+        }
+    }
+
+    struct FakePreparedAdmission;
+
+    impl PreparedCodeAdmission for FakePreparedAdmission {
+        fn bind_live(
+            &self,
+            _: u32,
+            _: &PinnedResource,
+        ) -> Result<Box<dyn RetainedLiveCode>, InternalOutcome> {
+            Ok(Box::new(FakeLiveCode))
+        }
+    }
+
+    struct InjectedStartTimes(Mutex<VecDeque<ProcessStartTime>>);
+
+    impl ProcessStartTimeInspector for InjectedStartTimes {
+        fn start_time(&self, _: u32) -> io::Result<Option<ProcessStartTime>> {
+            Ok(self.0.lock().unwrap().pop_front())
+        }
+    }
+
+    #[test]
+    fn injected_start_time_mismatch_refuses_the_retained_live_code_binding() {
+        let fixture = launch_fixture("descriptor-binding");
+        let runtime = verify_manifest(&fixture.manifest_path).unwrap();
+        let inspector = InjectedStartTimes(Mutex::new(VecDeque::from([
+            ProcessStartTime {
+                epoch_seconds: 100,
+                microseconds: 1,
+                absolute_time: 10,
+            },
+            ProcessStartTime {
+                epoch_seconds: 100,
+                microseconds: 2,
+                absolute_time: 10,
+            },
+        ])));
+        assert!(matches!(
+            bind_live_code(
+                &FakePreparedAdmission,
+                4242,
+                &inspector,
+                &runtime.executable,
+            ),
+            Err(InternalOutcome::Unavailable)
+        ));
+    }
+
+    #[test]
+    fn cancellation_kills_the_owned_process_group_before_returning() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("trap '' TERM; while :; do :; done")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                }
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let mut guard = ChildGuard::new(child, StderrMonitor::start(stderr));
+        let cancellation = ProjectionCancellation::default();
+        cancellation.cancel();
+        let (_, receiver) = mpsc::sync_channel::<()>(1);
+        assert_eq!(
+            wait_receiver(
+                &receiver,
+                Instant::now() + Duration::from_secs(1),
+                &cancellation,
+                &mut guard
+            ),
+            Err(InternalOutcome::Cancelled)
+        );
+        assert!(!group_exists(guard.process_group_id));
+    }
+
+    #[test]
+    fn product_admission_refuses_manifest_resources_outside_the_signed_resource_root() {
+        let temporary = TempDir::new().unwrap();
+        let root = temporary
+            .path()
+            .join("LocalMeetingNotes.app/Contents/Resources");
+        fs::create_dir_all(&root).unwrap();
+        let outside = temporary.path().join("other/bridge");
+        fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        fs::write(root.join("manifest"), b"manifest").unwrap();
+        fs::write(outside, b"bridge").unwrap();
+        for path in [root.join("manifest"), temporary.path().join("other/bridge")] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let directory = File::open(temporary.path()).unwrap();
+        let manifest = PinnedResource::open(
+            &directory,
+            temporary.path(),
+            &RuntimeManifestResource {
+                relative_path: "LocalMeetingNotes.app/Contents/Resources/manifest".into(),
+                sha256: format!("{:x}", Sha256::digest(b"manifest")),
+            },
+        )
+        .unwrap();
+        let bridge = PinnedResource::open(
+            &directory,
+            temporary.path(),
+            &RuntimeManifestResource {
+                relative_path: "other/bridge".into(),
+                sha256: format!("{:x}", Sha256::digest(b"bridge")),
+            },
+        )
+        .unwrap();
+        assert!(!resources_are_inside(&root, [&manifest, &bridge]));
+    }
+}

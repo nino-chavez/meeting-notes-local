@@ -7,6 +7,8 @@
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -18,19 +20,48 @@ pub const MAX_PROJECTION_FRAME_BYTES: usize = 64 * 1024;
 /// implement this without changing parsing or library authority.
 pub trait NoteProjector: Send + Sync {
     fn project(&self, request: &ProjectRequest) -> Result<Vec<u8>, ProjectTransportError>;
+
+    fn project_with_cancellation(
+        &self,
+        request: &ProjectRequest,
+        cancellation: &ProjectionCancellation,
+    ) -> Result<Vec<u8>, ProjectTransportError> {
+        if cancellation.is_cancelled() {
+            return Err(ProjectTransportError::Cancelled);
+        }
+        self.project(request)
+    }
+}
+
+/// Cloneable, process-local cancellation authority for one read-only
+/// projection. Cancellation never carries artifact or meeting content.
+#[derive(Clone, Default)]
+pub struct ProjectionCancellation(Arc<AtomicBool>);
+
+impl ProjectionCancellation {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
 }
 
 /// Content-free transport failure.  Raw child stderr and protocol bytes never
 /// cross into library diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectTransportError;
+pub enum ProjectTransportError {
+    Unavailable,
+    Cancelled,
+}
 
 /// Default until a verifier-owned child transport is wired by a later slice.
 pub struct UnavailableProjector;
 
 impl NoteProjector for UnavailableProjector {
     fn project(&self, _: &ProjectRequest) -> Result<Vec<u8>, ProjectTransportError> {
-        Err(ProjectTransportError)
+        Err(ProjectTransportError::Unavailable)
     }
 }
 

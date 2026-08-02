@@ -3,17 +3,28 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 import uuid
 import zipfile
 from pathlib import Path
 
 from worker.note_validator import ArtifactFailure
 from worker.note_validator import inspect as inspect_snapshot
+from worker.note_validator import project as project_snapshot
+from worker.note_bridge import (
+    BridgeRefused,
+    InvalidArguments,
+    _parse_command,
+    _watch_parent_pid,
+    verify_descriptor_runtime,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "notes"))
@@ -101,6 +112,7 @@ class NoteBridgeProcess:
 
 class NoteBridgeHarnessTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.role = "inspect"
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name).resolve()
         self.root = self.base / "app"
@@ -146,7 +158,7 @@ class NoteBridgeHarnessTests(unittest.TestCase):
     def _manifest_document(self) -> dict:
         return {
             "schema": "note-runtime/1",
-            "role": "inspect",
+            "role": self.role,
             "runtime": {
                 "relative_path": self.runtime.name,
                 "sha256": digest(self.runtime),
@@ -226,7 +238,7 @@ class NoteBridgeHarnessTests(unittest.TestCase):
         command = {
             "schema": "note-bridge-command/1",
             "request_id": request_id,
-            "operation": "note.inspect",
+            "operation": f"note.{self.role}",
             "arguments": arguments or self._arguments(),
         }
         return request_id, json.dumps(command).encode() + b"\n"
@@ -536,6 +548,280 @@ class NoteBridgeHarnessTests(unittest.TestCase):
             self.assertIsNone(result)
             self.assertEqual(returncode, 2)
             self.assertEqual(error, b"")
+
+
+class NoteProjectBridgeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._harness = NoteBridgeHarnessTests()
+        self._harness.setUp()
+        self._harness.role = "project"
+        self._harness._write_manifest()
+
+    def tearDown(self) -> None:
+        self._harness.tearDown()
+
+    def __getattr__(self, name):
+        harness = self.__dict__.get("_harness")
+        if harness is None:
+            raise AttributeError(name)
+        return getattr(harness, name)
+
+    def _fixture(self) -> dict:
+        return json.loads(
+            (REPO / "tests/fixtures/note-projection-v1.fixture").read_text(encoding="utf-8")
+        )
+
+    def test_project_ready_and_projection_are_read_only_and_use_no_temporary_copy(self) -> None:
+        self._replace_validator(
+            "\n"
+            "class _UnavailableTemporaryDirectory:\n"
+            "    def __init__(self, *args, **kwargs): pass\n"
+            "    def __enter__(self): raise OSError('temporary storage is unavailable')\n"
+            "    def __exit__(self, *args): return False\n"
+            "tempfile.TemporaryDirectory = _UnavailableTemporaryDirectory\n"
+        )
+        before = self._tree()
+        request_id, command = self._command()
+        bridge = self._start()
+        try:
+            self.assertEqual(
+                bridge.ready,
+                {
+                    "schema": "note-bridge-event/1",
+                    "event": "ready",
+                    "protocol": 1,
+                    "role": "project",
+                    "manifest_sha256": digest(self.manifest),
+                    "operations": ["note.project"],
+                },
+            )
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["request_id"], request_id)
+        self.assertEqual(result["outcome"], "succeeded")
+        self.assertEqual(result["projection"]["note_json_sha256"], self.note_id)
+        self.assertEqual(self._tree(), before)
+
+    def test_shared_fixture_locks_project_command_strictness_and_result_shape(self) -> None:
+        fixture = self._fixture()
+        valid = fixture["valid_commands"][0]
+        request_id, arguments = _parse_command(valid["raw_frame"].encode(), "project")
+        self.assertEqual(request_id, "11111111-1111-4111-8111-111111111111")
+        self.assertEqual(arguments["meeting_id"], "meeting-a")
+        for invalid in fixture["invalid_command_frames"]:
+            expected = invalid["expected"]
+            failure = BridgeRefused if expected == "protocol-failure" else InvalidArguments
+            with self.subTest(invalid["name"]), self.assertRaises(failure):
+                _parse_command(invalid["raw_frame"].encode(), "project")
+        for expected in fixture["valid_results"] + fixture["refusal_results"]:
+            result = expected["result"]
+            self.assertEqual(
+                list(result),
+                ["schema", "request_id", "operation", "outcome", "projection", "failure"],
+            )
+            if result["outcome"] == "succeeded":
+                projection = result["projection"]
+                self.assertEqual(
+                    list(projection),
+                    [
+                        "schema",
+                        "note_json_sha256",
+                        "note_markdown_sha256",
+                        "transcript_sha256",
+                        "claims",
+                    ],
+                )
+                for ordinal, claim in enumerate(projection["claims"]):
+                    self.assertEqual(claim["claim_ordinal"], ordinal)
+                    self.assertEqual(
+                        list(claim),
+                        ["claim_ordinal", "claim_sha256", "claim_type", "evidence_state", "claim", "locators"],
+                    )
+                    self.assertEqual(claim["evidence_state"], "located")
+                    self.assertTrue(1 <= len(claim["locators"]) <= 3)
+                    self.assertEqual(
+                        claim["locators"],
+                        sorted(
+                            claim["locators"],
+                            key=lambda locator: (
+                                locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
+                            ),
+                        ),
+                    )
+            else:
+                self.assertIsNone(result["projection"])
+                self.assertEqual(list(result["failure"]), ["code", "recoverable"])
+
+    def test_shared_fixture_unicode_scalar_locator_is_not_a_utf8_byte_offset(self) -> None:
+        fixture = self._fixture()
+        claim = fixture["valid_results"][1]["result"]["projection"]["claims"][4]
+        locator = claim["locators"][1]
+        turn = fixture["transcript_turns"][locator["turn"]]
+        self.assertEqual(turn[locator["start"] : locator["end"]], "é🙂")
+        self.assertEqual(locator["end"], 3)
+        self.assertNotEqual(len("aé🙂".encode("utf-8")), locator["end"])
+
+    def test_descriptor_runtime_uses_retained_bridge_resources_after_path_replacement(self) -> None:
+        descriptors = [
+            os.open(path, os.O_RDONLY)
+            for path in (self.manifest, self.bridge, self.validator)
+        ]
+        runtime = None
+        try:
+            with mock.patch("worker.note_bridge.sys.executable", str(self.runtime)):
+                runtime = verify_descriptor_runtime(*descriptors)
+                original_digest = runtime.resources["bridge"].digest
+                self.bridge.rename(self.bridge.with_suffix(".admitted"))
+                private_file(self.bridge, b"not the descriptor-admitted bridge")
+                runtime.require_unchanged()
+            self.assertEqual(runtime.resources["bridge"].digest, original_digest)
+        finally:
+            if runtime is not None:
+                runtime.close()
+            for descriptor in descriptors:
+                os.close(descriptor)
+
+    def test_descriptor_runtime_refuses_a_manifest_resource_bound_to_the_wrong_fd(self) -> None:
+        descriptors = [
+            os.open(path, os.O_RDONLY)
+            for path in (self.manifest, self.bridge, self.bridge)
+        ]
+        try:
+            with mock.patch("worker.note_bridge.sys.executable", str(self.runtime)):
+                with self.assertRaises(BridgeRefused):
+                    verify_descriptor_runtime(*descriptors)
+        finally:
+            for descriptor in descriptors:
+                os.close(descriptor)
+
+    def test_descriptor_launch_watches_expected_parent_exit_with_kqueue(self) -> None:
+        class Queue:
+            def __init__(self) -> None:
+                self.registered = []
+
+            def control(self, changes, *_):
+                if changes is not None:
+                    self.registered.extend(changes)
+                    return []
+                return [object()]
+
+            def close(self) -> None:
+                pass
+
+        queue = Queue()
+        exited = threading.Event()
+        exits = []
+
+        def fake_exit(code: int) -> None:
+            exits.append(code)
+            exited.set()
+            raise SystemExit(code)
+
+        with (
+            mock.patch("worker.note_bridge.os.getppid", return_value=4242),
+            mock.patch("worker.note_bridge.select.kqueue", return_value=queue),
+            mock.patch("worker.note_bridge.select.kevent", return_value=object()) as kevent,
+            mock.patch("worker.note_bridge.os._exit", side_effect=fake_exit),
+        ):
+            _watch_parent_pid(4242)
+            self.assertTrue(exited.wait(1))
+        self.assertEqual(exits, [0])
+        kevent.assert_called_once_with(
+            4242,
+            filter=select.KQ_FILTER_PROC,
+            flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        self.assertEqual(len(queue.registered), 1)
+
+    def _assert_project_failure(self, code: str, recoverable: bool) -> None:
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["failure"], {"code": code, "recoverable": recoverable})
+
+    def test_project_maps_missing_artifacts_to_the_closed_refusal(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        note.unlink()
+        self._assert_project_failure("artifact-missing", True)
+
+    def test_project_maps_changed_artifacts_to_the_closed_refusal(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        note.write_bytes(note.read_bytes() + b" ")
+        self._assert_project_failure("artifact-changed", False)
+
+    def test_project_maps_invalid_artifacts_to_the_closed_refusal(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        note.write_bytes(b"[]")
+        self._assert_project_failure("artifact-invalid", False)
+
+    def test_project_rechecks_descriptor_identity_after_derivation(self) -> None:
+        note = self.root / "meetings" / self.meeting_id / "notes" / f"{self.note_id}.json"
+        original = note.read_bytes()
+
+        def replace_after_open() -> None:
+            note.rename(note.with_suffix(".old"))
+            private_file(note, original)
+
+        root_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with self.assertRaises(ArtifactFailure) as failure:
+                project_snapshot(root_fd, self._arguments(), after_open=replace_after_open)
+        finally:
+            os.close(root_fd)
+        self.assertEqual((failure.exception.code, failure.exception.recoverable), ("artifact-changed", False))
+
+    def _replace_project_with_capacity_projection(self, count: int) -> None:
+        self._replace_validator(
+            "\n"
+            "def project(root_fd, arguments):\n"
+            "    claim_texts = [f'claim-{ordinal:06d}' for ordinal in range(" + str(count) + ")]\n"
+            "    claims = [{\n"
+            "        'claim_ordinal': ordinal,\n"
+            "        'claim_sha256': hashlib.sha256(claim.encode('utf-8')).hexdigest(),\n"
+            "        'claim_type': 'action',\n"
+            "        'evidence_state': 'located',\n"
+            "        'claim': claim,\n"
+            "        'locators': [{'turn': 0, 'start': 0, 'end': 5, 'text_sha256': '8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8'}],\n"
+            "    } for ordinal, claim in enumerate(claim_texts)]\n"
+            "    return {'schema': 'note-claim-projection/1', 'note_json_sha256': arguments['note_id'], 'note_markdown_sha256': 'b' * 64, 'transcript_sha256': arguments['transcript_id'], 'claims': claims}\n"
+        )
+
+    def test_shared_fixture_capacity_is_217_or_refusal_at_218_without_truncation(self) -> None:
+        fixture = self._fixture()["capacity_case"]
+        self._replace_project_with_capacity_projection(fixture["last_fitting_claim_count"])
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "succeeded")
+        self.assertEqual(len(result["projection"]["claims"]), fixture["last_fitting_claim_count"])
+        self.assertEqual(
+            len(json.dumps(result, separators=(",", ":")).encode() + b"\n"),
+            fixture["last_fitting_frame_bytes"],
+        )
+        self._replace_project_with_capacity_projection(fixture["claim_count"])
+        _, command = self._command()
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["failure"], {
+            "code": fixture["expected_result"],
+            "recoverable": False,
+        })
+        self.assertIsNone(result["projection"])
 
 
 if __name__ == "__main__":

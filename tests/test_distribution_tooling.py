@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
+import importlib.util
 import plistlib
+import subprocess
+import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def source(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def load_release_verifier():
+    path = ROOT / "scripts/verify-release-bundle.py"
+    spec = importlib.util.spec_from_file_location("release_bundle_verifier", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class DistributionToolingTests(unittest.TestCase):
@@ -45,7 +59,7 @@ class DistributionToolingTests(unittest.TestCase):
         unsigned_verify = signing.index('verify-release-bundle.py" "$APP"')
         first_mutating_sign = signing.index('codesign "${sign_args[@]}" "$path"')
         manifest_refresh = signing.index(
-            'build_manifest.py" \\\n    "$APP/Contents/Resources" --admission "$ADMISSION"'
+            'build_manifest.py" \\\n  "$APP/Contents/Resources" --admission "$ADMISSION"'
         )
         outer_app_sign = signing.index(
             'codesign --force --options runtime --timestamp \\\n'
@@ -64,8 +78,11 @@ class DistributionToolingTests(unittest.TestCase):
         self.assertLess(dmg_build, dmg_submit)
         self.assertLess(dmg_submit, final_verify)
 
-        self.assertIn('[[ "$ADMISSION" == "internal-alpha" ]]', signing)
+        self.assertIn('if [[ "$cmd" == "run-alpha" ]]', signing)
         self.assertIn('--entitlements "$PYTHON_ENTITLEMENTS"', signing)
+        self.assertIn('EXPECTED_IDENTIFIER="com.ninochavez.local-meeting-notes"', signing)
+        self.assertIn('PYTHON_SIGNING_IDENTIFIER="${EXPECTED_IDENTIFIER}.python-runtime"', signing)
+        self.assertIn('--identifier "$PYTHON_SIGNING_IDENTIFIER"', signing)
         self.assertIn('--entitlements "$CAPTURE_ENTITLEMENTS"', signing)
 
         entitlements = plistlib.loads(
@@ -117,8 +134,87 @@ class DistributionToolingTests(unittest.TestCase):
             "entitlements(path) == expected_entitlements",
             "CAPTURE_EXECUTABLE",
             '"com.apple.security.device.audio-input": True',
+            'EXPECTED_PYTHON_IDENTIFIER = f"{EXPECTED_IDENTIFIER}.python-runtime"',
+            "CODE_SIGNATURE_RUNTIME = 0x00010000",
+            "expected_designated_requirement(identifier)",
+            "entitlements(app) == CAPTURE_ENTITLEMENTS",
+            "verify_note_runtime(resources)",
+            '"note-runtime-project.json"',
+            '"note-validator.zip"',
         ):
             self.assertIn(required, verifier)
+
+    def test_note_project_runtime_manifest_and_validator_zip_are_generated_canonically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixtures = {
+                "python-runtime/bin/python3.12": b"runtime",
+                "worker/main.py": b"worker",
+                "bin/audiotee": b"tap",
+                "encoder-unavailable.identity": b"encoder",
+                "note-bridge.py": source("worker/note_bridge.py").encode(),
+            }
+            for relative, contents in fixtures.items():
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+            completed = subprocess.run(
+                [str(ROOT / "worker/build_manifest.py"), str(root)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            raw = (root / "note-runtime-project.json").read_bytes()
+            document = json.loads(raw)
+            self.assertEqual(
+                raw,
+                json.dumps(document, ensure_ascii=False, indent=2).encode(),
+            )
+            self.assertEqual(list(document), [
+                "schema", "role", "runtime", "bridge", "validator", "generator", "models"
+            ])
+            self.assertEqual(document["schema"], "note-runtime/1")
+            self.assertEqual(document["role"], "project")
+            self.assertIsNone(document["generator"])
+            self.assertEqual(document["models"], [])
+            self.assertEqual(document["bridge"]["relative_path"], "note-bridge.py")
+            self.assertEqual(document["validator"]["relative_path"], "note-validator.zip")
+            with zipfile.ZipFile(root / "note-validator.zip") as archive:
+                self.assertEqual(
+                    archive.namelist(),
+                    ["note_validator.py", "summarize.py", "transcript.py", "capture_health.py"],
+                )
+
+    def test_tauri_product_resource_contract_carries_the_note_project_runtime(self) -> None:
+        config = json.loads(source("apps/desktop/src-tauri/tauri.conf.json"))
+        resources = config["bundle"]["resources"]
+        self.assertEqual(resources["../runtime/note-bridge.py"], "note-bridge.py")
+        self.assertEqual(
+            resources["../runtime/note-runtime-project.json"],
+            "note-runtime-project.json",
+        )
+        self.assertEqual(resources["../runtime/note-validator.zip"], "note-validator.zip")
+
+    def test_release_identifiers_have_the_exact_developer_id_requirement_relationship(self) -> None:
+        verifier = load_release_verifier()
+        outer = verifier.expected_designated_requirement(verifier.EXPECTED_IDENTIFIER)
+        nested = verifier.expected_designated_requirement(
+            verifier.EXPECTED_PYTHON_IDENTIFIER
+        )
+        self.assertEqual(
+            verifier.EXPECTED_PYTHON_IDENTIFIER,
+            f"{verifier.EXPECTED_IDENTIFIER}.python-runtime",
+        )
+        self.assertEqual(
+            nested,
+            outer.replace(verifier.EXPECTED_IDENTIFIER, verifier.EXPECTED_PYTHON_IDENTIFIER),
+        )
+        self.assertEqual(
+            verifier.normalized_requirement(nested.replace(" exists", " /* exists */")),
+            nested,
+        )
 
     def test_frozen_alpha_verification_selects_alpha_admission(self) -> None:
         runbook = source("docs/distribution-runbook.md")

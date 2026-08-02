@@ -1911,6 +1911,7 @@ dependencies = [
 name = "local-meeting-notes-session-core"
 version = "0.1.0"
 dependencies = [
+ "core-foundation",
  "icu_normalizer",
  "libc",
  "serde",

@@ -4,16 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import plistlib
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from xml.parsers.expat import ExpatError
 
 EXPECTED_IDENTIFIER = "com.ninochavez.local-meeting-notes"
+EXPECTED_PYTHON_IDENTIFIER = f"{EXPECTED_IDENTIFIER}.python-runtime"
 EXPECTED_MINIMUM_MACOS = "14.4"
 EXPECTED_TEAM_ID = "34VZ63G58M"
 EXPECTED_AUTHORITY = f"Developer ID Application: Abelino Chavez ({EXPECTED_TEAM_ID})"
@@ -30,6 +33,18 @@ PYTHON_ENTITLEMENTS = {
 CAPTURE_ENTITLEMENTS = {
     "com.apple.security.device.audio-input": True,
 }
+CODE_SIGNATURE_RUNTIME = 0x00010000
+NOTE_RUNTIME_RESOURCES = {
+    "runtime": Path("python-runtime/bin/python3.12"),
+    "bridge": Path("note-bridge.py"),
+    "validator": Path("note-validator.zip"),
+}
+NOTE_VALIDATOR_INVENTORY = (
+    "note_validator.py",
+    "summarize.py",
+    "transcript.py",
+    "capture_health.py",
+)
 
 
 class VerificationError(ValueError):
@@ -50,6 +65,72 @@ def run(*arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise VerificationError(message)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    require(path.is_file() and not path.is_symlink(), "runtime resource is missing or unsafe")
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise VerificationError(f"runtime resource is unreadable ({exc})") from None
+    return digest.hexdigest()
+
+
+def verify_note_runtime(resources: Path) -> None:
+    manifest_path = resources / "note-runtime-project.json"
+    try:
+        raw = manifest_path.read_bytes()
+        require(b"\\" not in raw, "note runtime manifest contains JSON escapes")
+        document = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VerificationError(f"note runtime manifest is unreadable ({exc})") from None
+    require(
+        isinstance(document, dict)
+        and list(document) == [
+            "schema",
+            "role",
+            "runtime",
+            "bridge",
+            "validator",
+            "generator",
+            "models",
+        ],
+        "note runtime manifest fields are not exact",
+    )
+    require(
+        json.dumps(document, ensure_ascii=False, indent=2).encode() == raw,
+        "note runtime manifest is not canonical",
+    )
+    require(
+        document["schema"] == "note-runtime/1"
+        and document["role"] == "project"
+        and document["generator"] is None
+        and document["models"] == [],
+        "note runtime role is not the closed project role",
+    )
+    for name, relative in NOTE_RUNTIME_RESOURCES.items():
+        value = document.get(name)
+        require(
+            isinstance(value, dict)
+            and list(value) == ["relative_path", "sha256"]
+            and value["relative_path"] == str(relative)
+            and value["sha256"] == sha256(resources / relative),
+            f"note runtime {name} is not path- and digest-bound",
+        )
+    try:
+        with zipfile.ZipFile(resources / NOTE_RUNTIME_RESOURCES["validator"]) as archive:
+            require(
+                tuple(archive.namelist()) == NOTE_VALIDATOR_INVENTORY,
+                "note validator ZIP inventory is not exact",
+            )
+            for entry in archive.infolist():
+                require(not entry.is_dir(), "note validator ZIP contains a directory")
+                archive.read(entry)
+    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+        raise VerificationError(f"note validator ZIP is unreadable ({exc})") from None
 
 
 def load_plist(path: Path) -> dict:
@@ -98,6 +179,7 @@ def verify_runtime(resources: Path, admission: str) -> None:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise VerificationError(f"runtime manifest is unreadable ({exc})") from None
     require(manifest.get("schema") == "app-runtime/1", "runtime schema is not current")
+    verify_note_runtime(resources)
     require(
         manifest.get("admission") == admission,
         f"runtime admission is not {admission}; refusing this distribution candidate",
@@ -194,9 +276,66 @@ def entitlements(path: Path) -> dict:
     return value
 
 
+def expected_designated_requirement(identifier: str) -> str:
+    return (
+        f'identifier "{identifier}" and anchor apple generic and '
+        "certificate 1[field.1.2.840.113635.100.6.2.6] exists and "
+        "certificate leaf[field.1.2.840.113635.100.6.1.13] exists and "
+        f'certificate leaf[subject.OU] = "{EXPECTED_TEAM_ID}"'
+    )
+
+
+def normalized_requirement(value: str) -> str:
+    value = re.sub(r"/\*\s*exists\s*\*/", "exists", value)
+    return " ".join(value.split())
+
+
+def signing_identity(path: Path) -> tuple[str, int, str, str]:
+    detail = run(
+        "/usr/bin/codesign",
+        "-d",
+        "--verbose=5",
+        "--requirements",
+        "-",
+        str(path),
+    )
+    require(detail.returncode == 0, f"codesign could not inspect {path}")
+    output = detail.stdout + detail.stderr
+    identifier = re.search(r"(?m)^Identifier=(\S+)$", output)
+    team = re.search(r"(?m)^TeamIdentifier=(\S+)$", output)
+    flags = re.search(r"(?m)^CodeDirectory .* flags=0x([0-9a-fA-F]+)", output)
+    requirement = re.search(r"(?m)^designated => (.+)$", output)
+    require(identifier is not None, f"missing signing identifier: {path}")
+    require(team is not None, f"missing signing team: {path}")
+    require(flags is not None, f"missing signature flags: {path}")
+    require(requirement is not None, f"missing designated requirement: {path}")
+    return (
+        identifier.group(1),
+        int(flags.group(1), 16),
+        normalized_requirement(requirement.group(1)),
+        team.group(1),
+    )
+
+
+def verify_exact_code_identity(path: Path, identifier: str) -> None:
+    actual_identifier, flags, requirement, team = signing_identity(path)
+    require(actual_identifier == identifier, f"wrong signing identifier: {path}")
+    require(team == EXPECTED_TEAM_ID, f"wrong signing team: {path}")
+    require(
+        flags & CODE_SIGNATURE_RUNTIME == CODE_SIGNATURE_RUNTIME,
+        f"executable lacks the hardened-runtime bit: {path}",
+    )
+    require(
+        requirement == expected_designated_requirement(identifier),
+        f"unexpected designated requirement: {path}",
+    )
+
+
 def verify_signatures(app: Path, inventory: list[tuple[Path, str]]) -> None:
     outer = run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app))
     require(outer.returncode == 0, "outer app signature is not strict and complete")
+    verify_exact_code_identity(app, EXPECTED_IDENTIFIER)
+    require(entitlements(app) == CAPTURE_ENTITLEMENTS, "unexpected outer entitlement")
     for path, kind in inventory:
         checked = run("/usr/bin/codesign", "--verify", "--strict", str(path))
         require(
@@ -213,18 +352,22 @@ def verify_signatures(app: Path, inventory: list[tuple[Path, str]]) -> None:
             f"TeamIdentifier={EXPECTED_TEAM_ID}" in signature,
             f"wrong signing team: {path.relative_to(app)}",
         )
-        if "executable" in kind:
-            require(
-                "runtime" in signature,
-                f"executable lacks hardened runtime: {path.relative_to(app)}",
-            )
         relative = path.relative_to(app)
         if relative == PYTHON_EXECUTABLE:
             expected_entitlements = PYTHON_ENTITLEMENTS
+            verify_exact_code_identity(path, EXPECTED_PYTHON_IDENTIFIER)
         elif relative in {MAIN_EXECUTABLE, CAPTURE_EXECUTABLE}:
             expected_entitlements = CAPTURE_ENTITLEMENTS
+            if relative == MAIN_EXECUTABLE:
+                verify_exact_code_identity(path, EXPECTED_IDENTIFIER)
         else:
             expected_entitlements = {}
+            if "executable" in kind:
+                _, flags, _, _ = signing_identity(path)
+                require(
+                    flags & CODE_SIGNATURE_RUNTIME == CODE_SIGNATURE_RUNTIME,
+                    f"executable lacks the hardened-runtime bit: {relative}",
+                )
         require(
             entitlements(path) == expected_entitlements,
             f"unexpected entitlement: {path.relative_to(app)}",

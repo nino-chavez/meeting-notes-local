@@ -1449,7 +1449,7 @@ mod tests {
     impl NoteProjector for FixtureProjector {
         fn project(&self, request: &ProjectRequest) -> Result<Vec<u8>, ProjectTransportError> {
             match *self.0.lock().unwrap() {
-                ProjectorMode::Transport => Err(ProjectTransportError),
+                ProjectorMode::Transport => Err(ProjectTransportError::Unavailable),
                 ProjectorMode::Refusal(code) => {
                     Ok(format!("{{\"schema\":\"note-projection-result/1\",\"request_id\":\"{}\",\"operation\":\"note.project\",\"outcome\":\"refused\",\"projection\":null,\"failure\":{{\"code\":\"{code}\",\"recoverable\":{}}}}}\n", request.request_id, code == "artifact-missing").into_bytes())
                 }

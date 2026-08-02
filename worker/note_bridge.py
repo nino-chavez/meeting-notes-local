@@ -23,6 +23,7 @@ from pathlib import Path
 MAX_FRAME_BYTES = 64 * 1024
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SAFE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_SAFE_MEETING_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _MANIFEST_FIELDS = (
     "schema",
     "role",
@@ -87,6 +88,7 @@ class _VerifiedRuntime:
     root_fd: int
     manifest: _RetainedFile
     resources: dict[str, _RetainedFile]
+    role: str
 
     def require_unchanged(self) -> None:
         _require_link(self.manifest)
@@ -103,6 +105,41 @@ class _VerifiedRuntime:
             resource.close()
         self.manifest.close()
         os.close(self.root_fd)
+
+
+@dataclass
+class _DescriptorResource:
+    file_fd: int
+    identity: os.stat_result
+    digest: str
+    bytes: bytes
+
+    def require_unchanged(self) -> None:
+        if not _same_identity(self.identity, os.fstat(self.file_fd)):
+            raise BridgeRefused("inherited resource identity changed")
+        current = hashlib.sha256(_read_retained(self.file_fd, self.identity)).hexdigest()
+        if current != self.digest:
+            raise BridgeRefused("inherited resource bytes changed")
+
+    def close(self) -> None:
+        os.close(self.file_fd)
+
+
+@dataclass
+class _DescriptorRuntime:
+    manifest: _DescriptorResource
+    resources: dict[str, _DescriptorResource]
+    role: str
+
+    def require_unchanged(self) -> None:
+        self.manifest.require_unchanged()
+        for resource in self.resources.values():
+            resource.require_unchanged()
+
+    def close(self) -> None:
+        for resource in self.resources.values():
+            resource.close()
+        self.manifest.close()
 
 
 def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
@@ -343,16 +380,19 @@ def verify_runtime(manifest_path: Path) -> _VerifiedRuntime:
             raise BridgeRefused("manifest fields or field order are not current")
         if json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8") != raw:
             raise BridgeRefused("manifest bytes are not canonical")
-        if document["schema"] != "note-runtime/1" or document["role"] != "inspect":
-            raise BridgeRefused("inspect bridge manifest has the wrong role")
+        if document["schema"] != "note-runtime/1" or document["role"] not in {
+            "inspect",
+            "project",
+        }:
+            raise BridgeRefused("note bridge manifest has the wrong role")
         for field in ("runtime", "bridge", "validator"):
             document[field] = _resource(document[field], field)
         if document["generator"] is not None or document["models"] != []:
-            raise BridgeRefused("inspect bridge may not carry a generator or models")
+            raise BridgeRefused("validator-only note bridge may not carry a generator or models")
         for field in ("runtime", "bridge", "validator"):
             resource = document[field]
             resources[field] = _open_beneath(root_fd, resource["relative_path"], resource["sha256"])
-        verified = _VerifiedRuntime(root_fd, manifest, resources)
+        verified = _VerifiedRuntime(root_fd, manifest, resources, document["role"])
         _require_runtime_identity(verified)
         verified.require_unchanged()
         return verified
@@ -367,6 +407,79 @@ def verify_runtime(manifest_path: Path) -> _VerifiedRuntime:
             if manifest_parent is not None:
                 os.close(manifest_parent)
         os.close(root_fd)
+        raise
+
+
+def _resource_from_descriptor(descriptor: int) -> _DescriptorResource:
+    owned = os.dup(descriptor)
+    try:
+        identity = os.fstat(owned)
+        if (
+            not stat.S_ISREG(identity.st_mode)
+            or identity.st_uid != os.geteuid()
+            or stat.S_IMODE(identity.st_mode) & 0o022
+        ):
+            raise BridgeRefused("inherited resource is not a bundle-owned regular file")
+        data = _read_retained(owned, identity)
+        return _DescriptorResource(
+            owned,
+            identity,
+            hashlib.sha256(data).hexdigest(),
+            data,
+        )
+    except Exception:
+        os.close(owned)
+        raise
+
+
+def verify_descriptor_runtime(
+    manifest_fd: int,
+    bridge_fd: int,
+    validator_fd: int,
+) -> _DescriptorRuntime:
+    manifest = _resource_from_descriptor(manifest_fd)
+    resources: dict[str, _DescriptorResource] = {}
+    try:
+        raw = manifest.bytes
+        if b"\\" in raw:
+            raise BridgeRefused("manifest may not use JSON escapes")
+        document = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+        if not isinstance(document, dict) or list(document) != list(_MANIFEST_FIELDS):
+            raise BridgeRefused("manifest fields or field order are not current")
+        if json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8") != raw:
+            raise BridgeRefused("manifest bytes are not canonical")
+        if document["schema"] != "note-runtime/1" or document["role"] != "project":
+            raise BridgeRefused("descriptor bridge manifest has the wrong role")
+        for field in ("runtime", "bridge", "validator"):
+            document[field] = _resource(document[field], field)
+        if document["generator"] is not None or document["models"] != []:
+            raise BridgeRefused("project bridge may not carry a generator or models")
+        resources["bridge"] = _resource_from_descriptor(bridge_fd)
+        resources["validator"] = _resource_from_descriptor(validator_fd)
+        if resources["bridge"].digest != document["bridge"]["sha256"]:
+            raise BridgeRefused("inherited bridge differs from the manifest")
+        if resources["validator"].digest != document["validator"]["sha256"]:
+            raise BridgeRefused("inherited validator differs from the manifest")
+        executable_fd = os.open(
+            sys.executable,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW_ANY", os.O_NOFOLLOW),
+        )
+        try:
+            executable_identity = os.fstat(executable_fd)
+            if not stat.S_ISREG(executable_identity.st_mode):
+                raise BridgeRefused("running interpreter path is unsafe")
+            executable_bytes = _read_retained(executable_fd, executable_identity)
+        finally:
+            os.close(executable_fd)
+        if hashlib.sha256(executable_bytes).hexdigest() != document["runtime"]["sha256"]:
+            raise BridgeRefused("running interpreter differs from the manifest")
+        runtime = _DescriptorRuntime(manifest, resources, "project")
+        runtime.require_unchanged()
+        return runtime
+    except Exception:
+        for resource in resources.values():
+            resource.close()
+        manifest.close()
         raise
 
 
@@ -441,29 +554,39 @@ def _canonical_uuid(value: object) -> str:
     return value
 
 
-def _parse_command(frame: bytes) -> tuple[str, dict]:
+def _opaque_meeting_id(value: object) -> str:
+    if not isinstance(value, str) or not _SAFE_MEETING_ID.fullmatch(value):
+        raise InvalidArguments("meeting ID is not an opaque meeting ID")
+    return value
+
+
+def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
     value = json.loads(frame, object_pairs_hook=_reject_duplicate_keys)
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or list(value) != [
         "schema",
         "request_id",
         "operation",
         "arguments",
-    }:
+    ]:
         raise BridgeRefused("command has the wrong outer shape")
     try:
         request_id = _canonical_uuid(value["request_id"])
     except InvalidArguments as exc:
         raise BridgeRefused("command request ID is invalid") from exc
-    if value["schema"] != "note-bridge-command/1" or value["operation"] != "note.inspect":
-        raise BridgeRefused("command is outside the inspect role")
+    operation = f"note.{role}"
+    if value["schema"] != "note-bridge-command/1" or value["operation"] != operation:
+        raise BridgeRefused("command is outside the manifest role")
     arguments = value["arguments"]
-    if not isinstance(arguments, dict) or set(arguments) != {
+    if not isinstance(arguments, dict) or list(arguments) != [
         "meeting_id",
         "note_id",
         "transcript_id",
-    }:
-        raise InvalidArguments("inspect arguments have the wrong shape")
-    _canonical_uuid(arguments["meeting_id"])
+    ]:
+        raise InvalidArguments("note arguments have the wrong shape")
+    if role == "inspect":
+        _canonical_uuid(arguments["meeting_id"])
+    else:
+        _opaque_meeting_id(arguments["meeting_id"])
     try:
         _safe_digest(arguments["note_id"], "note ID")
         _safe_digest(arguments["transcript_id"], "transcript ID")
@@ -472,11 +595,14 @@ def _parse_command(frame: bytes) -> tuple[str, dict]:
     return request_id, arguments
 
 
-def _read_frame(parent_fd: int) -> bytes:
+def _read_frame(parent_fd: int | None) -> bytes:
     buffer = bytearray()
     while b"\n" not in buffer:
-        ready, _, _ = select.select([sys.stdin.fileno(), parent_fd], [], [], 10)
-        if parent_fd in ready and os.read(parent_fd, 1) == b"":
+        watched = [sys.stdin.fileno()]
+        if parent_fd is not None:
+            watched.append(parent_fd)
+        ready, _, _ = select.select(watched, [], [], 10)
+        if parent_fd is not None and parent_fd in ready and os.read(parent_fd, 1) == b"":
             raise BridgeRefused("parent liveness ended")
         if sys.stdin.fileno() not in ready:
             raise BridgeRefused("note command timed out")
@@ -500,17 +626,25 @@ def _emit(value: dict) -> None:
     sys.stdout.buffer.flush()
 
 
-def _refused(request_id: str, code: str, recoverable: bool) -> None:
-    _emit(
-        {
+def _refused(request_id: str, code: str, recoverable: bool, role: str) -> None:
+    if role == "inspect":
+        _emit({
             "schema": "note-bridge-result/1",
             "request_id": request_id,
             "operation": "note.inspect",
             "outcome": "refused",
             "artifact_digests": {},
             "failure": {"code": code, "recoverable": recoverable},
-        }
-    )
+        })
+        return
+    _emit({
+        "schema": "note-projection-result/1",
+        "request_id": request_id,
+        "operation": "note.project",
+        "outcome": "refused",
+        "projection": None,
+        "failure": {"code": code, "recoverable": recoverable},
+    })
 
 
 def _watch_parent(parent_fd: int) -> None:
@@ -528,6 +662,33 @@ def _watch_parent(parent_fd: int) -> None:
     threading.Thread(target=exit_at_eof, daemon=True).start()
 
 
+def _watch_parent_pid(expected_parent_pid: int) -> None:
+    if expected_parent_pid <= 1 or os.getppid() != expected_parent_pid:
+        raise BridgeRefused("parent identity changed before watch registration")
+    if not hasattr(select, "kqueue"):
+        raise BridgeRefused("parent process watch is unavailable")
+    queue = select.kqueue()
+    event = select.kevent(
+        expected_parent_pid,
+        filter=select.KQ_FILTER_PROC,
+        flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+        fflags=select.KQ_NOTE_EXIT,
+    )
+    queue.control([event], 0, 0)
+    if os.getppid() != expected_parent_pid:
+        queue.close()
+        raise BridgeRefused("parent identity changed during watch registration")
+
+    def exit_with_parent() -> None:
+        try:
+            events = queue.control(None, 1, None)
+        except Exception:
+            os._exit(2)
+        os._exit(0 if events else 2)
+
+    threading.Thread(target=exit_with_parent, daemon=True).start()
+
+
 def _require_execution_identity(
     runtime: _VerifiedRuntime,
     standard_library: tuple[Path, ...],
@@ -538,74 +699,127 @@ def _require_execution_identity(
     _require_loaded_code_confined(runtime, standard_library, bundle_loader)
 
 
-def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
+def _require_descriptor_identity(
+    runtime: _DescriptorRuntime,
+    bundle_loader: object,
+) -> None:
+    runtime.require_unchanged()
+    if any(
+        getattr(sys.modules[name], "__loader__", None) is not bundle_loader
+        for name in _VALIDATOR_MODULES
+    ):
+        raise BridgeRefused("validator code escaped the inherited bundle")
+
+
+def run(
+    root_path: Path,
+    manifest_path: Path | None,
+    parent_fd: int | None,
+    *,
+    descriptor_fds: tuple[int, int, int] | None = None,
+    expected_parent_pid: int | None = None,
+) -> int:
     standard_library = _confine_runtime_imports()
-    runtime = verify_runtime(manifest_path)
+    if descriptor_fds is None:
+        if manifest_path is None or parent_fd is None:
+            raise BridgeRefused("path bridge launch is incomplete")
+        runtime = verify_runtime(manifest_path)
+    else:
+        if manifest_path is not None or parent_fd is not None or expected_parent_pid is None:
+            raise BridgeRefused("descriptor bridge launch is incomplete")
+        _watch_parent_pid(expected_parent_pid)
+        runtime = verify_descriptor_runtime(*descriptor_fds)
     root_fd = _open_absolute_directory(root_path, private=True)
     try:
         validator, bundle_loader = load_validator(runtime)
-        _require_execution_identity(runtime, standard_library, bundle_loader)
+
+        def require_identity() -> None:
+            if isinstance(runtime, _DescriptorRuntime):
+                _require_descriptor_identity(runtime, bundle_loader)
+            else:
+                _require_execution_identity(runtime, standard_library, bundle_loader)
+
+        require_identity()
         _emit(
             {
                 "schema": "note-bridge-event/1",
                 "event": "ready",
                 "protocol": 1,
-                "role": "inspect",
+                "role": runtime.role,
                 "manifest_sha256": runtime.manifest.digest,
-                "operations": ["note.inspect"],
+                "operations": [f"note.{runtime.role}"],
             }
         )
         try:
             frame = _read_frame(parent_fd)
         except Exception:
-            _require_execution_identity(runtime, standard_library, bundle_loader)
+            require_identity()
             return 2
         request_id: str | None = None
         try:
             parsed = json.loads(frame, object_pairs_hook=_reject_duplicate_keys)
             if isinstance(parsed, dict) and isinstance(parsed.get("request_id"), str):
                 request_id = parsed["request_id"]
-            request_id, arguments = _parse_command(frame)
+            request_id, arguments = _parse_command(frame, runtime.role)
         except InvalidArguments:
             if request_id is None:
-                _require_execution_identity(runtime, standard_library, bundle_loader)
+                require_identity()
                 return 2
             try:
                 request_id = _canonical_uuid(request_id)
             except InvalidArguments:
-                _require_execution_identity(runtime, standard_library, bundle_loader)
+                require_identity()
                 return 2
-            _require_execution_identity(runtime, standard_library, bundle_loader)
-            _refused(request_id, "invalid-request", False)
+            require_identity()
+            _refused(request_id, "invalid-request", False, runtime.role)
             return 0
         except (BridgeRefused, UnicodeDecodeError, json.JSONDecodeError):
-            _require_execution_identity(runtime, standard_library, bundle_loader)
+            require_identity()
             return 2
-        _require_execution_identity(runtime, standard_library, bundle_loader)
+        require_identity()
         try:
-            digests = validator.inspect(root_fd, arguments)
+            result = (
+                validator.inspect(root_fd, arguments)
+                if runtime.role == "inspect"
+                else validator.project(root_fd, arguments)
+            )
         except validator.ArtifactFailure as exc:
             if (exc.code, exc.recoverable) not in {
                 ("artifact-invalid", False),
                 ("artifact-missing", True),
                 ("artifact-changed", False),
             }:
-                _require_execution_identity(runtime, standard_library, bundle_loader)
+                require_identity()
                 return 2
-            _require_execution_identity(runtime, standard_library, bundle_loader)
-            _refused(request_id, exc.code, exc.recoverable)
+            require_identity()
+            _refused(request_id, exc.code, exc.recoverable, runtime.role)
             return 0
         except Exception:
-            _require_execution_identity(runtime, standard_library, bundle_loader)
+            require_identity()
             return 2
-        _require_execution_identity(runtime, standard_library, bundle_loader)
+        require_identity()
+        if runtime.role == "project":
+            projected = {
+                "schema": "note-projection-result/1",
+                "request_id": request_id,
+                "operation": "note.project",
+                "outcome": "succeeded",
+                "projection": result,
+                "failure": None,
+            }
+            encoded = json.dumps(projected, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            if len(encoded) + 1 > MAX_FRAME_BYTES:
+                _refused(request_id, "projection-capacity-exceeded", False, runtime.role)
+                return 0
+            _emit(projected)
+            return 0
         _emit(
             {
                 "schema": "note-bridge-result/1",
                 "request_id": request_id,
                 "operation": "note.inspect",
                 "outcome": "succeeded",
-                "artifact_digests": digests,
+                "artifact_digests": result,
                 "failure": None,
             }
         )
@@ -627,6 +841,26 @@ def main() -> int:
             arguments.temporary_private_root,
             arguments.note_runtime_manifest,
             arguments.parent_liveness_fd,
+        )
+    except Exception:
+        return 2
+
+
+def main_from_fds(
+    manifest_fd: int,
+    bridge_fd: int,
+    validator_fd: int,
+    storage_root: str,
+    expected_parent_pid: int,
+) -> int:
+    """Entry point used only by the signed Rust-owned descriptor bootstrap."""
+    try:
+        return run(
+            Path(storage_root),
+            None,
+            None,
+            descriptor_fds=(manifest_fd, bridge_fd, validator_fd),
+            expected_parent_pid=expected_parent_pid,
         )
     except Exception:
         return 2
