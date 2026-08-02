@@ -28,6 +28,20 @@ fn generated_preview_library_buttons_bind_their_own_activation() {
 }
 
 #[test]
+fn meeting_detail_status_helper_is_defined_before_use() {
+    let shell = include_str!("../../ui/main.js");
+    let helper = shell
+        .find("function message(target, text, state = \"\")")
+        .expect("meeting-detail status helper");
+    let first_call = shell
+        .find("message(meetingDetailState")
+        .expect("meeting-detail status call");
+
+    assert!(helper < first_call);
+    assert!(shell[helper..first_call].contains("target.dataset.state = state;"));
+}
+
+#[test]
 fn main_window_has_only_named_commands_and_no_generic_capability() {
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
