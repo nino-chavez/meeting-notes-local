@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::library_read::valid_opaque_id;
+use crate::meeting::valid_opaque_id;
 use crate::storage::StorageRoot;
 
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
@@ -117,9 +117,17 @@ fn read_macos(root: &Path) -> MetadataState {
     let mut file = match open_metadata(&directory) {
         Ok(Some(file)) => file,
         Ok(None) => {
-            return MetadataState::Missing {
-                identity: identity(b"library-metadata/1:absent"),
-            };
+            if same_path_fd(&library, &directory)
+                && safe_directory(&directory)
+                    .map(|after| after == directory_before)
+                    .unwrap_or(false)
+                && metadata_child_is_missing(&directory).unwrap_or(false)
+            {
+                return MetadataState::Missing {
+                    identity: identity(b"library-metadata/1:absent"),
+                };
+            }
+            return unavailable_identity(root, b"missing-state-changed");
         }
         Err(()) => return unavailable_identity(root, b"unsafe-file"),
     };
@@ -312,6 +320,26 @@ fn open_metadata(directory: &File) -> Result<Option<File>, ()> {
     }
     // SAFETY: openat returned a distinct owned descriptor.
     Ok(Some(unsafe { File::from_raw_fd(fd) }))
+}
+
+#[cfg(target_os = "macos")]
+fn metadata_child_is_missing(directory: &File) -> Result<bool, ()> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            METADATA_NAME.as_ptr().cast(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        return Ok(false);
+    }
+    match io::Error::last_os_error().raw_os_error() {
+        Some(code) if code == libc::ENOENT => Ok(true),
+        _ => Err(()),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -549,7 +577,11 @@ fn validate(wire: MetadataWire) -> Result<MetadataWire, &'static str> {
 }
 fn canonical_uuid(value: &str) -> bool {
     Uuid::parse_str(value)
-        .map(|id| id.to_string() == value)
+        .map(|id| {
+            id.to_string() == value
+                && id.get_version_num() == 4
+                && id.get_variant() == uuid::Variant::RFC4122
+        })
         .unwrap_or(false)
 }
 fn valid_label(value: &str) -> bool {
@@ -574,6 +606,25 @@ fn unicode_normalization(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn valid_wire() -> MetadataWire {
+        MetadataWire {
+            revision: 7,
+            folders: vec![Folder {
+                id: "11111111-1111-4111-8111-111111111111".into(),
+                name: "Folder".into(),
+            }],
+            meetings: vec![MeetingMetadata {
+                meeting_id: "meeting-a".into(),
+                title: Some("Title".into()),
+                folder_id: Some("11111111-1111-4111-8111-111111111111".into()),
+            }],
+        }
+    }
+
+    fn assert_invalid(wire: MetadataWire) {
+        assert!(validate(wire).is_err());
+    }
     #[test]
     fn parser_refuses_order_duplicates_and_noncanonical_rows() {
         let good = br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[]}"#;
@@ -624,6 +675,86 @@ mod tests {
                 .and_then(|wire| validate(wire).map_err(de::Error::custom))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn validator_isolates_uuid_row_and_label_rules() {
+        assert!(validate(valid_wire()).is_ok());
+        assert!(canonical_uuid("11111111-1111-4111-8111-111111111111"));
+        for invalid in [
+            "00000000-0000-0000-0000-000000000000", // nil / non-v4
+            "11111111-1111-1111-8111-111111111111", // v1
+            "11111111-1111-4111-0111-111111111111", // NCS variant
+            "11111111-1111-4111-8111-11111111111A", // non-lowercase
+        ] {
+            assert!(!canonical_uuid(invalid));
+        }
+
+        let mut duplicate_folder = valid_wire();
+        duplicate_folder
+            .folders
+            .push(duplicate_folder.folders[0].clone());
+        assert_invalid(duplicate_folder);
+        let mut unsorted_folders = valid_wire();
+        unsorted_folders.folders.insert(
+            0,
+            Folder {
+                id: "22222222-2222-4222-8222-222222222222".into(),
+                name: "Later".into(),
+            },
+        );
+        assert_invalid(unsorted_folders);
+        let mut duplicate_meeting = valid_wire();
+        duplicate_meeting
+            .meetings
+            .push(duplicate_meeting.meetings[0].clone());
+        assert_invalid(duplicate_meeting);
+        let mut unsorted_meetings = valid_wire();
+        unsorted_meetings.meetings.insert(
+            0,
+            MeetingMetadata {
+                meeting_id: "meeting-b".into(),
+                title: Some("Other".into()),
+                folder_id: None,
+            },
+        );
+        assert_invalid(unsorted_meetings);
+        let mut opaque_id = valid_wire();
+        opaque_id.meetings[0].meeting_id = "../unsafe".into();
+        assert_invalid(opaque_id);
+        let mut bad_reference = valid_wire();
+        bad_reference.meetings[0].folder_id = Some("22222222-2222-4222-8222-222222222222".into());
+        assert_invalid(bad_reference);
+
+        for bad_label in [
+            "",
+            "e\u{301}",
+            " title",
+            "title\\path",
+            "line\u{2028}break",
+            "line\u{2029}break",
+            "control\u{0001}",
+        ] {
+            let mut title = valid_wire();
+            title.meetings[0].title = Some(bad_label.into());
+            assert_invalid(title);
+        }
+        let mut too_long = valid_wire();
+        too_long.folders[0].name = "n".repeat(121);
+        assert_invalid(too_long);
+    }
+
+    #[test]
+    fn parser_isolates_missing_and_nested_field_rules() {
+        for bytes in [
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","folder_id":null}]}"#.as_slice(),
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":null}]}"#.as_slice(),
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":null,"folder_id":null,"extra":true}]}"#.as_slice(),
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":null,"title":null,"folder_id":null}]}"#.as_slice(),
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"Folder","name":"Again"}],"meetings":[]}"#.as_slice(),
+        ] {
+            assert!(serde_json::from_slice::<MetadataWire>(bytes).is_err());
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -700,5 +831,25 @@ mod tests {
         assert!(safe_directory(&fd).unwrap() != before);
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(safe_directory(&fd).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn directory_path_binding_rejects_a_replaced_missing_namespace() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let temp = tempfile::TempDir::new().unwrap();
+        let library = temp.path().join("library");
+        fs::create_dir(&library).unwrap();
+        fs::set_permissions(&library, fs::Permissions::from_mode(0o700)).unwrap();
+        let fd = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&library)
+            .unwrap();
+        fs::rename(&library, temp.path().join("old-library")).unwrap();
+        fs::create_dir(&library).unwrap();
+        fs::set_permissions(&library, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!same_path_fd(&library, &fd));
+        assert!(metadata_child_is_missing(&fd).unwrap());
     }
 }

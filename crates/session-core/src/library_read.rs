@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::library_metadata::{MetadataIdentity, MetadataState, read_library_metadata};
 use crate::meeting::{
     MAX_MEETING_RECORD_BYTES, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref, load_meeting,
-    open_private_file, require_private_directory, verify_artifact_ref,
+    open_private_file, require_private_directory, valid_opaque_id, verify_artifact_ref,
     verify_record_static_artifacts,
 };
 use crate::storage::StorageRoot;
@@ -756,15 +756,6 @@ fn normalize(value: &str) -> (String, Vec<(u64, u64)>) {
 
 fn is_forbidden(character: char) -> bool {
     character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
-}
-pub(crate) fn valid_opaque_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value != "."
-        && value != ".."
-        && value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
 }
 fn valid_digest(value: &str) -> bool {
     value.len() == 64
