@@ -41,7 +41,43 @@ fn isolated_development_config_with_feature_is_development_only() {
 }
 
 #[test]
-fn production_rejects_every_development_or_hybrid_field() {
+fn preview_config_with_feature_keeps_the_existing_alpha_command_boundary() {
+    let preview = config(include_str!("../tauri.preview.conf.json"));
+    let plan = plan(BuildMode::Preview);
+    assert!(validate(BuildMode::Preview, &preview).is_ok());
+    assert_eq!(plan.capabilities_path, "capabilities/preview.json");
+    assert_eq!(plan.permissions_path, "permissions/production/**/*");
+    assert_eq!(
+        plan.commands,
+        [
+            "app_snapshot",
+            "start_meeting",
+            "stop_meeting",
+            "dismiss_meeting",
+            "retry_startup",
+        ]
+    );
+}
+
+#[test]
+fn surface_features_select_exactly_one_build_lane() {
+    assert!(matches!(
+        BuildMode::from_enabled_features(false, false),
+        Ok(BuildMode::Production)
+    ));
+    assert!(matches!(
+        BuildMode::from_enabled_features(true, false),
+        Ok(BuildMode::Development)
+    ));
+    assert!(matches!(
+        BuildMode::from_enabled_features(false, true),
+        Ok(BuildMode::Preview)
+    ));
+    assert!(BuildMode::from_enabled_features(true, true).is_err());
+}
+
+#[test]
+fn production_rejects_every_isolated_surface_or_hybrid_field() {
     let production = config(include_str!("../tauri.conf.json"));
     let mut hybrids = Vec::new();
 
@@ -85,13 +121,27 @@ fn production_rejects_every_development_or_hybrid_field() {
     empty_resources["bundle"]["resources"] = Value::Null;
     hybrids.push(empty_resources);
 
+    let mut preview_identifier = production.clone();
+    preview_identifier["identifier"] = Value::String(build_contract::PREVIEW_IDENTIFIER.into());
+    hybrids.push(preview_identifier);
+
+    let mut preview_window = production.clone();
+    preview_window["app"]["windows"][0]["label"] =
+        Value::String(build_contract::PREVIEW_WINDOW.into());
+    hybrids.push(preview_window);
+
+    let mut preview_capability = production.clone();
+    preview_capability["app"]["security"]["capabilities"] =
+        json!([build_contract::PREVIEW_CAPABILITY]);
+    hybrids.push(preview_capability);
+
     for hybrid in hybrids {
         assert!(validate(BuildMode::Production, &hybrid).is_err());
     }
 }
 
 #[test]
-fn development_rejects_every_production_or_hybrid_field() {
+fn development_rejects_every_production_preview_or_hybrid_field() {
     let development = config(include_str!("../tauri.library-dev.conf.json"));
     let production = config(include_str!("../tauri.conf.json"));
     let mut hybrids = Vec::new();
@@ -136,7 +186,64 @@ fn development_rejects_every_production_or_hybrid_field() {
     production_resources["bundle"]["resources"] = production["bundle"]["resources"].clone();
     hybrids.push(production_resources);
 
+    let mut preview_identifier = development.clone();
+    preview_identifier["identifier"] = Value::String(build_contract::PREVIEW_IDENTIFIER.into());
+    hybrids.push(preview_identifier);
+
+    let mut preview_window = development.clone();
+    preview_window["app"]["windows"][0]["label"] =
+        Value::String(build_contract::PREVIEW_WINDOW.into());
+    hybrids.push(preview_window);
+
+    let mut preview_capability = development.clone();
+    preview_capability["app"]["security"]["capabilities"] =
+        json!([build_contract::PREVIEW_CAPABILITY]);
+    hybrids.push(preview_capability);
+
     for hybrid in hybrids {
         assert!(validate(BuildMode::Development, &hybrid).is_err());
+    }
+}
+
+#[test]
+fn preview_rejects_production_development_and_hybrid_fields() {
+    let preview = config(include_str!("../tauri.preview.conf.json"));
+    let production = config(include_str!("../tauri.conf.json"));
+    let development = config(include_str!("../tauri.library-dev.conf.json"));
+    let mut hybrids = Vec::new();
+
+    for other in [&production, &development] {
+        let mut identifier = preview.clone();
+        identifier["identifier"] = other["identifier"].clone();
+        hybrids.push(identifier);
+
+        let mut name = preview.clone();
+        name["productName"] = other["productName"].clone();
+        hybrids.push(name);
+
+        let mut window = preview.clone();
+        window["app"]["windows"] = other["app"]["windows"].clone();
+        hybrids.push(window);
+
+        let mut capability = preview.clone();
+        capability["app"]["security"]["capabilities"] =
+            other["app"]["security"]["capabilities"].clone();
+        hybrids.push(capability);
+    }
+
+    let mut library_frontend = preview.clone();
+    library_frontend["build"]["frontendDist"] = Value::String(build_contract::DEV_FRONTEND.into());
+    hybrids.push(library_frontend);
+
+    let mut changed_resources = preview.clone();
+    changed_resources["bundle"]["resources"] = Value::Null;
+    hybrids.push(changed_resources);
+
+    let mut non_adhoc = preview.clone();
+    non_adhoc["bundle"]["macOS"]["signingIdentity"] = Value::String("not-ad-hoc".into());
+    hybrids.push(non_adhoc);
+
+    for hybrid in hybrids {
+        assert!(validate(BuildMode::Preview, &hybrid).is_err());
     }
 }

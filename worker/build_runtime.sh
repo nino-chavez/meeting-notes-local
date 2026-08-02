@@ -91,7 +91,8 @@ fi
 
 cp -R "$VENDOR/python-runtime" "$STAGE/python-runtime"
 cp "$REPO/worker/__init__.py" "$REPO/worker/main.py" \
-  "$REPO/worker/adapters.py" "$REPO/worker/storage.py" \
+  "$REPO/worker/adapters.py" "$REPO/worker/product_contracts.py" \
+  "$REPO/worker/storage.py" \
   "$REPO/worker/transcription.py" "$STAGE/worker/"
 cp "$REPO/worker/note_bridge.py" "$STAGE/note-bridge.py"
 cp "$REPO/spike/verify_capture.py" "$REPO/spike/capture_health.py" \

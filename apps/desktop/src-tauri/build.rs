@@ -5,11 +5,11 @@ use std::{env, fs};
 use build_contract::{BuildMode, plan, validate};
 
 fn main() {
-    let mode = if env::var_os("CARGO_FEATURE_LIBRARY_DEV_SURFACE").is_some() {
-        BuildMode::Development
-    } else {
-        BuildMode::Production
-    };
+    let mode = BuildMode::from_enabled_features(
+        env::var_os("CARGO_FEATURE_LIBRARY_DEV_SURFACE").is_some(),
+        env::var_os("CARGO_FEATURE_PREVIEW_SURFACE").is_some(),
+    )
+    .expect("only one Local Meeting Notes surface feature may be enabled");
     let config = env::var("TAURI_CONFIG")
         .ok()
         .map(Ok)

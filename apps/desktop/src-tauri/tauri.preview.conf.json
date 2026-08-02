@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Local Meeting Notes Preview",
+  "version": "0.1.0",
+  "identifier": "com.ninochavez.local-meeting-notes.preview",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "preview",
+        "title": "Local Meeting Notes — Preview",
+        "width": 960,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 560,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "capabilities": ["preview-window"],
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "freezePrototype": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.png"],
+    "resources": {
+      "../runtime/app-runtime.json": "app-runtime.json",
+      "../runtime/bin": "bin",
+      "../runtime/encoder-unavailable.identity": "encoder-unavailable.identity",
+      "../runtime/models": "models",
+      "../runtime/note-bridge.py": "note-bridge.py",
+      "../runtime/note-runtime-project.json": "note-runtime-project.json",
+      "../runtime/note-validator.zip": "note-validator.zip",
+      "../runtime/notes": "notes",
+      "../runtime/python-runtime": "python-runtime",
+      "../runtime/spike": "spike",
+      "../runtime/worker": "worker"
+    },
+    "macOS": {
+      "minimumSystemVersion": "14.4",
+      "signingIdentity": "-"
+    }
+  }
+}
