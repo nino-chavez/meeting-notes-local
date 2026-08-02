@@ -28,6 +28,8 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "dismiss_meeting",
     "retry_startup",
     "preview_library_snapshot",
+    "preview_library_search",
+    "preview_library_open_search_result",
     "preview_library_open_transcript",
 ];
 

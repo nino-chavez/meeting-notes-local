@@ -15,6 +15,9 @@ const retryStartup = document.querySelector("#retry-startup");
 const libraryLink = document.querySelector("#library-link");
 const libraryList = document.querySelector("#library-list");
 const libraryNotice = document.querySelector("#library-notice");
+const librarySearch = document.querySelector("#library-search");
+const librarySearchQuery = document.querySelector("#library-search-query");
+const librarySearchResults = document.querySelector("#library-search-results");
 const retention = document.querySelector("#retention-days");
 const checks = [
   document.querySelector("#consent-check"),
@@ -84,7 +87,7 @@ function renderTranscript(snapshot) {
   );
 }
 
-function renderTurns(container, warning, turns, warnings) {
+function renderTurns(container, warning, turns, warnings, matchedSourceTurnIndex = null) {
   container.replaceChildren();
   const safeWarnings = Array.isArray(warnings) ? warnings : [];
   warning.hidden = safeWarnings.length === 0;
@@ -92,6 +95,10 @@ function renderTurns(container, warning, turns, warnings) {
   for (const turn of turns || []) {
     const row = document.createElement("section");
     row.className = "turn";
+    if (Number.isInteger(matchedSourceTurnIndex) && turn.sourceTurnIndex === matchedSourceTurnIndex) {
+      row.classList.add("matched-turn");
+      row.dataset.sourceTurnIndex = String(matchedSourceTurnIndex);
+    }
     const meta = document.createElement("div");
     meta.className = "turn-meta";
     const speaker = document.createElement("strong");
@@ -110,6 +117,11 @@ function renderTurns(container, warning, turns, warnings) {
     empty.textContent = "No speech was detected in this capture.";
     container.append(empty);
   }
+  if (Number.isInteger(matchedSourceTurnIndex)) {
+    window.requestAnimationFrame(() => {
+      container.querySelector(`[data-source-turn-index="${matchedSourceTurnIndex}"]`)?.scrollIntoView({ block: "center" });
+    });
+  }
 }
 
 function formatMeetingTime(epochSeconds) {
@@ -120,6 +132,7 @@ function formatMeetingTime(epochSeconds) {
 
 function renderLibrary(snapshot) {
   libraryList.replaceChildren();
+  librarySearchResults.replaceChildren();
   libraryNotice.hidden = true;
   libraryNotice.textContent = "";
   document.querySelector("#library-copy").textContent = snapshot.message || "Opening retained Preview meetings on this Mac.";
@@ -152,6 +165,42 @@ function renderLibrary(snapshot) {
     libraryList.append(button);
   }
   showScreen("library-screen");
+}
+
+function renderLibrarySearch(response) {
+  librarySearchResults.replaceChildren();
+  clearError(libraryNotice);
+  if (response.state !== "results") {
+    setError(libraryNotice, response.message || "No retained text matched that search.");
+    return;
+  }
+  for (const result of response.results || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "library-search-result";
+    button.dataset.searchHandle = result.handle;
+    const summary = document.createElement("span");
+    const label = document.createElement("strong");
+    const detail = document.createElement("small");
+    if (result.kind === "withheld") {
+      label.textContent = "Withheld turn";
+      detail.textContent = "A voice check withheld matching text.";
+    } else if (result.kind === "meeting") {
+      label.textContent = result.text || "Retained meeting";
+      detail.textContent = "Title or folder match";
+    } else {
+      label.textContent = result.text || "Matched transcript text";
+      detail.textContent = Number.isInteger(result.sourceTurnIndex)
+        ? `Transcript · turn ${result.sourceTurnIndex + 1}`
+        : "Transcript";
+    }
+    summary.append(label, detail);
+    const action = document.createElement("span");
+    action.textContent = result.kind === "withheld" ? "Review status" : "Open transcript";
+    button.append(summary, action);
+    librarySearchResults.append(button);
+  }
+  setError(libraryNotice, response.message || "Exact results from the current Preview Library.");
 }
 
 function renderStartup(state) {
@@ -250,6 +299,7 @@ async function openLibrary() {
   libraryViewActive = true;
   if (pollTimer) window.clearTimeout(pollTimer);
   pollTimer = null;
+  librarySearchQuery.value = "";
   document.querySelector("#library-copy").textContent = "Opening retained Preview meetings on this Mac.";
   libraryList.replaceChildren();
   showScreen("library-screen");
@@ -260,7 +310,15 @@ async function openLibrary() {
   }
 }
 
-async function openLibraryTranscript(meetingId) {
+function returnToLibrary() {
+  // Preserve the current reader snapshot, typed query, and opaque result
+  // handles. Rebuilding here would silently clear the exact search the
+  // operator just opened.
+  clearError(libraryNotice);
+  showScreen("library-screen");
+}
+
+async function openLibraryTranscript(meetingId, matchedSourceTurnIndex = null) {
   if (!invoke || !meetingId) return;
   try {
     const result = await invoke("preview_library_open_transcript", { meetingId });
@@ -273,10 +331,47 @@ async function openLibraryTranscript(meetingId) {
       document.querySelector("#library-transcript-warning"),
       result.turns,
       result.warnings,
+      matchedSourceTurnIndex,
     );
     showScreen("library-transcript-screen");
   } catch {
     setError(libraryNotice, "That transcript could not be opened. Reopen Library and try again.");
+  }
+}
+
+async function searchLibrary(event) {
+  event.preventDefault();
+  if (!invoke || !libraryViewActive) return;
+  const query = librarySearchQuery.value.trim();
+  librarySearchResults.replaceChildren();
+  if (!query) {
+    clearError(libraryNotice);
+    return;
+  }
+  setError(libraryNotice, "Searching this retained Preview Library…");
+  try {
+    renderLibrarySearch(await invoke("preview_library_search", { query }));
+  } catch {
+    setError(libraryNotice, "Search is unavailable right now. Reopen Library and try again.");
+  }
+}
+
+async function openLibrarySearchResult(handle) {
+  if (!invoke || !handle) return;
+  setError(libraryNotice, "Opening the selected retained result…");
+  try {
+    const result = await invoke("preview_library_open_search_result", { handle });
+    if (!result.meetingId || result.state === "withheld") {
+      setError(libraryNotice, result.message || "That result cannot be opened as visible transcript text.");
+      return;
+    }
+    if (result.state !== "transcript" && result.state !== "meeting") {
+      setError(libraryNotice, result.message || "That search result is no longer current. Reopen Library and try again.");
+      return;
+    }
+    await openLibraryTranscript(result.meetingId, Number.isInteger(result.sourceTurnIndex) ? result.sourceTurnIndex : null);
+  } catch {
+    setError(libraryNotice, "That search result could not be opened. Reopen Library and try again.");
   }
 }
 
@@ -375,15 +470,20 @@ retryStartup.addEventListener("click", async () => {
 });
 
 libraryLink.addEventListener("click", openLibrary);
+librarySearch.addEventListener("submit", searchLibrary);
 libraryList.addEventListener("click", (event) => {
   const row = event.target.closest("button[data-meeting-id]");
   if (row) openLibraryTranscript(row.dataset.meetingId);
+});
+librarySearchResults.addEventListener("click", (event) => {
+  const result = event.target.closest("button[data-search-handle]");
+  if (result) openLibrarySearchResult(result.dataset.searchHandle);
 });
 document.querySelector("#library-back").addEventListener("click", () => {
   libraryViewActive = false;
   refresh();
 });
-document.querySelector("#library-transcript-back").addEventListener("click", openLibrary);
+document.querySelector("#library-transcript-back").addEventListener("click", returnToLibrary);
 
 renderStartup("shell-rendered");
 refresh();

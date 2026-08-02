@@ -113,7 +113,16 @@
         <p class="kicker">Retained meetings</p>
         <h1 id="library-title">Your Library.</h1>
         <p class="lede" id="library-copy">Opening retained Preview meetings on this Mac.</p>
+        <form class="library-search" id="library-search">
+          <label for="library-search-query">Find exact words</label>
+          <div class="library-search-field">
+            <input id="library-search-query" type="search" autocomplete="off" placeholder="Transcript, title, or folder" />
+            <button class="secondary" type="submit">Search</button>
+          </div>
+          <small>Searches retained Preview transcript text, titles, and folders on this Mac.</small>
+        </form>
         <div class="notice" id="library-notice" hidden></div>
+        <div class="library-search-results" id="library-search-results" aria-live="polite"></div>
         <div class="library-list" id="library-list" aria-live="polite"></div>
         <button class="secondary" id="library-back" type="button">Back</button>
       </section>

@@ -189,10 +189,22 @@
           "markdownDescription": "Enables the dismiss_meeting command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_library_open_search_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-library-open-search-result",
+          "markdownDescription": "Enables the preview_library_open_search_result command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_library_open_transcript command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-library-open-transcript",
           "markdownDescription": "Enables the preview_library_open_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_library_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-library-search",
+          "markdownDescription": "Enables the preview_library_search command without any pre-configured scope."
         },
         {
           "description": "Enables the preview_library_snapshot command without any pre-configured scope.",
@@ -231,10 +243,22 @@
           "markdownDescription": "Denies the dismiss_meeting command without any pre-configured scope."
         },
         {
+          "description": "Denies the preview_library_open_search_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-library-open-search-result",
+          "markdownDescription": "Denies the preview_library_open_search_result command without any pre-configured scope."
+        },
+        {
           "description": "Denies the preview_library_open_transcript command without any pre-configured scope.",
           "type": "string",
           "const": "deny-preview-library-open-transcript",
           "markdownDescription": "Denies the preview_library_open_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_library_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-library-search",
+          "markdownDescription": "Denies the preview_library_search command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_library_snapshot command without any pre-configured scope.",
