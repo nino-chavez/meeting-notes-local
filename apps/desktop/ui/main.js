@@ -12,8 +12,12 @@ const startError = document.querySelector("#start-error");
 const stopButton = document.querySelector("#stop-button");
 const stopError = document.querySelector("#stop-error");
 const retryStartup = document.querySelector("#retry-startup");
-const libraryLink = document.querySelector("#library-link");
+const productNav = document.querySelector("#product-nav");
+const findLink = document.querySelector("#find-link");
+const meetingsLink = document.querySelector("#meetings-link");
+const promisesLink = document.querySelector("#promises-link");
 const profileLink = document.querySelector("#profile-link");
+const startMeetingAction = document.querySelector("#start-meeting-action");
 const profileKicker = document.querySelector("#profile-kicker");
 const profileTitle = document.querySelector("#profile-title");
 const profileLede = document.querySelector("#profile-lede");
@@ -49,14 +53,42 @@ let lastSnapshot = null;
 let pollTimer = null;
 let startedAt = null;
 let elapsedTimer = null;
-let secondaryViewActive = false;
 let meetingAudioDeletionHandle = "";
+let currentScreen = "startup-screen";
+let productReturnScreen = "meetings-screen";
 
 function showScreen(id) {
+  currentScreen = id;
   document.documentElement.dataset.screen = id;
   for (const [screenId, screen] of screens) {
     screen.classList.toggle("active", screenId === id);
   }
+  syncProductNavigation();
+}
+
+function syncProductNavigation() {
+  const activeLink = {
+    "find-screen": findLink,
+    "meetings-screen": meetingsLink,
+    "promises-screen": promisesLink,
+  }[currentScreen];
+  for (const link of [findLink, meetingsLink, promisesLink]) {
+    if (link === activeLink) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+}
+
+function isIdleProductScreen() {
+  return [
+    "find-screen",
+    "meetings-screen",
+    "promises-screen",
+    "profile-screen",
+    "idle-screen",
+    "meeting-detail-screen",
+    "library-transcript-screen",
+    "transcript-screen",
+  ].includes(currentScreen);
 }
 
 function setError(element, message) {
@@ -251,24 +283,20 @@ function renderAudioRetention(retention, deletionHandle = "") {
     return;
   }
   meetingRetentionTitle.textContent = "Recording retention needs attention";
-  meetingRetentionPolicy.textContent = retention.message || "Audio retention details are unavailable. Reopen Library and try again.";
+  meetingRetentionPolicy.textContent = retention.message || "Audio retention details are unavailable. Reopen Meetings and try again.";
   meetingRetentionConsequence.textContent = "No recording action is available from this Preview view.";
 }
 
 function renderLibrary(snapshot) {
   libraryList.replaceChildren();
-  librarySearchResults.replaceChildren();
-  libraryNotice.hidden = true;
-  libraryNotice.textContent = "";
-  document.querySelector("#library-copy").textContent = snapshot.message || "Opening retained Preview meetings on this Mac.";
+  document.querySelector("#library-copy").textContent = snapshot.message || "Opening retained meetings on this Mac.";
   if (snapshot.state !== "populated" && snapshot.state !== "populated-incomplete") {
     const empty = document.createElement("p");
     empty.className = "library-empty";
     empty.textContent = snapshot.state === "empty"
-      ? "No retained Preview meetings yet. Finish a Preview recording to see it here."
-      : "Some retained meetings could not be read. Reopen Library and try again.";
+      ? "No retained meetings yet. Finish a recording to see it here."
+      : "Some retained meetings could not be read. Reopen Meetings and try again.";
     libraryList.append(empty);
-    showScreen("library-screen");
     return;
   }
   for (const row of snapshot.rows || []) {
@@ -278,7 +306,7 @@ function renderLibrary(snapshot) {
     button.dataset.meetingHandle = row.handle;
     button.dataset.label = row.label || "Untitled meeting";
     button.disabled = row.transcriptAvailable !== true;
-    button.addEventListener("click", () => openMeetingDetail(row.handle));
+    button.addEventListener("click", () => openMeetingDetail(row.handle, "meetings-screen"));
     const summary = document.createElement("span");
     const label = document.createElement("strong");
     label.textContent = row.label || "Untitled meeting";
@@ -290,7 +318,6 @@ function renderLibrary(snapshot) {
     button.append(summary, action);
     libraryList.append(button);
   }
-  showScreen("library-screen");
 }
 
 function renderLibrarySearch(response) {
@@ -333,7 +360,7 @@ function renderLibrarySearch(response) {
     button.append(summary, action);
     librarySearchResults.append(button);
   }
-  setError(libraryNotice, response.message || "Exact results from the current Preview Library.");
+  setError(libraryNotice, response.message || "Exact results from your retained meetings.");
 }
 
 function renderStartup(state) {
@@ -365,8 +392,10 @@ function render(snapshot) {
   document.documentElement.dataset.captureState = capture;
   const preview = snapshot.preview === true;
   releaseBadge.textContent = preview ? "Preview" : "Internal alpha";
-  libraryLink.hidden = !preview || !["idle", "transcript-ready"].includes(capture) || startup !== "ready";
-  profileLink.hidden = !preview || !["idle", "transcript-ready"].includes(capture) || startup !== "ready";
+  const productNavigationAvailable = preview && ["idle", "transcript-ready"].includes(capture) && startup === "ready";
+  productNav.hidden = !productNavigationAvailable;
+  profileLink.hidden = !productNavigationAvailable;
+  startMeetingAction.hidden = !productNavigationAvailable;
   meetingLabel.textContent = snapshot.meeting_id ? `Meeting ${snapshot.meeting_id.slice(0, 8)}` : "";
 
   if (startup !== "ready") {
@@ -380,7 +409,7 @@ function render(snapshot) {
     case "idle":
       headerState.textContent = "Ready · nothing is recording";
       endElapsed();
-      showScreen("idle-screen");
+      if (!isIdleProductScreen()) showScreen("find-screen");
       if (!snapshot.retention_operational) {
         setError(startError, snapshot.error || "Audio retention needs attention before another meeting can start.");
       }
@@ -418,7 +447,7 @@ function render(snapshot) {
       headerState.textContent = "Transcript ready · nothing is recording";
       endElapsed();
       renderTranscript(snapshot);
-      showScreen("transcript-screen");
+      if (!isIdleProductScreen()) showScreen("transcript-screen");
       break;
     default:
       headerState.textContent = "Nothing is recording · needs attention";
@@ -428,32 +457,40 @@ function render(snapshot) {
   }
 }
 
-async function rebuildLibraryView(resetSearch = false) {
+async function rebuildMeetingsView() {
   if (!invoke) return;
-  if (resetSearch) librarySearchQuery.value = "";
-  document.querySelector("#library-copy").textContent = "Opening retained Preview meetings on this Mac.";
+  document.querySelector("#library-copy").textContent = "Opening retained meetings on this Mac.";
   libraryList.replaceChildren();
-  librarySearchResults.replaceChildren();
   try {
     const snapshot = await invoke("preview_library_snapshot");
     renderLibrary(snapshot);
-    const query = librarySearchQuery.value.trim();
-    if (query) {
-      libraryList.replaceChildren();
-      renderLibrarySearch(await invoke("preview_library_search", { query }));
-    }
   } catch {
-    renderLibrary({ state: "unavailable", rows: [], message: "The Preview library is unavailable right now." });
+    renderLibrary({ state: "unavailable", rows: [], message: "Meetings are unavailable right now." });
   }
 }
 
-async function openLibrary() {
+async function openFind() {
   if (!invoke || lastSnapshot?.preview !== true) return;
-  secondaryViewActive = true;
-  if (pollTimer) window.clearTimeout(pollTimer);
-  pollTimer = null;
-  showScreen("library-screen");
-  await rebuildLibraryView(true);
+  productReturnScreen = "find-screen";
+  showScreen("find-screen");
+}
+
+async function openMeetings() {
+  if (!invoke || lastSnapshot?.preview !== true) return;
+  productReturnScreen = "meetings-screen";
+  showScreen("meetings-screen");
+  await rebuildMeetingsView();
+}
+
+function openPromises() {
+  if (!lastSnapshot?.preview) return;
+  productReturnScreen = "promises-screen";
+  showScreen("promises-screen");
+}
+
+function openStartMeeting() {
+  if (!lastSnapshot?.preview) return;
+  showScreen("idle-screen");
 }
 
 function renderProfile(snapshot) {
@@ -475,9 +512,6 @@ function renderProfile(snapshot) {
 
 async function openProfile() {
   if (!invoke || lastSnapshot?.preview !== true) return;
-  secondaryViewActive = true;
-  if (pollTimer) window.clearTimeout(pollTimer);
-  pollTimer = null;
   showScreen("profile-screen");
   try {
     renderProfile(await invoke("preview_profile_snapshot"));
@@ -486,10 +520,12 @@ async function openProfile() {
   }
 }
 
-async function returnToLibrary() {
-  clearError(libraryNotice);
-  showScreen("library-screen");
-  await rebuildLibraryView(false);
+async function returnToProductHome() {
+  if (productReturnScreen === "meetings-screen") {
+    await openMeetings();
+    return;
+  }
+  await openFind();
 }
 
 async function openLibraryTranscript(handle, matchedSourceTurnIndex = null) {
@@ -509,7 +545,7 @@ async function openLibraryTranscript(handle, matchedSourceTurnIndex = null) {
     );
     showScreen("library-transcript-screen");
   } catch {
-    setError(libraryNotice, "That transcript could not be opened. Reopen Library and try again.");
+    setError(libraryNotice, "That transcript could not be opened. Reopen Meetings and try again.");
   }
 }
 
@@ -551,12 +587,13 @@ function renderMeetingDetail(response) {
     meetingClaimList.append(card);
   }
   if (!meetingClaimList.children.length) {
-    message(meetingDetailState, "This admitted note has no supported claims. The retained transcript remains the source of record.", "note");
+    message(meetingDetailState, "This note has no supported claims. The retained transcript remains the source of record.", "note");
   }
 }
 
-async function openMeetingDetail(handle) {
+async function openMeetingDetail(handle, returnScreen = "meetings-screen") {
   if (!invoke || !handle) return;
+  productReturnScreen = returnScreen;
   libraryList.replaceChildren();
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
@@ -572,7 +609,7 @@ async function openMeetingDetail(handle) {
     document.querySelector("#meeting-detail-transcript-handle").value = response.transcriptHandle || "";
     renderMeetingDetail(response);
   } catch {
-    message(meetingDetailState, "That meeting could not be opened. Return to Library and try again.", "stale");
+    message(meetingDetailState, "That meeting could not be opened. Return to Meetings and try again.", "stale");
     meetingNoNote.hidden = true;
   }
 }
@@ -584,7 +621,7 @@ async function openMeetingEvidence(handle) {
   try {
     const result = await invoke("preview_library_open_evidence", { handle, locatorOrdinal: 0 });
     if (result.state !== "evidence" || !result.transcriptHandle || !Number.isInteger(result.sourceTurnIndex)) {
-      message(meetingDetailState, result.message || "That claim is no longer current. Return to Library and try again.", result.state || "stale");
+      message(meetingDetailState, result.message || "That claim is no longer current. Return to Meetings and try again.", result.state || "stale");
       return;
     }
     await openLibraryTranscript(result.transcriptHandle, {
@@ -593,30 +630,30 @@ async function openMeetingEvidence(handle) {
       end: result.end,
     });
   } catch {
-    message(meetingDetailState, "That claim could not be opened. Return to Library and try again.", "stale");
+    message(meetingDetailState, "That claim could not be opened. Return to Meetings and try again.", "stale");
   }
 }
 
 async function searchLibrary(event) {
   event.preventDefault();
-  if (!invoke || !secondaryViewActive) return;
+  if (!invoke) return;
   const query = librarySearchQuery.value.trim();
   librarySearchResults.replaceChildren();
   if (!query) {
-    await rebuildLibraryView(false);
+    clearError(libraryNotice);
     return;
   }
-  libraryList.replaceChildren();
-  setError(libraryNotice, "Searching this retained Preview Library…");
+  setError(libraryNotice, "Searching your retained meetings…");
   try {
     renderLibrarySearch(await invoke("preview_library_search", { query }));
   } catch {
-    setError(libraryNotice, "Search is unavailable right now. Reopen Library and try again.");
+    setError(libraryNotice, "Search is unavailable right now. Reopen Find and try again.");
   }
 }
 
 async function openLibrarySearchResult(handle) {
   if (!invoke || !handle) return;
+  productReturnScreen = "find-screen";
   librarySearchResults.replaceChildren();
   setError(libraryNotice, "Opening the selected retained result…");
   try {
@@ -626,7 +663,7 @@ async function openLibrarySearchResult(handle) {
       return;
     }
     if (result.state !== "transcript" && result.state !== "meeting") {
-      setError(libraryNotice, result.message || "That search result is no longer current. Reopen Library and try again.");
+      setError(libraryNotice, result.message || "That search result is no longer current. Reopen Find and try again.");
       return;
     }
     const exactMatch = Number.isInteger(result.sourceTurnIndex)
@@ -638,18 +675,16 @@ async function openLibrarySearchResult(handle) {
       : null;
     await openLibraryTranscript(result.transcriptHandle, exactMatch);
   } catch {
-    setError(libraryNotice, "That search result could not be opened. Reopen Library and try again.");
+    setError(libraryNotice, "That search result could not be opened. Reopen Find and try again.");
   }
 }
 
 function schedulePoll(delay) {
-  if (secondaryViewActive) return;
   if (pollTimer) window.clearTimeout(pollTimer);
   pollTimer = window.setTimeout(refresh, delay);
 }
 
 async function refresh() {
-  if (secondaryViewActive) return;
   if (!invoke) {
     render({ startup: "diagnostic-written", capture: "idle", error: "The local application bridge is unavailable." });
     return;
@@ -722,12 +757,14 @@ stopButton.addEventListener("click", async () => {
 document.querySelector("#new-meeting").addEventListener("click", async () => {
   if (invoke) await invoke("dismiss_meeting");
   clearAttemptReview(true);
+  showScreen("find-screen");
   await refresh();
 });
 
 document.querySelector("#recover-button").addEventListener("click", async () => {
   if (invoke) await invoke("dismiss_meeting");
   clearAttemptReview(true);
+  showScreen("find-screen");
   await refresh();
 });
 
@@ -736,19 +773,16 @@ retryStartup.addEventListener("click", async () => {
   await refresh();
 });
 
-libraryLink.addEventListener("click", openLibrary);
+findLink.addEventListener("click", openFind);
+meetingsLink.addEventListener("click", openMeetings);
+promisesLink.addEventListener("click", openPromises);
 profileLink.addEventListener("click", openProfile);
+startMeetingAction.addEventListener("click", openStartMeeting);
+document.querySelector("#start-back").addEventListener("click", openFind);
 librarySearch.addEventListener("submit", searchLibrary);
-document.querySelector("#library-back").addEventListener("click", () => {
-  secondaryViewActive = false;
-  refresh();
-});
-document.querySelector("#profile-back").addEventListener("click", () => {
-  secondaryViewActive = false;
-  refresh();
-});
-document.querySelector("#library-transcript-back").addEventListener("click", returnToLibrary);
-document.querySelector("#meeting-detail-back").addEventListener("click", returnToLibrary);
+document.querySelector("#profile-back").addEventListener("click", returnToProductHome);
+document.querySelector("#library-transcript-back").addEventListener("click", returnToProductHome);
+document.querySelector("#meeting-detail-back").addEventListener("click", returnToProductHome);
 recordingDeleteReview.addEventListener("click", () => {
   if (!meetingAudioDeletionHandle) return;
   recordingDeleteConfirmation.hidden = false;
@@ -771,11 +805,11 @@ recordingDeleteConfirm.addEventListener("click", async () => {
     if (response.audioRetention) renderAudioRetention(response.audioRetention);
     message(meetingDetailState, response.message || "Recording deletion finished.", response.state || "");
     if (!response.audioRetention) {
-      recordingDeleteStatus.textContent = response.message || "Recording deletion could not complete. Reopen Library and try again.";
+      recordingDeleteStatus.textContent = response.message || "Recording deletion could not complete. Reopen Meetings and try again.";
       recordingDeleteConfirm.disabled = true;
     }
   } catch {
-    recordingDeleteStatus.textContent = "Recording deletion could not complete. Reopen Library and try again.";
+    recordingDeleteStatus.textContent = "Recording deletion could not complete. Reopen Meetings and try again.";
     recordingDeleteConfirm.disabled = true;
   }
 });

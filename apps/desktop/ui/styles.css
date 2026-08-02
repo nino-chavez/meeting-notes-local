@@ -16,7 +16,8 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: grid;
   grid-template-rows: auto 1fr auto;
 }
@@ -40,7 +41,10 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 .app-header p, footer { margin: 0; }
 .app-header > div { display: flex; align-items: baseline; gap: 18px; }
 .header-actions { display: flex; align-items: center; gap: 12px; }
-.library-link, .profile-link { min-height: 34px; padding: 0 13px; font-size: 0.82rem; }
+.product-nav { display: flex; align-items: center; gap: 3px; }
+.product-nav button { min-height: 34px; padding: 0 9px; border-radius: 5px; color: var(--muted); background: transparent; font-size: 0.82rem; }
+.product-nav button[aria-current="page"] { color: var(--ink); background: #e4e9e3; }
+.profile-link, .start-meeting-action { min-height: 34px; padding: 0 13px; font-size: 0.82rem; }
 
 .eyebrow, .label, .kicker, legend, .retention-field > span, footer {
   font-size: 0.76rem;
@@ -64,8 +68,11 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 
 main {
   width: min(780px, calc(100% - 48px));
+  min-height: 0;
   margin: 0 auto;
   padding: clamp(44px, 7vh, 76px) 0 56px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .screen { display: none; }
@@ -216,6 +223,11 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .meeting-no-note h2 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: clamp(1.65rem, 3vw, 2.1rem); line-height: 1; }
 .meeting-no-note p { margin: 12px 0 18px; color: var(--muted); line-height: 1.55; }
 
+html[data-screen="library-transcript-screen"] main,
+html[data-screen="meeting-detail-screen"] main,
+html[data-screen="transcript-screen"] main { padding-right: 16px; }
+.start-back { margin-left: 9px; }
+
 .profile-screen h1 { max-width: 16ch; }
 html[data-screen="profile-screen"] main { padding-top: 28px; padding-bottom: 30px; }
 .profile-screen h1 { font-size: clamp(2.55rem, 5vw, 3.45rem); }
@@ -235,6 +247,7 @@ footer { border-top: 1px solid var(--line); border-bottom: 0; color: #66706a; }
 @media (max-width: 640px) {
   .app-header > div { display: block; }
   .header-actions { gap: 8px; }
+  .product-nav { order: 3; width: 100%; }
   .product-state { margin-top: 6px !important; }
   .release-badge { align-self: flex-start; }
   .channel-grid { grid-template-columns: 1fr; }

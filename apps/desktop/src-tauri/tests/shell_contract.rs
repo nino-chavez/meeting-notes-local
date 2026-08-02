@@ -256,18 +256,31 @@ fn shell_renders_safe_state_before_runtime_preflight() {
 }
 
 #[test]
-fn preview_library_pauses_capture_polling_and_resumes_on_return() {
+fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
 
-    assert!(html.contains("id=\"library-link\""));
-    assert!(html.contains("id=\"library-screen\""));
+    assert!(html.contains("id=\"product-nav\""));
+    assert!(html.contains("id=\"find-link\""));
+    assert!(html.contains("id=\"meetings-link\""));
+    assert!(html.contains("id=\"promises-link\""));
+    assert!(html.contains("id=\"find-screen\""));
+    assert!(html.contains("id=\"meetings-screen\""));
+    assert!(html.contains("id=\"promises-screen\""));
+    assert!(html.contains("Promises are not available yet."));
+    assert!(!html.contains("id=\"promises-link\" type=\"button\" disabled"));
     assert!(html.contains("id=\"library-transcript-screen\""));
     assert!(html.contains("id=\"meeting-detail-screen\""));
     assert!(html.contains("id=\"library-search\""));
-    assert!(script.contains("secondaryViewActive = true"));
-    assert!(script.contains("if (secondaryViewActive) return;"));
-    assert!(script.contains("secondaryViewActive = false;\n  refresh();"));
+    assert!(html.contains("id=\"start-meeting-action\""));
+    assert!(html.contains("id=\"start-back\""));
+    assert!(script.contains("if (!isIdleProductScreen()) showScreen(\"find-screen\");"));
+    assert!(script.contains("function syncProductNavigation()"));
+    assert!(script.contains("link.setAttribute(\"aria-current\", \"page\")"));
+    assert!(script.contains("function schedulePoll(delay) {\n  if (pollTimer) window.clearTimeout(pollTimer);"));
+    assert!(!script.contains("secondaryViewActive"));
+    assert!(script.contains("startMeetingAction.addEventListener(\"click\", openStartMeeting);"));
+    assert!(script.contains("await invoke(\"start_meeting\", request);"));
     assert!(script.contains("preview_library_snapshot"));
     assert!(script.contains("preview_profile_snapshot"));
     assert!(script.contains("preview_library_search"));
@@ -275,6 +288,7 @@ fn preview_library_pauses_capture_polling_and_resumes_on_return() {
     assert!(script.contains("preview_library_open_note"));
     assert!(script.contains("preview_library_open_evidence"));
     assert!(script.contains("preview_library_open_transcript"));
+    assert!(script.contains("await invoke(\"preview_library_open_search_result\", { handle })"));
 }
 
 #[test]
@@ -299,17 +313,18 @@ fn preview_voice_profile_surface_is_honest_and_non_mutating() {
 fn preview_library_navigation_rebuilds_one_current_handle_generation() {
     let script = include_str!("../../ui/main.js");
 
-    assert!(script.contains("async function rebuildLibraryView(resetSearch = false)"));
+    assert!(script.contains("async function rebuildMeetingsView()"));
     assert!(script.contains("const snapshot = await invoke(\"preview_library_snapshot\");"));
-    assert!(script.contains("if (query) {\n      libraryList.replaceChildren();\n      renderLibrarySearch(await invoke(\"preview_library_search\", { query }));"));
-    assert!(script.contains("async function returnToLibrary()"));
-    assert!(script.contains("await rebuildLibraryView(false);"));
-    assert!(script.contains("await rebuildLibraryView(true);"));
+    assert!(script.contains("async function openFind()"));
+    assert!(script.contains("async function openMeetings()"));
+    assert!(script.contains("async function returnToProductHome()"));
+    assert!(script.contains("await openMeetings();"));
+    assert!(script.contains("await openFind();"));
     assert!(
-        script.contains("library-transcript-back\").addEventListener(\"click\", returnToLibrary)")
+        script.contains("library-transcript-back\").addEventListener(\"click\", returnToProductHome)")
     );
-    assert!(script.contains("meeting-detail-back\").addEventListener(\"click\", returnToLibrary)"));
-    assert!(script.contains("libraryList.replaceChildren();\n  setError(libraryNotice, \"Searching this retained Preview Library…\")"));
+    assert!(script.contains("meeting-detail-back\").addEventListener(\"click\", returnToProductHome)"));
+    assert!(script.contains("setError(libraryNotice, \"Searching your retained meetings…\")"));
     assert!(script.contains("librarySearchResults.replaceChildren();\n  setError(libraryNotice, \"Opening the selected retained result…\")"));
 }
 
