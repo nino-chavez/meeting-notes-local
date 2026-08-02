@@ -17,9 +17,11 @@ application. Automatic note quality remains a separate pre-beta gate.
 
 The receipt remains valid behavioral evidence and does not need to be regenerated.
 The active whole-product gate is now the running synthetic walking-skeleton comparison
-in `prototype/walking-skeleton`: three structures, one corpus and one task, followed by
-operator approval of one exact fingerprint. Synthetic review cannot replace the later
-private semantic/usefulness gate.
+in `prototype/walking-skeleton`: three possible default opening views, one corpus and
+one task, followed by operator approval of one exact navigation composition. Meetings,
+Recorded promises, and Find remain product capabilities; the gate decides their
+hierarchy and transitions. Synthetic review cannot replace the later private
+semantic/usefulness gate.
 
 This repository has fresh sanitized history. That does not make meeting content
 source material: no capture, transcript, review packet, or private meeting
@@ -45,8 +47,8 @@ review details into Git or chat.
   render, digest, and cold review. The separate synthetic comparison may change shell
   layout and navigation, but must not claim that this older receipt approved them.
 - The new composition remains blocked until the operator accepts one exact current
-  candidate; non-interface contracts and the already-working transcript alpha may
-  continue independently.
+  default and navigation hierarchy; non-interface contracts and the already-working
+  transcript alpha may continue independently.
 
 The colleague survey is product-research evidence in `journeys.md`; it cannot supply
 this verdict. The evaluation-contribution candidate in J6 is later product research;

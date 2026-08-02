@@ -1,5 +1,6 @@
 {
-  "reviewScope": "walking-skeleton-information-architecture",
+  "reviewScope": "walking-skeleton-navigation-composition",
+  "reviewQuestion": "Which view opens by default, what receives first-class navigation, and how do the views relate?",
   "snapshotDate": "2026-08-02",
   "syntheticCorpusAsOf": "2026-05-09",
   "viewport": {
@@ -7,26 +8,34 @@
     "height": 900
   },
   "files": {
-    "index.html": "sha256:7b109f7a1272f9138c51e897c53034661822c563f2d0eadcd1928eadff164a3b",
-    "styles.css": "sha256:3db71eaafdf2807b703647ef4ccbeacb9eedb3bcdee37451b05fbb22da6ec6a8",
-    "app.js": "sha256:a133d29959061a6d24b5851d6b31ffc31af3cfadb0392c8bf8125be05d38d180"
+    "index.html": "sha256:5d29cabd4654713c025ebb4c359b305a15a52515b22cdb639f516421c5eb0042",
+    "styles.css": "sha256:bf2cb9d60c8b038f4cb89e89944549d77783a23061db0483e3ae96fcff1bd3c0",
+    "app.js": "sha256:3a94a7873443382b685cf2054f9506707888699e040b5c3d997d995715dfd224"
   },
-  "candidates": [
+  "sharedDestinations": [
+    "meeting-detail",
+    "note",
+    "canonical-transcript",
+    "evidence",
+    "correction",
+    "regeneration"
+  ],
+  "startingViews": [
     {
       "id": "meetings",
-      "label": "Meetings first",
+      "label": "Meetings",
       "query": "?direction=meetings"
     },
     {
       "id": "commitments",
-      "label": "Commitments first",
+      "label": "Recorded promises",
       "query": "?direction=commitments"
     },
     {
       "id": "retrieval",
-      "label": "Find + browse",
+      "label": "Find",
       "query": "?direction=retrieval"
     }
   ],
-  "approval": null
+  "compositionApproval": null
 }

@@ -1,13 +1,15 @@
 # Meeting-memory walking skeleton
 
-This local, synthetic prototype compares three information architectures against the
-same operator task and corpus:
+This local, synthetic prototype compares three possible default opening views inside
+one information architecture, against the same operator task and corpus:
 
-1. Meetings first
-2. Commitments first
-3. Find + browse
+1. Meetings
+2. Recorded promises
+3. Find
 
-Each direction implements the same thin journey:
+All three capabilities remain in the product. The review question is which view opens
+first, what receives first-class navigation, and how the operator moves among them.
+Each starting view implements the same thin journey:
 
 `find a decision → inspect its typed claim → open exact transcript words → review a withheld turn → restore it → see the note become stale → regenerate → return to the preserved retrieval context`
 
@@ -25,6 +27,7 @@ python3 -m http.server 4173 --directory prototype/walking-skeleton
 Then open `http://127.0.0.1:4173` at a 960×900 viewport. The outer page never scrolls;
 long meeting and transcript content scrolls inside its reading pane.
 
-`review-manifest.json` binds the three candidate URLs to the exact HTML, CSS, and
-JavaScript under review. Its `approval` field stays `null` until the operator chooses
-one candidate; mechanical checks and agent audits cannot fill it.
+`review-manifest.json` binds the three starting-view URLs to the exact HTML, CSS, and
+JavaScript under review. Its `compositionApproval` field stays `null` until the
+operator approves the default view and shared navigation hierarchy; mechanical checks
+and agent audits cannot fill it.

@@ -86,17 +86,20 @@ skeletons:
    exercise the complete memory journey before new product UI is implemented. Design
    proceeds retrieval → commitments and notes → capture, so the later need to find and
    trust something constrains what the earlier stages preserve.
-2. **Production walking skeleton.** After the operator approves one exact prototype,
-   the installed Preview implements one real path through `Launch → Record → Stop →
-   Transcribe → Library → Note → Evidence → Correct/regenerate → Retrieve`. Each step
-   is narrow but genuine. Later slices deepen that spine instead of building isolated
-   subsystems.
+2. **Production walking skeleton.** After the operator approves one exact navigation
+   composition, the installed Preview implements one real path through `Launch →
+   Record → Stop → Transcribe → Library → Note → Evidence → Correct/regenerate →
+   Retrieve`. Each step is narrow but genuine. Later slices deepen that spine instead
+   of building isolated subsystems.
 
-The first design gate compares three credible retrieval structures against the same
-synthetic corpus and tasks: meeting-first Library, commitment-first memory, and a
-retrieval-first hybrid. The original light/editorial visual system and proven capture,
-artifact, evidence-locator, retention and recovery behavior are inputs. Navigation,
-page hierarchy, note composition and exact geometry remain prototype questions.
+The first design gate compares three credible **default opening views** against the
+same synthetic corpus and tasks: Meetings, Recorded promises, and Find. All three are
+useful product capabilities and share meeting detail, note, canonical transcript,
+evidence, correction, and regeneration. The decision is which opens first, what earns
+first-class navigation, and how the views relate—not which two capabilities to delete.
+The original light/editorial visual system and proven capture, artifact,
+evidence-locator, retention and recovery behavior are inputs. Navigation, page
+hierarchy, note composition and exact geometry remain prototype questions.
 
 For this gate, “original” is executable evidence rather than a mood: the base tokens
 and type treatment come from the installed transcript-alpha UI at exact commit
@@ -110,8 +113,9 @@ implementation so there is one design authority again.
 The prototype must run at the real 960×900 product viewport and include thin notes,
 gaps, withheld turns, missing transcripts, stale notes, loading, failure and recovery.
 Automated checks can prove its mechanics. Only the operator can approve its
-information architecture and interaction. Rejected candidates remain runnable but
-clearly historical; the approved candidate is fingerprinted before implementation.
+information architecture and interaction. The approved composition fingerprints the
+default view, shared destinations, labels, and transitions before implementation;
+alternative starting views remain useful fixtures rather than rejected features.
 
 Already-started safety work may be brought to a clean checkpoint when it does not
 pre-decide the interface. New product UI does not run ahead of this gate. Once the
@@ -138,7 +142,7 @@ transcript and metadata search inside the validated local library remains in bet
 | Phase | Work an agent can complete | Human gate |
 |---|---|---|
 | Correctness floor | Close profile, provenance and structured-note contract defects; keep deterministic controls green | None |
-| Interaction skeleton | Compare three running structures over one synthetic corpus: meetings first, commitments first, and find + browse. Each must complete retrieval → exact words → withheld-turn correction → stale note → regeneration without product writes. The accepted 2026-07-31 private encounter remains claim/evidence input, not whole-product IA approval. | Operator reviews all three cold and approves only one exact fingerprinted candidate |
+| Interaction skeleton | Compare Meetings, Recorded promises, and Find as three possible default opening views in one system. Each must complete retrieval → exact words → withheld-turn correction → stale note → regeneration without product writes. The accepted 2026-07-31 private encounter remains claim/evidence input, not whole-product IA approval. | Operator approves one exact composition: default view, first-class navigation, shared destinations, labels, and transitions |
 | Production walking skeleton | Implement one genuine installed path through Launch → Record → Stop → Transcribe → Library → Note → Evidence → Correct/regenerate → Retrieve under the [`vertical-slice contract`](./docs/vertical-slice.md). Return every thin join as an updated Preview. | Operator exercises permissions, hardware capture, recovery, and the approved navigation over real retained artifacts |
 | Trust actions | Restore withheld speech, regenerate a note, choose retention, inspect disk use and delete audio or a meeting | Operator chooses the far-end notice and retention policy, then performs each action |
 | Limited beta | Package, sign, install cold and run a canary followed by real headphone meetings | Participants consent; the operator judges whether the notes are useful |
@@ -147,12 +151,12 @@ transcript and metadata search inside the validated local library remains in bet
 Work may run in parallel only where the evidence remains separable. The registered
 classifier benchmark remains research; it does not sit on the product critical path.
 Note-contract correctness, profile/provenance hardening and the interaction comparison
-can proceed independently. After one new candidate is approved, Rust trust/persistence,
-Python note/evidence work, and the Tauri product surface can proceed in isolated
-worktrees against the same frozen contracts and rejoin in installed slices. Product UI
-implementation does not run ahead of that composition gate. No agent can supply
-consent, approve its own design, create a real meeting, judge a note useful or
-authorize Apple signing.
+can proceed independently. After the navigation composition is approved, Rust
+trust/persistence, Python note/evidence work, and the Tauri product surface can proceed
+in isolated worktrees against the same frozen contracts and rejoin in installed
+slices. Product UI implementation does not run ahead of that composition gate. No
+agent can supply consent, approve its own design, create a real meeting, judge a note
+useful or authorize Apple signing.
 
 ---
 

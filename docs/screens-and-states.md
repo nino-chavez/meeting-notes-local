@@ -691,13 +691,14 @@ drawn as a broken placeholder. A shared synthetic corpus can compare navigation,
 hierarchy and state comprehension, but cannot approve note usefulness or semantic
 support.
 
-After one exact prototype is approved, implementation returns to **one thin working
-slice at a time over real data**. The existing menubar-to-capture-to-transcript alpha
-already proves the start of that spine. The next production slice joins it to Library,
-note, canonical evidence, correction/regeneration and retrieval, then replaces each
-simulated segment without changing the approved composition. Each join returns as an
-updated installed Preview. A placeholder still does not count as a working surface,
-and no synthetic encounter counts as a real-product or release receipt.
+After one exact navigation composition is approved, implementation returns to **one
+thin working slice at a time over real data**. The existing
+menubar-to-capture-to-transcript alpha already proves the start of that spine. The next
+production slice joins it to Library, note, canonical evidence,
+correction/regeneration and retrieval, then replaces each simulated segment without
+changing the approved composition. Each join returns as an updated installed Preview.
+A placeholder still does not count as a working surface, and no synthetic encounter
+counts as a real-product or release receipt.
 
 ---
 

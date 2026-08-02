@@ -165,12 +165,11 @@ const recoveredPartnerClaim = {
 };
 
 const directionLabels = {
-  meetings: "Meetings first",
-  commitments: "Commitments first",
-  retrieval: "Find + browse"
+  meetings: "Meetings",
+  commitments: "Promises",
+  retrieval: "Find"
 };
 
-const directionNumbers = { meetings: 1, commitments: 2, retrieval: 3 };
 const workspace = document.querySelector("#workspace");
 const footerDirection = document.querySelector("#footer-direction");
 const toast = document.querySelector("#toast");
@@ -319,7 +318,7 @@ function syncChrome() {
     button.tabIndex = selected ? 0 : -1;
   });
   workspace.setAttribute("aria-labelledby", `direction-${state.direction}`);
-  footerDirection.textContent = `Direction ${directionNumbers[state.direction]} of 3 · ${directionLabels[state.direction]}`;
+  footerDirection.textContent = `Default opening · ${directionLabels[state.direction]}`;
 }
 
 function showToast(message) {
@@ -391,7 +390,7 @@ function searchFormMarkup(compact = false) {
 function taskMarkup() {
   return `
     <section class="task-card" aria-label="Shared review task">
-      <span class="label">Same task in all three directions</span>
+      <span class="label">Same task from every starting view</span>
       <p>Find the <strong>estimate range</strong> decision, open the exact words, then review the withheld turn and regenerate the note.</p>
     </section>`;
 }
@@ -426,8 +425,8 @@ function renderMeetingsHome() {
   workspace.innerHTML = `
     <div class="workspace-grid">
       <aside class="rail">
-        <p class="kicker">Direction 1</p>
-        <h2 class="rail-title">Meetings first</h2>
+        <p class="kicker">Meetings view</p>
+        <h2 class="rail-title">Browse meetings</h2>
         <p class="rail-copy">Begin with the meeting, then find the claim inside it.</p>
         <div class="filter-stack" aria-label="Meeting folders">
           <button class="filter-button" type="button" data-action="clear-query" aria-pressed="${state.folderFilter === null}"><span>All meetings</span><small>4</small></button>
@@ -464,8 +463,8 @@ function renderCommitmentsHome() {
   workspace.innerHTML = `
     <div class="workspace-grid">
       <aside class="rail">
-        <p class="kicker">Direction 2</p>
-        <h2 class="rail-title">Commitments first</h2>
+        <p class="kicker">Promises view</p>
+        <h2 class="rail-title">Recorded promises</h2>
         <p class="rail-copy">Begin with recorded promises across meetings. Switch filters to inspect decisions, proposals, or questions. This is evidence, not a task list.</p>
         <div class="filter-stack" aria-label="Claim type">
           ${filterButton("all", "All memory", allClaims().length)}
@@ -522,7 +521,7 @@ function renderRetrievalHome() {
   workspace.innerHTML = `
     <div class="workspace-grid retrieval-grid">
       <aside class="rail">
-        <p class="kicker">Direction 3</p>
+        <p class="kicker">Find view</p>
         <h2 class="rail-title">Find what you remember</h2>
         <p class="rail-copy">Start with a subject or exact phrase. Results can be claims, transcript words, or meetings.</p>
         ${searchFormMarkup(true)}
@@ -689,7 +688,7 @@ function renderClaimDetail() {
 }
 
 function detailRailMarkup(meeting) {
-  const title = state.direction === "meetings" ? "Meetings first" : "Commitments first";
+  const title = state.direction === "meetings" ? "Meetings" : "Recorded promises";
   return `
     <p class="kicker">${escapeHtml(title)}</p>
     <h2 class="rail-title">${escapeHtml(meeting.title)}</h2>
