@@ -382,7 +382,9 @@ function renderMeetingDetail(response) {
   meetingNoNote.hidden = true;
   message(meetingDetailState, response.message || "Opening retained meeting…", response.state || "");
   if (response.state !== "note") {
-    meetingNoNote.hidden = false;
+    const showsTranscriptFallback = ["transcript-only", "summary-failed"].includes(response.state)
+      && Boolean(response.transcriptHandle);
+    meetingNoNote.hidden = !showsTranscriptFallback;
     return;
   }
   for (const claim of response.claims || []) {
@@ -404,7 +406,6 @@ function renderMeetingDetail(response) {
   }
   if (!meetingClaimList.children.length) {
     message(meetingDetailState, "This admitted note has no supported claims. The retained transcript remains the source of record.", "note");
-    meetingNoNote.hidden = false;
   }
 }
 
@@ -412,6 +413,7 @@ async function openMeetingDetail(handle) {
   if (!invoke || !handle) return;
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
+  document.querySelector("#meeting-detail-transcript-handle").value = "";
   message(meetingDetailState, "Opening this retained meeting…");
   showScreen("meeting-detail-screen");
   try {
