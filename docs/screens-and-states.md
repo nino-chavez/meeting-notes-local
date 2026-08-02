@@ -79,6 +79,15 @@ Transcribing and ready states use the same ambient channel and rejoin E. This sy
 candidate has not exercised macOS permissions, hardware capture, models, or the
 installed Preview.
 
+The next synthetic slice keeps G as a utility surface outside the accepted
+Find/Meetings/Promises navigation. It presents the conjunction required for Start,
+walks H through both permission fixtures and a no-default retention choice, and makes
+profile reset a two-step action whose consequence is visible immediately: meetings
+remain readable and Start becomes **Finish setup**. It stops at I's honest blocked
+boundary. A separately labelled returning-profile fixture can restore the ready state,
+but cannot complete the new-enrolment path. Guided multi-sitting enrolment remains the
+next interaction slice; no permission, profile, audio, or product record is touched.
+
 ### Two tests the decisions files do not contain
 
 The records above are the accepted outcomes. What produced them lives in the sessions,

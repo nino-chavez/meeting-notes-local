@@ -274,8 +274,22 @@ function freshState(defaultDirection) {
     captureDegraded: false,
     captureRecovering: false,
     captureOutputMeetingId: null,
-    captureHudHidden: false
+    captureHudHidden: false,
+    settingsReturnRoute: "home",
+    setupStep: "overview",
+    setupPermissions: { microphone: true, systemAudio: true },
+    retentionPeriodDays: 14,
+    retentionDraftDays: null,
+    voiceProfileStatus: "valid",
+    profileResetConfirming: false
   };
+}
+
+function capturePrerequisitesReady() {
+  return state.setupPermissions.microphone
+    && state.setupPermissions.systemAudio
+    && Number.isInteger(state.retentionPeriodDays)
+    && state.voiceProfileStatus === "valid";
 }
 
 function escapeHtml(value) {
@@ -430,9 +444,12 @@ function syncChrome() {
     button.tabIndex = selected ? 0 : -1;
   });
   document.querySelectorAll("[data-view]").forEach((button) => {
-    if (button.dataset.view === state.view) button.setAttribute("aria-current", "page");
+    if (state.route !== "settings" && button.dataset.view === state.view) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
+  const settingsAction = document.querySelector("#settings-action");
+  if (state.route === "settings") settingsAction.setAttribute("aria-current", "page");
+  else settingsAction.removeAttribute("aria-current");
   const captureLabels = {
     idle: { status: "Nothing is recording", action: "Start meeting", className: "" },
     consent: { status: "Ready to start", action: "Setup open", className: "is-armed" },
@@ -442,12 +459,14 @@ function syncChrome() {
   };
   const captureChrome = state.captureDegraded && state.capturePhase === "recording"
     ? { status: "Recording · system audio interrupted", action: "Show status", className: "is-degraded" }
-    : captureLabels[state.capturePhase];
+    : state.capturePhase === "idle" && !capturePrerequisitesReady()
+      ? { status: "Setup required", action: "Finish setup", className: "is-setup" }
+      : captureLabels[state.capturePhase];
   const productState = document.querySelector("#product-state");
   productState.className = `product-state ${captureChrome.className}`.trim();
   document.querySelector("#product-state-text").textContent = captureChrome.status;
   document.querySelector("#capture-action").textContent = captureChrome.action;
-  workspace.setAttribute("aria-label", `${viewLabels[state.view]} view`);
+  workspace.setAttribute("aria-label", state.route === "settings" ? "Settings" : `${viewLabels[state.view]} view`);
   footerDirection.textContent = `Viewing ${viewLabels[state.view]} · opens on ${viewLabels[state.defaultDirection]}`;
 }
 
@@ -491,7 +510,9 @@ function render() {
     return;
   }
 
-  if (state.route === "transcript") {
+  if (state.route === "settings") {
+    renderSettings();
+  } else if (state.route === "transcript") {
     renderTranscript();
   } else if (state.route === "meeting") {
     renderMeetingDetail();
@@ -606,6 +627,182 @@ function taskMarkup() {
       <span class="label">Same task from every starting view</span>
       <p>Find what could <strong>block the reporting pilot</strong>, open the discovery call, then trace that risk to exact words.</p>
     </section>`;
+}
+
+function setupProgressMarkup(activeStep) {
+  const steps = [
+    { id: "permissions", label: "1 · Permissions" },
+    { id: "retention", label: "2 · Audio" },
+    { id: "profile", label: "3 · Voice profile" }
+  ];
+  const activeIndex = steps.findIndex((step) => step.id === activeStep);
+  return `
+    <ol class="setup-progress" aria-label="First-run setup progress">
+      ${steps.map((step, index) => `<li class="${index === activeIndex ? "is-active" : index < activeIndex ? "is-done" : ""}">${escapeHtml(step.label)}</li>`).join("")}
+    </ol>`;
+}
+
+function settingsRailMarkup() {
+  return `
+    <aside class="settings-rail">
+      <p class="kicker">Local controls</p>
+      <h2>Settings</h2>
+      <p>Readiness, meeting-audio retention, and the owner voice profile stay visible in one place.</p>
+      <button class="secondary-button" type="button" data-action="close-settings">Back to ${escapeHtml(viewLabels[state.view])}</button>
+      <section class="settings-boundary">
+        <span class="label">Prototype boundary</span>
+        <p>These controls change synthetic browser state only. They do not inspect macOS permissions, record enrollment audio, or delete product data.</p>
+      </section>
+    </aside>`;
+}
+
+function settingsOverviewMarkup() {
+  const ready = capturePrerequisitesReady();
+  const captureBusy = state.capturePhase !== "idle";
+  const retention = Number.isInteger(state.retentionPeriodDays)
+    ? `Delete after ${state.retentionPeriodDays} day${state.retentionPeriodDays === 1 ? "" : "s"}`
+    : "Choose a period";
+  const profileReady = state.voiceProfileStatus === "valid";
+  return `
+    <section class="settings-content">
+      <header class="settings-intro">
+        <p class="kicker">Readiness</p>
+        <h1>${ready ? "Ready to record." : "Finish setup before recording."}</h1>
+        <p class="lede">Start is available only when both capture permissions, an audio auto-deletion period, and a valid owner voice profile are present.</p>
+      </header>
+      <div class="readiness-list" aria-label="Capture prerequisites">
+        <article class="readiness-row ${state.setupPermissions.microphone ? "is-ready" : "is-needed"}">
+          <div><span class="label">Microphone</span><strong>${state.setupPermissions.microphone ? "Allowed" : "Permission needed"}</strong></div>
+          <span>${state.setupPermissions.microphone ? "Required source is available" : "Recording cannot start"}</span>
+        </article>
+        <article class="readiness-row ${state.setupPermissions.systemAudio ? "is-ready" : "is-needed"}">
+          <div><span class="label">System audio</span><strong>${state.setupPermissions.systemAudio ? "Allowed" : "Permission needed"}</strong></div>
+          <span>${state.setupPermissions.systemAudio ? "Required source is available" : "Recording cannot start"}</span>
+        </article>
+        <article class="readiness-row ${Number.isInteger(state.retentionPeriodDays) ? "is-ready" : "is-needed"}">
+          <div><span class="label">Meeting audio</span><strong>${escapeHtml(retention)}</strong></div>
+          <button class="text-button" type="button" data-action="change-retention" ${captureBusy ? "disabled" : ""}>${Number.isInteger(state.retentionPeriodDays) ? "Change" : "Choose"}</button>
+        </article>
+        <article class="readiness-row ${profileReady ? "is-ready" : "is-needed"}">
+          <div><span class="label">Voice profile</span><strong>${profileReady ? "Valid · owner only" : "Enrollment needed"}</strong></div>
+          ${profileReady
+            ? `<button class="text-button" type="button" data-action="request-profile-reset" ${captureBusy ? "disabled" : ""}>Reset</button>`
+            : `<button class="text-button" type="button" data-action="review-profile-needed" ${captureBusy ? "disabled" : ""}>Review next step</button>`}
+        </article>
+      </div>
+      ${state.profileResetConfirming ? `
+        <section class="destructive-card" aria-labelledby="reset-profile-title">
+          <p class="label">Separate trust action</p>
+          <h2 id="reset-profile-title">Reset the voice profile?</h2>
+          <p>This removes the private profile, its calibrated threshold, and enrollment provenance. Meetings, notes, transcripts, retained meeting audio, and your auto-deletion choice remain.</p>
+          <p><strong>Recording will stay unavailable until enrollment is complete again.</strong></p>
+          <div class="confirmation-actions">
+            <button class="danger-button" type="button" data-action="confirm-profile-reset">Reset voice profile</button>
+            <button class="secondary-button" type="button" data-action="cancel-profile-reset">Cancel</button>
+          </div>
+        </section>` : ""}
+      <section class="settings-secondary">
+        <div>
+          <span class="label">Calendar</span>
+          <h2>Off · optional</h2>
+          <p>Capture works without calendar access. A later preparation brief can ask separately.</p>
+        </div>
+        <div>
+          <span class="label">Synthetic disk snapshot</span>
+          <h2>46.6 MB audio held</h2>
+          <p>Across four meetings. Notes and transcripts are stored separately.</p>
+        </div>
+      </section>
+      ${captureBusy ? `<p class="settings-lock"><strong>Recording state is active.</strong> Retention and profile changes wait until this attempt finishes.</p>` : ""}
+      <button class="text-button prototype-action" type="button" data-action="preview-first-run" ${captureBusy ? "disabled" : ""}>Preview the first-run state</button>
+    </section>`;
+}
+
+function permissionsSetupMarkup() {
+  const bothAllowed = state.setupPermissions.microphone && state.setupPermissions.systemAudio;
+  return `
+    <section class="settings-content">
+      ${setupProgressMarkup("permissions")}
+      <header class="settings-intro compact">
+        <p class="kicker">First run · required</p>
+        <h1>Allow the two sources recording needs.</h1>
+        <p class="lede">Without both sources, the app can still open existing meetings but cannot start a supported recording.</p>
+      </header>
+      <div class="permission-list">
+        <article>
+          <div><span class="label">Microphone</span><h2>${state.setupPermissions.microphone ? "Allowed" : "Permission needed"}</h2><p>Captures the enrolled operator at the microphone.</p></div>
+          <button class="secondary-button" type="button" data-action="grant-setup-permission" data-permission="microphone" ${state.setupPermissions.microphone ? "disabled" : ""}>${state.setupPermissions.microphone ? "Shown as allowed" : "Show as allowed"}</button>
+        </article>
+        <article>
+          <div><span class="label">System audio</span><h2>${state.setupPermissions.systemAudio ? "Allowed" : "Permission needed"}</h2><p>Captures the far end while headphones are in use.</p></div>
+          <button class="secondary-button" type="button" data-action="grant-setup-permission" data-permission="systemAudio" ${state.setupPermissions.systemAudio ? "disabled" : ""}>${state.setupPermissions.systemAudio ? "Shown as allowed" : "Show as allowed"}</button>
+        </article>
+      </div>
+      <p class="prototype-boundary">The web prototype does not request macOS permission. These buttons expose the granted and blocked states for review.</p>
+      <button class="primary-button" type="button" data-action="continue-to-retention" ${bothAllowed ? "" : "disabled"}>Choose audio auto-deletion</button>
+    </section>`;
+}
+
+function retentionSetupMarkup() {
+  const changing = state.setupStep === "retention-change";
+  const options = [1, 7, 14, 30];
+  return `
+    <section class="settings-content">
+      ${changing ? "" : setupProgressMarkup("retention")}
+      <header class="settings-intro compact">
+        <p class="kicker">${changing ? "Meeting audio" : "First run · your choice"}</p>
+        <h1>Choose when meeting audio is deleted.</h1>
+        <p class="lede">Notes, transcripts, and text evidence stay. Deleting audio removes playback, audio review, and re-transcription.</p>
+      </header>
+      <fieldset class="retention-choices">
+        <legend>Auto-delete meeting audio</legend>
+        ${options.map((days) => `
+          <label>
+            <input type="radio" name="retention-period" value="${days}" ${state.retentionDraftDays === days ? "checked" : ""} />
+            <span><strong>After ${days} day${days === 1 ? "" : "s"}</strong><small>The choice applies to each new meeting.</small></span>
+          </label>`).join("")}
+      </fieldset>
+      <p class="choice-help">No option is chosen for a new setup. You can release one meeting’s audio sooner from its note.</p>
+      <div class="setup-actions">
+        <button class="primary-button" type="button" data-action="save-retention" ${Number.isInteger(state.retentionDraftDays) ? "" : "disabled"}>${changing ? "Save auto-deletion" : "Continue to voice profile"}</button>
+        <button class="secondary-button" type="button" data-action="${changing ? "cancel-retention-change" : "back-to-permissions"}">${changing ? "Cancel" : "Back"}</button>
+      </div>
+    </section>`;
+}
+
+function profileNeededMarkup() {
+  return `
+    <section class="settings-content">
+      ${setupProgressMarkup("profile")}
+      <header class="settings-intro compact">
+        <p class="kicker">Voice profile · required</p>
+        <h1>Your voice profile is still needed.</h1>
+        <p class="lede">It helps keep the transcript centered on the enrolled operator. It does not name other speakers.</p>
+      </header>
+      <section class="profile-explainer">
+        <h2>Enrollment uses separate calibration recordings.</h2>
+        <ol>
+          <li><strong>Two operator sittings</strong><span>At least one hour apart; different days are ideal.</span></li>
+          <li><strong>One permitted other-voice sample</strong><span>Public-domain or licensed speech, or a person who agreed to make the calibration recording.</span></li>
+          <li><strong>One measured policy choice</strong><span>Choose the trade-off only after both observed error rates are visible.</span></li>
+        </ol>
+        <p>Dedicated calibration audio and working files are deleted as soon as the private derived material is safely stored. Meetings keep their own retention period.</p>
+      </section>
+      <p class="settings-lock"><strong>Recording remains unavailable.</strong> Guided multi-sitting enrollment is the next prototype slice. The returning fixture below is independent; it does not finish this enrollment.</p>
+      <div class="setup-actions">
+        <button class="secondary-button" type="button" data-action="load-returning-profile-fixture">Load separate returning-profile fixture</button>
+        <button class="text-button" type="button" data-action="close-settings">Keep this blocked state</button>
+      </div>
+    </section>`;
+}
+
+function renderSettings() {
+  let content;
+  if (state.setupStep === "permissions") content = permissionsSetupMarkup();
+  else if (state.setupStep === "retention" || state.setupStep === "retention-change") content = retentionSetupMarkup();
+  else if (state.setupStep === "profile") content = profileNeededMarkup();
+  else content = settingsOverviewMarkup();
+  workspace.innerHTML = `<div class="settings-layout">${settingsRailMarkup()}${content}</div>`;
 }
 
 function meetingsNewestFirst() {
@@ -1325,12 +1522,113 @@ async function copyText(text, message) {
   showToast(message);
 }
 
+function nextMissingSetupStep() {
+  if (!state.setupPermissions.microphone || !state.setupPermissions.systemAudio) return "permissions";
+  if (!Number.isInteger(state.retentionPeriodDays)) return "retention";
+  if (state.voiceProfileStatus !== "valid") return "profile";
+  return "overview";
+}
+
+function openSettings(step = "overview") {
+  if (state.route !== "settings") state.settingsReturnRoute = state.route;
+  state.route = "settings";
+  state.setupStep = step;
+  state.profileResetConfirming = false;
+  if (step === "retention") state.retentionDraftDays = state.retentionPeriodDays;
+  state.focusRequest = "heading";
+  render();
+}
+
+function closeSettings() {
+  if (state.route !== "settings") return;
+  state.route = state.settingsReturnRoute === "settings" ? "home" : state.settingsReturnRoute;
+  state.setupStep = "overview";
+  state.profileResetConfirming = false;
+  state.retentionDraftDays = null;
+  state.focusRequest = "heading";
+  render();
+}
+
+function previewFirstRun() {
+  if (state.capturePhase !== "idle") return;
+  state.setupPermissions = { microphone: false, systemAudio: false };
+  state.retentionPeriodDays = null;
+  state.retentionDraftDays = null;
+  state.voiceProfileStatus = "missing";
+  state.profileResetConfirming = false;
+  state.setupStep = "permissions";
+  state.consentConfirmed = false;
+  state.focusRequest = "heading";
+  render();
+}
+
+function grantSetupPermission(permission) {
+  if (state.route !== "settings" || state.setupStep !== "permissions") return;
+  if (!Object.hasOwn(state.setupPermissions, permission)) return;
+  state.setupPermissions[permission] = true;
+  render();
+}
+
+function continueToRetention() {
+  if (!state.setupPermissions.microphone || !state.setupPermissions.systemAudio) return;
+  state.setupStep = "retention";
+  state.retentionDraftDays = state.retentionPeriodDays;
+  state.focusRequest = "heading";
+  render();
+}
+
+function saveRetention() {
+  if (!Number.isInteger(state.retentionDraftDays)) return;
+  state.retentionPeriodDays = state.retentionDraftDays;
+  state.consentConfirmed = false;
+  if (state.setupStep === "retention-change") {
+    state.setupStep = "overview";
+    showToast(`Meeting audio will auto-delete after ${state.retentionPeriodDays} days in this fixture.`);
+  } else {
+    state.setupStep = "profile";
+  }
+  state.retentionDraftDays = null;
+  state.focusRequest = "heading";
+  render();
+}
+
+function requestProfileReset() {
+  if (state.capturePhase !== "idle" || state.voiceProfileStatus !== "valid") return;
+  state.profileResetConfirming = true;
+  state.focusRequest = "status";
+  render();
+}
+
+function confirmProfileReset() {
+  if (!state.profileResetConfirming || state.capturePhase !== "idle") return;
+  state.profileResetConfirming = false;
+  state.voiceProfileStatus = "missing";
+  state.consentConfirmed = false;
+  state.setupStep = "profile";
+  showToast("Synthetic voice profile reset. Meetings and retention remain.");
+  state.focusRequest = "heading";
+  render();
+}
+
+function loadReturningProfileFixture() {
+  if (state.capturePhase !== "idle") return;
+  state.voiceProfileStatus = "valid";
+  state.setupStep = "overview";
+  showToast("Separate returning-profile fixture loaded. No profile was built here.");
+  state.focusRequest = "heading";
+  render();
+}
+
 function showCapture() {
   if (state.capturePhase === "ready") {
     openCapturedMeeting();
     return;
   }
   if (state.capturePhase === "idle") {
+    if (!capturePrerequisitesReady()) {
+      openSettings(nextMissingSetupStep());
+      return;
+    }
     state.capturePhase = "consent";
     state.consentConfirmed = false;
     state.captureOutputMeetingId = null;
@@ -1428,6 +1726,11 @@ document.querySelector(".direction-tabs").addEventListener("keydown", (event) =>
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.capturePhase === "consent") cancelCapture();
+  if (event.key === "Escape" && state.profileResetConfirming) {
+    state.profileResetConfirming = false;
+    state.focusRequest = "heading";
+    render();
+  }
 });
 
 document.addEventListener("submit", (event) => {
@@ -1444,10 +1747,17 @@ document.addEventListener("submit", (event) => {
 });
 
 document.addEventListener("change", (event) => {
-  if (event.target.id !== "capture-consent") return;
-  state.consentConfirmed = event.target.checked;
-  const startButton = document.querySelector("[data-action=begin-capture]");
-  if (startButton) startButton.disabled = !state.consentConfirmed;
+  if (event.target.id === "capture-consent") {
+    state.consentConfirmed = event.target.checked;
+    const startButton = document.querySelector("[data-action=begin-capture]");
+    if (startButton) startButton.disabled = !state.consentConfirmed;
+    return;
+  }
+  if (event.target.name === "retention-period") {
+    state.retentionDraftDays = Number(event.target.value);
+    const saveButton = document.querySelector("[data-action=save-retention]");
+    if (saveButton) saveButton.disabled = false;
+  }
 });
 
 document.addEventListener("click", (event) => {
@@ -1464,6 +1774,44 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const action = button.dataset.action;
+  if (action === "open-settings") openSettings("overview");
+  if (action === "close-settings") closeSettings();
+  if (action === "preview-first-run") previewFirstRun();
+  if (action === "grant-setup-permission") grantSetupPermission(button.dataset.permission);
+  if (action === "continue-to-retention") continueToRetention();
+  if (action === "back-to-permissions") {
+    state.setupStep = "permissions";
+    state.retentionDraftDays = null;
+    state.focusRequest = "heading";
+    render();
+  }
+  if (action === "change-retention") {
+    if (state.capturePhase !== "idle") return;
+    state.setupStep = "retention-change";
+    state.retentionDraftDays = state.retentionPeriodDays;
+    state.focusRequest = "heading";
+    render();
+  }
+  if (action === "save-retention") saveRetention();
+  if (action === "cancel-retention-change") {
+    state.setupStep = "overview";
+    state.retentionDraftDays = null;
+    state.focusRequest = "heading";
+    render();
+  }
+  if (action === "request-profile-reset") requestProfileReset();
+  if (action === "cancel-profile-reset") {
+    state.profileResetConfirming = false;
+    state.focusRequest = "heading";
+    render();
+  }
+  if (action === "confirm-profile-reset") confirmProfileReset();
+  if (action === "review-profile-needed") {
+    state.setupStep = "profile";
+    state.focusRequest = "heading";
+    render();
+  }
+  if (action === "load-returning-profile-fixture") loadReturningProfileFixture();
   if (action === "show-capture") showCapture();
   if (action === "begin-capture") beginCapture();
   if (action === "cancel-capture") cancelCapture();

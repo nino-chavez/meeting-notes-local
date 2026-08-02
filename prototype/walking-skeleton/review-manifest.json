@@ -1,6 +1,6 @@
 {
-  "reviewScope": "walking-skeleton-manual-capture-to-note",
-  "reviewQuestion": "Does manual capture remain unmistakable and ambient while the operator browses, then rejoin the evidence-linked note without turning status into a destination?",
+  "reviewScope": "walking-skeleton-trust-setup",
+  "reviewQuestion": "Can the operator understand why Start is available or blocked, choose meeting-audio retention without a default, and reset the owner voice profile without mistaking that action for meeting deletion?",
   "approvedDefault": "retrieval",
   "evidenceBasis": {
     "market": "Corpus retrieval is positioned as core value; documented comparables expose multiple retrieval entry points.",
@@ -19,9 +19,9 @@
     "height": 900
   },
   "files": {
-    "index.html": "sha256:228fef64099d4c8804f3b4b37ef0506fcf88e86645225fd9c9e50153829df1d7",
-    "styles.css": "sha256:f312591827e9c4d72babfc016f286d06106d77c0660c86af2686c1147cd28380",
-    "app.js": "sha256:97a8c68a9efb5d5a8c1c28f1ea03b6c819951e71b63266fa361a8ee9b8c0c901"
+    "index.html": "sha256:7ce1c1342a9bd2ead2fe769db138747eef720a06445e915f36d4102dc2f79b45",
+    "styles.css": "sha256:93cc49f804eedc251e906d22a48fb999b292f45123c337e0ab6d7b304a914598",
+    "app.js": "sha256:f17cde7f886944c7a958c6f7a47bd2c897395f18970cceda16e9efcf8f1b3444"
   },
   "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
   "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",
@@ -109,6 +109,39 @@
       "local model execution",
       "installed Preview behavior",
       "consent sufficiency",
+      "beta admission or release"
+    ]
+  },
+  "trustSetupSlice": {
+    "id": "first-run-readiness-retention-profile-reset-v1",
+    "status": "pending-operator-review",
+    "source": "synthetic",
+    "placement": "Settings is a utility surface outside the accepted Find, Meetings, and Promises navigation.",
+    "states": [
+      "returning-ready",
+      "permissions-needed",
+      "permissions-partial",
+      "permissions-complete",
+      "retention-unselected",
+      "retention-selected",
+      "voice-profile-needed",
+      "profile-reset-confirm",
+      "profile-reset"
+    ],
+    "contracts": [
+      "Start requires both permissions, an explicit retention period, and a valid profile.",
+      "A new retention choice has no default.",
+      "Profile reset preserves meetings, notes, transcripts, retained meeting audio, and retention choice.",
+      "A returning-profile fixture is independent from new enrollment and cannot complete it."
+    ],
+    "guidedEnrollment": "pending-next-prototype-slice",
+    "doesNotApprove": [
+      "macOS permission attribution",
+      "retention policy wording",
+      "voice enrollment or profile validity",
+      "profile reset implementation",
+      "product deletion behavior",
+      "installed Preview behavior",
       "beta admission or release"
     ]
   },

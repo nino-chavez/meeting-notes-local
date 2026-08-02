@@ -53,6 +53,16 @@ or the existing partial-transcript specimen when a simulated channel interruptio
 not recovered. This path uses no hardware, permissions, audio, model, or product data;
 its interaction review is pending.
 
+The first trust-controls slice keeps **Settings** outside the accepted primary
+navigation and makes readiness explicit in one place. A returning-profile fixture
+shows the ready state; the first-run path requires both capture permissions and a
+no-default audio auto-deletion choice before it reaches the voice-profile boundary.
+Reset is a separate two-step action that leaves meetings, transcripts, notes,
+retained meeting audio, and the chosen retention period intact while making Start
+unavailable. Guided multi-sitting enrolment is intentionally the next slice rather
+than a completion this screen pretends to provide. No macOS permission, profile,
+audio, or product record is inspected or changed.
+
 It is a design instrument, not a second application runtime. It does not read or write
 Preview data, record audio, invoke a model, or prove note usefulness or semantic
 support. The synthetic corpus is frozen as of May 9, 2026 so relative retention states

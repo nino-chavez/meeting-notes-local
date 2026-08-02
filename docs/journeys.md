@@ -416,8 +416,9 @@ change the note corrects nothing.
 
 ### J5 — "How long is this keeping recordings of other people?" (retention)
 
-**The lifecycle is specified and prototyped, and scheduled audio deletion is
-implemented in the internal alpha. Its first real due-deletion receipt is still open;
+**The lifecycle is specified and its first-run choice, readiness join, and profile
+reset are now interaction candidates. Scheduled audio deletion is implemented in the
+internal alpha. Its first real due-deletion receipt is still open; guided enrolment and
 the remaining trust actions are not implemented. This remains the highest-stakes
 application gap.**
 
@@ -451,6 +452,14 @@ capture until enrollment completes again; only the research CLI may run ungated
 outside beta. The retained owner-only material includes the held-out score and
 negative-source receipt needed to re-derive the selected operating point without raw
 audio; it is never included in a meeting export.
+
+The active walking skeleton now exercises that separation without claiming a real
+profile: Settings shows the ready conjunction, first run requires both permission
+fixtures and an unselected retention choice, and the reset confirmation names what is
+deleted and what remains. Confirming reset changes Start to **Finish setup** and lands
+at the blocked enrollment explanation. The separate returning-profile fixture is
+explicitly not a shortcut through new enrollment. The multi-sitting enrollment itself
+is the next prototype slice.
 
 Readiness is conjunctive: a valid profile, both current capture permissions, and an
 explicit meeting-audio retention choice must all exist. Participant attestation then
