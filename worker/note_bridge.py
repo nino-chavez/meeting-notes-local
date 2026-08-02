@@ -475,10 +475,7 @@ def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
         "transcript_id",
     ]:
         raise InvalidArguments("note arguments have the wrong shape")
-    if role == "inspect":
-        _canonical_uuid(arguments["meeting_id"])
-    else:
-        _opaque_meeting_id(arguments["meeting_id"])
+    _opaque_meeting_id(arguments["meeting_id"])
     try:
         _safe_digest(arguments["note_id"], "note ID")
         _safe_digest(arguments["transcript_id"], "transcript ID")

@@ -514,6 +514,35 @@ class NoteBridgeHarnessTests(unittest.TestCase):
         self.assertEqual(result["request_id"], request_id)
         self.assertEqual(result["failure"], {"code": "invalid-request", "recoverable": False})
 
+    def test_inspect_uses_the_shared_opaque_meeting_id_predicate(self) -> None:
+        accepted = self._arguments()
+        accepted["meeting_id"] = "meeting-a"
+        request_id, command = self._command(accepted)
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["request_id"], request_id)
+        self.assertEqual(
+            result["failure"], {"code": "artifact-missing", "recoverable": True}
+        )
+        for meeting_id in ("meeting/a", ".", "a" * 129):
+            arguments = self._arguments()
+            arguments["meeting_id"] = meeting_id
+            request_id, command = self._command(arguments)
+            bridge = self._start()
+            try:
+                result, returncode, error = bridge.send(command)
+            finally:
+                bridge.close()
+            self.assertEqual((returncode, error), (0, b""))
+            self.assertEqual(result["request_id"], request_id)
+            self.assertEqual(
+                result["failure"], {"code": "invalid-request", "recoverable": False}
+            )
+
     def test_duplicate_keys_and_second_frames_are_protocol_failures(self) -> None:
         request_id = str(uuid.uuid4())
         duplicate = (
