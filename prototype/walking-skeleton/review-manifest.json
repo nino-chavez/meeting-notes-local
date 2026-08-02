@@ -1,6 +1,6 @@
 {
-  "reviewScope": "walking-skeleton-sales-discovery-note",
-  "reviewQuestion": "Does the approved navigation lead to a useful, legible discovery-call note whose claims remain traceable to exact words?",
+  "reviewScope": "walking-skeleton-manual-capture-to-note",
+  "reviewQuestion": "Does manual capture remain unmistakable and ambient while the operator browses, then rejoin the evidence-linked note without turning status into a destination?",
   "approvedDefault": "retrieval",
   "evidenceBasis": {
     "market": "Corpus retrieval is positioned as core value; documented comparables expose multiple retrieval entry points.",
@@ -19,9 +19,9 @@
     "height": 900
   },
   "files": {
-    "index.html": "sha256:0a277da6907ccf463a52ce0cb011143a8775a955c02ddf1add7de96ea3b6fe88",
-    "styles.css": "sha256:3ed3a1efa2c0f560c325aa1a4f9a01502dcaa4422c44908457297e907532d7c1",
-    "app.js": "sha256:44a0b5ed14d7b0c241188f9ce370fbcbab1e9b7f3946a3efbea9525efae36c2f"
+    "index.html": "sha256:228fef64099d4c8804f3b4b37ef0506fcf88e86645225fd9c9e50153829df1d7",
+    "styles.css": "sha256:f312591827e9c4d72babfc016f286d06106d77c0660c86af2686c1147cd28380",
+    "app.js": "sha256:97a8c68a9efb5d5a8c1c28f1ea03b6c819951e71b63266fa361a8ee9b8c0c901"
   },
   "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
   "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",
@@ -75,6 +75,40 @@
       "note usefulness",
       "installed Preview behavior",
       "private content",
+      "beta admission or release"
+    ]
+  },
+  "manualCaptureSlice": {
+    "id": "manual-capture-to-note-v1",
+    "status": "pending-operator-review",
+    "source": "synthetic",
+    "supportedEnvelope": [
+      "manual start and stop",
+      "headphones",
+      "microphone and system-audio channels",
+      "local post-meeting transcription"
+    ],
+    "states": [
+      "idle",
+      "per-attempt-consent",
+      "recording-healthy",
+      "recording-degraded",
+      "hud-dismissed-with-header-state-visible",
+      "transcribing-locally",
+      "meeting-ready",
+      "partial-meeting-with-known-gap"
+    ],
+    "joins": {
+      "healthy": "sales-discovery-note-v1",
+      "interrupted": "existing partial-transcript and correction specimen"
+    },
+    "doesNotApprove": [
+      "macOS permission behavior",
+      "voice-profile readiness",
+      "hardware capture",
+      "local model execution",
+      "installed Preview behavior",
+      "consent sufficiency",
       "beta admission or release"
     ]
   },

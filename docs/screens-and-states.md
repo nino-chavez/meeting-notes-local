@@ -71,6 +71,14 @@ light/editorial surface. `README.md § Delivery method` now pins that executable
 the temporary visual baseline and requires the visual documents to be reconciled only
 after an exact prototype is approved.
 
+The active walking skeleton now preserves the rule that status is not a destination.
+Manual Start opens B as a per-attempt consent overlay over the current Find, Meetings,
+or Promises view. A healthy or degraded C is a dismissible HUD backed by the persistent
+A/header state, so the operator can browse without losing the listening signal.
+Transcribing and ready states use the same ambient channel and rejoin E. This synthetic
+candidate has not exercised macOS permissions, hardware capture, models, or the
+installed Preview.
+
 ### Two tests the decisions files do not contain
 
 The records above are the accepted outcomes. What produced them lives in the sessions,

@@ -234,10 +234,12 @@ const viewLabels = {
 
 const workspace = document.querySelector("#workspace");
 const footerDirection = document.querySelector("#footer-direction");
+const captureLayer = document.querySelector("#capture-layer");
 const toast = document.querySelector("#toast");
 
 let loadTimer;
 let transitionTimer;
+let captureTimer;
 let toastTimer;
 let state = freshState(readDirection());
 
@@ -266,7 +268,13 @@ function freshState(defaultDirection) {
     partnerRecovering: false,
     partnerRecovered: false,
     retentionConfirming: false,
-    retentionReleased: false
+    retentionReleased: false,
+    capturePhase: "idle",
+    consentConfirmed: false,
+    captureDegraded: false,
+    captureRecovering: false,
+    captureOutputMeetingId: null,
+    captureHudHidden: false
   };
 }
 
@@ -387,6 +395,7 @@ function startLoading() {
 
 function resetPrototype(direction = state.defaultDirection) {
   window.clearTimeout(transitionTimer);
+  window.clearTimeout(captureTimer);
   state = freshState(direction);
   startLoading();
 }
@@ -424,6 +433,20 @@ function syncChrome() {
     if (button.dataset.view === state.view) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
+  const captureLabels = {
+    idle: { status: "Nothing is recording", action: "Start meeting", className: "" },
+    consent: { status: "Ready to start", action: "Setup open", className: "is-armed" },
+    recording: { status: "Recording · healthy", action: "Show status", className: "is-recording" },
+    transcribing: { status: "Transcribing locally", action: "Show status", className: "is-transcribing" },
+    ready: { status: "Meeting ready", action: "Open meeting", className: "is-ready" }
+  };
+  const captureChrome = state.captureDegraded && state.capturePhase === "recording"
+    ? { status: "Recording · system audio interrupted", action: "Show status", className: "is-degraded" }
+    : captureLabels[state.capturePhase];
+  const productState = document.querySelector("#product-state");
+  productState.className = `product-state ${captureChrome.className}`.trim();
+  document.querySelector("#product-state-text").textContent = captureChrome.status;
+  document.querySelector("#capture-action").textContent = captureChrome.action;
   workspace.setAttribute("aria-label", `${viewLabels[state.view]} view`);
   footerDirection.textContent = `Viewing ${viewLabels[state.view]} · opens on ${viewLabels[state.defaultDirection]}`;
 }
@@ -443,6 +466,7 @@ function restoreRequestedFocus() {
   if (!request) return;
   window.requestAnimationFrame(() => {
     let target;
+    if (request === "capture") target = captureLayer.querySelector("h1, h2");
     if (request === "results") target = workspace.querySelector(".section-heading h2, .empty-state h2");
     if (request === "gap") target = workspace.querySelector("#withheld-turn");
     if (request === "status") target = workspace.querySelector(".stale-panel h2, .failure-panel h2, .state-panel h2");
@@ -462,6 +486,7 @@ function render() {
         <h1>Opening your meeting memory.</h1>
         <p>Loading five synthetic meetings without touching Preview data.</p>
       </section>`;
+    renderCaptureLayer();
     restoreRequestedFocus();
     return;
   }
@@ -479,7 +504,88 @@ function render() {
   } else {
     renderRetrievalHome();
   }
+  renderCaptureLayer();
   restoreRequestedFocus();
+}
+
+function renderCaptureLayer() {
+  const consentOpen = state.capturePhase === "consent";
+  document.querySelector(".review-bar").inert = consentOpen;
+  document.querySelector(".app-shell").inert = consentOpen;
+  captureLayer.className = "";
+  captureLayer.innerHTML = "";
+  if (state.capturePhase === "idle" || (state.captureHudHidden && state.capturePhase !== "consent")) return;
+  if (state.capturePhase === "consent") {
+    captureLayer.className = "is-modal";
+    captureLayer.innerHTML = `
+      <div class="capture-scrim">
+        <section class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-consent-title">
+          <p class="kicker">Manual start · one capture attempt</p>
+          <h1 id="capture-consent-title">Ready to remember this meeting?</h1>
+          <p class="lede">Record the microphone and system audio on this Mac, then transcribe after you stop.</p>
+          <div class="section-heading"><h2>Before recording</h2><span>Ready</span></div>
+          <div class="preflight-list" aria-label="Capture readiness">
+            <div><strong>Microphone</strong><span>Ready · voice profile loaded</span></div>
+            <div><strong>System audio</strong><span>Ready · headphones expected</span></div>
+            <div><strong>Audio retention</strong><span>Release after 14 days</span></div>
+            <div><strong>Processing</strong><span>Local on this Mac</span></div>
+          </div>
+          <label class="consent-check">
+            <input id="capture-consent" type="checkbox" ${state.consentConfirmed ? "checked" : ""} />
+            <span><strong>I confirmed everyone knows this meeting will be recorded.</strong><small>This attestation applies only to this attempt. The app does not decide whether consent is sufficient.</small></span>
+          </label>
+          <div class="capture-actions">
+            <button class="primary-button" type="button" data-action="begin-capture" ${state.consentConfirmed ? "" : "disabled"}>Start recording</button>
+            <button class="secondary-button" type="button" data-action="cancel-capture">Cancel</button>
+          </div>
+          <p class="prototype-boundary">Synthetic interaction only. No microphone, system audio, model, or product record is used.</p>
+        </section>
+      </div>`;
+    return;
+  }
+  captureLayer.className = "is-hud";
+  if (state.capturePhase === "recording") {
+    const degraded = state.captureDegraded;
+    captureLayer.innerHTML = `
+      <aside class="floating-capture-hud ${degraded ? "is-degraded" : ""}" aria-label="Recording status">
+        <header><div><p class="kicker">${degraded ? "Recording degraded" : "Recording now"}</p><h2>${degraded ? "System audio interrupted" : "Listening to both sides"}</h2></div><button class="hud-dismiss" type="button" data-action="hide-capture-hud" aria-label="Dismiss recording status">Dismiss</button></header>
+        <div class="capture-clock"><span>${degraded ? "00:18" : "00:12"}</span><small>${degraded ? "Still recording" : "Elapsed"}</small></div>
+        <div class="channel-health">
+          <div class="channel-row is-healthy"><span class="channel-mark" aria-hidden="true"></span><strong>Microphone · Me</strong><span>Healthy</span></div>
+          <div class="channel-row ${degraded ? "is-interrupted" : "is-healthy"}"><span class="channel-mark" aria-hidden="true"></span><strong>System audio · Them</strong><span>${degraded ? "Interrupted at 00:12" : "Healthy"}</span></div>
+        </div>
+        ${degraded ? `<p class="capture-warning"><strong>Recording continues with a known gap.</strong> Far-end words may be missing.</p>` : `<p class="capture-guidance">Me/Them are capture channels, not named speakers.</p>`}
+        <div class="capture-actions">
+          <button class="primary-button stop-button" type="button" data-action="stop-capture">Stop recording</button>
+          ${degraded
+            ? `<button class="secondary-button" type="button" data-action="recover-system-audio" ${state.captureRecovering ? "disabled" : ""}>${state.captureRecovering ? "Checking…" : "Try again"}</button>`
+            : `<button class="text-button prototype-action" type="button" data-action="preview-degraded">Preview interruption</button>`}
+        </div>
+        <p class="prototype-boundary">Prototype state · no audio captured</p>
+      </aside>`;
+    return;
+  }
+  if (state.capturePhase === "transcribing") {
+    captureLayer.innerHTML = `
+      <aside class="floating-capture-hud capture-processing" role="status" aria-busy="true">
+        <header><div><p class="kicker">Recording saved</p><h2>Transcribing locally</h2></div><button class="hud-dismiss" type="button" data-action="hide-capture-hud" aria-label="Dismiss processing status">Dismiss</button></header>
+        <p class="hud-copy">Canonical words come first. The library remains available while the synthetic transition finishes.</p>
+        <div class="compact-progress"><span class="is-done">Capture saved</span><span class="is-active">Transcript</span><span>Note</span></div>
+        <p class="prototype-boundary">No model is running</p>
+      </aside>`;
+    return;
+  }
+  if (state.capturePhase === "ready") {
+    const output = findMeeting(state.captureOutputMeetingId) || findMeeting("m-05");
+    const hasGap = output.id === "m-02";
+    captureLayer.innerHTML = `
+      <aside class="floating-capture-hud capture-ready ${hasGap ? "has-gap" : ""}" role="status">
+        <header><div><p class="kicker">${hasGap ? "Ready · known gap" : "Meeting ready"}</p><h2>${escapeHtml(output.title)}</h2></div><button class="hud-dismiss" type="button" data-action="hide-capture-hud" aria-label="Dismiss ready status">Dismiss</button></header>
+        <p class="hud-copy">${hasGap ? "The interrupted channel remains visible as missing coverage." : "The synthetic note and canonical transcript are ready to inspect."}</p>
+        <button class="primary-button" type="button" data-action="open-captured-meeting">Open meeting</button>
+        <p class="prototype-boundary">Opens an existing synthetic fixture</p>
+      </aside>`;
+  }
 }
 
 function searchFormMarkup(compact = false) {
@@ -1219,6 +1325,97 @@ async function copyText(text, message) {
   showToast(message);
 }
 
+function showCapture() {
+  if (state.capturePhase === "ready") {
+    openCapturedMeeting();
+    return;
+  }
+  if (state.capturePhase === "idle") {
+    state.capturePhase = "consent";
+    state.consentConfirmed = false;
+    state.captureOutputMeetingId = null;
+  }
+  state.captureHudHidden = false;
+  state.focusRequest = "capture";
+  render();
+}
+
+function beginCapture() {
+  if (state.capturePhase !== "consent" || !state.consentConfirmed) return;
+  state.capturePhase = "recording";
+  state.captureDegraded = false;
+  state.captureRecovering = false;
+  state.captureHudHidden = false;
+  state.focusRequest = "capture";
+  showToast("Synthetic recording started. Both channels are healthy.");
+  render();
+}
+
+function cancelCapture() {
+  if (state.capturePhase !== "consent") return;
+  state.capturePhase = "idle";
+  state.consentConfirmed = false;
+  state.captureHudHidden = false;
+  state.focusRequest = "heading";
+  render();
+}
+
+function previewDegradedCapture() {
+  if (state.capturePhase !== "recording") return;
+  state.captureDegraded = true;
+  state.captureRecovering = false;
+  state.focusRequest = "capture";
+  render();
+}
+
+function recoverSystemAudio() {
+  if (state.capturePhase !== "recording" || !state.captureDegraded || state.captureRecovering) return;
+  state.captureRecovering = true;
+  render();
+  transitionTimer = window.setTimeout(() => {
+    state.captureRecovering = false;
+    state.captureDegraded = false;
+    showToast("System audio returned. The earlier interruption remains in capture history.");
+    state.focusRequest = "capture";
+    render();
+  }, 500);
+}
+
+function stopCapture() {
+  if (state.capturePhase !== "recording") return;
+  window.clearTimeout(transitionTimer);
+  state.captureOutputMeetingId = state.captureDegraded ? "m-02" : "m-05";
+  state.capturePhase = "transcribing";
+  state.captureDegraded = false;
+  state.captureRecovering = false;
+  state.consentConfirmed = false;
+  state.captureHudHidden = false;
+  state.focusRequest = "capture";
+  render();
+  captureTimer = window.setTimeout(() => {
+    state.capturePhase = "ready";
+    showToast(state.captureOutputMeetingId === "m-02" ? "Transcript ready with one known gap." : "Transcript and synthetic note are ready.");
+    state.focusRequest = "capture";
+    render();
+  }, 900);
+}
+
+function openCapturedMeeting() {
+  const outputMeetingId = state.captureOutputMeetingId || "m-05";
+  state.capturePhase = "idle";
+  state.captureDegraded = false;
+  state.captureOutputMeetingId = null;
+  state.captureHudHidden = false;
+  openMeeting(outputMeetingId);
+}
+
+function hideCaptureHud() {
+  if (state.capturePhase === "idle" || state.capturePhase === "consent") return;
+  state.captureHudHidden = true;
+  state.focusRequest = "heading";
+  render();
+}
+
 document.querySelector(".direction-tabs").addEventListener("keydown", (event) => {
   if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
   const order = ["meetings", "commitments", "retrieval"];
@@ -1227,6 +1424,10 @@ document.querySelector(".direction-tabs").addEventListener("keydown", (event) =>
   const next = order[(current + delta + order.length) % order.length];
   setDirection(next);
   document.querySelector(`[data-direction="${next}"]`)?.focus();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.capturePhase === "consent") cancelCapture();
 });
 
 document.addEventListener("submit", (event) => {
@@ -1240,6 +1441,13 @@ document.addEventListener("submit", (event) => {
   state.selectedTranscriptLocator = null;
   state.focusRequest = "results";
   render();
+});
+
+document.addEventListener("change", (event) => {
+  if (event.target.id !== "capture-consent") return;
+  state.consentConfirmed = event.target.checked;
+  const startButton = document.querySelector("[data-action=begin-capture]");
+  if (startButton) startButton.disabled = !state.consentConfirmed;
 });
 
 document.addEventListener("click", (event) => {
@@ -1256,6 +1464,14 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const action = button.dataset.action;
+  if (action === "show-capture") showCapture();
+  if (action === "begin-capture") beginCapture();
+  if (action === "cancel-capture") cancelCapture();
+  if (action === "preview-degraded") previewDegradedCapture();
+  if (action === "recover-system-audio") recoverSystemAudio();
+  if (action === "stop-capture") stopCapture();
+  if (action === "open-captured-meeting") openCapturedMeeting();
+  if (action === "hide-capture-hud") hideCaptureHud();
   if (action === "open-claim") openClaim(button.dataset.claimId);
   if (action === "open-meeting") openMeeting(button.dataset.meetingId);
   if (action === "open-evidence") openEvidence(button.dataset.claimId);

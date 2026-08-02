@@ -385,6 +385,14 @@ transcript alpha owns consent, two-leg capture, post-meeting transcription, and
 fresh-process transcript recovery. It does not yet own the evidence-linked note and
 library end of the journey, so the beta journey is still incomplete.
 
+The active synthetic walking skeleton now connects those beats without claiming
+runtime evidence: manual Start opens per-attempt consent over the current view;
+healthy or degraded capture stays in the persistent header and a dismissible HUD while
+the library remains usable; Stop shows local transcription; and completion rejoins the
+evidence-linked discovery note or the partial-transcript correction specimen. This is
+an interaction candidate only. It does not exercise permissions, hardware, the voice
+profile, capture, transcription, or automatic note generation.
+
 Two beats worth restating as journey rather than state. **Consent** is the highest-
 stakes interaction in the product and the only one with legal weight in roughly a
 dozen US states. And **degradation** is a beat, not an error: a leg dies mid-meeting,

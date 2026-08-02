@@ -44,6 +44,15 @@ stated from inferred wording and labels its summary as derived. The content revi
 still pending: this fixture does not prove automatic extraction, semantic support, or
 operator usefulness.
 
+The next runnable slice adds manual capture without making status a destination.
+**Start meeting** opens a per-attempt consent overlay above the current view. Once the
+synthetic recording starts, healthy or degraded channel state lives in the persistent
+header and a dismissible HUD while Find, Meetings, and Promises remain usable beneath
+it. Stop moves through local-transcription status and rejoins either the discovery note
+or the existing partial-transcript specimen when a simulated channel interruption was
+not recovered. This path uses no hardware, permissions, audio, model, or product data;
+its interaction review is pending.
+
 It is a design instrument, not a second application runtime. It does not read or write
 Preview data, record audio, invoke a model, or prove note usefulness or semantic
 support. The synthetic corpus is frozen as of May 9, 2026 so relative retention states
