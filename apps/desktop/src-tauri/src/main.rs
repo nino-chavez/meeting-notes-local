@@ -1,4 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(feature = "library-dev-surface", allow(dead_code))]
+
+#[cfg(feature = "library-dev-surface")]
+mod library_dev_surface;
 
 // The correction/regeneration facade is intentionally compiled but not wired
 // into the current internal-alpha command set.
@@ -697,6 +701,7 @@ fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
     Ok(snapshot)
 }
 
+#[cfg(not(feature = "library-dev-surface"))]
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -722,6 +727,11 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("Local Meeting Notes shell failed");
+}
+
+#[cfg(feature = "library-dev-surface")]
+fn main() {
+    library_dev_surface::run();
 }
 
 fn initialize_application(app: AppHandle, retry: bool) {

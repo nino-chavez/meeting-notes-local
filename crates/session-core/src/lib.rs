@@ -4,6 +4,7 @@ pub mod library_read;
 pub mod meeting;
 pub mod meeting_coordination;
 pub mod note_generation;
+pub mod note_projection;
 pub mod operation_store;
 pub mod operations;
 pub mod protocol;

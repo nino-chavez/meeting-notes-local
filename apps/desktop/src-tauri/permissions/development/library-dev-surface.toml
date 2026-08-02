@@ -1,0 +1,19 @@
+[[permission]]
+identifier = "allow-library-dev-snapshot"
+description = "Enables the development-only synthetic library snapshot."
+commands.allow = ["library_dev_snapshot"]
+
+[[permission]]
+identifier = "allow-library-dev-search"
+description = "Enables read-only search of the development-only synthetic library."
+commands.allow = ["library_dev_search"]
+
+[[permission]]
+identifier = "allow-library-dev-open-note"
+description = "Enables reading current projected claims from the synthetic library fixture."
+commands.allow = ["library_dev_open_note"]
+
+[[permission]]
+identifier = "allow-library-dev-open-evidence"
+description = "Enables opening a current claim locator from the synthetic library fixture."
+commands.allow = ["library_dev_open_evidence"]

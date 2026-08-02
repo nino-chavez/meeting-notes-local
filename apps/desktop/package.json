@@ -5,7 +5,9 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "library-dev": "tauri dev --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface",
+    "library-dev-build": "tauri build --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.0"

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Local Meeting Notes Library Development Surface",
+  "version": "0.1.0",
+  "identifier": "com.ninochavez.local-meeting-notes.library-dev",
+  "build": {
+    "frontendDist": "../library-dev-ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "library-dev",
+        "title": "Local Meeting Notes — Library Development Surface",
+        "width": 960,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 560,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "capabilities": ["library-dev-window"],
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "freezePrototype": true
+    }
+  },
+  "bundle": {
+    "active": false,
+    "resources": null
+  }
+}

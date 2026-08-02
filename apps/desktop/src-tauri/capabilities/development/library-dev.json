@@ -1,0 +1,13 @@
+{
+  "$schema": "../../gen/schemas/desktop-schema.json",
+  "identifier": "library-dev-window",
+  "description": "Development-only synthetic library reader. It has no filesystem, shell, capture, retention, export, correction, or production-data permission.",
+  "windows": ["library-dev"],
+  "platforms": ["macOS"],
+  "permissions": [
+    "allow-library-dev-snapshot",
+    "allow-library-dev-search",
+    "allow-library-dev-open-note",
+    "allow-library-dev-open-evidence"
+  ]
+}

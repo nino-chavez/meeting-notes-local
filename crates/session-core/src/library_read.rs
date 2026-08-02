@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 use icu_normalizer::ComposingNormalizer;
 use serde::Deserialize;
@@ -21,6 +22,9 @@ use crate::meeting::{
     MAX_MEETING_RECORD_BYTES, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref, load_meeting,
     open_private_file, require_private_directory, valid_opaque_id, verify_artifact_ref,
     verify_record_static_artifacts,
+};
+use crate::note_projection::{
+    NoteProjector, ProjectRequest, ProjectionError, UnavailableProjector, project_claims,
 };
 use crate::storage::StorageRoot;
 
@@ -62,13 +66,13 @@ pub enum LibraryReadError {
     ArtifactUnavailable,
 }
 
-#[derive(PartialEq, Eq)]
 pub struct LibraryProjection {
     snapshot_id: Uuid,
     rows: Vec<LibraryRow>,
     quarantined_meetings: usize,
     limits: ReadLimits,
     metadata: MetadataState,
+    projector: Arc<dyn NoteProjector>,
     hits: RefCell<BTreeMap<String, SealedHit>>,
 }
 
@@ -81,6 +85,9 @@ pub struct LibraryRow {
     meeting_record_sha256: String,
     transcript_relative_path: Option<String>,
     turns: Vec<StoredTurn>,
+    note_json_sha256: Option<String>,
+    note_markdown_sha256: Option<String>,
+    claims: Vec<StoredClaim>,
     attempt_sha256: String,
     title: Option<String>,
     folder: Option<String>,
@@ -89,8 +96,24 @@ pub struct LibraryRow {
 #[derive(Clone, PartialEq, Eq)]
 struct StoredTurn {
     index: u32,
+    visible_index: Option<u64>,
     text: String,
     gated: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct StoredClaim {
+    ordinal: u64,
+    sha256: String,
+    claim_type: crate::note_projection::ClaimType,
+    text: String,
+    locators: Vec<StoredLocator>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct StoredLocator {
+    projected: crate::note_projection::Locator,
+    source_turn_index: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +124,12 @@ pub struct LibraryHit {
 
 #[derive(Clone, PartialEq, Eq)]
 enum SealedHit {
+    Claim {
+        key: String,
+        authority: HitAuthority,
+        claim: StoredClaim,
+        normalized_query: String,
+    },
     Transcript {
         key: String,
         authority: HitAuthority,
@@ -131,11 +160,25 @@ struct HitAuthority {
     attempt_sha256: String,
     transcript_sha256: Option<String>,
     transcript_relative_path: Option<String>,
+    note_json_sha256: Option<String>,
+    note_markdown_sha256: Option<String>,
     metadata_identity: MetadataIdentity,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum OpenedLibraryHit {
+    Claim {
+        meeting_id: String,
+        claim_ordinal: u64,
+        claim_sha256: String,
+        claim_type: crate::note_projection::ClaimType,
+        evidence_state: ClaimEvidenceState,
+        claim: String,
+        locators: Vec<OpenedClaimLocator>,
+        note_json_sha256: String,
+        note_markdown_sha256: String,
+        transcript_sha256: String,
+    },
     Transcript {
         meeting_id: String,
         source_turn_index: u32,
@@ -154,8 +197,45 @@ pub enum OpenedLibraryHit {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ClaimEvidenceState {
+    Located,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct OpenedClaimLocator {
+    pub turn: u64,
+    pub source_turn_index: u32,
+    pub start: u64,
+    pub end: u64,
+    pub text_sha256: String,
+}
+
+/// Exact, scalar-bound evidence from one located claim locator.
+///
+/// This is intentionally narrower than a transcript reader: a caller can only
+/// request evidence through a still-valid claim handle and a locator ordinal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedClaimEvidence {
+    pub meeting_id: String,
+    pub source_turn_index: u32,
+    pub start: u64,
+    pub end: u64,
+    pub text: String,
+}
+
 impl LibraryProjection {
     pub fn rebuild(storage: &StorageRoot, limits: ReadLimits) -> Result<Self, LibraryReadError> {
+        Self::rebuild_with_projector(storage, limits, Arc::new(UnavailableProjector))
+    }
+
+    /// Rebuilds through an injected, read-only `note.project` transport.  The
+    /// snapshot retains no child output beyond the accepted current claims.
+    pub fn rebuild_with_projector(
+        storage: &StorageRoot,
+        limits: ReadLimits,
+        projector: Arc<dyn NoteProjector>,
+    ) -> Result<Self, LibraryReadError> {
         if limits.max_meetings == 0
             || limits.max_total_bytes == 0
             || limits.max_transcript_bytes == 0
@@ -196,13 +276,16 @@ impl LibraryProjection {
         let mut rows = Vec::new();
         let mut quarantined = 0;
         for (_, directory) in &directories {
-            match inspect_meeting(directory, limits, &mut total) {
+            match inspect_meeting(directory, limits, &mut total, projector.as_ref()) {
                 Ok(Some(row)) => rows.push(row),
                 Ok(None) => continue,
-                Err(LibraryReadError::CapacityExceeded) => {
+                Err(MeetingInspectionError::CapacityExceeded) => {
                     return Err(LibraryReadError::CapacityExceeded);
                 }
-                Err(_) => quarantined += 1,
+                Err(MeetingInspectionError::Unavailable) => {
+                    return Err(LibraryReadError::ArtifactUnavailable);
+                }
+                Err(MeetingInspectionError::Quarantine) => quarantined += 1,
             }
         }
         rows.sort_by(meeting_order);
@@ -237,6 +320,7 @@ impl LibraryProjection {
                     quarantined_meetings: quarantined,
                     limits,
                     metadata: metadata.unavailable_after_relative_validation(),
+                    projector,
                     hits: RefCell::new(BTreeMap::new()),
                 });
             }
@@ -247,6 +331,7 @@ impl LibraryProjection {
             quarantined_meetings: quarantined,
             limits,
             metadata,
+            projector,
             hits: RefCell::new(BTreeMap::new()),
         })
     }
@@ -263,6 +348,21 @@ impl LibraryProjection {
         let mut hits = Vec::new();
         for row in &self.rows {
             let authority = self.authority(row);
+            for claim in &row.claims {
+                if claim_matches(row, claim, &normalized) {
+                    hits.push(SealedHit::Claim {
+                        key: format!(
+                            "{}:c:{}:{}",
+                            row.meeting_id,
+                            row.note_json_sha256.as_deref().unwrap_or_default(),
+                            claim.ordinal
+                        ),
+                        authority: authority.clone(),
+                        claim: claim.clone(),
+                        normalized_query: normalized.clone(),
+                    });
+                }
+            }
             for turn in &row.turns {
                 for (start, end) in normalized_matches(&turn.text, &normalized) {
                     if turn.gated {
@@ -273,6 +373,14 @@ impl LibraryProjection {
                             normalized_query: normalized.clone(),
                         });
                     } else {
+                        if row.claims.iter().any(|claim| {
+                            claim.locators.iter().any(|locator| {
+                                locator.source_turn_index == turn.index
+                                    && match_lands_in_locator(start, end, &locator.projected)
+                            })
+                        }) {
+                            continue;
+                        }
                         hits.push(SealedHit::Transcript {
                             key: format!("{}:t:{}:{}:{}", row.meeting_id, turn.index, start, end),
                             authority: authority.clone(),
@@ -316,6 +424,42 @@ impl LibraryProjection {
             .collect())
     }
 
+    /// Returns the current projected claims for one already-listed meeting.
+    /// The returned handles retain the same stale-snapshot checks as search
+    /// handles, but do not create a broad transcript enumeration API.
+    pub fn note_claims(&self, meeting_id: &str) -> Result<Vec<LibraryHit>, LibraryReadError> {
+        let row = self
+            .rows
+            .iter()
+            .find(|row| row.meeting_id == meeting_id)
+            .ok_or(LibraryReadError::InvalidRequest)?;
+        let authority = self.authority(row);
+        let mut retained = self.hits.borrow_mut();
+        row.claims
+            .iter()
+            .map(|claim| {
+                let normalized_query = normalize_query(&claim.text)?;
+                let hit = SealedHit::Claim {
+                    key: format!(
+                        "{}:c:{}:{}",
+                        row.meeting_id,
+                        row.note_json_sha256.as_deref().unwrap_or_default(),
+                        claim.ordinal
+                    ),
+                    authority: authority.clone(),
+                    claim: claim.clone(),
+                    normalized_query,
+                };
+                let key = format!("{}:{}", self.snapshot_id, hit_key(&hit));
+                retained.insert(key.clone(), hit);
+                Ok(LibraryHit {
+                    projection_id: self.snapshot_id,
+                    key,
+                })
+            })
+            .collect()
+    }
+
     pub fn open(
         &self,
         storage: &StorageRoot,
@@ -330,8 +474,8 @@ impl LibraryProjection {
             .get(&handle.key)
             .cloned()
             .ok_or(LibraryReadError::SnapshotStale)?;
-        let rebuilt =
-            Self::rebuild(storage, self.limits).map_err(|_| LibraryReadError::SnapshotStale)?;
+        let rebuilt = Self::rebuild_with_projector(storage, self.limits, self.projector.clone())
+            .map_err(|_| LibraryReadError::SnapshotStale)?;
         let row = rebuilt
             .rows
             .iter()
@@ -341,6 +485,51 @@ impl LibraryProjection {
             return Err(LibraryReadError::SnapshotStale);
         }
         match hit {
+            SealedHit::Claim {
+                claim,
+                normalized_query,
+                ..
+            } => {
+                let current = row
+                    .claims
+                    .iter()
+                    .find(|candidate| candidate.ordinal == claim.ordinal)
+                    .ok_or(LibraryReadError::SnapshotStale)?;
+                if current != &claim || !claim_matches(row, current, &normalized_query) {
+                    return Err(LibraryReadError::SnapshotStale);
+                }
+                Ok(OpenedLibraryHit::Claim {
+                    meeting_id: row.meeting_id.clone(),
+                    claim_ordinal: current.ordinal,
+                    claim_sha256: current.sha256.clone(),
+                    claim_type: current.claim_type,
+                    evidence_state: ClaimEvidenceState::Located,
+                    claim: current.text.clone(),
+                    locators: current
+                        .locators
+                        .iter()
+                        .map(|locator| OpenedClaimLocator {
+                            turn: locator.projected.turn,
+                            source_turn_index: locator.source_turn_index,
+                            start: locator.projected.start,
+                            end: locator.projected.end,
+                            text_sha256: locator.projected.text_sha256.clone(),
+                        })
+                        .collect(),
+                    note_json_sha256: row
+                        .note_json_sha256
+                        .clone()
+                        .ok_or(LibraryReadError::SnapshotStale)?,
+                    note_markdown_sha256: row
+                        .note_markdown_sha256
+                        .clone()
+                        .ok_or(LibraryReadError::SnapshotStale)?,
+                    transcript_sha256: row
+                        .transcript_sha256
+                        .clone()
+                        .ok_or(LibraryReadError::SnapshotStale)?,
+                })
+            }
             SealedHit::Transcript {
                 source_turn_index,
                 original_scalar_start,
@@ -417,6 +606,58 @@ impl LibraryProjection {
         }
     }
 
+    /// Opens precisely one current claim locator.  The evidence is re-derived
+    /// from the transcript only after the claim handle has passed the normal
+    /// snapshot and artifact checks.
+    pub fn open_claim_evidence(
+        &self,
+        storage: &StorageRoot,
+        handle: &LibraryHit,
+        locator_ordinal: usize,
+    ) -> Result<OpenedClaimEvidence, LibraryReadError> {
+        let OpenedLibraryHit::Claim {
+            meeting_id,
+            note_json_sha256,
+            note_markdown_sha256,
+            transcript_sha256,
+            locators,
+            ..
+        } = self.open(storage, handle)?
+        else {
+            return Err(LibraryReadError::InvalidRequest);
+        };
+        let locator = locators
+            .get(locator_ordinal)
+            .ok_or(LibraryReadError::InvalidRequest)?;
+        let rebuilt = Self::rebuild_with_projector(storage, self.limits, self.projector.clone())
+            .map_err(|_| LibraryReadError::SnapshotStale)?;
+        let row = rebuilt
+            .rows
+            .iter()
+            .find(|row| row.meeting_id == meeting_id)
+            .ok_or(LibraryReadError::SnapshotStale)?;
+        if row.note_json_sha256.as_deref() != Some(&note_json_sha256)
+            || row.note_markdown_sha256.as_deref() != Some(&note_markdown_sha256)
+            || row.transcript_sha256.as_deref() != Some(&transcript_sha256)
+        {
+            return Err(LibraryReadError::SnapshotStale);
+        }
+        let turn = row
+            .turns
+            .iter()
+            .find(|turn| turn.index == locator.source_turn_index && !turn.gated)
+            .ok_or(LibraryReadError::SnapshotStale)?;
+        let text = scalar_slice(&turn.text, locator.start, locator.end)
+            .ok_or(LibraryReadError::SnapshotStale)?;
+        Ok(OpenedClaimEvidence {
+            meeting_id,
+            source_turn_index: locator.source_turn_index,
+            start: locator.start,
+            end: locator.end,
+            text,
+        })
+    }
+
     fn authority(&self, row: &LibraryRow) -> HitAuthority {
         HitAuthority {
             meeting_id: row.meeting_id.clone(),
@@ -426,6 +667,8 @@ impl LibraryProjection {
             attempt_sha256: row.attempt_sha256.clone(),
             transcript_sha256: row.transcript_sha256.clone(),
             transcript_relative_path: row.transcript_relative_path.clone(),
+            note_json_sha256: row.note_json_sha256.clone(),
+            note_markdown_sha256: row.note_markdown_sha256.clone(),
             metadata_identity: self.metadata.identity(),
         }
     }
@@ -436,23 +679,40 @@ impl LibraryProjection {
     }
 }
 
+enum MeetingInspectionError {
+    Quarantine,
+    CapacityExceeded,
+    Unavailable,
+}
+
+impl From<LibraryReadError> for MeetingInspectionError {
+    fn from(value: LibraryReadError) -> Self {
+        match value {
+            LibraryReadError::CapacityExceeded => Self::CapacityExceeded,
+            LibraryReadError::ArtifactUnavailable
+            | LibraryReadError::InvalidRequest
+            | LibraryReadError::SnapshotStale => Self::Quarantine,
+        }
+    }
+}
+
 fn inspect_meeting(
     directory: &Path,
     limits: ReadLimits,
     total: &mut u64,
-) -> Result<Option<LibraryRow>, LibraryReadError> {
+    projector: &dyn NoteProjector,
+) -> Result<Option<LibraryRow>, MeetingInspectionError> {
     let _meeting_bytes = bounded_read(
         &directory.join("meeting.json"),
         MAX_MEETING_RECORD_BYTES,
         total,
         limits,
     )?;
-    let meeting = load_meeting(directory).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    let meeting = load_meeting(directory).map_err(|_| MeetingInspectionError::Quarantine)?;
     verify_record_static_artifacts(directory, &meeting)
-        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+        .map_err(|_| MeetingInspectionError::Quarantine)?;
     if let Some(receipt) = &meeting.retention.deletion_receipt {
-        verify_artifact_ref(directory, receipt)
-            .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+        verify_artifact_ref(directory, receipt).map_err(|_| MeetingInspectionError::Quarantine)?;
         account_reference(directory, receipt, total, limits)?;
     }
     for reference in [
@@ -474,12 +734,12 @@ fn inspect_meeting(
     {
         account_reference(directory, reference, total, limits)?;
     }
-    let meeting_record = artifact_ref(directory, "meeting.json")
-        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
-    let attempt = artifact_ref(directory, "attempt.json")
-        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    let meeting_record =
+        artifact_ref(directory, "meeting.json").map_err(|_| MeetingInspectionError::Quarantine)?;
+    let attempt =
+        artifact_ref(directory, "attempt.json").map_err(|_| MeetingInspectionError::Quarantine)?;
     if attempt != meeting.artifacts.attempt {
-        return Err(LibraryReadError::ArtifactUnavailable);
+        return Err(MeetingInspectionError::Quarantine);
     }
     let attempt_bytes = bounded_read(
         &directory.join("attempt.json"),
@@ -487,8 +747,8 @@ fn inspect_meeting(
         total,
         limits,
     )?;
-    let attempt_data: Attempt = serde_json::from_slice(&attempt_bytes)
-        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    let attempt_data: Attempt =
+        serde_json::from_slice(&attempt_bytes).map_err(|_| MeetingInspectionError::Quarantine)?;
     if attempt_data.schema != "capture-attempt/1"
         || attempt_data.meeting_id != meeting.meeting_id
         || Uuid::parse_str(&attempt_data.attempt_id).is_err()
@@ -499,7 +759,7 @@ fn inspect_meeting(
         || !attempt_data.operator_attestation.operator_alone
         || attempt_data.retention_policy_sha256 != meeting.retention.policy_sha256
     {
-        return Err(LibraryReadError::ArtifactUnavailable);
+        return Err(MeetingInspectionError::Quarantine);
     }
     let (transcript_sha256, transcript_relative_path, turns, current_artifact) = if matches!(
         meeting.lifecycle,
@@ -511,11 +771,11 @@ fn inspect_meeting(
             .artifacts
             .current_transcript
             .as_ref()
-            .ok_or(LibraryReadError::ArtifactUnavailable)?;
+            .ok_or(MeetingInspectionError::Quarantine)?;
         let actual = artifact_ref(directory, &current.relative_path)
-            .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+            .map_err(|_| MeetingInspectionError::Quarantine)?;
         if &actual != current {
-            return Err(LibraryReadError::ArtifactUnavailable);
+            return Err(MeetingInspectionError::Quarantine);
         }
         let bytes = bounded_read(
             &directory.join(&current.relative_path),
@@ -524,7 +784,7 @@ fn inspect_meeting(
             limits,
         )?;
         let document: Transcript =
-            serde_json::from_slice(&bytes).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+            serde_json::from_slice(&bytes).map_err(|_| MeetingInspectionError::Quarantine)?;
         (
             Some(current.sha256.clone()),
             Some(current.relative_path.clone()),
@@ -536,22 +796,95 @@ fn inspect_meeting(
         // transcript bytes or transcript search authority are inferred.
         (None, None, Vec::new(), None)
     };
+    let (note_json_sha256, note_markdown_sha256, claims) = if meeting.lifecycle
+        == MeetingLifecycle::Ready
+    {
+        let note = meeting
+            .artifacts
+            .current_note
+            .as_ref()
+            .ok_or(MeetingInspectionError::Quarantine)?;
+        let request = ProjectRequest {
+            request_id: Uuid::new_v4(),
+            meeting_id: meeting.meeting_id.clone(),
+            note_json_sha256: note.json.sha256.clone(),
+            note_markdown_sha256: note.markdown.sha256.clone(),
+            transcript_sha256: transcript_sha256
+                .clone()
+                .ok_or(MeetingInspectionError::Quarantine)?,
+        };
+        let transcript_text: Vec<_> = turns
+            .iter()
+            .filter(|turn| !turn.gated)
+            .map(|turn| turn.text.clone())
+            .collect();
+        let claims =
+            project_claims(projector, &request, &transcript_text).map_err(|error| match error {
+                ProjectionError::ArtifactMissing
+                | ProjectionError::ArtifactInvalid
+                | ProjectionError::ArtifactChanged => MeetingInspectionError::Quarantine,
+                ProjectionError::CapacityExceeded => MeetingInspectionError::CapacityExceeded,
+                ProjectionError::Unavailable => MeetingInspectionError::Unavailable,
+            })?;
+        let claims = claims
+            .into_iter()
+            .map(|claim| {
+                let locators = claim
+                    .locators
+                    .into_iter()
+                    .map(|projected| {
+                        let source_turn_index = turns
+                            .iter()
+                            .find(|turn| turn.visible_index == Some(projected.turn))
+                            .map(|turn| turn.index)
+                            .ok_or(MeetingInspectionError::Unavailable)?;
+                        Ok(StoredLocator {
+                            projected,
+                            source_turn_index,
+                        })
+                    })
+                    .collect::<Result<_, MeetingInspectionError>>()?;
+                Ok(StoredClaim {
+                    ordinal: claim.ordinal,
+                    sha256: claim.sha256,
+                    claim_type: claim.claim_type,
+                    text: claim.text,
+                    locators,
+                })
+            })
+            .collect::<Result<Vec<_>, MeetingInspectionError>>()?;
+        (
+            Some(note.json.sha256.clone()),
+            Some(note.markdown.sha256.clone()),
+            claims,
+        )
+    } else {
+        (None, None, Vec::new())
+    };
     // Re-read the pointers after inspection before allowing this candidate into a snapshot.
-    let again = load_meeting(directory).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+    let again = load_meeting(directory).map_err(|_| MeetingInspectionError::Quarantine)?;
     if again != meeting
         || artifact_ref(directory, "meeting.json")
-            .map_err(|_| LibraryReadError::ArtifactUnavailable)?
+            .map_err(|_| MeetingInspectionError::Quarantine)?
             != meeting_record
         || artifact_ref(directory, "attempt.json")
-            .map_err(|_| LibraryReadError::ArtifactUnavailable)?
+            .map_err(|_| MeetingInspectionError::Quarantine)?
             != attempt
         || current_artifact.as_ref().is_some_and(|actual| {
             artifact_ref(directory, &actual.relative_path)
                 .map(|again| again != *actual)
                 .unwrap_or(true)
         })
+        || meeting.artifacts.current_note.as_ref().is_some_and(|note| {
+            artifact_ref(directory, &note.json.relative_path)
+                .map(|again| again != note.json)
+                .unwrap_or(true)
+                || artifact_ref(directory, &note.markdown.relative_path)
+                    .map(|again| again != note.markdown)
+                    .unwrap_or(true)
+        })
     {
-        return Err(LibraryReadError::ArtifactUnavailable);
+        return Err(MeetingInspectionError::Quarantine);
     }
     Ok(Some(LibraryRow {
         meeting_id: meeting.meeting_id.clone(),
@@ -561,6 +894,9 @@ fn inspect_meeting(
         meeting_record_sha256: meeting_record.sha256,
         transcript_relative_path,
         turns,
+        note_json_sha256,
+        note_markdown_sha256,
+        claims,
         attempt_sha256: attempt.sha256,
         title: None,
         folder: None,
@@ -664,6 +1000,7 @@ fn validate_transcript(document: Transcript) -> Result<Vec<StoredTurn>, LibraryR
     {
         return Err(LibraryReadError::ArtifactUnavailable);
     }
+    let mut visible_index = 0_u64;
     document
         .turns
         .into_iter()
@@ -691,10 +1028,17 @@ fn validate_transcript(document: Transcript) -> Result<Vec<StoredTurn>, LibraryR
             {
                 return Err(LibraryReadError::ArtifactUnavailable);
             }
+            let gated = turn.gated == Some(true);
+            let current_visible_index = (!gated).then(|| {
+                let current = visible_index;
+                visible_index += 1;
+                current
+            });
             Ok(StoredTurn {
                 index: index as u32,
+                visible_index: current_visible_index,
                 text: turn.text,
-                gated: turn.gated == Some(true),
+                gated,
             })
         })
         .collect()
@@ -777,6 +1121,21 @@ fn scalar_slice(text: &str, start: u64, end: u64) -> Option<String> {
             .collect(),
     )
 }
+fn claim_matches(row: &LibraryRow, claim: &StoredClaim, normalized_query: &str) -> bool {
+    !normalized_matches(&claim.text, normalized_query).is_empty()
+        || claim.locators.iter().any(|locator| {
+            row.turns
+                .iter()
+                .find(|turn| turn.index == locator.source_turn_index && !turn.gated)
+                .and_then(|turn| {
+                    scalar_slice(&turn.text, locator.projected.start, locator.projected.end)
+                })
+                .is_some_and(|text| !normalized_matches(&text, normalized_query).is_empty())
+        })
+}
+fn match_lands_in_locator(start: u64, end: u64, locator: &crate::note_projection::Locator) -> bool {
+    start >= locator.start && end <= locator.end
+}
 #[cfg(test)]
 fn digest_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -790,53 +1149,74 @@ fn meeting_order(left: &LibraryRow, right: &LibraryRow) -> std::cmp::Ordering {
 }
 fn hit_key(hit: &SealedHit) -> &str {
     match hit {
-        SealedHit::Transcript { key, .. }
+        SealedHit::Claim { key, .. }
+        | SealedHit::Transcript { key, .. }
         | SealedHit::Withheld { key, .. }
         | SealedHit::Meeting { key, .. } => key,
     }
 }
 fn hit_meeting_id(hit: &SealedHit) -> &str {
     match hit {
-        SealedHit::Transcript { authority, .. }
+        SealedHit::Claim { authority, .. }
+        | SealedHit::Transcript { authority, .. }
         | SealedHit::Withheld { authority, .. }
         | SealedHit::Meeting { authority, .. } => &authority.meeting_id,
     }
 }
 fn hit_authority(hit: &SealedHit) -> &HitAuthority {
     match hit {
-        SealedHit::Transcript { authority, .. }
+        SealedHit::Claim { authority, .. }
+        | SealedHit::Transcript { authority, .. }
         | SealedHit::Withheld { authority, .. }
         | SealedHit::Meeting { authority, .. } => authority,
     }
 }
 fn hit_order(left: &SealedHit, right: &SealedHit) -> std::cmp::Ordering {
-    let (lc, li) = hit_sort(left);
-    let (rc, ri) = hit_sort(right);
-    rc.cmp(&lc)
+    authority_created(hit_authority(right))
+        .cmp(&authority_created(hit_authority(left)))
         .then_with(|| hit_meeting_id(left).cmp(hit_meeting_id(right)))
-        .then_with(|| li.cmp(&ri))
+        .then_with(|| hit_location(left).cmp(&hit_location(right)))
+        .then_with(|| hit_kind(left).cmp(&hit_kind(right)))
+        .then_with(|| hit_claim_digest(left).cmp(hit_claim_digest(right)))
+        .then_with(|| hit_claim_ordinal(left).cmp(&hit_claim_ordinal(right)))
         .then_with(|| hit_key(left).cmp(hit_key(right)))
 }
-fn hit_sort(hit: &SealedHit) -> (u64, u64) {
+fn hit_kind(hit: &SealedHit) -> u8 {
     match hit {
+        SealedHit::Claim { .. } => 0,
+        SealedHit::Transcript { .. } => 1,
+        SealedHit::Withheld { .. } => 2,
+        SealedHit::Meeting { .. } => 3,
+    }
+}
+fn hit_location(hit: &SealedHit) -> (u64, u64) {
+    match hit {
+        SealedHit::Claim { claim, .. } => claim
+            .locators
+            .first()
+            .map(|locator| (locator.projected.turn, locator.projected.start))
+            .unwrap_or((u64::MAX, u64::MAX)),
         SealedHit::Transcript {
-            authority,
             source_turn_index,
             original_scalar_start,
             ..
-        } => (
-            authority_created(authority),
-            ((*source_turn_index as u64) << 32) | *original_scalar_start,
-        ),
+        } => (*source_turn_index as u64, *original_scalar_start),
         SealedHit::Withheld {
-            authority,
-            source_turn_index,
-            ..
-        } => (
-            authority_created(authority),
-            ((*source_turn_index as u64) << 32) | u32::MAX as u64,
-        ),
-        SealedHit::Meeting { authority, .. } => (authority_created(authority), u64::MAX),
+            source_turn_index, ..
+        } => (*source_turn_index as u64, u64::MAX),
+        SealedHit::Meeting { .. } => (u64::MAX, u64::MAX),
+    }
+}
+fn hit_claim_digest(hit: &SealedHit) -> &str {
+    match hit {
+        SealedHit::Claim { claim, .. } => &claim.sha256,
+        _ => "",
+    }
+}
+fn hit_claim_ordinal(hit: &SealedHit) -> u64 {
+    match hit {
+        SealedHit::Claim { claim, .. } => claim.ordinal,
+        _ => 0,
     }
 }
 fn authority_created(authority: &HitAuthority) -> u64 {
@@ -847,6 +1227,7 @@ fn authority_created(authority: &HitAuthority) -> u64 {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
 
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -857,6 +1238,7 @@ mod tests {
         ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
         MeetingRecord, MeetingSchema, artifact_ref, retention_policy_sha256, write_meeting,
     };
+    use crate::note_projection::{NoteProjector, ProjectRequest, ProjectTransportError};
     use crate::storage::{create_private_dir, durable_create_new};
 
     macro_rules! assert_stale {
@@ -963,6 +1345,53 @@ mod tests {
             path
         }
 
+        fn ready_meeting(&self, id: &str, created: u64) -> PathBuf {
+            self.ready_meeting_with_turns(
+                id,
+                created,
+                &[
+                    ("alpha", false),
+                    ("beta", false),
+                    ("gamma", false),
+                    ("aé🙂z", false),
+                ],
+            )
+        }
+
+        fn ready_meeting_with_turns(
+            &self,
+            id: &str,
+            created: u64,
+            turns: &[(&str, bool)],
+        ) -> PathBuf {
+            let directory = self.meeting(id, created, turns);
+            let mut record = load_meeting(&directory).unwrap();
+            create_private_dir(&directory.join("notes")).unwrap();
+            let json = b"{}\n";
+            let markdown = b"# private\n";
+            let json_digest = digest_bytes(json);
+            let markdown_digest = digest_bytes(markdown);
+            let json_path = format!("notes/{json_digest}.json");
+            let markdown_path = format!("notes/{markdown_digest}.md");
+            durable_create_new(&directory.join(&json_path), json).unwrap();
+            durable_create_new(&directory.join(&markdown_path), markdown).unwrap();
+            let transcript = record
+                .artifacts
+                .current_transcript
+                .as_ref()
+                .unwrap()
+                .sha256
+                .clone();
+            record.lifecycle = MeetingLifecycle::Ready;
+            record.artifacts.current_note = Some(crate::meeting::NoteRevisionRef {
+                json: artifact_ref(&directory, &json_path).unwrap(),
+                markdown: artifact_ref(&directory, &markdown_path).unwrap(),
+                source_transcript_sha256: transcript,
+            });
+            write_meeting(&directory, &record).unwrap();
+            directory
+        }
+
         fn metadata_only_meeting(
             &self,
             id: &str,
@@ -999,6 +1428,43 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum ProjectorMode {
+        Success,
+        Refusal(&'static str),
+        Transport,
+    }
+
+    struct FixtureProjector(Mutex<ProjectorMode>);
+
+    impl FixtureProjector {
+        fn new(mode: ProjectorMode) -> Self {
+            Self(Mutex::new(mode))
+        }
+        fn set(&self, mode: ProjectorMode) {
+            *self.0.lock().unwrap() = mode;
+        }
+    }
+
+    impl NoteProjector for FixtureProjector {
+        fn project(&self, request: &ProjectRequest) -> Result<Vec<u8>, ProjectTransportError> {
+            match *self.0.lock().unwrap() {
+                ProjectorMode::Transport => Err(ProjectTransportError),
+                ProjectorMode::Refusal(code) => {
+                    Ok(format!("{{\"schema\":\"note-projection-result/1\",\"request_id\":\"{}\",\"operation\":\"note.project\",\"outcome\":\"refused\",\"projection\":null,\"failure\":{{\"code\":\"{code}\",\"recoverable\":{}}}}}\n", request.request_id, code == "artifact-missing").into_bytes())
+                }
+                ProjectorMode::Success => {
+                    let locator = "{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}";
+                    let claims = (0..3)
+                        .map(|ordinal| format!("{{\"claim_ordinal\":{ordinal},\"claim_sha256\":\"b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"claim-a\",\"locators\":[{locator}]}}"))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    Ok(format!("{{\"schema\":\"note-projection-result/1\",\"request_id\":\"{}\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"{}\",\"note_markdown_sha256\":\"{}\",\"transcript_sha256\":\"{}\",\"claims\":[{claims}]}},\"failure\":null}}\n", request.request_id, request.note_json_sha256, request.note_markdown_sha256, request.transcript_sha256).into_bytes())
+                }
+            }
+        }
+    }
+
     #[test]
     fn rebuild_is_read_only_and_quarantines_tampered_meetings() {
         let fixture = Fixture::new();
@@ -1012,6 +1478,313 @@ mod tests {
         assert_eq!(projection.quarantined_meetings(), 1);
         assert_eq!(before, tree_digest(fixture.storage.path()));
         assert!(fixture.temp.path().exists());
+    }
+
+    #[test]
+    fn current_claims_use_fixture_projection_preserve_duplicate_ordinals_and_reinspect_on_open() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting("meeting-a", 10);
+        let projector = Arc::new(FixtureProjector::new(ProjectorMode::Success));
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            projector.clone(),
+        )
+        .unwrap();
+        let hits = projection.search("a").unwrap();
+        assert!(matches!(
+            projection.sealed(&hits[0]),
+            Some(SealedHit::Claim {
+                claim: StoredClaim { ordinal: 0, .. },
+                ..
+            })
+        ));
+        let claim_hits = projection.search("claim-a").unwrap();
+        assert_eq!(claim_hits.len(), 3, "same text remains distinct by ordinal");
+        for (ordinal, hit) in claim_hits.iter().enumerate() {
+            assert!(
+                matches!(projection.open(&fixture.storage, hit).unwrap(), OpenedLibraryHit::Claim { claim_ordinal, ref claim, .. } if claim_ordinal == ordinal as u64 && claim == "claim-a")
+            );
+        }
+        projector.set(ProjectorMode::Refusal("artifact-changed"));
+        assert_stale!(projection.open(&fixture.storage, &claim_hits[0]));
+
+        let fixture = Fixture::new();
+        let directory = fixture.ready_meeting("meeting-a", 10);
+        let projector = Arc::new(FixtureProjector::new(ProjectorMode::Success));
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            projector,
+        )
+        .unwrap();
+        let hit = projection.search("claim-a").unwrap().remove(0);
+        let note = load_meeting(&directory)
+            .unwrap()
+            .artifacts
+            .current_note
+            .unwrap();
+        fs::write(directory.join(note.json.relative_path), b"changed").unwrap();
+        assert_stale!(projection.open(&fixture.storage, &hit));
+    }
+
+    #[test]
+    fn note_claims_and_exact_evidence_keep_the_existing_snapshot_boundary() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting("meeting-a", 10);
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+
+        let claims = projection.note_claims("meeting-a").unwrap();
+        assert_eq!(claims.len(), 3);
+        assert!(matches!(
+            projection.open(&fixture.storage, &claims[0]).unwrap(),
+            OpenedLibraryHit::Claim {
+                claim_ordinal: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            projection.open_claim_evidence(&fixture.storage, &claims[0], 0).unwrap(),
+            OpenedClaimEvidence { source_turn_index: 0, ref text, .. } if text == "alpha"
+        ));
+        assert_eq!(
+            projection.note_claims("missing").unwrap_err(),
+            LibraryReadError::InvalidRequest
+        );
+        assert_eq!(
+            projection
+                .open_claim_evidence(&fixture.storage, &claims[0], 1)
+                .unwrap_err(),
+            LibraryReadError::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn claim_search_is_claim_first_deduplicated_and_opens_complete_evidence() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting("meeting-a", 10);
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+
+        let cited_span_hits = projection.search("alpha").unwrap();
+        assert_eq!(
+            cited_span_hits.len(),
+            3,
+            "the cited transcript hit is suppressed"
+        );
+        assert!(
+            cited_span_hits
+                .iter()
+                .all(|hit| matches!(projection.sealed(hit), Some(SealedHit::Claim { .. })))
+        );
+
+        let claim_and_span_hits = projection.search("a").unwrap();
+        assert_eq!(
+            claim_and_span_hits
+                .iter()
+                .filter(|hit| matches!(projection.sealed(hit), Some(SealedHit::Claim { .. })))
+                .count(),
+            3,
+            "claim text plus cited span still yields one hit per claim ordinal"
+        );
+
+        let opened = projection
+            .open(&fixture.storage, &cited_span_hits[0])
+            .unwrap();
+        assert!(matches!(
+            opened,
+            OpenedLibraryHit::Claim {
+                meeting_id,
+                claim_ordinal: 0,
+                claim_sha256,
+                claim_type: crate::note_projection::ClaimType::Decision,
+                evidence_state: ClaimEvidenceState::Located,
+                claim,
+                locators,
+                note_json_sha256,
+                note_markdown_sha256,
+                transcript_sha256,
+            } if meeting_id == "meeting-a"
+                && claim_sha256 == "b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2"
+                && claim == "claim-a"
+                && locators.len() == 1
+                && locators[0].turn == 0
+                && locators[0].source_turn_index == 0
+                && locators[0].start == 0
+                && locators[0].end == 5
+                && locators[0].text_sha256 == "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+                && valid_digest(&note_json_sha256)
+                && valid_digest(&note_markdown_sha256)
+                && valid_digest(&transcript_sha256)
+        ));
+    }
+
+    #[test]
+    fn projected_visible_turn_maps_back_to_original_turn_after_withheld_input() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting_with_turns(
+            "meeting-a",
+            10,
+            &[("withheld", true), ("alpha", false), ("beta", false)],
+        );
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+        let hit = projection.search("alpha").unwrap().remove(0);
+        assert!(matches!(
+            projection.open(&fixture.storage, &hit).unwrap(),
+            OpenedLibraryHit::Claim { locators, .. }
+                if locators[0].turn == 0 && locators[0].source_turn_index == 1
+        ));
+    }
+
+    #[test]
+    fn hit_order_is_recency_id_location_kind_digest_ordinal_then_id() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting("meeting-z", 11);
+        fixture.ready_meeting("meeting-a", 10);
+        fixture.ready_meeting("meeting-b", 10);
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+        let ordered: Vec<_> = projection
+            .search("claim-a")
+            .unwrap()
+            .iter()
+            .map(|hit| match projection.sealed(hit).unwrap() {
+                SealedHit::Claim {
+                    authority, claim, ..
+                } => (authority.meeting_id, claim.ordinal),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            ordered,
+            vec![
+                ("meeting-z".into(), 0),
+                ("meeting-z".into(), 1),
+                ("meeting-z".into(), 2),
+                ("meeting-a".into(), 0),
+                ("meeting-a".into(), 1),
+                ("meeting-a".into(), 2),
+                ("meeting-b".into(), 0),
+                ("meeting-b".into(), 1),
+                ("meeting-b".into(), 2),
+            ]
+        );
+
+        let authority = projection.authority(&projection.rows[0]);
+        let locator = StoredLocator {
+            projected: crate::note_projection::Locator {
+                turn: 0,
+                start: 0,
+                end: 5,
+                text_sha256: "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+                    .into(),
+            },
+            source_turn_index: 0,
+        };
+        let claim = |key: &str, digest: char, ordinal| SealedHit::Claim {
+            key: key.into(),
+            authority: authority.clone(),
+            claim: StoredClaim {
+                ordinal,
+                sha256: digest.to_string().repeat(64),
+                claim_type: crate::note_projection::ClaimType::Decision,
+                text: "claim".into(),
+                locators: vec![locator.clone()],
+            },
+            normalized_query: "claim".into(),
+        };
+        let mut same_location = [
+            SealedHit::Transcript {
+                key: "t-b".into(),
+                authority: authority.clone(),
+                source_turn_index: 0,
+                original_scalar_start: 0,
+                original_scalar_end: 1,
+                normalized_query: "a".into(),
+            },
+            claim("c-b-2", 'b', 2),
+            claim("c-a-2", 'a', 2),
+            claim("c-a-1", 'a', 1),
+            SealedHit::Transcript {
+                key: "t-a".into(),
+                authority,
+                source_turn_index: 0,
+                original_scalar_start: 0,
+                original_scalar_end: 1,
+                normalized_query: "a".into(),
+            },
+        ];
+        same_location.sort_by(hit_order);
+        assert_eq!(
+            same_location.iter().map(hit_key).collect::<Vec<_>>(),
+            vec!["c-a-1", "c-a-2", "c-b-2", "t-a", "t-b"]
+        );
+    }
+
+    #[test]
+    fn projection_failures_never_publish_partial_ready_meetings() {
+        for (mode, expected) in [
+            (
+                ProjectorMode::Refusal("projection-capacity-exceeded"),
+                LibraryReadError::CapacityExceeded,
+            ),
+            (
+                ProjectorMode::Refusal("invalid-request"),
+                LibraryReadError::ArtifactUnavailable,
+            ),
+            (
+                ProjectorMode::Transport,
+                LibraryReadError::ArtifactUnavailable,
+            ),
+        ] {
+            let fixture = Fixture::new();
+            fixture.ready_meeting("meeting-a", 10);
+            fixture.ready_meeting("meeting-b", 9);
+            let projector = Arc::new(FixtureProjector::new(mode));
+            assert!(matches!(
+                LibraryProjection::rebuild_with_projector(
+                    &fixture.storage,
+                    ReadLimits::default(),
+                    projector,
+                ),
+                Err(actual) if actual == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn artifact_refusals_quarantine_only_the_affected_ready_meeting() {
+        for code in ["artifact-missing", "artifact-invalid", "artifact-changed"] {
+            let fixture = Fixture::new();
+            fixture.ready_meeting("meeting-a", 10);
+            let projector = Arc::new(FixtureProjector::new(ProjectorMode::Refusal(code)));
+            let projection = LibraryProjection::rebuild_with_projector(
+                &fixture.storage,
+                ReadLimits::default(),
+                projector,
+            )
+            .unwrap();
+            assert!(projection.rows().is_empty(), "{code}");
+            assert_eq!(projection.quarantined_meetings(), 1, "{code}");
+        }
     }
 
     #[test]
