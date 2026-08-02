@@ -51,7 +51,8 @@ product value.
 ## Run
 
 Use the pinned runtime and local model directory. Keep output outside the
-repository:
+repository. The runner refuses remote model identifiers and cannot report a
+measured result without hashing a local `weights.safetensors` file:
 
 ```sh
 PINNED_PYTHON=/path/to/pinned/python-runtime/bin/python3

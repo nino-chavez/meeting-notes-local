@@ -36,7 +36,7 @@ from typing import Any
 import numpy as np
 
 RATE = 16_000
-DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
+DEFAULT_MODEL_ID = "mlx-community/whisper-large-v3-turbo"
 SCHEMA = "mlx-word-timestamp-benchmark/1"
 FIXTURE_SCHEMA = "mlx-word-timestamp-fixture/1"
 TOKEN = re.compile(r"[a-z0-9]+(?:'[a-z]+)?", re.I)
@@ -192,15 +192,12 @@ def transcribe(audio: np.ndarray, model: str, continuation: bool) -> dict[str, A
     )
 
 
-def model_digest(model: str) -> str | None:
-    # Best effort only.  Model identity is always reported; a missing local cache
-    # is not mistaken for a verified digest.
-    supplied = Path(model).expanduser()
-    if supplied.is_dir() and (supplied / "weights.safetensors").is_file():
-        return sha256_file(supplied / "weights.safetensors")
-    cache = Path.home() / ".cache/huggingface/hub" / ("models--" + model.replace("/", "--")) / "snapshots"
-    candidates = sorted(cache.glob("*/weights.safetensors"))
-    return sha256_file(candidates[-1]) if candidates else None
+def validated_local_model(model: Path) -> tuple[Path, str]:
+    supplied = model.expanduser().resolve()
+    weights = supplied / "weights.safetensors"
+    if not supplied.is_dir() or not weights.is_file():
+        raise ValueError("--model must be an explicit local model directory containing weights.safetensors")
+    return supplied, sha256_file(weights)
 
 
 def one_run(audio: np.ndarray, fixture: dict[str, Any], model: str, continuation: bool) -> dict[str, Any]:
@@ -256,8 +253,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--fixture", default="synthetic-silence-v1")
     parser.add_argument("--fixture-root", type=Path, help="directory containing a registered public fixture manifest and WAV")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--model-id", default=DEFAULT_MODEL, help="content-free model identity recorded in the report")
+    parser.add_argument("--model", type=Path, required=True, help="explicit local model directory containing weights.safetensors")
+    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="content-free model identity recorded in the report")
     parser.add_argument(
         "--arm",
         choices=("both", "baseline_no_previous_text", "continuation_seam_comparator"),
@@ -270,6 +267,7 @@ def main() -> int:
     if args.repetitions < 1:
         parser.error("--repetitions must be positive")
     try:
+        model_path, model_weights_sha256 = validated_local_model(args.model)
         fixture, audio = load_fixture(args.fixture, args.fixture_root)
         import mlx_whisper  # noqa: F401
     except (ImportError, OSError, ValueError, json.JSONDecodeError) as exc:
@@ -285,14 +283,14 @@ def main() -> int:
             "framework_version": importlib.metadata.version("mlx-whisper"),
             "platform": f"{platform.system()}-{platform.machine()}",
             "model_id": args.model_id,
-            "model_weights_sha256": model_digest(args.model),
+            "model_weights_sha256": model_weights_sha256,
             "language": "en",
             "sample_rate_hz": RATE,
             "word_timestamps": True,
             "timing_mode": "decoded",
             "alignment_method": "mlx-whisper word_timestamps",
         },
-        "arms": benchmark(audio, fixture, args.model, args.repetitions, args.arm),
+        "arms": benchmark(audio, fixture, str(model_path), args.repetitions, args.arm),
         "limits": [
             "aggregate metrics only; recognized text is never written",
             "first-call means the model was not loaded in this process; OS/file-cache state is uncontrolled and the model digest is read first",

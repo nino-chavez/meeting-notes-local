@@ -57,6 +57,18 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(all(call["word_timestamps"] for call in calls))
         self.assertEqual([call["condition_on_previous_text"] for call in calls], [False, True])
 
+    def test_measured_run_requires_an_explicit_digest_checked_local_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            weights = root / "weights.safetensors"
+            weights.write_bytes(b"registered weights")
+            model_path, digest = benchmark.validated_local_model(root)
+            self.assertEqual(model_path, root.resolve())
+            self.assertEqual(digest, benchmark.sha256_file(weights))
+
+        with self.assertRaisesRegex(ValueError, "explicit local model directory"):
+            benchmark.validated_local_model(Path("mlx-community/whisper-large-v3-turbo"))
+
     def test_measured_run_never_returns_recognized_text(self):
         result = {"segments": [{"words": [{"word": "privateword", "start": 0.0, "end": 0.1}]}]}
         fixture = {"expect_speech": True, "seams_s": [], "expected": {"minimum_words": 1}}
