@@ -17,15 +17,16 @@ fn single_instance_is_the_first_plugin_and_precedes_app_setup() {
 fn generated_preview_library_buttons_bind_their_own_activation() {
     let shell = include_str!("../../ui/main.js");
 
-    assert!(shell.contains(
-        "button.addEventListener(\"click\", () => openMeetingDetail(row.handle));"
-    ));
+    assert!(
+        shell.contains("button.addEventListener(\"click\", () => openMeetingDetail(row.handle));")
+    );
     assert!(shell.contains(
         "button.addEventListener(\"click\", () => openLibrarySearchResult(result.handle));"
     ));
-    assert!(shell.contains(
-        "row.transcriptAvailable ? \"Open meeting\" : \"No transcript was created\""
-    ));
+    assert!(
+        shell
+            .contains("row.transcriptAvailable ? \"Open meeting\" : \"No transcript was created\"")
+    );
     assert!(!shell.contains("Transcript unavailable"));
     assert!(!shell.contains("libraryList.addEventListener(\"click\""));
     assert!(!shell.contains("librarySearchResults.addEventListener(\"click\""));
@@ -49,9 +50,7 @@ fn meeting_detail_status_helper_is_defined_before_use() {
 fn transcript_only_fallback_requires_a_current_transcript_handle() {
     let shell = include_str!("../../ui/main.js");
 
-    assert!(shell.contains(
-        "[\"transcript-only\", \"summary-failed\"].includes(response.state)"
-    ));
+    assert!(shell.contains("[\"transcript-only\", \"summary-failed\"].includes(response.state)"));
     assert!(shell.contains("&& Boolean(response.transcriptHandle);"));
     assert!(shell.contains("meetingNoNote.hidden = !showsTranscriptFallback;"));
     assert!(!shell.contains("meetingNoNote.hidden = false;"));
@@ -275,16 +274,36 @@ fn preview_library_pauses_capture_polling_and_resumes_on_return() {
 }
 
 #[test]
-fn preview_transcript_back_preserves_the_current_library_search_snapshot() {
+fn preview_library_navigation_rebuilds_one_current_handle_generation() {
     let script = include_str!("../../ui/main.js");
 
-    assert!(script.contains("function returnToLibrary()"));
-    assert!(script.contains("showScreen(\"library-screen\");"));
+    assert!(script.contains("async function rebuildLibraryView(resetSearch = false)"));
+    assert!(script.contains("const snapshot = await invoke(\"preview_library_snapshot\");"));
+    assert!(script.contains("if (query) {\n      libraryList.replaceChildren();\n      renderLibrarySearch(await invoke(\"preview_library_search\", { query }));"));
+    assert!(script.contains("async function returnToLibrary()"));
+    assert!(script.contains("await rebuildLibraryView(false);"));
+    assert!(script.contains("await rebuildLibraryView(true);"));
     assert!(
         script.contains("library-transcript-back\").addEventListener(\"click\", returnToLibrary)")
     );
+    assert!(script.contains("meeting-detail-back\").addEventListener(\"click\", returnToLibrary)"));
+    assert!(script.contains("libraryList.replaceChildren();\n  setError(libraryNotice, \"Searching this retained Preview Library…\")"));
+    assert!(script.contains("librarySearchResults.replaceChildren();\n  setError(libraryNotice, \"Opening the selected retained result…\")"));
+}
+
+#[test]
+fn metadata_only_search_results_have_no_transcript_action() {
+    let script = include_str!("../../ui/main.js");
+    let styles = include_str!("../../ui/styles.css");
+
+    assert!(script.contains(
+        "const metadataOnly = result.kind === \"meeting\" && result.transcriptAvailable !== true;"
+    ));
+    assert!(script.contains("button.disabled = metadataOnly;"));
+    assert!(script.contains("? \"No transcript was created\""));
+    assert!(!styles.contains("var(--serif)"));
     assert!(
-        !script.contains("library-transcript-back\").addEventListener(\"click\", openLibrary)")
+        styles.contains(".meeting-no-note h2 { margin: 0; font-family: ui-serif, Georgia, serif;")
     );
 }
 

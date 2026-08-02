@@ -435,6 +435,27 @@ mod tests {
         (temporary, state)
     }
 
+    fn captured_reader() -> (TempDir, LibraryReader) {
+        let temporary = TempDir::new().unwrap();
+        let protected_root = temporary.path().join("protected-root");
+        create_private_dir(&protected_root).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("data"), &protected_root).unwrap();
+        seed_synthetic_fixture(&storage).unwrap();
+        clear_test_xattrs(storage.path());
+
+        let directory = storage.path().join("meetings").join(FIXTURE_MEETING_ID);
+        let mut meeting = load_meeting(&directory).unwrap();
+        meeting.lifecycle = MeetingLifecycle::Captured;
+        meeting.artifacts.current_transcript = None;
+        meeting.artifacts.current_note = None;
+        write_meeting(&directory, &meeting).unwrap();
+
+        clear_test_xattrs(storage.path());
+
+        let reader = project_seeded_library(storage).unwrap().reader;
+        (temporary, reader)
+    }
+
     #[cfg(target_os = "macos")]
     fn clear_test_xattrs(path: &Path) {
         let status = std::process::Command::new("xattr")
@@ -736,8 +757,31 @@ mod tests {
         let snapshot = reader.snapshot();
         let note = reader.open_note(&snapshot.rows[0].handle);
         assert_eq!(note.state, "transcript-only");
+        assert!(note.transcript_handle.is_some());
         assert!(note.claims.is_empty());
         assert!(note.message.contains("No admitted note"));
+    }
+
+    #[test]
+    fn metadata_only_rows_never_issue_transcript_handles() {
+        let (_temporary, mut reader) = captured_reader();
+
+        let snapshot = reader.snapshot();
+        assert_eq!(snapshot.rows.len(), 1);
+        assert!(!snapshot.rows[0].transcript_available);
+        assert_eq!(
+            reader.open_transcript(&snapshot.rows[0].handle).state,
+            "stale"
+        );
+
+        let snapshot = reader.snapshot();
+        let note = reader.open_note(&snapshot.rows[0].handle);
+        assert_eq!(note.state, "transcript-only");
+        assert!(note.transcript_handle.is_none());
+        assert_eq!(
+            note.message,
+            "No transcript was created for this retained meeting."
+        );
     }
 
     #[test]
@@ -751,6 +795,7 @@ mod tests {
                 text: Some("private meeting label".into()),
                 source_turn_index: None,
                 claim_ordinal: None,
+                transcript_available: true,
             }],
             unavailable_count: 0,
             message: "untrusted test response".into(),

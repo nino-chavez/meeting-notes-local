@@ -1895,12 +1895,19 @@ mod tests {
             fixture.metadata_only_meeting(id, 10 + offset as u64, *lifecycle);
         }
         fixture.meeting("meeting-z", 20, &[("transcript token", false)]);
-        fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"Organizer a","folder_id":null},{"meeting_id":"meeting-b","title":"Organizer b","folder_id":null},{"meeting_id":"meeting-c","title":"Organizer c","folder_id":null},{"meeting_id":"meeting-d","title":"Organizer d","folder_id":null}]}"#);
+        fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"Project Atlas"}],"meetings":[{"meeting_id":"meeting-a","title":"Organizer a","folder_id":"11111111-1111-4111-8111-111111111111"},{"meeting_id":"meeting-b","title":"Organizer b","folder_id":null},{"meeting_id":"meeting-c","title":"Organizer c","folder_id":null},{"meeting_id":"meeting-d","title":"Organizer d","folder_id":null}]}"#);
 
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         assert_eq!(projection.rows().len(), 5);
         assert_eq!(projection.search("organizer").unwrap().len(), 4);
+        let folder = projection.search("Atlas").unwrap();
+        assert_eq!(folder.len(), 1);
+        assert!(matches!(
+            projection.open(&fixture.storage, &folder[0]).unwrap(),
+            OpenedLibraryHit::Meeting { ref meeting_id, ref folder, .. }
+                if meeting_id == "meeting-a" && folder.as_deref() == Some("Project Atlas")
+        ));
         assert_eq!(projection.search("transcript").unwrap().len(), 1);
         for (id, lifecycle) in cases {
             let row = projection
