@@ -52,7 +52,7 @@ pub(crate) struct ProjectedClaim {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClaimType {
+pub enum ClaimType {
     Decision,
     Action,
     Proposal,
@@ -92,7 +92,12 @@ fn parse_result(
     request: &ProjectRequest,
     transcript_turns: &[String],
 ) -> Result<Vec<ProjectedClaim>, ProjectionError> {
-    if frame.len() > MAX_PROJECTION_FRAME_BYTES || !frame.ends_with(b"\n") {
+    if frame.len() > MAX_PROJECTION_FRAME_BYTES
+        || !frame.ends_with(b"\n")
+        || frame[..frame.len() - 1]
+            .iter()
+            .any(|byte| matches!(byte, b'\n' | b'\r'))
+    {
         return Err(ProjectionError::Unavailable);
     }
     let root = strict_json(&frame[..frame.len() - 1])?;
@@ -285,7 +290,7 @@ fn forbidden(character: char) -> bool {
     character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
 }
 
-fn exact_object<'a, const N: usize>(
+pub(crate) fn exact_object<'a, const N: usize>(
     value: &'a StrictJson,
     keys: [&str; N],
 ) -> Result<[&'a StrictJson; N], ProjectionError> {
@@ -303,32 +308,32 @@ fn exact_object<'a, const N: usize>(
     Ok(std::array::from_fn(|index| &entries[index].1))
 }
 
-fn string(value: &StrictJson) -> Result<&str, ProjectionError> {
+pub(crate) fn string(value: &StrictJson) -> Result<&str, ProjectionError> {
     match value {
         StrictJson::String(value) => Ok(value),
         _ => Err(ProjectionError::Unavailable),
     }
 }
-fn bool_value(value: &StrictJson) -> Result<bool, ProjectionError> {
+pub(crate) fn bool_value(value: &StrictJson) -> Result<bool, ProjectionError> {
     match value {
         StrictJson::Bool(value) => Ok(*value),
         _ => Err(ProjectionError::Unavailable),
     }
 }
-fn u64_value(value: &StrictJson) -> Result<u64, ProjectionError> {
+pub(crate) fn u64_value(value: &StrictJson) -> Result<u64, ProjectionError> {
     match value {
         StrictJson::Number(value) => value.as_u64().ok_or(ProjectionError::Unavailable),
         _ => Err(ProjectionError::Unavailable),
     }
 }
-fn array(value: &StrictJson) -> Result<&[StrictJson], ProjectionError> {
+pub(crate) fn array(value: &StrictJson) -> Result<&[StrictJson], ProjectionError> {
     match value {
         StrictJson::Array(value) => Ok(value),
         _ => Err(ProjectionError::Unavailable),
     }
 }
 
-enum StrictJson {
+pub(crate) enum StrictJson {
     Null,
     Bool(bool),
     Number(serde_json::Number),
@@ -387,7 +392,7 @@ impl<'de> Deserialize<'de> for StrictJson {
     }
 }
 
-fn strict_json(bytes: &[u8]) -> Result<StrictJson, ProjectionError> {
+pub(crate) fn strict_json(bytes: &[u8]) -> Result<StrictJson, ProjectionError> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let value =
         StrictJson::deserialize(&mut deserializer).map_err(|_| ProjectionError::Unavailable)?;
@@ -599,6 +604,17 @@ mod tests {
             assert!(
                 matches!(parse_result(&frame(&case["result"]), &request(), &turns()), Err(actual) if actual == error)
             );
+        }
+    }
+
+    #[test]
+    fn result_requires_exactly_one_terminal_newline_and_no_second_frame_bytes() {
+        let fixture = fixture();
+        let valid = frame(&fixture["valid_results"][0]["result"]);
+        for suffix in [b"\n".as_slice(), b" \n", b"{}\n", b"x"] {
+            let mut invalid = valid.clone();
+            invalid.extend_from_slice(suffix);
+            assert!(parse_result(&invalid, &request(), &turns()).is_err());
         }
     }
 }

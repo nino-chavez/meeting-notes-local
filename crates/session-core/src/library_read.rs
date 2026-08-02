@@ -96,6 +96,7 @@ pub struct LibraryRow {
 #[derive(Clone, PartialEq, Eq)]
 struct StoredTurn {
     index: u32,
+    visible_index: Option<u64>,
     text: String,
     gated: bool,
 }
@@ -106,9 +107,13 @@ struct StoredClaim {
     sha256: String,
     claim_type: crate::note_projection::ClaimType,
     text: String,
-    // Locators stay in the sealed snapshot identity.  They are never exposed
-    // by a read result or diagnostic.
-    locators: Vec<crate::note_projection::Locator>,
+    locators: Vec<StoredLocator>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct StoredLocator {
+    projected: crate::note_projection::Locator,
+    source_turn_index: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +170,14 @@ pub enum OpenedLibraryHit {
     Claim {
         meeting_id: String,
         claim_ordinal: u64,
+        claim_sha256: String,
+        claim_type: crate::note_projection::ClaimType,
+        evidence_state: ClaimEvidenceState,
         claim: String,
+        locators: Vec<OpenedClaimLocator>,
+        note_json_sha256: String,
+        note_markdown_sha256: String,
+        transcript_sha256: String,
     },
     Transcript {
         meeting_id: String,
@@ -183,6 +195,20 @@ pub enum OpenedLibraryHit {
         title: Option<String>,
         folder: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ClaimEvidenceState {
+    Located,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct OpenedClaimLocator {
+    pub turn: u64,
+    pub source_turn_index: u32,
+    pub start: u64,
+    pub end: u64,
+    pub text_sha256: String,
 }
 
 impl LibraryProjection {
@@ -310,7 +336,7 @@ impl LibraryProjection {
         for row in &self.rows {
             let authority = self.authority(row);
             for claim in &row.claims {
-                if !normalized_matches(&claim.text, &normalized).is_empty() {
+                if claim_matches(row, claim, &normalized) {
                     hits.push(SealedHit::Claim {
                         key: format!(
                             "{}:c:{}:{}",
@@ -334,6 +360,14 @@ impl LibraryProjection {
                             normalized_query: normalized.clone(),
                         });
                     } else {
+                        if row.claims.iter().any(|claim| {
+                            claim.locators.iter().any(|locator| {
+                                locator.source_turn_index == turn.index
+                                    && match_lands_in_locator(start, end, &locator.projected)
+                            })
+                        }) {
+                            continue;
+                        }
                         hits.push(SealedHit::Transcript {
                             key: format!("{}:t:{}:{}:{}", row.meeting_id, turn.index, start, end),
                             authority: authority.clone(),
@@ -412,15 +446,39 @@ impl LibraryProjection {
                     .iter()
                     .find(|candidate| candidate.ordinal == claim.ordinal)
                     .ok_or(LibraryReadError::SnapshotStale)?;
-                if current != &claim
-                    || normalized_matches(&current.text, &normalized_query).is_empty()
-                {
+                if current != &claim || !claim_matches(row, current, &normalized_query) {
                     return Err(LibraryReadError::SnapshotStale);
                 }
                 Ok(OpenedLibraryHit::Claim {
                     meeting_id: row.meeting_id.clone(),
                     claim_ordinal: current.ordinal,
+                    claim_sha256: current.sha256.clone(),
+                    claim_type: current.claim_type,
+                    evidence_state: ClaimEvidenceState::Located,
                     claim: current.text.clone(),
+                    locators: current
+                        .locators
+                        .iter()
+                        .map(|locator| OpenedClaimLocator {
+                            turn: locator.projected.turn,
+                            source_turn_index: locator.source_turn_index,
+                            start: locator.projected.start,
+                            end: locator.projected.end,
+                            text_sha256: locator.projected.text_sha256.clone(),
+                        })
+                        .collect(),
+                    note_json_sha256: row
+                        .note_json_sha256
+                        .clone()
+                        .ok_or(LibraryReadError::SnapshotStale)?,
+                    note_markdown_sha256: row
+                        .note_markdown_sha256
+                        .clone()
+                        .ok_or(LibraryReadError::SnapshotStale)?,
+                    transcript_sha256: row
+                        .transcript_sha256
+                        .clone()
+                        .ok_or(LibraryReadError::SnapshotStale)?,
                 })
             }
             SealedHit::Transcript {
@@ -654,7 +712,11 @@ fn inspect_meeting(
                 .clone()
                 .ok_or(MeetingInspectionError::Quarantine)?,
         };
-        let transcript_text: Vec<_> = turns.iter().map(|turn| turn.text.clone()).collect();
+        let transcript_text: Vec<_> = turns
+            .iter()
+            .filter(|turn| !turn.gated)
+            .map(|turn| turn.text.clone())
+            .collect();
         let claims =
             project_claims(projector, &request, &transcript_text).map_err(|error| match error {
                 ProjectionError::ArtifactMissing
@@ -665,14 +727,31 @@ fn inspect_meeting(
             })?;
         let claims = claims
             .into_iter()
-            .map(|claim| StoredClaim {
-                ordinal: claim.ordinal,
-                sha256: claim.sha256,
-                claim_type: claim.claim_type,
-                text: claim.text,
-                locators: claim.locators,
+            .map(|claim| {
+                let locators = claim
+                    .locators
+                    .into_iter()
+                    .map(|projected| {
+                        let source_turn_index = turns
+                            .iter()
+                            .find(|turn| turn.visible_index == Some(projected.turn))
+                            .map(|turn| turn.index)
+                            .ok_or(MeetingInspectionError::Unavailable)?;
+                        Ok(StoredLocator {
+                            projected,
+                            source_turn_index,
+                        })
+                    })
+                    .collect::<Result<_, MeetingInspectionError>>()?;
+                Ok(StoredClaim {
+                    ordinal: claim.ordinal,
+                    sha256: claim.sha256,
+                    claim_type: claim.claim_type,
+                    text: claim.text,
+                    locators,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, MeetingInspectionError>>()?;
         (
             Some(note.json.sha256.clone()),
             Some(note.markdown.sha256.clone()),
@@ -820,6 +899,7 @@ fn validate_transcript(document: Transcript) -> Result<Vec<StoredTurn>, LibraryR
     {
         return Err(LibraryReadError::ArtifactUnavailable);
     }
+    let mut visible_index = 0_u64;
     document
         .turns
         .into_iter()
@@ -847,10 +927,17 @@ fn validate_transcript(document: Transcript) -> Result<Vec<StoredTurn>, LibraryR
             {
                 return Err(LibraryReadError::ArtifactUnavailable);
             }
+            let gated = turn.gated == Some(true);
+            let current_visible_index = (!gated).then(|| {
+                let current = visible_index;
+                visible_index += 1;
+                current
+            });
             Ok(StoredTurn {
                 index: index as u32,
+                visible_index: current_visible_index,
                 text: turn.text,
-                gated: turn.gated == Some(true),
+                gated,
             })
         })
         .collect()
@@ -933,6 +1020,21 @@ fn scalar_slice(text: &str, start: u64, end: u64) -> Option<String> {
             .collect(),
     )
 }
+fn claim_matches(row: &LibraryRow, claim: &StoredClaim, normalized_query: &str) -> bool {
+    !normalized_matches(&claim.text, normalized_query).is_empty()
+        || claim.locators.iter().any(|locator| {
+            row.turns
+                .iter()
+                .find(|turn| turn.index == locator.source_turn_index && !turn.gated)
+                .and_then(|turn| {
+                    scalar_slice(&turn.text, locator.projected.start, locator.projected.end)
+                })
+                .is_some_and(|text| !normalized_matches(&text, normalized_query).is_empty())
+        })
+}
+fn match_lands_in_locator(start: u64, end: u64, locator: &crate::note_projection::Locator) -> bool {
+    start >= locator.start && end <= locator.end
+}
 #[cfg(test)]
 fn digest_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -969,45 +1071,51 @@ fn hit_authority(hit: &SealedHit) -> &HitAuthority {
     }
 }
 fn hit_order(left: &SealedHit, right: &SealedHit) -> std::cmp::Ordering {
-    hit_kind(left).cmp(&hit_kind(right)).then_with(|| {
-        let (lc, li) = hit_sort(left);
-        let (rc, ri) = hit_sort(right);
-        rc.cmp(&lc)
-            .then_with(|| hit_meeting_id(left).cmp(hit_meeting_id(right)))
-            .then_with(|| li.cmp(&ri))
-            .then_with(|| hit_key(left).cmp(hit_key(right)))
-    })
+    authority_created(hit_authority(right))
+        .cmp(&authority_created(hit_authority(left)))
+        .then_with(|| hit_meeting_id(left).cmp(hit_meeting_id(right)))
+        .then_with(|| hit_location(left).cmp(&hit_location(right)))
+        .then_with(|| hit_kind(left).cmp(&hit_kind(right)))
+        .then_with(|| hit_claim_digest(left).cmp(hit_claim_digest(right)))
+        .then_with(|| hit_claim_ordinal(left).cmp(&hit_claim_ordinal(right)))
+        .then_with(|| hit_key(left).cmp(hit_key(right)))
 }
 fn hit_kind(hit: &SealedHit) -> u8 {
     match hit {
         SealedHit::Claim { .. } => 0,
-        SealedHit::Transcript { .. } | SealedHit::Withheld { .. } => 1,
-        SealedHit::Meeting { .. } => 2,
+        SealedHit::Transcript { .. } => 1,
+        SealedHit::Withheld { .. } => 2,
+        SealedHit::Meeting { .. } => 3,
     }
 }
-fn hit_sort(hit: &SealedHit) -> (u64, u64) {
+fn hit_location(hit: &SealedHit) -> (u64, u64) {
     match hit {
-        SealedHit::Claim {
-            authority, claim, ..
-        } => (authority_created(authority), claim.ordinal),
+        SealedHit::Claim { claim, .. } => claim
+            .locators
+            .first()
+            .map(|locator| (locator.projected.turn, locator.projected.start))
+            .unwrap_or((u64::MAX, u64::MAX)),
         SealedHit::Transcript {
-            authority,
             source_turn_index,
             original_scalar_start,
             ..
-        } => (
-            authority_created(authority),
-            ((*source_turn_index as u64) << 32) | *original_scalar_start,
-        ),
+        } => (*source_turn_index as u64, *original_scalar_start),
         SealedHit::Withheld {
-            authority,
-            source_turn_index,
-            ..
-        } => (
-            authority_created(authority),
-            ((*source_turn_index as u64) << 32) | u32::MAX as u64,
-        ),
-        SealedHit::Meeting { authority, .. } => (authority_created(authority), u64::MAX),
+            source_turn_index, ..
+        } => (*source_turn_index as u64, u64::MAX),
+        SealedHit::Meeting { .. } => (u64::MAX, u64::MAX),
+    }
+}
+fn hit_claim_digest(hit: &SealedHit) -> &str {
+    match hit {
+        SealedHit::Claim { claim, .. } => &claim.sha256,
+        _ => "",
+    }
+}
+fn hit_claim_ordinal(hit: &SealedHit) -> u64 {
+    match hit {
+        SealedHit::Claim { claim, .. } => claim.ordinal,
+        _ => 0,
     }
 }
 fn authority_created(authority: &HitAuthority) -> u64 {
@@ -1137,7 +1245,7 @@ mod tests {
         }
 
         fn ready_meeting(&self, id: &str, created: u64) -> PathBuf {
-            let directory = self.meeting(
+            self.ready_meeting_with_turns(
                 id,
                 created,
                 &[
@@ -1146,7 +1254,16 @@ mod tests {
                     ("gamma", false),
                     ("aé🙂z", false),
                 ],
-            );
+            )
+        }
+
+        fn ready_meeting_with_turns(
+            &self,
+            id: &str,
+            created: u64,
+            turns: &[(&str, bool)],
+        ) -> PathBuf {
+            let directory = self.meeting(id, created, turns);
             let mut record = load_meeting(&directory).unwrap();
             create_private_dir(&directory.join("notes")).unwrap();
             let json = b"{}\n";
@@ -1308,6 +1425,181 @@ mod tests {
             .unwrap();
         fs::write(directory.join(note.json.relative_path), b"changed").unwrap();
         assert_stale!(projection.open(&fixture.storage, &hit));
+    }
+
+    #[test]
+    fn claim_search_is_claim_first_deduplicated_and_opens_complete_evidence() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting("meeting-a", 10);
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+
+        let cited_span_hits = projection.search("alpha").unwrap();
+        assert_eq!(
+            cited_span_hits.len(),
+            3,
+            "the cited transcript hit is suppressed"
+        );
+        assert!(
+            cited_span_hits
+                .iter()
+                .all(|hit| matches!(projection.sealed(hit), Some(SealedHit::Claim { .. })))
+        );
+
+        let claim_and_span_hits = projection.search("a").unwrap();
+        assert_eq!(
+            claim_and_span_hits
+                .iter()
+                .filter(|hit| matches!(projection.sealed(hit), Some(SealedHit::Claim { .. })))
+                .count(),
+            3,
+            "claim text plus cited span still yields one hit per claim ordinal"
+        );
+
+        let opened = projection
+            .open(&fixture.storage, &cited_span_hits[0])
+            .unwrap();
+        assert!(matches!(
+            opened,
+            OpenedLibraryHit::Claim {
+                meeting_id,
+                claim_ordinal: 0,
+                claim_sha256,
+                claim_type: crate::note_projection::ClaimType::Decision,
+                evidence_state: ClaimEvidenceState::Located,
+                claim,
+                locators,
+                note_json_sha256,
+                note_markdown_sha256,
+                transcript_sha256,
+            } if meeting_id == "meeting-a"
+                && claim_sha256 == "b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2"
+                && claim == "claim-a"
+                && locators.len() == 1
+                && locators[0].turn == 0
+                && locators[0].source_turn_index == 0
+                && locators[0].start == 0
+                && locators[0].end == 5
+                && locators[0].text_sha256 == "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+                && valid_digest(&note_json_sha256)
+                && valid_digest(&note_markdown_sha256)
+                && valid_digest(&transcript_sha256)
+        ));
+    }
+
+    #[test]
+    fn projected_visible_turn_maps_back_to_original_turn_after_withheld_input() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting_with_turns(
+            "meeting-a",
+            10,
+            &[("withheld", true), ("alpha", false), ("beta", false)],
+        );
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+        let hit = projection.search("alpha").unwrap().remove(0);
+        assert!(matches!(
+            projection.open(&fixture.storage, &hit).unwrap(),
+            OpenedLibraryHit::Claim { locators, .. }
+                if locators[0].turn == 0 && locators[0].source_turn_index == 1
+        ));
+    }
+
+    #[test]
+    fn hit_order_is_recency_id_location_kind_digest_ordinal_then_id() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting("meeting-z", 11);
+        fixture.ready_meeting("meeting-a", 10);
+        fixture.ready_meeting("meeting-b", 10);
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+        let ordered: Vec<_> = projection
+            .search("claim-a")
+            .unwrap()
+            .iter()
+            .map(|hit| match projection.sealed(hit).unwrap() {
+                SealedHit::Claim {
+                    authority, claim, ..
+                } => (authority.meeting_id, claim.ordinal),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            ordered,
+            vec![
+                ("meeting-z".into(), 0),
+                ("meeting-z".into(), 1),
+                ("meeting-z".into(), 2),
+                ("meeting-a".into(), 0),
+                ("meeting-a".into(), 1),
+                ("meeting-a".into(), 2),
+                ("meeting-b".into(), 0),
+                ("meeting-b".into(), 1),
+                ("meeting-b".into(), 2),
+            ]
+        );
+
+        let authority = projection.authority(&projection.rows[0]);
+        let locator = StoredLocator {
+            projected: crate::note_projection::Locator {
+                turn: 0,
+                start: 0,
+                end: 5,
+                text_sha256: "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+                    .into(),
+            },
+            source_turn_index: 0,
+        };
+        let claim = |key: &str, digest: char, ordinal| SealedHit::Claim {
+            key: key.into(),
+            authority: authority.clone(),
+            claim: StoredClaim {
+                ordinal,
+                sha256: digest.to_string().repeat(64),
+                claim_type: crate::note_projection::ClaimType::Decision,
+                text: "claim".into(),
+                locators: vec![locator.clone()],
+            },
+            normalized_query: "claim".into(),
+        };
+        let mut same_location = [
+            SealedHit::Transcript {
+                key: "t-b".into(),
+                authority: authority.clone(),
+                source_turn_index: 0,
+                original_scalar_start: 0,
+                original_scalar_end: 1,
+                normalized_query: "a".into(),
+            },
+            claim("c-b-2", 'b', 2),
+            claim("c-a-2", 'a', 2),
+            claim("c-a-1", 'a', 1),
+            SealedHit::Transcript {
+                key: "t-a".into(),
+                authority,
+                source_turn_index: 0,
+                original_scalar_start: 0,
+                original_scalar_end: 1,
+                normalized_query: "a".into(),
+            },
+        ];
+        same_location.sort_by(hit_order);
+        assert_eq!(
+            same_location.iter().map(hit_key).collect::<Vec<_>>(),
+            vec!["c-a-1", "c-a-2", "c-b-2", "t-a", "t-b"]
+        );
     }
 
     #[test]
