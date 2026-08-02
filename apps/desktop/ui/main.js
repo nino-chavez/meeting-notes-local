@@ -50,6 +50,11 @@ function clearError(element) {
   element.hidden = true;
 }
 
+function message(target, text, state = "") {
+  target.textContent = text;
+  target.dataset.state = state;
+}
+
 function startIsAllowed() {
   return lastSnapshot?.retention_operational === true
     && checks.every((check) => check.checked)
