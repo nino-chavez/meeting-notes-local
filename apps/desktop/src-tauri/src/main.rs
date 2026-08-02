@@ -74,6 +74,10 @@ const CAPTURE_STOP_TIMEOUT: Duration = Duration::from_secs(20);
 const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
+#[cfg(feature = "preview-surface")]
+const ACTIVE_WINDOW_LABEL: &str = "preview";
+#[cfg(not(feature = "preview-surface"))]
+const ACTIVE_WINDOW_LABEL: &str = "main";
 
 struct ApplicationState {
     model: Mutex<AppModel>,
@@ -739,7 +743,7 @@ fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reade
     let Some(storage) = storage else {
         return library_reader::LibraryReader::unavailable_snapshot();
     };
-    let reader = match LibraryProjection::rebuild(&storage, ReadLimits::default()) {
+    let mut reader = match LibraryProjection::rebuild(&storage, ReadLimits::default()) {
         Ok(projection) => library_reader::LibraryReader::new(storage, projection),
         Err(_) => return library_reader::LibraryReader::unavailable_snapshot(),
     };
@@ -765,9 +769,18 @@ fn preview_library_search(
     response
         .results
         .retain(|result| matches!(result.kind, "transcript" | "withheld" | "meeting"));
-    if response.state == "results" && response.results.is_empty() {
-        response.state = "no-results";
-        response.message = "No retained transcript, title, or folder matched that search.".into();
+    if matches!(response.state, "results" | "results-incomplete") && response.results.is_empty() {
+        if response.unavailable_count == 0 {
+            response.state = "no-results";
+            response.message =
+                "No retained transcript, title, or folder matched that search.".into();
+        } else {
+            response.state = "incomplete";
+            response.message = format!(
+                "No retained transcript, title, or folder match was found among readable meetings. {} could not be searched.",
+                response.unavailable_count
+            );
+        }
     }
     response
 }
@@ -778,12 +791,13 @@ fn preview_library_open_search_result(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibrarySearchOpenResponse {
-    let reader = state.preview_library.lock().expect("preview library lock");
+    let mut reader = state.preview_library.lock().expect("preview library lock");
     reader
-        .as_ref()
+        .as_mut()
         .map(|reader| reader.open_search_result(&handle))
         .unwrap_or_else(|| library_reader::LibrarySearchOpenResponse {
             state: "unavailable",
+            transcript_handle: None,
             meeting_id: None,
             source_turn_index: None,
             message: "The local Preview library is unavailable. Reopen the app and try again."
@@ -794,14 +808,14 @@ fn preview_library_open_search_result(
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_open_note(
-    meeting_id: String,
+    handle: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibraryNoteResponse {
     let mut reader = state.preview_library.lock().expect("preview library lock");
     reader
         .as_mut()
-        .map(|reader| reader.open_note(&meeting_id))
-        .unwrap_or_else(|| library_reader::LibraryReader::unavailable_note(&meeting_id))
+        .map(|reader| reader.open_note(&handle))
+        .unwrap_or_else(|| library_reader::LibraryReader::unavailable_note(""))
 }
 
 #[cfg(feature = "preview-surface")]
@@ -811,9 +825,9 @@ fn preview_library_open_evidence(
     locator_ordinal: usize,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibraryEvidenceResponse {
-    let reader = state.preview_library.lock().expect("preview library lock");
+    let mut reader = state.preview_library.lock().expect("preview library lock");
     reader
-        .as_ref()
+        .as_mut()
         .map(|reader| reader.open_evidence(&handle, locator_ordinal))
         .unwrap_or_else(library_reader::LibraryReader::unavailable_evidence)
 }
@@ -821,24 +835,37 @@ fn preview_library_open_evidence(
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_open_transcript(
-    meeting_id: String,
+    handle: String,
     state: State<'_, ApplicationState>,
 ) -> PreviewLibraryTranscript {
-    let available = state
+    let opened = state
         .preview_library
         .lock()
         .expect("preview library lock")
-        .as_ref()
-        .is_some_and(|reader| reader.has_transcript(&meeting_id));
-    if !available {
+        .as_mut()
+        .map(|reader| reader.open_transcript(&handle));
+    let Some(opened) = opened else {
         return PreviewLibraryTranscript {
-            state: "stale",
+            state: "unavailable",
             meeting_id: None,
             turns: Vec::new(),
             warnings: Vec::new(),
-            message: "That library view is no longer current. Reopen Library and try again.".into(),
+            message: "The local Preview library is unavailable. Reopen the app and try again."
+                .into(),
         };
-    }
+    };
+    let Some(meeting_id) = (opened.state == "transcript")
+        .then_some(opened.meeting_id)
+        .flatten()
+    else {
+        return PreviewLibraryTranscript {
+            state: opened.state,
+            meeting_id: None,
+            turns: Vec::new(),
+            warnings: Vec::new(),
+            message: opened.message,
+        };
+    };
     let storage = state
         .storage
         .lock()
@@ -894,7 +921,7 @@ fn preview_library_open_transcript(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window(ACTIVE_WINDOW_LABEL) {
                 let _ = window.set_focus();
             }
         }))

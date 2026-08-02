@@ -30,6 +30,7 @@ use crate::storage::StorageRoot;
 
 const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TURNS: usize = 20_000;
+pub const MAX_SEARCH_RESULTS: usize = 100;
 const NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 /// Rust 1.94.0 source identity used by `char::to_lowercase` in
 /// `search-normalization/1`.
@@ -161,7 +162,7 @@ enum SealedHit {
     Meeting {
         key: String,
         authority: HitAuthority,
-        normalized_query: String,
+        normalized_query: Option<String>,
     },
 }
 
@@ -358,7 +359,7 @@ impl LibraryProjection {
     }
 
     pub fn search(&self, query: &str) -> Result<Vec<LibraryHit>, LibraryReadError> {
-        let normalized = normalize_query(query)?;
+        let normalized = normalize_search_query(query)?;
         let mut hits = Vec::new();
         for row in &self.rows {
             let authority = self.authority(row);
@@ -387,14 +388,6 @@ impl LibraryProjection {
                             normalized_query: normalized.clone(),
                         });
                     } else {
-                        if row.claims.iter().any(|claim| {
-                            claim.locators.iter().any(|locator| {
-                                locator.source_turn_index == turn.index
-                                    && match_lands_in_locator(start, end, &locator.projected)
-                            })
-                        }) {
-                            continue;
-                        }
                         hits.push(SealedHit::Transcript {
                             key: format!("{}:t:{}:{}:{}", row.meeting_id, turn.index, start, end),
                             authority: authority.clone(),
@@ -418,13 +411,17 @@ impl LibraryProjection {
                 hits.push(SealedHit::Meeting {
                     key: format!("{}:m", row.meeting_id),
                     authority: authority.clone(),
-                    normalized_query: normalized.clone(),
+                    normalized_query: Some(normalized.clone()),
                 });
             }
         }
         hits.sort_by(hit_order);
         hits.dedup_by(|left, right| hit_key(left) == hit_key(right));
+        if hits.len() > MAX_SEARCH_RESULTS {
+            return Err(LibraryReadError::CapacityExceeded);
+        }
         let mut retained = self.hits.borrow_mut();
+        retained.clear();
         Ok(hits
             .into_iter()
             .map(|hit| {
@@ -449,6 +446,7 @@ impl LibraryProjection {
             .ok_or(LibraryReadError::InvalidRequest)?;
         let authority = self.authority(row);
         let mut retained = self.hits.borrow_mut();
+        retained.clear();
         row.claims
             .iter()
             .map(|claim| {
@@ -474,9 +472,58 @@ impl LibraryProjection {
             .collect()
     }
 
+    /// Retains one already-listed meeting as an opaque, projection-owned open
+    /// target. It is not a pathname or a general transcript enumeration API.
+    pub fn meeting_handle(&self, meeting_id: &str) -> Result<LibraryHit, LibraryReadError> {
+        let row = self
+            .rows
+            .iter()
+            .find(|row| row.meeting_id == meeting_id)
+            .ok_or(LibraryReadError::InvalidRequest)?;
+        let hit = SealedHit::Meeting {
+            key: format!("{}:o", row.meeting_id),
+            authority: self.authority(row),
+            normalized_query: None,
+        };
+        let key = format!("{}:{}", self.snapshot_id, hit_key(&hit));
+        self.hits.borrow_mut().insert(key.clone(), hit);
+        Ok(LibraryHit {
+            projection_id: self.snapshot_id,
+            key,
+        })
+    }
+
+    /// Confirms that the complete read-only snapshot remains current once.
+    /// Callers may then inspect several already-owned hits without rebuilding
+    /// the library once per result.
+    pub fn validate_snapshot(&self, storage: &StorageRoot) -> Result<(), LibraryReadError> {
+        let rebuilt = Self::rebuild_with_projector(storage, self.limits, self.projector.clone())?;
+        if rebuilt.rows != self.rows
+            || rebuilt.quarantined_meetings != self.quarantined_meetings
+            || rebuilt.metadata != self.metadata
+        {
+            return Err(LibraryReadError::SnapshotStale);
+        }
+        Ok(())
+    }
+
     pub fn open(
         &self,
         storage: &StorageRoot,
+        handle: &LibraryHit,
+    ) -> Result<OpenedLibraryHit, LibraryReadError> {
+        self.open_inner(Some(storage), handle)
+    }
+
+    /// Inspects a projection-owned hit after `validate_snapshot` has already
+    /// established that the exact snapshot remains current.
+    pub fn open_snapshot(&self, handle: &LibraryHit) -> Result<OpenedLibraryHit, LibraryReadError> {
+        self.open_inner(None, handle)
+    }
+
+    fn open_inner(
+        &self,
+        storage: Option<&StorageRoot>,
         handle: &LibraryHit,
     ) -> Result<OpenedLibraryHit, LibraryReadError> {
         if handle.projection_id != self.snapshot_id {
@@ -488,14 +535,19 @@ impl LibraryProjection {
             .get(&handle.key)
             .cloned()
             .ok_or(LibraryReadError::SnapshotStale)?;
-        let rebuilt = Self::rebuild_with_projector(storage, self.limits, self.projector.clone())
+        let rebuilt = storage
+            .map(|storage| {
+                Self::rebuild_with_projector(storage, self.limits, self.projector.clone())
+            })
+            .transpose()
             .map_err(|_| LibraryReadError::SnapshotStale)?;
-        let row = rebuilt
+        let current = rebuilt.as_ref().unwrap_or(self);
+        let row = current
             .rows
             .iter()
             .find(|row| row.meeting_id == hit_meeting_id(&hit))
             .ok_or(LibraryReadError::SnapshotStale)?;
-        if rebuilt.authority(row) != *hit_authority(&hit) {
+        if current.authority(row) != *hit_authority(&hit) {
             return Err(LibraryReadError::SnapshotStale);
         }
         match hit {
@@ -601,15 +653,17 @@ impl LibraryProjection {
             SealedHit::Meeting {
                 normalized_query, ..
             } => {
-                if row
-                    .title
-                    .as_ref()
-                    .is_none_or(|title| normalized_matches(title, &normalized_query).is_empty())
-                    && row.folder.as_ref().is_none_or(|folder| {
-                        normalized_matches(folder, &normalized_query).is_empty()
-                    })
-                {
-                    return Err(LibraryReadError::SnapshotStale);
+                if let Some(normalized_query) = normalized_query {
+                    if row
+                        .title
+                        .as_ref()
+                        .is_none_or(|title| normalized_matches(title, &normalized_query).is_empty())
+                        && row.folder.as_ref().is_none_or(|folder| {
+                            normalized_matches(folder, &normalized_query).is_empty()
+                        })
+                    {
+                        return Err(LibraryReadError::SnapshotStale);
+                    }
                 }
                 Ok(OpenedLibraryHit::Meeting {
                     meeting_id: row.meeting_id.clone(),
@@ -1069,6 +1123,14 @@ fn normalize_query(query: &str) -> Result<String, LibraryReadError> {
     Ok(normalize(trimmed).0)
 }
 
+fn normalize_search_query(query: &str) -> Result<String, LibraryReadError> {
+    let normalized = normalize_query(query)?;
+    if normalized.chars().count() < 2 {
+        return Err(LibraryReadError::InvalidRequest);
+    }
+    Ok(normalized)
+}
+
 fn normalized_matches(field: &str, needle: &str) -> Vec<(u64, u64)> {
     let (haystack, origins) = normalize(field);
     if needle.is_empty() {
@@ -1146,9 +1208,6 @@ fn claim_matches(row: &LibraryRow, claim: &StoredClaim, normalized_query: &str) 
                 })
                 .is_some_and(|text| !normalized_matches(&text, normalized_query).is_empty())
         })
-}
-fn match_lands_in_locator(start: u64, end: u64, locator: &crate::note_projection::Locator) -> bool {
-    start >= locator.start && end <= locator.end
 }
 #[cfg(test)]
 fn digest_bytes(bytes: &[u8]) -> String {
@@ -1505,7 +1564,7 @@ mod tests {
             projector.clone(),
         )
         .unwrap();
-        let hits = projection.search("a").unwrap();
+        let hits = projection.search("claim-a").unwrap();
         assert!(matches!(
             projection.sealed(&hits[0]),
             Some(SealedHit::Claim {
@@ -1590,18 +1649,21 @@ mod tests {
         .unwrap();
 
         let cited_span_hits = projection.search("alpha").unwrap();
-        assert_eq!(
-            cited_span_hits.len(),
-            3,
-            "the cited transcript hit is suppressed"
+        assert_eq!(cited_span_hits.len(), 4);
+        assert!(
+            cited_span_hits
+                .iter()
+                .filter(|hit| matches!(projection.sealed(hit), Some(SealedHit::Claim { .. })))
+                .count()
+                == 3
         );
         assert!(
             cited_span_hits
                 .iter()
-                .all(|hit| matches!(projection.sealed(hit), Some(SealedHit::Claim { .. })))
+                .any(|hit| matches!(projection.sealed(hit), Some(SealedHit::Transcript { .. })))
         );
 
-        let claim_and_span_hits = projection.search("a").unwrap();
+        let claim_and_span_hits = projection.search("claim-a").unwrap();
         assert_eq!(
             claim_and_span_hits
                 .iter()
@@ -1896,7 +1958,7 @@ mod tests {
             fixture.metadata(bytes);
             let projection =
                 LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-            assert!(projection.search("x").unwrap().is_empty());
+            assert!(projection.search("xx").unwrap().is_empty());
             assert_eq!(projection.search("transcript").unwrap().len(), 1);
         }
     }
@@ -2160,6 +2222,10 @@ mod tests {
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         assert_eq!(projection.search("token").unwrap().len(), 1);
+        assert_eq!(
+            projection.search("t"),
+            Err(LibraryReadError::InvalidRequest)
+        );
         assert!(matches!(
             LibraryProjection::rebuild(
                 &fixture.storage,
@@ -2211,6 +2277,27 @@ mod tests {
         assert_eq!(
             normalize_query(" \n token"),
             Err(LibraryReadError::InvalidRequest)
+        );
+
+        let fixture = Fixture::new();
+        for ordinal in 0..=MAX_SEARCH_RESULTS {
+            fixture.meeting(
+                &format!("meeting-{ordinal:03}"),
+                ordinal as u64,
+                &[("common phrase", false)],
+            );
+        }
+        let projection = LibraryProjection::rebuild(
+            &fixture.storage,
+            ReadLimits {
+                max_meetings: MAX_SEARCH_RESULTS + 1,
+                ..ReadLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            projection.search("common"),
+            Err(LibraryReadError::CapacityExceeded)
         );
     }
 
