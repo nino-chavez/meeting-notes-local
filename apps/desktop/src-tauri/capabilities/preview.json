@@ -13,6 +13,8 @@
     "allow-preview-library-snapshot",
     "allow-preview-library-search",
     "allow-preview-library-open-search-result",
+    "allow-preview-library-open-note",
+    "allow-preview-library-open-evidence",
     "allow-preview-library-open-transcript"
   ]
 }

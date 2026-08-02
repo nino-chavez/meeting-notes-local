@@ -793,6 +793,33 @@ fn preview_library_open_search_result(
 
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
+fn preview_library_open_note(
+    meeting_id: String,
+    state: State<'_, ApplicationState>,
+) -> library_reader::LibraryNoteResponse {
+    let mut reader = state.preview_library.lock().expect("preview library lock");
+    reader
+        .as_mut()
+        .map(|reader| reader.open_note(&meeting_id))
+        .unwrap_or_else(|| library_reader::LibraryReader::unavailable_note(&meeting_id))
+}
+
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
+fn preview_library_open_evidence(
+    handle: String,
+    locator_ordinal: usize,
+    state: State<'_, ApplicationState>,
+) -> library_reader::LibraryEvidenceResponse {
+    let reader = state.preview_library.lock().expect("preview library lock");
+    reader
+        .as_ref()
+        .map(|reader| reader.open_evidence(&handle, locator_ordinal))
+        .unwrap_or_else(library_reader::LibraryReader::unavailable_evidence)
+}
+
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
 fn preview_library_open_transcript(
     meeting_id: String,
     state: State<'_, ApplicationState>,
@@ -884,6 +911,10 @@ fn main() {
             preview_library_search,
             #[cfg(feature = "preview-surface")]
             preview_library_open_search_result,
+            #[cfg(feature = "preview-surface")]
+            preview_library_open_note,
+            #[cfg(feature = "preview-surface")]
+            preview_library_open_evidence,
             #[cfg(feature = "preview-surface")]
             preview_library_open_transcript
         ])

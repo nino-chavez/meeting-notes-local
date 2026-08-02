@@ -98,6 +98,8 @@ pub(crate) struct LibraryEvidenceResponse {
     pub(crate) state: &'static str,
     pub(crate) meeting_id: Option<String>,
     pub(crate) source_turn_index: Option<u32>,
+    pub(crate) start: Option<u64>,
+    pub(crate) end: Option<u64>,
     pub(crate) text: Option<String>,
     pub(crate) message: String,
 }
@@ -275,14 +277,27 @@ impl LibraryReader {
         else {
             return Self::stale_note(meeting_id);
         };
-        if row.lifecycle() == MeetingLifecycle::SummaryFailed {
-            return LibraryNoteResponse {
-                state: "summary-failed",
-                meeting_id: meeting_id.into(),
-                claims: Vec::new(),
-                message: "A note was not produced. Retained transcript text remains available."
-                    .into(),
-            };
+        match row.lifecycle() {
+            MeetingLifecycle::SummaryFailed => {
+                return LibraryNoteResponse {
+                    state: "summary-failed",
+                    meeting_id: meeting_id.into(),
+                    claims: Vec::new(),
+                    message: "A note was not produced. Retained transcript text remains available."
+                        .into(),
+                };
+            }
+            MeetingLifecycle::Ready => {}
+            _ => {
+                return LibraryNoteResponse {
+                    state: "transcript-only",
+                    meeting_id: meeting_id.into(),
+                    claims: Vec::new(),
+                    message:
+                        "No admitted note is available. Retained transcript text remains available."
+                            .into(),
+                };
+            }
         }
         let handles = match self.projection.note_claims(meeting_id) {
             Ok(handles) => handles,
@@ -334,6 +349,8 @@ impl LibraryReader {
                 state: "evidence",
                 meeting_id: Some(evidence.meeting_id),
                 source_turn_index: Some(evidence.source_turn_index),
+                start: Some(evidence.start),
+                end: Some(evidence.end),
                 text: Some(evidence.text),
                 message: "Exact text from the retained transcript locator.".into(),
             },
@@ -371,6 +388,8 @@ impl LibraryReader {
             state: "empty",
             meeting_id: None,
             source_turn_index: None,
+            start: None,
+            end: None,
             text: None,
             message: UNAVAILABLE_MESSAGE.into(),
         }
@@ -418,6 +437,8 @@ impl LibraryReader {
             state: "stale",
             meeting_id: None,
             source_turn_index: None,
+            start: None,
+            end: None,
             text: None,
             message: STALE_MESSAGE.into(),
         }
