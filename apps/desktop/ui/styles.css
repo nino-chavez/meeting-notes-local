@@ -40,7 +40,7 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 .app-header p, footer { margin: 0; }
 .app-header > div { display: flex; align-items: baseline; gap: 18px; }
 .header-actions { display: flex; align-items: center; gap: 12px; }
-.library-link { min-height: 34px; padding: 0 13px; font-size: 0.82rem; }
+.library-link, .profile-link { min-height: 34px; padding: 0 13px; font-size: 0.82rem; }
 
 .eyebrow, .label, .kicker, legend, .retention-field > span, footer {
   font-size: 0.76rem;
@@ -215,6 +215,20 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .meeting-no-note { max-width: 62ch; margin: 30px 0; padding: 22px 0 26px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .meeting-no-note h2 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: clamp(1.65rem, 3vw, 2.1rem); line-height: 1; }
 .meeting-no-note p { margin: 12px 0 18px; color: var(--muted); line-height: 1.55; }
+
+.profile-screen h1 { max-width: 16ch; }
+html[data-screen="profile-screen"] main { padding-top: 28px; padding-bottom: 30px; }
+.profile-screen h1 { font-size: clamp(2.55rem, 5vw, 3.45rem); }
+.profile-screen .lede { margin-top: 16px; }
+.profile-screen .notice { margin: 14px 0 8px; padding: 12px 15px; }
+.profile-screen .footnote { margin: 0 0 14px; }
+.profile-status { max-width: 62ch; margin: 18px 0 16px; padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.profile-status h2 { margin: 7px 0 10px; font-family: ui-serif, Georgia, serif; font-size: clamp(1.65rem, 3vw, 2.1rem); font-weight: 500; letter-spacing: -0.025em; line-height: 1; }
+.profile-status p { max-width: 60ch; margin: 8px 0 0; color: var(--muted); line-height: 1.55; }
+.profile-requirements { max-width: 62ch; margin: 0 0 14px; }
+.profile-requirements p:last-child { margin: 7px 0 0; color: var(--muted); line-height: 1.5; }
+.profile-requirements strong { color: var(--ink); }
+#profile-setup { margin-right: 9px; }
 
 footer { border-top: 1px solid var(--line); border-bottom: 0; color: #66706a; }
 

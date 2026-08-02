@@ -14,7 +14,7 @@ Core Audio process tap, your microphone comes through the same path
 > proves its scheduled audio deletion and clean transfer to another Mac or genuinely
 > clean account. A separately identified local Preview now continually delivers the
 > product reader: Library, exact search, meeting detail, canonical transcript,
-> retention/disk state, and an explicitly approved two-step action that can delete
+> retention/disk state, an honest Voice profile capability surface, and an explicitly approved two-step action that can delete
 > only one meeting's retained audio while preserving its transcript and note. That
 > Preview is not the frozen alpha distribution build or a beta. What also exists is a working
 > two-leg research capture — validated end to end over a 75-minute meeting — a

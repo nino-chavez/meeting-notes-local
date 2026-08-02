@@ -223,6 +223,13 @@ struct PreviewLibraryTranscript {
     message: String,
 }
 
+#[cfg(any(feature = "preview-surface", test))]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewProfileSnapshot {
+    state: &'static str,
+}
+
 fn apply_restored_transcript_projection(
     model: &mut AppModel,
     projection: RestoredTranscriptProjection,
@@ -762,6 +769,14 @@ fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reade
 
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
+fn preview_profile_snapshot() -> PreviewProfileSnapshot {
+    PreviewProfileSnapshot {
+        state: "setup-unavailable",
+    }
+}
+
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
 fn preview_library_search(
     query: String,
     state: State<'_, ApplicationState>,
@@ -1110,6 +1125,8 @@ fn main() {
             retry_startup,
             #[cfg(feature = "preview-surface")]
             preview_library_snapshot,
+            #[cfg(feature = "preview-surface")]
+            preview_profile_snapshot,
             #[cfg(feature = "preview-surface")]
             preview_library_search,
             #[cfg(feature = "preview-surface")]
