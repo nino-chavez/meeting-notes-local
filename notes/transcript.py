@@ -438,3 +438,26 @@ def load(path: Path) -> Transcript:
             return load_file_transcript(path)
         return load_capture(path)
     raise ValueError(f"{path}: not a QMSum meeting, a capture, or a Meet transcript")
+
+
+class _MemoryTranscriptPath:
+    """A read-only path-shaped transcript source used by artifact validators."""
+
+    def __init__(self, raw: str, source: str):
+        self._raw = raw
+        self.stem = source
+
+    def read_text(self) -> str:
+        return self._raw
+
+    def __str__(self) -> str:
+        return self.stem
+
+
+def load_bytes(raw: bytes, *, source: str = "memory") -> Transcript:
+    """Load a JSON transcript from retained bytes without materializing a file."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("transcript bytes are not UTF-8") from exc
+    return load(_MemoryTranscriptPath(text, source))

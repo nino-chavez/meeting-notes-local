@@ -23,6 +23,7 @@ from pathlib import Path
 MAX_FRAME_BYTES = 64 * 1024
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SAFE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_SAFE_MEETING_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _MANIFEST_FIELDS = (
     "schema",
     "role",
@@ -87,6 +88,7 @@ class _VerifiedRuntime:
     root_fd: int
     manifest: _RetainedFile
     resources: dict[str, _RetainedFile]
+    role: str
 
     def require_unchanged(self) -> None:
         _require_link(self.manifest)
@@ -343,16 +345,19 @@ def verify_runtime(manifest_path: Path) -> _VerifiedRuntime:
             raise BridgeRefused("manifest fields or field order are not current")
         if json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8") != raw:
             raise BridgeRefused("manifest bytes are not canonical")
-        if document["schema"] != "note-runtime/1" or document["role"] != "inspect":
-            raise BridgeRefused("inspect bridge manifest has the wrong role")
+        if document["schema"] != "note-runtime/1" or document["role"] not in {
+            "inspect",
+            "project",
+        }:
+            raise BridgeRefused("note bridge manifest has the wrong role")
         for field in ("runtime", "bridge", "validator"):
             document[field] = _resource(document[field], field)
         if document["generator"] is not None or document["models"] != []:
-            raise BridgeRefused("inspect bridge may not carry a generator or models")
+            raise BridgeRefused("validator-only note bridge may not carry a generator or models")
         for field in ("runtime", "bridge", "validator"):
             resource = document[field]
             resources[field] = _open_beneath(root_fd, resource["relative_path"], resource["sha256"])
-        verified = _VerifiedRuntime(root_fd, manifest, resources)
+        verified = _VerifiedRuntime(root_fd, manifest, resources, document["role"])
         _require_runtime_identity(verified)
         verified.require_unchanged()
         return verified
@@ -441,29 +446,39 @@ def _canonical_uuid(value: object) -> str:
     return value
 
 
-def _parse_command(frame: bytes) -> tuple[str, dict]:
+def _opaque_meeting_id(value: object) -> str:
+    if not isinstance(value, str) or not _SAFE_MEETING_ID.fullmatch(value):
+        raise InvalidArguments("meeting ID is not an opaque meeting ID")
+    return value
+
+
+def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
     value = json.loads(frame, object_pairs_hook=_reject_duplicate_keys)
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or list(value) != [
         "schema",
         "request_id",
         "operation",
         "arguments",
-    }:
+    ]:
         raise BridgeRefused("command has the wrong outer shape")
     try:
         request_id = _canonical_uuid(value["request_id"])
     except InvalidArguments as exc:
         raise BridgeRefused("command request ID is invalid") from exc
-    if value["schema"] != "note-bridge-command/1" or value["operation"] != "note.inspect":
-        raise BridgeRefused("command is outside the inspect role")
+    operation = f"note.{role}"
+    if value["schema"] != "note-bridge-command/1" or value["operation"] != operation:
+        raise BridgeRefused("command is outside the manifest role")
     arguments = value["arguments"]
-    if not isinstance(arguments, dict) or set(arguments) != {
+    if not isinstance(arguments, dict) or list(arguments) != [
         "meeting_id",
         "note_id",
         "transcript_id",
-    }:
-        raise InvalidArguments("inspect arguments have the wrong shape")
-    _canonical_uuid(arguments["meeting_id"])
+    ]:
+        raise InvalidArguments("note arguments have the wrong shape")
+    if role == "inspect":
+        _canonical_uuid(arguments["meeting_id"])
+    else:
+        _opaque_meeting_id(arguments["meeting_id"])
     try:
         _safe_digest(arguments["note_id"], "note ID")
         _safe_digest(arguments["transcript_id"], "transcript ID")
@@ -500,17 +515,25 @@ def _emit(value: dict) -> None:
     sys.stdout.buffer.flush()
 
 
-def _refused(request_id: str, code: str, recoverable: bool) -> None:
-    _emit(
-        {
+def _refused(request_id: str, code: str, recoverable: bool, role: str) -> None:
+    if role == "inspect":
+        _emit({
             "schema": "note-bridge-result/1",
             "request_id": request_id,
             "operation": "note.inspect",
             "outcome": "refused",
             "artifact_digests": {},
             "failure": {"code": code, "recoverable": recoverable},
-        }
-    )
+        })
+        return
+    _emit({
+        "schema": "note-projection-result/1",
+        "request_id": request_id,
+        "operation": "note.project",
+        "outcome": "refused",
+        "projection": None,
+        "failure": {"code": code, "recoverable": recoverable},
+    })
 
 
 def _watch_parent(parent_fd: int) -> None:
@@ -550,9 +573,9 @@ def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
                 "schema": "note-bridge-event/1",
                 "event": "ready",
                 "protocol": 1,
-                "role": "inspect",
+                "role": runtime.role,
                 "manifest_sha256": runtime.manifest.digest,
-                "operations": ["note.inspect"],
+                "operations": [f"note.{runtime.role}"],
             }
         )
         try:
@@ -565,7 +588,7 @@ def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
             parsed = json.loads(frame, object_pairs_hook=_reject_duplicate_keys)
             if isinstance(parsed, dict) and isinstance(parsed.get("request_id"), str):
                 request_id = parsed["request_id"]
-            request_id, arguments = _parse_command(frame)
+            request_id, arguments = _parse_command(frame, runtime.role)
         except InvalidArguments:
             if request_id is None:
                 _require_execution_identity(runtime, standard_library, bundle_loader)
@@ -576,14 +599,18 @@ def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
                 _require_execution_identity(runtime, standard_library, bundle_loader)
                 return 2
             _require_execution_identity(runtime, standard_library, bundle_loader)
-            _refused(request_id, "invalid-request", False)
+            _refused(request_id, "invalid-request", False, runtime.role)
             return 0
         except (BridgeRefused, UnicodeDecodeError, json.JSONDecodeError):
             _require_execution_identity(runtime, standard_library, bundle_loader)
             return 2
         _require_execution_identity(runtime, standard_library, bundle_loader)
         try:
-            digests = validator.inspect(root_fd, arguments)
+            result = (
+                validator.inspect(root_fd, arguments)
+                if runtime.role == "inspect"
+                else validator.project(root_fd, arguments)
+            )
         except validator.ArtifactFailure as exc:
             if (exc.code, exc.recoverable) not in {
                 ("artifact-invalid", False),
@@ -593,19 +620,34 @@ def run(root_path: Path, manifest_path: Path, parent_fd: int) -> int:
                 _require_execution_identity(runtime, standard_library, bundle_loader)
                 return 2
             _require_execution_identity(runtime, standard_library, bundle_loader)
-            _refused(request_id, exc.code, exc.recoverable)
+            _refused(request_id, exc.code, exc.recoverable, runtime.role)
             return 0
         except Exception:
             _require_execution_identity(runtime, standard_library, bundle_loader)
             return 2
         _require_execution_identity(runtime, standard_library, bundle_loader)
+        if runtime.role == "project":
+            projected = {
+                "schema": "note-projection-result/1",
+                "request_id": request_id,
+                "operation": "note.project",
+                "outcome": "succeeded",
+                "projection": result,
+                "failure": None,
+            }
+            encoded = json.dumps(projected, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            if len(encoded) + 1 > MAX_FRAME_BYTES:
+                _refused(request_id, "projection-capacity-exceeded", False, runtime.role)
+                return 0
+            _emit(projected)
+            return 0
         _emit(
             {
                 "schema": "note-bridge-result/1",
                 "request_id": request_id,
                 "operation": "note.inspect",
                 "outcome": "succeeded",
-                "artifact_digests": digests,
+                "artifact_digests": result,
                 "failure": None,
             }
         )
