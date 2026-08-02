@@ -28,7 +28,9 @@ licenses, signing behavior, macOS 14.4 memory use, latency, and semantic review
 remain admission gates.
 
 The revision is pinned now; the model tree digest is deliberately absent until
-the exact download is inspected. Do not substitute a moving Hub tag.
+the exact download is inspected. `tree_sha256` covers model files only and
+excludes Hugging Face's mutable local `.cache` transfer metadata. Do not
+substitute a moving Hub tag.
 
 ## Run the protocol tests
 
@@ -50,3 +52,45 @@ hf download mlx-community/SmolLM2-1.7B-Instruct --revision 1c18454eb88e660ee6f0a
 Only after the file inventory, `tree_sha256`, and license review are recorded
 may a public/synthetic fixture call `local_mlx_provider`. That still does not
 authorize Preview/product wiring, private recordings, or model admission.
+
+## 2026-08-02 synthetic measurement
+
+This measurement used no meeting recording, Preview data, or product record.
+It used the `synthetic_transcript()` fixture in this module and a disposable
+Python 3.12 environment under `/private/tmp`.
+
+| Item | Measured value |
+| --- | --- |
+| Downloaded model tree | `4cadbd458f4790d1958e4acfecccfb9d41cde8458748ab3d1fcc41092d5f621f` |
+| Downloaded size | 3.2 GiB on disk; model page's advertised size is about 3.42 GB |
+| `model.safetensors` | `821ae8a85a20a81957b36a03d93b1313b54e7ac6946907331442156282879499` |
+| Runtime resolved in disposable environment | `mlx-lm==0.30.4`, `mlx==0.32.0`, `transformers==5.0.0rc1` |
+| First cold run | 13.90 s; 2,573,516,800-byte maximum resident set; 4,282,063,304-byte peak footprint |
+| Repeated run timing | cold 11.407 s; warm 9.132 s; warm 9.121 s |
+| Repeated response digest | `07c0d7c13ea81d0a74fba3c9d7540404eba7786ac2a5d708e2d7e64e011d8e08` on all three runs |
+| Output outcome | malformed response → transcript-only; zero claims on all runs |
+
+The exact non-cache inventory was:
+
+| File | SHA-256 |
+| --- | --- |
+| `.gitattributes` | `11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361` |
+| `README.md` | `903f9541fc69014bee74af0a390544a8282cef948b0b451a7d539e04a1d4ecd2` |
+| `config.json` | `faafbb054b2be93596a3ea0452a5f88b8c8558447c3d158a802f79e841398a9c` |
+| `merges.txt` | `0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510` |
+| `model.safetensors` | `821ae8a85a20a81957b36a03d93b1313b54e7ac6946907331442156282879499` |
+| `model.safetensors.index.json` | `e8ed9c7489be6ffb201325977b92561fb0379d603ced6f32308674e5a3a082d7` |
+| `special_tokens_map.json` | `2b7379f3ae813529281a5c602bc5a11c1d4e0a99107aaa597fe936c1e813ca52` |
+| `tokenizer.json` | `7d27c493c729a66ecefc837280b05d948b1ed50d130eebdbf911b1b36cf38ed7` |
+| `tokenizer_config.json` | `a27f638bd2831f5c3dea654a75838930f2b11fbe550c4d4e1d5d7bd07157b2ee` |
+| `vocab.json` | `82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79` |
+
+The first prompt form exceeded the candidate tokenizer's declared 2,048-token
+limit (2,541 tokens). The harness now limits this first experiment to one
+canonical anchor per candidate and one source reference per output, then reran
+the same fixture. That reduces context and is not a semantic-quality result.
+
+This candidate is **not admitted**. It failed the structured-output syntax gate
+on every measured run, so exact locator, semantic usefulness, and human-review
+gates were not reached. The disposable dependency set also differs from the
+shipped MLX runtime; no runtime replacement is justified by this result.

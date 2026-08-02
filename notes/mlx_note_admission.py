@@ -140,47 +140,31 @@ def _object(value: object, names: tuple[str, ...]) -> dict:
 
 def response_contract(manifest: dict) -> dict:
     """The prompt contract; the parser below remains the actual boundary."""
-    candidate_ids = [row["candidate_id"] for row in manifest["candidates"]]
-    fragment_ids = sorted({
-        fragment_id
-        for row in manifest["candidates"]
-        for fragment_id in row["visible_fragment_ids"]
-    })
     return {
         "schema": MODEL_RESPONSE_SCHEMA,
         "type": "object",
-        "additionalProperties": False,
-        "required": ["items"],
-        "properties": {
-            "items": {
-                "type": "array",
-                "maxItems": len(candidate_ids),
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": [
-                        "candidate_id", "source_fragment_ids", "citation", "label", "claim",
-                    ],
-                    "properties": {
-                        "candidate_id": {"type": "string", "enum": candidate_ids},
-                        "source_fragment_ids": {
-                            "type": "array",
-                            "items": {"type": "string", "enum": fragment_ids},
-                            "minItems": 1,
-                            "maxItems": 3,
-                            "uniqueItems": True,
-                        },
-                        "citation": {"type": "string", "minLength": 1},
-                        "label": {
-                            "type": "string",
-                            "enum": ["DECISION", "ACTION", "PROPOSAL", "QUESTION"],
-                        },
-                        "claim": {"type": "string", "minLength": 1, "maxLength": 160},
-                    },
-                },
-            },
-        },
+        "ordered_fields": [
+            "candidate_id", "source_fragment_ids", "citation", "label", "claim",
+        ],
+        "labels": ["DECISION", "ACTION", "PROPOSAL", "QUESTION"],
+        "source_reference_limit": 1,
+        "claim_character_limit": 160,
     }
+
+
+def _admission_candidates(manifest: dict) -> list[dict]:
+    """Bound the first experiment to one exact anchor per source fragment."""
+    selected = []
+    anchors: set[str] = set()
+    for row in manifest["candidates"]:
+        if row["cue_type"] not in {"decision", "action", "proposal", "question"}:
+            continue
+        anchor = row["anchor_fragment_id"]
+        if anchor in anchors:
+            continue
+        anchors.add(anchor)
+        selected.append(row)
+    return selected
 
 
 def model_request(transcript: Transcript, manifest: dict) -> dict:
@@ -191,20 +175,18 @@ def model_request(transcript: Transcript, manifest: dict) -> dict:
         for row in build_fragment_map(transcript)["fragments"]
     }
     candidates = []
-    for row in manifest["candidates"]:
-        visible = []
-        for fragment_id in row["visible_fragment_ids"]:
-            fragment = fragments[fragment_id]
-            visible.append({
+    for row in _admission_candidates(manifest):
+        fragment_id = row["anchor_fragment_id"]
+        fragment = fragments[fragment_id]
+        candidates.append({
+            "candidate_id": row["candidate_id"],
+            "cue_type": row["cue_type"],
+            "source_fragments": [{
                 "source_fragment_id": fragment_id,
                 "text": transcript.turns[fragment["turn"]].text[
                     fragment["char_start"]:fragment["char_end"]
                 ],
-            })
-        candidates.append({
-            "candidate_id": row["candidate_id"],
-            "cue_type": row["cue_type"],
-            "source_fragments": visible,
+            }],
         })
     return {
         "schema": "mlx-note-request/1",
@@ -214,12 +196,13 @@ def model_request(transcript: Transcript, manifest: dict) -> dict:
     }
 
 
-def _decode_response(raw: str, manifest: dict, transcript: Transcript) -> list[dict]:
+def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[dict]:
     root = _object(_strict_json(raw), ("items",))
     rows = root["items"]
     if not isinstance(rows, list):
         raise AdmissionRefused("malformed-response")
-    candidates = {row["candidate_id"]: row for row in manifest["candidates"]}
+    candidate_rows = request["candidates"]
+    candidates = {row["candidate_id"]: row for row in candidate_rows}
     fragment_map = build_fragment_map(transcript)
     fragments = {
         row["source_fragment_id"]: row for row in fragment_map["fragments"]
@@ -239,7 +222,7 @@ def _decode_response(raw: str, manifest: dict, transcript: Transcript) -> list[d
         if candidate_id in seen:
             raise AdmissionRefused("duplicate-candidate")
         seen.add(candidate_id)
-        candidate_position = manifest["candidates"].index(candidates[candidate_id])
+        candidate_position = candidate_rows.index(candidates[candidate_id])
         if candidate_position <= last_candidate_position:
             raise AdmissionRefused("candidates-out-of-order")
         last_candidate_position = candidate_position
@@ -251,7 +234,10 @@ def _decode_response(raw: str, manifest: dict, transcript: Transcript) -> list[d
             or len(source_ids) != len(set(source_ids))
         ):
             raise AdmissionRefused("malformed-response")
-        allowed = candidates[candidate_id]["visible_fragment_ids"]
+        allowed = [
+            fragment["source_fragment_id"]
+            for fragment in candidates[candidate_id]["source_fragments"]
+        ]
         if any(value not in allowed or value not in fragments for value in source_ids):
             raise AdmissionRefused("unknown-source-fragment")
         positions = [allowed.index(value) for value in source_ids]
@@ -497,10 +483,12 @@ def run_model_arm(
     manifest = generate_manifest(transcript, STRATEGY_CUE)
     request = model_request(transcript, manifest)
     started = time.monotonic()
+    response_receipt: dict[str, str] = {}
     try:
         raw, observed = provider(request)
+        response_receipt = {"response_sha256": _sha256(raw)}
         runtime = _runtime_receipt(observed, expected_model_tree_sha256)
-        rows = _decode_response(raw, manifest, transcript)
+        rows = _decode_response(raw, request, transcript)
         if not rows:
             raise AdmissionRefused("no-model-candidates")
         identity = {
@@ -510,11 +498,11 @@ def run_model_arm(
         }
         note = _note2_candidate(transcript, rows, model_identity=identity, arm="mlx")
     except TimeoutError:
-        return transcript_only("mlx", "timeout", {"manifest_sha256": manifest["manifest_sha256"]})
+        return transcript_only("mlx", "timeout", {"manifest_sha256": manifest["manifest_sha256"], **response_receipt})
     except AdmissionRefused as exc:
-        return transcript_only("mlx", exc.code, {"manifest_sha256": manifest["manifest_sha256"]})
+        return transcript_only("mlx", exc.code, {"manifest_sha256": manifest["manifest_sha256"], **response_receipt})
     except Exception as exc:
-        return transcript_only("mlx", "note2-validation-failed", {"error": type(exc).__name__, "manifest_sha256": manifest["manifest_sha256"]})
+        return transcript_only("mlx", "note2-validation-failed", {"error": type(exc).__name__, "manifest_sha256": manifest["manifest_sha256"], **response_receipt})
     return AdmissionResult(
         arm="mlx",
         outcome="accepted-research-candidate",
@@ -536,15 +524,23 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
     if not model_directory.is_dir():
         raise ValueError("model directory does not exist")
 
+    loaded: tuple[object, object] | None = None
+
     def provider(request: dict) -> tuple[str, dict]:
+        nonlocal loaded
         try:
             package = importlib.metadata.version("mlx-lm")
+            import mlx.core as mx
             from mlx_lm import generate, load
+            from mlx_lm.sample_utils import make_sampler
         except (ImportError, importlib.metadata.PackageNotFoundError) as exc:
             raise AdmissionRefused("runtime-package-mismatch") from exc
         if f"mlx-lm=={package}" != MLX_RUNTIME["package"]:
             raise AdmissionRefused("runtime-package-mismatch")
-        model, tokenizer = load(str(model_directory))
+        if loaded is None:
+            loaded = load(str(model_directory))
+        model, tokenizer = loaded
+        mx.random.seed(MLX_RUNTIME["decoding"]["seed"])
         messages = [{"role": "user", "content": _canonical_json(request)}]
         prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         raw = generate(
@@ -552,6 +548,8 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
             tokenizer,
             prompt=prompt,
             max_tokens=MLX_RUNTIME["decoding"]["max_tokens"],
+            max_kv_size=MLX_RUNTIME["decoding"]["max_kv_size"],
+            sampler=make_sampler(temp=MLX_RUNTIME["decoding"]["temperature"]),
             verbose=False,
         )
         return raw, {
@@ -568,7 +566,12 @@ def tree_sha256(root: Path) -> str:
         raise ValueError("model tree is missing")
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        relative = path.relative_to(root).as_posix().encode("utf-8")
+        relative_path = path.relative_to(root)
+        # Hugging Face keeps mutable locks and transfer metadata below .cache.
+        # They are not model bytes and must not change the identity we measure.
+        if ".cache" in relative_path.parts:
+            continue
+        relative = relative_path.as_posix().encode("utf-8")
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
         digest.update(path.stat().st_size.to_bytes(8, "big"))

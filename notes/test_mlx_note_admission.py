@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from mlx_note_admission import (
     run_control_arm,
     run_model_arm,
     synthetic_transcript,
+    tree_sha256,
 )
 from candidate_first import STRATEGY_CUE, generate_manifest
 from summarize import structured_artifact_citations
@@ -106,6 +108,17 @@ class MlxNoteAdmissionTests(unittest.TestCase):
                 self.assertEqual(result.outcome, "transcript-only")
                 self.assertEqual(result.code, code)
                 self.assertIsNone(result.note)
+
+    def test_model_tree_digest_excludes_mutable_transfer_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "model.safetensors").write_bytes(b"synthetic model bytes")
+            cache = root / ".cache" / "huggingface"
+            cache.mkdir(parents=True)
+            (cache / "transfer.lock").write_text("first", encoding="utf-8")
+            first = tree_sha256(root)
+            (cache / "transfer.lock").write_text("changed", encoding="utf-8")
+            self.assertEqual(tree_sha256(root), first)
 
 
 if __name__ == "__main__":
