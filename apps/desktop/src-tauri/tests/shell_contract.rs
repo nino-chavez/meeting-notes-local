@@ -23,6 +23,10 @@ fn generated_preview_library_buttons_bind_their_own_activation() {
     assert!(shell.contains(
         "button.addEventListener(\"click\", () => openLibrarySearchResult(result.handle));"
     ));
+    assert!(shell.contains(
+        "row.transcriptAvailable ? \"Open meeting\" : \"No transcript was created\""
+    ));
+    assert!(!shell.contains("Transcript unavailable"));
     assert!(!shell.contains("libraryList.addEventListener(\"click\""));
     assert!(!shell.contains("librarySearchResults.addEventListener(\"click\""));
 }
