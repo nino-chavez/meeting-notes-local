@@ -49,9 +49,10 @@ from transcript import NONE, Transcript, Turn
 ADMISSION_SCHEMA = "mlx-note-admission/1"
 MODEL_RESPONSE_SCHEMA = "mlx-note-response/1"
 
-# This is a research pin, not a release manifest.  The revision pins the model
-# source before download; the local model-tree digest is intentionally unknown
-# until the explicit fetch/measurement step creates a reviewable inventory.
+# This is a research pin, not a release manifest.  The revision pins the MLX
+# conversion before download; the local model-tree digest is intentionally
+# unknown until the explicit fetch/measurement step creates a reviewable
+# inventory.
 MLX_RUNTIME = {
     "schema": "mlx-note-runtime/1",
     "role": "research-only",
@@ -59,9 +60,12 @@ MLX_RUNTIME = {
     "package": "mlx-lm==0.30.4",
     "package_license": "MIT",
     "model": {
-        "repository": "mlx-community/SmolLM2-1.7B-Instruct",
-        "revision": "1c18454eb88e660ee6f0a201e310fa3602fad3e0",
+        "repository": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+        "revision": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
         "license": "Apache-2.0",
+        "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "expected_download_bytes": 880172064,
+        "expected_model_safetensors_sha256": "0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717",
         "expected_tree_sha256": None,
         "status": "unfetched-not-admitted",
     },
@@ -541,7 +545,14 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
             loaded = load(str(model_directory))
         model, tokenizer = loaded
         mx.random.seed(MLX_RUNTIME["decoding"]["seed"])
-        messages = [{"role": "user", "content": _canonical_json(request)}]
+        # The selected model's documented chat template receives the instruction separately;
+        # keep it out of the canonical user payload so an instruction-like
+        # string inside transcript material cannot alter its role.
+        user_request = {key: value for key, value in request.items() if key != "system"}
+        messages = [
+            {"role": "system", "content": request["system"]},
+            {"role": "user", "content": _canonical_json(user_request)},
+        ]
         prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         raw = generate(
             model,

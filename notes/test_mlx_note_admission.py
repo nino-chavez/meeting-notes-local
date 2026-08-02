@@ -37,6 +37,17 @@ def accepted_provider(request: dict) -> tuple[str, dict]:
 
 
 class MlxNoteAdmissionTests(unittest.TestCase):
+    def test_research_model_manifest_is_immutable_and_has_a_download_budget(self) -> None:
+        model = MLX_RUNTIME["model"]
+        self.assertEqual(model["repository"], "mlx-community/Qwen2.5-1.5B-Instruct-4bit")
+        self.assertEqual(len(model["revision"]), 40)
+        self.assertTrue(all(character in "0123456789abcdef" for character in model["revision"]))
+        self.assertEqual(model["license"], "Apache-2.0")
+        self.assertGreater(model["expected_download_bytes"], 0)
+        self.assertEqual(len(model["expected_model_safetensors_sha256"]), 64)
+        self.assertIsNone(model["expected_tree_sha256"])
+
+
     def test_control_arm_is_repeatable_and_replays_existing_note2_validation(self) -> None:
         transcript = synthetic_transcript()
         first = run_control_arm(transcript)

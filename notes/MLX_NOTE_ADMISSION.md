@@ -19,13 +19,49 @@ model-digest mismatch are explicitly covered.
 
 ## Candidate pin
 
-The research pin is `mlx-lm==0.30.4` and
-`mlx-community/SmolLM2-1.7B-Instruct` at revision
-`1c18454eb88e660ee6f0a201e310fa3602fad3e0`. The model source advertises
-Apache-2.0; MLX-LM advertises MIT. Neither fact admits a shipped dependency:
-the downloaded file inventory, tree digest, package wheel hash, transitive
-licenses, signing behavior, macOS 14.4 memory use, latency, and semantic review
-remain admission gates.
+The first `SmolLM2-1.7B-Instruct` experiment remains rejected: it returned
+malformed non-JSON on every repeat. That is a result about that exact pin and
+prompt, not a claim about MLX, PyTorch, or other models. Do not retry it as the
+next candidate.
+
+### Preregistration comparison — 2026-08-02
+
+| Candidate | License / official source | MLX artifact and immutable revision | Context / template evidence | Download artifact | Decision |
+| --- | --- | --- | --- | --- | --- |
+| **Qwen2.5-1.5B-Instruct 4-bit** | Apache-2.0 on the [official Qwen card](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) | `mlx-community/Qwen2.5-1.5B-Instruct-4bit@8b403126fc14f14cfc99bb4cfa72ecbc129ea677` | Official card: 32,768 tokens and `apply_chat_template`; it reports improved structured outputs, especially JSON. The MLX conversion documents `apply_chat_template`. | 880,172,064 bytes total metadata inventory; `model.safetensors` 868,628,559 bytes (about 869 MB decimal) | **Selected for measurement only.** Smallest candidate with an Apache pin, documented MLX conversion, 4,096-token registered request budget below native context, and model-card JSON relevance. |
+| Phi-3.5-mini-instruct 4-bit | MIT on the [official Microsoft card](https://huggingface.co/microsoft/Phi-3.5-mini-instruct) | `mlx-community/Phi-3.5-mini-instruct-4bit@7b2052fd882fe017300d4d42a4eb06a27b816af4` | Official card: 128K context, chat format, and a claim of instruction adherence. | `model.safetensors` 2,149,696,133 bytes | Plausible fallback, but larger and its conversion inventory carries custom Python source; no remote code is permitted in this experiment. Evaluate only after a separate local MLX-only compatibility inspection. |
+| Llama-3.2-3B-Instruct 4-bit | [Llama 3.2 Community License](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct) permits commercial use subject to its attribution, distribution, acceptable-use, and scale terms. | `mlx-community/Llama-3.2-3B-Instruct-4bit@7f0dc925e0d0afb0322d96f9255cfddf2ba5636e` | Official card: instruction-tuned models for retrieval/summarization and 128K native context; conversion has an MLX chat template. | `model.safetensors` 1,807,496,278 bytes | Plausible but not selected: materially larger, source access is gated, and its custom license adds release obligations that Apache avoids. |
+
+The conversion pins and byte counts above came from the Hugging Face model
+metadata endpoints on 2026-08-02; no model data was downloaded. MLX-LM's
+[official README](https://github.com/ml-explore/mlx-lm) documents Apple-silicon
+generation, Hugging Face/MLX artifacts, `load`, `generate`, and
+`apply_chat_template`. Its [long-prompt guidance](https://github.com/ml-explore/mlx-lm#long-prompts-and-generations)
+documents the rotating `max_kv_size` trade-off. The selected conversion's
+[model card](https://huggingface.co/mlx-community/Qwen2.5-1.5B-Instruct-4bit)
+documents its MLX conversion, MLX-LM loading, chat template, and 869 MB listed
+artifact size. These are compatibility and author claims, not evidence of
+schema adherence or note usefulness.
+
+Exact research sources consulted:
+
+- Qwen source card and license: <https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct>
+- Selected conversion at the registered revision: <https://huggingface.co/mlx-community/Qwen2.5-1.5B-Instruct-4bit/tree/8b403126fc14f14cfc99bb4cfa72ecbc129ea677>
+- Selected conversion metadata and LFS size/hash: <https://huggingface.co/api/models/mlx-community/Qwen2.5-1.5B-Instruct-4bit?blobs=true>
+- MLX-LM official compatibility/API documentation: <https://github.com/ml-explore/mlx-lm>
+- Phi source card and license: <https://huggingface.co/microsoft/Phi-3.5-mini-instruct>
+- Phi MLX conversion at the compared revision: <https://huggingface.co/mlx-community/Phi-3.5-mini-instruct-4bit/tree/7b2052fd882fe017300d4d42a4eb06a27b816af4>
+- Llama source card and commercial license: <https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct>
+- Llama MLX conversion at the compared revision: <https://huggingface.co/mlx-community/Llama-3.2-3B-Instruct-4bit/tree/7f0dc925e0d0afb0322d96f9255cfddf2ba5636e>
+
+The registered research pin is `mlx-lm==0.30.4` (MIT) and
+`mlx-community/Qwen2.5-1.5B-Instruct-4bit` at immutable revision
+`8b403126fc14f14cfc99bb4cfa72ecbc129ea677`. The selected base model is
+Apache-2.0. The private experimental provider imports MLX/MLX-LM only; it
+does not import PyTorch, use a server, or ship in the product path. Neither
+license nor a preregistered pin admits a dependency: downloaded inventory,
+tree digest, package wheel hash, transitive licenses, signing behavior, macOS
+14.4 memory, latency, and semantic review remain admission gates.
 
 The revision is pinned now; the model tree digest is deliberately absent until
 the exact download is inspected. `tree_sha256` covers model files only and
@@ -39,21 +75,56 @@ python3 -m unittest discover -s notes -p 'test_mlx_note_admission.py' -v
 python3 notes/mlx_note_admission.py --self-test
 ```
 
-## Next measurement step — not run by this harness
+### Measurement protocol and pass gates
 
-The weights are not cached in this worktree. Fetch exactly this approximately
-3.42 GB MLX candidate into a disposable research directory, then record its
-tree digest before any run:
+Fetch only the selected immutable revision into a disposable research
+directory. Its expected full inventory is 880,172,064 bytes; the expected
+`model.safetensors` SHA-256 is
+`0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717`.
+Record the full non-cache `tree_sha256`, the package/wheel identity, and the
+local macOS version before an inference call. A mismatch is transcript-only.
 
 ```sh
-hf download mlx-community/SmolLM2-1.7B-Instruct --revision 1c18454eb88e660ee6f0a201e310fa3602fad3e0 --local-dir /private/tmp/lmn-mlx-note-admission-model
+hf download mlx-community/Qwen2.5-1.5B-Instruct-4bit \
+  --revision 8b403126fc14f14cfc99bb4cfa72ecbc129ea677 \
+  --local-dir /private/tmp/lmn-mlx-note-admission-model
 ```
 
-Only after the file inventory, `tree_sha256`, and license review are recorded
-may a public/synthetic fixture call `local_mlx_provider`. That still does not
-authorize Preview/product wiring, private recordings, or model admission.
+The request stays at the existing 4,096-token rotating KV budget and 512-token
+output cap: native Qwen context (32,768) is larger than the registered prompt
+budget. Use the model's documented chat template with exactly two messages:
+the current `SYSTEM_PROMPT` as `system`, and canonical request JSON as `user`.
+Use temperature `0.0`, seed `0`, one non-streaming completion, no retries, no
+remote code, and no schema-constraining decoder. The parser is the enforcement
+boundary; this measures whether the model follows the prompt unaided.
 
-## 2026-08-02 synthetic measurement
+Run the deterministic control first, then 12 synthetic/public transcript
+fixtures: four ordinary supported claims; two locator-order cases; two
+name/number preservation cases; two explicit negation cases; and two
+abstention/no-supported-candidate cases. Each is run three times from a fresh
+process for cold timing and twice more in the same loaded process for warm
+timing. Never use meeting recordings, Preview data, or product records.
+
+| Gate | Pass condition | Failure |
+| --- | --- | --- |
+| Syntax and schema | 12/12 fixtures return one strict JSON object and the local response plus `note/2` validations accept all three repeats. | Any malformed JSON, duplicate key, extra/missing field, unknown ID, timeout, or validation refusal is transcript-only and rejects the candidate. |
+| Locator / names / numbers / negation | 100% exact canonical citations; 100% of fixture assertions preserve every identifier, numeral/date, and asserted negation. | One wrong locator, invented/changed name or number, or lost/reversed negation rejects the candidate. |
+| Repeatability | Raw response SHA-256 and accepted note/receipt are identical across the three cold runs. | Any variation rejects the candidate; do not average it away. |
+| Latency | Cold median at most 30 s; warm median at most 15 s, measured and reported separately on the same macOS 14.4+ machine. | Exceeding either threshold rejects the candidate for the supported local envelope. |
+| Memory | Peak process footprint at most 4,282,063,304 bytes and no memory-pressure/termination signal. This is the prior harness's measured envelope, not a hardware guarantee. | Exceeding it rejects the candidate for that envelope. |
+| Human semantic/usefulness review | A human reviews every accepted fixture output for usefulness, support, and appropriate abstention. | No admission without a recorded human decision, even if every mechanical gate passes. |
+
+The 869 MB artifact makes this candidate plausibly smaller than the previous
+3.2 GiB SmolLM2 download and plausibly within the already measured 4.28 GB
+research footprint, but peak memory has not been measured. That is an
+inference from artifact size, not a supported-Mac claim.
+
+**Selection is not admission.** This plan neither changes the product runtime
+nor asserts that automatic notes are useful. It remains an isolated research
+exercise until every mechanical gate and the human semantic/usefulness review
+are complete.
+
+## 2026-08-02 rejected SmolLM2 measurement
 
 This measurement used no meeting recording, Preview data, or product record.
 It used the `synthetic_transcript()` fixture in this module and a disposable
