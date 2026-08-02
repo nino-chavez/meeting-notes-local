@@ -75,13 +75,20 @@ fn preview_window_is_a_separate_real_capture_shell_with_a_read_only_library() {
         package["scripts"]["preview-build"]
             .as_str()
             .is_some_and(|script| script.contains("tauri.preview.conf.json")
-                && script.contains("preview-surface"))
+                && script.contains("preview-surface")
+                && script.contains("prepare-preview-bundle.sh sign"))
     );
     assert!(
         package["scripts"]["preview-verify"]
             .as_str()
-            .is_some_and(|script| script.contains("codesign --verify --deep --strict"))
+            .is_some_and(|script| script.contains("prepare-preview-bundle.sh verify"))
     );
+    let preview_preparer = include_str!("../../../../scripts/prepare-preview-bundle.sh");
+    assert!(preview_preparer.contains("capture-entitlements.plist"));
+    assert!(preview_preparer.contains("meeting-capture"));
+    assert!(preview_preparer.contains("build_manifest.py"));
+    assert!(preview_preparer.contains("codesign --verify --deep --strict"));
+    assert!(preview_preparer.contains("com\\.apple\\.security\\.device\\.audio-input"));
     assert_eq!(capability["windows"], serde_json::json!(["preview"]));
     assert_eq!(
         capability["permissions"],

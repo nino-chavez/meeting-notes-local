@@ -7,8 +7,8 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "preview": "tauri dev --config src-tauri/tauri.preview.conf.json --features preview-surface",
-    "preview-build": "tauri build --config src-tauri/tauri.preview.conf.json --features preview-surface",
-    "preview-verify": "codesign --verify --deep --strict ../../target/release/bundle/macos/Local\\ Meeting\\ Notes\\ Preview.app",
+    "preview-build": "tauri build --config src-tauri/tauri.preview.conf.json --features preview-surface && ../../scripts/prepare-preview-bundle.sh sign",
+    "preview-verify": "../../scripts/prepare-preview-bundle.sh verify",
     "library-dev": "tauri dev --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface",
     "library-dev-build": "tauri build --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface"
   },
