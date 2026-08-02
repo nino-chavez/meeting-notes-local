@@ -1,0 +1,18 @@
+{
+  "schema": "mlx-word-timestamp-fixture/1",
+  "fixtures": [
+    {
+      "id": "public-longform-v1",
+      "source": "public",
+      "audio": "public-longform-v1.wav",
+      "audio_sha256": "replace-with-verified-public-audio-sha256",
+      "expect_speech": true,
+      "seams_s": [30.0, 60.0],
+      "expected": {
+        "minimum_words": 1,
+        "metric_counts": {},
+        "token_hash_counts": {}
+      }
+    }
+  ]
+}
