@@ -974,7 +974,7 @@ struct Attempt {
     retention_policy_sha256: String,
 }
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Attestation {
     participants_consented: bool,
     headphones: bool,
@@ -1288,7 +1288,7 @@ mod tests {
                 "created_at_epoch_seconds": created,
                 "application_build_sha256": "a".repeat(64),
                 "participant_notice_version": NOTICE_VERSION,
-                "operator_attestation": {"participants_consented": true, "headphones": true, "operator_alone": true},
+                "operator_attestation": {"participantsConsented": true, "headphones": true, "operatorAlone": true},
                 "retention_policy_sha256": policy,
             });
             durable_create_new(
