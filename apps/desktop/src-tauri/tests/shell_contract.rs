@@ -55,6 +55,26 @@ fn product_operation_facade_remains_unregistered() {
 }
 
 #[test]
+fn private_library_reader_has_no_registered_command_or_storage_authority() {
+    let main = include_str!("../src/main.rs");
+    let reader = include_str!("../src/library_reader.rs");
+    let handler_start = main
+        .find(".invoke_handler(tauri::generate_handler![")
+        .expect("named command handler");
+    let handler_end = main[handler_start..]
+        .find("])")
+        .expect("named command handler end")
+        + handler_start;
+
+    assert!(main.contains("mod library_reader;"));
+    assert!(!main[handler_start..handler_end].contains("library_reader"));
+    assert!(!reader.contains("#[tauri::command]"));
+    assert!(!reader.contains("tauri::"));
+    assert!(!reader.contains("StorageRoot::create"));
+    assert!(!reader.contains("invoke_handler"));
+}
+
+#[test]
 fn product_operation_facade_uses_top_level_frozen_ui_arguments() {
     let facade = include_str!("../src/product_facade.rs");
 

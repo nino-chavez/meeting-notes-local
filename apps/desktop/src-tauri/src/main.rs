@@ -3,6 +3,11 @@
 
 #[cfg(feature = "library-dev-surface")]
 mod library_dev_surface;
+// The library reader is intentionally private and unregistered.  It maps an
+// already-built projection into closed DTOs, but does not create storage or
+// provide a Tauri command.
+#[allow(dead_code)]
+mod library_reader;
 
 // The correction/regeneration facade is intentionally compiled but not wired
 // into the current internal-alpha command set.

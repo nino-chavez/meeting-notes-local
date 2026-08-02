@@ -3,14 +3,10 @@
 //! This module is compiled only with `library-dev-surface`. It has no capture,
 //! retention, export, correction, regeneration, or production-data commands.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use local_meeting_notes_session_core::library_read::{
-    ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, OpenedLibraryHit,
-    ReadLimits,
-};
+use local_meeting_notes_session_core::library_read::{LibraryProjection, ReadLimits};
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
     MeetingLifecycle, MeetingRecord, MeetingSchema, NoteRevisionRef, artifact_ref,
@@ -22,11 +18,14 @@ use local_meeting_notes_session_core::note_projection::{
 use local_meeting_notes_session_core::storage::{
     StorageRoot, create_private_dir, durable_create_new,
 };
-use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
-use uuid::Uuid;
+
+use crate::library_reader::{
+    LibraryEvidenceResponse, LibraryNoteResponse, LibraryReader, LibrarySearchResponse,
+    LibrarySnapshot,
+};
 
 const DEV_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.library-dev";
 const FIXTURE_STORAGE_GENERATION: &str = "fixture-v2";
@@ -35,81 +34,13 @@ const FIXTURE_MARKER: &str = "library-dev-fixture-v2.json";
 const NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 
 struct DevLibrary {
-    storage: StorageRoot,
-    projection: LibraryProjection,
-    handles: HashMap<String, LibraryHit>,
+    reader: LibraryReader,
 }
 
 #[derive(Default)]
 pub struct DevSurfaceState {
     library: Mutex<Option<DevLibrary>>,
     startup_error: Mutex<Option<String>>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DevSnapshot {
-    state: &'static str,
-    rows: Vec<DevRow>,
-    message: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DevRow {
-    meeting_id: String,
-    label: String,
-    created_at_epoch_seconds: u64,
-    transcript_available: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DevSearchResponse {
-    state: &'static str,
-    results: Vec<DevSearchResult>,
-    message: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DevSearchResult {
-    handle: String,
-    kind: &'static str,
-    meeting_id: String,
-    text: Option<String>,
-    source_turn_index: Option<u32>,
-    claim_ordinal: Option<u64>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DevNoteResponse {
-    state: &'static str,
-    meeting_id: String,
-    claims: Vec<DevClaim>,
-    message: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DevClaim {
-    handle: String,
-    ordinal: u64,
-    claim_type: &'static str,
-    claim: String,
-    evidence_state: &'static str,
-    locator_count: usize,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DevEvidenceResponse {
-    state: &'static str,
-    meeting_id: Option<String>,
-    source_turn_index: Option<u32>,
-    text: Option<String>,
-    message: String,
 }
 
 pub fn run() {
@@ -155,177 +86,86 @@ fn initialize(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn library_dev_snapshot(state: State<'_, DevSurfaceState>) -> DevSnapshot {
+fn library_dev_snapshot(state: State<'_, DevSurfaceState>) -> LibrarySnapshot {
     snapshot_response(&state)
 }
 
-fn snapshot_response(state: &DevSurfaceState) -> DevSnapshot {
+fn snapshot_response(state: &DevSurfaceState) -> LibrarySnapshot {
     let guard = state.library.lock().expect("development library lock");
     if let Some(library) = guard.as_ref() {
-        if library.projection.rows().is_empty() {
-            return DevSnapshot {
-                state: "empty",
-                rows: Vec::new(),
-                message:
-                    "The synthetic meeting is unavailable. Reopen this development app to retry."
-                        .into(),
-            };
-        }
-        let rows = library
-            .projection
-            .rows()
-            .iter()
-            .map(|row| DevRow {
-                meeting_id: row.meeting_id.clone(),
-                label: "Sanitized library sample".into(),
-                created_at_epoch_seconds: row.created_at_epoch_seconds,
-                transcript_available: row.transcript_sha256.is_some(),
-            })
-            .collect();
-        return DevSnapshot {
-            state: "populated",
-            rows,
-            message:
+        let mut response = library.reader.snapshot();
+        if response.state == "populated" {
+            for row in &mut response.rows {
+                row.label = "Sanitized library sample".into();
+            }
+            response.message =
                 "Synthetic, sanitized development data only. This does not open production data."
-                    .into(),
-        };
+                    .into();
+        } else {
+            response.message =
+                "The synthetic meeting is unavailable. Reopen this development app to retry."
+                    .into();
+        }
+        return response;
     }
-    DevSnapshot {
-        state: "empty",
-        rows: Vec::new(),
-        message: state
-            .startup_error
-            .lock()
-            .expect("development startup lock")
-            .clone()
-            .unwrap_or_else(|| "No synthetic fixture is available.".into()),
-    }
+    let mut response = LibraryReader::unavailable_snapshot();
+    response.message = startup_message(state);
+    response
 }
 
 #[tauri::command]
-fn library_dev_search(query: String, state: State<'_, DevSurfaceState>) -> DevSearchResponse {
+fn library_dev_search(query: String, state: State<'_, DevSurfaceState>) -> LibrarySearchResponse {
     search_response(&query, &state)
 }
 
-fn search_response(query: &str, state: &DevSurfaceState) -> DevSearchResponse {
+fn search_response(query: &str, state: &DevSurfaceState) -> LibrarySearchResponse {
     let mut guard = state.library.lock().expect("development library lock");
     let Some(library) = guard.as_mut() else {
         return unavailable_search(state);
     };
-    match library.projection.search(query) {
-        Ok(hits) if hits.is_empty() => DevSearchResponse {
-            state: "no-results",
-            results: Vec::new(),
-            message: "No sanitized sample matched that search.".into(),
-        },
-        Ok(hits) => {
-            let mut results = Vec::new();
-            for hit in hits {
-                let handle = retain_handle(library, hit.clone());
-                match library.projection.open(&library.storage, &hit) {
-                    Ok(OpenedLibraryHit::Claim {
-                        meeting_id,
-                        claim,
-                        claim_ordinal,
-                        ..
-                    }) => results.push(DevSearchResult {
-                        handle,
-                        kind: "claim",
-                        meeting_id,
-                        text: Some(claim),
-                        source_turn_index: None,
-                        claim_ordinal: Some(claim_ordinal),
-                    }),
-                    Ok(OpenedLibraryHit::Transcript {
-                        meeting_id,
-                        text,
-                        source_turn_index,
-                        ..
-                    }) => results.push(DevSearchResult {
-                        handle,
-                        kind: "transcript",
-                        meeting_id,
-                        text: Some(text),
-                        source_turn_index: Some(source_turn_index),
-                        claim_ordinal: None,
-                    }),
-                    Ok(OpenedLibraryHit::Withheld {
-                        meeting_id,
-                        source_turn_index,
-                    }) => results.push(DevSearchResult {
-                        handle,
-                        kind: "withheld",
-                        meeting_id,
-                        text: None,
-                        source_turn_index: Some(source_turn_index),
-                        claim_ordinal: None,
-                    }),
-                    Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => {
-                        results.push(DevSearchResult {
-                            handle,
-                            kind: "meeting",
-                            meeting_id,
-                            text: Some("Sanitized library sample".into()),
-                            source_turn_index: None,
-                            claim_ordinal: None,
-                        })
-                    }
-                    Err(error) => return stale_search(error),
-                }
-            }
-            DevSearchResponse {
-                state: "results",
-                results,
-                message: "Results from the synthetic meeting.".into(),
-            }
+    synthetic_search_response(library.reader.search(query))
+}
+
+fn synthetic_search_response(mut response: LibrarySearchResponse) -> LibrarySearchResponse {
+    for result in &mut response.results {
+        if result.kind == "meeting" {
+            result.text = Some("Sanitized library sample".into());
         }
-        Err(error) => stale_search(error),
     }
+    response.message = match response.state {
+        "results" => "Results from the synthetic meeting.",
+        "no-results" => "No sanitized sample matched that search.",
+        "stale" => "That view is stale. Reopen the sanitized sample and try again.",
+        _ => "No synthetic fixture is available.",
+    }
+    .into();
+    response
 }
 
 #[tauri::command]
-fn library_dev_open_note(meeting_id: String, state: State<'_, DevSurfaceState>) -> DevNoteResponse {
+fn library_dev_open_note(
+    meeting_id: String,
+    state: State<'_, DevSurfaceState>,
+) -> LibraryNoteResponse {
     open_note_response(&meeting_id, &state)
 }
 
-fn open_note_response(meeting_id: &str, state: &DevSurfaceState) -> DevNoteResponse {
+fn open_note_response(meeting_id: &str, state: &DevSurfaceState) -> LibraryNoteResponse {
     let mut guard = state.library.lock().expect("development library lock");
     let Some(library) = guard.as_mut() else {
         return unavailable_note(meeting_id, state);
     };
-    let handles = match library.projection.note_claims(meeting_id) {
-        Ok(handles) => handles,
-        Err(error) => return stale_note(meeting_id, error),
-    };
-    let mut claims = Vec::new();
-    for hit in handles {
-        let handle = retain_handle(library, hit.clone());
-        match library.projection.open(&library.storage, &hit) {
-            Ok(OpenedLibraryHit::Claim {
-                claim_ordinal,
-                claim_type,
-                evidence_state,
-                claim,
-                locators,
-                ..
-            }) => claims.push(DevClaim {
-                handle,
-                ordinal: claim_ordinal,
-                claim_type: claim_type_name(claim_type),
-                claim,
-                evidence_state: evidence_state_name(evidence_state),
-                locator_count: locators.len(),
-            }),
-            Ok(_) => return stale_note(meeting_id, LibraryReadError::SnapshotStale),
-            Err(error) => return stale_note(meeting_id, error),
+    let mut response = library.reader.open_note(meeting_id);
+    response.message = match response.state {
+        "note" => "Words located in the transcript. Semantic support has not been reviewed.",
+        "summary-failed" => {
+            "The synthetic note was not produced. Search retained transcript text instead."
         }
+        "stale" => "That note view is stale. Reopen the sanitized sample and try again.",
+        _ => "No synthetic fixture is available.",
     }
-    DevNoteResponse {
-        state: "note",
-        meeting_id: meeting_id.into(),
-        claims,
-        message: "Words located in the transcript. Semantic support has not been reviewed.".into(),
-    }
+    .into();
+    response
 }
 
 #[tauri::command]
@@ -333,7 +173,7 @@ fn library_dev_open_evidence(
     handle: String,
     locator_ordinal: usize,
     state: State<'_, DevSurfaceState>,
-) -> DevEvidenceResponse {
+) -> LibraryEvidenceResponse {
     open_evidence_response(&handle, locator_ordinal, &state)
 }
 
@@ -341,27 +181,19 @@ fn open_evidence_response(
     handle: &str,
     locator_ordinal: usize,
     state: &DevSurfaceState,
-) -> DevEvidenceResponse {
+) -> LibraryEvidenceResponse {
     let guard = state.library.lock().expect("development library lock");
     let Some(library) = guard.as_ref() else {
         return unavailable_evidence(state);
     };
-    let Some(hit) = library.handles.get(handle) else {
-        return stale_evidence();
-    };
-    match library
-        .projection
-        .open_claim_evidence(&library.storage, hit, locator_ordinal)
-    {
-        Ok(evidence) => DevEvidenceResponse {
-            state: "evidence",
-            meeting_id: Some(evidence.meeting_id),
-            source_turn_index: Some(evidence.source_turn_index),
-            text: Some(evidence.text),
-            message: "Exact locator text from the synthetic transcript.".into(),
-        },
-        Err(_) => stale_evidence(),
+    let mut response = library.reader.open_evidence(handle, locator_ordinal);
+    response.message = match response.state {
+        "evidence" => "Exact locator text from the synthetic transcript.",
+        "stale" => "That evidence view is stale. Reopen the note and try again.",
+        _ => "No synthetic fixture is available.",
     }
+    .into();
+    response
 }
 
 fn create_dev_library(app: &AppHandle) -> Result<DevLibrary, String> {
@@ -391,9 +223,7 @@ fn project_seeded_library(storage: StorageRoot) -> Result<DevLibrary, String> {
         return Err("The synthetic development fixture is incomplete. Remove only this development app’s data and reopen it.".into());
     }
     Ok(DevLibrary {
-        storage,
-        projection,
-        handles: HashMap::new(),
+        reader: LibraryReader::new(storage, projection),
     })
 }
 
@@ -528,12 +358,6 @@ impl NoteProjector for SyntheticProjector {
     }
 }
 
-fn retain_handle(library: &mut DevLibrary, hit: LibraryHit) -> String {
-    let handle = Uuid::new_v4().to_string();
-    library.handles.insert(handle.clone(), hit);
-    handle
-}
-
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     durable_create_new(path, bytes).map_err(error_text)
 }
@@ -554,75 +378,22 @@ fn scalar_offset(text: &str, needle: &str) -> Option<u64> {
         .map(|byte_offset| text[..byte_offset].chars().count() as u64)
 }
 
-fn claim_type_name(
-    value: local_meeting_notes_session_core::note_projection::ClaimType,
-) -> &'static str {
-    match value {
-        local_meeting_notes_session_core::note_projection::ClaimType::Decision => "decision",
-        local_meeting_notes_session_core::note_projection::ClaimType::Action => "action",
-        local_meeting_notes_session_core::note_projection::ClaimType::Proposal => "proposal",
-        local_meeting_notes_session_core::note_projection::ClaimType::Question => "question",
-    }
+fn unavailable_search(state: &DevSurfaceState) -> LibrarySearchResponse {
+    let mut response = LibraryReader::unavailable_search();
+    response.message = startup_message(state);
+    response
 }
 
-fn evidence_state_name(value: ClaimEvidenceState) -> &'static str {
-    match value {
-        ClaimEvidenceState::Located => "located",
-    }
+fn unavailable_note(meeting_id: &str, state: &DevSurfaceState) -> LibraryNoteResponse {
+    let mut response = LibraryReader::unavailable_note(meeting_id);
+    response.message = startup_message(state);
+    response
 }
 
-fn stale_search(_: LibraryReadError) -> DevSearchResponse {
-    DevSearchResponse {
-        state: "stale",
-        results: Vec::new(),
-        message: "That view is stale. Reopen the sanitized sample and try again.".into(),
-    }
-}
-
-fn stale_note(meeting_id: &str, _: LibraryReadError) -> DevNoteResponse {
-    DevNoteResponse {
-        state: "stale",
-        meeting_id: meeting_id.into(),
-        claims: Vec::new(),
-        message: "That note view is stale. Reopen the sanitized sample and try again.".into(),
-    }
-}
-
-fn stale_evidence() -> DevEvidenceResponse {
-    DevEvidenceResponse {
-        state: "stale",
-        meeting_id: None,
-        source_turn_index: None,
-        text: None,
-        message: "That evidence view is stale. Reopen the note and try again.".into(),
-    }
-}
-
-fn unavailable_search(state: &DevSurfaceState) -> DevSearchResponse {
-    DevSearchResponse {
-        state: "empty",
-        results: Vec::new(),
-        message: startup_message(state),
-    }
-}
-
-fn unavailable_note(meeting_id: &str, state: &DevSurfaceState) -> DevNoteResponse {
-    DevNoteResponse {
-        state: "empty",
-        meeting_id: meeting_id.into(),
-        claims: Vec::new(),
-        message: startup_message(state),
-    }
-}
-
-fn unavailable_evidence(state: &DevSurfaceState) -> DevEvidenceResponse {
-    DevEvidenceResponse {
-        state: "empty",
-        meeting_id: None,
-        source_turn_index: None,
-        text: None,
-        message: startup_message(state),
-    }
+fn unavailable_evidence(state: &DevSurfaceState) -> LibraryEvidenceResponse {
+    let mut response = LibraryReader::unavailable_evidence();
+    response.message = startup_message(state);
+    response
 }
 
 fn startup_message(state: &DevSurfaceState) -> String {
@@ -641,7 +412,10 @@ fn error_text(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use local_meeting_notes_session_core::meeting::load_meeting;
+    use crate::library_reader::LibrarySearchResult;
+    use local_meeting_notes_session_core::meeting::{
+        MeetingLifecycle, load_meeting, write_meeting,
+    };
     use local_meeting_notes_session_core::storage::{create_private_dir, durable_replace};
     use tempfile::TempDir;
 
@@ -750,7 +524,7 @@ mod tests {
         assert!(empty_evidence.meeting_id.is_none());
         assert!(empty_evidence.source_turn_index.is_none());
 
-        let (_temporary, state) = populated_state();
+        let (temporary, state) = populated_state();
         let no_results = search_response("not-present", &state);
         assert_eq!(no_results.state, "no-results");
         assert!(no_results.results.is_empty());
@@ -773,24 +547,14 @@ mod tests {
 
         let note = open_note_response(FIXTURE_MEETING_ID, &state);
         let handle = note.claims[0].handle.clone();
-        let note_path = {
-            let guard = state.library.lock().unwrap();
-            let library = guard.as_ref().unwrap();
-            let meeting = load_meeting(
-                &library
-                    .storage
-                    .path()
-                    .join("meetings")
-                    .join(FIXTURE_MEETING_ID),
-            )
-            .unwrap();
-            library
-                .storage
-                .path()
-                .join("meetings")
-                .join(FIXTURE_MEETING_ID)
-                .join(meeting.artifacts.current_note.unwrap().json.relative_path)
-        };
+        let meeting_directory = temporary
+            .path()
+            .join("data")
+            .join("meetings")
+            .join(FIXTURE_MEETING_ID);
+        let meeting = load_meeting(&meeting_directory).unwrap();
+        let note_path =
+            meeting_directory.join(meeting.artifacts.current_note.unwrap().json.relative_path);
         durable_replace(&note_path, b"{\"changed\":true}\n").unwrap();
         let stale = open_evidence_response(&handle, 0, &state);
         assert_eq!(stale.state, "stale");
@@ -798,5 +562,174 @@ mod tests {
         assert!(stale.meeting_id.is_none());
         assert!(stale.source_turn_index.is_none());
         assert!(!serde_json::to_string(&stale).unwrap().contains("café"));
+    }
+
+    #[test]
+    fn private_reader_keeps_exact_claim_precedence_and_locator_evidence() {
+        let (_temporary, state) = populated_state();
+        let mut guard = state.library.lock().unwrap();
+        let reader = &mut guard.as_mut().unwrap().reader;
+
+        let results = reader.search("café");
+        assert_eq!(results.state, "results");
+        assert_eq!(
+            results.results.len(),
+            1,
+            "the cited transcript hit is suppressed"
+        );
+        assert_eq!(results.results[0].kind, "claim");
+        let evidence = reader.open_evidence(&results.results[0].handle, 0);
+        assert_eq!(evidence.state, "evidence");
+        assert_eq!(evidence.source_turn_index, Some(0));
+        assert_eq!(evidence.text.as_deref(), Some("café"));
+    }
+
+    #[test]
+    fn private_reader_discards_superseded_handles_after_each_response() {
+        let (_temporary, state) = populated_state();
+        let mut guard = state.library.lock().unwrap();
+        let reader = &mut guard.as_mut().unwrap().reader;
+
+        let mut prior_search_handle = String::new();
+        for _ in 0..8 {
+            let search = reader.search("café");
+            assert_eq!(search.state, "results");
+            assert_eq!(reader.retained_handle_count(), search.results.len());
+            let handle = search.results[0].handle.clone();
+            assert_eq!(reader.open_evidence(&handle, 0).state, "evidence");
+            prior_search_handle = handle;
+        }
+        let no_results = reader.search("not-present");
+        assert_eq!(no_results.state, "no-results");
+        assert_eq!(reader.retained_handle_count(), 0);
+        assert_eq!(reader.open_evidence(&prior_search_handle, 0).state, "stale");
+
+        for _ in 0..8 {
+            let note = reader.open_note(FIXTURE_MEETING_ID);
+            assert_eq!(note.state, "note");
+            assert_eq!(reader.retained_handle_count(), note.claims.len());
+            assert_eq!(
+                reader.open_evidence(&note.claims[0].handle, 0).state,
+                "evidence"
+            );
+        }
+        assert_eq!(reader.open_note("missing").state, "stale");
+        assert_eq!(reader.retained_handle_count(), 0);
+    }
+
+    #[test]
+    fn private_reader_returns_closed_empty_stale_and_withheld_responses() {
+        let empty_temporary = TempDir::new().unwrap();
+        let empty_protected_root = empty_temporary.path().join("protected-root");
+        create_private_dir(&empty_protected_root).unwrap();
+        let empty_storage =
+            StorageRoot::create(&empty_temporary.path().join("data"), &empty_protected_root)
+                .unwrap();
+        let empty_projection =
+            LibraryProjection::rebuild(&empty_storage, ReadLimits::default()).unwrap();
+        let empty_snapshot = LibraryReader::new(empty_storage, empty_projection).snapshot();
+        assert_eq!(empty_snapshot.state, "empty");
+        assert_eq!(
+            empty_snapshot.message,
+            "No retained meetings are available."
+        );
+
+        let unavailable = LibraryReader::unavailable_search();
+        assert_eq!(unavailable.state, "empty");
+        assert!(unavailable.results.is_empty());
+        assert_ne!(unavailable.message, empty_snapshot.message);
+        assert!(!unavailable.message.contains("sample"));
+
+        let (temporary, state) = populated_state();
+        let (handle, withheld) = {
+            let mut guard = state.library.lock().unwrap();
+            let reader = &mut guard.as_mut().unwrap().reader;
+            let withheld = reader.search("withheld");
+            let note = reader.open_note(FIXTURE_MEETING_ID);
+            (note.claims[0].handle.clone(), withheld)
+        };
+        assert_eq!(withheld.state, "results");
+        assert_eq!(withheld.results[0].kind, "withheld");
+        assert!(withheld.results[0].text.is_none());
+        assert!(
+            !serde_json::to_string(&withheld)
+                .unwrap()
+                .contains("withheld sample detail")
+        );
+
+        let meeting_directory = temporary
+            .path()
+            .join("data")
+            .join("meetings")
+            .join(FIXTURE_MEETING_ID);
+        let meeting = load_meeting(&meeting_directory).unwrap();
+        durable_replace(
+            &meeting_directory.join(meeting.artifacts.current_note.unwrap().json.relative_path),
+            b"{\"changed\":true}\n",
+        )
+        .unwrap();
+        let stale = state
+            .library
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .reader
+            .open_evidence(&handle, 0);
+        assert_eq!(stale.state, "stale");
+        assert!(stale.text.is_none());
+        assert!(stale.meeting_id.is_none());
+        assert!(!serde_json::to_string(&stale).unwrap().contains("café"));
+        assert!(!stale.message.contains("café"));
+    }
+
+    #[test]
+    fn private_reader_distinguishes_summary_failed_from_empty_note() {
+        let temporary = TempDir::new().unwrap();
+        let protected_root = temporary.path().join("protected-root");
+        create_private_dir(&protected_root).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("data"), &protected_root).unwrap();
+        seed_synthetic_fixture(&storage).unwrap();
+        clear_test_xattrs(storage.path());
+        let directory = storage.path().join("meetings").join(FIXTURE_MEETING_ID);
+        let mut meeting = load_meeting(&directory).unwrap();
+        meeting.lifecycle = MeetingLifecycle::SummaryFailed;
+        meeting.artifacts.current_note = None;
+        write_meeting(&directory, &meeting).unwrap();
+
+        let mut reader = project_seeded_library(storage).unwrap().reader;
+        let snapshot = reader.snapshot();
+        assert_eq!(snapshot.state, "populated");
+        let note = reader.open_note(FIXTURE_MEETING_ID);
+        assert_eq!(note.state, "summary-failed");
+        assert!(note.claims.is_empty());
+    }
+
+    #[test]
+    fn development_wrapper_redacts_meeting_result_labels() {
+        let response = synthetic_search_response(LibrarySearchResponse {
+            state: "results",
+            results: vec![LibrarySearchResult {
+                handle: "opaque-handle".into(),
+                kind: "meeting",
+                meeting_id: FIXTURE_MEETING_ID.into(),
+                text: Some("private meeting label".into()),
+                source_turn_index: None,
+                claim_ordinal: None,
+            }],
+            message: "untrusted test response".into(),
+        });
+        assert_eq!(response.state, "results");
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].kind, "meeting");
+        assert_eq!(
+            response.results[0].text.as_deref(),
+            Some("Sanitized library sample")
+        );
+        assert!(
+            !serde_json::to_string(&response)
+                .unwrap()
+                .contains("private meeting label")
+        );
     }
 }

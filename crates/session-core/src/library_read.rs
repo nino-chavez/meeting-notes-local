@@ -93,6 +93,20 @@ pub struct LibraryRow {
     folder: Option<String>,
 }
 
+impl LibraryRow {
+    /// Lifecycle is snapshot data only. The reader adapter uses it to distinguish
+    /// a transcript that remains readable after a note-generation refusal.
+    pub fn lifecycle(&self) -> MeetingLifecycle {
+        self.lifecycle
+    }
+
+    /// Metadata is already part of this projection's exact-search authority.
+    /// Exposing the accepted title does not create a broader metadata reader.
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct StoredTurn {
     index: u32,
