@@ -56,6 +56,8 @@ use local_meeting_notes_session_core::recovery::{
 use local_meeting_notes_session_core::reducer::{
     CaptureState, ExclusiveOperation, Reducer, StartupState,
 };
+#[cfg(feature = "preview-surface")]
+use local_meeting_notes_session_core::retention::ProfileLifecycleStatus;
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, RetentionOutcome, execute_due_retention_excluding, meeting_dir,
 };
@@ -98,6 +100,8 @@ struct ApplicationState {
     retention_started: AtomicBool,
     #[cfg(feature = "preview-surface")]
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
+    #[cfg(feature = "preview-surface")]
+    preview_profile_state: Mutex<PreviewProfileState>,
 }
 
 impl Default for ApplicationState {
@@ -113,6 +117,8 @@ impl Default for ApplicationState {
             retention_started: AtomicBool::new(false),
             #[cfg(feature = "preview-surface")]
             preview_library: Mutex::new(None),
+            #[cfg(feature = "preview-surface")]
+            preview_profile_state: Mutex::new(PreviewProfileState::Checking),
         }
     }
 }
@@ -228,6 +234,29 @@ struct PreviewLibraryTranscript {
 #[serde(rename_all = "camelCase")]
 struct PreviewProfileSnapshot {
     state: &'static str,
+}
+
+#[cfg(feature = "preview-surface")]
+#[derive(Clone, Copy)]
+enum PreviewProfileState {
+    Checking,
+    NotEnrolled,
+    ProfilePresentUnvalidated,
+    EnrollmentRecoveryRequired,
+    StorageNeedsAttention,
+}
+
+#[cfg(feature = "preview-surface")]
+impl PreviewProfileState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Checking => "checking",
+            Self::NotEnrolled => "not-enrolled",
+            Self::ProfilePresentUnvalidated => "profile-present-unvalidated",
+            Self::EnrollmentRecoveryRequired => "enrollment-recovery-required",
+            Self::StorageNeedsAttention => "storage-needs-attention",
+        }
+    }
 }
 
 fn apply_restored_transcript_projection(
@@ -769,9 +798,13 @@ fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reade
 
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
-fn preview_profile_snapshot() -> PreviewProfileSnapshot {
+fn preview_profile_snapshot(state: State<'_, ApplicationState>) -> PreviewProfileSnapshot {
+    let state = *state
+        .preview_profile_state
+        .lock()
+        .expect("preview profile state lock");
     PreviewProfileSnapshot {
-        state: "setup-unavailable",
+        state: state.as_str(),
     }
 }
 
@@ -1307,6 +1340,8 @@ fn initialize_application(app: AppHandle, retry: bool) {
             }
         };
     drop(storage_sequence);
+    #[cfg(feature = "preview-surface")]
+    prepare_preview_profile_lifecycle(&state, &storage_context);
     {
         let mut model = state.model.lock().expect("application model lock");
         model.retention_operational = true;
@@ -1516,6 +1551,44 @@ fn ensure_app_data_writer_lock(
 
 fn acquire_app_data_writer_lock(storage: &StorageRoot) -> Result<AppDataWriterLock, String> {
     AppDataWriterLock::acquire(storage).map_err(error_text)
+}
+
+#[cfg(feature = "preview-surface")]
+fn prepare_preview_profile_lifecycle(state: &ApplicationState, context: &StorageContext) {
+    let prepared = state
+        .app_data_writer_lock
+        .lock()
+        .map_err(|_| "the app-data writer lock is unavailable".to_string())
+        .and_then(|held| {
+            held.as_ref()
+                .ok_or_else(|| "the app-data writer lock is unavailable".to_string())
+                .and_then(|lock| {
+                    lock.profile_lifecycle_authority()
+                        .prepare(now_epoch_seconds())
+                        .map_err(error_text)
+                })
+        });
+    let profile_state = match prepared {
+        Ok(ProfileLifecycleStatus::NotEnrolled) => PreviewProfileState::NotEnrolled,
+        Ok(ProfileLifecycleStatus::ProfilePresentUnvalidated) => {
+            PreviewProfileState::ProfilePresentUnvalidated
+        }
+        Ok(ProfileLifecycleStatus::EnrollmentRecoveryRequired) => {
+            PreviewProfileState::EnrollmentRecoveryRequired
+        }
+        Err(error) => {
+            let _ = write_private_diagnostic(
+                &context.diagnostics,
+                "profile_lifecycle_prepare_failed",
+                &error,
+            );
+            PreviewProfileState::StorageNeedsAttention
+        }
+    };
+    *state
+        .preview_profile_state
+        .lock()
+        .expect("preview profile state lock") = profile_state;
 }
 
 #[cfg(debug_assertions)]

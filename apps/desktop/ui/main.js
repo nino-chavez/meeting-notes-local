@@ -458,19 +458,43 @@ async function openLibrary() {
 
 function renderProfile(snapshot) {
   const state = snapshot?.state || "unavailable";
-  if (state === "setup-unavailable") {
+  if (state === "not-enrolled") {
     profileKicker.textContent = "Voice profile · Setup required";
     profileTitle.textContent = "Your voice setup takes two sittings.";
     profileLede.textContent = "Voice isolation is not active in this Preview. Alpha recording remains limited to one person near the microphone.";
-    profileStatusTitle.textContent = "Voice setup is not available yet";
-    profileStatusCopy.textContent = "Setup is not available in this Preview yet. Current alpha recording remains available under its existing one-operator limits.";
+    profileStatusTitle.textContent = "No enrolled profile is active";
+    profileStatusCopy.textContent = "Lifecycle receipts show no enrolled profile. Guided setup is not packaged yet, so current alpha recording remains available under its existing one-operator limits.";
+    return;
+  }
+  if (state === "profile-present-unvalidated") {
+    profileKicker.textContent = "Voice profile · Validation required";
+    profileTitle.textContent = "Stored profile material is not active.";
+    profileLede.textContent = "This Preview found lifecycle-bound profile material, but it cannot validate it against a packaged voice model yet.";
+    profileStatusTitle.textContent = "Voice isolation remains off";
+    profileStatusCopy.textContent = "The profile is not used for recording. Current alpha recording remains available under its existing one-operator limits.";
+    return;
+  }
+  if (state === "enrollment-recovery-required") {
+    profileKicker.textContent = "Voice profile · Recovery required";
+    profileTitle.textContent = "Voice setup was interrupted.";
+    profileLede.textContent = "The fixed-slot lifecycle found unfinished setup work. This Preview will not guess whether to keep or discard it.";
+    profileStatusTitle.textContent = "Guided recovery is not packaged yet";
+    profileStatusCopy.textContent = "Voice isolation remains off. Existing meetings remain readable, and current alpha recording keeps its existing one-operator limits.";
+    return;
+  }
+  if (state === "checking") {
+    profileKicker.textContent = "Voice profile · Checking";
+    profileTitle.textContent = "Checking voice setup.";
+    profileLede.textContent = "The app is checking private lifecycle storage without exposing profile content.";
+    profileStatusTitle.textContent = "Checking fixed-slot storage";
+    profileStatusCopy.textContent = "Voice isolation remains off while this check finishes.";
     return;
   }
   profileKicker.textContent = "Voice profile · Needs attention";
-  profileTitle.textContent = "Voice setup status is unavailable.";
-  profileLede.textContent = "This Preview could not read its own voice-setup capability state.";
-  profileStatusTitle.textContent = "Voice isolation is unavailable";
-  profileStatusCopy.textContent = "The app did not open or change profile material. Current retained meetings remain readable.";
+  profileTitle.textContent = "Voice profile storage needs attention.";
+  profileLede.textContent = "The fixed-slot lifecycle could not establish one safe storage authority.";
+  profileStatusTitle.textContent = "Voice isolation remains off";
+  profileStatusCopy.textContent = "No profile action was offered. Current retained meetings remain readable, and alpha recording keeps its existing one-operator limits.";
 }
 
 async function openProfile() {

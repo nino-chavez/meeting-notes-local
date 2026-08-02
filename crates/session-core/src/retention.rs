@@ -19,6 +19,8 @@ use crate::meeting::{
 };
 use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
 use crate::operation_store::{OperationStore, OperationStoreError, StoredOperationRequest};
+use crate::profile_lifecycle::prepare_profile_lifecycle;
+pub use crate::profile_lifecycle::{ProfileLifecycleError, ProfileLifecycleStatus};
 use crate::storage::{
     StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
 };
@@ -175,6 +177,28 @@ pub struct AppDataWriterLock {
     coordination: Arc<MeetingStorageCoordination>,
 }
 
+/// Profile lifecycle capability bound to the held process-lifetime writer
+/// lock and its one storage coordinator.
+pub struct ProfileLifecycleAuthority<'a> {
+    lock: &'a AppDataWriterLock,
+}
+
+impl ProfileLifecycleAuthority<'_> {
+    /// Initializes fixed slots, recovers an interrupted reset, and returns a
+    /// content-free state. Profile bytes and filesystem paths never cross this
+    /// boundary.
+    pub fn prepare(
+        &self,
+        completed_at_epoch_seconds: u64,
+    ) -> Result<ProfileLifecycleStatus, ProfileLifecycleError> {
+        prepare_profile_lifecycle(
+            &self.lock.storage,
+            self.lock.coordination.as_ref(),
+            completed_at_epoch_seconds,
+        )
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum AppDataWriterLockError {
     #[error("app-data writer lock path is unavailable")]
@@ -233,6 +257,10 @@ impl AppDataWriterLock {
 
     pub fn deletion_authority(&self) -> ManualAudioDeletionAuthority<'_> {
         ManualAudioDeletionAuthority { lock: self }
+    }
+
+    pub fn profile_lifecycle_authority(&self) -> ProfileLifecycleAuthority<'_> {
+        ProfileLifecycleAuthority { lock: self }
     }
 }
 

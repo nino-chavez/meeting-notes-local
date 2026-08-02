@@ -52,7 +52,7 @@ pub(crate) enum ProfileResetOutcome {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum ProfileLifecycleError {
+pub enum ProfileLifecycleError {
     #[error("meeting storage coordination is unavailable")]
     Coordination(#[from] MeetingCoordinationError),
     #[error("profile lifecycle refuses while a meeting is active")]
@@ -73,6 +73,18 @@ pub(crate) enum ProfileLifecycleError {
     Io(#[from] io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+/// Content-free lifecycle state for product surfaces.
+///
+/// `ProfilePresentUnvalidated` deliberately does not mean that the profile is
+/// usable. Semantic profile validation and encoder matching remain separate
+/// worker responsibilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileLifecycleStatus {
+    NotEnrolled,
+    ProfilePresentUnvalidated,
+    EnrollmentRecoveryRequired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -477,6 +489,59 @@ pub(crate) fn recover_profile_lifecycle(
     completed_at: u64,
 ) -> Result<Option<ProfileResetOutcome>, ProfileLifecycleError> {
     recover_with_platform(storage, coordination, completed_at, &SystemPlatform)
+}
+
+/// Initialize the fixed-slot lifecycle, finish an interrupted reset, and
+/// return only a content-free status. The caller must already hold the
+/// lifetime app-data writer lock that owns `coordination`.
+pub(crate) fn prepare_profile_lifecycle(
+    storage: &StorageRoot,
+    coordination: &MeetingStorageCoordination,
+    completed_at: u64,
+) -> Result<ProfileLifecycleStatus, ProfileLifecycleError> {
+    prepare_with_platform(storage, coordination, completed_at, &SystemPlatform)
+}
+
+fn prepare_with_platform(
+    storage: &StorageRoot,
+    coordination: &MeetingStorageCoordination,
+    completed_at: u64,
+    platform: &dyn SwapPlatform,
+) -> Result<ProfileLifecycleStatus, ProfileLifecycleError> {
+    match recover_with_platform(storage, coordination, completed_at, platform) {
+        Ok(_) => lifecycle_status(storage, coordination),
+        Err(ProfileLifecycleError::NonterminalEnrollment) => {
+            Ok(ProfileLifecycleStatus::EnrollmentRecoveryRequired)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn lifecycle_status(
+    storage: &StorageRoot,
+    coordination: &MeetingStorageCoordination,
+) -> Result<ProfileLifecycleStatus, ProfileLifecycleError> {
+    let sequence = coordination.lock_sequence()?;
+    if !sequence.active_meeting_ids()?.is_empty() {
+        return Err(ProfileLifecycleError::ActiveMeeting);
+    }
+    let current = authority(storage)?;
+    match current.payload {
+        Payload::EnrollmentWriting { .. } | Payload::EnrollmentReady { .. } => {
+            Ok(ProfileLifecycleStatus::EnrollmentRecoveryRequired)
+        }
+        Payload::ResetDeleting { .. } | Payload::ResetStaged { .. } => {
+            Err(ProfileLifecycleError::NonterminalReset)
+        }
+        ref payload => {
+            let (live, _, _) = slots_for_terminal(payload)?;
+            if is_zero(&live) {
+                Ok(ProfileLifecycleStatus::NotEnrolled)
+            } else {
+                Ok(ProfileLifecycleStatus::ProfilePresentUnvalidated)
+            }
+        }
+    }
 }
 
 fn reset_with_platform(
@@ -1181,8 +1246,20 @@ fn verify_authority_slots(
             reset_zero,
             enrollment_zero,
             ..
+        } => {
+            exact_slot(
+                &root.join("profile/lifecycle/enrollment.staged"),
+                enrollment_zero,
+            )?;
+            let l = inspect_slot(&root.join("profile/voiceprint.json"), true)?;
+            let r = inspect_slot(&root.join("profile/lifecycle/reset.tombstone"), true)?;
+            if !((l == *profile && r == *reset_zero)
+                || (l == *reset_zero && (r == *profile || is_zero_of(&r, profile))))
+            {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
         }
-        | Payload::ResetStaged {
+        Payload::ResetStaged {
             profile,
             reset_zero,
             enrollment_zero,
@@ -1194,9 +1271,7 @@ fn verify_authority_slots(
             )?;
             let l = inspect_slot(&root.join("profile/voiceprint.json"), true)?;
             let r = inspect_slot(&root.join("profile/lifecycle/reset.tombstone"), true)?;
-            if !((l == *profile && r == *reset_zero)
-                || (l == *reset_zero && (r == *profile || is_zero_of(&r, profile))))
-            {
+            if !(l == *reset_zero && (r == *profile || is_zero_of(&r, profile))) {
                 return Err(ProfileLifecycleError::Quarantined);
             }
         }
@@ -1212,6 +1287,12 @@ fn verify_authority_slots(
                 &root.join("profile/lifecycle/enrollment.staged"),
                 enrollment_zero,
             )?;
+            if !is_zero(live_zero)
+                || !is_zero(reset_zero)
+                || live_zero.identity == reset_zero.identity
+            {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
         }
         Payload::EnrollmentWriting {
             live_zero,
@@ -2176,6 +2257,123 @@ mod tests {
         ));
         let auth = authority(&s).unwrap();
         assert!(matches!(auth.payload, Payload::Baseline { .. }));
+    }
+    #[test]
+    fn preparation_reports_only_content_free_readiness() {
+        let (_t, s) = storage();
+        let coordination = MeetingStorageCoordination::default();
+        assert_eq!(
+            prepare_with_platform(&s, &coordination, 1, &FakePlatform).unwrap(),
+            ProfileLifecycleStatus::NotEnrolled
+        );
+
+        let (_t, s) = storage();
+        let live = s.path().join("profile/voiceprint.json");
+        fs::write(&live, b"synthetic unvalidated profile bytes").unwrap();
+        fs::set_permissions(&live, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            prepare_with_platform(&s, &coordination, 2, &FakePlatform).unwrap(),
+            ProfileLifecycleStatus::ProfilePresentUnvalidated
+        );
+    }
+    #[test]
+    fn preparation_refuses_an_active_meeting() {
+        let (_t, s) = storage();
+        let coordination = MeetingStorageCoordination::default();
+        let _lease = coordination.acquire("synthetic-meeting").unwrap();
+        assert!(matches!(
+            prepare_with_platform(&s, &coordination, 1, &FakePlatform),
+            Err(ProfileLifecycleError::ActiveMeeting)
+        ));
+        assert!(!s.path().join("profile/lifecycle").exists());
+    }
+    #[test]
+    fn preparation_reports_interrupted_enrollment_without_mutating_it() {
+        let (_t, s) = storage();
+        initialize_with_platform(&s, &FakePlatform).unwrap();
+        let baseline = authority(&s).unwrap();
+        let (live_zero, reset_zero, enrollment_zero) =
+            slots_for_terminal(&baseline.payload).unwrap();
+        let writing = Payload::EnrollmentWriting {
+            sequence: 1,
+            predecessor: baseline.digest,
+            operation_id: "123e4567-e89b-12d3-a456-426614174000".into(),
+            requested_at: 1,
+            prior_count: 0,
+            prior_last: None,
+            live_zero,
+            reset_zero,
+            enrollment_zero,
+        };
+        let published = publish(&s, &writing).unwrap();
+        let coordination = MeetingStorageCoordination::default();
+
+        assert_eq!(
+            prepare_with_platform(&s, &coordination, 2, &FakePlatform).unwrap(),
+            ProfileLifecycleStatus::EnrollmentRecoveryRequired
+        );
+        assert_eq!(authority(&s).unwrap().digest, published.digest);
+    }
+    #[test]
+    fn staged_reset_receipt_requires_the_post_swap_layout() {
+        let (_t, s) = storage();
+        let live = s.path().join("profile/voiceprint.json");
+        fs::write(&live, b"synthetic profile bytes").unwrap();
+        fs::set_permissions(&live, fs::Permissions::from_mode(0o600)).unwrap();
+        initialize_with_platform(&s, &FakePlatform).unwrap();
+        let baseline = authority(&s).unwrap();
+        let (profile, reset_zero, enrollment_zero) = slots_for_terminal(&baseline.payload).unwrap();
+        let staged = Payload::ResetStaged {
+            sequence: 1,
+            predecessor: baseline.digest,
+            operation_id: "123e4567-e89b-12d3-a456-426614174000".into(),
+            requested_at: 1,
+            prior_count: 0,
+            prior_last: None,
+            profile,
+            reset_zero,
+            enrollment_zero,
+        };
+        write_slot(&s.path().join("profile/lifecycle/receipt.b.json"), &staged).unwrap();
+
+        assert!(matches!(
+            authority(&s),
+            Err(ProfileLifecycleError::Quarantined)
+        ));
+    }
+    #[test]
+    fn removed_reset_receipt_requires_two_distinct_zero_slots() {
+        let (_t, s) = storage();
+        let live_path = s.path().join("profile/voiceprint.json");
+        fs::write(&live_path, b"synthetic profile bytes").unwrap();
+        fs::set_permissions(&live_path, fs::Permissions::from_mode(0o600)).unwrap();
+        initialize_with_platform(&s, &FakePlatform).unwrap();
+        let baseline = authority(&s).unwrap();
+        let reset_path = s.path().join("profile/lifecycle/reset.tombstone");
+        fs::write(&reset_path, b"not zero").unwrap();
+        fs::set_permissions(&reset_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let removed = Payload::ResetRemoved {
+            sequence: 1,
+            predecessor: baseline.digest,
+            completed_count: 1,
+            last_reset: LastReset {
+                operation_id: "123e4567-e89b-12d3-a456-426614174000".into(),
+                completed_at: 2,
+            },
+            live_zero: inspect_slot(&live_path, true).unwrap(),
+            reset_zero: inspect_slot(&reset_path, true).unwrap(),
+            enrollment_zero: inspect_slot(
+                &s.path().join("profile/lifecycle/enrollment.staged"),
+                false,
+            )
+            .unwrap(),
+        };
+        write_slot(&s.path().join("profile/lifecycle/receipt.b.json"), &removed).unwrap();
+
+        assert!(matches!(
+            authority(&s),
+            Err(ProfileLifecycleError::Quarantined)
+        ));
     }
     #[test]
     fn explicit_null_and_unknown_fields_are_refused() {
