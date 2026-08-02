@@ -77,6 +77,38 @@ summary. Every note claim must lead back to the retained words behind it. Withhe
 speech, capture gaps and deleted audio remain visible rather than being rewritten as
 certainty.
 
+### Delivery method: prototype-validated walking skeleton
+
+The goal stays fixed. The route to it now follows two deliberately separate
+skeletons:
+
+1. **Interaction skeleton.** A running local prototype uses synthetic meetings to
+   exercise the complete memory journey before new product UI is implemented. Design
+   proceeds retrieval → commitments and notes → capture, so the later need to find and
+   trust something constrains what the earlier stages preserve.
+2. **Production walking skeleton.** After the operator approves one exact prototype,
+   the installed Preview implements one real path through `Launch → Record → Stop →
+   Transcribe → Library → Note → Evidence → Correct/regenerate → Retrieve`. Each step
+   is narrow but genuine. Later slices deepen that spine instead of building isolated
+   subsystems.
+
+The first design gate compares three credible retrieval structures against the same
+synthetic corpus and tasks: meeting-first Library, commitment-first memory, and a
+retrieval-first hybrid. The original light/editorial visual system and proven capture,
+artifact, evidence-locator, retention and recovery behavior are inputs. Navigation,
+page hierarchy, note composition and exact geometry remain prototype questions.
+
+The prototype must run at the real 960×900 product viewport and include thin notes,
+gaps, withheld turns, missing transcripts, stale notes, loading, failure and recovery.
+Automated checks can prove its mechanics. Only the operator can approve its
+information architecture and interaction. Rejected candidates remain runnable but
+clearly historical; the approved candidate is fingerprinted before implementation.
+
+Already-started safety work may be brought to a clean checkpoint when it does not
+pre-decide the interface. New product UI does not run ahead of this gate. Once the
+spine is approved, every implementation slice returns as an updated installed Preview
+so the operator can inspect the real application continuously.
+
 The first supported beta is deliberately narrow:
 
 - macOS 14.4 or later;

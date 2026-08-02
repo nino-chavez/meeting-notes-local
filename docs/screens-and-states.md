@@ -678,11 +678,20 @@ operator "reasonably mistook the Ingest placeholder for a non-working folder
 chooser" — recorded in its Decision 0047, which concluded that "a shell fixture
 cannot serve as the next operator encounter."
 
-So the build order here is **one working surface at a time over real data**, not a
-shell with empty rooms. A placeholder does not read as unfinished; it reads as
-broken, and it spends the operator's review on a question the team already knew the
-answer to. The first thing worth showing is the menubar item over a real capture that
-produces a real note — narrow, and true end to end.
+That lesson now applies in two stages. The design stage is a **working interaction
+skeleton**, not a shell with empty rooms: every control on the reviewed path performs
+its prototype action, and unavailable production behavior is labelled rather than
+drawn as a broken placeholder. A shared synthetic corpus can compare navigation,
+hierarchy and state comprehension, but cannot approve note usefulness or semantic
+support.
+
+After one exact prototype is approved, implementation returns to **one thin working
+slice at a time over real data**. The existing menubar-to-capture-to-transcript alpha
+already proves the start of that spine. The next production slice joins it to Library,
+note, canonical evidence, correction/regeneration and retrieval, then replaces each
+simulated segment without changing the approved composition. Each join returns as an
+updated installed Preview. A placeholder still does not count as a working surface,
+and no synthetic encounter counts as a real-product or release receipt.
 
 ---
 

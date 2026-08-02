@@ -1,9 +1,11 @@
-# Post-approval macOS vertical slice
+# macOS walking skeleton and delivery contract
 
 ## Status
 
-This remains the implementation contract. The accepted interaction receipt now
-authorizes the ordered work below.
+The accepted interaction receipt remains the implementation contract for the
+claim-to-canonical-transcript behavior it actually reviewed. Frozen storage, worker,
+retention, recovery and evidence contracts also remain binding. It does not authorize
+an unresolved whole-product navigation or composition.
 
 The interaction gate in
 [`encounter-acceptance.md`](./encounter-acceptance.md) passed on 2026-07-31 for
@@ -11,6 +13,14 @@ the exact digest-bound private page. The repository's fresh history and that
 receipt do not permit private meeting artifacts in Git. They also do not prove
 the application runtime or automatic-note quality, so no application build may
 be described as beta-ready from this approval.
+
+Product UI work is therefore back at a bounded design gate: first approve a running
+synthetic interaction skeleton, then record that exact candidate as the composition
+contract for the real walking skeleton. That later receipt can supersede layout,
+navigation and screen geometry without weakening the already-proved evidence behavior
+or non-visual contracts. The already-started profile lifecycle join may reach a clean
+checkpoint because it does not choose the interface; guided enrolment, reset and other
+new surfaces wait for the approved composition.
 
 The transcript-only internal-alpha path is implemented and packaged with the real
 local worker runtime. Commit
@@ -43,13 +53,28 @@ Status as of 2026-08-02. ETA ranges assume timely human review and no major rese
 automatic-note quality. Passing tests are bounded evidence; they do not advance a
 human gate.
 
+### Active delivery spine
+
+Design proceeds **retrieval → commitments and notes → capture**. Implementation then
+walks the operator's chronological path:
+
+`Launch → Record → Stop → Transcribe → Library → Note → Evidence → Correct/regenerate → Retrieve`
+
+The active visible stream is the first part of that spine: compare a meeting-first
+Library, commitment-first memory, and retrieval-first hybrid using one shared
+synthetic corpus. Each live candidate must support finding an old decision, inspecting
+its canonical transcript evidence, recognizing a gap, correcting the record,
+regenerating the note and returning to retrieval. Operator approval applies only to
+the exact fingerprinted candidate. It then becomes the implementation contract for a
+real installed vertical slice.
+
 | Wave | Current status and active stream | Join or exit | Human gate | ETA |
 |---|---|---|---|---|
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |
 | B. Shared-contract freeze | Complete and independently re-audited after one narrow correction. Implementation proved that supported macOS exposes no descriptor-based executable launch, so the original audited wording required an impossible primitive. The corrected contract keeps the signed interpreter, standard library, and dynamic libraries inside the release trust boundary and descriptor-retains every manifest-listed bridge-controlled resource. All other correction/regeneration, worker, recovery, artifact, receipt, and fixture contracts remain frozen. | Real projector transport must implement the corrected descriptor handoff, cancellation, and parent-death contract before admission. | None. | Complete 2026-08-01 |
-| C. Trust foundation | In progress. The independently audited restoration coordinator covers every durable phase and refuses simultaneous storage mutation. The development-only profile bridge validates quarantined candidates without following links, trusting unsafe ownership or modes, overwriting installed bytes, or crashing on malformed data. The Preview now exposes an honest Voice profile capability surface: it states that voice setup and isolation are not active, shows the real multi-session requirements, leaves current alpha capture under its existing one-operator limit, and does not inspect or classify stored profile material before the lifecycle authority exists. After explicit operator approval, the Preview also exposes a two-step, one-meeting audio-deletion action over the audited staged `audio-deletion/1` facade. A dedicated single-use handle, fresh retention recheck, process writer lock, and core meeting lease keep that action narrower than generic meeting or transcript authority. Synthetic tests prove released audio leaves transcript and note artifacts intact; the visible confirmation was opened and canceled against retained local data, so no real deletion receipt is claimed. The frozen alpha command boundary is unchanged. Profile lifecycle integration, guided enrolment/reset, withheld-turn restoration, policy change, and whole-meeting deletion remain. | Join the fixed-slot lifecycle authority next, then deliver guided enrolment and reviewed reset as working Preview increments. Follow with withheld-turn restoration and stale-note regeneration. Exercise real destructive actions only as operator actions before beta admission. | Retention-policy wording and far-end-notice choices; real deletion, profile policy, reset, and withheld-turn decisions. | Cumulative 1–2 weeks |
+| C. Trust foundation | In progress, with the fixed-slot lifecycle join parked as an audited implementation candidate rather than installed Preview work. The independent audit found two release blockers: initial slot publication can mutate a pathname before descriptor identity is proved, and receipt validation accepts impossible phase histories. The candidate also overstates volume readiness and must not be promoted. The independently audited restoration coordinator, development-only profile bridge and staged one-meeting audio-deletion facade remain bounded evidence. Capture admission and the frozen alpha command boundary are unchanged. Guided enrolment/reset, withheld-turn restoration, policy change and whole-meeting deletion remain. | Preserve the candidate and its passing tests, but do not install or promote it. Resume with descriptor-before-mutation publication, legal transition validation, strict encoder validation and guided enrolment/reset after the walking-skeleton prototype establishes their product place. | Retention-policy wording and far-end-notice choices; real deletion, profile policy, reset and withheld-turn decisions. | Cumulative 1–2 weeks after the design gate |
 | D. Evidence-linked automatic notes | In progress. The private coordinator and inspect-only transport remain closed and recovery-tested. The corrected synthetic-only MLX harness now advertises and parses the same strict `{"items":[...]}` contract, binds immutable model/runtime identities, separates tree hashing and model load from per-call timing, and fails closed to `transcript-only`. The bounded two-fixture Qwen2.5 1.5B corrective probe was rejected: the supported fixture produced invalid JSON and the empty fixture returned the wrong root/shape. The full suite correctly did not run, and the runner now refuses that scope until a fresh-process orchestrator implements the registered 12-fixture cold/warm repeat matrix. SmolLM2's earlier result remains inconclusive. Neither model is admitted, no third candidate is scheduled, and no generator is wired into Preview. | Keep note work off the Preview critical path. Before any new model search, decide and preregister one bounded decoding/contract repair or close this small-model path. Admit a create bridge only after typed output, exact locators, fidelity, latency, memory, repeatability, and human semantic/usefulness gates pass. | Semantic support and usefulness adjudication. | Additional 2–3 weeks after a registered experiment passes |
-| E. Product surfaces and retrieval | In progress. The separate Preview bundle now registers bounded reader and voice-capability commands and renders the real Library, exact search, meeting detail, typed `note/2` claims when present, canonical evidence landing, transcript-only fallback, validated retention/disk state, the reviewed recording-deletion interaction, and the persistent Voice profile destination in the original light/editorial design system. The voice surface is deliberately non-mutating and makes no stored-profile claim until lifecycle-backed enrolment/reset exists. The frozen alpha command boundary is unchanged. The default 960×900 window is the visual acceptance size. Searches and returns rebuild one current handle generation; metadata-only meetings cannot receive transcript actions; exact Unicode scalar spans survive search reopening; and transcript opens recheck the validated digest, path, and parsed bytes while holding storage coordination. Correction/regeneration commands remain unregistered. | Continue continual Preview delivery with lifecycle-backed profile enrolment/reset, followed by withheld-turn restoration and stale-note regeneration. Pass synthetic state tests and cold interaction review before beta admission. | Cold operator review of the working surfaces. | Additional 2–3 weeks, partly parallel with D |
+| E. Product surfaces and retrieval | Rebaselined to prototype-first. The separate Preview proves bounded reader and voice-capability mechanics and renders the real Library, exact search, meeting detail, canonical transcript, retention/disk state and reviewed one-meeting audio-deletion interaction in the original light/editorial system. Those working surfaces are evidence, not automatic approval of the whole-product IA. The active stream now compares three live retrieval structures at 960×900 against the same synthetic corpus, including evidence landing, uncertainty, correction/regeneration and return-to-retrieval. No candidate writes product records or reads private meetings. The frozen alpha command boundary remains unchanged. | Operator approves one exact fingerprinted interaction skeleton. Translate only that candidate into the production walking-skeleton contract, then deliver it as thin installed Preview increments. | Cold operator review of the live candidates and explicit approval of one exact revision. | Prototype comparison 1–3 days; implementation remains within the cumulative 2–3 week surface range |
 | F. Beta packaging and admission | Blocked by C–E. | Frozen build/model identities, installed canary, locator resolution, correction/restart/retention/deletion receipts. | Pre-run reference, semantic review, and operator usefulness verdict. | Cumulative 6–9 weeks |
 | G. Production hardening and GA | Not started. | Clean accounts/Macs, upgrade/migration/rollback, fault injection, privacy/security, and content-free diagnostics. | Explicit beta admission and later GA release decisions. | Cumulative 9–14 weeks |
 | H. Later extensions | Outside v1: optional EventKit brief, operator-authored live note, detection, and conversational cross-meeting retrieval. Speaker playback/AEC remains research. | Each extension receives its own contract and evidence. | Separate scope and release decisions. | 1–4 weeks each after v1; no AEC ETA before feasibility passes |
