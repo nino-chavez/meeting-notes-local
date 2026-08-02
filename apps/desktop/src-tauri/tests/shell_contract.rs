@@ -14,6 +14,20 @@ fn single_instance_is_the_first_plugin_and_precedes_app_setup() {
 }
 
 #[test]
+fn generated_preview_library_buttons_bind_their_own_activation() {
+    let shell = include_str!("../../ui/main.js");
+
+    assert!(shell.contains(
+        "button.addEventListener(\"click\", () => openMeetingDetail(row.handle));"
+    ));
+    assert!(shell.contains(
+        "button.addEventListener(\"click\", () => openLibrarySearchResult(result.handle));"
+    ));
+    assert!(!shell.contains("libraryList.addEventListener(\"click\""));
+    assert!(!shell.contains("librarySearchResults.addEventListener(\"click\""));
+}
+
+#[test]
 fn main_window_has_only_named_commands_and_no_generic_capability() {
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
