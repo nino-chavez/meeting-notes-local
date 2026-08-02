@@ -16,6 +16,7 @@ use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::library_read::valid_opaque_id;
 use crate::storage::StorageRoot;
 
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
@@ -109,6 +110,10 @@ fn read_macos(root: &Path) -> MetadataState {
         }
         Err(()) => return unavailable_identity(root, b"unsafe-library"),
     };
+    let directory_before = match safe_directory(&directory) {
+        Ok(identity) => identity,
+        Err(()) => return unavailable_identity(root, b"unsafe-library"),
+    };
     let mut file = match open_metadata(&directory) {
         Ok(Some(file)) => file,
         Ok(None) => {
@@ -139,6 +144,9 @@ fn read_macos(root: &Path) -> MetadataState {
     // Both descriptor/path bindings are repeated after the bounded read; no
     // authority survives a name swap or a changed directory binding.
     if !same_path_fd(&library, &directory)
+        || safe_directory(&directory)
+            .map(|after| after != directory_before)
+            .unwrap_or(true)
         || !same_child_fd(&library.join("metadata.json"), &file)
         || safe_file(&file)
             .map(|after| fd_identity(&after) != before)
@@ -213,6 +221,21 @@ struct FdIdentity {
     ctime: i64,
     ctime_nsec: i64,
 }
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DirectoryIdentity {
+    dev: u64,
+    ino: u64,
+    generation: u64,
+    mode: u32,
+    uid: u32,
+    flags: u32,
+    mtime: i64,
+    mtime_nsec: i64,
+    ctime: i64,
+    ctime_nsec: i64,
+}
 #[cfg(target_os = "macos")]
 fn fd_identity(metadata: &fs::Metadata) -> FdIdentity {
     use std::os::darwin::fs::MetadataExt as _;
@@ -230,6 +253,27 @@ fn fd_identity(metadata: &fs::Metadata) -> FdIdentity {
         ctime: metadata.ctime(),
         ctime_nsec: metadata.ctime_nsec(),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn safe_directory(file: &File) -> Result<DirectoryIdentity, ()> {
+    use std::os::darwin::fs::MetadataExt as _;
+    let metadata = file.metadata().map_err(|_| ())?;
+    if !safe_directory_metadata(&metadata) {
+        return Err(());
+    }
+    Ok(DirectoryIdentity {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+        generation: u64::from(metadata.st_gen()),
+        mode: metadata.mode(),
+        uid: metadata.uid(),
+        flags: metadata.st_flags(),
+        mtime: metadata.mtime(),
+        mtime_nsec: metadata.mtime_nsec(),
+        ctime: metadata.ctime(),
+        ctime_nsec: metadata.ctime_nsec(),
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -257,7 +301,7 @@ fn open_metadata(directory: &File) -> Result<Option<File>, ()> {
         libc::openat(
             directory.as_raw_fd(),
             METADATA_NAME.as_ptr().cast(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | O_UNIQUE,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK | O_UNIQUE,
         )
     };
     if fd < 0 {
@@ -508,15 +552,6 @@ fn canonical_uuid(value: &str) -> bool {
         .map(|id| id.to_string() == value)
         .unwrap_or(false)
 }
-fn valid_opaque_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value != "."
-        && value != ".."
-        && value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-}
 fn valid_label(value: &str) -> bool {
     let nfc: String = unicode_normalization(value);
     value == nfc
@@ -552,6 +587,43 @@ mod tests {
             br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[],"x":0}"#.as_slice(),
             br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[],"meetings":[]}"#.as_slice(),
         ] { assert!(serde_json::from_slice::<MetadataWire>(bad).is_err()); }
+    }
+
+    #[test]
+    fn parser_refuses_every_label_authority_violation() {
+        let rejected: &[&[u8]] = &[
+            // Nested order, unknown fields, duplicate nested keys, and required nullable fields.
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"name":"needle","id":"11111111-1111-4111-8111-111111111111"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"needle","extra":true}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","id":"11111111-1111-4111-8111-111111111111","name":"needle"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"needle"}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","folder_id":null}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"needle","folder_id":null,"extra":true}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"needle","title":"needle","folder_id":null}]}"#,
+            // Sorting/uniqueness, canonical identifiers, and every label constraint.
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"22222222-2222-4222-8222-222222222222","name":"needle"},{"id":"11111111-1111-4111-8111-111111111111","name":"later"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-11111111111A","name":"needle"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":" e\u0301 "}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"needle/unsafe"}],"meetings":[]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-b","title":"needle","folder_id":null},{"meeting_id":"meeting-a","title":"later","folder_id":null}]}"#,
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"needle","folder_id":"11111111-1111-4111-8111-111111111111"}]}"#,
+        ];
+        for bytes in rejected {
+            assert!(
+                serde_json::from_slice::<MetadataWire>(bytes)
+                    .and_then(|wire| validate(wire).map_err(de::Error::custom))
+                    .is_err()
+            );
+        }
+        let too_long = format!(
+            "{{\"schema\":\"library-metadata/1\",\"revision\":0,\"folders\":[{{\"id\":\"11111111-1111-4111-8111-111111111111\",\"name\":\"{}\"}}],\"meetings\":[]}}",
+            "n".repeat(121)
+        );
+        assert!(
+            serde_json::from_str::<MetadataWire>(&too_long)
+                .and_then(|wire| validate(wire).map_err(de::Error::custom))
+                .is_err()
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -608,5 +680,25 @@ mod tests {
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn directory_identity_detects_metadata_namespace_changes_and_unsafe_modes() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let temp = tempfile::TempDir::new().unwrap();
+        let directory = temp.path().join("library");
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let fd = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&directory)
+            .unwrap();
+        let before = safe_directory(&fd).unwrap();
+        fs::write(directory.join("metadata.json"), b"{}").unwrap();
+        assert!(safe_directory(&fd).unwrap() != before);
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(safe_directory(&fd).is_err());
     }
 }

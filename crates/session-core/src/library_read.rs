@@ -76,10 +76,10 @@ pub struct LibraryProjection {
 pub struct LibraryRow {
     pub meeting_id: String,
     pub created_at_epoch_seconds: u64,
-    pub transcript_sha256: String,
+    pub transcript_sha256: Option<String>,
     lifecycle: MeetingLifecycle,
     meeting_record_sha256: String,
-    transcript_relative_path: String,
+    transcript_relative_path: Option<String>,
     turns: Vec<StoredTurn>,
     attempt_sha256: String,
     title: Option<String>,
@@ -129,12 +129,12 @@ struct HitAuthority {
     meeting_record_sha256: String,
     lifecycle: MeetingLifecycle,
     attempt_sha256: String,
-    transcript_sha256: String,
-    transcript_relative_path: String,
+    transcript_sha256: Option<String>,
+    transcript_relative_path: Option<String>,
     metadata_identity: MetadataIdentity,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum OpenedLibraryHit {
     Transcript {
         meeting_id: String,
@@ -501,33 +501,41 @@ fn inspect_meeting(
     {
         return Err(LibraryReadError::ArtifactUnavailable);
     }
-    if !matches!(
+    let (transcript_sha256, transcript_relative_path, turns, current_artifact) = if matches!(
         meeting.lifecycle,
         MeetingLifecycle::TranscriptReady
             | MeetingLifecycle::SummaryFailed
             | MeetingLifecycle::Ready
     ) {
-        return Ok(None);
-    }
-    let current = meeting
-        .artifacts
-        .current_transcript
-        .as_ref()
-        .ok_or(LibraryReadError::ArtifactUnavailable)?;
-    let actual = artifact_ref(directory, &current.relative_path)
-        .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
-    if &actual != current {
-        return Err(LibraryReadError::ArtifactUnavailable);
-    }
-    let bytes = bounded_read(
-        &directory.join(&current.relative_path),
-        limits.max_transcript_bytes,
-        total,
-        limits,
-    )?;
-    let document: Transcript =
-        serde_json::from_slice(&bytes).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
-    let turns = validate_transcript(document)?;
+        let current = meeting
+            .artifacts
+            .current_transcript
+            .as_ref()
+            .ok_or(LibraryReadError::ArtifactUnavailable)?;
+        let actual = artifact_ref(directory, &current.relative_path)
+            .map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+        if &actual != current {
+            return Err(LibraryReadError::ArtifactUnavailable);
+        }
+        let bytes = bounded_read(
+            &directory.join(&current.relative_path),
+            limits.max_transcript_bytes,
+            total,
+            limits,
+        )?;
+        let document: Transcript =
+            serde_json::from_slice(&bytes).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
+        (
+            Some(current.sha256.clone()),
+            Some(current.relative_path.clone()),
+            validate_transcript(document)?,
+            Some(actual),
+        )
+    } else {
+        // The closed lifecycle table admits these rows for metadata only.  No
+        // transcript bytes or transcript search authority are inferred.
+        (None, None, Vec::new(), None)
+    };
     // Re-read the pointers after inspection before allowing this candidate into a snapshot.
     let again = load_meeting(directory).map_err(|_| LibraryReadError::ArtifactUnavailable)?;
     if again != meeting
@@ -537,19 +545,21 @@ fn inspect_meeting(
         || artifact_ref(directory, "attempt.json")
             .map_err(|_| LibraryReadError::ArtifactUnavailable)?
             != attempt
-        || artifact_ref(directory, &current.relative_path)
-            .map_err(|_| LibraryReadError::ArtifactUnavailable)?
-            != actual
+        || current_artifact.as_ref().is_some_and(|actual| {
+            artifact_ref(directory, &actual.relative_path)
+                .map(|again| again != *actual)
+                .unwrap_or(true)
+        })
     {
         return Err(LibraryReadError::ArtifactUnavailable);
     }
     Ok(Some(LibraryRow {
         meeting_id: meeting.meeting_id.clone(),
         created_at_epoch_seconds: attempt_data.created_at_epoch_seconds,
-        transcript_sha256: current.sha256.clone(),
+        transcript_sha256,
         lifecycle: meeting.lifecycle,
         meeting_record_sha256: meeting_record.sha256,
-        transcript_relative_path: current.relative_path.clone(),
+        transcript_relative_path,
         turns,
         attempt_sha256: attempt.sha256,
         title: None,
@@ -858,6 +868,12 @@ mod tests {
     };
     use crate::storage::{create_private_dir, durable_create_new};
 
+    macro_rules! assert_stale {
+        ($result:expr) => {
+            assert!(matches!($result, Err(LibraryReadError::SnapshotStale)));
+        };
+    }
+
     struct Fixture {
         temp: TempDir,
         storage: StorageRoot,
@@ -955,6 +971,41 @@ mod tests {
             durable_create_new(&path, bytes).unwrap();
             path
         }
+
+        fn metadata_only_meeting(
+            &self,
+            id: &str,
+            created: u64,
+            lifecycle: MeetingLifecycle,
+        ) -> PathBuf {
+            let directory = self.meeting(id, created, &[("unsearched", false)]);
+            let mut record = load_meeting(&directory).unwrap();
+            record.lifecycle = lifecycle;
+            record.artifacts.current_transcript = None;
+            record.artifacts.current_note = None;
+            match lifecycle {
+                MeetingLifecycle::Incomplete => {
+                    record.artifacts.ownership = None;
+                    record.artifacts.capture_session = None;
+                    record.artifacts.microphone_audio = None;
+                    record.artifacts.system_audio = None;
+                    record.retention.state = AudioState::NeverCreated;
+                    record.retention.deletion_receipt = None;
+                }
+                MeetingLifecycle::Captured | MeetingLifecycle::TranscriptionFailed => {}
+                MeetingLifecycle::RecoveredInterrupted => {
+                    record.artifacts.ownership = None;
+                    record.artifacts.capture_session = None;
+                    record.artifacts.microphone_audio = None;
+                    record.artifacts.system_audio = None;
+                    record.retention.state = AudioState::NeverCreated;
+                    record.retention.deletion_receipt = None;
+                }
+                _ => panic!("fixture only supports metadata-only lifecycles"),
+            }
+            write_meeting(&directory, &record).unwrap();
+            directory
+        }
     }
 
     #[test]
@@ -989,6 +1040,58 @@ mod tests {
             matches!(projection.open(&fixture.storage, &title[0]).unwrap(), OpenedLibraryHit::Meeting { ref title, ref folder, .. } if title.as_deref() == Some("Project kickoff") && folder.as_deref() == Some("Project Atlas"))
         );
         assert_eq!(projection.search("transcript").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn every_safe_metadata_only_lifecycle_is_projected_without_transcript_authority() {
+        let fixture = Fixture::new();
+        let cases = [
+            ("meeting-a", MeetingLifecycle::Incomplete),
+            ("meeting-b", MeetingLifecycle::Captured),
+            ("meeting-c", MeetingLifecycle::TranscriptionFailed),
+            ("meeting-d", MeetingLifecycle::RecoveredInterrupted),
+        ];
+        for (offset, (id, lifecycle)) in cases.iter().enumerate() {
+            fixture.metadata_only_meeting(id, 10 + offset as u64, *lifecycle);
+        }
+        fixture.meeting("meeting-z", 20, &[("transcript token", false)]);
+        fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"Organizer a","folder_id":null},{"meeting_id":"meeting-b","title":"Organizer b","folder_id":null},{"meeting_id":"meeting-c","title":"Organizer c","folder_id":null},{"meeting_id":"meeting-d","title":"Organizer d","folder_id":null}]}"#);
+
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert_eq!(projection.rows().len(), 5);
+        assert_eq!(projection.search("organizer").unwrap().len(), 4);
+        assert_eq!(projection.search("transcript").unwrap().len(), 1);
+        for (id, lifecycle) in cases {
+            let row = projection
+                .rows()
+                .iter()
+                .find(|row| row.meeting_id == id)
+                .unwrap();
+            assert_eq!(row.lifecycle, lifecycle);
+            assert_eq!(row.transcript_sha256, None);
+            assert!(row.turns.is_empty());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metadata_fifo_never_blocks_the_projection() {
+        use std::ffi::CString;
+        use std::time::{Duration, Instant};
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 10, &[("transcript token", false)]);
+        let library = fixture.storage.path().join("library");
+        create_private_dir(&library).unwrap();
+        let fifo =
+            CString::new(library.join("metadata.json").as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let started = Instant::now();
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(projection.search("transcript").unwrap().len(), 1);
+        assert!(projection.search("metadata").unwrap().is_empty());
     }
 
     #[test]
@@ -1027,10 +1130,7 @@ mod tests {
         let missing = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         let missing_hit = missing.search("transcript").unwrap().remove(0);
         fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"first","folder_id":null}]}"#);
-        assert_eq!(
-            missing.open(&fixture.storage, &missing_hit),
-            Err(LibraryReadError::SnapshotStale)
-        );
+        assert_stale!(missing.open(&fixture.storage, &missing_hit));
 
         let variants: &[Option<&[u8]>] = &[
             Some(br#"{ "schema" : "library-metadata/1", "revision" : 1, "folders" : [], "meetings" : [{ "meeting_id" : "meeting-a", "title" : "first", "folder_id" : null }] }"#),
@@ -1053,10 +1153,7 @@ mod tests {
                 }
                 None => fs::remove_file(&path).unwrap(),
             }
-            assert_eq!(
-                projection.open(&fixture.storage, &hit),
-                Err(LibraryReadError::SnapshotStale)
-            );
+            assert_stale!(projection.open(&fixture.storage, &hit));
         }
     }
 
@@ -1211,10 +1308,7 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            assert_eq!(
-                projection.open(&fixture.storage, &hit),
-                Err(LibraryReadError::SnapshotStale)
-            );
+            assert_stale!(projection.open(&fixture.storage, &hit));
         }
     }
 
@@ -1229,15 +1323,9 @@ mod tests {
             projection_id: projection.snapshot_id,
             key: "forged".into(),
         };
-        assert_eq!(
-            projection.open(&fixture.storage, &forged),
-            Err(LibraryReadError::SnapshotStale)
-        );
+        assert_stale!(projection.open(&fixture.storage, &forged));
         let other = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        assert_eq!(
-            projection.open(&fixture.storage, &other.search("stable").unwrap()[0]),
-            Err(LibraryReadError::SnapshotStale)
-        );
+        assert_stale!(projection.open(&fixture.storage, &other.search("stable").unwrap()[0]));
         assert!(projection.open(&fixture.storage, &handle).is_ok());
     }
 
@@ -1251,10 +1339,7 @@ mod tests {
         let mut record = load_meeting(&directory).unwrap();
         record.lifecycle = MeetingLifecycle::SummaryFailed;
         write_meeting(&directory, &record).unwrap();
-        assert_eq!(
-            projection.open(&fixture.storage, &handle),
-            Err(LibraryReadError::SnapshotStale)
-        );
+        assert_stale!(projection.open(&fixture.storage, &handle));
 
         let fixture = Fixture::new();
         let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
@@ -1271,10 +1356,7 @@ mod tests {
         record.retention.state = AudioState::Retained;
         record.retention.deletion_receipt = None;
         write_meeting(&directory, &record).unwrap();
-        assert_eq!(
-            projection.open(&fixture.storage, &handle),
-            Err(LibraryReadError::SnapshotStale)
-        );
+        assert_stale!(projection.open(&fixture.storage, &handle));
 
         let fixture = Fixture::new();
         let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
@@ -1290,10 +1372,7 @@ mod tests {
         durable_create_new(&directory.join(&relative), alternate.as_bytes()).unwrap();
         record.artifacts.current_transcript = Some(artifact_ref(&directory, &relative).unwrap());
         write_meeting(&directory, &record).unwrap();
-        assert_eq!(
-            projection.open(&fixture.storage, &handle),
-            Err(LibraryReadError::SnapshotStale)
-        );
+        assert_stale!(projection.open(&fixture.storage, &handle));
     }
 
     #[test]
