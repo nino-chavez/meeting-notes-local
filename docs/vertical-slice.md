@@ -225,10 +225,26 @@ Wave D does not add `note.create` to the transcript-alpha worker or introduce a
 second application-scoped service. Rust may spawn a separately manifested,
 one-shot Python note child after alpha readiness. Each child sends one
 `note-bridge-event/1` ready frame, accepts exactly one
-`note-bridge-command/1` request, emits exactly one `note-bridge-result/1`, and
-exits. The create role advertises only `note.create`; the independent inspection
-role advertises only `note.inspect`. A create child and the fresh child that
-inspects its output are separate processes.
+`note-bridge-command/1` request, emits exactly one role-specific terminal result,
+and exits. The create role advertises only `note.create`; the independent
+inspection role advertises only `note.inspect`. A create child and the fresh
+child that inspects its output are separate processes.
+
+Claim retrieval needs canonical claim text and resolved locators, but the frozen
+`note.inspect` result deliberately returns only artifact digests. Three seams
+were compared before adding that authority:
+
+| Shape | Consequence | Decision |
+|---|---|---|
+| Parse `note/2` again in Rust after `note.inspect` | Keeps one worker operation, but creates a second semantic note and locator validator that can disagree with the Python authority. | Rejected. |
+| Add claims to the existing `note.inspect` result | Avoids another operation, but silently changes the digest-only contract already used by note generation and recovery. | Rejected. |
+| Add a separate read-only `note.project` role and result | Keeps `note.inspect` unchanged, reuses the same coherent Python validation, and gives Rust only the bounded current-claim projection it needs. | Chosen. |
+
+The project role advertises only `note.project`. It uses the same validator-only
+runtime as inspect: `generator` is null and `models` is empty. It is read-only,
+creates no app data or receipt, and is not a note generator. The role remains
+private and unregistered until its Rust-owned process transport, exact parser,
+library join, corpus bound, and cold surface review pass.
 
 The app fixes the private storage root and verifies one closed `note-runtime/1`
 manifest before spawn. Its fields, in canonical order, are `schema`, `role`,
@@ -241,7 +257,7 @@ by ID, unknown fields are refused, and every identifier and relative path is
 ASCII restricted to letters, digits, `.`, `_`, `-`, and `/`; empty components,
 `.`/`..`, backslashes, control characters, and JSON escapes are refused. The manifest identity is the SHA-256 of
 two-space pretty UTF-8 JSON in this field order with no terminal newline.
-`role: inspect` requires `generator: null` and `models: []`; `role: create`
+`role: inspect` and `role: project` require `generator: null` and `models: []`; `role: create`
 requires an admitted generator and its complete nonempty model inventory.
 Before spawn, Rust opens every listed resource without following links, requires
 a regular bundle-owned file, hashes its bytes, and compares the result with the
@@ -267,16 +283,21 @@ The ready frame is exactly:
 ```
 
 The create role substitutes `create` and the one-element operation list
-`["note.create"]`. Role, manifest digest, and operation list must exactly match
+`["note.create"]`; the project role substitutes `project` and
+`["note.project"]`. Role, manifest digest, and operation list must exactly match
 the verified manifest. Unknown fields, enum values, duplicate operations, or a
 different order are protocol failure.
 
 The single command has fields `schema`, `request_id`, `operation`, and
-`arguments`. `request_id` is a UUID and must match the terminal result. Create
-arguments are exactly the frozen `meeting_id` and
+`arguments`, in that order; duplicate, missing, unknown, or reordered keys are
+refused. `request_id` is a canonical lowercase hyphenated UUID and must match
+the terminal result. Create arguments are exactly the frozen `meeting_id` and
 `source_transcript_sha256`. Inspect arguments are exactly `meeting_id`,
-`note_id`, and `transcript_id`. All IDs are opaque or lowercase SHA-256 values;
-no path, prompt, model name, or storage root crosses the frame.
+`note_id`, and `transcript_id`, in that order. Project uses those same three
+ordered arguments. `meeting_id` follows the shared opaque meeting-ID predicate:
+1 through 128 ASCII alphanumeric, `-`, or `_` bytes and neither `.` nor `..`.
+`note_id` and `transcript_id` are lowercase SHA-256 values. No path, prompt,
+model name, or storage root crosses the frame.
 
 The terminal result has fields `schema: note-bridge-result/1`, `request_id`,
 `operation`, `outcome`, `artifact_digests`, and `failure`. Outcome is the closed
@@ -290,6 +311,64 @@ one content-free failure code from `invalid-request`, `artifact-missing`,
 Refusal never becomes a persisted note rejection. Unknown or missing fields,
 wrong role/operation combinations, a second result, or success at end-of-file
 without the exact result are protocol failure.
+
+`note.project` leaves that result unchanged and uses a distinct
+`note-projection-result/1` frame. Its fields are exactly `schema`, `request_id`,
+`operation`, `outcome`, `projection`, and `failure`, in that order. Operation is
+`note.project`; outcome is `succeeded` or `refused`. Success has `failure: null`
+and one `note-claim-projection/1` object. Refusal has `projection: null` and one
+content-free failure object whose fields are exactly `code` then `recoverable`.
+
+The projection fields are exactly `schema`, `note_json_sha256`,
+`note_markdown_sha256`, `transcript_sha256`, and `claims`, in that order. The
+three identities must equal the coherent, freshly re-inspected artifact
+snapshot. Claims remain in canonical note read order. Every claim row has
+exactly `claim_ordinal`, `claim_sha256`, `claim_type`, `evidence_state`, `claim`,
+and `locators`, in that order. `claim_ordinal` is a zero-based contiguous JSON
+integer no greater than 2^64 - 1 and equal to the row's array position; a
+Boolean is not an integer.
+It is the row identity within the exact note digest. `claim_sha256` is the
+lowercase SHA-256 of the claim's UTF-8 bytes. It is never a row identity and may
+repeat without qualification; only `claim_ordinal` within the exact note digest
+identifies a row. `claim_type` is `decision`, `action`, `proposal`, or `question`.
+Current accepted `note/2` authoritatively re-derives
+only `evidence_state: located`; every claim therefore has one through three
+locators. `composed`, `untestable`, and `unquoted` remain later Wave D states
+that require a note-schema and validator change plus separate beta admission.
+Projection cannot infer or introduce them. Claim text is the canonical nonempty
+product claim of at most 160 Unicode scalar values.
+
+Each locator has exactly `turn`, `start`, `end`, and `text_sha256`. Turn, start,
+and end are JSON integers from zero through 2^64 - 1 and Booleans are refused.
+`turn` is less than the exact transcript turn count; offsets are half-open Unicode-scalar indices
+with `start < end <=` that turn's Unicode-scalar count. `text_sha256` is the
+lowercase SHA-256 of the UTF-8 encoding of the exact scalar slice. Locator rows
+are unique and sorted by `(turn, start, end, text_sha256)`. Python derives these
+rows only after the same descriptor-pinned note, Markdown, transcript,
+evidence-graph, and rendered-claim checks used by `note.inspect`; it never
+trusts stored claim rows alone. An empty claims list is valid. No partial
+projection is valid.
+
+The serialized result plus newline remains inside the existing 65,536-byte
+frame. A valid note whose complete projection does not fit returns only
+`projection-capacity-exceeded`, `recoverable: false`; it never truncates claims.
+Other project refusals are the inspect set with the same recoverability:
+`invalid-request`/false, `artifact-invalid`/false,
+`artifact-missing`/true, and `artifact-changed`/false. Transport, timeout,
+runtime failure, malformed output, or an unrecognized refusal is protocol
+failure. Artifact missing, invalid, or changed quarantines that ready meeting;
+the library never exposes it as transcript-only. Projection capacity failure
+fails the whole rebuild as `library-capacity-exceeded`. Invalid request,
+transport, timeout, runtime failure, malformed output, or an unknown refusal
+fails the whole rebuild as `artifact-unavailable`. A snapshot assembled from
+only some claims or only some projectable ready meetings is never published.
+The protocol-only, content-free case pack is
+`tests/fixtures/note-projection-v1.fixture`. Its non-prose tokens freeze valid
+commands, all admitted claim types and locator cardinalities, duplicate claim
+text including otherwise identical repeated rows, shared locators, Unicode-scalar
+landing, refusal mapping, deterministic capacity/no-truncation, recursive exact
+field order, and duplicate/unknown-field rejection. It is not evidence that any
+product note is valid.
 
 Role fixes the refusal codes and their mapping. Create accepts only
 `invalid-request` with `recoverable: false`, which maps to
@@ -310,7 +389,7 @@ operation must equal that command.
 
 A frame is at most 65,536 bytes including its newline; stderr is capped at 16
 KiB and may not contain meeting text. Ready is bounded to 10 seconds and
-inspection to 30 seconds. The initial 15-minute creation ceiling is provisional
+inspection or projection to 30 seconds. The initial 15-minute creation ceiling is provisional
 until cold-start measurement. Timeout, cancellation, malformed output, extra
 frames, or identity mismatch terminates the one-shot process group, waits 750
 milliseconds, then kills and waits if needed. Closing the parent's liveness pipe
@@ -320,7 +399,8 @@ subprocesses, so the owned group contains only the direct one-shot child;
 admitting descendants later requires a new ownership contract. Normal
 shutdown closes liveness, stops, and waits for the one-shot group.
 
-Each spawn gets a UUID request directory below the durable note operation:
+Each create or inspect spawn that participates in a durable note operation gets
+a UUID request directory below that operation:
 `children/<request-id>/`. Before Rust sends the command, it writes an immutable,
 owner-private `ownership.json` with schema `note-child-ownership/1`, operation
 ID, request ID, role, manifest SHA-256, PID, process start time, process-group ID,
@@ -354,6 +434,15 @@ model, timeout, malformed output, or protocol failure is worker unavailability,
 not note rejection. A crash after immutable artifact creation but before result
 storage leaves those bytes without product authority.
 
+Projection is not a durable note operation. It takes no writer lock, writes no
+ownership or exit receipt, and publishes no persistent projection. Rust owns
+the one-shot child lifetime and keeps a successful result only inside the
+immutable in-memory library snapshot. Project may not write note, transcript,
+claim, locator, or rendered-note bytes outside canonical storage. Its semantic
+validation operates on descriptor-retained bytes and in-memory objects; the
+temporary snapshot copies currently used by the inspection harness are not an
+admissible implementation for this receipt-free operation.
+
 Note recovery runs only after existing ownership recovery, interrupted deletion,
 newly due retention, and unchanged transcript-alpha readiness have completed,
 but before note-library exposure. Note-runtime
@@ -362,13 +451,14 @@ change alpha readiness. No command, UI capability, semantic-quality claim, or
 beta admission follows from this private bridge.
 
 The create role is not implemented or advertised until a fixed generator and
-model identity are admitted. Before then, an inspect-only one-shot may exist
-only in the repository test harness, using a temporary private root that the
-harness removes after the child has exited. It is not packaged, installed,
-started by the app, or permitted to write app-data or an ownership/generation
-receipt. It may prove framing, confinement, liveness, timeout, and
-changed-artifact refusal, but may not implement `NoteGenerationWorker`, enter
-the note coordinator, or translate missing generation into `note_rejected`.
+model identity are admitted. Before then, validator-only inspect and project
+one-shots may exist only in the repository test harness, using a temporary
+private root that the harness removes after the child has exited. They are not
+packaged, installed, started by the app, or permitted to write app data or an
+ownership/generation receipt. They may prove framing, confinement, liveness,
+timeout, changed-artifact refusal, and exact projection, but may not implement
+`NoteGenerationWorker`, enter the note coordinator, or translate missing
+generation into `note_rejected`.
 
 Tauri's current canonical patterns support this boundary:
 
@@ -391,7 +481,7 @@ facility does not authorize its JavaScript API.
 | Tauri webview | Rendering, local interaction state, accessible focus and announcements | Process launch, storage paths, artifact acceptance, consent persistence |
 | Rust session core | Startup and capture reducer, one-at-a-time operation lock, attestation lifetime, policy checks, process group, private diagnostics, meeting index projection, deletion orchestration | Transcription, voice scoring, note claims, or a second interpretation of artifact validity |
 | Python worker | Versioned operations over capture finalization and the existing profile, transcript, and note validators | Capture-child launch or Stop, product readiness, arbitrary commands or paths, retention policy, UI state |
-| One-shot note child | One manifested create or inspect operation, immutable note publication, and Python-owned note semantics | Application lifetime, alpha readiness, writer lock, meeting pointers, recovery ordering, commands, or UI state |
+| One-shot note child | One manifested create, inspect, or project operation; immutable note publication for create; and Python-owned note semantics. Project is read-only and returns only an in-memory current-claim projection. | Application lifetime, alpha readiness, writer lock, meeting pointers, recovery ordering, persistent projections, project artifact publication, receipts, commands, or UI state |
 | Swift tap | System and microphone audio acquisition for the current capture | Restart policy, meeting identity, transcript or note behavior |
 | Canonical artifacts | Durable evidence and the accepted result of each completed stage | Live child state or permission state |
 
@@ -871,7 +961,9 @@ yields `meeting`. One source span cannot produce both a claim and transcript
 hit. Stale notes and rejected summaries contribute no claims. Claim and
 transcript/withheld hits bind the exact current transcript digest; meeting-only
 hits do not invent one. Claim hits additionally bind current note JSON and
-Markdown digests, claim digest, and validated locator set. Transcript hits bind
+Markdown digests plus the complete projected row: claim ordinal, digest, type,
+located state, canonical claim text, and validated locator set.
+Transcript hits bind
 the source turn and mapped original character span. Opening any hit re-inspects
 all bound meeting, attempt, metadata, transcript, note, and gate identities;
 drift returns `snapshot-stale` and no content.
@@ -947,13 +1039,13 @@ Both orders are total. Meeting pages order newest
 `created_at_epoch_seconds` first, then meeting ID by UTF-8 byte order. Search
 orders by that meeting key, then by the earliest validated locator's source turn
 and original scalar start, hit kind in `claim`, `transcript`, `withheld`,
-`meeting` order, claim digest, and hit ID. A claim with no locator and a meeting
-hit use unsigned-64 maximum for turn and start. A withheld hit uses its source
+`meeting` order, claim digest, claim ordinal, and hit ID. A meeting hit uses
+unsigned-64 maximum for turn and start. A withheld hit uses its source
 turn and unsigned-64 maximum for the private sort start; that sentinel is not
-returned as an evidence span. Each unique current claim digest
-produces at most one hit; claim-text and cited-span matches for the same claim
-deduplicate. If several claims cite one source span, each claim remains a
-separate hit ordered by claim digest. Rust keeps cursors inside the immutable
+returned as an evidence span. Each canonical projected claim ordinal produces
+at most one hit; claim-text and cited-span matches for that same ordinal
+deduplicate. Equal claim text with different types or evidence remains separate,
+as do several claims that cite one source span. Rust keeps cursors inside the immutable
 snapshot and generates opaque cursor IDs bound to snapshot, metadata revision,
 query digest, filter digest, and last sort key. A cursor is not frontend data
 authority and cannot be reused with another query or filter.

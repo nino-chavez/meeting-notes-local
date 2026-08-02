@@ -1,0 +1,477 @@
+{
+  "schema": "note-projection-fixture/1",
+  "purpose": "protocol-only",
+  "transcript_turns": [
+    "alpha",
+    "beta",
+    "gamma",
+    "aé🙂z"
+  ],
+  "valid_commands": [
+    {
+      "name": "opaque-meeting-id",
+      "raw_frame": "{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"arguments\":{\"meeting_id\":\"meeting-a\",\"note_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"transcript_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}\n"
+    }
+  ],
+  "valid_results": [
+    {
+      "name": "empty-projection",
+      "result": {
+        "schema": "note-projection-result/1",
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "operation": "note.project",
+        "outcome": "succeeded",
+        "projection": {
+          "schema": "note-claim-projection/1",
+          "note_json_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "note_markdown_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "transcript_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "claims": []
+        },
+        "failure": null
+      }
+    },
+    {
+      "name": "all-claim-types-duplicate-text-shared-and-three-locators",
+      "result": {
+        "schema": "note-projection-result/1",
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "operation": "note.project",
+        "outcome": "succeeded",
+        "projection": {
+          "schema": "note-claim-projection/1",
+          "note_json_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "note_markdown_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "transcript_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "claims": [
+            {
+              "claim_ordinal": 0,
+              "claim_sha256": "b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2",
+              "claim_type": "decision",
+              "evidence_state": "located",
+              "claim": "claim-a",
+              "locators": [
+                {
+                  "turn": 0,
+                  "start": 0,
+                  "end": 5,
+                  "text_sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+                }
+              ]
+            },
+            {
+              "claim_ordinal": 1,
+              "claim_sha256": "b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2",
+              "claim_type": "decision",
+              "evidence_state": "located",
+              "claim": "claim-a",
+              "locators": [
+                {
+                  "turn": 0,
+                  "start": 0,
+                  "end": 5,
+                  "text_sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+                }
+              ]
+            },
+            {
+              "claim_ordinal": 2,
+              "claim_sha256": "dd9ec5bc1ee2b6bc57d0e6a12132d5f81f2e881c310e778bb0f49deb5f5a842a",
+              "claim_type": "action",
+              "evidence_state": "located",
+              "claim": "claim-b",
+              "locators": [
+                {
+                  "turn": 0,
+                  "start": 0,
+                  "end": 5,
+                  "text_sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+                },
+                {
+                  "turn": 1,
+                  "start": 0,
+                  "end": 4,
+                  "text_sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+                },
+                {
+                  "turn": 2,
+                  "start": 0,
+                  "end": 5,
+                  "text_sha256": "be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67"
+                }
+              ]
+            },
+            {
+              "claim_ordinal": 3,
+              "claim_sha256": "b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2",
+              "claim_type": "proposal",
+              "evidence_state": "located",
+              "claim": "claim-a",
+              "locators": [
+                {
+                  "turn": 1,
+                  "start": 0,
+                  "end": 4,
+                  "text_sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+                }
+              ]
+            },
+            {
+              "claim_ordinal": 4,
+              "claim_sha256": "c0aec13022ab4cd11e0817c928ad09e3e4dc599be58827b52e72deec7fcc0c47",
+              "claim_type": "question",
+              "evidence_state": "located",
+              "claim": "claim-c",
+              "locators": [
+                {
+                  "turn": 0,
+                  "start": 0,
+                  "end": 5,
+                  "text_sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+                },
+                {
+                  "turn": 3,
+                  "start": 1,
+                  "end": 3,
+                  "text_sha256": "7382f537af6a53054b6a72792df00fa0be0f5d2e8214db9cd6ebbcc3d57d02b9"
+                }
+              ]
+            }
+          ]
+        },
+        "failure": null
+      }
+    }
+  ],
+  "refusal_results": [
+    {
+      "name": "invalid-request",
+      "result": {
+        "schema": "note-projection-result/1",
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "operation": "note.project",
+        "outcome": "refused",
+        "projection": null,
+        "failure": {
+          "code": "invalid-request",
+          "recoverable": false
+        }
+      }
+    },
+    {
+      "name": "artifact-missing",
+      "result": {
+        "schema": "note-projection-result/1",
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "operation": "note.project",
+        "outcome": "refused",
+        "projection": null,
+        "failure": {
+          "code": "artifact-missing",
+          "recoverable": true
+        }
+      }
+    },
+    {
+      "name": "artifact-invalid",
+      "result": {
+        "schema": "note-projection-result/1",
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "operation": "note.project",
+        "outcome": "refused",
+        "projection": null,
+        "failure": {
+          "code": "artifact-invalid",
+          "recoverable": false
+        }
+      }
+    },
+    {
+      "name": "artifact-changed",
+      "result": {
+        "schema": "note-projection-result/1",
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "operation": "note.project",
+        "outcome": "refused",
+        "projection": null,
+        "failure": {
+          "code": "artifact-changed",
+          "recoverable": false
+        }
+      }
+    },
+    {
+      "name": "projection-capacity-exceeded",
+      "result": {
+        "schema": "note-projection-result/1",
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "operation": "note.project",
+        "outcome": "refused",
+        "projection": null,
+        "failure": {
+          "code": "projection-capacity-exceeded",
+          "recoverable": false
+        }
+      }
+    }
+  ],
+  "invalid_command_frames": [
+    {
+      "name": "wrong-outer-order",
+      "raw_frame": "{\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"schema\":\"note-bridge-command/1\",\"operation\":\"note.project\",\"arguments\":{\"meeting_id\":\"meeting-a\",\"note_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"transcript_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "wrong-argument-order",
+      "raw_frame": "{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"arguments\":{\"note_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"meeting_id\":\"meeting-a\",\"transcript_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}\n",
+      "expected": "invalid-request"
+    },
+    {
+      "name": "duplicate-field",
+      "raw_frame": "{\"schema\":\"note-bridge-command/1\",\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"arguments\":{\"meeting_id\":\"meeting-a\",\"note_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"transcript_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "unknown-field",
+      "raw_frame": "{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"arguments\":{\"meeting_id\":\"meeting-a\",\"note_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"transcript_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"},\"extra\":null}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "duplicate-argument-field",
+      "raw_frame": "{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"arguments\":{\"meeting_id\":\"meeting-a\",\"meeting_id\":\"meeting-a\",\"note_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"transcript_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "unknown-argument-field",
+      "raw_frame": "{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"arguments\":{\"meeting_id\":\"meeting-a\",\"note_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"transcript_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"extra\":null}}\n",
+      "expected": "invalid-request"
+    }
+  ],
+  "invalid_result_frames": [
+    {
+      "name": "wrong-outer-order",
+      "raw_frame": "{\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"schema\":\"note-projection-result/1\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[]},\"failure\":null}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "duplicate-field",
+      "raw_frame": "{\"schema\":\"note-projection-result/1\",\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"refused\",\"projection\":null,\"failure\":{\"code\":\"artifact-changed\",\"recoverable\":false}}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "unknown-field",
+      "raw_frame": "{\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"refused\",\"projection\":null,\"failure\":{\"code\":\"artifact-changed\",\"recoverable\":false},\"extra\":null}\n",
+      "expected": "protocol-failure"
+    }
+  ],
+  "invalid_nested_objects": [
+    {
+      "boundary": "projection",
+      "name": "wrong-order",
+      "raw_object": "{\"schema\":\"note-claim-projection/1\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[]}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "projection",
+      "name": "duplicate-field",
+      "raw_object": "{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[]}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "projection",
+      "name": "unknown-field",
+      "raw_object": "{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[],\"extra\":null}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "claim",
+      "name": "wrong-order",
+      "raw_object": "{\"claim_sha256\":\"b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2\",\"claim_ordinal\":0,\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"claim-a\",\"locators\":[{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}]}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "claim",
+      "name": "duplicate-field",
+      "raw_object": "{\"claim_ordinal\":0,\"claim_ordinal\":0,\"claim_sha256\":\"b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"claim-a\",\"locators\":[{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}]}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "claim",
+      "name": "unknown-field",
+      "raw_object": "{\"claim_ordinal\":0,\"claim_sha256\":\"b8eccd74fe344c3e91654493ed1cc69e9b637cf8dd0ed2d2884f2375bd15c4f2\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"claim-a\",\"locators\":[{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}],\"extra\":null}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "locator",
+      "name": "wrong-order",
+      "raw_object": "{\"start\":0,\"turn\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "locator",
+      "name": "duplicate-field",
+      "raw_object": "{\"turn\":0,\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "locator",
+      "name": "unknown-field",
+      "raw_object": "{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\",\"extra\":null}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "failure",
+      "name": "wrong-order",
+      "raw_object": "{\"recoverable\":false,\"code\":\"artifact-changed\"}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "failure",
+      "name": "duplicate-field",
+      "raw_object": "{\"code\":\"artifact-changed\",\"code\":\"artifact-changed\",\"recoverable\":false}",
+      "expected": "protocol-failure"
+    },
+    {
+      "boundary": "failure",
+      "name": "unknown-field",
+      "raw_object": "{\"code\":\"artifact-changed\",\"recoverable\":false,\"extra\":null}",
+      "expected": "protocol-failure"
+    }
+  ],
+  "invalid_projection_mutations": [
+    {
+      "name": "boolean-ordinal",
+      "base": "all-claim-types-duplicate-text-shared-and-three-locators",
+      "path": "claims[0].claim_ordinal",
+      "value": true,
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "noncontiguous-ordinal",
+      "base": "all-claim-types-duplicate-text-shared-and-three-locators",
+      "path": "claims[1].claim_ordinal",
+      "value": 2,
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "unsupported-evidence-state",
+      "base": "all-claim-types-duplicate-text-shared-and-three-locators",
+      "path": "claims[0].evidence_state",
+      "value": "composed",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "duplicate-locator",
+      "base": "all-claim-types-duplicate-text-shared-and-three-locators",
+      "path": "claims[0].locators",
+      "value": [
+        {
+          "turn": 0,
+          "start": 0,
+          "end": 5,
+          "text_sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+        },
+        {
+          "turn": 0,
+          "start": 0,
+          "end": 5,
+          "text_sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+        }
+      ],
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "unsorted-locators",
+      "base": "all-claim-types-duplicate-text-shared-and-three-locators",
+      "path": "claims[2].locators",
+      "value": [
+        {
+          "turn": 1,
+          "start": 0,
+          "end": 4,
+          "text_sha256": "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753"
+        },
+        {
+          "turn": 0,
+          "start": 0,
+          "end": 5,
+          "text_sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+        }
+      ],
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "utf8-byte-offset-instead-of-scalar-offset",
+      "base": "all-claim-types-duplicate-text-shared-and-three-locators",
+      "path": "claims[4].locators[1].end",
+      "value": 7,
+      "expected": "protocol-failure"
+    }
+  ],
+  "library_failure_cases": [
+    {
+      "source": "artifact-missing",
+      "effect": "quarantine-ready-meeting"
+    },
+    {
+      "source": "artifact-invalid",
+      "effect": "quarantine-ready-meeting"
+    },
+    {
+      "source": "artifact-changed",
+      "effect": "quarantine-ready-meeting"
+    },
+    {
+      "source": "projection-capacity-exceeded",
+      "effect": "fail-whole-rebuild",
+      "library_error": "library-capacity-exceeded"
+    },
+    {
+      "source": "invalid-request",
+      "effect": "fail-whole-rebuild",
+      "library_error": "artifact-unavailable"
+    },
+    {
+      "source": "transport-or-timeout-or-runtime",
+      "effect": "fail-whole-rebuild",
+      "library_error": "artifact-unavailable"
+    },
+    {
+      "source": "malformed-output",
+      "effect": "fail-whole-rebuild",
+      "library_error": "artifact-unavailable"
+    },
+    {
+      "source": "unknown-refusal",
+      "effect": "fail-whole-rebuild",
+      "library_error": "artifact-unavailable"
+    }
+  ],
+  "capacity_case": {
+    "base": "empty-projection",
+    "compact_json": true,
+    "terminal_newline_bytes": 1,
+    "claim_count": 218,
+    "claim_text_format": "claim-{claim_ordinal:06d}",
+    "claim_type": "action",
+    "evidence_state": "located",
+    "locator": {
+      "turn": 0,
+      "start": 0,
+      "end": 5,
+      "text_sha256": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+    },
+    "claim_sha256_rule": "sha256-utf8-claim-text",
+    "last_fitting_claim_count": 217,
+    "last_fitting_frame_bytes": 65251,
+    "first_overflow_frame_bytes": 65550,
+    "expected_result": "projection-capacity-exceeded",
+    "partial_success_permitted": false
+  },
+  "assertions": {
+    "capacity_never_truncates": true,
+    "no_partial_claim_projection": true,
+    "no_partial_projectable_meeting_snapshot": true,
+    "product_note_validity_proven": false
+  }
+}

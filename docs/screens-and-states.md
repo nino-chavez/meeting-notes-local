@@ -321,8 +321,8 @@ note.
 was missing them.** Every state here is about whether a note *exists*. None of them
 says anything about whether what it asserts can be believed, which is J1 beat 3 and
 the reason `docs/journeys.md` decided the note must cite the transcript. Four
-per-claim states, emitted by `notes/summarize.py` and rendered by
-`docs/prototype/build.py`:
+per-claim states remain the product direction established by the research
+renderer:
 
 | Claim state | Meaning |
 |---|---|
@@ -330,6 +330,12 @@ per-claim states, emitted by `notes/summarize.py` and rendered by
 | `composed` | They are not in the transcript — and it was the model's only input, so the quote was composed |
 | `untestable` | Under four words, so a match would prove nothing either way |
 | `unquoted` | The claim offered no evidence at all |
+
+The current accepted product `note/2` validator authoritatively re-derives only
+`located` claims. The first `note-claim-projection/1` therefore exposes only
+that state. `composed`, `untestable`, and `unquoted` are not silently inferred
+from stored research rows; admitting them requires the planned Wave D note-schema,
+validator, interaction, and beta-admission work.
 
 **These were `verified` and `unsupported`, and both claimed more than the check does.**
 `verified` was read as "this claim checks out", including by the surface, which drew it
