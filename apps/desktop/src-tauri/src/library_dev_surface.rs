@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
+const DEV_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.library-dev";
 const FIXTURE_MEETING_ID: &str = "library-dev-sample";
 const FIXTURE_MARKER: &str = "library-dev-fixture-v1.json";
 const NOTICE_VERSION: &str = "internal-transcript-alpha/1";
@@ -118,12 +119,20 @@ pub fn run() {
             library_dev_open_note,
             library_dev_open_evidence
         ])
-        .setup(|app| Ok(initialize(app.handle())?))
+        .setup(|app| {
+            initialize(app.handle())
+                .map_err(|error| Box::<dyn std::error::Error>::from(std::io::Error::other(error)))
+        })
         .run(tauri::generate_context!())
         .expect("Local Meeting Notes library development surface failed");
 }
 
-fn initialize(app: &AppHandle) -> tauri::Result<()> {
+fn initialize(app: &AppHandle) -> Result<(), String> {
+    if app.config().identifier != DEV_IDENTIFIER {
+        return Err(
+            "The library development surface requires its isolated Tauri configuration.".into(),
+        );
+    }
     let state = app.state::<DevSurfaceState>();
     match create_dev_library(app) {
         Ok(library) => {
@@ -145,6 +154,10 @@ fn initialize(app: &AppHandle) -> tauri::Result<()> {
 
 #[tauri::command]
 fn library_dev_snapshot(state: State<'_, DevSurfaceState>) -> DevSnapshot {
+    snapshot_response(&state)
+}
+
+fn snapshot_response(state: &DevSurfaceState) -> DevSnapshot {
     let guard = state.library.lock().expect("development library lock");
     if let Some(library) = guard.as_ref() {
         let rows = library
@@ -323,13 +336,23 @@ fn create_dev_library(app: &AppHandle) -> Result<DevLibrary, String> {
     let app_data = app.path().app_data_dir().map_err(error_text)?;
     let protected_root = app.path().resource_dir().map_err(error_text)?;
     let storage = StorageRoot::create(&app_data, &protected_root).map_err(error_text)?;
+    create_dev_library_at(storage)
+}
+
+fn create_dev_library_at(storage: StorageRoot) -> Result<DevLibrary, String> {
     seed_synthetic_fixture(&storage)?;
+    project_seeded_library(storage)
+}
+
+fn project_seeded_library(storage: StorageRoot) -> Result<DevLibrary, String> {
     let projection = LibraryProjection::rebuild_with_projector(
         &storage,
         ReadLimits::default(),
         Arc::new(SyntheticProjector),
     )
-    .map_err(|_| "The synthetic development library could not be projected.".to_string())?;
+    .map_err(|error| {
+        format!("The synthetic development library could not be projected: {error}.")
+    })?;
     Ok(DevLibrary {
         storage,
         projection,
@@ -376,9 +399,9 @@ fn seed_synthetic_fixture(storage: &StorageRoot) -> Result<(), String> {
         "schema": "capture-transcript/1", "source": "development-sanitized-fixture", "attribution": "channel",
         "bleed": null, "voiceprint": null, "capture_health": {},
         "turns": [
-            {"start": 0.0, "end": 1.0, "speaker": "Sample", "text": "Use Thursday as the sample launch date.", "gated": false},
-            {"start": 1.0, "end": 2.0, "speaker": "Sample", "text": "Schedule the sample design review before the demo.", "gated": false},
-            {"start": 2.0, "end": 3.0, "speaker": "Sample", "text": "withheld sample detail", "gated": true}
+            {"start": 0.0, "end": 1.0, "speaker": "Them", "text": "Use Thursday in the café sample launch date.", "gated": false},
+            {"start": 1.0, "end": 2.0, "speaker": "Them", "text": "Schedule the sample design review before the demo.", "gated": false},
+            {"start": 2.0, "end": 3.0, "speaker": "Me", "text": "withheld sample detail", "gated": true}
         ]
     });
     let transcript_bytes = serde_json::to_vec_pretty(&transcript).map_err(error_text)?;
@@ -431,9 +454,9 @@ impl NoteProjector for SyntheticProjector {
         let claims = [
             (
                 "decision",
-                "Use Thursday as the sample launch date.",
+                "Use Thursday in the café sample launch date.",
                 0_u64,
-                "Thursday",
+                "café",
             ),
             (
                 "action",
@@ -447,36 +470,22 @@ impl NoteProjector for SyntheticProjector {
         .map(|(ordinal, (claim_type, claim, turn, evidence))| {
             let start = scalar_offset(claim, evidence).expect("fixture locator");
             let end = start + evidence.chars().count() as u64;
-            json!({
-                "claim_ordinal": ordinal as u64,
-                "claim_sha256": digest(claim.as_bytes()),
-                "claim_type": claim_type,
-                "evidence_state": "located",
-                "claim": claim,
-                "locators": [{
-                    "turn": turn,
-                    "start": start,
-                    "end": end,
-                    "text_sha256": digest(evidence.as_bytes())
-                }]
-            })
+            format!(
+                "{{\"claim_ordinal\":{ordinal},\"claim_sha256\":\"{}\",\"claim_type\":\"{claim_type}\",\"evidence_state\":\"located\",\"claim\":\"{claim}\",\"locators\":[{{\"turn\":{turn},\"start\":{start},\"end\":{end},\"text_sha256\":\"{}\"}}]}}",
+                digest(claim.as_bytes()),
+                digest(evidence.as_bytes()),
+            )
         })
-        .collect::<Vec<_>>();
-        let frame = json!({
-            "schema": "note-projection-result/1",
-            "request_id": request.request_id,
-            "operation": "note.project",
-            "outcome": "succeeded",
-            "projection": {
-                "schema": "note-claim-projection/1",
-                "note_json_sha256": request.note_json_sha256,
-                "note_markdown_sha256": request.note_markdown_sha256,
-                "transcript_sha256": request.transcript_sha256,
-                "claims": claims
-            },
-            "failure": null
-        });
-        let mut bytes = serde_json::to_vec(&frame).map_err(|_| ProjectTransportError)?;
+        .collect::<Vec<_>>()
+        .join(",");
+        let mut bytes = format!(
+            "{{\"schema\":\"note-projection-result/1\",\"request_id\":\"{}\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"{}\",\"note_markdown_sha256\":\"{}\",\"transcript_sha256\":\"{}\",\"claims\":[{claims}]}},\"failure\":null}}",
+            request.request_id,
+            request.note_json_sha256,
+            request.note_markdown_sha256,
+            request.transcript_sha256,
+        )
+        .into_bytes();
         bytes.push(b'\n');
         Ok(bytes)
     }
@@ -590,4 +599,114 @@ fn startup_message(state: &DevSurfaceState) -> String {
 
 fn error_text(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use local_meeting_notes_session_core::meeting::load_meeting;
+    use local_meeting_notes_session_core::storage::{create_private_dir, durable_replace};
+    use tempfile::TempDir;
+
+    fn seeded_library() -> (TempDir, DevLibrary) {
+        let temporary = TempDir::new().unwrap();
+        let protected_root = temporary.path().join("protected-root");
+        create_private_dir(&protected_root).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("data"), &protected_root).unwrap();
+        seed_synthetic_fixture(&storage).unwrap();
+        clear_test_xattrs(storage.path());
+        let library = project_seeded_library(storage).unwrap();
+        (temporary, library)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn clear_test_xattrs(path: &Path) {
+        let status = std::process::Command::new("xattr")
+            .args(["-rc"])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn clear_test_xattrs(_: &Path) {}
+
+    #[test]
+    fn synthetic_seed_initializes_populated_library_note_claim_and_evidence() {
+        let (_temporary, library) = seeded_library();
+        let state = DevSurfaceState::default();
+        *state.library.lock().unwrap() = Some(library);
+        let snapshot = snapshot_response(&state);
+        assert_eq!(snapshot.state, "populated");
+        assert_eq!(snapshot.rows.len(), 1);
+
+        let guard = state.library.lock().unwrap();
+        let library = guard.as_ref().unwrap();
+        let claims = library
+            .projection
+            .note_claims(&snapshot.rows[0].meeting_id)
+            .unwrap();
+        assert_eq!(claims.len(), 2);
+        let evidence = library
+            .projection
+            .open_claim_evidence(&library.storage, &claims[0], 0)
+            .unwrap();
+        assert_eq!(evidence.text, "café");
+        assert_eq!(
+            evidence.start,
+            "Use Thursday in the ".chars().count() as u64
+        );
+        assert_eq!(evidence.end, evidence.start + "café".chars().count() as u64);
+    }
+
+    #[test]
+    fn empty_no_result_withheld_and_stale_states_do_not_leak_fixture_text() {
+        let empty = snapshot_response(&DevSurfaceState::default());
+        assert_eq!(empty.state, "empty");
+
+        let (_temporary, library) = seeded_library();
+        assert!(library.projection.search("not-present").unwrap().is_empty());
+        let withheld = library.projection.search("withheld").unwrap();
+        assert_eq!(withheld.len(), 1);
+        assert!(matches!(
+            library
+                .projection
+                .open(&library.storage, &withheld[0])
+                .unwrap(),
+            OpenedLibraryHit::Withheld { .. }
+        ));
+
+        let claim = library
+            .projection
+            .note_claims(FIXTURE_MEETING_ID)
+            .unwrap()
+            .remove(0);
+        let meeting = load_meeting(
+            &library
+                .storage
+                .path()
+                .join("meetings")
+                .join(FIXTURE_MEETING_ID),
+        )
+        .unwrap();
+        let note = meeting.artifacts.current_note.unwrap();
+        durable_replace(
+            &library
+                .storage
+                .path()
+                .join("meetings")
+                .join(FIXTURE_MEETING_ID)
+                .join(note.json.relative_path),
+            b"{\"changed\":true}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            library
+                .projection
+                .open_claim_evidence(&library.storage, &claim, 0)
+                .unwrap_err(),
+            LibraryReadError::SnapshotStale
+        );
+    }
 }

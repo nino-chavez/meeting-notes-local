@@ -6,6 +6,7 @@ license.workspace = true
 description = "Local Meeting Notes safety-first macOS shell"
 
 [build-dependencies]
+serde_json.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
