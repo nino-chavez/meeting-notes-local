@@ -175,6 +175,7 @@ function renderLibrary(snapshot) {
     button.dataset.meetingHandle = row.handle;
     button.dataset.label = row.label || "Untitled meeting";
     button.disabled = row.transcriptAvailable !== true;
+    button.addEventListener("click", () => openMeetingDetail(row.handle));
     const summary = document.createElement("span");
     const label = document.createElement("strong");
     label.textContent = row.label || "Untitled meeting";
@@ -201,6 +202,7 @@ function renderLibrarySearch(response) {
     button.type = "button";
     button.className = "library-search-result";
     button.dataset.searchHandle = result.handle;
+    button.addEventListener("click", () => openLibrarySearchResult(result.handle));
     const summary = document.createElement("span");
     const label = document.createElement("strong");
     const detail = document.createElement("small");
@@ -571,14 +573,6 @@ retryStartup.addEventListener("click", async () => {
 
 libraryLink.addEventListener("click", openLibrary);
 librarySearch.addEventListener("submit", searchLibrary);
-libraryList.addEventListener("click", (event) => {
-  const row = event.target.closest("button[data-meeting-handle]");
-  if (row) openMeetingDetail(row.dataset.meetingHandle);
-});
-librarySearchResults.addEventListener("click", (event) => {
-  const result = event.target.closest("button[data-search-handle]");
-  if (result) openLibrarySearchResult(result.dataset.searchHandle);
-});
 document.querySelector("#library-back").addEventListener("click", () => {
   libraryViewActive = false;
   refresh();
