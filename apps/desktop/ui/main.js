@@ -146,7 +146,9 @@ function renderTurns(container, warning, turns, warnings, match = null) {
   }
   if (Number.isInteger(match?.sourceTurnIndex)) {
     window.requestAnimationFrame(() => {
-      container.querySelector(`[data-source-turn-index="${match.sourceTurnIndex}"]`)?.scrollIntoView({ block: "center" });
+      const destination = container.querySelector(".matched-locator")
+        || container.querySelector(`[data-source-turn-index="${match.sourceTurnIndex}"]`);
+      destination?.scrollIntoView({ block: "center" });
     });
   }
 }
@@ -495,10 +497,14 @@ async function openLibrarySearchResult(handle) {
       setError(libraryNotice, result.message || "That search result is no longer current. Reopen Library and try again.");
       return;
     }
-    await openLibraryTranscript(
-      result.transcriptHandle,
-      Number.isInteger(result.sourceTurnIndex) ? { sourceTurnIndex: result.sourceTurnIndex } : null,
-    );
+    const exactMatch = Number.isInteger(result.sourceTurnIndex)
+      ? {
+          sourceTurnIndex: result.sourceTurnIndex,
+          start: Number.isInteger(result.start) ? result.start : null,
+          end: Number.isInteger(result.end) ? result.end : null,
+        }
+      : null;
+    await openLibraryTranscript(result.transcriptHandle, exactMatch);
   } catch {
     setError(libraryNotice, "That search result could not be opened. Reopen Library and try again.");
   }

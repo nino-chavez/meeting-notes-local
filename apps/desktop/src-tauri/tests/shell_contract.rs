@@ -308,6 +308,43 @@ fn metadata_only_search_results_have_no_transcript_action() {
 }
 
 #[test]
+fn preview_exact_search_lands_on_opened_unicode_scalar_span() {
+    let script = include_str!("../../ui/main.js");
+
+    assert!(script.contains("const characters = Array.from(text || \"\");"));
+    assert!(script.contains("start: Number.isInteger(result.start) ? result.start : null,"));
+    assert!(script.contains("end: Number.isInteger(result.end) ? result.end : null,"));
+    assert!(script.contains("await openLibraryTranscript(result.transcriptHandle, exactMatch);"));
+    assert!(script.contains("container.querySelector(\".matched-locator\")"));
+    assert!(!script.contains("result.text.indexOf"));
+}
+
+#[test]
+fn preview_transcript_open_rechecks_the_bound_digest_and_path() {
+    let source = include_str!("../src/main.rs");
+    let reader = include_str!("../src/library_reader.rs");
+
+    assert!(reader.contains("pub(crate) transcript_artifact: Option<ArtifactRef>"));
+    assert!(source.contains("(opened.meeting_id, opened.transcript_artifact)"));
+    assert!(source.contains("meeting.artifacts.current_transcript.as_ref() != Some(expected)"));
+    assert!(source.contains("Sha256::digest(&bytes)"));
+    assert!(source.contains("current.artifacts.current_transcript.as_ref() != Some(expected)"));
+    let sequence = source
+        .find("let storage_sequence = match coordination.lock_sequence()")
+        .expect("coordinated transcript read");
+    let load = source
+        .find(
+            "load_bound_preview_transcript_projection(&storage, &meeting_id, &transcript_artifact)",
+        )
+        .expect("bound transcript load");
+    let release = source
+        .find("drop(storage_sequence);")
+        .expect("coordinated transcript read release");
+    assert!(sequence < load && load < release);
+    assert!(source[sequence..load].contains("active_meeting_ids()"));
+}
+
+#[test]
 fn preview_search_is_a_named_read_only_boundary_and_preserves_production_commands() {
     let source = include_str!("../src/main.rs");
     let contract = include_str!("../build_contract.rs");
