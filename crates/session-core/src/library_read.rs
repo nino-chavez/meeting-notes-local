@@ -211,6 +211,19 @@ pub struct OpenedClaimLocator {
     pub text_sha256: String,
 }
 
+/// Exact, scalar-bound evidence from one located claim locator.
+///
+/// This is intentionally narrower than a transcript reader: a caller can only
+/// request evidence through a still-valid claim handle and a locator ordinal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedClaimEvidence {
+    pub meeting_id: String,
+    pub source_turn_index: u32,
+    pub start: u64,
+    pub end: u64,
+    pub text: String,
+}
+
 impl LibraryProjection {
     pub fn rebuild(storage: &StorageRoot, limits: ReadLimits) -> Result<Self, LibraryReadError> {
         Self::rebuild_with_projector(storage, limits, Arc::new(UnavailableProjector))
@@ -411,6 +424,42 @@ impl LibraryProjection {
             .collect())
     }
 
+    /// Returns the current projected claims for one already-listed meeting.
+    /// The returned handles retain the same stale-snapshot checks as search
+    /// handles, but do not create a broad transcript enumeration API.
+    pub fn note_claims(&self, meeting_id: &str) -> Result<Vec<LibraryHit>, LibraryReadError> {
+        let row = self
+            .rows
+            .iter()
+            .find(|row| row.meeting_id == meeting_id)
+            .ok_or(LibraryReadError::InvalidRequest)?;
+        let authority = self.authority(row);
+        let mut retained = self.hits.borrow_mut();
+        row.claims
+            .iter()
+            .map(|claim| {
+                let normalized_query = normalize_query(&claim.text)?;
+                let hit = SealedHit::Claim {
+                    key: format!(
+                        "{}:c:{}:{}",
+                        row.meeting_id,
+                        row.note_json_sha256.as_deref().unwrap_or_default(),
+                        claim.ordinal
+                    ),
+                    authority: authority.clone(),
+                    claim: claim.clone(),
+                    normalized_query,
+                };
+                let key = format!("{}:{}", self.snapshot_id, hit_key(&hit));
+                retained.insert(key.clone(), hit);
+                Ok(LibraryHit {
+                    projection_id: self.snapshot_id,
+                    key,
+                })
+            })
+            .collect()
+    }
+
     pub fn open(
         &self,
         storage: &StorageRoot,
@@ -555,6 +604,58 @@ impl LibraryProjection {
                 })
             }
         }
+    }
+
+    /// Opens precisely one current claim locator.  The evidence is re-derived
+    /// from the transcript only after the claim handle has passed the normal
+    /// snapshot and artifact checks.
+    pub fn open_claim_evidence(
+        &self,
+        storage: &StorageRoot,
+        handle: &LibraryHit,
+        locator_ordinal: usize,
+    ) -> Result<OpenedClaimEvidence, LibraryReadError> {
+        let OpenedLibraryHit::Claim {
+            meeting_id,
+            note_json_sha256,
+            note_markdown_sha256,
+            transcript_sha256,
+            locators,
+            ..
+        } = self.open(storage, handle)?
+        else {
+            return Err(LibraryReadError::InvalidRequest);
+        };
+        let locator = locators
+            .get(locator_ordinal)
+            .ok_or(LibraryReadError::InvalidRequest)?;
+        let rebuilt = Self::rebuild_with_projector(storage, self.limits, self.projector.clone())
+            .map_err(|_| LibraryReadError::SnapshotStale)?;
+        let row = rebuilt
+            .rows
+            .iter()
+            .find(|row| row.meeting_id == meeting_id)
+            .ok_or(LibraryReadError::SnapshotStale)?;
+        if row.note_json_sha256.as_deref() != Some(&note_json_sha256)
+            || row.note_markdown_sha256.as_deref() != Some(&note_markdown_sha256)
+            || row.transcript_sha256.as_deref() != Some(&transcript_sha256)
+        {
+            return Err(LibraryReadError::SnapshotStale);
+        }
+        let turn = row
+            .turns
+            .iter()
+            .find(|turn| turn.index == locator.source_turn_index && !turn.gated)
+            .ok_or(LibraryReadError::SnapshotStale)?;
+        let text = scalar_slice(&turn.text, locator.start, locator.end)
+            .ok_or(LibraryReadError::SnapshotStale)?;
+        Ok(OpenedClaimEvidence {
+            meeting_id,
+            source_turn_index: locator.source_turn_index,
+            start: locator.start,
+            end: locator.end,
+            text,
+        })
     }
 
     fn authority(&self, row: &LibraryRow) -> HitAuthority {
@@ -1425,6 +1526,42 @@ mod tests {
             .unwrap();
         fs::write(directory.join(note.json.relative_path), b"changed").unwrap();
         assert_stale!(projection.open(&fixture.storage, &hit));
+    }
+
+    #[test]
+    fn note_claims_and_exact_evidence_keep_the_existing_snapshot_boundary() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting("meeting-a", 10);
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+
+        let claims = projection.note_claims("meeting-a").unwrap();
+        assert_eq!(claims.len(), 3);
+        assert!(matches!(
+            projection.open(&fixture.storage, &claims[0]).unwrap(),
+            OpenedLibraryHit::Claim {
+                claim_ordinal: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            projection.open_claim_evidence(&fixture.storage, &claims[0], 0).unwrap(),
+            OpenedClaimEvidence { source_turn_index: 0, ref text, .. } if text == "alpha"
+        ));
+        assert_eq!(
+            projection.note_claims("missing").unwrap_err(),
+            LibraryReadError::InvalidRequest
+        );
+        assert_eq!(
+            projection
+                .open_claim_evidence(&fixture.storage, &claims[0], 1)
+                .unwrap_err(),
+            LibraryReadError::InvalidRequest
+        );
     }
 
     #[test]

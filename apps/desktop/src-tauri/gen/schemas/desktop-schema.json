@@ -189,6 +189,30 @@
           "markdownDescription": "Enables the dismiss_meeting command without any pre-configured scope."
         },
         {
+          "description": "Enables the library_dev_open_evidence command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-dev-open-evidence",
+          "markdownDescription": "Enables the library_dev_open_evidence command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_dev_open_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-dev-open-note",
+          "markdownDescription": "Enables the library_dev_open_note command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_dev_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-dev-search",
+          "markdownDescription": "Enables the library_dev_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_dev_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-dev-snapshot",
+          "markdownDescription": "Enables the library_dev_snapshot command without any pre-configured scope."
+        },
+        {
           "description": "Enables the retry_startup command without any pre-configured scope.",
           "type": "string",
           "const": "allow-retry-startup",
@@ -217,6 +241,30 @@
           "type": "string",
           "const": "deny-dismiss-meeting",
           "markdownDescription": "Denies the dismiss_meeting command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_dev_open_evidence command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-dev-open-evidence",
+          "markdownDescription": "Denies the library_dev_open_evidence command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_dev_open_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-dev-open-note",
+          "markdownDescription": "Denies the library_dev_open_note command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_dev_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-dev-search",
+          "markdownDescription": "Denies the library_dev_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_dev_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-dev-snapshot",
+          "markdownDescription": "Denies the library_dev_snapshot command without any pre-configured scope."
         },
         {
           "description": "Denies the retry_startup command without any pre-configured scope.",

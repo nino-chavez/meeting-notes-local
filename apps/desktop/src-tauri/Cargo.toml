@@ -24,3 +24,4 @@ tempfile.workspace = true
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+library-dev-surface = []

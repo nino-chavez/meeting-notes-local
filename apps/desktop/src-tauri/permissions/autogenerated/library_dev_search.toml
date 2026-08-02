@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-dev-search"
+description = "Enables the library_dev_search command without any pre-configured scope."
+commands.allow = ["library_dev_search"]
+
+[[permission]]
+identifier = "deny-library-dev-search"
+description = "Denies the library_dev_search command without any pre-configured scope."
+commands.deny = ["library_dev_search"]

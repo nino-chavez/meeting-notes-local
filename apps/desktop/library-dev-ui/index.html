@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en" data-surface="development">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Local Meeting Notes — Library Development Surface</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">Local Meeting Notes</p>
+        <h1>Library development surface</h1>
+      </div>
+      <span class="badge">Development surface</span>
+    </header>
+
+    <main>
+      <section class="notice" aria-label="Development limitation">
+        <strong>Synthetic, sanitized fixture only.</strong>
+        This app has no capture, retention, deletion, correction, regeneration, export, paging, or production-data access. It is not beta-ready.
+      </section>
+
+      <section class="layout">
+        <aside aria-labelledby="library-title">
+          <div class="section-heading">
+            <p class="eyebrow">Library</p>
+            <h2 id="library-title">Sanitized samples</h2>
+          </div>
+          <div id="library-state" class="state">Opening the synthetic fixture…</div>
+          <div id="library-list" class="list" aria-live="polite"></div>
+        </aside>
+
+        <section class="reader" aria-labelledby="note-title">
+          <div class="section-heading">
+            <p class="eyebrow">Note reader</p>
+            <h2 id="note-title">Select a sample</h2>
+          </div>
+          <p id="note-state" class="state">Choose the sanitized sample to read its located claims.</p>
+          <div id="claim-list" class="list"></div>
+
+          <div class="search-panel">
+            <label for="search-query">Search the sanitized fixture</label>
+            <div class="search-row">
+              <input id="search-query" type="search" placeholder="Try Thursday, review, or withheld" autocomplete="off" />
+              <button id="search-button" type="button">Search</button>
+            </div>
+            <div id="search-state" class="state">No search yet.</div>
+            <div id="search-results" class="list"></div>
+          </div>
+        </section>
+
+        <aside aria-labelledby="evidence-title">
+          <div class="section-heading">
+            <p class="eyebrow">Transcript evidence</p>
+            <h2 id="evidence-title">Exact locator</h2>
+          </div>
+          <p id="evidence-state" class="state">Select “Open exact evidence” from a located claim.</p>
+          <blockquote id="evidence-text" hidden></blockquote>
+          <p class="small">“Located” means the displayed words occur in the transcript. It does not verify that the words semantically support the claim.</p>
+        </aside>
+      </section>
+    </main>
+    <script src="main.js" defer></script>
+  </body>
+</html>
