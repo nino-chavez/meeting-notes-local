@@ -786,21 +786,29 @@ the organising primitive, the search scope, and the claim-to-audio path are all
 unsettled and all cross-surface; and the note format itself, since J1 and J2 both
 depend on its shape and it is currently whatever the summarizer emits.
 
-**Prototype as static HTML** — the same shape film-room used before its Tauri
-candidate. It can settle IA, hierarchy, and the note's shape against a real corpus.
+**Prototype as a running local interaction skeleton** — the same broad move
+film-room used before its Tauri candidate, but with every control in the reviewed
+journey working inside the prototype. It can compare IA, hierarchy, note shape and
+state comprehension before those choices harden in the installed app.
 
 **It cannot settle** whether the notes are any good, which needs the dogfood run;
 whether retrieval works, which needs a corpus of more than one meeting; or anything
 about capture, which is not in it.
 
-**A prototype needs real content or it settles nothing.** This project has one real
-75-minute capture and three QMSum meetings, which is enough to populate a library view
-honestly and not enough to test search. Populating it with invented meetings would
-make every IA judgement worthless, and the operator's own recorded objection — "so
-where is the content I use for reviewing with 630?" — is what that failure looks like
-from the outside.
+**Content has two distinct jobs.** A shared, deliberately difficult synthetic corpus
+is sufficient for comparing navigation structures and exercising the same retrieval,
+evidence, gap, correction and regeneration tasks without moving private meeting
+content into the prototype or Git. It is not evidence that notes are useful, that a
+claim is semantically supported, or that retrieval works over a real history.
 
-### Built: `docs/prototype/build.py`
+After one structure survives that comparison, the operator evaluates the exact
+candidate against operator-controlled real or public content outside the tracked
+prototype. That second encounter is where note usefulness, semantic support and the
+felt cost of a long real meeting can be judged. The earlier recorded objection — "so
+where is the content I use for reviewing with 630?" — still governs that gate; it no
+longer prevents the cheaper synthetic comparison from settling the mechanics first.
+
+### Prior design evidence: `docs/prototype/build.py`
 
 A generator rather than a page, because the populated page is derived from QMSum and
 `.gitignore` already keeps that corpus out of a public repo. It reads `note/1`
