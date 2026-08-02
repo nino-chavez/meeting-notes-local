@@ -21,6 +21,11 @@ const librarySearchResults = document.querySelector("#library-search-results");
 const meetingDetailState = document.querySelector("#meeting-detail-state");
 const meetingClaimList = document.querySelector("#meeting-claim-list");
 const meetingNoNote = document.querySelector("#meeting-no-note");
+const meetingRetention = document.querySelector("#meeting-retention");
+const meetingRetentionTitle = document.querySelector("#meeting-retention-title");
+const meetingRetentionPolicy = document.querySelector("#meeting-retention-policy");
+const meetingRetentionSize = document.querySelector("#meeting-retention-size");
+const meetingRetentionConsequence = document.querySelector("#meeting-retention-consequence");
 const retention = document.querySelector("#retention-days");
 const checks = [
   document.querySelector("#consent-check"),
@@ -157,6 +162,68 @@ function formatMeetingTime(epochSeconds) {
   const value = Number(epochSeconds) * 1000;
   if (!Number.isFinite(value) || value <= 0) return "Retained meeting";
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function formatByteSize(bytes) {
+  if (!Number.isInteger(bytes) || bytes < 0) return "Size unavailable";
+  if (bytes < 1024) return `${bytes} bytes`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = -1;
+  do {
+    value /= 1024;
+    unit += 1;
+  } while (value >= 1024 && unit < units.length - 1);
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]} (${bytes.toLocaleString()} bytes)`;
+}
+
+function localRetentionDeadline(epochSeconds) {
+  const value = Number(epochSeconds) * 1000;
+  if (!Number.isFinite(value) || value <= 0) return "The scheduled deletion time is unavailable.";
+  return `Scheduled to delete on ${new Intl.DateTimeFormat(undefined, {
+    dateStyle: "full", timeStyle: "short",
+  }).format(new Date(value))}.`;
+}
+
+function renderAudioRetention(retention) {
+  meetingRetention.hidden = !retention;
+  if (!retention) return;
+  const state = retention.state || "unavailable";
+  const policy = retention.policy || "unknown";
+  const deadline = retention.deadlineEpochSeconds;
+  meetingRetention.dataset.state = state;
+  meetingRetentionSize.hidden = true;
+  if (state === "retained") {
+    meetingRetentionTitle.textContent = "Recording retained";
+    meetingRetentionPolicy.textContent = policy === "manual"
+      ? "Kept until you delete the recording."
+      : localRetentionDeadline(deadline);
+    meetingRetentionSize.hidden = false;
+    meetingRetentionSize.textContent = `Retained audio: ${formatByteSize(retention.retainedBytes)} across both recording channels.`;
+    meetingRetentionConsequence.textContent = "The separate voice profile is unaffected by this meeting’s retention state.";
+    return;
+  }
+  if (state === "released") {
+    meetingRetentionTitle.textContent = "Recording deleted";
+    meetingRetentionPolicy.textContent = retention.message || "Meeting audio was deleted.";
+    meetingRetentionConsequence.textContent = "The transcript, note, and evidence remain. You can no longer listen to the recording, check this transcription against it, or transcribe it again. The separate voice profile is unaffected.";
+    return;
+  }
+  if (state === "deleting") {
+    meetingRetentionTitle.textContent = "Recording deletion in progress";
+    meetingRetentionPolicy.textContent = retention.message || "Meeting audio deletion is already in progress.";
+    meetingRetentionConsequence.textContent = "The transcript, note, evidence, and separate voice profile are not changed by this status.";
+    return;
+  }
+  if (state === "not-recorded") {
+    meetingRetentionTitle.textContent = "No recording retained";
+    meetingRetentionPolicy.textContent = retention.message || "This meeting has no retained audio.";
+    meetingRetentionConsequence.textContent = "The separate voice profile is unaffected.";
+    return;
+  }
+  meetingRetentionTitle.textContent = "Recording retention needs attention";
+  meetingRetentionPolicy.textContent = retention.message || "Audio retention details are unavailable. Reopen Library and try again.";
+  meetingRetentionConsequence.textContent = "No recording action is available from this Preview view.";
 }
 
 function renderLibrary(snapshot) {
@@ -398,6 +465,7 @@ function claimTypeLabel(value) {
 function renderMeetingDetail(response) {
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
+  renderAudioRetention(response.audioRetention);
   message(meetingDetailState, response.message || "Opening retained meeting…", response.state || "");
   if (response.state !== "note") {
     const showsTranscriptFallback = ["transcript-only", "summary-failed"].includes(response.state)
@@ -432,6 +500,7 @@ async function openMeetingDetail(handle) {
   libraryList.replaceChildren();
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
+  meetingRetention.hidden = true;
   document.querySelector("#meeting-detail-transcript-handle").value = "";
   message(meetingDetailState, "Opening this retained meeting…");
   showScreen("meeting-detail-screen");

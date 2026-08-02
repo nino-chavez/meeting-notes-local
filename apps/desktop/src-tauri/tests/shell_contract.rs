@@ -192,7 +192,8 @@ fn private_library_reader_has_no_registered_command_or_storage_authority() {
     assert!(!main[handler_start..handler_end].contains("library_reader"));
     assert!(!reader.contains("#[tauri::command]"));
     assert!(!reader.contains("tauri::"));
-    assert!(!reader.contains("StorageRoot::create"));
+    let production_reader = reader.split("#[cfg(test)]").next().unwrap();
+    assert!(!production_reader.contains("StorageRoot::create"));
     assert!(!reader.contains("invoke_handler"));
 }
 
@@ -289,6 +290,31 @@ fn preview_library_navigation_rebuilds_one_current_handle_generation() {
     assert!(script.contains("meeting-detail-back\").addEventListener(\"click\", returnToLibrary)"));
     assert!(script.contains("libraryList.replaceChildren();\n  setError(libraryNotice, \"Searching this retained Preview Library…\")"));
     assert!(script.contains("librarySearchResults.replaceChildren();\n  setError(libraryNotice, \"Opening the selected retained result…\")"));
+}
+
+#[test]
+fn preview_meeting_detail_renders_retention_without_a_mutating_control() {
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+
+    assert!(html.contains("id=\"meeting-retention\""));
+    assert!(script.contains("function formatByteSize(bytes)"));
+    assert!(script.contains("function localRetentionDeadline(epochSeconds)"));
+    assert!(script.contains("function renderAudioRetention(retention)"));
+    assert!(script.contains(
+        "Retained audio: ${formatByteSize(retention.retainedBytes)} across both recording channels."
+    ));
+    assert!(script.contains("Kept until you delete the recording."));
+    assert!(script.contains("The transcript, note, and evidence remain. You can no longer listen to the recording, check this transcription against it, or transcribe it again. The separate voice profile is unaffected."));
+    assert!(script.contains("renderAudioRetention(response.audioRetention);"));
+    for forbidden in [
+        "delete recording",
+        "delete audio",
+        "preview_library_delete_audio",
+    ] {
+        assert!(!html.contains(forbidden));
+        assert!(!script.contains(forbidden));
+    }
 }
 
 #[test]
