@@ -138,6 +138,19 @@
           <p id="meeting-retention-policy"></p>
           <p id="meeting-retention-size"></p>
           <p id="meeting-retention-consequence"></p>
+          <div class="recording-delete-action" id="recording-delete-action" hidden>
+            <button class="secondary danger-outline" id="recording-delete-review" type="button">Delete recording now</button>
+            <div class="recording-delete-confirmation" id="recording-delete-confirmation" hidden>
+              <p><strong>Permanently delete this recording?</strong></p>
+              <p>This deletes only this meeting’s local audio. The transcript, note, evidence, and meeting details remain. The separate voice profile is unaffected.</p>
+              <p>You will no longer be able to listen to this recording, check its transcription against the audio, or transcribe it again.</p>
+              <div class="recording-delete-buttons">
+                <button class="secondary" id="recording-delete-cancel" type="button">Cancel</button>
+                <button class="danger" id="recording-delete-confirm" type="button">Permanently delete recording</button>
+              </div>
+              <p class="notice error" id="recording-delete-status" role="status" aria-live="polite" hidden></p>
+            </div>
+          </div>
         </section>
         <section id="meeting-claim-list" class="meeting-claim-list" aria-live="polite"></section>
         <section class="meeting-no-note" id="meeting-no-note" hidden aria-labelledby="meeting-no-note-title">

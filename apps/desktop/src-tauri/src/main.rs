@@ -18,6 +18,12 @@ mod product_facade;
 #[allow(dead_code)]
 mod manual_delete_facade;
 
+#[cfg(feature = "preview-surface")]
+use manual_delete_facade::{
+    AudioDeletionReview, ManualAudioDeletionFacadeError, ManualAudioDeletionFacadeOutcome,
+    ManualAudioDeletionUiArgs,
+};
+
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -823,6 +829,106 @@ fn preview_library_open_note(
 }
 
 #[cfg(feature = "preview-surface")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewAudioDeletionResponse {
+    state: &'static str,
+    audio_retention: Option<library_reader::LibraryAudioRetention>,
+    message: String,
+}
+
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
+fn preview_delete_meeting_audio(
+    handle: String,
+    state: State<'_, ApplicationState>,
+) -> PreviewAudioDeletionResponse {
+    let access = state
+        .preview_library
+        .lock()
+        .expect("preview library lock")
+        .as_mut()
+        .map(|reader| reader.authorize_audio_deletion(&handle))
+        .unwrap_or_else(|| library_reader::LibraryAudioDeletionAccess {
+            state: "unavailable",
+            meeting_id: None,
+            message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
+        });
+
+    // Any attempted mutation boundary invalidates every retained reader handle.
+    *state.preview_library.lock().expect("preview library lock") = None;
+
+    let storage = state
+        .storage
+        .lock()
+        .expect("storage context lock")
+        .as_ref()
+        .map(|context| context.storage.clone());
+    let retention_for = |meeting_id: &str| {
+        storage
+            .as_ref()
+            .map(|storage| library_reader::LibraryReader::read_audio_retention(storage, meeting_id))
+    };
+
+    let Some(meeting_id) = access.meeting_id else {
+        return PreviewAudioDeletionResponse {
+            state: access.state,
+            audio_retention: None,
+            message: access.message,
+        };
+    };
+    if access.state != "authorized" {
+        return PreviewAudioDeletionResponse {
+            state: access.state,
+            audio_retention: retention_for(&meeting_id),
+            message: access.message,
+        };
+    }
+
+    let result = state
+        .manual_audio_deletion_facade()
+        .delete_audio(ManualAudioDeletionUiArgs {
+            meeting_id: meeting_id.clone(),
+            review: AudioDeletionReview::Reviewed,
+        });
+    let (response_state, message) = match result {
+        Ok(ManualAudioDeletionFacadeOutcome::AudioReleased) => (
+            "released",
+            "The meeting recording was permanently deleted from this Mac.",
+        ),
+        Ok(ManualAudioDeletionFacadeOutcome::RecoveredRemoval) => (
+            "released",
+            "The interrupted recording deletion was recovered and completed.",
+        ),
+        Ok(ManualAudioDeletionFacadeOutcome::AlreadyReleased) => (
+            "already-released",
+            "This meeting recording was already deleted.",
+        ),
+        Ok(ManualAudioDeletionFacadeOutcome::DeferredActive) => (
+            "deferred-active",
+            "Recording deletion was deferred because this meeting is still active.",
+        ),
+        Err(ManualAudioDeletionFacadeError::MeetingActionInProgress) => (
+            "action-in-progress",
+            "Another action for this meeting is in progress. Reopen Library and try again.",
+        ),
+        Err(
+            ManualAudioDeletionFacadeError::ConfirmationRequired
+            | ManualAudioDeletionFacadeError::WriterLockUnavailable
+            | ManualAudioDeletionFacadeError::StorageUnavailable,
+        ) => (
+            "unavailable",
+            "Recording deletion could not complete. Reopen Library and try again.",
+        ),
+    };
+    PreviewAudioDeletionResponse {
+        state: response_state,
+        audio_retention: retention_for(&meeting_id),
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_open_evidence(
     handle: String,
@@ -1013,7 +1119,9 @@ fn main() {
             #[cfg(feature = "preview-surface")]
             preview_library_open_evidence,
             #[cfg(feature = "preview-surface")]
-            preview_library_open_transcript
+            preview_library_open_transcript,
+            #[cfg(feature = "preview-surface")]
+            preview_delete_meeting_audio
         ])
         .setup(|app| {
             let handle = app.handle().clone();

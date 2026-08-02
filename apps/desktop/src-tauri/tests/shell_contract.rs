@@ -82,7 +82,7 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
 }
 
 #[test]
-fn preview_window_is_a_separate_real_capture_shell_with_a_read_only_library() {
+fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
     let preview: Value = serde_json::from_str(include_str!("../tauri.preview.conf.json")).unwrap();
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/preview.json")).unwrap();
@@ -147,7 +147,8 @@ fn preview_window_is_a_separate_real_capture_shell_with_a_read_only_library() {
             "allow-preview-library-open-search-result",
             "allow-preview-library-open-note",
             "allow-preview-library-open-evidence",
-            "allow-preview-library-open-transcript"
+            "allow-preview-library-open-transcript",
+            "allow-preview-delete-meeting-audio"
         ])
     );
     let serialized = serde_json::to_string(&capability).unwrap();
@@ -293,28 +294,30 @@ fn preview_library_navigation_rebuilds_one_current_handle_generation() {
 }
 
 #[test]
-fn preview_meeting_detail_renders_retention_without_a_mutating_control() {
+fn preview_meeting_detail_requires_two_explicit_steps_for_audio_deletion() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
 
     assert!(html.contains("id=\"meeting-retention\""));
     assert!(script.contains("function formatByteSize(bytes)"));
     assert!(script.contains("function localRetentionDeadline(epochSeconds)"));
-    assert!(script.contains("function renderAudioRetention(retention)"));
+    assert!(script.contains("function renderAudioRetention(retention, deletionHandle = \"\")"));
     assert!(script.contains(
         "Retained audio: ${formatByteSize(retention.retainedBytes)} across both recording channels."
     ));
     assert!(script.contains("Kept until you delete the recording."));
     assert!(script.contains("The transcript, note, and evidence remain. You can no longer listen to the recording, check this transcription against it, or transcribe it again. The separate voice profile is unaffected."));
-    assert!(script.contains("renderAudioRetention(response.audioRetention);"));
-    for forbidden in [
-        "delete recording",
-        "delete audio",
-        "preview_library_delete_audio",
-    ] {
-        assert!(!html.contains(forbidden));
-        assert!(!script.contains(forbidden));
-    }
+    assert!(html.contains("id=\"recording-delete-review\""));
+    assert!(html.contains("Delete recording now"));
+    assert!(html.contains("id=\"recording-delete-confirm\""));
+    assert!(html.contains("Permanently delete recording"));
+    assert!(html.contains("This deletes only this meeting’s local audio."));
+    assert!(html.contains("The separate voice profile is unaffected."));
+    assert!(script.contains("recordingDeleteReview.addEventListener(\"click\""));
+    assert!(script.contains("recordingDeleteConfirm.addEventListener(\"click\", async () =>"));
+    assert!(script.contains("await invoke(\"preview_delete_meeting_audio\", { handle })"));
+    assert!(!script.contains("window.confirm("));
+    assert!(!script.contains("confirm("));
 }
 
 #[test]
@@ -371,7 +374,7 @@ fn preview_transcript_open_rechecks_the_bound_digest_and_path() {
 }
 
 #[test]
-fn preview_search_is_a_named_read_only_boundary_and_preserves_production_commands() {
+fn preview_commands_are_named_and_preserve_the_production_command_boundary() {
     let source = include_str!("../src/main.rs");
     let contract = include_str!("../build_contract.rs");
     let handler_start = source
@@ -387,12 +390,13 @@ fn preview_search_is_a_named_read_only_boundary_and_preserves_production_command
     assert!(handler.contains("preview_library_open_search_result"));
     assert!(handler.contains("preview_library_open_note"));
     assert!(handler.contains("preview_library_open_evidence"));
+    assert!(handler.contains("preview_delete_meeting_audio"));
     assert!(source.contains("reader.open_search_result(&handle)"));
     assert!(contract.contains("const PRODUCTION_COMMANDS"));
     assert!(
         !contract[contract.find("const PRODUCTION_COMMANDS").unwrap()
             ..contract.find("const PREVIEW_COMMANDS").unwrap()]
-            .contains("preview_library_search")
+            .contains("preview_")
     );
 }
 

@@ -26,6 +26,12 @@ const meetingRetentionTitle = document.querySelector("#meeting-retention-title")
 const meetingRetentionPolicy = document.querySelector("#meeting-retention-policy");
 const meetingRetentionSize = document.querySelector("#meeting-retention-size");
 const meetingRetentionConsequence = document.querySelector("#meeting-retention-consequence");
+const recordingDeleteAction = document.querySelector("#recording-delete-action");
+const recordingDeleteReview = document.querySelector("#recording-delete-review");
+const recordingDeleteConfirmation = document.querySelector("#recording-delete-confirmation");
+const recordingDeleteCancel = document.querySelector("#recording-delete-cancel");
+const recordingDeleteConfirm = document.querySelector("#recording-delete-confirm");
+const recordingDeleteStatus = document.querySelector("#recording-delete-status");
 const retention = document.querySelector("#retention-days");
 const checks = [
   document.querySelector("#consent-check"),
@@ -38,6 +44,7 @@ let pollTimer = null;
 let startedAt = null;
 let elapsedTimer = null;
 let libraryViewActive = false;
+let meetingAudioDeletionHandle = "";
 
 function showScreen(id) {
   for (const [screenId, screen] of screens) {
@@ -185,7 +192,18 @@ function localRetentionDeadline(epochSeconds) {
   }).format(new Date(value))}.`;
 }
 
-function renderAudioRetention(retention) {
+function closeRecordingDeleteReview() {
+  recordingDeleteConfirmation.hidden = true;
+  recordingDeleteStatus.hidden = true;
+  recordingDeleteStatus.textContent = "";
+  recordingDeleteConfirm.disabled = false;
+  recordingDeleteConfirm.textContent = "Permanently delete recording";
+}
+
+function renderAudioRetention(retention, deletionHandle = "") {
+  meetingAudioDeletionHandle = "";
+  recordingDeleteAction.hidden = true;
+  closeRecordingDeleteReview();
   meetingRetention.hidden = !retention;
   if (!retention) return;
   const state = retention.state || "unavailable";
@@ -201,6 +219,10 @@ function renderAudioRetention(retention) {
     meetingRetentionSize.hidden = false;
     meetingRetentionSize.textContent = `Retained audio: ${formatByteSize(retention.retainedBytes)} across both recording channels.`;
     meetingRetentionConsequence.textContent = "The separate voice profile is unaffected by this meeting’s retention state.";
+    if (deletionHandle) {
+      meetingAudioDeletionHandle = deletionHandle;
+      recordingDeleteAction.hidden = false;
+    }
     return;
   }
   if (state === "released") {
@@ -465,7 +487,7 @@ function claimTypeLabel(value) {
 function renderMeetingDetail(response) {
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
-  renderAudioRetention(response.audioRetention);
+  renderAudioRetention(response.audioRetention, response.audioDeletionHandle);
   message(meetingDetailState, response.message || "Opening retained meeting…", response.state || "");
   if (response.state !== "note") {
     const showsTranscriptFallback = ["transcript-only", "summary-failed"].includes(response.state)
@@ -501,6 +523,9 @@ async function openMeetingDetail(handle) {
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
   meetingRetention.hidden = true;
+  meetingAudioDeletionHandle = "";
+  recordingDeleteAction.hidden = true;
+  closeRecordingDeleteReview();
   document.querySelector("#meeting-detail-transcript-handle").value = "";
   message(meetingDetailState, "Opening this retained meeting…");
   showScreen("meeting-detail-screen");
@@ -681,6 +706,36 @@ document.querySelector("#library-back").addEventListener("click", () => {
 });
 document.querySelector("#library-transcript-back").addEventListener("click", returnToLibrary);
 document.querySelector("#meeting-detail-back").addEventListener("click", returnToLibrary);
+recordingDeleteReview.addEventListener("click", () => {
+  if (!meetingAudioDeletionHandle) return;
+  recordingDeleteConfirmation.hidden = false;
+  recordingDeleteConfirm.focus();
+});
+recordingDeleteCancel.addEventListener("click", () => {
+  closeRecordingDeleteReview();
+  recordingDeleteReview.focus();
+});
+recordingDeleteConfirm.addEventListener("click", async () => {
+  if (!invoke || !meetingAudioDeletionHandle) return;
+  const handle = meetingAudioDeletionHandle;
+  meetingAudioDeletionHandle = "";
+  recordingDeleteConfirm.disabled = true;
+  recordingDeleteConfirm.textContent = "Deleting recording…";
+  recordingDeleteStatus.hidden = false;
+  recordingDeleteStatus.textContent = "Permanently deleting this meeting’s local audio…";
+  try {
+    const response = await invoke("preview_delete_meeting_audio", { handle });
+    if (response.audioRetention) renderAudioRetention(response.audioRetention);
+    message(meetingDetailState, response.message || "Recording deletion finished.", response.state || "");
+    if (!response.audioRetention) {
+      recordingDeleteStatus.textContent = response.message || "Recording deletion could not complete. Reopen Library and try again.";
+      recordingDeleteConfirm.disabled = true;
+    }
+  } catch {
+    recordingDeleteStatus.textContent = "Recording deletion could not complete. Reopen Library and try again.";
+    recordingDeleteConfirm.disabled = true;
+  }
+});
 document.querySelector("#meeting-open-transcript").addEventListener("click", () => {
   const handle = document.querySelector("#meeting-detail-transcript-handle").value;
   if (handle) openLibraryTranscript(handle);

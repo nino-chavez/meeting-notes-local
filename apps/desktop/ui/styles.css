@@ -196,8 +196,18 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .meeting-retention { max-width: 62ch; margin: 30px 0; padding: 22px 0 24px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .meeting-retention h2 { margin: 7px 0 12px; font-family: ui-serif, Georgia, serif; font-size: clamp(1.65rem, 3vw, 2.1rem); font-weight: 500; letter-spacing: -0.025em; line-height: 1; }
 .meeting-retention p { max-width: 60ch; margin: 9px 0 0; color: var(--muted); line-height: 1.55; }
-.meeting-retention p:last-child { color: var(--ink); }
+#meeting-retention-consequence { color: var(--ink); }
 .meeting-retention[data-state="released"] { border-color: #aeb6b0; }
+.recording-delete-action { margin-top: 20px; }
+.recording-delete-confirmation { max-width: 58ch; margin-top: 16px; padding: 18px; border: 1px solid #b99b92; border-radius: 5px; background: #f5ece8; }
+.recording-delete-confirmation p { margin-top: 8px; color: var(--ink); }
+.recording-delete-confirmation p:first-child { margin-top: 0; }
+.recording-delete-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.danger-outline { border-color: #9b4b3d; color: #843b31; }
+.danger { min-height: 44px; padding: 0 17px; border: 1px solid #843b31; border-radius: 4px; color: #fffaf5; background: #843b31; font: inherit; font-weight: 700; }
+.danger:hover { background: #6f3028; }
+.danger:disabled { cursor: wait; opacity: 0.64; }
+#recording-delete-status { margin-top: 14px; }
 .meeting-claim { padding: 22px 0 24px; border-bottom: 1px solid var(--line); }
 .claim-meta { margin: 0 0 10px; color: var(--muted); font-size: 0.78rem; font-weight: 760; letter-spacing: 0.09em; text-transform: uppercase; }
 .claim-text { max-width: 62ch; margin: 0 0 18px; font-size: 1.08rem; line-height: 1.55; }
