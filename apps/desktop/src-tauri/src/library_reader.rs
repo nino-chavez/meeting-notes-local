@@ -127,6 +127,14 @@ impl LibraryReader {
         }
     }
 
+    /// Confines a transcript-open request to a row that this exact read-only
+    /// projection accepted. The caller still reopens and verifies the artifact.
+    pub(crate) fn has_transcript(&self, meeting_id: &str) -> bool {
+        self.projection.rows().iter().any(|row| {
+            row.meeting_id == meeting_id && row.transcript_sha256.is_some()
+        })
+    }
+
     pub(crate) fn search(&mut self, query: &str) -> LibrarySearchResponse {
         // A handle is valid only for the response that returned it. Keeping old
         // handles would retain an unbounded amount of private snapshot state.

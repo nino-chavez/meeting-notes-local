@@ -13,7 +13,10 @@
         <p class="eyebrow">Local Meeting Notes</p>
         <p class="product-state"><span class="status-dot" aria-hidden="true"></span><span id="header-state">Opening safely</span></p>
       </div>
-      <span class="release-badge" id="release-badge">Internal alpha</span>
+      <div class="header-actions">
+        <button class="secondary library-link" id="library-link" type="button" hidden>Library</button>
+        <span class="release-badge" id="release-badge">Internal alpha</span>
+      </div>
     </header>
 
     <main aria-live="polite">
@@ -104,6 +107,24 @@
         <div class="notice" id="transcript-warning" hidden></div>
         <article id="transcript-turns" aria-label="Meeting transcript"></article>
         <button class="primary" id="new-meeting" type="button">Return to Start</button>
+      </section>
+
+      <section class="screen library-screen" id="library-screen" aria-labelledby="library-title">
+        <p class="kicker">Retained meetings</p>
+        <h1 id="library-title">Your Library.</h1>
+        <p class="lede" id="library-copy">Opening retained Preview meetings on this Mac.</p>
+        <div class="notice" id="library-notice" hidden></div>
+        <div class="library-list" id="library-list" aria-live="polite"></div>
+        <button class="secondary" id="library-back" type="button">Back</button>
+      </section>
+
+      <section class="screen transcript-screen" id="library-transcript-screen" aria-labelledby="library-transcript-title">
+        <p class="kicker">Retained meeting</p>
+        <h1 id="library-transcript-title">Captured words.</h1>
+        <p class="lede">This retained transcript is available for review. It is not an automatic note.</p>
+        <div class="notice" id="library-transcript-warning" hidden></div>
+        <article id="library-transcript-turns" aria-label="Retained meeting transcript"></article>
+        <button class="secondary" id="library-transcript-back" type="button">Back to Library</button>
       </section>
 
       <section class="screen" id="error-screen" aria-labelledby="error-title">

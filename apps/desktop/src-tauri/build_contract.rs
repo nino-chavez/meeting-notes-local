@@ -21,6 +21,16 @@ const PRODUCTION_COMMANDS: &[&str] = &[
     "retry_startup",
 ];
 
+const PREVIEW_COMMANDS: &[&str] = &[
+    "app_snapshot",
+    "start_meeting",
+    "stop_meeting",
+    "dismiss_meeting",
+    "retry_startup",
+    "preview_library_snapshot",
+    "preview_library_open_transcript",
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BuildMode {
     Production,
@@ -61,7 +71,7 @@ pub fn plan(mode: BuildMode) -> BuildPlan {
             permissions_path: "permissions/development/**/*",
         },
         BuildMode::Preview => BuildPlan {
-            commands: PRODUCTION_COMMANDS,
+            commands: PREVIEW_COMMANDS,
             capabilities_path: "capabilities/preview.json",
             permissions_path: "permissions/production/**/*",
         },

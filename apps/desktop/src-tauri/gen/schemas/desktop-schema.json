@@ -189,6 +189,18 @@
           "markdownDescription": "Enables the dismiss_meeting command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_library_open_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-library-open-transcript",
+          "markdownDescription": "Enables the preview_library_open_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_library_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-library-snapshot",
+          "markdownDescription": "Enables the preview_library_snapshot command without any pre-configured scope."
+        },
+        {
           "description": "Enables the retry_startup command without any pre-configured scope.",
           "type": "string",
           "const": "allow-retry-startup",
@@ -217,6 +229,18 @@
           "type": "string",
           "const": "deny-dismiss-meeting",
           "markdownDescription": "Denies the dismiss_meeting command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_library_open_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-library-open-transcript",
+          "markdownDescription": "Denies the preview_library_open_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_library_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-library-snapshot",
+          "markdownDescription": "Denies the preview_library_snapshot command without any pre-configured scope."
         },
         {
           "description": "Denies the retry_startup command without any pre-configured scope.",
