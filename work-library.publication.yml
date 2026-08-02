@@ -1,0 +1,95 @@
+schema: work-library-publication/0
+case_id: local-meeting-notes
+adapter: git-manifest
+canonical_output: beta-boundary
+
+catalog:
+  title: Local Meeting Notes
+  subtitle: Private capture research · Bounded beta
+  question: What can the local meeting-notes beta honestly support—and what must a real meeting prove next?
+  summary: Support headphones, deliberate voice calibration, capture-health evidence, and attribution fallback. The next proof is an ordinary meeting whose resulting note a human reads and judges useful.
+
+collection_candidates: [commerce, product-research, local-ai]
+
+publication:
+  status: draft
+  clearance: internal
+  assurance:
+    human_validation: pending
+
+outputs:
+  - id: beta-boundary
+    type: decision-record
+    status: draft
+    artifact: docs/work-library-record.md
+    clearance: internal
+    assurance:
+      human_validation: pending
+  - id: capture-evidence
+    type: evidence-register
+    status: ready
+    artifact: spike/RESULTS.md
+    clearance: internal
+    assurance:
+      human_validation: pending
+  - id: notes-evidence
+    type: evidence-register
+    status: ready
+    artifact: notes/EVAL.md
+    clearance: internal
+    assurance:
+      human_validation: pending
+  - id: product-reference
+    type: reference-library
+    status: draft
+    artifact: docs/
+    clearance: internal
+    assurance:
+      human_validation: pending
+
+projections:
+  - id: decision
+    output: beta-boundary
+    artifact: docs/work-library-record.md
+    render_as: executive-decision
+    label: Supported beta boundary
+    route: /
+  - id: capture-evidence
+    output: capture-evidence
+    artifact: spike/RESULTS.md
+    render_as: evidence-register
+    label: Capture and voice-gate evidence
+    route: /evidence/capture
+  - id: notes-evidence
+    output: notes-evidence
+    artifact: notes/EVAL.md
+    render_as: evidence-register
+    label: Note-generation evaluation
+    route: /evidence/notes
+  - id: journeys
+    output: product-reference
+    artifact: docs/journeys.md
+    render_as: strategy-memo
+    label: Product journeys
+    route: /strategy/journeys
+  - id: screens
+    output: product-reference
+    artifact: docs/screens-and-states.md
+    render_as: reference-document
+    label: Screens and states
+    route: /reference/screens-and-states
+  - id: teardown
+    output: product-reference
+    artifact: docs/teardown.md
+    render_as: reference-document
+    label: Teardown and recovery
+    route: /reference/teardown
+
+exclude:
+  - assets/**
+  - capture/**
+  - fixtures/**
+  - sessions/**
+  - tests/**
+  - "**/.git/**"
+  - "**/.venv/**"
