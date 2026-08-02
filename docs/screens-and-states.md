@@ -83,10 +83,12 @@ The next synthetic slice keeps G as a utility surface outside the accepted
 Find/Meetings/Promises navigation. It presents the conjunction required for Start,
 walks H through both permission fixtures and a no-default retention choice, and makes
 profile reset a two-step action whose consequence is visible immediately: meetings
-remain readable and Start becomes **Finish setup**. It stops at I's honest blocked
-boundary. A separately labelled returning-profile fixture can restore the ready state,
-but cannot complete the new-enrolment path. Guided multi-sitting enrolment remains the
-next interaction slice; no permission, profile, audio, or product record is touched.
+remain readable and Start becomes **Finish setup**. The joined I slice then walks two
+operator recordings, a fixture-only measured gap, permitted comparison speech, three
+unselected measured-policy rows, build, owner-only persistence, completion, and
+discard. A separately labelled returning-profile fixture can restore the ready state
+but cannot complete the new-enrolment path. No permission, profile, audio, model, or
+product record is touched.
 
 ### Two tests the decisions files do not contain
 

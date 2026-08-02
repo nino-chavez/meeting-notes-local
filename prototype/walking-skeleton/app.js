@@ -281,7 +281,13 @@ function freshState(defaultDirection) {
     retentionPeriodDays: 14,
     retentionDraftDays: null,
     voiceProfileStatus: "valid",
-    profileResetConfirming: false
+    profileResetConfirming: false,
+    enrollmentRecording: false,
+    enrollmentRecordingKind: null,
+    enrollmentNegativeSource: null,
+    enrollmentPolicy: null,
+    enrollmentBuildPhase: null,
+    enrollmentDiscardConfirming: false
   };
 }
 
@@ -457,11 +463,13 @@ function syncChrome() {
     transcribing: { status: "Transcribing locally", action: "Show status", className: "is-transcribing" },
     ready: { status: "Meeting ready", action: "Open meeting", className: "is-ready" }
   };
-  const captureChrome = state.captureDegraded && state.capturePhase === "recording"
-    ? { status: "Recording · system audio interrupted", action: "Show status", className: "is-degraded" }
-    : state.capturePhase === "idle" && !capturePrerequisitesReady()
-      ? { status: "Setup required", action: "Finish setup", className: "is-setup" }
-      : captureLabels[state.capturePhase];
+  const captureChrome = state.enrollmentRecording
+    ? { status: "Recording · voice enrollment", action: "Show enrollment", className: "is-recording" }
+    : state.captureDegraded && state.capturePhase === "recording"
+      ? { status: "Recording · system audio interrupted", action: "Show status", className: "is-degraded" }
+      : state.capturePhase === "idle" && !capturePrerequisitesReady()
+        ? { status: "Setup required", action: "Finish setup", className: "is-setup" }
+        : captureLabels[state.capturePhase];
   const productState = document.querySelector("#product-state");
   productState.className = `product-state ${captureChrome.className}`.trim();
   document.querySelector("#product-state-text").textContent = captureChrome.status;
@@ -488,7 +496,7 @@ function restoreRequestedFocus() {
     if (request === "capture") target = captureLayer.querySelector("h1, h2");
     if (request === "results") target = workspace.querySelector(".section-heading h2, .empty-state h2");
     if (request === "gap") target = workspace.querySelector("#withheld-turn");
-    if (request === "status") target = workspace.querySelector(".stale-panel h2, .failure-panel h2, .state-panel h2");
+    if (request === "status") target = workspace.querySelector(".destructive-card h2, .stale-panel h2, .failure-panel h2, .state-panel h2");
     if (!target) target = workspace.querySelector("h1");
     if (!target) target = workspace;
     target.setAttribute("tabindex", "-1");
@@ -648,7 +656,7 @@ function settingsRailMarkup() {
       <p class="kicker">Local controls</p>
       <h2>Settings</h2>
       <p>Readiness, meeting-audio retention, and the owner voice profile stay visible in one place.</p>
-      <button class="secondary-button" type="button" data-action="close-settings">Back to ${escapeHtml(viewLabels[state.view])}</button>
+      <button class="secondary-button" type="button" data-action="close-settings" ${state.enrollmentRecording ? "disabled" : ""}>Back to ${escapeHtml(viewLabels[state.view])}</button>
       <section class="settings-boundary">
         <span class="label">Prototype boundary</span>
         <p>These controls change synthetic browser state only. They do not inspect macOS permissions, record enrollment audio, or delete product data.</p>
@@ -658,7 +666,7 @@ function settingsRailMarkup() {
 
 function settingsOverviewMarkup() {
   const ready = capturePrerequisitesReady();
-  const captureBusy = state.capturePhase !== "idle";
+  const captureBusy = state.capturePhase !== "idle" || state.enrollmentRecording;
   const retention = Number.isInteger(state.retentionPeriodDays)
     ? `Delete after ${state.retentionPeriodDays} day${state.retentionPeriodDays === 1 ? "" : "s"}`
     : "Choose a period";
@@ -788,11 +796,195 @@ function profileNeededMarkup() {
         </ol>
         <p>Dedicated calibration audio and working files are deleted as soon as the private derived material is safely stored. Meetings keep their own retention period.</p>
       </section>
-      <p class="settings-lock"><strong>Recording remains unavailable.</strong> Guided multi-sitting enrollment is the next prototype slice. The returning fixture below is independent; it does not finish this enrollment.</p>
+      <p class="settings-lock"><strong>Recording remains unavailable.</strong> Complete guided enrollment before starting a supported meeting. The returning fixture below is independent; it does not finish this enrollment.</p>
       <div class="setup-actions">
+        <button class="primary-button" type="button" data-action="start-enrollment">Start voice enrollment</button>
         <button class="secondary-button" type="button" data-action="load-returning-profile-fixture">Load separate returning-profile fixture</button>
-        <button class="text-button" type="button" data-action="close-settings">Keep this blocked state</button>
       </div>
+    </section>`;
+}
+
+function enrollmentProgressMarkup(active) {
+  const steps = [
+    { id: "voice-one", label: "1 · Voice sample" },
+    { id: "voice-two", label: "2 · Later sample" },
+    { id: "other-voice", label: "3 · Other voice" },
+    { id: "policy", label: "4 · Policy" }
+  ];
+  const activeIndex = steps.findIndex((step) => step.id === active);
+  return `
+    <ol class="enrollment-progress" aria-label="Voice enrollment progress">
+      ${steps.map((step, index) => `<li class="${index === activeIndex ? "is-active" : index < activeIndex ? "is-done" : ""}">${escapeHtml(step.label)}</li>`).join("")}
+    </ol>`;
+}
+
+function enrollmentDiscardMarkup() {
+  return `
+    <div class="enrollment-discard">
+      ${state.enrollmentDiscardConfirming ? `
+        <section class="destructive-card" aria-labelledby="discard-enrollment-title">
+          <p class="label">Incomplete enrollment</p>
+          <h2 id="discard-enrollment-title">Discard this enrollment?</h2>
+          <p>Dedicated enrollment audio, private derived samples, comparison scores, and partial profile work are removed. Existing meetings, meeting audio, notes, transcripts, retention choice, and any previously valid profile remain.</p>
+          <div class="confirmation-actions">
+            <button class="danger-button" type="button" data-action="confirm-enrollment-discard">Discard enrollment</button>
+            <button class="secondary-button" type="button" data-action="cancel-enrollment-discard">Cancel</button>
+          </div>
+        </section>` : `<button class="text-button danger-text" type="button" data-action="request-enrollment-discard">Discard enrollment</button>`}
+    </div>`;
+}
+
+function enrollmentRecorderMarkup(kind) {
+  const isOtherVoice = kind === "other-voice";
+  return `
+    <section class="enrollment-recorder" role="status" aria-live="polite">
+      <div class="recording-pulse" aria-hidden="true"></div>
+      <div>
+        <span class="label">Recording now · synthetic</span>
+        <h2>${isOtherVoice ? "Listening to the permitted comparison speech" : "Listening to your voice"}</h2>
+        <p>Microphone only. System audio and existing meetings are not used.</p>
+      </div>
+      <button class="primary-button stop-button" type="button" data-action="stop-enrollment-recording">Stop sample</button>
+    </section>`;
+}
+
+function enrollmentSittingMarkup(which) {
+  const first = which === 1;
+  const kind = first ? "operator-one" : "operator-two";
+  const recording = state.enrollmentRecording && state.enrollmentRecordingKind === kind;
+  return `
+    <section class="settings-content">
+      ${enrollmentProgressMarkup(first ? "voice-one" : "voice-two")}
+      <header class="settings-intro compact enrollment-intro">
+        <p class="kicker">Voice enrollment · ${first ? "first" : "later"} sitting</p>
+        <h1>${first ? "Record your first voice sample." : "Record a separate voice sample."}</h1>
+        <p class="lede">Speak naturally in a quiet place. The app reports whether it has enough usable speech; it does not turn a progress percentage into proof.</p>
+      </header>
+      ${recording ? enrollmentRecorderMarkup(kind) : `
+        <section class="enrollment-card">
+          <div><span class="label">Before recording</span><h2>Only your microphone is used.</h2><p>${first ? "This starts a dedicated calibration sitting, not a meeting." : "The recorded timestamps must show at least one hour since the first sitting; another day is ideal."}</p></div>
+          <button class="primary-button" type="button" data-action="start-enrollment-recording" data-kind="${kind}">Start sample</button>
+        </section>`}
+      <p class="lifecycle-note"><strong>Short-lived source audio.</strong> The dedicated WAV, transcript, segments, and working files are deleted as soon as the private derived material is safely stored. Failure or discard removes partial work.</p>
+      ${enrollmentDiscardMarkup()}
+    </section>`;
+}
+
+function enrollmentWaitMarkup() {
+  return `
+    <section class="settings-content">
+      ${enrollmentProgressMarkup("voice-two")}
+      <header class="settings-intro compact enrollment-intro">
+        <p class="kicker">First sitting saved</p>
+        <h1>Return at least one hour later.</h1>
+        <p class="lede">Another day is ideal. The product reads recorded timestamps and will not treat two clips from one sitting as separate evidence.</p>
+      </header>
+      <section class="readiness-list enrollment-facts">
+        <article class="readiness-row is-ready"><div><span class="label">Private derived sample</span><strong>Stored for comparison</strong></div><span>Owner account only</span></article>
+        <article class="readiness-row is-ready"><div><span class="label">Dedicated source audio</span><strong>Deleted after safe storage</strong></div><span>No meeting was created</span></article>
+        <article class="readiness-row is-needed"><div><span class="label">Second sitting</span><strong>Not eligible yet</strong></div><span>Measured at runtime</span></article>
+      </section>
+      <div class="setup-actions">
+        <button class="secondary-button prototype-action" type="button" data-action="load-later-sitting-fixture">Load eligible later-sitting fixture</button>
+        <button class="text-button" type="button" data-action="close-settings">Return to meetings</button>
+      </div>
+      <p class="prototype-boundary">The fixture advances review without asserting that real time elapsed.</p>
+      ${enrollmentDiscardMarkup()}
+    </section>`;
+}
+
+function enrollmentReviewMarkup() {
+  return `
+    <section class="settings-content">
+      ${enrollmentProgressMarkup("other-voice")}
+      <header class="settings-intro compact enrollment-intro">
+        <p class="kicker">Two-sitting fixture · review</p>
+        <h1>Your samples can now be compared.</h1>
+        <p class="lede">The exact counts and gap come from the enrollment record. Refused or incomplete material cannot reach the next step.</p>
+      </header>
+      <div class="enrollment-metrics" aria-label="Synthetic operator sample facts">
+        <div><strong>2</strong><span>separate sittings</span></div>
+        <div><strong>25 hr</strong><span>fixture gap</span></div>
+        <div><strong>100</strong><span>held-out samples</span></div>
+      </div>
+      <p class="lifecycle-note"><strong>Non-personal fixture.</strong> These counts test the interaction and do not describe the reviewer. Both dedicated recordings are already represented as deleted.</p>
+      <div class="setup-actions">
+        <button class="primary-button" type="button" data-action="continue-to-negative-sample">Add permitted other-voice speech</button>
+      </div>
+      ${enrollmentDiscardMarkup()}
+    </section>`;
+}
+
+function negativeSampleMarkup() {
+  const recording = state.enrollmentRecording && state.enrollmentRecordingKind === "other-voice";
+  return `
+    <section class="settings-content">
+      ${enrollmentProgressMarkup("other-voice")}
+      <header class="settings-intro compact enrollment-intro">
+        <p class="kicker">Comparison speech · required</p>
+        <h1>Measure what the gate might mistake for you.</h1>
+        <p class="lede">Use permitted speech only. Do not record a private conversation, an unaware bystander, or unlicensed program audio.</p>
+      </header>
+      ${recording ? enrollmentRecorderMarkup("other-voice") : `
+        <fieldset class="negative-source-choices">
+          <legend>Choose the source for this calibration recording</legend>
+          <label><input type="radio" name="negative-source" value="licensed" ${state.enrollmentNegativeSource === "licensed" ? "checked" : ""} /><span><strong>Public-domain or licensed playback</strong><small>Play permitted speech near the microphone.</small></span></label>
+          <label><input type="radio" name="negative-source" value="consenting" ${state.enrollmentNegativeSource === "consenting" ? "checked" : ""} /><span><strong>A consenting person</strong><small>They knowingly record speech for this calibration.</small></span></label>
+        </fieldset>
+        <p class="choice-help">The registered floor is 60 seconds of scorable speech across at least 20 segments. Neither number is a statistical guarantee.</p>
+        <button class="primary-button" type="button" data-action="start-enrollment-recording" data-kind="other-voice" ${state.enrollmentNegativeSource ? "" : "disabled"}>Start comparison sample</button>`}
+      <p class="lifecycle-note"><strong>Separate lifecycle.</strong> This dedicated audio and its working files are deleted after private comparison scores are safely stored. It never becomes meeting content.</p>
+      ${enrollmentDiscardMarkup()}
+    </section>`;
+}
+
+function voicePolicyMarkup() {
+  const policies = [
+    { id: "preserve", label: "Preserve more of my speech", operator: "1 of 100 operator samples dropped", other: "31 of 40 other-voice samples included" },
+    { id: "middle", label: "Choose the measured middle point", operator: "5 of 100 operator samples dropped", other: "29 of 40 other-voice samples included" },
+    { id: "exclude", label: "Keep more other voices out", operator: "20 of 100 operator samples dropped", other: "22 of 40 other-voice samples included" }
+  ];
+  return `
+    <section class="settings-content">
+      ${enrollmentProgressMarkup("policy")}
+      <header class="settings-intro compact enrollment-intro">
+        <p class="kicker">Measured policy · no default</p>
+        <h1>Choose which error to avoid first.</h1>
+        <p class="lede">Dropping your speech loses meeting memory. Including another voice can misstate who said it. Both measured costs stay visible.</p>
+      </header>
+      <fieldset class="voice-policy-choices">
+        <legend>Non-personal deterministic fixture</legend>
+        ${policies.map((policy) => `
+          <label>
+            <input type="radio" name="voice-policy" value="${policy.id}" ${state.enrollmentPolicy === policy.id ? "checked" : ""} />
+            <span><strong>${escapeHtml(policy.label)}</strong><small>${escapeHtml(policy.operator)}</small><small>${escapeHtml(policy.other)}</small></span>
+          </label>`).join("")}
+      </fieldset>
+      <p class="choice-help">These rates come from the repository’s fixed non-personal score fixture. They are not measurements of your voice and no row is recommended.</p>
+      <div class="setup-actions">
+        <button class="primary-button" type="button" data-action="build-enrollment-profile" ${state.enrollmentPolicy ? "" : "disabled"}>Build selected profile</button>
+      </div>
+      ${enrollmentDiscardMarkup()}
+    </section>`;
+}
+
+function enrollmentBuildMarkup() {
+  const persisting = state.enrollmentBuildPhase === "persisting";
+  return `
+    <section class="settings-content">
+      ${enrollmentProgressMarkup("policy")}
+      <header class="settings-intro compact enrollment-intro">
+        <p class="kicker">Private profile · local build</p>
+        <h1>${persisting ? "Saving the profile for this account." : "Building the selected voice profile."}</h1>
+        <p class="lede">Start remains blocked until the selected measured row and its provenance are safely stored and can be validated again.</p>
+      </header>
+      <div class="build-progress" role="status" aria-live="polite">
+        <span class="is-done">Measurements checked</span>
+        <span class="${persisting ? "is-done" : "is-active"}">Profile built</span>
+        <span class="${persisting ? "is-active" : ""}">Owner-only save</span>
+      </div>
+      <p class="lifecycle-note"><strong>No valid profile yet.</strong> A build result without successful private persistence cannot enable Start. Failure deletes partial output and leaves enrollment incomplete.</p>
+      <p class="prototype-boundary">Synthetic transition only. No model runs and no profile is written.</p>
     </section>`;
 }
 
@@ -801,6 +993,13 @@ function renderSettings() {
   if (state.setupStep === "permissions") content = permissionsSetupMarkup();
   else if (state.setupStep === "retention" || state.setupStep === "retention-change") content = retentionSetupMarkup();
   else if (state.setupStep === "profile") content = profileNeededMarkup();
+  else if (state.setupStep === "enrollment-one") content = enrollmentSittingMarkup(1);
+  else if (state.setupStep === "enrollment-wait") content = enrollmentWaitMarkup();
+  else if (state.setupStep === "enrollment-two") content = enrollmentSittingMarkup(2);
+  else if (state.setupStep === "enrollment-review") content = enrollmentReviewMarkup();
+  else if (state.setupStep === "enrollment-negative") content = negativeSampleMarkup();
+  else if (state.setupStep === "enrollment-policy") content = voicePolicyMarkup();
+  else if (state.setupStep === "enrollment-build") content = enrollmentBuildMarkup();
   else content = settingsOverviewMarkup();
   workspace.innerHTML = `<div class="settings-layout">${settingsRailMarkup()}${content}</div>`;
 }
@@ -1532,7 +1731,7 @@ function nextMissingSetupStep() {
 function openSettings(step = "overview") {
   if (state.route !== "settings") state.settingsReturnRoute = state.route;
   state.route = "settings";
-  state.setupStep = step;
+  state.setupStep = state.enrollmentRecording ? state.setupStep : step;
   state.profileResetConfirming = false;
   if (step === "retention") state.retentionDraftDays = state.retentionPeriodDays;
   state.focusRequest = "heading";
@@ -1540,7 +1739,7 @@ function openSettings(step = "overview") {
 }
 
 function closeSettings() {
-  if (state.route !== "settings") return;
+  if (state.route !== "settings" || state.enrollmentRecording) return;
   state.route = state.settingsReturnRoute === "settings" ? "home" : state.settingsReturnRoute;
   state.setupStep = "overview";
   state.profileResetConfirming = false;
@@ -1550,7 +1749,8 @@ function closeSettings() {
 }
 
 function previewFirstRun() {
-  if (state.capturePhase !== "idle") return;
+  if (state.capturePhase !== "idle" || state.enrollmentRecording) return;
+  clearEnrollmentState();
   state.setupPermissions = { microphone: false, systemAudio: false };
   state.retentionPeriodDays = null;
   state.retentionDraftDays = null;
@@ -1593,14 +1793,15 @@ function saveRetention() {
 }
 
 function requestProfileReset() {
-  if (state.capturePhase !== "idle" || state.voiceProfileStatus !== "valid") return;
+  if (state.capturePhase !== "idle" || state.enrollmentRecording || state.voiceProfileStatus !== "valid") return;
   state.profileResetConfirming = true;
   state.focusRequest = "status";
   render();
 }
 
 function confirmProfileReset() {
-  if (!state.profileResetConfirming || state.capturePhase !== "idle") return;
+  if (!state.profileResetConfirming || state.capturePhase !== "idle" || state.enrollmentRecording) return;
+  clearEnrollmentState();
   state.profileResetConfirming = false;
   state.voiceProfileStatus = "missing";
   state.consentConfirmed = false;
@@ -1611,7 +1812,8 @@ function confirmProfileReset() {
 }
 
 function loadReturningProfileFixture() {
-  if (state.capturePhase !== "idle") return;
+  if (state.capturePhase !== "idle" || state.enrollmentRecording) return;
+  clearEnrollmentState();
   state.voiceProfileStatus = "valid";
   state.setupStep = "overview";
   showToast("Separate returning-profile fixture loaded. No profile was built here.");
@@ -1619,7 +1821,103 @@ function loadReturningProfileFixture() {
   render();
 }
 
+function clearEnrollmentState() {
+  window.clearTimeout(transitionTimer);
+  state.enrollmentRecording = false;
+  state.enrollmentRecordingKind = null;
+  state.enrollmentNegativeSource = null;
+  state.enrollmentPolicy = null;
+  state.enrollmentBuildPhase = null;
+  state.enrollmentDiscardConfirming = false;
+}
+
+function startEnrollment() {
+  if (state.capturePhase !== "idle" || state.voiceProfileStatus === "valid") return;
+  clearEnrollmentState();
+  state.setupStep = "enrollment-one";
+  state.focusRequest = "heading";
+  render();
+}
+
+function startEnrollmentRecording(kind) {
+  const allowed = {
+    "operator-one": "enrollment-one",
+    "operator-two": "enrollment-two",
+    "other-voice": "enrollment-negative"
+  };
+  if (state.capturePhase !== "idle" || state.setupStep !== allowed[kind]) return;
+  if (kind === "other-voice" && !state.enrollmentNegativeSource) return;
+  state.enrollmentRecording = true;
+  state.enrollmentRecordingKind = kind;
+  state.enrollmentDiscardConfirming = false;
+  state.focusRequest = "heading";
+  render();
+}
+
+function stopEnrollmentRecording() {
+  if (!state.enrollmentRecording) return;
+  const kind = state.enrollmentRecordingKind;
+  state.enrollmentRecording = false;
+  state.enrollmentRecordingKind = null;
+  if (kind === "operator-one") {
+    state.setupStep = "enrollment-wait";
+    showToast("First fixture sitting saved; dedicated source audio is represented as deleted.");
+  } else if (kind === "operator-two") {
+    state.setupStep = "enrollment-review";
+    showToast("Second fixture sitting saved; dedicated source audio is represented as deleted.");
+  } else if (kind === "other-voice") {
+    state.setupStep = "enrollment-policy";
+    showToast("Comparison scores saved; dedicated source audio is represented as deleted.");
+  }
+  state.focusRequest = "heading";
+  render();
+}
+
+function requestEnrollmentDiscard() {
+  if (!state.setupStep.startsWith("enrollment-")) return;
+  state.enrollmentRecording = false;
+  state.enrollmentRecordingKind = null;
+  state.enrollmentDiscardConfirming = true;
+  state.focusRequest = "status";
+  render();
+}
+
+function confirmEnrollmentDiscard() {
+  if (!state.enrollmentDiscardConfirming) return;
+  clearEnrollmentState();
+  state.voiceProfileStatus = "missing";
+  state.setupStep = "profile";
+  state.consentConfirmed = false;
+  showToast("Synthetic enrollment discarded. Meetings and retention remain.");
+  state.focusRequest = "heading";
+  render();
+}
+
+function buildEnrollmentProfile() {
+  if (state.setupStep !== "enrollment-policy" || !state.enrollmentPolicy) return;
+  state.setupStep = "enrollment-build";
+  state.enrollmentBuildPhase = "building";
+  state.focusRequest = "heading";
+  render();
+  transitionTimer = window.setTimeout(() => {
+    state.enrollmentBuildPhase = "persisting";
+    render();
+    transitionTimer = window.setTimeout(() => {
+      state.voiceProfileStatus = "valid";
+      state.enrollmentBuildPhase = null;
+      state.setupStep = "overview";
+      showToast("Synthetic owner-only profile saved. This Mac is ready to record.");
+      state.focusRequest = "heading";
+      render();
+    }, 450);
+  }, 450);
+}
+
 function showCapture() {
+  if (state.enrollmentRecording) {
+    openSettings(state.setupStep);
+    return;
+  }
   if (state.capturePhase === "ready") {
     openCapturedMeeting();
     return;
@@ -1731,6 +2029,11 @@ document.addEventListener("keydown", (event) => {
     state.focusRequest = "heading";
     render();
   }
+  if (event.key === "Escape" && state.enrollmentDiscardConfirming) {
+    state.enrollmentDiscardConfirming = false;
+    state.focusRequest = "heading";
+    render();
+  }
 });
 
 document.addEventListener("submit", (event) => {
@@ -1757,6 +2060,18 @@ document.addEventListener("change", (event) => {
     state.retentionDraftDays = Number(event.target.value);
     const saveButton = document.querySelector("[data-action=save-retention]");
     if (saveButton) saveButton.disabled = false;
+    return;
+  }
+  if (event.target.name === "negative-source") {
+    state.enrollmentNegativeSource = event.target.value;
+    const startButton = document.querySelector("[data-action=start-enrollment-recording]");
+    if (startButton) startButton.disabled = false;
+    return;
+  }
+  if (event.target.name === "voice-policy") {
+    state.enrollmentPolicy = event.target.value;
+    const buildButton = document.querySelector("[data-action=build-enrollment-profile]");
+    if (buildButton) buildButton.disabled = false;
   }
 });
 
@@ -1774,7 +2089,7 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const action = button.dataset.action;
-  if (action === "open-settings") openSettings("overview");
+  if (action === "open-settings") openSettings(state.enrollmentRecording ? state.setupStep : "overview");
   if (action === "close-settings") closeSettings();
   if (action === "preview-first-run") previewFirstRun();
   if (action === "grant-setup-permission") grantSetupPermission(button.dataset.permission);
@@ -1812,6 +2127,27 @@ document.addEventListener("click", (event) => {
     render();
   }
   if (action === "load-returning-profile-fixture") loadReturningProfileFixture();
+  if (action === "start-enrollment") startEnrollment();
+  if (action === "start-enrollment-recording") startEnrollmentRecording(button.dataset.kind);
+  if (action === "stop-enrollment-recording") stopEnrollmentRecording();
+  if (action === "load-later-sitting-fixture") {
+    state.setupStep = "enrollment-two";
+    state.focusRequest = "heading";
+    render();
+  }
+  if (action === "continue-to-negative-sample") {
+    state.setupStep = "enrollment-negative";
+    state.focusRequest = "heading";
+    render();
+  }
+  if (action === "request-enrollment-discard") requestEnrollmentDiscard();
+  if (action === "cancel-enrollment-discard") {
+    state.enrollmentDiscardConfirming = false;
+    state.focusRequest = "heading";
+    render();
+  }
+  if (action === "confirm-enrollment-discard") confirmEnrollmentDiscard();
+  if (action === "build-enrollment-profile") buildEnrollmentProfile();
   if (action === "show-capture") showCapture();
   if (action === "begin-capture") beginCapture();
   if (action === "cancel-capture") cancelCapture();

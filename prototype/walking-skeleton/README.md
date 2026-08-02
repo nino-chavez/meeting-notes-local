@@ -59,9 +59,11 @@ shows the ready state; the first-run path requires both capture permissions and 
 no-default audio auto-deletion choice before it reaches the voice-profile boundary.
 Reset is a separate two-step action that leaves meetings, transcripts, notes,
 retained meeting audio, and the chosen retention period intact while making Start
-unavailable. Guided multi-sitting enrolment is intentionally the next slice rather
-than a completion this screen pretends to provide. No macOS permission, profile,
-audio, or product record is inspected or changed.
+unavailable. The joined enrolment slice then walks two operator sittings separated by
+a measured gap, permitted comparison speech, an unselected measured-policy trade-off,
+private build/persistence, discard, and return to ready. Its displayed rates come from
+the repository's fixed non-personal score fixture. No macOS permission, profile,
+audio, model, or product record is inspected or changed.
 
 It is a design instrument, not a second application runtime. It does not read or write
 Preview data, record audio, invoke a model, or prove note usefulness or semantic

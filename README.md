@@ -121,8 +121,10 @@ implementation so there is one design authority again.
 The prototype runs at the real 960×900 product viewport and includes thin notes,
 gaps, withheld turns, missing transcripts, stale notes, loading, failure, recovery,
 first-run prerequisites, a no-default retention choice, and a separately resettable
-owner voice profile. The current voice path stops before guided multi-sitting
-enrolment; it does not pretend that a returning-profile fixture completed first run.
+owner voice profile. Guided enrolment now walks two separated operator sittings,
+permitted other-voice material, a no-default measured policy, discard, and an
+owner-only save transition. It uses non-personal fixtures and does not claim a real
+profile exists.
 Automated checks can prove its mechanics. Only the operator can approve its
 information architecture and interaction. The approved composition fingerprints the
 default view, shared destinations, labels, and transitions before implementation;
@@ -153,7 +155,7 @@ transcript and metadata search inside the validated local library remains in bet
 | Phase | Work an agent can complete | Human gate |
 |---|---|---|
 | Correctness floor | Close profile, provenance and structured-note contract defects; keep deterministic controls green | None |
-| Interaction skeleton | The operator accepted Find as the default plus persistent Find, Meetings, and Promises navigation at exact prototype commit `689fcda396c073d21d69d8feb3cfb6031bec0596`. The approved spine now includes the synthetic discovery note, ambient manual capture, and the first trust-controls slice: settings readiness, explicit retention choice, blocked Start, and profile reset without meeting deletion. | Composition gate passed 2026-08-02. Discovery-note, capture, and trust-control reviews are pending; guided enrolment, hardware, automatic-note usefulness, and application behavior remain separate gates. |
+| Interaction skeleton | The operator accepted Find as the default plus persistent Find, Meetings, and Promises navigation at exact prototype commit `689fcda396c073d21d69d8feb3cfb6031bec0596`. The approved spine now includes the synthetic discovery note, ambient manual capture, settings readiness, explicit retention, profile reset, and guided two-sitting enrolment through a measured policy and private-save transition. | Composition gate passed 2026-08-02. Discovery-note, capture, trust-control, and enrolment reviews are pending; real profile policy, hardware, automatic-note usefulness, and application behavior remain separate gates. |
 | Production walking skeleton | Implement one genuine installed path through Launch → Record → Stop → Transcribe → Library → Note → Evidence → Correct/regenerate → Retrieve under the [`vertical-slice contract`](./docs/vertical-slice.md). Return every thin join as an updated Preview. | Operator exercises permissions, hardware capture, recovery, and the approved navigation over real retained artifacts |
 | Trust actions | Restore withheld speech, regenerate a note, choose retention, inspect disk use and delete audio or a meeting | Operator chooses the far-end notice and retention policy, then performs each action |
 | Limited beta | Package, sign, install cold and run a canary followed by real headphone meetings | Participants consent; the operator judges whether the notes are useful |

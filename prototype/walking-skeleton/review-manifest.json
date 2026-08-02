@@ -1,6 +1,6 @@
 {
-  "reviewScope": "walking-skeleton-trust-setup",
-  "reviewQuestion": "Can the operator understand why Start is available or blocked, choose meeting-audio retention without a default, and reset the owner voice profile without mistaking that action for meeting deletion?",
+  "reviewScope": "walking-skeleton-guided-voice-enrollment",
+  "reviewQuestion": "Can the operator complete or discard voice enrollment while understanding the two-sitting gap, permitted comparison speech, measured trade-off, short-lived source audio, and exact condition that makes Start available?",
   "approvedDefault": "retrieval",
   "evidenceBasis": {
     "market": "Corpus retrieval is positioned as core value; documented comparables expose multiple retrieval entry points.",
@@ -20,8 +20,8 @@
   },
   "files": {
     "index.html": "sha256:7ce1c1342a9bd2ead2fe769db138747eef720a06445e915f36d4102dc2f79b45",
-    "styles.css": "sha256:93cc49f804eedc251e906d22a48fb999b292f45123c337e0ab6d7b304a914598",
-    "app.js": "sha256:f17cde7f886944c7a958c6f7a47bd2c897395f18970cceda16e9efcf8f1b3444"
+    "styles.css": "sha256:bce41ecda87ee211c2e10a9357645ab8920979b7e4c9ec853aa513f2a1eff5ad",
+    "app.js": "sha256:0c178618cf181702e87b515dd69baa73b06bbb7a057912abd88089edc034f751"
   },
   "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
   "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",
@@ -134,13 +134,67 @@
       "Profile reset preserves meetings, notes, transcripts, retained meeting audio, and retention choice.",
       "A returning-profile fixture is independent from new enrollment and cannot complete it."
     ],
-    "guidedEnrollment": "pending-next-prototype-slice",
+    "guidedEnrollment": "joined-by-voice-enrollment-v1",
     "doesNotApprove": [
       "macOS permission attribution",
       "retention policy wording",
       "voice enrollment or profile validity",
       "profile reset implementation",
       "product deletion behavior",
+      "installed Preview behavior",
+      "beta admission or release"
+    ]
+  },
+  "voiceEnrollmentSlice": {
+    "id": "voice-enrollment-v1",
+    "status": "pending-operator-review",
+    "source": "synthetic",
+    "states": [
+      "first-operator-sitting",
+      "first-sitting-recording",
+      "resume-after-measured-gap",
+      "second-operator-sitting",
+      "second-sitting-review",
+      "permitted-other-voice-source",
+      "other-voice-recording",
+      "measured-policy-unselected",
+      "profile-building",
+      "owner-only-persistence",
+      "enrolled-ready",
+      "discard-confirm",
+      "discarded"
+    ],
+    "nonPersonalPolicyFixture": [
+      {
+        "label": "preserve-more-operator-speech",
+        "operatorSamplesDropped": "1/100",
+        "otherVoiceSamplesIncluded": "31/40"
+      },
+      {
+        "label": "measured-middle",
+        "operatorSamplesDropped": "5/100",
+        "otherVoiceSamplesIncluded": "29/40"
+      },
+      {
+        "label": "keep-more-other-voices-out",
+        "operatorSamplesDropped": "20/100",
+        "otherVoiceSamplesIncluded": "22/40"
+      }
+    ],
+    "contracts": [
+      "The second sitting requires a measured gap of at least one hour; the fixture never claims real time elapsed.",
+      "Comparison speech must be public-domain, appropriately licensed, or deliberately recorded by a consenting person.",
+      "No measured policy is selected or recommended by default.",
+      "Dedicated source audio and working files are represented as deleted after safe private derivation.",
+      "Start remains blocked until the selected row and provenance are represented as owner-only persisted.",
+      "Discard preserves meetings, meeting audio, notes, transcripts, retention choice, and any previously valid profile."
+    ],
+    "doesNotApprove": [
+      "real enrollment audio",
+      "profile measurements or validity",
+      "operating-point policy",
+      "source-audio deletion implementation",
+      "owner-only persistence implementation",
       "installed Preview behavior",
       "beta admission or release"
     ]

@@ -458,8 +458,10 @@ profile: Settings shows the ready conjunction, first run requires both permissio
 fixtures and an unselected retention choice, and the reset confirmation names what is
 deleted and what remains. Confirming reset changes Start to **Finish setup** and lands
 at the blocked enrollment explanation. The separate returning-profile fixture is
-explicitly not a shortcut through new enrollment. The multi-sitting enrollment itself
-is the next prototype slice.
+explicitly not a shortcut through new enrollment. The joined enrollment path now
+walks two separated operator sittings, permitted other-voice material, an explicitly
+unselected measured policy, build/private persistence, completion, and discard. Its
+counts and rates are non-personal fixtures, not claims about the reviewer.
 
 Readiness is conjunctive: a valid profile, both current capture permissions, and an
 explicit meeting-audio retention choice must all exist. Participant attestation then
