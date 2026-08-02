@@ -20,7 +20,6 @@ from mlx_note_admission import (
     run_control_arm,
     run_model_arm,
     synthetic_corrective_probe_fixtures,
-    synthetic_measurement_fixtures,
     tree_sha256,
 )
 from summarize import structured_artifact_citations
@@ -41,6 +40,14 @@ def fixture_receipt(phase: str, identifier: str, transcript, expected_outcome: s
         "required_citation_terms": all(term.casefold() in joined for term in required_terms),
         "strict_empty_abstention": expected_outcome != "transcript-only" or result.code == "no-model-candidates",
     }
+
+
+def fixtures_for_scope(scope: str):
+    if scope == "probe":
+        return synthetic_corrective_probe_fixtures()
+    raise ValueError(
+        "full-scope-not-implemented: use a fresh-process orchestrator for the registered cold/warm repeat matrix"
+    )
     return {
         "phase": phase,
         "id": identifier,
@@ -63,7 +70,10 @@ def main() -> int:
     parser.add_argument("--model-directory", required=True, type=Path)
     parser.add_argument("--scope", required=True, choices=("probe", "full"))
     args = parser.parse_args()
-    fixtures = synthetic_corrective_probe_fixtures() if args.scope == "probe" else synthetic_measurement_fixtures()
+    try:
+        fixtures = fixtures_for_scope(args.scope)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
     preflight_tree_sha256 = tree_sha256(args.model_directory)
     if preflight_tree_sha256 != MLX_RUNTIME["model"]["expected_tree_sha256"]:

@@ -115,6 +115,9 @@ name/number preservation cases; two explicit negation cases; and two
 abstention/no-supported-candidate cases. Each is run three times from a fresh
 process for cold timing and twice more in the same loaded process for warm
 timing. Never use meeting recordings, Preview data, or product records.
+The current measurement runner deliberately refuses `--scope full`; a future
+fresh-process orchestrator must implement this exact repeat matrix before the
+full suite can run or support an admission claim.
 
 | Gate | Pass condition | Failure |
 | --- | --- | --- |

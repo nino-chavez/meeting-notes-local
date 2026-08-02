@@ -22,6 +22,7 @@ from mlx_note_admission import (
     synthetic_transcript,
     tree_sha256,
 )
+from measure_mlx_note_candidate import fixtures_for_scope
 from candidate_first import STRATEGY_CUE, generate_manifest
 from summarize import structured_artifact_citations
 
@@ -99,6 +100,11 @@ class MlxNoteAdmissionTests(unittest.TestCase):
         fixtures = synthetic_corrective_probe_fixtures()
         self.assertEqual([fixture[0] for fixture in fixtures], ["ordinary-decision", "abstain-chitchat"])
         self.assertEqual([fixture[2] for fixture in fixtures], ["accepted-research-candidate", "transcript-only"])
+
+    def test_measurement_runner_refuses_unimplemented_full_scope(self) -> None:
+        self.assertEqual(len(fixtures_for_scope("probe")), 2)
+        with self.assertRaisesRegex(ValueError, "full-scope-not-implemented"):
+            fixtures_for_scope("full")
 
     def test_research_model_manifest_is_immutable_and_has_a_download_budget(self) -> None:
         model = MLX_RUNTIME["model"]
