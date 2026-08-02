@@ -311,10 +311,10 @@ routes. Its private-input mode consumes the exact `encounter-review-content/1` a
 digest-bound `encounter-content-approval/1` schemas, and an eligible owner-only packet
 populated the exact page accepted in the 2026-07-31 cold review. Its correction,
 retention, deletion, and processing behaviors remain specimens. Cross-meeting search
-was not present in the accepted encounter and remains outside this gate. Exact,
-non-generative transcript and metadata search is later beta work that requires its own
-cold review; conversational or semantic cross-meeting retrieval remains outside the
-supported beta.
+was not present in the accepted encounter and remains outside this gate. A private,
+unregistered Rust reader now implements exact non-generative transcript, title, and
+folder search, but the working library surface still requires its own cold review;
+conversational or semantic cross-meeting retrieval remains outside the supported beta.
 
 ## Cold operator checklist
 
