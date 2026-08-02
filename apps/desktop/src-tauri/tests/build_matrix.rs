@@ -66,6 +66,21 @@ fn preview_config_with_feature_adds_only_the_read_only_library_boundary() {
 }
 
 #[test]
+fn production_and_preview_share_the_product_window_size() {
+    let production = config(include_str!("../tauri.conf.json"));
+    let preview = config(include_str!("../tauri.preview.conf.json"));
+
+    for config in [&production, &preview] {
+        let window = &config["app"]["windows"][0];
+        assert_eq!(window["width"], 960);
+        assert_eq!(window["height"], 900);
+        assert_eq!(window["minWidth"], 720);
+        assert_eq!(window["minHeight"], 560);
+        assert_eq!(window["resizable"], true);
+    }
+}
+
+#[test]
 fn surface_features_select_exactly_one_build_lane() {
     assert!(matches!(
         BuildMode::from_enabled_features(false, false),

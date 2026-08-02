@@ -13,7 +13,7 @@
         "label": "preview",
         "title": "Local Meeting Notes — Preview",
         "width": 960,
-        "height": 720,
+        "height": 900,
         "minWidth": 720,
         "minHeight": 560,
         "resizable": true
