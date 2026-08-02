@@ -31,12 +31,13 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use local_meeting_notes_session_core::diagnostic::write_private_diagnostic;
+#[cfg(feature = "preview-surface")]
+use local_meeting_notes_session_core::library_read::{LibraryProjection, ReadLimits};
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
     MeetingLifecycle, MeetingRecord, MeetingSchema, artifact_ref, load_meeting, read_private_bytes,
     retention_policy_sha256, write_meeting,
 };
-use local_meeting_notes_session_core::library_read::{LibraryProjection, ReadLimits};
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 use local_meeting_notes_session_core::protocol::{
     Operation, ProtocolError, WorkerCommand, WorkerResult,
@@ -186,6 +187,8 @@ struct AppSnapshot {
 
 #[derive(Clone, Serialize)]
 struct TranscriptTurn {
+    #[serde(rename = "sourceTurnIndex")]
+    source_turn_index: u32,
     speaker: Option<String>,
     start: f64,
     text: String,
@@ -741,11 +744,51 @@ fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reade
         Err(_) => return library_reader::LibraryReader::unavailable_snapshot(),
     };
     let snapshot = reader.snapshot();
-    *state
-        .preview_library
-        .lock()
-        .expect("preview library lock") = Some(reader);
+    *state.preview_library.lock().expect("preview library lock") = Some(reader);
     snapshot
+}
+
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
+fn preview_library_search(
+    query: String,
+    state: State<'_, ApplicationState>,
+) -> library_reader::LibrarySearchResponse {
+    let mut reader = state.preview_library.lock().expect("preview library lock");
+    let mut response = reader
+        .as_mut()
+        .map(|reader| reader.search(&query))
+        .unwrap_or_else(library_reader::LibraryReader::unavailable_search);
+    // Preview's active reader is deliberately transcript/title metadata only.
+    // The broader projection contract also supports future claim readers, but
+    // this surface cannot make claim text a search destination yet.
+    response
+        .results
+        .retain(|result| matches!(result.kind, "transcript" | "withheld" | "meeting"));
+    if response.state == "results" && response.results.is_empty() {
+        response.state = "no-results";
+        response.message = "No retained transcript, title, or folder matched that search.".into();
+    }
+    response
+}
+
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
+fn preview_library_open_search_result(
+    handle: String,
+    state: State<'_, ApplicationState>,
+) -> library_reader::LibrarySearchOpenResponse {
+    let reader = state.preview_library.lock().expect("preview library lock");
+    reader
+        .as_ref()
+        .map(|reader| reader.open_search_result(&handle))
+        .unwrap_or_else(|| library_reader::LibrarySearchOpenResponse {
+            state: "unavailable",
+            meeting_id: None,
+            source_turn_index: None,
+            message: "The local Preview library is unavailable. Reopen the app and try again."
+                .into(),
+        })
 }
 
 #[cfg(feature = "preview-surface")]
@@ -781,7 +824,8 @@ fn preview_library_open_transcript(
             meeting_id: None,
             turns: Vec::new(),
             warnings: Vec::new(),
-            message: "The local Preview library is unavailable. Reopen the app and try again.".into(),
+            message: "The local Preview library is unavailable. Reopen the app and try again."
+                .into(),
         };
     };
     let opened = (|| {
@@ -836,6 +880,10 @@ fn main() {
             retry_startup,
             #[cfg(feature = "preview-surface")]
             preview_library_snapshot,
+            #[cfg(feature = "preview-surface")]
+            preview_library_search,
+            #[cfg(feature = "preview-surface")]
+            preview_library_open_search_result,
             #[cfg(feature = "preview-surface")]
             preview_library_open_transcript
         ])
@@ -2353,7 +2401,7 @@ fn parse_transcript_projection(bytes: &[u8]) -> Result<(Vec<TranscriptTurn>, Vec
     let unattributed = document.attribution == "none";
     let mut turns = Vec::with_capacity(document.turns.len());
     let mut gated = 0_u64;
-    for turn in document.turns {
+    for (source_turn_index, turn) in document.turns.into_iter().enumerate() {
         if !turn.start.is_finite()
             || !turn.end.is_finite()
             || turn.start < 0.0
@@ -2378,6 +2426,7 @@ fn parse_transcript_projection(bytes: &[u8]) -> Result<(Vec<TranscriptTurn>, Vec
             continue;
         }
         turns.push(TranscriptTurn {
+            source_turn_index: source_turn_index as u32,
             speaker: if unattributed { None } else { turn.speaker },
             start: turn.start,
             text: turn.text,
@@ -2966,6 +3015,7 @@ mod tests {
             RestoredTranscriptProjection {
                 meeting_id: "meeting-fixture".into(),
                 turns: vec![TranscriptTurn {
+                    source_turn_index: 0,
                     speaker: Some("Me".into()),
                     start: 0.0,
                     text: "visible".into(),

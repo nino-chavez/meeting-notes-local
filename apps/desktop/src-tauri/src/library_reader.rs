@@ -61,6 +61,17 @@ pub(crate) struct LibrarySearchResult {
     pub(crate) claim_ordinal: Option<u64>,
 }
 
+/// A verified search handle can only reopen its current projection target. It
+/// deliberately returns a turn identity, never a filename or a general path.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LibrarySearchOpenResponse {
+    pub(crate) state: &'static str,
+    pub(crate) meeting_id: Option<String>,
+    pub(crate) source_turn_index: Option<u32>,
+    pub(crate) message: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LibraryNoteResponse {
@@ -130,9 +141,10 @@ impl LibraryReader {
     /// Confines a transcript-open request to a row that this exact read-only
     /// projection accepted. The caller still reopens and verifies the artifact.
     pub(crate) fn has_transcript(&self, meeting_id: &str) -> bool {
-        self.projection.rows().iter().any(|row| {
-            row.meeting_id == meeting_id && row.transcript_sha256.is_some()
-        })
+        self.projection
+            .rows()
+            .iter()
+            .any(|row| row.meeting_id == meeting_id && row.transcript_sha256.is_some())
     }
 
     pub(crate) fn search(&mut self, query: &str) -> LibrarySearchResponse {
@@ -209,6 +221,46 @@ impl LibraryReader {
                 }
             }
             Err(_) => Self::stale_search(),
+        }
+    }
+
+    /// Reopens a result through the projection's normal stale-artifact checks.
+    /// Search terms never become filesystem or transcript-enumeration authority.
+    pub(crate) fn open_search_result(&self, handle: &str) -> LibrarySearchOpenResponse {
+        let Some(hit) = self.handles.get(handle) else {
+            return Self::stale_search_open();
+        };
+        match self.projection.open(&self.storage, hit) {
+            Ok(OpenedLibraryHit::Transcript {
+                meeting_id,
+                source_turn_index,
+                ..
+            }) => LibrarySearchOpenResponse {
+                state: "transcript",
+                meeting_id: Some(meeting_id),
+                source_turn_index: Some(source_turn_index),
+                message: "Opening the exact retained transcript turn that matched.".into(),
+            },
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => LibrarySearchOpenResponse {
+                state: "meeting",
+                meeting_id: Some(meeting_id),
+                source_turn_index: None,
+                message: "Opening this retained meeting's canonical transcript.".into(),
+            },
+            Ok(OpenedLibraryHit::Withheld {
+                meeting_id,
+                source_turn_index,
+            }) => LibrarySearchOpenResponse {
+                state: "withheld",
+                meeting_id: Some(meeting_id),
+                source_turn_index: Some(source_turn_index),
+                message:
+                    "A voice check withheld this matching turn. It is not shown as transcript text."
+                        .into(),
+            },
+            // Preview does not expose note reading yet, so a retained claim is
+            // not a transcript/title search destination.
+            Ok(OpenedLibraryHit::Claim { .. }) | Err(_) => Self::stale_search_open(),
         }
     }
 
@@ -339,6 +391,15 @@ impl LibraryReader {
         LibrarySearchResponse {
             state: "stale",
             results: Vec::new(),
+            message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn stale_search_open() -> LibrarySearchOpenResponse {
+        LibrarySearchOpenResponse {
+            state: "stale",
+            meeting_id: None,
+            source_turn_index: None,
             message: STALE_MESSAGE.into(),
         }
     }

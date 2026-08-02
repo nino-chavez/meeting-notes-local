@@ -173,6 +173,19 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .turn p { margin: 0; line-height: 1.58; }
 .empty-transcript { padding: 24px 0; color: var(--muted); }
 .library-list { margin: 38px 0 24px; border-top: 1px solid var(--line); }
+.library-search { margin-top: 32px; }
+.library-search > label { display: block; margin-bottom: 9px; color: var(--ink); font-weight: 650; }
+.library-search-field { display: flex; gap: 10px; align-items: stretch; }
+.library-search-field input { flex: 1; min-width: 0; padding: 12px 13px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background: #faf9f4; font: inherit; }
+.library-search-field input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 34%, transparent); outline-offset: 2px; }
+.library-search small { display: block; margin-top: 8px; color: var(--muted); font-size: 0.8rem; line-height: 1.42; }
+.library-search-results { border-top: 1px solid var(--line); }
+.library-search-results:empty { display: none; }
+.library-search-result { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: 100%; min-height: 66px; padding: 15px 0; border: 0; border-bottom: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; }
+.library-search-result strong, .library-search-result small { display: block; }
+.library-search-result small { margin-top: 4px; color: var(--muted); }
+.library-search-result span:last-child { color: var(--accent); font-size: 0.86rem; white-space: nowrap; }
+.turn.matched-turn { margin: 0 -14px; padding-right: 14px; padding-left: 14px; border-left: 3px solid var(--accent); background: #e7f0e9; }
 .library-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: 100%; min-height: 72px; padding: 16px 0; border: 0; border-radius: 0; border-bottom: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; }
 .library-row strong, .library-row small { display: block; }
 .library-row small { margin-top: 4px; color: var(--muted); }
@@ -187,6 +200,7 @@ footer { border-top: 1px solid var(--line); border-bottom: 0; color: #66706a; }
   .product-state { margin-top: 6px !important; }
   .release-badge { align-self: flex-start; }
   .channel-grid { grid-template-columns: 1fr; }
+  .library-search-field { align-items: stretch; flex-direction: column; }
   .turn { grid-template-columns: 1fr; gap: 10px; }
 }
 
