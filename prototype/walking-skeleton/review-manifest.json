@@ -19,10 +19,12 @@
     "height": 900
   },
   "files": {
-    "index.html": "sha256:05015edfe4f3dc750094c39488848a5a869e01a432c4590804b23fc0cde11583",
-    "styles.css": "sha256:bf2cb9d60c8b038f4cb89e89944549d77783a23061db0483e3ae96fcff1bd3c0",
-    "app.js": "sha256:3a94a7873443382b685cf2054f9506707888699e040b5c3d997d995715dfd224"
+    "index.html": "sha256:0a277da6907ccf463a52ce0cb011143a8775a955c02ddf1add7de96ea3b6fe88",
+    "styles.css": "sha256:386c5ac335d60c9ba6ece66aed8438d4961903315dfc268abd6117e73634320f",
+    "app.js": "sha256:b932d4b810c3cb8334363beb371930c9e05ed4bcde90934f68252b36fad48e77"
   },
+  "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
+  "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",
   "sharedDestinations": [
     "meeting-detail",
     "note",

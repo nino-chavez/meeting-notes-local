@@ -84,6 +84,13 @@ the first-meeting scenario selected by 3/3 respondents. That slice compares the 
 note hierarchy—summary, decisions, actions/owners, open questions, risks/blockers—and
 its evidence treatment without confounding the navigation decision.
 
+The running comparison now separates the two controls explicitly: a dark reviewer bar
+changes only the default opening, while the light app header keeps Find, Meetings, and
+Promises persistently available. Moving among those product destinations preserves a
+restored transcript turn, stale/regenerated note state, the resulting promise, and the
+meeting's updated status. The remaining design gate is the operator's judgment of that
+hierarchy, not whether the three capabilities can coexist mechanically.
+
 | Wave | Current status and active stream | Join or exit | Human gate | ETA |
 |---|---|---|---|---|
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |

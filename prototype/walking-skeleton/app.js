@@ -164,7 +164,7 @@ const recoveredPartnerClaim = {
   locator: { turnId: "m03-t01", start: 7, end: 47, quote: "send the agenda before the next check-in" }
 };
 
-const directionLabels = {
+const viewLabels = {
   meetings: "Meetings",
   commitments: "Promises",
   retrieval: "Find"
@@ -181,21 +181,21 @@ let state = freshState(readDirection());
 
 function readDirection() {
   const direction = new URLSearchParams(window.location.search).get("direction");
-  return Object.hasOwn(directionLabels, direction) ? direction : "retrieval";
+  return Object.hasOwn(viewLabels, direction) ? direction : "retrieval";
 }
 
-function freshState(direction) {
+function freshState(defaultDirection) {
   return {
-    direction,
+    defaultDirection,
+    view: defaultDirection,
     loading: true,
     route: "home",
     query: "",
     selectedMeetingId: null,
     selectedClaimId: null,
     selectedTranscriptLocator: null,
-    claimFilter: direction === "commitments" ? "commitments" : "all",
+    claimFilter: defaultDirection === "commitments" ? "commitments" : "all",
     folderFilter: null,
-    retrievalMode: "find",
     focusRequest: null,
     reviewingGap: false,
     restored: false,
@@ -297,28 +297,47 @@ function startLoading() {
   }, 350);
 }
 
-function resetPrototype(direction = state.direction) {
+function resetPrototype(direction = state.defaultDirection) {
   window.clearTimeout(transitionTimer);
   state = freshState(direction);
   startLoading();
 }
 
 function setDirection(direction) {
-  if (!Object.hasOwn(directionLabels, direction) || direction === state.direction) return;
+  if (!Object.hasOwn(viewLabels, direction) || direction === state.defaultDirection) return;
   const url = new URL(window.location.href);
   url.searchParams.set("direction", direction);
   window.history.replaceState({}, "", url);
   resetPrototype(direction);
 }
 
+function switchView(view) {
+  if (!Object.hasOwn(viewLabels, view)) return;
+  state.view = view;
+  state.route = "home";
+  state.query = "";
+  state.selectedMeetingId = null;
+  state.selectedClaimId = null;
+  state.selectedTranscriptLocator = null;
+  state.claimFilter = view === "commitments" ? "commitments" : "all";
+  state.folderFilter = null;
+  state.reviewingGap = false;
+  state.focusRequest = "heading";
+  render();
+}
+
 function syncChrome() {
   document.querySelectorAll("[data-direction]").forEach((button) => {
-    const selected = button.dataset.direction === state.direction;
+    const selected = button.dataset.direction === state.defaultDirection;
     button.setAttribute("aria-selected", String(selected));
     button.tabIndex = selected ? 0 : -1;
   });
-  workspace.setAttribute("aria-labelledby", `direction-${state.direction}`);
-  footerDirection.textContent = `Default opening · ${directionLabels[state.direction]}`;
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    if (button.dataset.view === state.view) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  workspace.setAttribute("aria-label", `${viewLabels[state.view]} view`);
+  footerDirection.textContent = `Viewing ${viewLabels[state.view]} · opens on ${viewLabels[state.defaultDirection]}`;
 }
 
 function showToast(message) {
@@ -365,9 +384,9 @@ function render() {
     renderMeetingDetail();
   } else if (state.route === "claim") {
     renderClaimDetail();
-  } else if (state.direction === "meetings") {
+  } else if (state.view === "meetings") {
     renderMeetingsHome();
-  } else if (state.direction === "commitments") {
+  } else if (state.view === "commitments") {
     renderCommitmentsHome();
   } else {
     renderRetrievalHome();
@@ -525,12 +544,7 @@ function renderRetrievalHome() {
         <h2 class="rail-title">Find what you remember</h2>
         <p class="rail-copy">Start with a subject or exact phrase. Results can be claims, transcript words, or meetings.</p>
         ${searchFormMarkup(true)}
-        ${state.query ? searchResultsListMarkup(results) : `
-          <div class="filter-stack" aria-label="Browse modes">
-            <button class="filter-button" type="button" data-action="retrieval-mode" data-mode="find" aria-pressed="${state.retrievalMode === "find"}"><span>Find</span><small>Question first</small></button>
-            <button class="filter-button" type="button" data-action="retrieval-mode" data-mode="meetings" aria-pressed="${state.retrievalMode === "meetings"}"><span>Browse meetings</span><small>4</small></button>
-            <button class="filter-button" type="button" data-action="retrieval-mode" data-mode="commitments" aria-pressed="${state.retrievalMode === "commitments"}"><span>Recorded promises</span><small>${allClaims().filter(({ claim }) => claim.kind === "commitment").length}</small></button>
-          </div>`}
+        ${state.query ? searchResultsListMarkup(results) : `<p class="rail-note">Use the navigation above to browse Meetings or review Promises without losing the shared meeting record.</p>`}
       </aside>
       <section class="content-pane">
         ${retrievalContentMarkup()}
@@ -539,27 +553,6 @@ function renderRetrievalHome() {
 }
 
 function retrievalContentMarkup() {
-  if (state.retrievalMode === "meetings") {
-    return `
-      <div class="home-intro">
-        <p class="kicker">Browse by source</p>
-        <h1>Meetings.</h1>
-        <p class="lede">Use chronology when the meeting itself is what you remember.</p>
-      </div>
-      <div class="section-heading"><h2>Recent meetings</h2><span>4 retained</span></div>
-      <div class="meeting-list">${meetingRowsMarkup()}</div>`;
-  }
-  if (state.retrievalMode === "commitments") {
-    const promises = allClaims().filter(({ claim }) => claim.kind === "commitment").map(({ meeting, claim }) => ({ type: "claim", meeting, claim }));
-    return `
-      <div class="home-intro">
-        <p class="kicker">Across meetings</p>
-        <h1>Recorded promises.</h1>
-        <p class="lede">Review what someone committed to say or do. Completion still belongs in your task system.</p>
-      </div>
-      <div class="section-heading"><h2>Promises</h2><span>${promises.length} recorded</span></div>
-      <div class="claim-list">${claimRowsMarkup(promises)}</div>`;
-  }
   return `
     <div class="home-intro">
       <p class="kicker">Meeting memory</p>
@@ -667,7 +660,7 @@ function renderClaimDetail() {
     return;
   }
   const content = claimDetailMarkup(found.meeting, found.claim);
-  if (state.direction === "retrieval") {
+  if (state.view === "retrieval") {
     const results = search(state.query);
     workspace.innerHTML = `
       <div class="workspace-grid retrieval-grid">
@@ -688,7 +681,7 @@ function renderClaimDetail() {
 }
 
 function detailRailMarkup(meeting) {
-  const title = state.direction === "meetings" ? "Meetings" : "Recorded promises";
+  const title = state.view === "meetings" ? "Meetings" : "Recorded promises";
   return `
     <p class="kicker">${escapeHtml(title)}</p>
     <h2 class="rail-title">${escapeHtml(meeting.title)}</h2>
@@ -1078,7 +1071,7 @@ async function copyText(text, message) {
 document.querySelector(".direction-tabs").addEventListener("keydown", (event) => {
   if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
   const order = ["meetings", "commitments", "retrieval"];
-  const current = order.indexOf(state.direction);
+  const current = order.indexOf(state.defaultDirection);
   const delta = event.key === "ArrowRight" ? 1 : -1;
   const next = order[(current + delta + order.length) % order.length];
   setDirection(next);
@@ -1089,7 +1082,6 @@ document.addEventListener("submit", (event) => {
   if (event.target.id !== "search-form") return;
   event.preventDefault();
   state.query = new FormData(event.target).get("query").trim();
-  state.retrievalMode = "find";
   state.folderFilter = null;
   state.route = "home";
   state.selectedMeetingId = null;
@@ -1103,6 +1095,11 @@ document.addEventListener("click", (event) => {
   const direction = event.target.closest("[data-direction]")?.dataset.direction;
   if (direction) {
     setDirection(direction);
+    return;
+  }
+  const view = event.target.closest("[data-view]")?.dataset.view;
+  if (view) {
+    switchView(view);
     return;
   }
   const button = event.target.closest("[data-action]");
@@ -1133,12 +1130,6 @@ document.addEventListener("click", (event) => {
   if (action === "claim-filter") {
     state.claimFilter = button.dataset.filter;
     state.focusRequest = "results";
-    render();
-  }
-  if (action === "retrieval-mode") {
-    state.retrievalMode = button.dataset.mode;
-    state.query = "";
-    state.focusRequest = "heading";
     render();
   }
   if (action === "folder-filter") {
@@ -1193,7 +1184,6 @@ document.addEventListener("click", (event) => {
   }
 });
 
-document.querySelector("#home-button").addEventListener("click", backToResults);
 document.querySelector("#reset-prototype").addEventListener("click", () => resetPrototype());
 
 assertFixtureIntegrity();

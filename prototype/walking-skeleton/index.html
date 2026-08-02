@@ -31,16 +31,20 @@
           <span class="product-state"><span class="status-dot" aria-hidden="true"></span>Nothing is recording</span>
         </div>
         <div class="header-actions">
-          <button class="header-link" id="home-button" type="button">Library</button>
+          <nav class="product-nav" aria-label="Meeting memory">
+            <button type="button" data-view="retrieval">Find</button>
+            <button type="button" data-view="meetings">Meetings</button>
+            <button type="button" data-view="commitments">Promises</button>
+          </nav>
           <span class="release-badge">Prototype</span>
         </div>
       </header>
 
-      <main id="workspace" role="tabpanel" tabindex="-1"></main>
+      <main id="workspace" tabindex="-1"></main>
 
       <footer>
         <span>Synthetic snapshot May 9, 2026 · no product records</span>
-        <span id="footer-direction">Default opening · Find</span>
+        <span id="footer-direction">Viewing Find · opens on Find</span>
       </footer>
     </div>
 

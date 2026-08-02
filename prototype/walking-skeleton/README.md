@@ -13,6 +13,12 @@ Each starting view implements the same thin journey:
 
 `find a decision → inspect its typed claim → open exact transcript words → review a withheld turn → restore it → see the note become stale → regenerate → return to the preserved retrieval context`
 
+The light app header is the proposed persistent product navigation: **Find**,
+**Meetings**, and **Promises** remain reachable from every product view. The dark bar is
+reviewer-only: it changes which of those views opens by default. Switching product
+views preserves corrected transcript state, regenerated note state, and the resulting
+meeting and promise updates.
+
 Find opens by default as an evidence-ranked hypothesis, not an arbitrary favorite.
 Existing market research treats corpus retrieval as core value; the registered
 colleague snapshot (`n=3`) favors a question-shaped entry 2:1 over filters and scores
