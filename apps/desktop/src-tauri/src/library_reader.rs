@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use local_meeting_notes_session_core::library_read::{
     ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, OpenedLibraryHit,
 };
-use local_meeting_notes_session_core::meeting::MeetingLifecycle;
+use local_meeting_notes_session_core::meeting::{ArtifactRef, MeetingLifecycle};
 use local_meeting_notes_session_core::note_projection::ClaimType;
 use local_meeting_notes_session_core::storage::StorageRoot;
 use serde::Serialize;
@@ -61,6 +61,8 @@ pub(crate) struct LibrarySearchResult {
     pub(crate) meeting_id: String,
     pub(crate) text: Option<String>,
     pub(crate) source_turn_index: Option<u32>,
+    pub(crate) start: Option<u64>,
+    pub(crate) end: Option<u64>,
     pub(crate) claim_ordinal: Option<u64>,
     pub(crate) transcript_available: bool,
 }
@@ -74,6 +76,8 @@ pub(crate) struct LibrarySearchOpenResponse {
     pub(crate) transcript_handle: Option<String>,
     pub(crate) meeting_id: Option<String>,
     pub(crate) source_turn_index: Option<u32>,
+    pub(crate) start: Option<u64>,
+    pub(crate) end: Option<u64>,
     pub(crate) message: String,
 }
 
@@ -115,6 +119,7 @@ pub(crate) struct LibraryEvidenceResponse {
 pub(crate) struct LibraryTranscriptAccess {
     pub(crate) state: &'static str,
     pub(crate) meeting_id: Option<String>,
+    pub(crate) transcript_artifact: Option<ArtifactRef>,
     pub(crate) message: String,
 }
 
@@ -230,6 +235,8 @@ impl LibraryReader {
                             meeting_id,
                             text: Some(claim),
                             source_turn_index: None,
+                            start: None,
+                            end: None,
                             claim_ordinal: Some(claim_ordinal),
                             transcript_available: true,
                         }),
@@ -237,6 +244,8 @@ impl LibraryReader {
                             meeting_id,
                             text,
                             source_turn_index,
+                            original_scalar_start,
+                            original_scalar_end,
                             ..
                         }) => results.push(LibrarySearchResult {
                             handle: self.retain_handle(hit),
@@ -244,6 +253,8 @@ impl LibraryReader {
                             meeting_id,
                             text: Some(text),
                             source_turn_index: Some(source_turn_index),
+                            start: Some(original_scalar_start),
+                            end: Some(original_scalar_end),
                             claim_ordinal: None,
                             transcript_available: true,
                         }),
@@ -256,6 +267,8 @@ impl LibraryReader {
                             meeting_id,
                             text: None,
                             source_turn_index: Some(source_turn_index),
+                            start: None,
+                            end: None,
                             claim_ordinal: None,
                             transcript_available: false,
                         }),
@@ -263,6 +276,7 @@ impl LibraryReader {
                             meeting_id,
                             title,
                             folder,
+                            ..
                         }) => {
                             let transcript_available = self.meeting_has_transcript(&meeting_id);
                             results.push(LibrarySearchResult {
@@ -271,6 +285,8 @@ impl LibraryReader {
                                 meeting_id,
                                 text: title.or(folder),
                                 source_turn_index: None,
+                                start: None,
+                                end: None,
                                 claim_ordinal: None,
                                 transcript_available,
                             });
@@ -313,12 +329,16 @@ impl LibraryReader {
             Ok(OpenedLibraryHit::Transcript {
                 meeting_id,
                 source_turn_index,
+                original_scalar_start,
+                original_scalar_end,
                 ..
             }) => self.retain_search_open(
                 hit,
                 "transcript",
                 Some(meeting_id),
                 Some(source_turn_index),
+                Some(original_scalar_start),
+                Some(original_scalar_end),
                 "Opening the exact retained transcript turn that matched.",
             ),
             Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => {
@@ -328,6 +348,8 @@ impl LibraryReader {
                         "meeting",
                         Some(meeting_id),
                         None,
+                        None,
+                        None,
                         "Opening this retained meeting's canonical transcript.",
                     )
                 } else {
@@ -336,6 +358,8 @@ impl LibraryReader {
                         transcript_handle: None,
                         meeting_id: Some(meeting_id),
                         source_turn_index: None,
+                        start: None,
+                        end: None,
                         message: "No transcript was created for this retained meeting.".into(),
                     }
                 }
@@ -348,6 +372,8 @@ impl LibraryReader {
                 "withheld",
                 Some(meeting_id),
                 Some(source_turn_index),
+                None,
+                None,
                 "A voice check withheld this matching turn. It is not shown as transcript text.",
             ),
             // Preview does not expose note reading yet, so a retained claim is
@@ -477,24 +503,31 @@ impl LibraryReader {
         };
         self.handles.clear();
         let response = match self.projection.open(&self.storage, &hit) {
-            Ok(OpenedLibraryHit::Transcript { meeting_id, .. }) => LibraryTranscriptAccess {
+            Ok(OpenedLibraryHit::Transcript {
+                meeting_id,
+                transcript_artifact,
+                ..
+            }) => LibraryTranscriptAccess {
                 state: "transcript",
                 meeting_id: Some(meeting_id),
+                transcript_artifact: Some(transcript_artifact),
                 message: "Opening the retained canonical transcript.".into(),
             },
-            Ok(OpenedLibraryHit::Meeting { meeting_id, .. })
-                if self.meeting_has_transcript(&meeting_id) =>
-            {
-                LibraryTranscriptAccess {
-                    state: "transcript",
-                    meeting_id: Some(meeting_id),
-                    message: "Opening the retained canonical transcript.".into(),
-                }
-            }
+            Ok(OpenedLibraryHit::Meeting {
+                meeting_id,
+                transcript_artifact: Some(transcript_artifact),
+                ..
+            }) => LibraryTranscriptAccess {
+                state: "transcript",
+                meeting_id: Some(meeting_id),
+                transcript_artifact: Some(transcript_artifact),
+                message: "Opening the retained canonical transcript.".into(),
+            },
             Ok(OpenedLibraryHit::Meeting { .. }) => Self::stale_transcript(),
             Ok(OpenedLibraryHit::Withheld { .. }) => LibraryTranscriptAccess {
                 state: "withheld",
                 meeting_id: None,
+                transcript_artifact: None,
                 message: "A voice check withheld that matching turn from transcript text.".into(),
             },
             Ok(OpenedLibraryHit::Claim { .. }) | Err(_) => Self::stale_transcript(),
@@ -572,6 +605,8 @@ impl LibraryReader {
         state: &'static str,
         meeting_id: Option<String>,
         source_turn_index: Option<u32>,
+        start: Option<u64>,
+        end: Option<u64>,
         message: &'static str,
     ) -> LibrarySearchOpenResponse {
         self.handles.clear();
@@ -580,6 +615,8 @@ impl LibraryReader {
             transcript_handle: Some(self.retain_handle(hit)),
             meeting_id,
             source_turn_index,
+            start,
+            end,
             message: message.into(),
         }
     }
@@ -604,6 +641,8 @@ impl LibraryReader {
             transcript_handle: None,
             meeting_id: None,
             source_turn_index: None,
+            start: None,
+            end: None,
             message: STALE_MESSAGE.into(),
         }
     }
@@ -635,6 +674,7 @@ impl LibraryReader {
         LibraryTranscriptAccess {
             state: "stale",
             meeting_id: None,
+            transcript_artifact: None,
             message: STALE_MESSAGE.into(),
         }
     }

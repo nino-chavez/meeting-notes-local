@@ -19,9 +19,9 @@ use uuid::Uuid;
 
 use crate::library_metadata::{MetadataIdentity, MetadataState, read_library_metadata};
 use crate::meeting::{
-    MAX_MEETING_RECORD_BYTES, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref, load_meeting,
-    open_private_file, require_private_directory, valid_opaque_id, verify_artifact_ref,
-    verify_record_static_artifacts,
+    ArtifactRef, MAX_MEETING_RECORD_BYTES, MAX_RECEIPT_BYTES, MeetingLifecycle, artifact_ref,
+    load_meeting, open_private_file, require_private_directory, valid_opaque_id,
+    verify_artifact_ref, verify_record_static_artifacts,
 };
 use crate::note_projection::{
     NoteProjector, ProjectRequest, ProjectionError, UnavailableProjector, project_claims,
@@ -200,6 +200,7 @@ pub enum OpenedLibraryHit {
         original_scalar_start: u64,
         original_scalar_end: u64,
         text: String,
+        transcript_artifact: ArtifactRef,
     },
     Withheld {
         meeting_id: String,
@@ -209,6 +210,7 @@ pub enum OpenedLibraryHit {
         meeting_id: String,
         title: Option<String>,
         folder: Option<String>,
+        transcript_artifact: Option<ArtifactRef>,
     },
 }
 
@@ -623,6 +625,8 @@ impl LibraryProjection {
                     original_scalar_end,
                     text: scalar_slice(&turn.text, original_scalar_start, original_scalar_end)
                         .ok_or(LibraryReadError::SnapshotStale)?,
+                    transcript_artifact: transcript_artifact(row)?
+                        .ok_or(LibraryReadError::SnapshotStale)?,
                 })
             }
             SealedHit::Withheld {
@@ -669,6 +673,7 @@ impl LibraryProjection {
                     meeting_id: row.meeting_id.clone(),
                     title: row.title.clone(),
                     folder: row.folder.clone(),
+                    transcript_artifact: transcript_artifact(row)?,
                 })
             }
         }
@@ -1185,6 +1190,16 @@ fn valid_digest(value: &str) -> bool {
 }
 fn span_is_valid(text: &str, start: u64, end: u64) -> bool {
     start < end && end <= text.chars().count() as u64
+}
+fn transcript_artifact(row: &LibraryRow) -> Result<Option<ArtifactRef>, LibraryReadError> {
+    match (&row.transcript_relative_path, &row.transcript_sha256) {
+        (Some(relative_path), Some(sha256)) => Ok(Some(ArtifactRef {
+            relative_path: relative_path.clone(),
+            sha256: sha256.clone(),
+        })),
+        (None, None) => Ok(None),
+        _ => Err(LibraryReadError::SnapshotStale),
+    }
 }
 fn scalar_slice(text: &str, start: u64, end: u64) -> Option<String> {
     if !span_is_valid(text, start, end) {

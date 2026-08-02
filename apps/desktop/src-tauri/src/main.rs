@@ -33,6 +33,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use local_meeting_notes_session_core::diagnostic::write_private_diagnostic;
 #[cfg(feature = "preview-surface")]
 use local_meeting_notes_session_core::library_read::{LibraryProjection, ReadLimits};
+#[cfg(any(feature = "preview-surface", test))]
+use local_meeting_notes_session_core::meeting::resolve_artifact;
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
     MeetingLifecycle, MeetingRecord, MeetingSchema, artifact_ref, load_meeting, read_private_bytes,
@@ -800,6 +802,8 @@ fn preview_library_open_search_result(
             transcript_handle: None,
             meeting_id: None,
             source_turn_index: None,
+            start: None,
+            end: None,
             message: "The local Preview library is unavailable. Reopen the app and try again."
                 .into(),
         })
@@ -854,16 +858,24 @@ fn preview_library_open_transcript(
                 .into(),
         };
     };
-    let Some(meeting_id) = (opened.state == "transcript")
-        .then_some(opened.meeting_id)
-        .flatten()
-    else {
+    if opened.state != "transcript" {
         return PreviewLibraryTranscript {
             state: opened.state,
             meeting_id: None,
             turns: Vec::new(),
             warnings: Vec::new(),
             message: opened.message,
+        };
+    }
+    let (Some(meeting_id), Some(transcript_artifact)) =
+        (opened.meeting_id, opened.transcript_artifact)
+    else {
+        return PreviewLibraryTranscript {
+            state: "stale",
+            meeting_id: None,
+            turns: Vec::new(),
+            warnings: Vec::new(),
+            message: "That transcript is no longer available. Reopen Library and try again.".into(),
         };
     };
     let storage = state
@@ -882,24 +894,48 @@ fn preview_library_open_transcript(
                 .into(),
         };
     };
-    let opened = (|| {
-        let directory = meeting_dir(&storage, &meeting_id).map_err(error_text)?;
-        let meeting = load_meeting(&directory).map_err(error_text)?;
-        let transcript = meeting
-            .artifacts
-            .current_transcript
-            .as_ref()
-            .ok_or_else(|| "the selected meeting has no retained transcript".to_string())?;
-        let (turns, mut warnings) = load_transcript_projection(&directory, transcript)?;
-        if meeting.retention.state == AudioState::Released {
-            warnings.push(
-                "Meeting audio was deleted under the selected retention period. The transcript remains."
+    let coordination = match state.meeting_storage_coordination() {
+        Ok(coordination) => coordination,
+        Err(_) => {
+            return PreviewLibraryTranscript {
+                state: "unavailable",
+                meeting_id: None,
+                turns: Vec::new(),
+                warnings: Vec::new(),
+                message: "The local Preview library is unavailable. Reopen the app and try again."
                     .into(),
-            );
+            };
         }
-        Ok::<_, String>((turns, warnings))
-    })();
-    match opened {
+    };
+    let storage_sequence = match coordination.lock_sequence() {
+        Ok(sequence) => sequence,
+        Err(_) => {
+            return PreviewLibraryTranscript {
+                state: "unavailable",
+                meeting_id: None,
+                turns: Vec::new(),
+                warnings: Vec::new(),
+                message: "The local Preview library is unavailable. Reopen the app and try again."
+                    .into(),
+            };
+        }
+    };
+    if storage_sequence
+        .active_meeting_ids()
+        .map(|active| active.contains(&meeting_id))
+        .unwrap_or(true)
+    {
+        return PreviewLibraryTranscript {
+            state: "stale",
+            meeting_id: None,
+            turns: Vec::new(),
+            warnings: Vec::new(),
+            message: "That transcript is being updated. Reopen Library and try again.".into(),
+        };
+    }
+    let opened =
+        load_bound_preview_transcript_projection(&storage, &meeting_id, &transcript_artifact);
+    let response = match opened {
         Ok((turns, warnings)) => PreviewLibraryTranscript {
             state: "transcript",
             meeting_id: Some(meeting_id),
@@ -914,7 +950,41 @@ fn preview_library_open_transcript(
             warnings: Vec::new(),
             message: "That transcript is no longer available. Reopen Library and try again.".into(),
         },
+    };
+    drop(storage_sequence);
+    response
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn load_bound_preview_transcript_projection(
+    storage: &StorageRoot,
+    meeting_id: &str,
+    expected: &ArtifactRef,
+) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
+    let directory = meeting_dir(storage, meeting_id).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    if meeting.artifacts.current_transcript.as_ref() != Some(expected) {
+        return Err("the selected transcript pointer changed".into());
     }
+    let path = resolve_artifact(&directory, &expected.relative_path).map_err(error_text)?;
+    let bytes = read_private_bytes(&path, TRANSCRIPT_MAX_BYTES).map_err(error_text)?;
+    if format!("{:x}", Sha256::digest(&bytes)) != expected.sha256 {
+        return Err("the selected transcript bytes changed".into());
+    }
+    let (turns, mut warnings) = parse_transcript_projection(&bytes)?;
+    let current = load_meeting(&directory).map_err(error_text)?;
+    if current.artifacts.current_transcript.as_ref() != Some(expected)
+        || artifact_ref(&directory, &expected.relative_path).map_err(error_text)? != *expected
+    {
+        return Err("the selected transcript changed while opening".into());
+    }
+    if current.retention.state == AudioState::Released {
+        warnings.push(
+            "Meeting audio was deleted under the selected retention period. The transcript remains."
+                .into(),
+        );
+    }
+    Ok((turns, warnings))
 }
 
 #[cfg(not(feature = "library-dev-surface"))]
@@ -3181,5 +3251,74 @@ mod tests {
         fs::write(transcript_path, b"changed").unwrap();
 
         assert!(load_latest_transcript_projection(&storage, &[meeting_id]).is_err());
+    }
+
+    #[test]
+    fn preview_bound_transcript_rejects_pointer_replacement_after_reader_validation() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4().to_string();
+        write_transcript_fixture(
+            &storage,
+            &meeting_id,
+            10,
+            AudioState::Retained,
+            "stable synthetic words",
+        );
+        let directory = meeting_dir(&storage, &meeting_id).unwrap();
+        let mut meeting = load_meeting(&directory).unwrap();
+        let expected = meeting.artifacts.current_transcript.clone().unwrap();
+        let (turns, _) =
+            load_bound_preview_transcript_projection(&storage, &meeting_id, &expected).unwrap();
+        assert_eq!(turns[0].text, "stable synthetic words");
+
+        let replacement = serde_json::to_vec_pretty(&json!({
+            "schema": "capture-transcript/1",
+            "source": "synthetic-replacement-fixture",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": [{
+                "start": 0.0,
+                "end": 1.0,
+                "speaker": "Me",
+                "text": "replacement synthetic words",
+            }],
+        }))
+        .unwrap();
+        let replacement_digest = format!("{:x}", Sha256::digest(&replacement));
+        let replacement_relative = format!("transcript/{replacement_digest}.json");
+        durable_create_new(&directory.join(&replacement_relative), &replacement).unwrap();
+        meeting.artifacts.current_transcript =
+            Some(artifact_ref(&directory, &replacement_relative).unwrap());
+        write_meeting(&directory, &meeting).unwrap();
+
+        assert!(
+            load_bound_preview_transcript_projection(&storage, &meeting_id, &expected).is_err()
+        );
+    }
+
+    #[test]
+    fn preview_bound_transcript_hashes_the_exact_bytes_it_parses() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4().to_string();
+        let transcript_path = write_transcript_fixture(
+            &storage,
+            &meeting_id,
+            10,
+            AudioState::Retained,
+            "stable synthetic words",
+        );
+        let directory = meeting_dir(&storage, &meeting_id).unwrap();
+        let expected = load_meeting(&directory)
+            .unwrap()
+            .artifacts
+            .current_transcript
+            .unwrap();
+        fs::write(transcript_path, b"changed synthetic bytes").unwrap();
+
+        assert!(
+            load_bound_preview_transcript_projection(&storage, &meeting_id, &expected).is_err()
+        );
     }
 }

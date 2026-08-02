@@ -456,6 +456,74 @@ mod tests {
         (temporary, reader)
     }
 
+    fn transcript_ready_reader(turns: &[&str]) -> (TempDir, LibraryReader, ArtifactRef) {
+        let temporary = TempDir::new().unwrap();
+        let protected_root = temporary.path().join("protected-root");
+        create_private_dir(&protected_root).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("data"), &protected_root).unwrap();
+        seed_synthetic_fixture(&storage).unwrap();
+        clear_test_xattrs(storage.path());
+
+        let directory = storage.path().join("meetings").join(FIXTURE_MEETING_ID);
+        let transcript = json!({
+            "schema": "capture-transcript/1",
+            "source": "development-sanitized-fixture",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": turns.iter().enumerate().map(|(index, text)| json!({
+                "start": index as f64,
+                "end": index as f64 + 1.0,
+                "speaker": "Them",
+                "text": text,
+                "gated": false,
+            })).collect::<Vec<_>>(),
+        });
+        let bytes = serde_json::to_vec_pretty(&transcript).unwrap();
+        let relative = format!("transcript/{}.json", digest(&bytes));
+        write_new(&directory.join(&relative), &bytes).unwrap();
+        let transcript_artifact = artifact_ref(&directory, &relative).unwrap();
+        let mut meeting = load_meeting(&directory).unwrap();
+        meeting.lifecycle = MeetingLifecycle::TranscriptReady;
+        meeting.artifacts.current_note = None;
+        meeting.artifacts.current_transcript = Some(transcript_artifact.clone());
+        write_meeting(&directory, &meeting).unwrap();
+
+        clear_test_xattrs(storage.path());
+        let reader = project_seeded_library(storage).unwrap().reader;
+        (temporary, reader, transcript_artifact)
+    }
+
+    fn replace_current_transcript(temporary: &TempDir, text: &str) {
+        let directory = temporary
+            .path()
+            .join("data")
+            .join("meetings")
+            .join(FIXTURE_MEETING_ID);
+        let transcript = json!({
+            "schema": "capture-transcript/1",
+            "source": "development-sanitized-fixture",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": [{
+                "start": 0.0,
+                "end": 1.0,
+                "speaker": "Them",
+                "text": text,
+                "gated": false,
+            }],
+        });
+        let bytes = serde_json::to_vec_pretty(&transcript).unwrap();
+        let relative = format!("transcript/{}.json", digest(&bytes));
+        write_new(&directory.join(&relative), &bytes).unwrap();
+        let mut meeting = load_meeting(&directory).unwrap();
+        meeting.artifacts.current_transcript = Some(artifact_ref(&directory, &relative).unwrap());
+        write_meeting(&directory, &meeting).unwrap();
+    }
+
     #[cfg(target_os = "macos")]
     fn clear_test_xattrs(path: &Path) {
         let status = std::process::Command::new("xattr")
@@ -613,6 +681,77 @@ mod tests {
         assert_eq!(evidence.state, "evidence");
         assert_eq!(evidence.source_turn_index, Some(0));
         assert_eq!(evidence.text.as_deref(), Some("café"));
+    }
+
+    #[test]
+    fn transcript_search_preserves_unicode_scalar_spans_for_repeated_words_and_turns() {
+        let (_temporary, mut reader, expected_artifact) =
+            transcript_ready_reader(&["😀 e\u{301}cho écho", "écho"]);
+
+        let results = reader.search(" ÉCHO ");
+        assert_eq!(results.state, "results");
+        assert_eq!(results.results.len(), 3);
+        assert_eq!(
+            results
+                .results
+                .iter()
+                .map(|result| (result.source_turn_index, result.start, result.end))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(0), Some(2), Some(7)),
+                (Some(0), Some(8), Some(12)),
+                (Some(1), Some(0), Some(4)),
+            ]
+        );
+        let serialized = serde_json::to_string(&results).unwrap();
+        assert!(serialized.contains("\"start\":2"));
+        assert!(serialized.contains("\"end\":7"));
+
+        let opened = reader.open_search_result(&results.results[1].handle);
+        assert_eq!(opened.state, "transcript");
+        assert_eq!(opened.source_turn_index, Some(0));
+        assert_eq!(opened.start, Some(8));
+        assert_eq!(opened.end, Some(12));
+        let transcript = reader.open_transcript(&opened.transcript_handle.unwrap());
+        assert_eq!(transcript.state, "transcript");
+        assert_eq!(transcript.transcript_artifact, Some(expected_artifact));
+    }
+
+    #[test]
+    fn overlapping_search_results_reopen_each_exact_scalar_span() {
+        let (_temporary, mut reader, expected_artifact) = transcript_ready_reader(&["oooo"]);
+
+        for (ordinal, start, end) in [(0, 0, 2), (1, 1, 3), (2, 2, 4)] {
+            let results = reader.search("oo");
+            assert_eq!(results.results.len(), 3);
+            assert_eq!(results.results[ordinal].start, Some(start));
+            assert_eq!(results.results[ordinal].end, Some(end));
+
+            let opened = reader.open_search_result(&results.results[ordinal].handle);
+            assert_eq!(opened.start, Some(start));
+            assert_eq!(opened.end, Some(end));
+            let transcript = reader.open_transcript(&opened.transcript_handle.unwrap());
+            assert_eq!(transcript.state, "transcript");
+            assert_eq!(
+                transcript.transcript_artifact.as_ref(),
+                Some(&expected_artifact)
+            );
+        }
+    }
+
+    #[test]
+    fn transcript_handle_rejects_a_replaced_current_digest_and_path() {
+        let (temporary, mut reader, _) = transcript_ready_reader(&["stable synthetic words"]);
+        let results = reader.search("stable");
+        let opened = reader.open_search_result(&results.results[0].handle);
+        let transcript_handle = opened.transcript_handle.unwrap();
+
+        replace_current_transcript(&temporary, "replacement synthetic words");
+
+        let stale = reader.open_transcript(&transcript_handle);
+        assert_eq!(stale.state, "stale");
+        assert!(stale.meeting_id.is_none());
+        assert!(stale.transcript_artifact.is_none());
     }
 
     #[test]
@@ -794,6 +933,8 @@ mod tests {
                 meeting_id: FIXTURE_MEETING_ID.into(),
                 text: Some("private meeting label".into()),
                 source_turn_index: None,
+                start: None,
+                end: None,
                 claim_ordinal: None,
                 transcript_available: true,
             }],
