@@ -38,6 +38,71 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
 }
 
 #[test]
+fn preview_window_is_a_separate_real_capture_shell_with_only_alpha_commands() {
+    let preview: Value = serde_json::from_str(include_str!("../tauri.preview.conf.json")).unwrap();
+    let capability: Value =
+        serde_json::from_str(include_str!("../capabilities/preview.json")).unwrap();
+    let production: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    let package: Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
+
+    assert_eq!(preview["productName"], "Local Meeting Notes Preview");
+    assert_eq!(
+        preview["identifier"],
+        "com.ninochavez.local-meeting-notes.preview"
+    );
+    assert_eq!(preview["build"]["frontendDist"], "../ui");
+    assert_eq!(preview["app"]["windows"][0]["label"], "preview");
+    assert_eq!(
+        preview["app"]["windows"][0]["title"],
+        "Local Meeting Notes — Preview"
+    );
+    assert_eq!(
+        preview["app"]["security"]["capabilities"],
+        serde_json::json!(["preview-window"])
+    );
+    assert_eq!(
+        preview["bundle"]["resources"],
+        production["bundle"]["resources"]
+    );
+    assert_eq!(preview["bundle"]["macOS"]["signingIdentity"], "-");
+    assert!(
+        package["scripts"]["preview"]
+            .as_str()
+            .is_some_and(|script| script.contains("tauri.preview.conf.json")
+                && script.contains("preview-surface"))
+    );
+    assert!(
+        package["scripts"]["preview-build"]
+            .as_str()
+            .is_some_and(|script| script.contains("tauri.preview.conf.json")
+                && script.contains("preview-surface"))
+    );
+    assert!(
+        package["scripts"]["preview-verify"]
+            .as_str()
+            .is_some_and(|script| script.contains("codesign --verify --deep --strict"))
+    );
+    assert_eq!(capability["windows"], serde_json::json!(["preview"]));
+    assert_eq!(
+        capability["permissions"],
+        serde_json::json!([
+            "allow-app-snapshot",
+            "allow-start-meeting",
+            "allow-stop-meeting",
+            "allow-dismiss-meeting",
+            "allow-retry-startup"
+        ])
+    );
+    let serialized = serde_json::to_string(&capability).unwrap();
+    for forbidden in ["shell:", "fs:", "process:", "dialog:", "http:"] {
+        assert!(
+            !serialized.contains(forbidden),
+            "forbidden preview capability {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn product_operation_facade_remains_unregistered() {
     let source = include_str!("../src/main.rs");
     let handler_start = source

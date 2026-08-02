@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preview-window",
+  "description": "The separately identified Preview window may exercise only the existing internal transcript-alpha command boundary. It has no library, note, filesystem, shell, process, dialog, or remote-origin permission.",
+  "windows": ["preview"],
+  "platforms": ["macOS"],
+  "permissions": [
+    "allow-app-snapshot",
+    "allow-start-meeting",
+    "allow-stop-meeting",
+    "allow-dismiss-meeting",
+    "allow-retry-startup"
+  ]
+}
