@@ -13,6 +13,7 @@ from mlx_note_admission import (
     MLX_RUNTIME,
     run_control_arm,
     run_model_arm,
+    synthetic_measurement_fixtures,
     synthetic_transcript,
     tree_sha256,
 )
@@ -37,6 +38,23 @@ def accepted_provider(request: dict) -> tuple[str, dict]:
 
 
 class MlxNoteAdmissionTests(unittest.TestCase):
+    def test_synthetic_measurement_plan_has_registered_coverage(self) -> None:
+        fixtures = synthetic_measurement_fixtures()
+        self.assertEqual(len(fixtures), 12)
+        identifiers = [fixture[0] for fixture in fixtures]
+        self.assertEqual(len(identifiers), len(set(identifiers)))
+        self.assertEqual(sum(fixture[2] == "accepted-research-candidate" for fixture in fixtures), 10)
+        self.assertEqual(sum(fixture[2] == "transcript-only" for fixture in fixtures), 2)
+        self.assertTrue(any("not" in fixture[3] for fixture in fixtures))
+        self.assertTrue(any(any(character.isdigit() for character in term) for fixture in fixtures for term in fixture[3]))
+        for _identifier, transcript, expected, _terms in fixtures:
+            control = run_control_arm(transcript)
+            if expected == "transcript-only":
+                self.assertEqual(control.outcome, "transcript-only")
+                self.assertEqual(control.code, "no-deterministic-candidates")
+            else:
+                self.assertEqual(control.outcome, expected)
+
     def test_research_model_manifest_is_immutable_and_has_a_download_budget(self) -> None:
         model = MLX_RUNTIME["model"]
         self.assertEqual(model["repository"], "mlx-community/Qwen2.5-1.5B-Instruct-4bit")
@@ -45,7 +63,11 @@ class MlxNoteAdmissionTests(unittest.TestCase):
         self.assertEqual(model["license"], "Apache-2.0")
         self.assertGreater(model["expected_download_bytes"], 0)
         self.assertEqual(len(model["expected_model_safetensors_sha256"]), 64)
-        self.assertIsNone(model["expected_tree_sha256"])
+        self.assertEqual(
+            model["expected_tree_sha256"],
+            "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        )
+        self.assertEqual(model["status"], "measured-rejected-not-admitted")
 
 
     def test_control_arm_is_repeatable_and_replays_existing_note2_validation(self) -> None:

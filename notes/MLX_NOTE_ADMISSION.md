@@ -63,10 +63,9 @@ license nor a preregistered pin admits a dependency: downloaded inventory,
 tree digest, package wheel hash, transitive licenses, signing behavior, macOS
 14.4 memory, latency, and semantic review remain admission gates.
 
-The revision is pinned now; the model tree digest is deliberately absent until
-the exact download is inspected. `tree_sha256` covers model files only and
-excludes Hugging Face's mutable local `.cache` transfer metadata. Do not
-substitute a moving Hub tag.
+The revision and its measured model tree digest are pinned now.
+`tree_sha256` covers model files only and excludes Hugging Face's mutable local
+`.cache` transfer metadata. Do not substitute a moving Hub tag.
 
 ## Run the protocol tests
 
@@ -107,7 +106,7 @@ timing. Never use meeting recordings, Preview data, or product records.
 
 | Gate | Pass condition | Failure |
 | --- | --- | --- |
-| Syntax and schema | 12/12 fixtures return one strict JSON object and the local response plus `note/2` validations accept all three repeats. | Any malformed JSON, duplicate key, extra/missing field, unknown ID, timeout, or validation refusal is transcript-only and rejects the candidate. |
+| Syntax and schema | All 12 fixtures return one strict JSON object. All 10 supported fixtures pass local response plus `note/2` validation on all three repeats; both abstention fixtures return strict empty `items` and remain transcript-only. | Any malformed JSON, duplicate key, extra/missing field, unknown ID, timeout, non-empty abstention, or validation refusal rejects the candidate. |
 | Locator / names / numbers / negation | 100% exact canonical citations; 100% of fixture assertions preserve every identifier, numeral/date, and asserted negation. | One wrong locator, invented/changed name or number, or lost/reversed negation rejects the candidate. |
 | Repeatability | Raw response SHA-256 and accepted note/receipt are identical across the three cold runs. | Any variation rejects the candidate; do not average it away. |
 | Latency | Cold median at most 30 s; warm median at most 15 s, measured and reported separately on the same macOS 14.4+ machine. | Exceeding either threshold rejects the candidate for the supported local envelope. |
@@ -123,6 +122,53 @@ inference from artifact size, not a supported-Mac claim.
 nor asserts that automatic notes are useful. It remains an isolated research
 exercise until every mechanical gate and the human semantic/usefulness review
 are complete.
+
+### 2026-08-02 Qwen synthetic-only measurement — rejected
+
+This measurement used only the 12 registered synthetic fixtures in
+`synthetic_measurement_fixtures()` and the private, disposable MLX process. It
+did not open Preview, product records, meeting transcripts, or audio. Its
+receipt code emits fixture IDs, hashes, outcomes, timings, and boolean checks;
+it does not retain fixture text or model replies.
+
+| Pre-run check | Observed value | Gate |
+| --- | --- | --- |
+| Source revision | `8b403126fc14f14cfc99bb4cfa72ecbc129ea677` | Exact registered revision |
+| Non-cache inventory | 11 files; 880,172,064 bytes | Exact registered byte budget |
+| `model.safetensors` SHA-256 | `0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717` | Exact registered file digest |
+| Full non-cache tree SHA-256 | `3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95` | Recorded before and after all runs |
+| Disposable runtime | Python 3.14; `mlx-lm==0.30.4`; `mlx==0.32.0`; `transformers==5.0.0rc1` | MLX/MLX-LM only in the experiment; no PyTorch import or shipped-path change |
+| Host | arm64, macOS 26.5.2 | One machine, not a general hardware claim |
+
+One initial execution was deliberately discarded: its receipt was accidentally
+opened inside the model tree, so the harness returned `model-digest-mismatch`
+for every fixture. The receipt was moved outside the tree; the exact pre-run
+tree digest and byte budget were then re-established before the valid runs
+below. That is a harness recovery, not model evidence.
+
+The valid protocol was three fresh-process cold suites and two suites in one
+loaded warm process, with the registered system/user chat-template messages,
+temperature `0.0`, seed `0`, 512 output tokens, 4,096 KV tokens, no retry, no
+remote code, and no constrained decoder. It made 60 total fixture calls.
+
+| Gate | Observed result | Verdict |
+| --- | --- | --- |
+| Strict JSON / response schema | All 60 calls were `malformed-response`: 0/50 supported-fixture calls reached `note/2`; 0/10 abstention calls produced valid empty `items`. | **Fail** |
+| Exact citation / locator replay | Unmeasured: no response crossed strict JSON validation. | Not reached |
+| Names, numbers, negation | Unmeasured: no response crossed strict JSON validation. | Not reached |
+| Repeatability | For each of the 12 fixture IDs, all five raw response SHA-256 values and all outcome codes matched. The repeatable result was malformed output, not a repeatable valid note. | Syntax gate still fails |
+| Cold latency | 20.33 s, 19.25 s, 18.98 s whole-suite wall time; median 19.25 s (30 s ceiling). | Pass on this machine |
+| Warm latency | 23.931 s and 23.353 s per suite in one loaded process (15 s ceiling). | **Fail** |
+| Peak memory | Largest `time -l` peak footprint: 2,024,900,336 bytes; largest maximum resident set: 1,176,272,896 bytes (4,282,063,304-byte ceiling). | Pass on this machine |
+| Human semantic/usefulness review | No candidate output passed the mechanical boundary. | Not reached; required for any future admission |
+
+`mlx-community/Qwen2.5-1.5B-Instruct-4bit` is therefore **rejected for this
+automatic-note admission protocol**. It is not admitted, no product runtime
+or schema has changed, and the selected model's advertised JSON capability did
+not survive this exact constrained extraction test. This finding applies only
+to the pinned model, registered prompt/template/decoding settings, and
+synthetic fixture suite; it is not a claim about MLX, PyTorch, Qwen generally,
+or automatic-note product readiness.
 
 ## 2026-08-02 rejected SmolLM2 measurement
 

@@ -50,9 +50,8 @@ ADMISSION_SCHEMA = "mlx-note-admission/1"
 MODEL_RESPONSE_SCHEMA = "mlx-note-response/1"
 
 # This is a research pin, not a release manifest.  The revision pins the MLX
-# conversion before download; the local model-tree digest is intentionally
-# unknown until the explicit fetch/measurement step creates a reviewable
-# inventory.
+# conversion before download.  The measured local model-tree digest binds the
+# exact downloaded inventory; it remains a rejected research artifact.
 MLX_RUNTIME = {
     "schema": "mlx-note-runtime/1",
     "role": "research-only",
@@ -66,8 +65,8 @@ MLX_RUNTIME = {
         "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
         "expected_download_bytes": 880172064,
         "expected_model_safetensors_sha256": "0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717",
-        "expected_tree_sha256": None,
-        "status": "unfetched-not-admitted",
+        "expected_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "status": "measured-rejected-not-admitted",
     },
     "decoding": {
         "temperature": 0.0,
@@ -601,6 +600,28 @@ def synthetic_transcript() -> Transcript:
             Turn("I will send the test plan on Tuesday."),
             Turn("Could the supplier meet the revised date?"),
         ],
+    )
+
+
+def synthetic_measurement_fixtures() -> tuple[tuple[str, Transcript, str, tuple[str, ...]], ...]:
+    """Public/synthetic-only fixture plan for the registered research candidate.
+
+    The tuple is (identifier, transcript, expected outcome, required citation
+    terms).  Receipts retain only identifiers, hashes, and boolean checks.
+    """
+    return (
+        ("ordinary-decision", Transcript("synthetic", NONE, [Turn("Dana decided that Battery 7 ships on Tuesday.")]), "accepted-research-candidate", ("Dana", "7", "Tuesday")),
+        ("ordinary-action", Transcript("synthetic", NONE, [Turn("Marco will send invoice 2048 by June 14.")]), "accepted-research-candidate", ("Marco", "2048", "June 14")),
+        ("ordinary-proposal", Transcript("synthetic", NONE, [Turn("Priya proposed moving the renewal to Q4.")]), "accepted-research-candidate", ("Priya", "Q4")),
+        ("ordinary-question", Transcript("synthetic", NONE, [Turn("Could Aisha confirm whether the North room is available?")]), "accepted-research-candidate", ("Aisha", "North")),
+        ("locator-canonical-order", Transcript("synthetic", NONE, [Turn("We decided that the Harbor release uses build 17."), Turn("I will notify Omar after the release.")]), "accepted-research-candidate", ("Harbor", "17")),
+        ("locator-second-turn", Transcript("synthetic", NONE, [Turn("The agenda is unchanged."), Turn("Leah decided that the South launch moves to Friday.")]), "accepted-research-candidate", ("Leah", "South", "Friday")),
+        ("name-number-decision", Transcript("synthetic", NONE, [Turn("Nora decided that Case 481 is not ready for closure.")]), "accepted-research-candidate", ("Nora", "481", "not")),
+        ("name-number-action", Transcript("synthetic", NONE, [Turn("Dev will send version 3.14 to Mei on July 9.")]), "accepted-research-candidate", ("Dev", "3.14", "Mei", "July 9")),
+        ("negation-decision", Transcript("synthetic", NONE, [Turn("We decided not to cancel Project Atlas.")]), "accepted-research-candidate", ("not", "Atlas")),
+        ("negation-proposal", Transcript("synthetic", NONE, [Turn("I propose that we do not merge the red branch.")]), "accepted-research-candidate", ("not", "red branch")),
+        ("abstain-chitchat", Transcript("synthetic", NONE, [Turn("The weather was pleasant and the coffee was warm.")]), "transcript-only", ()),
+        ("abstain-plain", Transcript("synthetic", NONE, [Turn("The window is open.")]), "transcript-only", ()),
     )
 
 

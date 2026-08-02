@@ -1,0 +1,53 @@
+{
+  "schema": "mlx-note-measurement-receipt/1",
+  "scope": "synthetic-only; no product records, Preview data, private transcript, or audio",
+  "model": {
+    "repository": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+    "revision": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
+    "inventory_bytes": 880172064,
+    "model_safetensors_sha256": "0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717",
+    "tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95"
+  },
+  "runtime": {
+    "python": "3.14",
+    "mlx_lm": "0.30.4",
+    "mlx": "0.32.0",
+    "transformers": "5.0.0rc1",
+    "host": "arm64 macOS 26.5.2"
+  },
+  "protocol": {
+    "fixture_count": 12,
+    "calls": 60,
+    "cold_suite_wall_seconds": [20.33, 19.25, 18.98],
+    "warm_suite_elapsed_seconds": [23.930894, 23.35322],
+    "peak_memory_footprint_bytes": 2024900336,
+    "maximum_resident_set_bytes": 1176272896
+  },
+  "result": {
+    "outcome": "rejected-not-admitted",
+    "outcome_code": "malformed-response",
+    "malformed_response_calls": 60,
+    "accepted_note2_calls": 0,
+    "valid_empty_abstention_calls": 0,
+    "repeatable_raw_response_hashes": true,
+    "unmeasured_gates": [
+      "exact-citation-locator-replay",
+      "names-numbers-negation",
+      "human-semantic-usefulness-review"
+    ]
+  },
+  "fixture_response_sha256": {
+    "ordinary-decision": "ae8876bc5cc6e205dd113ad47550cbccae4f2c26c072482da44603994f5adc18",
+    "ordinary-action": "7fa18f649b6934d86804f3fae24d1128420aab468166f673dc7b97849fdb0bd3",
+    "ordinary-proposal": "3a187602575607a3cb25bf38644619e8025caffba1ded3023a19d6778bd6922a",
+    "ordinary-question": "58702da440ac1b67642ffd14a85633c92ba69e303ee516f50d26afff3812c913",
+    "locator-canonical-order": "f0feec9bbb1eb68dc5e19f2908fff08216b7b6a1e71ee125f3d7f457e090b84c",
+    "locator-second-turn": "58bc735bdfce339d6fe1c83fac8663def7ab94c6876e46737933480c81ff2be3",
+    "name-number-decision": "2e5b9d08087ac02228751666708e91eceaf5f6abb49eb290ebd458d4f4a335e6",
+    "name-number-action": "cf820d7ed9b6a14e18068522b3808f5b4e25a5487c38685f939f33877a406666",
+    "negation-decision": "230bf598a8a48cc83ad937dbe185ed6d38b446639f52018c00653f7c7270da0b",
+    "negation-proposal": "2de7f474cdae189c9700111c62cccdf7f1da2a80cd45213b536f0e5d27b5ea71",
+    "abstain-chitchat": "2b6b5a654f2a89e900b42344109e4f57de55f53c3b7080958003bf7b085fe555",
+    "abstain-plain": "2b6b5a654f2a89e900b42344109e4f57de55f53c3b7080958003bf7b085fe555"
+  }
+}
