@@ -188,7 +188,7 @@ function renderLibrary(snapshot) {
     time.textContent = formatMeetingTime(row.createdAtEpochSeconds);
     summary.append(label, time);
     const action = document.createElement("span");
-    action.textContent = row.transcriptAvailable ? "Open meeting" : "Transcript unavailable";
+    action.textContent = row.transcriptAvailable ? "Open meeting" : "No transcript was created";
     button.append(summary, action);
     libraryList.append(button);
   }
