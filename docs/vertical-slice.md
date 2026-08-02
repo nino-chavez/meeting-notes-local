@@ -14,13 +14,13 @@ receipt do not permit private meeting artifacts in Git. They also do not prove
 the application runtime or automatic-note quality, so no application build may
 be described as beta-ready from this approval.
 
-Product UI work is therefore back at a bounded design gate: first approve a running
-synthetic interaction skeleton, then record that exact candidate as the composition
-contract for the real walking skeleton. That later receipt can supersede layout,
-navigation and screen geometry without weakening the already-proved evidence behavior
-or non-visual contracts. The already-started profile lifecycle join may reach a clean
-checkpoint because it does not choose the interface; guided enrolment, reset and other
-new surfaces wait for the approved composition.
+The bounded composition gate passed on 2026-08-02. The operator accepted Find as the
+default, persistent Find/Meetings/Promises navigation, and the shared reader/evidence
+transitions at exact synthetic prototype commit
+`689fcda396c073d21d69d8feb3cfb6031bec0596`. That digest-bound artifact is now
+the composition contract for the real walking skeleton. It does not weaken the
+already-proved evidence behavior or non-visual contracts, and it does not approve
+automatic-note quality, installed-runtime behavior, beta admission, or release.
 
 The transcript-only internal-alpha path is implemented and packaged with the real
 local worker runtime. Commit
@@ -69,27 +69,27 @@ record, regenerating the note and returning to retrieval. Operator approval bind
 exact default, first-class navigation, labels, and transitions. That composition then
 becomes the implementation contract for a real installed vertical slice.
 
-Find is not an equal-weight guess: it is the provisional default because the market
-positions corpus retrieval as core value, Gong documents multiple retrieval entry
-points, and the registered `n=3` colleague snapshot favors a question-shaped entry 2:1
-over filters while scoring cited cross-meeting value 5, 4, and 5. Meetings remains the
-first-class source/filter path; Recorded promises remains a prominent derived view.
-The current beta still uses exact transcript-and-metadata search, not conversational
-cross-meeting answers.
+Find was not an equal-weight guess: the market positions corpus retrieval as core
+value, Gong documents multiple retrieval entry points, and the registered `n=3`
+colleague snapshot favors a question-shaped entry 2:1 over filters while scoring cited
+cross-meeting value 5, 4, and 5. The operator accepted it as the default on 2026-08-02.
+Meetings remains the first-class source/filter path; Promises remains a prominent
+derived view. The current beta still uses exact transcript-and-metadata search, not
+conversational cross-meeting answers.
 
-Keep the current synthetic corpus frozen until that navigation comparison closes; it
-exists to hold evidence states and tasks constant. The next prototype flesh-out then
-holds the approved navigation constant and uses a synthetic sales/discovery meeting,
-the first-meeting scenario selected by 3/3 respondents. That slice compares the shared
-note hierarchy—summary, decisions, actions/owners, open questions, risks/blockers—and
-its evidence treatment without confounding the navigation decision.
+The navigation corpus stayed frozen through the comparison so evidence states and
+tasks remained constant. The active prototype flesh-out now holds the approved
+navigation constant and uses a synthetic sales/discovery meeting, the first-meeting
+scenario selected by 3/3 respondents. That slice compares the shared note
+hierarchy—summary, decisions, actions/owners, open questions, risks/blockers—and its
+evidence treatment without confounding the navigation decision.
 
-The running comparison now separates the two controls explicitly: a dark reviewer bar
+The accepted composition separates the two controls explicitly: a dark reviewer bar
 changes only the default opening, while the light app header keeps Find, Meetings, and
 Promises persistently available. Moving among those product destinations preserves a
 restored transcript turn, stale/regenerated note state, the resulting promise, and the
-meeting's updated status. The remaining design gate is the operator's judgment of that
-hierarchy, not whether the three capabilities can coexist mechanically.
+meeting's updated status. The active visible slice now holds that hierarchy fixed and
+fleshes out the survey-led sales/discovery note reader.
 
 | Wave | Current status and active stream | Join or exit | Human gate | ETA |
 |---|---|---|---|---|
@@ -97,7 +97,7 @@ hierarchy, not whether the three capabilities can coexist mechanically.
 | B. Shared-contract freeze | Complete and independently re-audited after one narrow correction. Implementation proved that supported macOS exposes no descriptor-based executable launch, so the original audited wording required an impossible primitive. The corrected contract keeps the signed interpreter, standard library, and dynamic libraries inside the release trust boundary and descriptor-retains every manifest-listed bridge-controlled resource. All other correction/regeneration, worker, recovery, artifact, receipt, and fixture contracts remain frozen. | Real projector transport must implement the corrected descriptor handoff, cancellation, and parent-death contract before admission. | None. | Complete 2026-08-01 |
 | C. Trust foundation | In progress, with the fixed-slot lifecycle join parked as an audited implementation candidate rather than installed Preview work. The independent audit found two release blockers: initial slot publication can mutate a pathname before descriptor identity is proved, and receipt validation accepts impossible phase histories. The candidate also overstates volume readiness and must not be promoted. The independently audited restoration coordinator, development-only profile bridge and staged one-meeting audio-deletion facade remain bounded evidence. Capture admission and the frozen alpha command boundary are unchanged. Guided enrolment/reset, withheld-turn restoration, policy change and whole-meeting deletion remain. | Preserve the candidate and its passing tests, but do not install or promote it. Resume with descriptor-before-mutation publication, legal transition validation, strict encoder validation and guided enrolment/reset after the walking-skeleton prototype establishes their product place. | Retention-policy wording and far-end-notice choices; real deletion, profile policy, reset and withheld-turn decisions. | Cumulative 1–2 weeks after the design gate |
 | D. Evidence-linked automatic notes | In progress. The private coordinator and inspect-only transport remain closed and recovery-tested. The corrected synthetic-only MLX harness now advertises and parses the same strict `{"items":[...]}` contract, binds immutable model/runtime identities, separates tree hashing and model load from per-call timing, and fails closed to `transcript-only`. The bounded two-fixture Qwen2.5 1.5B corrective probe was rejected: the supported fixture produced invalid JSON and the empty fixture returned the wrong root/shape. The full suite correctly did not run, and the runner now refuses that scope until a fresh-process orchestrator implements the registered 12-fixture cold/warm repeat matrix. SmolLM2's earlier result remains inconclusive. Neither model is admitted, no third candidate is scheduled, and no generator is wired into Preview. | Keep note work off the Preview critical path. Before any new model search, decide and preregister one bounded decoding/contract repair or close this small-model path. Admit a create bridge only after typed output, exact locators, fidelity, latency, memory, repeatability, and human semantic/usefulness gates pass. | Semantic support and usefulness adjudication. | Additional 2–3 weeks after a registered experiment passes |
-| E. Product surfaces and retrieval | Rebaselined to prototype-first. The separate Preview proves bounded reader and voice-capability mechanics and renders the real Library, exact search, meeting detail, canonical transcript, retention/disk state and reviewed one-meeting audio-deletion interaction in the original light/editorial system. Those working surfaces are evidence, not automatic approval of the whole-product IA. The active stream now compares Meetings, Recorded promises, and Find as three default opening views at 960×900 against the same synthetic corpus, including evidence landing, uncertainty, correction/regeneration and return-to-retrieval. All three remain in the product; no prototype view writes product records or reads private meetings. The frozen alpha command boundary remains unchanged. | Operator approves one exact composed navigation system: default view, first-class destinations, labels, transitions, and shared detail/evidence surfaces. Deliver that composition as thin installed Preview increments. | Cold operator review of all starting views and explicit approval of one exact composition. | Prototype comparison 1–3 days; implementation remains within the cumulative 2–3 week surface range |
+| E. Product surfaces and retrieval | The composition gate passed on 2026-08-02 at exact prototype commit `689fcda396c073d21d69d8feb3cfb6031bec0596`: Find opens by default and Find, Meetings, and Promises remain persistent navigation. The active stream holds that spine fixed while adding a synthetic sales/discovery note organized around the `n=3` survey's shared outputs and evidence expectations. No prototype view writes product records or reads private meetings. The frozen alpha command boundary remains unchanged. | Review the sales/discovery note slice, then deliver the accepted composition as thin installed Preview increments. | Automatic-note semantic support/usefulness and installed behavior remain human gates; navigation composition is accepted. | Visible note slice 1–2 days; implementation remains within the cumulative 2–3 week surface range |
 | F. Beta packaging and admission | Blocked by C–E. | Frozen build/model identities, installed canary, locator resolution, correction/restart/retention/deletion receipts. | Pre-run reference, semantic review, and operator usefulness verdict. | Cumulative 6–9 weeks |
 | G. Production hardening and GA | Not started. | Clean accounts/Macs, upgrade/migration/rollback, fault injection, privacy/security, and content-free diagnostics. | Explicit beta admission and later GA release decisions. | Cumulative 9–14 weeks |
 | H. Later extensions | Outside v1: optional EventKit brief, operator-authored live note, detection, and conversational cross-meeting retrieval. Speaker playback/AEC remains research. | Each extension receives its own contract and evidence. | Separate scope and release decisions. | 1–4 weeks each after v1; no AEC ETA before feasibility passes |

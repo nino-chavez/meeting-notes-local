@@ -16,12 +16,12 @@ extraction, correction, deletion, startup recovery, or packaging works in an
 application. Automatic note quality remains a separate pre-beta gate.
 
 The receipt remains valid behavioral evidence and does not need to be regenerated.
-The active whole-product gate is now the running synthetic walking-skeleton comparison
-in `prototype/walking-skeleton`: three possible default opening views, one corpus and
-one task, followed by operator approval of one exact navigation composition. Meetings,
-Recorded promises, and Find remain product capabilities; the gate decides their
-hierarchy and transitions. Synthetic review cannot replace the later private
-semantic/usefulness gate.
+The later whole-product composition gate passed on 2026-08-02. The operator accepted
+Find as the default, persistent Find/Meetings/Promises navigation, and the shared
+reader/evidence transitions at exact synthetic prototype commit
+`689fcda396c073d21d69d8feb3cfb6031bec0596`. The digest-bound decision is
+recorded in `prototype/walking-skeleton/review-manifest.json`. Synthetic review cannot
+replace the later private semantic/usefulness or installed-runtime gates.
 
 This repository has fresh sanitized history. That does not make meeting content
 source material: no capture, transcript, review packet, or private meeting
@@ -46,9 +46,9 @@ review details into Git or chat.
 - A change that claims authority from this private receipt requires a new private
   render, digest, and cold review. The separate synthetic comparison may change shell
   layout and navigation, but must not claim that this older receipt approved them.
-- The new composition remains blocked until the operator accepts one exact current
-  default and navigation hierarchy; non-interface contracts and the already-working
-  transcript alpha may continue independently.
+- The composition is no longer blocked: its exact accepted artifact remains the
+  navigation authority while later synthetic content slices are reviewed. This does
+  not approve generated-note quality or installed Preview behavior.
 
 The colleague survey is product-research evidence in `journeys.md`; it cannot supply
 this verdict. The evaluation-contribution candidate in J6 is later product research;

@@ -1,7 +1,7 @@
 {
   "reviewScope": "walking-skeleton-navigation-composition",
   "reviewQuestion": "Which view opens by default, what receives first-class navigation, and how do the views relate?",
-  "provisionalDefault": "retrieval",
+  "approvedDefault": "retrieval",
   "evidenceBasis": {
     "market": "Corpus retrieval is positioned as core value; documented comparables expose multiple retrieval entry points.",
     "surveyResponses": 3,
@@ -50,5 +50,40 @@
       "query": "?direction=retrieval"
     }
   ],
-  "compositionApproval": null
+  "compositionApproval": {
+    "status": "accepted",
+    "decision": "accept",
+    "reviewer": "operator",
+    "reviewedAt": "2026-08-02T21:37:11Z",
+    "approvedCommit": "689fcda396c073d21d69d8feb3cfb6031bec0596",
+    "approvedArtifact": {
+      "files": {
+        "index.html": "sha256:0a277da6907ccf463a52ce0cb011143a8775a955c02ddf1add7de96ea3b6fe88",
+        "styles.css": "sha256:386c5ac335d60c9ba6ece66aed8438d4961903315dfc268abd6117e73634320f",
+        "app.js": "sha256:b932d4b810c3cb8334363beb371930c9e05ed4bcde90934f68252b36fad48e77"
+      },
+      "defaultView": "retrieval",
+      "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
+      "sharedDestinations": [
+        "meeting-detail",
+        "note",
+        "canonical-transcript",
+        "evidence",
+        "correction",
+        "regeneration"
+      ]
+    },
+    "scope": [
+      "Find as the default opening view",
+      "Find, Meetings, and Promises as persistent product navigation",
+      "the separation of reviewer-only default controls from product navigation",
+      "the shared meeting, note, canonical-transcript, evidence, correction, and regeneration transitions"
+    ],
+    "doesNotApprove": [
+      "automatic-note semantic support or usefulness",
+      "application runtime or installed Preview behavior",
+      "private meeting content",
+      "beta admission or release"
+    ]
+  }
 }

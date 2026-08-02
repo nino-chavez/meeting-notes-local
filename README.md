@@ -92,16 +92,19 @@ skeletons:
    Retrieve`. Each step is narrow but genuine. Later slices deepen that spine instead
    of building isolated subsystems.
 
-The first design gate compares three credible **default opening views** against the
+The first design gate compared three credible **default opening views** against the
 same synthetic corpus and tasks: Meetings, Recorded promises, and Find. All three are
 useful product capabilities and share meeting detail, note, canonical transcript,
 evidence, correction, and regeneration. The decision is which opens first, what earns
 first-class navigation, and how the views relate—not which two capabilities to delete.
-The current evidence ranks Find as the provisional default: corpus retrieval is a
-category headline, and the colleague snapshot (`n=3`) records two natural-language
-entrants versus one person/project/date filter entrant, with cited cross-meeting value
-scored 5, 4, and 5. That ranking shapes the prototype; it does not admit conversational
-search to the first beta or replace operator review.
+The evidence ranked Find as the leading default: corpus retrieval is a category
+headline, and the colleague snapshot (`n=3`) records two natural-language entrants
+versus one person/project/date filter entrant, with cited cross-meeting value scored 5,
+4, and 5. On 2026-08-02 the operator accepted Find as the default, persistent
+Find/Meetings/Promises navigation, and the shared reader/evidence transitions at exact
+prototype commit `689fcda396c073d21d69d8feb3cfb6031bec0596`. That decision does
+not admit conversational search to the first beta or approve automatic-note quality,
+runtime behavior, private content, beta admission, or release.
 The original light/editorial visual system and proven capture, artifact,
 evidence-locator, retention and recovery behavior are inputs. Navigation, page
 hierarchy, note composition and exact geometry remain prototype questions.
@@ -115,7 +118,7 @@ comparison. Their non-visual security, accessibility, and shell decisions remain
 binding. Reconcile the visual documents to the approved prototype before production UI
 implementation so there is one design authority again.
 
-The prototype must run at the real 960×900 product viewport and include thin notes,
+The prototype runs at the real 960×900 product viewport and includes thin notes,
 gaps, withheld turns, missing transcripts, stale notes, loading, failure and recovery.
 Automated checks can prove its mechanics. Only the operator can approve its
 information architecture and interaction. The approved composition fingerprints the
@@ -123,9 +126,9 @@ default view, shared destinations, labels, and transitions before implementation
 alternative starting views remain useful fixtures rather than rejected features.
 
 Already-started safety work may be brought to a clean checkpoint when it does not
-pre-decide the interface. New product UI does not run ahead of this gate. Once the
-spine is approved, every implementation slice returns as an updated installed Preview
-so the operator can inspect the real application continuously.
+pre-decide the interface. New product UI now follows the approved spine, and every
+implementation slice returns as an updated installed Preview so the operator can
+inspect the real application continuously.
 
 The first supported beta is deliberately narrow:
 
@@ -147,7 +150,7 @@ transcript and metadata search inside the validated local library remains in bet
 | Phase | Work an agent can complete | Human gate |
 |---|---|---|
 | Correctness floor | Close profile, provenance and structured-note contract defects; keep deterministic controls green | None |
-| Interaction skeleton | Compare Meetings, Recorded promises, and Find as three possible default opening views in one system. Each must complete retrieval → exact words → withheld-turn correction → stale note → regeneration without product writes. The accepted 2026-07-31 private encounter remains claim/evidence input, not whole-product IA approval. | Operator approves one exact composition: default view, first-class navigation, shared destinations, labels, and transitions |
+| Interaction skeleton | The operator accepted Find as the default plus persistent Find, Meetings, and Promises navigation at exact prototype commit `689fcda396c073d21d69d8feb3cfb6031bec0596`. The approved spine completes retrieval → exact words → withheld-turn correction → stale note → regeneration without product writes. The next synthetic slice holds that navigation fixed while fleshing out sales/discovery note content. | Composition gate passed 2026-08-02. Automatic-note usefulness and application behavior remain separate gates. |
 | Production walking skeleton | Implement one genuine installed path through Launch → Record → Stop → Transcribe → Library → Note → Evidence → Correct/regenerate → Retrieve under the [`vertical-slice contract`](./docs/vertical-slice.md). Return every thin join as an updated Preview. | Operator exercises permissions, hardware capture, recovery, and the approved navigation over real retained artifacts |
 | Trust actions | Restore withheld speech, regenerate a note, choose retention, inspect disk use and delete audio or a meeting | Operator chooses the far-end notice and retention policy, then performs each action |
 | Limited beta | Package, sign, install cold and run a canary followed by real headphone meetings | Participants consent; the operator judges whether the notes are useful |
@@ -159,9 +162,9 @@ Note-contract correctness, profile/provenance hardening and the interaction comp
 can proceed independently. After the navigation composition is approved, Rust
 trust/persistence, Python note/evidence work, and the Tauri product surface can proceed
 in isolated worktrees against the same frozen contracts and rejoin in installed
-slices. Product UI implementation does not run ahead of that composition gate. No
-agent can supply consent, approve its own design, create a real meeting, judge a note
-useful or authorize Apple signing.
+slices. Product UI implementation now follows the accepted composition in thin,
+visible increments. No agent can supply consent, approve its own design, create a real
+meeting, judge a note useful or authorize Apple signing.
 
 ---
 
