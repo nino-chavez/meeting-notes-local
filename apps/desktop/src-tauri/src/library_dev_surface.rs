@@ -193,11 +193,15 @@ fn snapshot_response(state: &DevSurfaceState) -> DevSnapshot {
 
 #[tauri::command]
 fn library_dev_search(query: String, state: State<'_, DevSurfaceState>) -> DevSearchResponse {
+    search_response(&query, &state)
+}
+
+fn search_response(query: &str, state: &DevSurfaceState) -> DevSearchResponse {
     let mut guard = state.library.lock().expect("development library lock");
     let Some(library) = guard.as_mut() else {
-        return unavailable_search(&state);
+        return unavailable_search(state);
     };
-    match library.projection.search(&query) {
+    match library.projection.search(query) {
         Ok(hits) if hits.is_empty() => DevSearchResponse {
             state: "no-results",
             results: Vec::new(),
@@ -264,13 +268,17 @@ fn library_dev_search(query: String, state: State<'_, DevSurfaceState>) -> DevSe
 
 #[tauri::command]
 fn library_dev_open_note(meeting_id: String, state: State<'_, DevSurfaceState>) -> DevNoteResponse {
+    open_note_response(&meeting_id, &state)
+}
+
+fn open_note_response(meeting_id: &str, state: &DevSurfaceState) -> DevNoteResponse {
     let mut guard = state.library.lock().expect("development library lock");
     let Some(library) = guard.as_mut() else {
-        return unavailable_note(&meeting_id, &state);
+        return unavailable_note(meeting_id, state);
     };
-    let handles = match library.projection.note_claims(&meeting_id) {
+    let handles = match library.projection.note_claims(meeting_id) {
         Ok(handles) => handles,
-        Err(error) => return stale_note(&meeting_id, error),
+        Err(error) => return stale_note(meeting_id, error),
     };
     let mut claims = Vec::new();
     for hit in handles {
@@ -291,13 +299,13 @@ fn library_dev_open_note(meeting_id: String, state: State<'_, DevSurfaceState>) 
                 evidence_state: evidence_state_name(evidence_state),
                 locator_count: locators.len(),
             }),
-            Ok(_) => return stale_note(&meeting_id, LibraryReadError::SnapshotStale),
-            Err(error) => return stale_note(&meeting_id, error),
+            Ok(_) => return stale_note(meeting_id, LibraryReadError::SnapshotStale),
+            Err(error) => return stale_note(meeting_id, error),
         }
     }
     DevNoteResponse {
         state: "note",
-        meeting_id,
+        meeting_id: meeting_id.into(),
         claims,
         message: "Located means these words occur in the transcript. It does not mean semantic support was verified."
             .into(),
@@ -310,11 +318,19 @@ fn library_dev_open_evidence(
     locator_ordinal: usize,
     state: State<'_, DevSurfaceState>,
 ) -> DevEvidenceResponse {
+    open_evidence_response(&handle, locator_ordinal, &state)
+}
+
+fn open_evidence_response(
+    handle: &str,
+    locator_ordinal: usize,
+    state: &DevSurfaceState,
+) -> DevEvidenceResponse {
     let guard = state.library.lock().expect("development library lock");
     let Some(library) = guard.as_ref() else {
-        return unavailable_evidence(&state);
+        return unavailable_evidence(state);
     };
-    let Some(hit) = library.handles.get(&handle) else {
+    let Some(hit) = library.handles.get(handle) else {
         return stale_evidence();
     };
     match library
@@ -619,6 +635,13 @@ mod tests {
         (temporary, library)
     }
 
+    fn populated_state() -> (TempDir, DevSurfaceState) {
+        let (temporary, library) = seeded_library();
+        let state = DevSurfaceState::default();
+        *state.library.lock().unwrap() = Some(library);
+        (temporary, state)
+    }
+
     #[cfg(target_os = "macos")]
     fn clear_test_xattrs(path: &Path) {
         let status = std::process::Command::new("xattr")
@@ -633,80 +656,105 @@ mod tests {
     fn clear_test_xattrs(_: &Path) {}
 
     #[test]
-    fn synthetic_seed_initializes_populated_library_note_claim_and_evidence() {
-        let (_temporary, library) = seeded_library();
-        let state = DevSurfaceState::default();
-        *state.library.lock().unwrap() = Some(library);
+    fn ipc_response_helpers_return_populated_snapshot_search_note_and_unicode_evidence() {
+        let (_temporary, state) = populated_state();
         let snapshot = snapshot_response(&state);
         assert_eq!(snapshot.state, "populated");
         assert_eq!(snapshot.rows.len(), 1);
+        let snapshot_json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(snapshot_json["rows"][0]["meetingId"], FIXTURE_MEETING_ID);
+        assert_eq!(snapshot_json["rows"][0]["transcriptAvailable"], true);
 
-        let guard = state.library.lock().unwrap();
-        let library = guard.as_ref().unwrap();
-        let claims = library
-            .projection
-            .note_claims(&snapshot.rows[0].meeting_id)
-            .unwrap();
-        assert_eq!(claims.len(), 2);
-        let evidence = library
-            .projection
-            .open_claim_evidence(&library.storage, &claims[0], 0)
-            .unwrap();
-        assert_eq!(evidence.text, "café");
+        let search = search_response("café", &state);
+        assert_eq!(search.state, "results");
+        assert_eq!(search.results.len(), 1);
+        assert_eq!(search.results[0].kind, "claim");
         assert_eq!(
-            evidence.start,
-            "Use Thursday in the ".chars().count() as u64
+            search.results[0].text.as_deref(),
+            Some("Use Thursday in the café sample launch date.")
         );
-        assert_eq!(evidence.end, evidence.start + "café".chars().count() as u64);
+        assert_eq!(search.results[0].source_turn_index, None);
+        assert!(!search.results[0].handle.is_empty());
+
+        let note = open_note_response(FIXTURE_MEETING_ID, &state);
+        assert_eq!(note.state, "note");
+        assert_eq!(note.meeting_id, FIXTURE_MEETING_ID);
+        assert_eq!(note.claims.len(), 2);
+        let handle = note.claims[0].handle.clone();
+        assert_ne!(handle, note.meeting_id);
+        assert_ne!(handle, note.claims[0].claim);
+        assert!(note.claims[0].locator_count > 0);
+
+        let evidence = open_evidence_response(&handle, 0, &state);
+        assert_eq!(evidence.state, "evidence");
+        assert_eq!(evidence.meeting_id.as_deref(), Some(FIXTURE_MEETING_ID));
+        assert_eq!(evidence.source_turn_index, Some(0));
+        assert_eq!(evidence.text.as_deref(), Some("café"));
     }
 
     #[test]
-    fn empty_no_result_withheld_and_stale_states_do_not_leak_fixture_text() {
-        let empty = snapshot_response(&DevSurfaceState::default());
-        assert_eq!(empty.state, "empty");
+    fn ipc_response_helpers_redact_empty_no_result_withheld_and_stale_states() {
+        let empty = DevSurfaceState::default();
+        assert_eq!(snapshot_response(&empty).state, "empty");
+        let empty_search = search_response("anything", &empty);
+        assert_eq!(empty_search.state, "empty");
+        assert!(empty_search.results.is_empty());
+        let empty_note = open_note_response(FIXTURE_MEETING_ID, &empty);
+        assert_eq!(empty_note.state, "empty");
+        assert!(empty_note.claims.is_empty());
+        let empty_evidence = open_evidence_response("opaque-handle", 0, &empty);
+        assert_eq!(empty_evidence.state, "empty");
+        assert!(empty_evidence.text.is_none());
+        assert!(empty_evidence.meeting_id.is_none());
+        assert!(empty_evidence.source_turn_index.is_none());
 
-        let (_temporary, library) = seeded_library();
-        assert!(library.projection.search("not-present").unwrap().is_empty());
-        let withheld = library.projection.search("withheld").unwrap();
-        assert_eq!(withheld.len(), 1);
-        assert!(matches!(
+        let (_temporary, state) = populated_state();
+        let no_results = search_response("not-present", &state);
+        assert_eq!(no_results.state, "no-results");
+        assert!(no_results.results.is_empty());
+        assert_eq!(
+            serde_json::to_value(&no_results).unwrap()["results"],
+            json!([])
+        );
+
+        let withheld = search_response("withheld", &state);
+        assert_eq!(withheld.state, "results");
+        assert_eq!(withheld.results.len(), 1);
+        assert_eq!(withheld.results[0].kind, "withheld");
+        assert_eq!(withheld.results[0].text, None);
+        assert_eq!(withheld.results[0].source_turn_index, Some(2));
+        assert!(
+            !serde_json::to_string(&withheld)
+                .unwrap()
+                .contains("withheld sample detail")
+        );
+
+        let note = open_note_response(FIXTURE_MEETING_ID, &state);
+        let handle = note.claims[0].handle.clone();
+        let note_path = {
+            let guard = state.library.lock().unwrap();
+            let library = guard.as_ref().unwrap();
+            let meeting = load_meeting(
+                &library
+                    .storage
+                    .path()
+                    .join("meetings")
+                    .join(FIXTURE_MEETING_ID),
+            )
+            .unwrap();
             library
-                .projection
-                .open(&library.storage, &withheld[0])
-                .unwrap(),
-            OpenedLibraryHit::Withheld { .. }
-        ));
-
-        let claim = library
-            .projection
-            .note_claims(FIXTURE_MEETING_ID)
-            .unwrap()
-            .remove(0);
-        let meeting = load_meeting(
-            &library
-                .storage
-                .path()
-                .join("meetings")
-                .join(FIXTURE_MEETING_ID),
-        )
-        .unwrap();
-        let note = meeting.artifacts.current_note.unwrap();
-        durable_replace(
-            &library
                 .storage
                 .path()
                 .join("meetings")
                 .join(FIXTURE_MEETING_ID)
-                .join(note.json.relative_path),
-            b"{\"changed\":true}\n",
-        )
-        .unwrap();
-        assert_eq!(
-            library
-                .projection
-                .open_claim_evidence(&library.storage, &claim, 0)
-                .unwrap_err(),
-            LibraryReadError::SnapshotStale
-        );
+                .join(meeting.artifacts.current_note.unwrap().json.relative_path)
+        };
+        durable_replace(&note_path, b"{\"changed\":true}\n").unwrap();
+        let stale = open_evidence_response(&handle, 0, &state);
+        assert_eq!(stale.state, "stale");
+        assert!(stale.text.is_none());
+        assert!(stale.meeting_id.is_none());
+        assert!(stale.source_turn_index.is_none());
+        assert!(!serde_json::to_string(&stale).unwrap().contains("café"));
     }
 }
