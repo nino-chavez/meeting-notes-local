@@ -236,35 +236,70 @@ const workspace = document.querySelector("#workspace");
 const footerDirection = document.querySelector("#footer-direction");
 const captureLayer = document.querySelector("#capture-layer");
 const toast = document.querySelector("#toast");
+const recoveryFixtureKey = "local-meeting-notes:walking-skeleton-recovery";
 
 let loadTimer;
 let transitionTimer;
 let captureTimer;
 let toastTimer;
-let state = freshState(readDirection());
+let state = freshState(readDirection(), readRecoveryFixture());
 
 function readDirection() {
   const direction = new URLSearchParams(window.location.search).get("direction");
   return Object.hasOwn(viewLabels, direction) ? direction : "retrieval";
 }
 
-function freshState(defaultDirection) {
+function readRecoveryFixture() {
+  try {
+    const raw = window.sessionStorage.getItem(recoveryFixtureKey);
+    if (!raw) return null;
+    const fixture = JSON.parse(raw);
+    const keys = Object.keys(fixture ?? {}).sort().join(",");
+    if (
+      keys !== "meetingId,priorNoteVersion,scenario,schema,transcriptView"
+      || fixture.schema !== "walking-skeleton-recovery/1"
+      || fixture.scenario !== "note-regeneration-request-only"
+      || fixture.meetingId !== "m-02"
+      || fixture.transcriptView !== 2
+      || fixture.priorNoteVersion !== 1
+    ) {
+      clearRecoveryFixture();
+      return null;
+    }
+    return fixture;
+  } catch {
+    clearRecoveryFixture();
+    return null;
+  }
+}
+
+function clearRecoveryFixture() {
+  try {
+    window.sessionStorage.removeItem(recoveryFixtureKey);
+  } catch {
+    // The prototype remains usable when browser storage is unavailable.
+  }
+}
+
+function freshState(defaultDirection, recoveryFixture = null) {
+  const recoveringRegeneration = recoveryFixture?.scenario === "note-regeneration-request-only";
   return {
     defaultDirection,
     view: defaultDirection,
     loading: true,
-    route: "home",
+    route: recoveringRegeneration ? "meeting" : "home",
     query: "",
-    selectedMeetingId: null,
+    selectedMeetingId: recoveringRegeneration ? "m-02" : null,
     selectedClaimId: null,
     selectedTranscriptLocator: null,
     claimFilter: defaultDirection === "commitments" ? "commitments" : "all",
     folderFilter: null,
     focusRequest: null,
     reviewingGap: false,
-    restored: false,
+    restored: recoveringRegeneration,
     regenerating: false,
     regenerated: false,
+    recoveryState: recoveringRegeneration ? "interrupted" : "none",
     partnerRecovering: false,
     partnerRecovered: false,
     retentionConfirming: false,
@@ -336,6 +371,7 @@ function evidenceLabel(claim) {
 }
 
 function claimsFor(meeting) {
+  if (meeting.id === "m-02" && state.restored && !state.regenerated) return [];
   const claims = [...meeting.claims];
   if (meeting.id === "m-02" && state.regenerated) claims.push(meeting.regeneratedClaim);
   if (meeting.id === "m-03" && state.partnerRecovered) claims.push(recoveredPartnerClaim);
@@ -416,6 +452,7 @@ function startLoading() {
 function resetPrototype(direction = state.defaultDirection) {
   window.clearTimeout(transitionTimer);
   window.clearTimeout(captureTimer);
+  clearRecoveryFixture();
   state = freshState(direction);
   startLoading();
 }
@@ -463,10 +500,13 @@ function syncChrome() {
     transcribing: { status: "Transcribing locally", action: "Show status", className: "is-transcribing" },
     ready: { status: "Meeting ready", action: "Open meeting", className: "is-ready" }
   };
+  const recoveryPending = state.recoveryState === "interrupted" || state.recoveryState === "resuming";
   const captureChrome = state.enrollmentRecording
     ? { status: "Recording · voice enrollment", action: "Show enrollment", className: "is-recording" }
     : state.captureDegraded && state.capturePhase === "recording"
       ? { status: "Recording · system audio interrupted", action: "Show status", className: "is-degraded" }
+      : state.capturePhase === "idle" && recoveryPending
+        ? { status: "Recovery needs attention", action: "Review recovery", className: "is-setup" }
       : state.capturePhase === "idle" && !capturePrerequisitesReady()
         ? { status: "Setup required", action: "Finish setup", className: "is-setup" }
         : captureLabels[state.capturePhase];
@@ -507,11 +547,12 @@ function restoreRequestedFocus() {
 function render() {
   syncChrome();
   if (state.loading) {
+    const recovering = state.recoveryState === "interrupted";
     workspace.innerHTML = `
       <section class="loading-view" role="status" aria-busy="true">
         <span class="loading-mark" aria-hidden="true"></span>
-        <h1>Opening your meeting memory.</h1>
-        <p>Loading five synthetic meetings without touching Preview data.</p>
+        <h1>${recovering ? "Checking interrupted work." : "Opening your meeting memory."}</h1>
+        <p>${recovering ? "Rebuilding one synthetic meeting from a content-free recovery receipt." : "Loading five synthetic meetings without touching Preview data."}</p>
       </section>`;
     renderCaptureLayer();
     restoreRequestedFocus();
@@ -1178,7 +1219,8 @@ function search(query) {
     for (const turn of turnsFor(meeting)) {
       const normalizedTurn = turn.text?.toLocaleLowerCase();
       const start = normalizedTurn?.indexOf(needle) ?? -1;
-      if (!turn.type && !turn.withheld && start >= 0) {
+      const includedInCurrentTranscript = !turn.type && (!turn.withheld || (meeting.id === "m-02" && state.restored));
+      if (includedInCurrentTranscript && start >= 0) {
         results.push({
           type: "transcript",
           meeting,
@@ -1341,7 +1383,7 @@ function coverageMarkup(meeting) {
   if (meeting.id === "m-02") {
     const label = state.restored ? "Withheld turn restored" : "One withheld turn";
     const detail = state.restored
-      ? "The canonical transcript changed. The note was marked stale until regeneration."
+      ? "The canonical transcript changed. Note version 1 is history until a replacement is generated."
       : meeting.coverage;
     return `
       <section class="coverage-strip is-gap">
@@ -1368,12 +1410,48 @@ function coverageMarkup(meeting) {
 }
 
 function staleMarkup() {
+  const recovering = state.recoveryState === "interrupted" || state.recoveryState === "resuming";
+  const resuming = state.recoveryState === "resuming" || state.regenerating;
   return `
-    <section class="stale-panel">
-      <p class="label">Stale · transcript changed</p>
-      <h2>The current note does not include the restored turn.</h2>
-      <p>Keep note version 1 as history, then regenerate from the corrected canonical transcript.</p>
-      <button class="primary-button" type="button" data-action="regenerate-note" ${state.regenerating ? "disabled" : ""}>${state.regenerating ? "Regenerating…" : "Regenerate note"}</button>
+    <section class="stale-panel ${recovering ? "is-recovery" : ""}">
+      <p class="label">${recovering ? "Recovered after a document reload" : "Stale note · version 1 is history"}</p>
+      <h2>${recovering ? "Your transcript correction is safe. No replacement note was published." : "The corrected transcript has no current note yet."}</h2>
+      <p>${recovering
+        ? "The canonical transcript includes the restored turn. Note version 1 remains stale history, and the interrupted request can be retried without accepting a partial note."
+        : "The prior note stays available as history but does not include the restored turn. Generate version 2 from the corrected canonical transcript."}</p>
+      <div class="stale-actions">
+        <button class="primary-button" type="button" data-action="regenerate-note" ${resuming ? "disabled" : ""}>${resuming ? "Regenerating…" : recovering ? "Resume note regeneration" : "Generate note version 2"}</button>
+        ${recovering ? "" : `<button class="text-button prototype-action" type="button" data-action="preview-document-reload-interruption">Prototype: interrupt after request</button>`}
+      </div>
+      ${recovering
+        ? `<p class="prototype-boundary">Synthetic recovery preview. The native app and product records are not exercised.</p>`
+        : `<p class="prototype-boundary">Reviewer action writes a content-free request receipt, then reloads this document.</p>`}
+    </section>`;
+}
+
+function revisionHistoryMarkup(meeting) {
+  if (meeting.id !== "m-02" || !state.restored) return "";
+  const currentNote = state.regenerated;
+  const recovered = state.recoveryState === "recovered";
+  return `
+    <section class="revision-lineage" aria-label="Transcript and note history">
+      <div class="section-heading">
+        <h2>${state.recoveryState === "none" ? "Transcript and note history" : "What survived"}</h2>
+        <span>${currentNote ? "Current note ready" : "Regeneration needed"}</span>
+      </div>
+      <div class="revision-row is-current">
+        <div><strong>Transcript view 2</strong><span>Includes the restored withheld turn.</span></div>
+        <span>Current</span>
+      </div>
+      <div class="revision-row is-history">
+        <div><strong>Note version 1</strong><span>Built from transcript view 1 and excluded from current results.</span></div>
+        <span>Stale history</span>
+      </div>
+      <div class="revision-row ${currentNote ? "is-current" : "is-missing"}">
+        <div><strong>Note version 2</strong><span>${currentNote ? "Built from transcript view 2 and includes the restored promise." : "No partial replacement has product authority."}</span></div>
+        <span>${currentNote ? "Current" : "Not published"}</span>
+      </div>
+      ${recovered ? `<p class="recovery-receipt"><strong>Recovery complete.</strong> One replacement note became current; no partial note was published.</p>` : ""}
     </section>`;
 }
 
@@ -1456,7 +1534,8 @@ function renderMeetingDetail() {
 
 function meetingDetailMarkup(meeting) {
   if (meeting.id === "m-03" && !state.partnerRecovered) return partnerFailureMarkup(meeting);
-  const claims = claimsFor(meeting);
+  const stale = noteState(meeting) === "stale";
+  const claims = stale ? meeting.claims : claimsFor(meeting);
   const transcriptLabel = meeting.id === "m-03" && state.partnerRecovered
     ? "Recovered transcript"
     : meeting.id === "m-02" && state.restored
@@ -1467,7 +1546,7 @@ function meetingDetailMarkup(meeting) {
   return `
     <header class="detail-header">
       <div>
-        <p class="kicker">${escapeHtml(transcriptLabel)} · note ${noteState(meeting) === "stale" ? "stale" : "ready"}</p>
+        <p class="kicker">${escapeHtml(transcriptLabel)} · ${stale ? "no current note" : "note ready"}</p>
         <h1>${escapeHtml(meeting.title)}</h1>
         <p class="detail-meta">${escapeHtml(meeting.date)} · ${escapeHtml(meeting.folder)}</p>
       </div>
@@ -1476,9 +1555,10 @@ function meetingDetailMarkup(meeting) {
       </div>
     </header>
     ${coverageMarkup(meeting)}
-    ${noteState(meeting) === "stale" ? staleMarkup() : ""}
-    <div class="section-heading"><h2>Meeting note</h2><span>Version ${meeting.id === "m-02" && state.regenerated ? "2" : "1"} · ${claims.length} claims</span></div>
-    ${meetingNoteMarkup(meeting, claims)}
+    ${stale ? staleMarkup() : ""}
+    ${revisionHistoryMarkup(meeting)}
+    <div class="section-heading"><h2>${stale ? "Prior note" : "Meeting note"}</h2><span>Version ${meeting.id === "m-02" && state.regenerated ? "2" : "1"} · ${stale ? "history · " : ""}${claims.length} claims</span></div>
+    <div class="${stale ? "historical-note" : "current-note"}">${meetingNoteMarkup(meeting, claims)}</div>
     ${retentionActionMarkup(meeting)}`;
 }
 
@@ -1568,9 +1648,8 @@ function renderTranscript() {
         <p>${claim ? escapeHtml(claim.text) : transcriptLocator ? `“${escapeHtml(transcriptLocator.quote)}”` : "Read the canonical words in order."}</p>
         ${transcriptLocator ? `<div class="source-fact"><strong>${claim ? escapeHtml(evidenceLabel(claim)) : "Exact words found"}</strong><span>Text locator: ${escapeHtml(`${transcriptLocator.turnId} [${transcriptLocator.start}, ${transcriptLocator.end})`)}</span></div>` : ""}
         <div class="source-fact"><strong>${meeting.id === "m-02" ? (state.restored ? "Withheld turn restored" : "One withheld turn") : "Transcript available"}</strong><span>${meeting.id === "m-02" ? "Gap at 00:01:08–00:01:26" : escapeHtml(currentAudio(meeting).detail)}</span></div>
-        <div class="source-fact"><strong>Note ${noteState(meeting) === "stale" ? "needs regeneration" : "is current"}</strong><span>${meeting.id === "m-02" && state.regenerated ? "Version 2 includes the restored promise." : "Claims remain separate from canonical words."}</span></div>
+        <div class="source-fact"><strong>Note ${noteState(meeting) === "stale" ? "needs regeneration" : "is current"}</strong><span>${meeting.id === "m-02" && state.regenerated ? "Version 2 includes the restored promise." : meeting.id === "m-02" && state.restored ? "Version 1 remains history; no partial replacement is current." : "Claims remain separate from canonical words."}</span></div>
         ${meeting.id === "m-02" && !state.restored ? `<button class="primary-button" type="button" data-action="review-gap">Review withheld turn</button>` : ""}
-        ${meeting.id === "m-02" && state.restored && !state.regenerated ? `<button class="primary-button" type="button" data-action="regenerate-note" ${state.regenerating ? "disabled" : ""}>${state.regenerating ? "Regenerating…" : "Regenerate note"}</button>` : ""}
         <button class="secondary-button" type="button" data-action="back-results">Back to ${state.query ? `“${escapeHtml(state.query)}” results` : "Library"}</button>
       </aside>
     </div>`;
@@ -1685,21 +1764,47 @@ function reviewGap() {
 function restoreTurn() {
   state.restored = true;
   state.regenerated = false;
+  state.recoveryState = "none";
   state.reviewingGap = false;
+  state.selectedClaimId = null;
+  state.selectedTranscriptLocator = null;
   showToast("Turn restored. Note version 1 is now stale.");
   state.focusRequest = "gap";
   render();
 }
 
+function previewDocumentReloadInterruption() {
+  if (!state.restored || state.regenerated || state.regenerating) return;
+  const fixture = {
+    schema: "walking-skeleton-recovery/1",
+    scenario: "note-regeneration-request-only",
+    meetingId: "m-02",
+    transcriptView: 2,
+    priorNoteVersion: 1
+  };
+  try {
+    window.sessionStorage.setItem(recoveryFixtureKey, JSON.stringify(fixture));
+    window.location.reload();
+  } catch {
+    showToast("This browser blocked the synthetic recovery receipt; the prototype was not reloaded.");
+  }
+}
+
 function regenerateNote() {
   if (!state.restored || state.regenerating) return;
+  const resumingRecovery = state.recoveryState === "interrupted";
   state.regenerating = true;
+  if (resumingRecovery) state.recoveryState = "resuming";
   state.focusRequest = "status";
   render();
   transitionTimer = window.setTimeout(() => {
     state.regenerating = false;
     state.regenerated = true;
-    showToast("Note version 2 now includes the restored promise.");
+    if (state.recoveryState === "resuming") {
+      state.recoveryState = "recovered";
+      clearRecoveryFixture();
+    }
+    showToast(`${resumingRecovery ? "Recovery complete. " : ""}Note version 2 now includes the restored promise.`);
     state.focusRequest = "heading";
     render();
   }, 650);
@@ -1916,6 +2021,13 @@ function buildEnrollmentProfile() {
 function showCapture() {
   if (state.enrollmentRecording) {
     openSettings(state.setupStep);
+    return;
+  }
+  if (state.recoveryState === "interrupted" || state.recoveryState === "resuming") {
+    openMeeting("m-02");
+    state.focusRequest = "status";
+    render();
+    showToast("Finish the recovered note regeneration before starting another meeting.");
     return;
   }
   if (state.capturePhase === "ready") {
@@ -2177,6 +2289,7 @@ document.addEventListener("click", (event) => {
   }
   if (action === "review-gap") reviewGap();
   if (action === "restore-turn") restoreTurn();
+  if (action === "preview-document-reload-interruption") previewDocumentReloadInterruption();
   if (action === "regenerate-note") regenerateNote();
   if (action === "claim-filter") {
     state.claimFilter = button.dataset.filter;

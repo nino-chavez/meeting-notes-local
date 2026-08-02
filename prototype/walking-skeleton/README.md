@@ -65,6 +65,17 @@ private build/persistence, discard, and return to ready. Its displayed rates com
 the repository's fixed non-personal score fixture. No macOS permission, profile,
 audio, model, or product record is inspected or changed.
 
+The correction/recovery slice makes revision authority visible instead of treating
+“stale” as a badge. Restoring the withheld turn creates transcript view 2, moves note
+version 1 to stale history, and leaves no current note until version 2 is generated. A
+reviewer-only interruption writes a content-free synthetic receipt containing fixture
+IDs and version numbers, reloads the document, and reopens the meeting with one safe
+action: resume note regeneration. The receipt survives further document reloads and is
+cleared only after the deterministic retry makes version 2 current. Stale note claims
+stay out of current Find and Promises results while restored transcript words become
+searchable. This proves the proposed interaction and browser-state reconstruction, not
+native persistence or installed-app recovery.
+
 It is a design instrument, not a second application runtime. It does not read or write
 Preview data, record audio, invoke a model, or prove note usefulness or semantic
 support. The synthetic corpus is frozen as of May 9, 2026 so relative retention states

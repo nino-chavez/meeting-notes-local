@@ -1,6 +1,6 @@
 {
-  "reviewScope": "walking-skeleton-guided-voice-enrollment",
-  "reviewQuestion": "Can the operator complete or discard voice enrollment while understanding the two-sitting gap, permitted comparison speech, measured trade-off, short-lived source audio, and exact condition that makes Start available?",
+  "reviewScope": "walking-skeleton-correction-document-reload-recovery",
+  "reviewQuestion": "After restoring withheld speech, can the operator distinguish the current transcript from stale note history, survive an interrupted regeneration request across repeated document reloads, and safely publish one replacement note?",
   "approvedDefault": "retrieval",
   "evidenceBasis": {
     "market": "Corpus retrieval is positioned as core value; documented comparables expose multiple retrieval entry points.",
@@ -20,8 +20,8 @@
   },
   "files": {
     "index.html": "sha256:7ce1c1342a9bd2ead2fe769db138747eef720a06445e915f36d4102dc2f79b45",
-    "styles.css": "sha256:bce41ecda87ee211c2e10a9357645ab8920979b7e4c9ec853aa513f2a1eff5ad",
-    "app.js": "sha256:0c178618cf181702e87b515dd69baa73b06bbb7a057912abd88089edc034f751"
+    "styles.css": "sha256:30684b23d58cb601b1c161621fca778e90641efb3762e2724271a140278cf975",
+    "app.js": "sha256:aa3606c9b00742fabdb7d86de23bf086c8082daac00633596e5b9aaa162e3ac0"
   },
   "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
   "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",
@@ -195,6 +195,53 @@
       "operating-point policy",
       "source-audio deletion implementation",
       "owner-only persistence implementation",
+      "installed Preview behavior",
+      "beta admission or release"
+    ]
+  },
+  "correctionRecoverySlice": {
+    "id": "withheld-turn-regeneration-recovery-v1",
+    "status": "pending-operator-review",
+    "source": "synthetic",
+    "states": [
+      "withheld-turn-review",
+      "restored-transcript-view-current",
+      "prior-note-stale-history",
+      "no-current-note",
+      "regeneration-request-only-interruption",
+      "fresh-document-reload",
+      "safe-regeneration-retry",
+      "replacement-note-current"
+    ],
+    "contentFreeRecoveryReceipt": [
+      "schema",
+      "scenario",
+      "synthetic-meeting-id",
+      "transcript-view-number",
+      "prior-note-version-number"
+    ],
+    "contracts": [
+      "Restoring a withheld turn creates a successor canonical transcript view rather than rewriting the captured transcript.",
+      "The prior note remains readable as stale history but is excluded from current results.",
+      "No partial replacement note becomes current after the request-only interruption.",
+      "Each document reload returns to the affected meeting with one safe action until note regeneration reaches a terminal state.",
+      "The header blocks a new meeting while recovery needs attention, then returns to Start after version 2 becomes current.",
+      "The recovery reader rejects unknown receipt fields before restoring synthetic state.",
+      "The synthetic receipt stores no transcript, note, meeting title, or private content."
+    ],
+    "mechanicalEvidence": {
+      "viewport": "960x900",
+      "outerOverflow": false,
+      "consoleErrors": 0,
+      "documentReloadObserved": true,
+      "receiptRetainedAcrossSecondReload": true,
+      "receiptClearedAfterTerminalRetry": true
+    },
+    "doesNotApprove": [
+      "native operation persistence",
+      "installed fresh-process recovery",
+      "real transcript correction",
+      "automatic-note semantic support or usefulness",
       "installed Preview behavior",
       "beta admission or release"
     ]

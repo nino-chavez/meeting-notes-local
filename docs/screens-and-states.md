@@ -342,6 +342,16 @@ durable artifact; the summary is an enhancement over it. A generated artifact wi
 It never enters the library or note-detail surface as though it were a thin but usable
 note.
 
+Correction adds revision states to this surface without creating another destination.
+A restored withheld turn makes a successor transcript current, moves the prior note to
+`stale-history`, and leaves `current-note` empty. Regeneration is a separate action. If
+its request is interrupted, the production fresh-launch surface must show what
+survived, state that no replacement was published, and offer one retry. Only a
+validated successor note may become current; the stale note remains readable as
+history but is excluded from current results. The walking skeleton exercises the same
+hierarchy with repeated document reloads and a content-free synthetic receipt. The
+installed receipt and fresh-process persistence path remain unproven.
+
 **The states above are the surface's; a claim inside it has its own, and this table
 was missing them.** Every state here is about whether a note *exists*. None of them
 says anything about whether what it asserts can be believed, which is J1 beat 3 and

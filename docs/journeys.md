@@ -403,16 +403,22 @@ leg and be visibly honest at menubar size.
 
 The gate marked a colleague's speech as not-the-operator. The operator disagrees.
 
-**The code promises this journey and the review prototype now specifies its
-consequence.** `transcript.json` keeps every gated turn with its score precisely so the
-decision can be overruled. The correction specimen makes a restored turn mark the note
-stale and requires a separate regeneration. It is not wired to a real capture and no
-application surface performs the operation yet, so this remains a product contract
-rather than a feature.
+**The code promises this journey and the review prototype now specifies its consequence
+and recovery choreography.** `transcript.json` keeps every gated turn with its score
+precisely so the decision can be overruled. The correction specimen makes transcript
+view 2 current, keeps note version 1 as visibly stale history, and leaves no current
+note until a separate regeneration succeeds. Its reviewer-only interruption reloads
+the prototype from a content-free request receipt, returns to the affected meeting,
+and offers one safe retry. Note version 2 becomes current only after that retry. It is
+not wired to a real capture or native operation receipts, so this remains a product
+contract and interaction candidate rather than an installed feature.
 
 Minimum: the gated turns are visible where the note is read, distinguishable, and
-restorable — after which the note is regenerated, because a correction that does not
-change the note corrects nothing.
+restorable — after which the old note is unmistakably historical, regeneration is
+separate, and an interrupted request can be resumed after a fresh process without
+promoting a partial note. The walking skeleton tests that hierarchy with repeated
+document reloads; it does not count as native fresh-process evidence. A correction that
+does not change the note corrects nothing.
 
 ### J5 — "How long is this keeping recordings of other people?" (retention)
 
