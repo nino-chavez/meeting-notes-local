@@ -8,10 +8,18 @@ operator accepted the exact rendered interaction in a cold review on 2026-07-31.
 digest-bound human-review receipt remains beside that private packet. No meeting
 content, response detail, or approval packet is stored in Git.
 
-This gate approves an interaction design. It does not prove that capture,
-automatic extraction, correction, deletion, startup recovery, or packaging works
-in an application. The encounter no longer blocks the executable application
-skeleton. Automatic note quality remains a separate pre-beta gate.
+This receipt approves the claim-to-exact-words behavior, evidence-state treatment,
+correction consequence, and other interactions the private page actually exercised.
+It is not approval of the current whole-product information architecture, navigation,
+screen geometry, or visual system. It also does not prove that capture, automatic
+extraction, correction, deletion, startup recovery, or packaging works in an
+application. Automatic note quality remains a separate pre-beta gate.
+
+The receipt remains valid behavioral evidence and does not need to be regenerated.
+The active whole-product gate is now the running synthetic walking-skeleton comparison
+in `prototype/walking-skeleton`: three structures, one corpus and one task, followed by
+operator approval of one exact fingerprint. Synthetic review cannot replace the later
+private semantic/usefulness gate.
 
 This repository has fresh sanitized history. That does not make meeting content
 source material: no capture, transcript, review packet, or private meeting
@@ -19,27 +27,32 @@ artifact may be committed or pushed.
 
 ### Fresh-session continuation
 
-The durable continuation point is branch `codex/product-foundation`. A new session
-should read this Status section, the Cold operator checklist, and
-`vertical-slice.md`'s Status before acting. It does not need the prior chat transcript.
+The accepted private receipt remains durable on `codex/product-foundation`. Active
+composition work continues on `codex/walking-skeleton-prototype`. A new session should
+read this Status section, `README.md § Delivery method`, the Cold operator checklist,
+and `vertical-slice.md`'s Status before acting. It does not need the prior chat
+transcript.
 
 The gate passed when the operator returned `accept` for the exact private page already
 rendered and the digest-bound receipt was recorded on 2026-07-31. Do not regenerate
 the page merely to start a new session. Do not move its content, paths, manifest, or
 review details into Git or chat.
 
-- The recorded `accept` approves only this interaction. It does not approve automatic
-  note quality or the application runtime.
-- `revise` records UI findings without quoting private meeting content. Any interface
-  change requires a new render, digest, and cold review.
-- `decline` leaves application implementation blocked and preserves the reason as a
-  human finding.
+- The recorded `accept` approves only the reviewed behavior. It does not approve
+  automatic note quality, the application runtime, or the new whole-product
+  composition.
+- A change that claims authority from this private receipt requires a new private
+  render, digest, and cold review. The separate synthetic comparison may change shell
+  layout and navigation, but must not claim that this older receipt approved them.
+- The new composition remains blocked until the operator accepts one exact current
+  candidate; non-interface contracts and the already-working transcript alpha may
+  continue independently.
 
 The colleague survey is product-research evidence in `journeys.md`; it cannot supply
 this verdict. The evaluation-contribution candidate in J6 is later product research;
 it is not part of the page under review or the first vertical slice.
 
-## Why this gate uses human-curated real content
+## Why the accepted behavioral gate used human-curated real content
 
 Three candidate inputs were compared:
 

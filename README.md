@@ -98,6 +98,15 @@ retrieval-first hybrid. The original light/editorial visual system and proven ca
 artifact, evidence-locator, retention and recovery behavior are inputs. Navigation,
 page hierarchy, note composition and exact geometry remain prototype questions.
 
+For this gate, “original” is executable evidence rather than a mood: the base tokens
+and type treatment come from the installed transcript-alpha UI at exact commit
+`5fe9aecd4f53204dc6e82573fd4b4dde37efd6d1` and its additive reader extensions in
+`apps/desktop/ui/styles.css`. The dark, pre-surface visual clauses in `DIRECTION.md`
+and `DESIGN.md` were never implemented in that app and are historical during this
+comparison. Their non-visual security, accessibility, and shell decisions remain
+binding. Reconcile the visual documents to the approved prototype before production UI
+implementation so there is one design authority again.
+
 The prototype must run at the real 960×900 product viewport and include thin notes,
 gaps, withheld turns, missing transcripts, stale notes, loading, failure and recovery.
 Automated checks can prove its mechanics. Only the operator can approve its
@@ -129,21 +138,21 @@ transcript and metadata search inside the validated local library remains in bet
 | Phase | Work an agent can complete | Human gate |
 |---|---|---|
 | Correctness floor | Close profile, provenance and structured-note contract defects; keep deterministic controls green | None |
-| Product encounter | Build a click-through from one consented real capture and operator-confirmed evidence-bound review items, visibly separated from automatic-note evidence; include a rejected-summary state that keeps the transcript and bind the private packet in [`docs/encounter-acceptance.md`](./docs/encounter-acceptance.md) | Operator reviews it cold and approves only the exact interaction |
-| Narrow application | Build the Tauri shell, Rust-owned session state, Swift capture sidecar, local worker, private storage and post-meeting processing under the [`post-approval vertical-slice contract`](./docs/vertical-slice.md) | Operator exercises permissions and hardware capture |
+| Interaction skeleton | Compare three running structures over one synthetic corpus: meetings first, commitments first, and find + browse. Each must complete retrieval → exact words → withheld-turn correction → stale note → regeneration without product writes. The accepted 2026-07-31 private encounter remains claim/evidence input, not whole-product IA approval. | Operator reviews all three cold and approves only one exact fingerprinted candidate |
+| Production walking skeleton | Implement one genuine installed path through Launch → Record → Stop → Transcribe → Library → Note → Evidence → Correct/regenerate → Retrieve under the [`vertical-slice contract`](./docs/vertical-slice.md). Return every thin join as an updated Preview. | Operator exercises permissions, hardware capture, recovery, and the approved navigation over real retained artifacts |
 | Trust actions | Restore withheld speech, regenerate a note, choose retention, inspect disk use and delete audio or a meeting | Operator chooses the far-end notice and retention policy, then performs each action |
 | Limited beta | Package, sign, install cold and run a canary followed by real headphone meetings | Participants consent; the operator judges whether the notes are useful |
 | General availability | Prove recovery, updates, fresh-machine permissions and the supported envelope across beta use | Release decision uses beta evidence; passing tests alone cannot make it |
 
 Work may run in parallel only where the evidence remains separable. The registered
 classifier benchmark remains research; it does not sit on the product critical path.
-Note-contract correctness, profile/provenance hardening and click-through
-choreography can proceed independently. After the encounter is approved, the Rust
-session supervisor, Swift sidecar packaging, local worker protocol and approved
-interface can proceed in isolated worktrees against shared fixtures. Product
-implementation does not run ahead of the encounter, and no agent can supply consent,
-approve its own design, create a real meeting, judge a note useful or authorize Apple
-signing.
+Note-contract correctness, profile/provenance hardening and the interaction comparison
+can proceed independently. After one new candidate is approved, Rust trust/persistence,
+Python note/evidence work, and the Tauri product surface can proceed in isolated
+worktrees against the same frozen contracts and rejoin in installed slices. Product UI
+implementation does not run ahead of that composition gate. No agent can supply
+consent, approve its own design, create a real meeting, judge a note useful or
+authorize Apple signing.
 
 ---
 
@@ -721,8 +730,8 @@ silence, that is what happened.
 | [`docs/screens-and-states.md`](./docs/screens-and-states.md) | Eleven surfaces, their lifecycle states, and the five templates derived from them. |
 | [`docs/journeys.md`](./docs/journeys.md) | What the operator does across days. Six current journeys plus a governed evaluation-contribution candidate, why the unit is retrieval rather than the meeting, a market check including Gong, the registered colleague-survey analysis and two-response snapshot, and the gaps the state inventory could not show. |
 | [`docs/vertical-slice.md`](./docs/vertical-slice.md) | The post-approval application boundary: process ownership, worker protocol, private persistence, recovery, workstream split and fault evidence. |
-| [`DIRECTION.md`](./DIRECTION.md) | Art direction. Thesis first; the device ledger stays empty until devices ship. |
-| [`DESIGN.md`](./DESIGN.md) | Tokens, visual rules, engineering rules, and the Tauri-over-SwiftUI shell decision. |
+| [`DIRECTION.md`](./DIRECTION.md) | Pre-surface dark art direction. Its visual clauses are historical during the walking-skeleton comparison because they conflict with the installed alpha; non-visual constraints still inform review. |
+| [`DESIGN.md`](./DESIGN.md) | Pre-surface visual tokens plus binding engineering rules, including the Tauri-over-SwiftUI shell decision. Visual tokens must be reconciled to the approved prototype before implementation. |
 | [`docs/teardown.md`](./docs/teardown.md) | How Circleback, Fireflies and Granola actually work, and why this is built the way it is. |
 
 The images above are drawn from real captured envelopes and follow this repo's

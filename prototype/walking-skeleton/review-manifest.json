@@ -1,0 +1,32 @@
+{
+  "reviewScope": "walking-skeleton-information-architecture",
+  "snapshotDate": "2026-08-02",
+  "syntheticCorpusAsOf": "2026-05-09",
+  "viewport": {
+    "width": 960,
+    "height": 900
+  },
+  "files": {
+    "index.html": "sha256:7b109f7a1272f9138c51e897c53034661822c563f2d0eadcd1928eadff164a3b",
+    "styles.css": "sha256:3db71eaafdf2807b703647ef4ccbeacb9eedb3bcdee37451b05fbb22da6ec6a8",
+    "app.js": "sha256:a133d29959061a6d24b5851d6b31ffc31af3cfadb0392c8bf8125be05d38d180"
+  },
+  "candidates": [
+    {
+      "id": "meetings",
+      "label": "Meetings first",
+      "query": "?direction=meetings"
+    },
+    {
+      "id": "commitments",
+      "label": "Commitments first",
+      "query": "?direction=commitments"
+    },
+    {
+      "id": "retrieval",
+      "label": "Find + browse",
+      "query": "?direction=retrieval"
+    }
+  ],
+  "approval": null
+}

@@ -1,5 +1,13 @@
 # Direction — local-meeting-notes
 
+> **Status, 2026-08-02:** the dark visual direction below predates the installed
+> transcript-alpha surface and conflicts with the operator-selected light/editorial
+> baseline. Keep it as historical design evidence during the walking-skeleton
+> comparison; do not use it to restyle the active prototype. `README.md § Delivery
+> method` owns the temporary visual authority. Non-visual constraints remain review
+> inputs, and this document must be reconciled to the approved prototype before
+> production UI implementation.
+
 Art direction for this surface. Unlike the records that quote an existing
 `DESIGN.md`, this one is **authored, not derived**: there is no shipped
 `DESIGN.md` stating a direction to quote, because there is no shipped surface.

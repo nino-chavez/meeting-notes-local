@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Local Meeting Notes — Walking Skeleton</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to meeting memory</a>
+
+    <section class="review-bar" aria-label="Prototype comparison controls">
+      <div class="review-context">
+        <strong>Walking skeleton</strong>
+        <span>Synthetic snapshot: May 9, 2026 · structure review</span>
+      </div>
+      <div class="direction-tabs" role="tablist" aria-label="Compare entry structures">
+        <button id="direction-meetings" type="button" role="tab" aria-controls="workspace" data-direction="meetings">Meetings first</button>
+        <button id="direction-commitments" type="button" role="tab" aria-controls="workspace" data-direction="commitments">Commitments first</button>
+        <button id="direction-retrieval" type="button" role="tab" aria-controls="workspace" data-direction="retrieval">Find + browse</button>
+      </div>
+      <button class="review-reset" id="reset-prototype" type="button">Reset task</button>
+    </section>
+
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand-lockup">
+          <span class="eyebrow">Local Meeting Notes</span>
+          <span class="product-state"><span class="status-dot" aria-hidden="true"></span>Nothing is recording</span>
+        </div>
+        <div class="header-actions">
+          <button class="header-link" id="home-button" type="button">Library</button>
+          <span class="release-badge">Prototype</span>
+        </div>
+      </header>
+
+      <main id="workspace" role="tabpanel" tabindex="-1"></main>
+
+      <footer>
+        <span>Interaction prototype · no product records</span>
+        <span id="footer-direction">Direction 3 of 3 · Find + browse</span>
+      </footer>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <script src="app.js"></script>
+  </body>
+</html>

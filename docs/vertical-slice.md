@@ -79,6 +79,95 @@ real installed vertical slice.
 | G. Production hardening and GA | Not started. | Clean accounts/Macs, upgrade/migration/rollback, fault injection, privacy/security, and content-free diagnostics. | Explicit beta admission and later GA release decisions. | Cumulative 9–14 weeks |
 | H. Later extensions | Outside v1: optional EventKit brief, operator-authored live note, detection, and conversational cross-meeting retrieval. Speaker playback/AEC remains research. | Each extension receives its own contract and evidence. | Separate scope and release decisions. | 1–4 weeks each after v1; no AEC ETA before feasibility passes |
 
+### Transcript fidelity, readability, and evidence navigation
+
+This area records the worthwhile product opportunities from the CrisperWhisper
+analysis without scheduling a runtime replacement or schema rewrite.
+
+#### Product authority — adopted now
+
+- The product has one canonical transcript: the closest supported record of what was
+  audibly said. Notes are interpretation derived from it.
+- Every transcript records an explicit transcription policy: faithful/verbatim-oriented
+  at first, with model digest, decoding configuration, language, timing mode, alignment
+  method, processing duration, and cold/warm state.
+- Any cleaned text is a reversible **Readable transcript** presentation, never a second
+  authoritative or “intended” transcript. Every readable phrase and note claim must
+  resolve to exact canonical words; evidence links always land there.
+
+#### First bounded experiment — after the active visible-reader slice
+
+Use the existing pinned MLX large-v3-turbo model with `word_timestamps=True` over only
+public or synthetic audio in an isolated sidecar. It must not write Preview or product
+records. Compare the current deliberate anti-poisoning setting,
+`condition_on_previous_text=False`, with one isolated continuation/seam arm. Do not
+change the default unless registered long-form fixtures show fewer seam drops and
+duplicates without error cascades. Smaller MLX variants may serve only as packaging or
+latency controls; quality remains the gate.
+
+Measure fillers, false starts, repeated words, corrections, names, numbers, negation,
+silence hallucinations, looping, truncation or early end-of-transcript, long-form
+seams, timing monotonicity, cold/warm latency, peak memory, and repeatability. Exit on
+registered fidelity, timing, memory, and operator evidence-seek value, not the mere
+presence of timestamps. This experiment is independent and does not block Library,
+the note reader, trust controls, alpha receipts, or continual Preview delivery.
+
+#### Conditional adoption — only after the sidecar passes
+
+- Add optional typed word timing to transcript artifacts: word text, start, end,
+  physical channel, model/alignment provenance, and whether timing is decoded, aligned,
+  or interpolated.
+- Keep the current claim-to-text character locator authoritative. Time augments it with
+  channel/audio seeking; it never replaces it or strengthens approximate alignment.
+- Prove phrase-level audio seeking in a disposable viewer first. Require finite ordered
+  times, correct channel and duration bounds, exact text-locator resolution, and
+  operator review before Preview integration.
+- Join deterministic seam, silence, looping, fallback, and early-termination fixtures
+  to the permanent suite. Diagnostics remain content-free: model identity/digest,
+  duration, cold/warm state, timing mode, and failure category.
+
+#### Readable transcript — after canonical timing and fidelity pass
+
+Prototype a reversible view over the canonical transcript. It may visually suppress
+fillers and repeated fragments or normalize punctuation, casing, and formatting. It
+must not silently alter names, dates, numbers, negation, commitments, or ambiguous
+corrections. One action reveals the exact original passage and, only if timing passes,
+plays the correct channel interval. A transformation that cannot preserve exact word
+mapping is interpretation and belongs with generated notes, not the transcript.
+
+Run a cold operator comparison on reading speed, trust, locator corrections, and
+usefulness before admission. The current MLX model does not claim CrisperWhisper's
+learned controllable modes; this plan adopts the product separation, not that model
+claim.
+
+#### Later correction and alignment research
+
+Investigate whether operator-corrected text can regain approximate word timing through
+alignment. Forced or interpolated timing must stay labelled approximate and cannot
+strengthen evidence or masquerade as decoded timing. A glossary/hotword concept for
+names and domain terms requires an independently licensed local implementation and a
+registered accuracy test. “Verbatimize” is not a requirement; the only relevant idea
+is correction-to-audio reconciliation, never synthesizing disfluencies into the
+canonical record.
+
+#### Explicit non-adoptions and blockers
+
+- No CrisperWhisper weights or outputs enter Product or Preview without a separate
+  commercial licence. Its non-commercial weights remain research-only.
+- No PyTorch runtime migration is scheduled for this macOS-arm64 envelope. PyTorch is a
+  valid research environment; CrisperWhisper's measured MPS selection and Transformers
+  fallback defects are packaging defects, not general PyTorch defects.
+- No dual authoritative transcripts, diarization, speaker identity, overlap
+  resolution, live transcription, or speaker-mode admission follows from this work.
+- No approximate forced alignment is evidence, and no runtime, model, schema, or
+  signing change is made merely to demonstrate a concept already testable in MLX.
+
+The adoption order is therefore: finish the current visible reader prototype; run the
+independent MLX word-timestamp and fidelity benchmark; join only passing contract and
+test ideas into trust/evidence work; prototype Readable transcript only after canonical
+timing and evidence-seek review pass. Every shipped feature still requires the existing
+human semantic, usefulness, and release gates.
+
 ## Reader and job
 
 This document is for the implementer and reviewer who pick up the application

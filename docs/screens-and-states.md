@@ -65,6 +65,12 @@ palette, which is the safe version of the same rule — but it settles the note'
 structure only. It is not art-direction acceptance, and `DIRECTION.md`'s ledger stays
 empty until a product surface ships a device.
 
+That sentence describes the earlier dark research renderer, not the active
+walking-skeleton comparison. The installed transcript alpha shipped a distinct
+light/editorial surface. `README.md § Delivery method` now pins that executable UI as
+the temporary visual baseline and requires the visual documents to be reconciled only
+after an exact prototype is approved.
+
 ### Two tests the decisions files do not contain
 
 The records above are the accepted outcomes. What produced them lives in the sessions,

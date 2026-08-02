@@ -62,6 +62,13 @@ rounded:
 
 # DESIGN.md — local-meeting-notes
 
+> **Visual status, 2026-08-02:** the dark tokens below were authored before the
+> installed transcript-alpha surface and do not describe its operator-selected
+> light/editorial UI. They are historical during the walking-skeleton comparison;
+> `README.md § Delivery method` identifies the exact executable visual baseline. The
+> engineering, security, accessibility, and shell rules in this file remain binding.
+> Reconcile the visual tokens to the approved prototype before production UI work.
+
 Visual rules and engineering rules together, so neither gets decided ad hoc
 surface by surface. Answers to [`DIRECTION.md`](./DIRECTION.md); the L5
 inventory it covers is [`docs/screens-and-states.md`](./docs/screens-and-states.md).
