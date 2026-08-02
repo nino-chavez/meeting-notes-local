@@ -1,6 +1,6 @@
 {
-  "reviewScope": "walking-skeleton-navigation-composition",
-  "reviewQuestion": "Which view opens by default, what receives first-class navigation, and how do the views relate?",
+  "reviewScope": "walking-skeleton-sales-discovery-note",
+  "reviewQuestion": "Does the approved navigation lead to a useful, legible discovery-call note whose claims remain traceable to exact words?",
   "approvedDefault": "retrieval",
   "evidenceBasis": {
     "market": "Corpus retrieval is positioned as core value; documented comparables expose multiple retrieval entry points.",
@@ -20,8 +20,8 @@
   },
   "files": {
     "index.html": "sha256:0a277da6907ccf463a52ce0cb011143a8775a955c02ddf1add7de96ea3b6fe88",
-    "styles.css": "sha256:386c5ac335d60c9ba6ece66aed8438d4961903315dfc268abd6117e73634320f",
-    "app.js": "sha256:b932d4b810c3cb8334363beb371930c9e05ed4bcde90934f68252b36fad48e77"
+    "styles.css": "sha256:3ed3a1efa2c0f560c325aa1a4f9a01502dcaa4422c44908457297e907532d7c1",
+    "app.js": "sha256:44a0b5ed14d7b0c241188f9ce370fbcbab1e9b7f3946a3efbea9525efae36c2f"
   },
   "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
   "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",
@@ -50,6 +50,34 @@
       "query": "?direction=retrieval"
     }
   ],
+  "activeContentSlice": {
+    "id": "sales-discovery-note-v1",
+    "status": "pending-operator-review",
+    "source": "synthetic",
+    "surveyBasis": "Sales or discovery calls were selected by 3 of 3 respondents.",
+    "outputs": [
+      "concise-summary",
+      "decisions",
+      "actions-and-owners",
+      "open-questions",
+      "risks-and-blockers",
+      "customer-needs"
+    ],
+    "trustTreatments": [
+      "exact-text-locators",
+      "stated-versus-inferred-labels",
+      "fixed-Me-and-Them-channel-labels",
+      "visible-derived-summary-label"
+    ],
+    "doesNotApprove": [
+      "automatic extraction",
+      "semantic support",
+      "note usefulness",
+      "installed Preview behavior",
+      "private content",
+      "beta admission or release"
+    ]
+  },
   "compositionApproval": {
     "status": "accepted",
     "decision": "accept",

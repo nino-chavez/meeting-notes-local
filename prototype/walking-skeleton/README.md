@@ -37,6 +37,13 @@ the same task and evidence states. The active flesh-out now holds that accepted
 hierarchy constant and uses a synthetic sales/discovery meeting—the first scenario
 selected by 3/3 respondents—to compare note content and evidence treatment.
 
+The first content slice is now runnable. It adds a synthetic discovery call organized
+as concise summary, decisions, actions and owners, open questions, risks and blockers,
+and customer needs. Each typed claim has exact-word navigation; the note distinguishes
+stated from inferred wording and labels its summary as derived. The content review is
+still pending: this fixture does not prove automatic extraction, semantic support, or
+operator usefulness.
+
 It is a design instrument, not a second application runtime. It does not read or write
 Preview data, record audio, invoke a model, or prove note usefulness or semantic
 support. The synthetic corpus is frozen as of May 9, 2026 so relative retention states

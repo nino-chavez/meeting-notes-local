@@ -401,6 +401,8 @@ h3 { margin: 0; font-size: 1rem; line-height: 1.3; }
 .claim-kind.commitment { color: #4e565d; }
 .claim-kind.proposal,
 .claim-kind.question { color: #6f665c; }
+.claim-kind.risk { color: #843b31; }
+.claim-kind.customer_need { color: #496f98; }
 
 .evidence-state {
   display: inline-flex;
@@ -487,8 +489,49 @@ h3 { margin: 0; font-size: 1rem; line-height: 1.3; }
   border-bottom: 1px solid var(--line);
 }
 .claim-card:first-of-type { border-top: 1px solid var(--line); }
+.claim-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.support-state,
+.owner-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--raised);
+  font-size: 0.68rem;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.support-state.inferred { border-color: #b6c7d8; background: var(--info-soft); }
 .claim-card p { max-width: 62ch; margin: 9px 0 16px; font-size: 1.02rem; line-height: 1.5; }
 .claim-card-footer { display: flex; justify-content: space-between; align-items: center; gap: 18px; }
+
+.note-summary-card {
+  margin: 18px 0;
+  padding: 19px 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.note-summary-card p { max-width: 62ch; margin: 8px 0 0; line-height: 1.55; }
+.note-summary-card h2 { margin-top: 8px; font-family: ui-serif, Georgia, serif; font-size: 1.65rem; font-weight: 500; }
+.note-summary-card p { color: var(--muted); }
+.note-boundary-line { margin: 15px 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
+.note-boundary-line strong { color: var(--ink); }
+.note-sections { margin-top: 10px; }
+.note-section .section-heading { margin-top: 26px; }
+.note-section .claim-card:first-of-type { border-top: 0; }
+
+.rail-review { margin-top: 24px; padding-top: 19px; border-top: 1px solid var(--line); }
+.rail-review p { margin: 8px 0 0; color: var(--muted); font-size: 0.79rem; line-height: 1.5; }
 
 .state-panel,
 .empty-state,

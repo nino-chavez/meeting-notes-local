@@ -146,6 +146,68 @@ const meetings = [
         locator: { turnId: "m04-t01", start: 0, end: 53, quote: "Keep meeting audio for fourteen days, then release it" }
       }
     ]
+  },
+  {
+    id: "m-05",
+    title: "Discovery call — reporting workflow",
+    date: "May 8, 2026 at 2:00 PM",
+    folder: "Sales",
+    transcriptStatus: "complete",
+    audio: { state: "held", detail: "12.7 MB · scheduled for release May 22, 2026" },
+    noteLayout: "survey-core",
+    summary: "Support trends are copied into a shared report each Friday. The first pilot will import the weekly CSV and preserve the source rows. A redacted sample is due Tuesday, while account names in exported summaries could block legal review.",
+    reviewPrompt: "Can you see what was decided, what happens next, and what could block the pilot before opening the transcript?",
+    turns: [
+      { id: "m05-t01", at: "00:00:18", speaker: "Them", text: "Our team spends Friday afternoons copying support trends into a shared report." },
+      { id: "m05-t02", at: "00:00:42", speaker: "Me", text: "We agreed the first pilot will import the weekly CSV and preserve the original rows." },
+      { id: "m05-t03", at: "00:01:05", speaker: "Them", text: "If account names appear in an exported summary, legal review will block the pilot." },
+      { id: "m05-t04", at: "00:01:28", speaker: "Me", text: "I will send a sample redacted report by Tuesday." },
+      { id: "m05-t05", at: "00:01:49", speaker: "Them", text: "Can the report separate urgent defects from general requests?" },
+      { id: "m05-t06", at: "00:02:02", speaker: "Me", text: "That split may help, but we did not decide it today." }
+    ],
+    claims: [
+      {
+        id: "m05-c01",
+        kind: "customer_need",
+        text: "Spend less time copying support trends into the weekly report.",
+        evidenceState: "located",
+        supportType: "inferred",
+        locator: { turnId: "m05-t01", start: 9, end: 77, quote: "spends Friday afternoons copying support trends into a shared report" }
+      },
+      {
+        id: "m05-c02",
+        kind: "decision",
+        text: "Import the weekly CSV and preserve the original rows for the first pilot.",
+        evidenceState: "located",
+        supportType: "stated",
+        locator: { turnId: "m05-t02", start: 3, end: 83, quote: "agreed the first pilot will import the weekly CSV and preserve the original rows" }
+      },
+      {
+        id: "m05-c03",
+        kind: "commitment",
+        text: "Send a sample redacted report by Tuesday.",
+        evidenceState: "located",
+        supportType: "stated",
+        owner: "Me",
+        locator: { turnId: "m05-t04", start: 0, end: 47, quote: "I will send a sample redacted report by Tuesday" }
+      },
+      {
+        id: "m05-c04",
+        kind: "question",
+        text: "Can the report separate urgent defects from general requests?",
+        evidenceState: "located",
+        supportType: "stated",
+        locator: { turnId: "m05-t05", start: 0, end: 60, quote: "Can the report separate urgent defects from general requests" }
+      },
+      {
+        id: "m05-c05",
+        kind: "risk",
+        text: "Account names in an exported summary could block legal review.",
+        evidenceState: "located",
+        supportType: "stated",
+        locator: { turnId: "m05-t03", start: 3, end: 81, quote: "account names appear in an exported summary, legal review will block the pilot" }
+      }
+    ]
   }
 ];
 
@@ -218,7 +280,23 @@ function escapeHtml(value) {
 }
 
 function kindLabel(kind) {
-  return kind === "commitment" ? "Recorded promise" : kind[0].toUpperCase() + kind.slice(1);
+  const labels = {
+    commitment: "Recorded promise",
+    customer_need: "Customer need",
+    decision: "Decision",
+    proposal: "Proposal",
+    question: "Open question",
+    risk: "Risk"
+  };
+  if (!labels[kind]) throw new Error(`Unknown claim kind: ${kind}`);
+  return labels[kind];
+}
+
+function supportTypeLabel(claim) {
+  if (!claim.supportType) return null;
+  if (claim.supportType === "stated") return "Stated";
+  if (claim.supportType === "inferred") return "Inferred";
+  throw new Error(`Unknown support type: ${claim.supportType}`);
 }
 
 function evidenceLabel(claim) {
@@ -284,6 +362,16 @@ function assertFixtureIntegrity() {
     if (located !== claim.locator.quote) {
       throw new Error(`Synthetic locator mismatch for ${claim.id}`);
     }
+  }
+  const discovery = meetings.find((meeting) => meeting.id === "m-05");
+  const requiredDiscoveryKinds = ["customer_need", "decision", "commitment", "question", "risk"];
+  for (const kind of requiredDiscoveryKinds) {
+    if (!discovery.claims.some((claim) => claim.kind === kind)) {
+      throw new Error(`Synthetic discovery note is missing ${kind}`);
+    }
+  }
+  if (!discovery.claims.every((claim) => claim.supportType === "stated" || claim.supportType === "inferred")) {
+    throw new Error("Synthetic discovery claims require explicit stated or inferred labels");
   }
 }
 
@@ -372,7 +460,7 @@ function render() {
       <section class="loading-view" role="status" aria-busy="true">
         <span class="loading-mark" aria-hidden="true"></span>
         <h1>Opening your meeting memory.</h1>
-        <p>Loading four synthetic meetings without touching Preview data.</p>
+        <p>Loading five synthetic meetings without touching Preview data.</p>
       </section>`;
     restoreRequestedFocus();
     return;
@@ -399,7 +487,7 @@ function searchFormMarkup(compact = false) {
     <form class="search-block" id="search-form">
       <label for="memory-search">Find exact words</label>
       <div class="search-row">
-        <input id="memory-search" name="query" type="search" value="${escapeHtml(state.query)}" placeholder="Try “estimate range”" autocomplete="off" />
+        <input id="memory-search" name="query" type="search" value="${escapeHtml(state.query)}" placeholder="Try “legal review”" autocomplete="off" />
         <button type="submit">Find</button>
       </div>
       <p class="search-help">Searches claim text, canonical transcript words, meeting titles, and folders on this Mac.${compact ? "" : " Exact words stay linked to their source."}</p>
@@ -410,11 +498,19 @@ function taskMarkup() {
   return `
     <section class="task-card" aria-label="Shared review task">
       <span class="label">Same task from every starting view</span>
-      <p>Find the <strong>estimate range</strong> decision, open the exact words, then review the withheld turn and regenerate the note.</p>
+      <p>Find what could <strong>block the reporting pilot</strong>, open the discovery call, then trace that risk to exact words.</p>
     </section>`;
 }
 
-function meetingRowsMarkup(list = meetings) {
+function meetingsNewestFirst() {
+  return [...meetings].sort((a, b) => meetingTimestamp(b) - meetingTimestamp(a));
+}
+
+function meetingTimestamp(meeting) {
+  return Date.parse(meeting.date.replace(" at ", " "));
+}
+
+function meetingRowsMarkup(list = meetingsNewestFirst()) {
   return list.map((meeting) => {
     const audio = currentAudio(meeting);
     const status = meeting.id === "m-03" && !state.partnerRecovered
@@ -448,9 +544,10 @@ function renderMeetingsHome() {
         <h2 class="rail-title">Browse meetings</h2>
         <p class="rail-copy">Begin with the meeting, then find the claim inside it.</p>
         <div class="filter-stack" aria-label="Meeting folders">
-          <button class="filter-button" type="button" data-action="clear-query" aria-pressed="${state.folderFilter === null}"><span>All meetings</span><small>4</small></button>
-          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Operations"}" data-action="folder-filter" data-folder="Operations"><span>Operations</span><small>3</small></button>
-          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Partnerships"}" data-action="folder-filter" data-folder="Partnerships"><span>Partnerships</span><small>1</small></button>
+          <button class="filter-button" type="button" data-action="clear-query" aria-pressed="${state.folderFilter === null}"><span>All meetings</span><small>${meetings.length}</small></button>
+          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Operations"}" data-action="folder-filter" data-folder="Operations"><span>Operations</span><small>${meetings.filter((meeting) => meeting.folder === "Operations").length}</small></button>
+          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Partnerships"}" data-action="folder-filter" data-folder="Partnerships"><span>Partnerships</span><small>${meetings.filter((meeting) => meeting.folder === "Partnerships").length}</small></button>
+          <button class="filter-button" type="button" aria-pressed="${state.folderFilter === "Sales"}" data-action="folder-filter" data-folder="Sales"><span>Sales</span><small>${meetings.filter((meeting) => meeting.folder === "Sales").length}</small></button>
         </div>
         ${taskMarkup()}
       </aside>
@@ -462,7 +559,7 @@ function renderMeetingsHome() {
         </div>
         ${searchFormMarkup()}
         ${state.query ? meetingSearchResultsMarkup(results) : `
-          <div class="section-heading"><h2>Recent meetings</h2><span>4 retained</span></div>
+          <div class="section-heading"><h2>Recent meetings</h2><span>${meetings.length} retained</span></div>
           <div class="meeting-list">${meetingRowsMarkup()}</div>`}
       </section>
     </div>`;
@@ -561,7 +658,11 @@ function retrievalContentMarkup() {
     </div>
     ${taskMarkup()}
     <div class="section-heading"><h2>Recent memory</h2><span>Not a task list</span></div>
-    <div class="claim-list">${claimRowsMarkup(allClaims().filter(({ claim }) => claim.kind === "decision" || claim.kind === "commitment").slice(0, 4).map(({ meeting, claim }) => ({ type: "claim", meeting, claim })))}</div>`;
+    <div class="claim-list">${claimRowsMarkup(allClaims()
+      .filter(({ claim }) => ["decision", "commitment", "risk"].includes(claim.kind))
+      .sort((a, b) => meetingTimestamp(b.meeting) - meetingTimestamp(a.meeting))
+      .slice(0, 4)
+      .map(({ meeting, claim }) => ({ type: "claim", meeting, claim })))}</div>`;
 }
 
 function search(query) {
@@ -693,6 +794,12 @@ function detailRailMarkup(meeting) {
 
 function claimDetailMarkup(meeting, claim) {
   const stale = noteState(meeting) === "stale";
+  const supportType = supportTypeLabel(claim);
+  const supportExplanation = claim.supportType === "inferred"
+    ? "The note wording is an interpretation of those words, not a quote."
+    : claim.supportType === "stated"
+      ? "The note labels this as directly stated."
+      : "The locator makes no stated-versus-inferred judgment.";
   return `
     <nav class="breadcrumb" aria-label="Breadcrumb">
       <button type="button" data-action="back-results">${state.query ? `Results for “${escapeHtml(state.query)}”` : "Library"}</button>
@@ -701,7 +808,7 @@ function claimDetailMarkup(meeting, claim) {
     </nav>
     <header class="detail-header">
       <div>
-        <p class="kicker">${escapeHtml(kindLabel(claim.kind))} · ${escapeHtml(evidenceLabel(claim))}</p>
+        <p class="kicker">${escapeHtml(kindLabel(claim.kind))}${supportType ? ` · ${escapeHtml(supportType)}` : ""} · ${escapeHtml(evidenceLabel(claim))}</p>
         <h1>${escapeHtml(claim.text)}</h1>
         <p class="detail-meta">From ${escapeHtml(meeting.title)} · ${escapeHtml(meeting.date)}</p>
       </div>
@@ -715,9 +822,9 @@ function claimDetailMarkup(meeting, claim) {
     ${stale ? staleMarkup() : ""}
     ${claim.evidenceState === "located" ? `
       <section class="state-panel">
-        <p class="label">What “words located” means</p>
+        <p class="label">${supportType ? `${escapeHtml(supportType)} · ` : ""}What “words located” means</p>
         <h2>The cited words occur in the transcript.</h2>
-        <p>This does not prove they support the note’s interpretation. Open the canonical words and decide.</p>
+        <p>${escapeHtml(supportExplanation)} Location does not prove semantic support. Open the canonical words and decide.</p>
       </section>` : `
       <section class="failure-panel">
         <p class="label">Evidence gap</p>
@@ -769,15 +876,57 @@ function staleMarkup() {
 }
 
 function claimCardMarkup(meeting, claim) {
+  const supportType = supportTypeLabel(claim);
   return `
     <article class="claim-card">
-      <span class="claim-kind ${claim.kind}">${escapeHtml(kindLabel(claim.kind))} · <span class="evidence-state ${claim.evidenceState}">${escapeHtml(evidenceLabel(claim))}</span></span>
+      <div class="claim-card-meta">
+        <span class="claim-kind ${claim.kind}">${escapeHtml(kindLabel(claim.kind))}</span>
+        <span class="evidence-state ${claim.evidenceState}">${escapeHtml(evidenceLabel(claim))}</span>
+        ${supportType ? `<span class="support-state ${claim.supportType}">${escapeHtml(supportType)}</span>` : ""}
+        ${claim.owner ? `<span class="owner-state">Owner: ${escapeHtml(claim.owner)}</span>` : ""}
+      </div>
       <p>${escapeHtml(claim.text)}</p>
       <div class="claim-card-footer">
         <button class="text-button" type="button" data-action="open-claim" data-claim-id="${claim.id}">Open claim</button>
         ${claim.locator ? `<button class="text-button" type="button" data-action="open-evidence" data-claim-id="${claim.id}">Show exact words</button>` : ""}
       </div>
     </article>`;
+}
+
+function meetingNoteMarkup(meeting, claims) {
+  if (!claims.length) {
+    return `<section class="empty-state"><h2>No note was created.</h2><p>The transcript remains the durable artifact.</p></section>`;
+  }
+  if (meeting.noteLayout !== "survey-core") {
+    return claims.map((claim) => claimCardMarkup(meeting, claim)).join("");
+  }
+  const sections = [
+    { id: "decisions", title: "Decisions", kinds: ["decision"] },
+    { id: "actions", title: "Actions & owners", kinds: ["commitment"] },
+    { id: "questions", title: "Open questions", kinds: ["question"] },
+    { id: "risks", title: "Risks & blockers", kinds: ["risk"] },
+    { id: "needs", title: "Customer needs", kinds: ["customer_need"] }
+  ];
+  return `
+    <p class="note-boundary-line"><strong>Synthetic content review.</strong> Hierarchy and evidence behavior only; automatic extraction and usefulness have not been reviewed.</p>
+    <section class="note-summary-card" aria-labelledby="note-summary-title">
+      <span class="label">Concise summary · derived</span>
+      <h2 id="note-summary-title">Summary</h2>
+      <p>${escapeHtml(meeting.summary)}</p>
+    </section>
+    <div class="note-sections">
+      ${sections.map((section) => {
+        const sectionClaims = claims.filter((claim) => section.kinds.includes(claim.kind));
+        return `
+          <section class="note-section" aria-labelledby="note-${section.id}">
+            <div class="section-heading">
+              <h2 id="note-${section.id}">${escapeHtml(section.title)}</h2>
+              <span>${sectionClaims.length}</span>
+            </div>
+            ${sectionClaims.map((claim) => claimCardMarkup(meeting, claim)).join("")}
+          </section>`;
+      }).join("")}
+    </div>`;
 }
 
 function renderMeetingDetail() {
@@ -795,6 +944,7 @@ function renderMeetingDetail() {
         <p class="rail-copy">${escapeHtml(meeting.date)} · ${escapeHtml(meeting.folder)}</p>
         <button class="secondary-button" type="button" data-action="back-results">Back to ${state.query ? `“${escapeHtml(state.query)}”` : "Library"}</button>
         ${retentionFactsMarkup()}
+        ${meeting.reviewPrompt ? `<section class="rail-review"><span class="label">Review question</span><p>${escapeHtml(meeting.reviewPrompt)}</p></section>` : ""}
       </aside>
       <section class="content-pane">
         ${meetingDetailMarkup(meeting)}
@@ -826,7 +976,7 @@ function meetingDetailMarkup(meeting) {
     ${coverageMarkup(meeting)}
     ${noteState(meeting) === "stale" ? staleMarkup() : ""}
     <div class="section-heading"><h2>Meeting note</h2><span>Version ${meeting.id === "m-02" && state.regenerated ? "2" : "1"} · ${claims.length} claims</span></div>
-    ${claims.length ? claims.map((claim) => claimCardMarkup(meeting, claim)).join("") : `<section class="empty-state"><h2>No note was created.</h2><p>The transcript remains the durable artifact.</p></section>`}
+    ${meetingNoteMarkup(meeting, claims)}
     ${retentionActionMarkup(meeting)}`;
 }
 
@@ -851,7 +1001,8 @@ function partnerFailureMarkup(meeting) {
 
 function retentionFactsMarkup() {
   const held = meetings.filter((meeting) => ["held", "expiring"].includes(currentAudio(meeting).state));
-  const bytes = held.reduce((total, meeting) => total + (meeting.id === "m-02" ? 18.4 : meeting.id === "m-03" ? 9.2 : 6.3), 0);
+  const audioMegabytes = { "m-02": 18.4, "m-03": 9.2, "m-04": 6.3, "m-05": 12.7 };
+  const bytes = held.reduce((total, meeting) => total + (audioMegabytes[meeting.id] ?? 0), 0);
   return `
     <div class="section-heading"><h3>Audio held</h3><span>${held.length}</span></div>
     <p class="rail-copy">${bytes.toFixed(1)} MB across this synthetic corpus. Transcript evidence is retained separately.</p>`;
