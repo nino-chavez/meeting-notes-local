@@ -46,6 +46,18 @@ fn meeting_detail_status_helper_is_defined_before_use() {
 }
 
 #[test]
+fn transcript_only_fallback_requires_a_current_transcript_handle() {
+    let shell = include_str!("../../ui/main.js");
+
+    assert!(shell.contains(
+        "[\"transcript-only\", \"summary-failed\"].includes(response.state)"
+    ));
+    assert!(shell.contains("&& Boolean(response.transcriptHandle);"));
+    assert!(shell.contains("meetingNoNote.hidden = !showsTranscriptFallback;"));
+    assert!(!shell.contains("meetingNoNote.hidden = false;"));
+}
+
+#[test]
 fn main_window_has_only_named_commands_and_no_generic_capability() {
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();

@@ -971,7 +971,7 @@ keeps transcript/note search authority but refreshes audio state. Whole-meeting
 deletion removes the row and its metadata only after its deletion receipt is
 terminal.
 
-Beta search is one literal mode. Query bytes must be valid UTF-8, contain 1
+Beta search is one literal mode. Query bytes must be valid UTF-8, contain 2
 through 256 Unicode scalar values after trimming Unicode whitespace, and
 contain no control or line-separator characters. `search-normalization/1` is
 pinned to Unicode 17.0.0, `unicode-segmentation` 1.13.3 with crate checksum
@@ -1006,10 +1006,12 @@ range over the validated attempt receipt, not formatted text search. Named
 participants, inferred counterparties, tags, and generated subjects are absent.
 
 Result precedence is closed. A claim-text match, or a transcript match already
-cited by a current accepted claim, yields one `claim` hit. An unmatched retained
-turn yields `transcript` or `withheld`. A title, folder, or channel-only match
-yields `meeting`. One source span cannot produce both a claim and transcript
-hit. Stale notes and rejected summaries contribute no claims. Claim and
+cited by a current accepted claim, yields one `claim` hit for each matching claim.
+Every matching retained turn also yields its canonical `transcript` or `withheld`
+hit, including when a current claim cites that same span. A title, folder, or
+channel-only match yields `meeting`. Claim text and cited-span matches for the
+same claim ordinal deduplicate; the canonical transcript hit remains separate.
+Stale notes and rejected summaries contribute no claims. Claim and
 transcript/withheld hits bind the exact current transcript digest; meeting-only
 hits do not invent one. Claim hits additionally bind current note JSON and
 Markdown digests plus the complete projected row: claim ordinal, digest, type,
