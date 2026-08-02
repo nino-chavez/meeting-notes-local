@@ -5,12 +5,17 @@
 //! the exact current claim or locator through `LibraryProjection`.
 
 use std::collections::HashMap;
+use std::fs;
 
 use local_meeting_notes_session_core::library_read::{
     ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, OpenedLibraryHit,
 };
-use local_meeting_notes_session_core::meeting::{ArtifactRef, MeetingLifecycle};
+use local_meeting_notes_session_core::meeting::{
+    ArtifactRef, AudioRetentionRule, AudioState, MeetingLifecycle, load_meeting, resolve_artifact,
+    verify_record_artifacts, verify_record_static_artifacts,
+};
 use local_meeting_notes_session_core::note_projection::ClaimType;
+use local_meeting_notes_session_core::retention::meeting_dir;
 use local_meeting_notes_session_core::storage::StorageRoot;
 use serde::Serialize;
 use uuid::Uuid;
@@ -88,6 +93,20 @@ pub(crate) struct LibraryNoteResponse {
     pub(crate) transcript_handle: Option<String>,
     pub(crate) meeting_id: String,
     pub(crate) claims: Vec<LibraryClaim>,
+    pub(crate) audio_retention: LibraryAudioRetention,
+    pub(crate) message: String,
+}
+
+/// Content-free, freshly checked retention facts for one meeting detail view.
+/// The browser receives no artifact path, digest, audio bytes, or deletion
+/// authority. This remains a read-only Preview projection.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LibraryAudioRetention {
+    pub(crate) state: &'static str,
+    pub(crate) policy: &'static str,
+    pub(crate) deadline_epoch_seconds: Option<u64>,
+    pub(crate) retained_bytes: Option<u64>,
     pub(crate) message: String,
 }
 
@@ -402,6 +421,7 @@ impl LibraryReader {
         else {
             return Self::stale_note(&meeting_id);
         };
+        let audio_retention = self.audio_retention(&meeting_id);
         match lifecycle {
             MeetingLifecycle::SummaryFailed => {
                 return LibraryNoteResponse {
@@ -409,6 +429,7 @@ impl LibraryReader {
                     transcript_handle: self.retain_transcript_handle(&meeting_id),
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
+                    audio_retention,
                     message: "A note was not produced. Retained transcript text remains available."
                         .into(),
                 };
@@ -421,6 +442,7 @@ impl LibraryReader {
                     transcript_handle: transcript_handle.clone(),
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
+                    audio_retention,
                     message: if transcript_handle.is_some() {
                         "No admitted note is available. Retained transcript text remains available."
                             .into()
@@ -461,6 +483,7 @@ impl LibraryReader {
             transcript_handle: self.retain_transcript_handle(&meeting_id),
             meeting_id: meeting_id.into(),
             claims,
+            audio_retention,
             message: "Claim words can be opened against their exact transcript locators.".into(),
         }
     }
@@ -559,6 +582,7 @@ impl LibraryReader {
             transcript_handle: None,
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
+            audio_retention: Self::unavailable_audio_retention(),
             message: UNAVAILABLE_MESSAGE.into(),
         }
     }
@@ -597,6 +621,99 @@ impl LibraryReader {
             .rows()
             .iter()
             .any(|row| row.meeting_id == meeting_id && row.transcript_sha256.is_some())
+    }
+
+    fn audio_retention(&self, meeting_id: &str) -> LibraryAudioRetention {
+        Self::read_audio_retention(&self.storage, meeting_id)
+    }
+
+    fn read_audio_retention(storage: &StorageRoot, meeting_id: &str) -> LibraryAudioRetention {
+        let Ok(directory) = meeting_dir(storage, meeting_id) else {
+            return Self::unavailable_audio_retention();
+        };
+        let Ok(meeting) = load_meeting(&directory) else {
+            return Self::unavailable_audio_retention();
+        };
+        let (policy, deadline_epoch_seconds) = match meeting.retention.rule {
+            AudioRetentionRule::DeleteAfter { .. } => (
+                "scheduled",
+                meeting.retention.next_deletion_at_epoch_seconds,
+            ),
+            AudioRetentionRule::UntilManualDeletion => ("manual", None),
+        };
+        match meeting.retention.state {
+            AudioState::Retained => {
+                if verify_record_artifacts(&directory, &meeting).is_err() {
+                    return Self::unavailable_audio_retention();
+                }
+                let bytes = [
+                    meeting.artifacts.microphone_audio.as_ref(),
+                    meeting.artifacts.system_audio.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                .try_fold(0_u64, |total, artifact| {
+                    let path =
+                        resolve_artifact(&directory, &artifact.relative_path).map_err(|_| ())?;
+                    let size = fs::metadata(path).map_err(|_| ())?.len();
+                    total.checked_add(size).ok_or(())
+                });
+                let Ok(retained_bytes) = bytes else {
+                    return Self::unavailable_audio_retention();
+                };
+                LibraryAudioRetention {
+                    state: "retained",
+                    policy,
+                    deadline_epoch_seconds,
+                    retained_bytes: Some(retained_bytes),
+                    message: "Meeting audio is retained on this Mac.".into(),
+                }
+            }
+            AudioState::Released => {
+                if verify_record_artifacts(&directory, &meeting).is_err() {
+                    return Self::unavailable_audio_retention();
+                }
+                LibraryAudioRetention {
+                    state: "released",
+                    policy,
+                    deadline_epoch_seconds,
+                    retained_bytes: None,
+                    message:
+                        "Meeting audio was deleted. The transcript, note, and evidence remain."
+                            .into(),
+                }
+            }
+            AudioState::Deleting => {
+                if verify_record_static_artifacts(&directory, &meeting).is_err() {
+                    return Self::unavailable_audio_retention();
+                }
+                LibraryAudioRetention {
+                    state: "deleting",
+                    policy,
+                    deadline_epoch_seconds,
+                    retained_bytes: None,
+                    message: "Meeting audio deletion is already in progress.".into(),
+                }
+            }
+            AudioState::NeverCreated => LibraryAudioRetention {
+                state: "not-recorded",
+                policy,
+                deadline_epoch_seconds,
+                retained_bytes: None,
+                message: "This meeting has no retained audio.".into(),
+            },
+        }
+    }
+
+    fn unavailable_audio_retention() -> LibraryAudioRetention {
+        LibraryAudioRetention {
+            state: "unavailable",
+            policy: "unknown",
+            deadline_epoch_seconds: None,
+            retained_bytes: None,
+            message: "Audio retention details are unavailable. Reopen Library and try again."
+                .into(),
+        }
     }
 
     fn retain_search_open(
@@ -653,6 +770,7 @@ impl LibraryReader {
             transcript_handle: None,
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
+            audio_retention: Self::unavailable_audio_retention(),
             message: STALE_MESSAGE.into(),
         }
     }
@@ -710,5 +828,205 @@ fn claim_type_name(value: ClaimType) -> &'static str {
 fn evidence_state_name(value: ClaimEvidenceState) -> &'static str {
     match value {
         ClaimEvidenceState::Located => "located",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    use local_meeting_notes_session_core::meeting::{
+        AudioRetention, MeetingArtifacts, MeetingRecord, MeetingSchema, artifact_ref,
+        retention_policy_sha256, write_meeting,
+    };
+    use local_meeting_notes_session_core::storage::{
+        StorageRoot, create_private_dir, durable_create_new,
+    };
+    use sha2::Digest;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    const MEETING_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+    struct Fixture {
+        _temporary: TempDir,
+        storage: StorageRoot,
+        directory: std::path::PathBuf,
+    }
+
+    fn fixture(
+        state: AudioState,
+        rule: AudioRetentionRule,
+        microphone: &[u8],
+        system: &[u8],
+    ) -> Fixture {
+        let temporary = TempDir::new().unwrap();
+        let protected = temporary.path().join("protected");
+        create_private_dir(&protected).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("app-data"), &protected).unwrap();
+        let directory = storage.path().join("meetings").join(MEETING_ID);
+        create_private_dir(&directory).unwrap();
+        create_private_dir(&directory.join("capture")).unwrap();
+        durable_create_new(&directory.join("attempt.json"), b"attempt").unwrap();
+
+        let lifecycle = if state == AudioState::NeverCreated {
+            MeetingLifecycle::Incomplete
+        } else {
+            create_private_dir(&directory.join("deletion")).unwrap();
+            durable_create_new(&directory.join("ownership.json"), b"ownership").unwrap();
+            durable_create_new(&directory.join("capture/session.json"), b"session").unwrap();
+            durable_create_new(&directory.join("capture/mic.wav"), microphone).unwrap();
+            durable_create_new(&directory.join("capture/system.wav"), system).unwrap();
+            MeetingLifecycle::Captured
+        };
+        let deletion_receipt = if state == AudioState::Released {
+            fs::remove_file(directory.join("capture/mic.wav")).unwrap();
+            fs::remove_file(directory.join("capture/system.wav")).unwrap();
+            durable_create_new(&directory.join("deletion/audio-deletion.json"), b"released")
+                .unwrap();
+            Some(artifact_ref(&directory, "deletion/audio-deletion.json").unwrap())
+        } else {
+            None
+        };
+        let next_deletion_at_epoch_seconds = match rule {
+            AudioRetentionRule::DeleteAfter { .. } if state != AudioState::NeverCreated => {
+                Some(1_728_000_060)
+            }
+            AudioRetentionRule::DeleteAfter { .. } | AudioRetentionRule::UntilManualDeletion => {
+                None
+            }
+        };
+        let record = MeetingRecord {
+            schema: MeetingSchema::V2,
+            meeting_id: MEETING_ID.into(),
+            lifecycle,
+            retention: AudioRetention {
+                policy_sha256: retention_policy_sha256(&rule),
+                rule,
+                next_deletion_at_epoch_seconds,
+                state,
+                deletion_receipt,
+            },
+            artifacts: MeetingArtifacts {
+                attempt: artifact_ref(&directory, "attempt.json").unwrap(),
+                ownership: (state != AudioState::NeverCreated)
+                    .then(|| artifact_ref(&directory, "ownership.json").unwrap()),
+                capture_session: (state != AudioState::NeverCreated)
+                    .then(|| artifact_ref(&directory, "capture/session.json").unwrap()),
+                microphone_audio: (state != AudioState::NeverCreated).then(|| ArtifactRef {
+                    relative_path: "capture/mic.wav".into(),
+                    sha256: format!("{:x}", sha2::Sha256::digest(microphone)),
+                }),
+                system_audio: (state != AudioState::NeverCreated).then(|| ArtifactRef {
+                    relative_path: "capture/system.wav".into(),
+                    sha256: format!("{:x}", sha2::Sha256::digest(system)),
+                }),
+                current_transcript: None,
+                current_note: None,
+            },
+            pending_storage_operation: (state == AudioState::Deleting).then_some(
+                local_meeting_notes_session_core::meeting::PendingStorageOperation::AudioDeletionV1,
+            ),
+        };
+        write_meeting(&directory, &record).unwrap();
+        Fixture {
+            _temporary: temporary,
+            storage,
+            directory,
+        }
+    }
+
+    #[test]
+    fn retention_projection_reports_exact_two_leg_bytes_and_scheduled_deadline() {
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::DeleteAfter { seconds: 60 },
+            &[1; 19],
+            &[2; 23],
+        );
+
+        let retention = LibraryReader::read_audio_retention(&fixture.storage, MEETING_ID);
+
+        assert_eq!(retention.state, "retained");
+        assert_eq!(retention.policy, "scheduled");
+        assert_eq!(retention.deadline_epoch_seconds, Some(1_728_000_060));
+        assert_eq!(retention.retained_bytes, Some(42));
+        assert!(
+            !serde_json::to_string(&retention)
+                .unwrap()
+                .contains("capture/")
+        );
+    }
+
+    #[test]
+    fn manual_released_never_created_and_deleting_are_content_free_states() {
+        let manual = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 44],
+            &[2; 48],
+        );
+        let released = fixture(
+            AudioState::Released,
+            AudioRetentionRule::DeleteAfter { seconds: 60 },
+            &[1; 44],
+            &[2; 48],
+        );
+        let never_created = fixture(
+            AudioState::NeverCreated,
+            AudioRetentionRule::UntilManualDeletion,
+            &[],
+            &[],
+        );
+        let deleting = fixture(
+            AudioState::Deleting,
+            AudioRetentionRule::DeleteAfter { seconds: 60 },
+            &[1; 44],
+            &[2; 48],
+        );
+
+        let manual = LibraryReader::read_audio_retention(&manual.storage, MEETING_ID);
+        let released = LibraryReader::read_audio_retention(&released.storage, MEETING_ID);
+        let never_created = LibraryReader::read_audio_retention(&never_created.storage, MEETING_ID);
+        let deleting = LibraryReader::read_audio_retention(&deleting.storage, MEETING_ID);
+
+        assert_eq!(
+            (manual.state, manual.policy, manual.deadline_epoch_seconds),
+            ("retained", "manual", None)
+        );
+        assert_eq!(released.state, "released");
+        assert_eq!(released.retained_bytes, None);
+        assert_eq!(never_created.state, "not-recorded");
+        assert_eq!(deleting.state, "deleting");
+    }
+
+    #[test]
+    fn changed_missing_or_symlinked_audio_fails_closed() {
+        for mutation in ["changed", "missing", "symlink"] {
+            let fixture = fixture(
+                AudioState::Retained,
+                AudioRetentionRule::UntilManualDeletion,
+                &[1; 44],
+                &[2; 48],
+            );
+            let microphone = fixture.directory.join("capture/mic.wav");
+            match mutation {
+                "changed" => fs::write(&microphone, b"changed").unwrap(),
+                "missing" => fs::remove_file(&microphone).unwrap(),
+                "symlink" => {
+                    fs::remove_file(&microphone).unwrap();
+                    let target = fixture.directory.join("capture/not-audio");
+                    durable_create_new(&target, b"not audio").unwrap();
+                    symlink(target, microphone).unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            let retention = LibraryReader::read_audio_retention(&fixture.storage, MEETING_ID);
+            assert_eq!(retention.state, "unavailable", "{mutation}");
+            assert_eq!(retention.retained_bytes, None, "{mutation}");
+        }
     }
 }

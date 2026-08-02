@@ -193,6 +193,11 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .library-row span:last-child { color: var(--accent); font-size: 0.86rem; white-space: nowrap; }
 .library-empty { margin: 0; padding: 24px 0; border-bottom: 1px solid var(--line); color: var(--muted); line-height: 1.52; }
 .meeting-claim-list { margin: 30px 0; border-top: 1px solid var(--line); }
+.meeting-retention { max-width: 62ch; margin: 30px 0; padding: 22px 0 24px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.meeting-retention h2 { margin: 7px 0 12px; font-family: ui-serif, Georgia, serif; font-size: clamp(1.65rem, 3vw, 2.1rem); font-weight: 500; letter-spacing: -0.025em; line-height: 1; }
+.meeting-retention p { max-width: 60ch; margin: 9px 0 0; color: var(--muted); line-height: 1.55; }
+.meeting-retention p:last-child { color: var(--ink); }
+.meeting-retention[data-state="released"] { border-color: #aeb6b0; }
 .meeting-claim { padding: 22px 0 24px; border-bottom: 1px solid var(--line); }
 .claim-meta { margin: 0 0 10px; color: var(--muted); font-size: 0.78rem; font-weight: 760; letter-spacing: 0.09em; text-transform: uppercase; }
 .claim-text { max-width: 62ch; margin: 0 0 18px; font-size: 1.08rem; line-height: 1.55; }
