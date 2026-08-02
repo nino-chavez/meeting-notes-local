@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use local_meeting_notes_session_core::library_read::{
-    ClaimEvidenceState, LibraryHit, LibraryProjection, OpenedLibraryHit,
+    ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, OpenedLibraryHit,
 };
 use local_meeting_notes_session_core::meeting::MeetingLifecycle;
 use local_meeting_notes_session_core::note_projection::ClaimType;
@@ -30,12 +30,14 @@ pub(crate) struct LibraryReader {
 pub(crate) struct LibrarySnapshot {
     pub(crate) state: &'static str,
     pub(crate) rows: Vec<LibrarySnapshotRow>,
+    pub(crate) unavailable_count: usize,
     pub(crate) message: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LibrarySnapshotRow {
+    pub(crate) handle: String,
     pub(crate) meeting_id: String,
     pub(crate) label: String,
     pub(crate) created_at_epoch_seconds: u64,
@@ -47,6 +49,7 @@ pub(crate) struct LibrarySnapshotRow {
 pub(crate) struct LibrarySearchResponse {
     pub(crate) state: &'static str,
     pub(crate) results: Vec<LibrarySearchResult>,
+    pub(crate) unavailable_count: usize,
     pub(crate) message: String,
 }
 
@@ -67,6 +70,7 @@ pub(crate) struct LibrarySearchResult {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LibrarySearchOpenResponse {
     pub(crate) state: &'static str,
+    pub(crate) transcript_handle: Option<String>,
     pub(crate) meeting_id: Option<String>,
     pub(crate) source_turn_index: Option<u32>,
     pub(crate) message: String,
@@ -76,6 +80,7 @@ pub(crate) struct LibrarySearchOpenResponse {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LibraryNoteResponse {
     pub(crate) state: &'static str,
+    pub(crate) transcript_handle: Option<String>,
     pub(crate) meeting_id: String,
     pub(crate) claims: Vec<LibraryClaim>,
     pub(crate) message: String,
@@ -96,11 +101,19 @@ pub(crate) struct LibraryClaim {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LibraryEvidenceResponse {
     pub(crate) state: &'static str,
+    pub(crate) transcript_handle: Option<String>,
     pub(crate) meeting_id: Option<String>,
     pub(crate) source_turn_index: Option<u32>,
     pub(crate) start: Option<u64>,
     pub(crate) end: Option<u64>,
     pub(crate) text: Option<String>,
+    pub(crate) message: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct LibraryTranscriptAccess {
+    pub(crate) state: &'static str,
+    pub(crate) meeting_id: Option<String>,
     pub(crate) message: String,
 }
 
@@ -115,62 +128,103 @@ impl LibraryReader {
         }
     }
 
-    pub(crate) fn snapshot(&self) -> LibrarySnapshot {
+    pub(crate) fn snapshot(&mut self) -> LibrarySnapshot {
+        self.handles.clear();
+        let unavailable_count = self.projection.quarantined_meetings();
         if self.projection.rows().is_empty() {
             return LibrarySnapshot {
-                state: "empty",
+                state: if unavailable_count == 0 {
+                    "empty"
+                } else {
+                    "incomplete"
+                },
                 rows: Vec::new(),
-                message: "No retained meetings are available.".into(),
+                unavailable_count,
+                message: if unavailable_count == 0 {
+                    "No retained meetings are available.".into()
+                } else {
+                    format!("{unavailable_count} retained meeting(s) could not be read.")
+                },
             };
         }
-        LibrarySnapshot {
-            state: "populated",
-            rows: self
-                .projection
-                .rows()
-                .iter()
-                .map(|row| LibrarySnapshotRow {
-                    meeting_id: row.meeting_id.clone(),
-                    label: row.title().unwrap_or("Untitled meeting").to_owned(),
-                    created_at_epoch_seconds: row.created_at_epoch_seconds,
-                    transcript_available: row.transcript_sha256.is_some(),
-                })
-                .collect(),
-            message: "Retained meetings are available.".into(),
-        }
-    }
-
-    /// Confines a transcript-open request to a row that this exact read-only
-    /// projection accepted. The caller still reopens and verifies the artifact.
-    pub(crate) fn has_transcript(&self, meeting_id: &str) -> bool {
-        self.projection
+        let source_rows: Vec<_> = self
+            .projection
             .rows()
             .iter()
-            .any(|row| row.meeting_id == meeting_id && row.transcript_sha256.is_some())
+            .map(|row| {
+                (
+                    row.meeting_id.clone(),
+                    row.title().unwrap_or("Untitled meeting").to_owned(),
+                    row.created_at_epoch_seconds,
+                    row.transcript_sha256.is_some(),
+                )
+            })
+            .collect();
+        let mut rows = Vec::new();
+        for (meeting_id, label, created_at_epoch_seconds, transcript_available) in source_rows {
+            let Ok(hit) = self.projection.meeting_handle(&meeting_id) else {
+                return Self::unavailable_snapshot();
+            };
+            rows.push(LibrarySnapshotRow {
+                handle: self.retain_handle(hit),
+                meeting_id,
+                label,
+                created_at_epoch_seconds,
+                transcript_available,
+            });
+        }
+        LibrarySnapshot {
+            state: if unavailable_count == 0 {
+                "populated"
+            } else {
+                "populated-incomplete"
+            },
+            rows,
+            unavailable_count,
+            message: if unavailable_count == 0 {
+                "Retained meetings are available.".into()
+            } else {
+                format!("Retained meetings are available. {unavailable_count} could not be read.")
+            },
+        }
     }
 
     pub(crate) fn search(&mut self, query: &str) -> LibrarySearchResponse {
         // A handle is valid only for the response that returned it. Keeping old
         // handles would retain an unbounded amount of private snapshot state.
         self.handles.clear();
+        let unavailable_count = self.projection.quarantined_meetings();
         match self.projection.search(query) {
             Ok(hits) if hits.is_empty() => LibrarySearchResponse {
-                state: "no-results",
+                state: if unavailable_count == 0 {
+                    "no-results"
+                } else {
+                    "incomplete"
+                },
                 results: Vec::new(),
-                message: "No retained text matched that search.".into(),
+                unavailable_count,
+                message: if unavailable_count == 0 {
+                    "No retained text matched that search.".into()
+                } else {
+                    format!(
+                        "No match was found among readable meetings. {unavailable_count} could not be searched."
+                    )
+                },
             },
             Ok(hits) => {
+                if self.projection.validate_snapshot(&self.storage).is_err() {
+                    return Self::stale_search();
+                }
                 let mut results = Vec::new();
                 for hit in hits {
-                    let handle = self.retain_handle(hit.clone());
-                    match self.projection.open(&self.storage, &hit) {
+                    match self.projection.open_snapshot(&hit) {
                         Ok(OpenedLibraryHit::Claim {
                             meeting_id,
                             claim,
                             claim_ordinal,
                             ..
                         }) => results.push(LibrarySearchResult {
-                            handle,
+                            handle: self.retain_handle(hit),
                             kind: "claim",
                             meeting_id,
                             text: Some(claim),
@@ -183,7 +237,7 @@ impl LibraryReader {
                             source_turn_index,
                             ..
                         }) => results.push(LibrarySearchResult {
-                            handle,
+                            handle: self.retain_handle(hit),
                             kind: "transcript",
                             meeting_id,
                             text: Some(text),
@@ -194,7 +248,7 @@ impl LibraryReader {
                             meeting_id,
                             source_turn_index,
                         }) => results.push(LibrarySearchResult {
-                            handle,
+                            handle: self.retain_handle(hit),
                             kind: "withheld",
                             meeting_id,
                             text: None,
@@ -206,7 +260,7 @@ impl LibraryReader {
                             title,
                             folder,
                         }) => results.push(LibrarySearchResult {
-                            handle,
+                            handle: self.retain_handle(hit),
                             kind: "meeting",
                             meeting_id,
                             text: title.or(folder),
@@ -217,70 +271,96 @@ impl LibraryReader {
                     }
                 }
                 LibrarySearchResponse {
-                    state: "results",
+                    state: if unavailable_count == 0 {
+                        "results"
+                    } else {
+                        "results-incomplete"
+                    },
                     results,
-                    message: "Exact results from the current library snapshot.".into(),
+                    unavailable_count,
+                    message: if unavailable_count == 0 {
+                        "Exact results from the current library snapshot.".into()
+                    } else {
+                        format!(
+                            "Exact results from readable meetings. {unavailable_count} could not be searched."
+                        )
+                    },
                 }
             }
+            Err(LibraryReadError::InvalidRequest) => Self::invalid_search(),
+            Err(LibraryReadError::CapacityExceeded) => Self::bounded_search(),
             Err(_) => Self::stale_search(),
         }
     }
 
     /// Reopens a result through the projection's normal stale-artifact checks.
     /// Search terms never become filesystem or transcript-enumeration authority.
-    pub(crate) fn open_search_result(&self, handle: &str) -> LibrarySearchOpenResponse {
-        let Some(hit) = self.handles.get(handle) else {
+    pub(crate) fn open_search_result(&mut self, handle: &str) -> LibrarySearchOpenResponse {
+        let Some(hit) = self.handles.get(handle).cloned() else {
+            self.handles.clear();
             return Self::stale_search_open();
         };
-        match self.projection.open(&self.storage, hit) {
+        self.handles.clear();
+        match self.projection.open(&self.storage, &hit) {
             Ok(OpenedLibraryHit::Transcript {
                 meeting_id,
                 source_turn_index,
                 ..
-            }) => LibrarySearchOpenResponse {
-                state: "transcript",
-                meeting_id: Some(meeting_id),
-                source_turn_index: Some(source_turn_index),
-                message: "Opening the exact retained transcript turn that matched.".into(),
-            },
-            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => LibrarySearchOpenResponse {
-                state: "meeting",
-                meeting_id: Some(meeting_id),
-                source_turn_index: None,
-                message: "Opening this retained meeting's canonical transcript.".into(),
-            },
+            }) => self.retain_search_open(
+                hit,
+                "transcript",
+                Some(meeting_id),
+                Some(source_turn_index),
+                "Opening the exact retained transcript turn that matched.",
+            ),
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => self.retain_search_open(
+                hit,
+                "meeting",
+                Some(meeting_id),
+                None,
+                "Opening this retained meeting's canonical transcript.",
+            ),
             Ok(OpenedLibraryHit::Withheld {
                 meeting_id,
                 source_turn_index,
-            }) => LibrarySearchOpenResponse {
-                state: "withheld",
-                meeting_id: Some(meeting_id),
-                source_turn_index: Some(source_turn_index),
-                message:
-                    "A voice check withheld this matching turn. It is not shown as transcript text."
-                        .into(),
-            },
+            }) => self.retain_search_open(
+                hit,
+                "withheld",
+                Some(meeting_id),
+                Some(source_turn_index),
+                "A voice check withheld this matching turn. It is not shown as transcript text.",
+            ),
             // Preview does not expose note reading yet, so a retained claim is
             // not a transcript/title search destination.
             Ok(OpenedLibraryHit::Claim { .. }) | Err(_) => Self::stale_search_open(),
         }
     }
 
-    pub(crate) fn open_note(&mut self, meeting_id: &str) -> LibraryNoteResponse {
+    pub(crate) fn open_note(&mut self, handle: &str) -> LibraryNoteResponse {
         // Opening a note establishes the next evidence-response boundary.
+        let Some(hit) = self.handles.get(handle).cloned() else {
+            self.handles.clear();
+            return Self::stale_note("");
+        };
         self.handles.clear();
-        let Some(row) = self
+        let meeting_id = match self.projection.open(&self.storage, &hit) {
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
+            Ok(_) | Err(_) => return Self::stale_note(""),
+        };
+        let Some(lifecycle) = self
             .projection
             .rows()
             .iter()
             .find(|row| row.meeting_id == meeting_id)
+            .map(|row| row.lifecycle())
         else {
-            return Self::stale_note(meeting_id);
+            return Self::stale_note(&meeting_id);
         };
-        match row.lifecycle() {
+        match lifecycle {
             MeetingLifecycle::SummaryFailed => {
                 return LibraryNoteResponse {
                     state: "summary-failed",
+                    transcript_handle: self.retain_transcript_handle(&meeting_id),
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
                     message: "A note was not produced. Retained transcript text remains available."
@@ -291,6 +371,7 @@ impl LibraryReader {
             _ => {
                 return LibraryNoteResponse {
                     state: "transcript-only",
+                    transcript_handle: self.retain_transcript_handle(&meeting_id),
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
                     message:
@@ -299,14 +380,14 @@ impl LibraryReader {
                 };
             }
         }
-        let handles = match self.projection.note_claims(meeting_id) {
+        let handles = match self.projection.note_claims(&meeting_id) {
             Ok(handles) => handles,
-            Err(_) => return Self::stale_note(meeting_id),
+            Err(_) => return Self::stale_note(&meeting_id),
         };
         let mut claims = Vec::new();
         for hit in handles {
             let handle = self.retain_handle(hit.clone());
-            match self.projection.open(&self.storage, &hit) {
+            match self.projection.open_snapshot(&hit) {
                 Ok(OpenedLibraryHit::Claim {
                     claim_ordinal,
                     claim_type,
@@ -322,11 +403,12 @@ impl LibraryReader {
                     evidence_state: evidence_state_name(evidence_state),
                     locator_count: locators.len(),
                 }),
-                Ok(_) | Err(_) => return Self::stale_note(meeting_id),
+                Ok(_) | Err(_) => return Self::stale_note(&meeting_id),
             }
         }
         LibraryNoteResponse {
             state: "note",
+            transcript_handle: self.retain_transcript_handle(&meeting_id),
             meeting_id: meeting_id.into(),
             claims,
             message: "Claim words can be opened against their exact transcript locators.".into(),
@@ -334,49 +416,81 @@ impl LibraryReader {
     }
 
     pub(crate) fn open_evidence(
-        &self,
+        &mut self,
         handle: &str,
         locator_ordinal: usize,
     ) -> LibraryEvidenceResponse {
-        let Some(hit) = self.handles.get(handle) else {
+        let Some(hit) = self.handles.get(handle).cloned() else {
+            self.handles.clear();
             return Self::stale_evidence();
         };
+        self.handles.clear();
         match self
             .projection
-            .open_claim_evidence(&self.storage, hit, locator_ordinal)
+            .open_claim_evidence(&self.storage, &hit, locator_ordinal)
         {
-            Ok(evidence) => LibraryEvidenceResponse {
-                state: "evidence",
-                meeting_id: Some(evidence.meeting_id),
-                source_turn_index: Some(evidence.source_turn_index),
-                start: Some(evidence.start),
-                end: Some(evidence.end),
-                text: Some(evidence.text),
-                message: "Exact text from the retained transcript locator.".into(),
-            },
+            Ok(evidence) => {
+                let transcript_handle = self.retain_transcript_handle(&evidence.meeting_id);
+                LibraryEvidenceResponse {
+                    state: "evidence",
+                    transcript_handle,
+                    meeting_id: Some(evidence.meeting_id),
+                    source_turn_index: Some(evidence.source_turn_index),
+                    start: Some(evidence.start),
+                    end: Some(evidence.end),
+                    text: Some(evidence.text),
+                    message: "Exact text from the retained transcript locator.".into(),
+                }
+            }
             Err(_) => Self::stale_evidence(),
         }
     }
 
+    pub(crate) fn open_transcript(&mut self, handle: &str) -> LibraryTranscriptAccess {
+        let Some(hit) = self.handles.get(handle).cloned() else {
+            self.handles.clear();
+            return Self::stale_transcript();
+        };
+        self.handles.clear();
+        let response = match self.projection.open(&self.storage, &hit) {
+            Ok(OpenedLibraryHit::Transcript { meeting_id, .. })
+            | Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => LibraryTranscriptAccess {
+                state: "transcript",
+                meeting_id: Some(meeting_id),
+                message: "Opening the retained canonical transcript.".into(),
+            },
+            Ok(OpenedLibraryHit::Withheld { .. }) => LibraryTranscriptAccess {
+                state: "withheld",
+                meeting_id: None,
+                message: "A voice check withheld that matching turn from transcript text.".into(),
+            },
+            Ok(OpenedLibraryHit::Claim { .. }) | Err(_) => Self::stale_transcript(),
+        };
+        response
+    }
+
     pub(crate) fn unavailable_snapshot() -> LibrarySnapshot {
         LibrarySnapshot {
-            state: "empty",
+            state: "unavailable",
             rows: Vec::new(),
+            unavailable_count: 0,
             message: UNAVAILABLE_MESSAGE.into(),
         }
     }
 
     pub(crate) fn unavailable_search() -> LibrarySearchResponse {
         LibrarySearchResponse {
-            state: "empty",
+            state: "unavailable",
             results: Vec::new(),
+            unavailable_count: 0,
             message: UNAVAILABLE_MESSAGE.into(),
         }
     }
 
     pub(crate) fn unavailable_note(meeting_id: &str) -> LibraryNoteResponse {
         LibraryNoteResponse {
-            state: "empty",
+            state: "unavailable",
+            transcript_handle: None,
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
             message: UNAVAILABLE_MESSAGE.into(),
@@ -385,7 +499,8 @@ impl LibraryReader {
 
     pub(crate) fn unavailable_evidence() -> LibraryEvidenceResponse {
         LibraryEvidenceResponse {
-            state: "empty",
+            state: "unavailable",
+            transcript_handle: None,
             meeting_id: None,
             source_turn_index: None,
             start: None,
@@ -401,6 +516,31 @@ impl LibraryReader {
         handle
     }
 
+    fn retain_transcript_handle(&mut self, meeting_id: &str) -> Option<String> {
+        self.projection
+            .meeting_handle(meeting_id)
+            .ok()
+            .map(|hit| self.retain_handle(hit))
+    }
+
+    fn retain_search_open(
+        &mut self,
+        hit: LibraryHit,
+        state: &'static str,
+        meeting_id: Option<String>,
+        source_turn_index: Option<u32>,
+        message: &'static str,
+    ) -> LibrarySearchOpenResponse {
+        self.handles.clear();
+        LibrarySearchOpenResponse {
+            state,
+            transcript_handle: Some(self.retain_handle(hit)),
+            meeting_id,
+            source_turn_index,
+            message: message.into(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn retained_handle_count(&self) -> usize {
         self.handles.len()
@@ -410,6 +550,7 @@ impl LibraryReader {
         LibrarySearchResponse {
             state: "stale",
             results: Vec::new(),
+            unavailable_count: 0,
             message: STALE_MESSAGE.into(),
         }
     }
@@ -417,6 +558,7 @@ impl LibraryReader {
     fn stale_search_open() -> LibrarySearchOpenResponse {
         LibrarySearchOpenResponse {
             state: "stale",
+            transcript_handle: None,
             meeting_id: None,
             source_turn_index: None,
             message: STALE_MESSAGE.into(),
@@ -426,6 +568,7 @@ impl LibraryReader {
     fn stale_note(meeting_id: &str) -> LibraryNoteResponse {
         LibraryNoteResponse {
             state: "stale",
+            transcript_handle: None,
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
             message: STALE_MESSAGE.into(),
@@ -435,12 +578,39 @@ impl LibraryReader {
     fn stale_evidence() -> LibraryEvidenceResponse {
         LibraryEvidenceResponse {
             state: "stale",
+            transcript_handle: None,
             meeting_id: None,
             source_turn_index: None,
             start: None,
             end: None,
             text: None,
             message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn stale_transcript() -> LibraryTranscriptAccess {
+        LibraryTranscriptAccess {
+            state: "stale",
+            meeting_id: None,
+            message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn invalid_search() -> LibrarySearchResponse {
+        LibrarySearchResponse {
+            state: "invalid",
+            results: Vec::new(),
+            unavailable_count: 0,
+            message: "Enter at least two characters to search retained text.".into(),
+        }
+    }
+
+    fn bounded_search() -> LibrarySearchResponse {
+        LibrarySearchResponse {
+            state: "bounded",
+            results: Vec::new(),
+            unavailable_count: 0,
+            message: "That search has too many matches. Use a more specific exact phrase.".into(),
         }
     }
 }

@@ -10,6 +10,7 @@ fn single_instance_is_the_first_plugin_and_precedes_app_setup() {
 
     assert_eq!(source.find(".plugin("), Some(plugin));
     assert!(plugin < setup);
+    assert!(source.contains("get_webview_window(ACTIVE_WINDOW_LABEL)"));
 }
 
 #[test]

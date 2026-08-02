@@ -91,8 +91,8 @@ fn library_dev_snapshot(state: State<'_, DevSurfaceState>) -> LibrarySnapshot {
 }
 
 fn snapshot_response(state: &DevSurfaceState) -> LibrarySnapshot {
-    let guard = state.library.lock().expect("development library lock");
-    if let Some(library) = guard.as_ref() {
+    let mut guard = state.library.lock().expect("development library lock");
+    if let Some(library) = guard.as_mut() {
         let mut response = library.reader.snapshot();
         if response.state == "populated" {
             for row in &mut response.rows {
@@ -133,8 +133,9 @@ fn synthetic_search_response(mut response: LibrarySearchResponse) -> LibrarySear
         }
     }
     response.message = match response.state {
-        "results" => "Results from the synthetic meeting.",
+        "results" | "results-incomplete" => "Results from the synthetic meeting.",
         "no-results" => "No sanitized sample matched that search.",
+        "bounded" => "That search has too many matches. Use a more specific phrase.",
         "stale" => "That view is stale. Reopen the sanitized sample and try again.",
         _ => "No synthetic fixture is available.",
     }
@@ -143,19 +144,16 @@ fn synthetic_search_response(mut response: LibrarySearchResponse) -> LibrarySear
 }
 
 #[tauri::command]
-fn library_dev_open_note(
-    meeting_id: String,
-    state: State<'_, DevSurfaceState>,
-) -> LibraryNoteResponse {
-    open_note_response(&meeting_id, &state)
+fn library_dev_open_note(handle: String, state: State<'_, DevSurfaceState>) -> LibraryNoteResponse {
+    open_note_response(&handle, &state)
 }
 
-fn open_note_response(meeting_id: &str, state: &DevSurfaceState) -> LibraryNoteResponse {
+fn open_note_response(handle: &str, state: &DevSurfaceState) -> LibraryNoteResponse {
     let mut guard = state.library.lock().expect("development library lock");
     let Some(library) = guard.as_mut() else {
-        return unavailable_note(meeting_id, state);
+        return unavailable_note("", state);
     };
-    let mut response = library.reader.open_note(meeting_id);
+    let mut response = library.reader.open_note(handle);
     response.message = match response.state {
         "note" => "Words located in the transcript. Semantic support has not been reviewed.",
         "summary-failed" => {
@@ -182,8 +180,8 @@ fn open_evidence_response(
     locator_ordinal: usize,
     state: &DevSurfaceState,
 ) -> LibraryEvidenceResponse {
-    let guard = state.library.lock().expect("development library lock");
-    let Some(library) = guard.as_ref() else {
+    let mut guard = state.library.lock().expect("development library lock");
+    let Some(library) = guard.as_mut() else {
         return unavailable_evidence(state);
     };
     let mut response = library.reader.open_evidence(handle, locator_ordinal);
@@ -462,21 +460,25 @@ mod tests {
 
         let search = search_response("café", &state);
         assert_eq!(search.state, "results");
-        assert_eq!(search.results.len(), 1);
-        assert_eq!(search.results[0].kind, "claim");
+        assert!(search.results.len() >= 2);
+        let claim = search
+            .results
+            .iter()
+            .find(|result| result.kind == "claim")
+            .unwrap();
         assert_eq!(
-            search.results[0].text.as_deref(),
+            claim.text.as_deref(),
             Some("Use Thursday in the café sample launch date.")
         );
-        assert_eq!(search.results[0].source_turn_index, None);
-        assert_eq!(search.results[0].claim_ordinal, Some(0));
+        assert_eq!(claim.source_turn_index, None);
+        assert_eq!(claim.claim_ordinal, Some(0));
         assert_eq!(
             serde_json::to_value(&search).unwrap()["results"][0]["claimOrdinal"],
             0
         );
         assert!(!search.results[0].handle.is_empty());
 
-        let note = open_note_response(FIXTURE_MEETING_ID, &state);
+        let note = open_note_response(&snapshot_response(&state).rows[0].handle, &state);
         assert_eq!(note.state, "note");
         assert_eq!(note.meeting_id, FIXTURE_MEETING_ID);
         assert_eq!(note.claims.len(), 2);
@@ -513,15 +515,15 @@ mod tests {
     #[test]
     fn ipc_response_helpers_redact_empty_no_result_withheld_and_stale_states() {
         let empty = DevSurfaceState::default();
-        assert_eq!(snapshot_response(&empty).state, "empty");
+        assert_eq!(snapshot_response(&empty).state, "unavailable");
         let empty_search = search_response("anything", &empty);
-        assert_eq!(empty_search.state, "empty");
+        assert_eq!(empty_search.state, "unavailable");
         assert!(empty_search.results.is_empty());
-        let empty_note = open_note_response(FIXTURE_MEETING_ID, &empty);
-        assert_eq!(empty_note.state, "empty");
+        let empty_note = open_note_response("opaque-handle", &empty);
+        assert_eq!(empty_note.state, "unavailable");
         assert!(empty_note.claims.is_empty());
         let empty_evidence = open_evidence_response("opaque-handle", 0, &empty);
-        assert_eq!(empty_evidence.state, "empty");
+        assert_eq!(empty_evidence.state, "unavailable");
         assert!(empty_evidence.text.is_none());
         assert!(empty_evidence.meeting_id.is_none());
         assert!(empty_evidence.source_turn_index.is_none());
@@ -547,7 +549,7 @@ mod tests {
                 .contains("withheld sample detail")
         );
 
-        let note = open_note_response(FIXTURE_MEETING_ID, &state);
+        let note = open_note_response(&snapshot_response(&state).rows[0].handle, &state);
         let handle = note.claims[0].handle.clone();
         let meeting_directory = temporary
             .path()
@@ -574,13 +576,19 @@ mod tests {
 
         let results = reader.search("café");
         assert_eq!(results.state, "results");
-        assert_eq!(
-            results.results.len(),
-            1,
-            "the cited transcript hit is suppressed"
+        assert!(results.results.iter().any(|result| result.kind == "claim"));
+        assert!(
+            results
+                .results
+                .iter()
+                .any(|result| result.kind == "transcript")
         );
-        assert_eq!(results.results[0].kind, "claim");
-        let evidence = reader.open_evidence(&results.results[0].handle, 0);
+        let claim = results
+            .results
+            .iter()
+            .find(|result| result.kind == "claim")
+            .unwrap();
+        let evidence = reader.open_evidence(&claim.handle, 0);
         assert_eq!(evidence.state, "evidence");
         assert_eq!(evidence.source_turn_index, Some(0));
         assert_eq!(evidence.text.as_deref(), Some("café"));
@@ -607,9 +615,11 @@ mod tests {
         assert_eq!(reader.open_evidence(&prior_search_handle, 0).state, "stale");
 
         for _ in 0..8 {
-            let note = reader.open_note(FIXTURE_MEETING_ID);
+            let snapshot = reader.snapshot();
+            let note = reader.open_note(&snapshot.rows[0].handle);
             assert_eq!(note.state, "note");
-            assert_eq!(reader.retained_handle_count(), note.claims.len());
+            assert!(note.transcript_handle.is_some());
+            assert_eq!(reader.retained_handle_count(), note.claims.len() + 1);
             assert_eq!(
                 reader.open_evidence(&note.claims[0].handle, 0).state,
                 "evidence"
@@ -637,7 +647,7 @@ mod tests {
         );
 
         let unavailable = LibraryReader::unavailable_search();
-        assert_eq!(unavailable.state, "empty");
+        assert_eq!(unavailable.state, "unavailable");
         assert!(unavailable.results.is_empty());
         assert_ne!(unavailable.message, empty_snapshot.message);
         assert!(!unavailable.message.contains("sample"));
@@ -647,7 +657,8 @@ mod tests {
             let mut guard = state.library.lock().unwrap();
             let reader = &mut guard.as_mut().unwrap().reader;
             let withheld = reader.search("withheld");
-            let note = reader.open_note(FIXTURE_MEETING_ID);
+            let snapshot = reader.snapshot();
+            let note = reader.open_note(&snapshot.rows[0].handle);
             (note.claims[0].handle.clone(), withheld)
         };
         assert_eq!(withheld.state, "results");
@@ -674,7 +685,7 @@ mod tests {
             .library
             .lock()
             .unwrap()
-            .as_ref()
+            .as_mut()
             .unwrap()
             .reader
             .open_evidence(&handle, 0);
@@ -702,7 +713,7 @@ mod tests {
         let mut reader = project_seeded_library(storage).unwrap().reader;
         let snapshot = reader.snapshot();
         assert_eq!(snapshot.state, "populated");
-        let note = reader.open_note(FIXTURE_MEETING_ID);
+        let note = reader.open_note(&snapshot.rows[0].handle);
         assert_eq!(note.state, "summary-failed");
         assert!(note.claims.is_empty());
     }
@@ -722,7 +733,8 @@ mod tests {
         write_meeting(&directory, &meeting).unwrap();
 
         let mut reader = project_seeded_library(storage).unwrap().reader;
-        let note = reader.open_note(FIXTURE_MEETING_ID);
+        let snapshot = reader.snapshot();
+        let note = reader.open_note(&snapshot.rows[0].handle);
         assert_eq!(note.state, "transcript-only");
         assert!(note.claims.is_empty());
         assert!(note.message.contains("No admitted note"));
@@ -740,6 +752,7 @@ mod tests {
                 source_turn_index: None,
                 claim_ordinal: None,
             }],
+            unavailable_count: 0,
             message: "untrusted test response".into(),
         });
         assert_eq!(response.state, "results");

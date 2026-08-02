@@ -158,12 +158,12 @@ function renderLibrary(snapshot) {
   libraryNotice.hidden = true;
   libraryNotice.textContent = "";
   document.querySelector("#library-copy").textContent = snapshot.message || "Opening retained Preview meetings on this Mac.";
-  if (snapshot.state !== "populated") {
+  if (snapshot.state !== "populated" && snapshot.state !== "populated-incomplete") {
     const empty = document.createElement("p");
     empty.className = "library-empty";
     empty.textContent = snapshot.state === "empty"
       ? "No retained Preview meetings yet. Finish a Preview recording to see it here."
-      : "The Preview library is not available right now. Reopen the app and try again.";
+      : "Some retained meetings could not be read. Reopen Library and try again.";
     libraryList.append(empty);
     showScreen("library-screen");
     return;
@@ -172,7 +172,7 @@ function renderLibrary(snapshot) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "library-row";
-    button.dataset.meetingId = row.meetingId;
+    button.dataset.meetingHandle = row.handle;
     button.dataset.label = row.label || "Untitled meeting";
     button.disabled = row.transcriptAvailable !== true;
     const summary = document.createElement("span");
@@ -192,7 +192,7 @@ function renderLibrary(snapshot) {
 function renderLibrarySearch(response) {
   librarySearchResults.replaceChildren();
   clearError(libraryNotice);
-  if (response.state !== "results") {
+  if (response.state !== "results" && response.state !== "results-incomplete") {
     setError(libraryNotice, response.message || "No retained text matched that search.");
     return;
   }
@@ -340,10 +340,10 @@ function returnToLibrary() {
   showScreen("library-screen");
 }
 
-async function openLibraryTranscript(meetingId, matchedSourceTurnIndex = null) {
-  if (!invoke || !meetingId) return;
+async function openLibraryTranscript(handle, matchedSourceTurnIndex = null) {
+  if (!invoke || !handle) return;
   try {
-    const result = await invoke("preview_library_open_transcript", { meetingId });
+    const result = await invoke("preview_library_open_transcript", { handle });
     if (result.state !== "transcript") {
       setError(libraryNotice, result.message);
       return;
@@ -401,15 +401,16 @@ function renderMeetingDetail(response) {
   }
 }
 
-async function openMeetingDetail(meetingId) {
-  if (!invoke || !meetingId) return;
-  document.querySelector("#meeting-detail-id").value = meetingId;
+async function openMeetingDetail(handle) {
+  if (!invoke || !handle) return;
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
   message(meetingDetailState, "Opening this retained meeting…");
   showScreen("meeting-detail-screen");
   try {
-    renderMeetingDetail(await invoke("preview_library_open_note", { meetingId }));
+    const response = await invoke("preview_library_open_note", { handle });
+    document.querySelector("#meeting-detail-transcript-handle").value = response.transcriptHandle || "";
+    renderMeetingDetail(response);
   } catch {
     message(meetingDetailState, "That meeting could not be opened. Return to Library and try again.", "stale");
     meetingNoNote.hidden = true;
@@ -421,11 +422,11 @@ async function openMeetingEvidence(handle) {
   message(meetingDetailState, "Opening the claim’s exact retained words…");
   try {
     const result = await invoke("preview_library_open_evidence", { handle, locatorOrdinal: 0 });
-    if (result.state !== "evidence" || !result.meetingId || !Number.isInteger(result.sourceTurnIndex)) {
+    if (result.state !== "evidence" || !result.transcriptHandle || !Number.isInteger(result.sourceTurnIndex)) {
       message(meetingDetailState, result.message || "That claim is no longer current. Return to Library and try again.", result.state || "stale");
       return;
     }
-    await openLibraryTranscript(result.meetingId, {
+    await openLibraryTranscript(result.transcriptHandle, {
       sourceTurnIndex: result.sourceTurnIndex,
       start: result.start,
       end: result.end,
@@ -457,7 +458,7 @@ async function openLibrarySearchResult(handle) {
   setError(libraryNotice, "Opening the selected retained result…");
   try {
     const result = await invoke("preview_library_open_search_result", { handle });
-    if (!result.meetingId || result.state === "withheld") {
+    if (!result.transcriptHandle || result.state === "withheld") {
       setError(libraryNotice, result.message || "That result cannot be opened as visible transcript text.");
       return;
     }
@@ -466,7 +467,7 @@ async function openLibrarySearchResult(handle) {
       return;
     }
     await openLibraryTranscript(
-      result.meetingId,
+      result.transcriptHandle,
       Number.isInteger(result.sourceTurnIndex) ? { sourceTurnIndex: result.sourceTurnIndex } : null,
     );
   } catch {
@@ -571,8 +572,8 @@ retryStartup.addEventListener("click", async () => {
 libraryLink.addEventListener("click", openLibrary);
 librarySearch.addEventListener("submit", searchLibrary);
 libraryList.addEventListener("click", (event) => {
-  const row = event.target.closest("button[data-meeting-id]");
-  if (row) openMeetingDetail(row.dataset.meetingId);
+  const row = event.target.closest("button[data-meeting-handle]");
+  if (row) openMeetingDetail(row.dataset.meetingHandle);
 });
 librarySearchResults.addEventListener("click", (event) => {
   const result = event.target.closest("button[data-search-handle]");
@@ -585,8 +586,8 @@ document.querySelector("#library-back").addEventListener("click", () => {
 document.querySelector("#library-transcript-back").addEventListener("click", returnToLibrary);
 document.querySelector("#meeting-detail-back").addEventListener("click", returnToLibrary);
 document.querySelector("#meeting-open-transcript").addEventListener("click", () => {
-  const meetingId = document.querySelector("#meeting-detail-id").value;
-  if (meetingId) openLibraryTranscript(meetingId);
+  const handle = document.querySelector("#meeting-detail-transcript-handle").value;
+  if (handle) openLibraryTranscript(handle);
 });
 
 renderStartup("shell-rendered");
