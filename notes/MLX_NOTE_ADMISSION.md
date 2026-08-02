@@ -13,22 +13,24 @@ The harness compares two arms:
   response shape, local model-tree digest, and then replays the existing
   `note/2` evidence validation in memory.
 
-Every failure produces `transcript-only` and no note object: malformed output,
-unknown candidate/source IDs, citation mismatch, timeout, package mismatch, and
-model-digest mismatch are explicitly covered.
+Every failure produces `transcript-only` and no note object. Content-free
+receipts distinguish JSON syntax, root/schema/field-order/type,
+citation/source/locator, and length/truncation failures, plus timeout and
+runtime/model-identity refusal.
 
 ## Candidate pin
 
-The first `SmolLM2-1.7B-Instruct` experiment remains rejected: it returned
-malformed non-JSON on every repeat. That is a result about that exact pin and
-prompt, not a claim about MLX, PyTorch, or other models. Do not retry it as the
-next candidate.
+The first `SmolLM2-1.7B-Instruct` experiment remains **unadmitted**. Its
+historical output was checked against a prompt contract that did not advertise
+the parser's exact root/item shape, so it is an inconclusive protocol
+measurement—not evidence that the model produced non-JSON. Do not use it to
+generalize about MLX, PyTorch, or other models.
 
 ### Preregistration comparison — 2026-08-02
 
 | Candidate | License / official source | MLX artifact and immutable revision | Context / template evidence | Download artifact | Decision |
 | --- | --- | --- | --- | --- | --- |
-| **Qwen2.5-1.5B-Instruct 4-bit** | Apache-2.0 on the [official Qwen card](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) | `mlx-community/Qwen2.5-1.5B-Instruct-4bit@8b403126fc14f14cfc99bb4cfa72ecbc129ea677` | Official card: 32,768 tokens and `apply_chat_template`; it reports improved structured outputs, especially JSON. The MLX conversion documents `apply_chat_template`. | 880,172,064 bytes total metadata inventory; `model.safetensors` 868,628,559 bytes (about 869 MB decimal) | **Selected for measurement only.** Smallest candidate with an Apache pin, documented MLX conversion, 4,096-token registered request budget below native context, and model-card JSON relevance. |
+| **Qwen2.5-1.5B-Instruct 4-bit** | Apache-2.0 on the [official Qwen card](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) | `mlx-community/Qwen2.5-1.5B-Instruct-4bit@8b403126fc14f14cfc99bb4cfa72ecbc129ea677` | Official card: 32,768 tokens and `apply_chat_template`; it reports improved structured outputs, especially JSON. The MLX conversion documents `apply_chat_template`. | 880,172,064 bytes total metadata inventory; `model.safetensors` 868,628,559 bytes (about 869 MB decimal) | **Selected for the two-fixture corrective probe only.** The prior 12-fixture result is inconclusive because its advertised output contract was incomplete. |
 | Phi-3.5-mini-instruct 4-bit | MIT on the [official Microsoft card](https://huggingface.co/microsoft/Phi-3.5-mini-instruct) | `mlx-community/Phi-3.5-mini-instruct-4bit@7b2052fd882fe017300d4d42a4eb06a27b816af4` | Official card: 128K context, chat format, and a claim of instruction adherence. | `model.safetensors` 2,149,696,133 bytes | Plausible fallback, but larger and its conversion inventory carries custom Python source; no remote code is permitted in this experiment. Evaluate only after a separate local MLX-only compatibility inspection. |
 | Llama-3.2-3B-Instruct 4-bit | [Llama 3.2 Community License](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct) permits commercial use subject to its attribution, distribution, acceptable-use, and scale terms. | `mlx-community/Llama-3.2-3B-Instruct-4bit@7f0dc925e0d0afb0322d96f9255cfddf2ba5636e` | Official card: instruction-tuned models for retrieval/summarization and 128K native context; conversion has an MLX chat template. | `model.safetensors` 1,807,496,278 bytes | Plausible but not selected: materially larger, source access is gated, and its custom license adds release obligations that Apache avoids. |
 
@@ -94,8 +96,18 @@ output cap: native Qwen context (32,768) is larger than the registered prompt
 budget. Use the model's documented chat template with exactly two messages:
 the current `SYSTEM_PROMPT` as `system`, and canonical request JSON as `user`.
 Use temperature `0.0`, seed `0`, one non-streaming completion, no retries, no
-remote code, and no schema-constraining decoder. The parser is the enforcement
-boundary; this measures whether the model follows the prompt unaided.
+remote code, and no schema-constraining decoder. The response contract now
+explicitly requires one root field, `items`, whose value is an array of objects
+with exactly this order: `candidate_id`, `source_fragment_ids`, `citation`,
+`label`, `claim`; an abstention is exactly `{"items":[]}`. The parser remains
+the enforcement boundary; it does not unwrap fences or prose.
+
+The first corrective run is deliberately smaller: one supported fixture and
+one empty-candidate fixture. It hashes the model tree before load and after the
+two calls, records load time separately from each call, and retains only
+response hash/byte length, exact refusal category, prompt/template hashes, and
+available MLX streaming metadata. Run the full fixture suite only if both
+corrective calls cross strict parsing and all mechanical gates pass.
 
 Run the deterministic control first, then 12 synthetic/public transcript
 fixtures: four ordinary supported claims; two locator-order cases; two
@@ -123,54 +135,47 @@ nor asserts that automatic notes are useful. It remains an isolated research
 exercise until every mechanical gate and the human semantic/usefulness review
 are complete.
 
-### 2026-08-02 Qwen synthetic-only measurement — rejected
+### 2026-08-02 Qwen synthetic-only measurement — inconclusive
 
-This measurement used only the 12 registered synthetic fixtures in
-`synthetic_measurement_fixtures()` and the private, disposable MLX process. It
-did not open Preview, product records, meeting transcripts, or audio. Its
-receipt code emits fixture IDs, hashes, outcomes, timings, and boolean checks;
-it does not retain fixture text or model replies.
+The prior Qwen run used synthetic data only, but the advertised contract did
+not state the parser's required `{"items":[...]}` root, ordered item fields, or
+the empty response. Its retained hashes and timings do not prove a non-JSON
+model response or a warm-latency failure, because the timed suites also mixed
+tree hashing and orchestration with generation. Qwen remains unadmitted. The
+corrective probe below is the only measurement eligible to decide whether to
+continue to the full fixture suite.
 
-| Pre-run check | Observed value | Gate |
+### 2026-08-02 Qwen corrective probe — rejected
+
+The corrected harness advertised the exact strict root and ordered item shape,
+bound the registered model tree and local runtime metadata, and ran the
+deterministic control before each model call. It used only one supported and
+one empty-candidate synthetic fixture. Model load was measured separately;
+pre/post tree hashing happened outside each call's timing. No model reply or
+fixture text was retained.
+
+| Check | Supported fixture | Empty-candidate fixture |
 | --- | --- | --- |
-| Source revision | `8b403126fc14f14cfc99bb4cfa72ecbc129ea677` | Exact registered revision |
-| Non-cache inventory | 11 files; 880,172,064 bytes | Exact registered byte budget |
-| `model.safetensors` SHA-256 | `0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717` | Exact registered file digest |
-| Full non-cache tree SHA-256 | `3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95` | Recorded before and after all runs |
-| Disposable runtime | Python 3.14; `mlx-lm==0.30.4`; `mlx==0.32.0`; `transformers==5.0.0rc1` | MLX/MLX-LM only in the experiment; no PyTorch import or shipped-path change |
-| Host | arm64, macOS 26.5.2 | One machine, not a general hardware claim |
+| Control | accepted | transcript-only, `no-deterministic-candidates` |
+| Strict result | `response-json-syntax` | `response-contract` (wrong root/schema/field shape) |
+| Response receipt | 345 bytes; SHA-256 `e244bd14ed15d32790e93ba6a3583382249cde427c7e3599408a3cab1c7f6338` | 2 bytes; SHA-256 `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| MLX streaming metadata | 496 prompt tokens; 181 generated tokens; finish `stop` | 267 prompt tokens; 2 generated tokens; finish `stop` |
+| Call time | 2.857 s | 0.372 s |
 
-One initial execution was deliberately discarded: its receipt was accidentally
-opened inside the model tree, so the harness returned `model-digest-mismatch`
-for every fixture. The receipt was moved outside the tree; the exact pre-run
-tree digest and byte budget were then re-established before the valid runs
-below. That is a harness recovery, not model evidence.
+The exact source tree SHA-256 was
+`3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95`
+both before and after the probe. The pinned MLX runtime loaded in 1.072 s;
+peak process RSS was 1,171,488,768 bytes. Per-call request/template hashes,
+runtime package metadata hashes, and harness source hash are retained in the
+content-free receipt. The result failed both mechanical parsing gates, so the
+full suite did not run. Locator replay, names/numbers/negation, repeatability,
+and human semantic/usefulness review remain unperformed.
 
-The valid protocol was three fresh-process cold suites and two suites in one
-loaded warm process, with the registered system/user chat-template messages,
-temperature `0.0`, seed `0`, 512 output tokens, 4,096 KV tokens, no retry, no
-remote code, and no constrained decoder. It made 60 total fixture calls.
+Qwen is **not admitted**. This corrective result is limited to this pinned
+model, exact template/contract, runtime, and two synthetic fixtures; it does
+not make a product-readiness claim.
 
-| Gate | Observed result | Verdict |
-| --- | --- | --- |
-| Strict JSON / response schema | All 60 calls were `malformed-response`: 0/50 supported-fixture calls reached `note/2`; 0/10 abstention calls produced valid empty `items`. | **Fail** |
-| Exact citation / locator replay | Unmeasured: no response crossed strict JSON validation. | Not reached |
-| Names, numbers, negation | Unmeasured: no response crossed strict JSON validation. | Not reached |
-| Repeatability | For each of the 12 fixture IDs, all five raw response SHA-256 values and all outcome codes matched. The repeatable result was malformed output, not a repeatable valid note. | Syntax gate still fails |
-| Cold latency | 20.33 s, 19.25 s, 18.98 s whole-suite wall time; median 19.25 s (30 s ceiling). | Pass on this machine |
-| Warm latency | 23.931 s and 23.353 s per suite in one loaded process (15 s ceiling). | **Fail** |
-| Peak memory | Largest `time -l` peak footprint: 2,024,900,336 bytes; largest maximum resident set: 1,176,272,896 bytes (4,282,063,304-byte ceiling). | Pass on this machine |
-| Human semantic/usefulness review | No candidate output passed the mechanical boundary. | Not reached; required for any future admission |
-
-`mlx-community/Qwen2.5-1.5B-Instruct-4bit` is therefore **rejected for this
-automatic-note admission protocol**. It is not admitted, no product runtime
-or schema has changed, and the selected model's advertised JSON capability did
-not survive this exact constrained extraction test. This finding applies only
-to the pinned model, registered prompt/template/decoding settings, and
-synthetic fixture suite; it is not a claim about MLX, PyTorch, Qwen generally,
-or automatic-note product readiness.
-
-## 2026-08-02 rejected SmolLM2 measurement
+## 2026-08-02 SmolLM2 measurement — inconclusive
 
 This measurement used no meeting recording, Preview data, or product record.
 It used the `synthetic_transcript()` fixture in this module and a disposable
@@ -203,11 +208,8 @@ The exact non-cache inventory was:
 | `vocab.json` | `82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79` |
 
 The first prompt form exceeded the candidate tokenizer's declared 2,048-token
-limit (2,541 tokens). The harness now limits this first experiment to one
-canonical anchor per candidate and one source reference per output, then reran
-the same fixture. That reduces context and is not a semantic-quality result.
-
-This candidate is **not admitted**. It failed the structured-output syntax gate
-on every measured run, so exact locator, semantic usefulness, and human-review
-gates were not reached. The disposable dependency set also differs from the
-shipped MLX runtime; no runtime replacement is justified by this result.
+limit (2,541 tokens). The harness then reduced the context. Because neither
+historical prompt advertised the strict parser shape, the recorded output
+digest is not valid syntax-gate evidence. SmolLM2 remains **unadmitted**;
+locator, semantic usefulness, human review, and fair latency classification
+remain unmeasured. No runtime replacement is justified by this result.

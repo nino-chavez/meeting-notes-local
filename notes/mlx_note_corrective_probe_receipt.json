@@ -1,0 +1,79 @@
+{
+  "schema": "mlx-note-corrective-probe/1",
+  "scope": "synthetic-only; one supported and one empty-candidate fixture",
+  "disposition": "rejected-not-admitted; full suite not run",
+  "harness": {
+    "base_revision": "bf95c063000eb4e6829c13f1383f188ee9445774",
+    "source_sha256": "d181abe4e3f12f8b73596b8b41a891f417d2b392f5b07ba10c15c03e410404ff"
+  },
+  "model": {
+    "repository": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+    "revision": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
+    "inventory_bytes": 880172064,
+    "tree_sha256_before": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+    "tree_sha256_after": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95"
+  },
+  "runtime": {
+    "model_load_elapsed_s": 1.071534,
+    "peak_rss": 1171488768,
+    "python": "3.14.6",
+    "mlx_lm": "0.30.4",
+    "mlx": "0.32.0",
+    "transformers": "5.0.0rc1",
+    "package_metadata_sha256": {
+      "mlx-lm": {
+        "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b",
+        "record": "012d425bc9461f3226a3036ab2a890eb8f91f1dee1bf4e0088c1a466537d2084"
+      },
+      "mlx": {
+        "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8",
+        "record": "1d649a411e73e1518f0e8360f17ffe44442ff516ab88651f1b4f30e7f9ee4e43"
+      },
+      "transformers": {
+        "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0",
+        "record": "ea5b7cabec85b39ec2eeacf92f4bd275e7969f3aeff57e8f39713a31d79c00b2"
+      }
+    }
+  },
+  "calls": [
+    {
+      "phase": "cold-call",
+      "id": "ordinary-decision",
+      "control_outcome": "accepted-research-candidate",
+      "outcome": "transcript-only",
+      "code": "response-json-syntax",
+      "refusal_category": "json-syntax",
+      "elapsed_s": 2.870265,
+      "response_bytes": 345,
+      "response_sha256": "e244bd14ed15d32790e93ba6a3583382249cde427c7e3599408a3cab1c7f6338",
+      "request_sha256": "9b8ce25050d1eb7eb3a6743eb67b40e13f10250bb09a03e508568ceab6b60c7e",
+      "rendered_template_sha256": "38e07789e410459170ec5fb2f45eb80bdc17ef7dfcfece122cc4570c44282565",
+      "prompt_tokens": 496,
+      "generated_tokens": 181,
+      "finish_reason": "stop"
+    },
+    {
+      "phase": "warm-call",
+      "id": "abstain-chitchat",
+      "control_outcome": "transcript-only",
+      "control_code": "no-deterministic-candidates",
+      "outcome": "transcript-only",
+      "code": "response-contract",
+      "refusal_category": "root-schema-field-order-or-type",
+      "elapsed_s": 0.374206,
+      "response_bytes": 2,
+      "response_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "request_sha256": "15a529714265c980d2d29ec115a332a1f8e52853c8cc14b4b30dc1757a626eae",
+      "rendered_template_sha256": "953be5959e83610851b1e01bbc237f4e810aefe8dbc41dffdc17881bb11cea5f",
+      "prompt_tokens": 267,
+      "generated_tokens": 2,
+      "finish_reason": "stop"
+    }
+  ],
+  "unperformed_gates": [
+    "exact-citation-locator-replay",
+    "names-numbers-negation",
+    "repeatability",
+    "human-semantic-usefulness-review"
+  ]
+}

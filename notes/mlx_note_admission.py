@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import platform
 import time
 from collections.abc import Callable
 from copy import deepcopy
@@ -48,6 +49,7 @@ from transcript import NONE, Transcript, Turn
 
 ADMISSION_SCHEMA = "mlx-note-admission/1"
 MODEL_RESPONSE_SCHEMA = "mlx-note-response/1"
+HARNESS_BASE_REVISION = "bf95c063000eb4e6829c13f1383f188ee9445774"
 
 # This is a research pin, not a release manifest.  The revision pins the MLX
 # conversion before download.  The measured local model-tree digest binds the
@@ -55,9 +57,29 @@ MODEL_RESPONSE_SCHEMA = "mlx-note-response/1"
 MLX_RUNTIME = {
     "schema": "mlx-note-runtime/1",
     "role": "research-only",
-    "python": "3.12",
+    "python": "3.14.6",
     "package": "mlx-lm==0.30.4",
     "package_license": "MIT",
+    "runtime_identity": {
+        "python": "3.14.6",
+        "implementation": "CPython",
+        "mlx": "0.32.0",
+        "transformers": "5.0.0rc1",
+        "package_metadata_sha256": {
+            "mlx-lm": {
+                "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b",
+                "record": "012d425bc9461f3226a3036ab2a890eb8f91f1dee1bf4e0088c1a466537d2084",
+            },
+            "mlx": {
+                "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8",
+                "record": "1d649a411e73e1518f0e8360f17ffe44442ff516ab88651f1b4f30e7f9ee4e43",
+            },
+            "transformers": {
+                "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0",
+                "record": "ea5b7cabec85b39ec2eeacf92f4bd275e7969f3aeff57e8f39713a31d79c00b2",
+            },
+        },
+    },
     "model": {
         "repository": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
         "revision": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
@@ -66,7 +88,7 @@ MLX_RUNTIME = {
         "expected_download_bytes": 880172064,
         "expected_model_safetensors_sha256": "0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717",
         "expected_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
-        "status": "measured-rejected-not-admitted",
+        "status": "corrective-probe-rejected-not-admitted",
     },
     "decoding": {
         "temperature": 0.0,
@@ -124,34 +146,50 @@ def _strict_json(raw: str) -> object:
     def pairs(items: list[tuple[str, object]]) -> tuple[tuple[str, object], ...]:
         names = [name for name, _ in items]
         if len(names) != len(set(names)):
-            raise AdmissionRefused("malformed-response")
+            raise AdmissionRefused("response-contract")
         return tuple(items)
 
     if not isinstance(raw, str) or not raw.strip():
-        raise AdmissionRefused("malformed-response")
+        raise AdmissionRefused("response-json-syntax")
     try:
         return json.loads(raw, object_pairs_hook=pairs)
     except json.JSONDecodeError as exc:
-        raise AdmissionRefused("malformed-response") from exc
+        raise AdmissionRefused("response-json-syntax") from exc
 
 
 def _object(value: object, names: tuple[str, ...]) -> dict:
     if not isinstance(value, tuple) or tuple(name for name, _ in value) != names:
-        raise AdmissionRefused("malformed-response")
+        raise AdmissionRefused("response-contract")
     return dict(value)
 
 
 def response_contract(manifest: dict) -> dict:
-    """The prompt contract; the parser below remains the actual boundary."""
+    """Exact strict root and item ordering accepted by ``_decode_response``."""
     return {
         "schema": MODEL_RESPONSE_SCHEMA,
-        "type": "object",
-        "ordered_fields": [
-            "candidate_id", "source_fragment_ids", "citation", "label", "claim",
-        ],
-        "labels": ["DECISION", "ACTION", "PROPOSAL", "QUESTION"],
-        "source_reference_limit": 1,
-        "claim_character_limit": 160,
+        "root": {
+            "type": "object",
+            "ordered_fields": ["items"],
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "item": {
+                        "type": "object",
+                        "ordered_fields": [
+                            "candidate_id", "source_fragment_ids", "citation", "label", "claim",
+                        ],
+                        "properties": {
+                            "candidate_id": {"type": "string", "enum": [row["candidate_id"] for row in _admission_candidates(manifest)]},
+                            "source_fragment_ids": {"type": "array", "min_items": 1, "max_items": 3},
+                            "citation": {"type": "string"},
+                            "label": {"type": "string", "enum": ["DECISION", "ACTION", "PROPOSAL", "QUESTION"]},
+                            "claim": {"type": "string", "min_length": 1, "max_length": 160},
+                        },
+                    },
+                },
+            },
+        },
+        "empty_response": {"items": []},
     }
 
 
@@ -203,7 +241,7 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
     root = _object(_strict_json(raw), ("items",))
     rows = root["items"]
     if not isinstance(rows, list):
-        raise AdmissionRefused("malformed-response")
+        raise AdmissionRefused("response-contract")
     candidate_rows = request["candidates"]
     candidates = {row["candidate_id"]: row for row in candidate_rows}
     fragment_map = build_fragment_map(transcript)
@@ -221,13 +259,13 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
         )
         candidate_id = row["candidate_id"]
         if not isinstance(candidate_id, str) or candidate_id not in candidates:
-            raise AdmissionRefused("unknown-candidate")
+            raise AdmissionRefused("citation-locator")
         if candidate_id in seen:
-            raise AdmissionRefused("duplicate-candidate")
+            raise AdmissionRefused("response-contract")
         seen.add(candidate_id)
         candidate_position = candidate_rows.index(candidates[candidate_id])
         if candidate_position <= last_candidate_position:
-            raise AdmissionRefused("candidates-out-of-order")
+            raise AdmissionRefused("response-contract")
         last_candidate_position = candidate_position
         source_ids = row["source_fragment_ids"]
         if (
@@ -236,28 +274,28 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
             or any(not isinstance(value, str) for value in source_ids)
             or len(source_ids) != len(set(source_ids))
         ):
-            raise AdmissionRefused("malformed-response")
+            raise AdmissionRefused("response-contract")
         allowed = [
             fragment["source_fragment_id"]
             for fragment in candidates[candidate_id]["source_fragments"]
         ]
         if any(value not in allowed or value not in fragments for value in source_ids):
-            raise AdmissionRefused("unknown-source-fragment")
+            raise AdmissionRefused("citation-locator")
         positions = [allowed.index(value) for value in source_ids]
         if positions != sorted(positions):
-            raise AdmissionRefused("source-fragments-out-of-order")
+            raise AdmissionRefused("citation-locator")
         citation = row["citation"]
         if not isinstance(citation, str):
-            raise AdmissionRefused("malformed-response")
+            raise AdmissionRefused("response-contract")
         primary = fragments[source_ids[0]]
         if source_ids[0] in used_primary_fragments:
-            raise AdmissionRefused("duplicate-primary-source")
+            raise AdmissionRefused("citation-locator")
         used_primary_fragments.add(source_ids[0])
         canonical_citation = transcript.turns[primary["turn"]].text[
             primary["char_start"]:primary["char_end"]
         ]
         if citation != canonical_citation:
-            raise AdmissionRefused("citation-mismatch")
+            raise AdmissionRefused("citation-locator")
         label = row["label"]
         claim = row["claim"]
         if (
@@ -268,7 +306,7 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
             or len(claim) > 160
             or any(ord(character) < 32 for character in claim)
         ):
-            raise AdmissionRefused("malformed-response")
+            raise AdmissionRefused("response-contract")
         selected.append({
             "source_fragment_ids": source_ids,
             "label": label,
@@ -277,18 +315,47 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
     return selected
 
 
-def _runtime_receipt(observed: dict, expected_tree_sha256: str) -> dict:
-    required = {"package", "model_tree_sha256"}
+def _harness_identity() -> dict:
+    return {
+        "base_revision": HARNESS_BASE_REVISION,
+        "source_sha256": _sha256(Path(__file__).read_bytes()),
+    }
+
+
+def _refusal_category(code: str) -> str:
+    if code == "response-json-syntax":
+        return "json-syntax"
+    if code == "response-contract":
+        return "root-schema-field-order-or-type"
+    if code == "citation-locator":
+        return "citation-source-or-locator"
+    if code == "response-length-truncation":
+        return "length-or-truncation"
+    return "other-refusal"
+
+
+def _runtime_receipt(observed: dict, expected_request_sha256: str) -> dict:
+    required = {
+        "model_tree_sha256", "runtime_identity", "request_sha256",
+        "rendered_template_sha256", "generation",
+    }
     if not isinstance(observed, dict) or set(observed) != required:
         raise AdmissionRefused("model-digest-mismatch")
-    if observed["package"] != MLX_RUNTIME["package"]:
+    if observed["runtime_identity"] != MLX_RUNTIME["runtime_identity"]:
         raise AdmissionRefused("runtime-package-mismatch")
-    if observed["model_tree_sha256"] != expected_tree_sha256:
+    if observed["model_tree_sha256"] != MLX_RUNTIME["model"]["expected_tree_sha256"]:
         raise AdmissionRefused("model-digest-mismatch")
+    if observed["request_sha256"] != expected_request_sha256:
+        raise AdmissionRefused("response-contract")
+    generation = observed["generation"]
+    if not isinstance(generation, dict) or set(generation) != {
+        "call_elapsed_s", "prompt_tokens", "generated_tokens", "finish_reason",
+    }:
+        raise AdmissionRefused("response-contract")
     return {
-        "runtime": deepcopy(MLX_RUNTIME),
+        "registered_runtime": deepcopy(MLX_RUNTIME),
         "observed": dict(observed),
-        "expected_model_tree_sha256": expected_tree_sha256,
+        "harness": _harness_identity(),
     }
 
 
@@ -427,7 +494,14 @@ def transcript_only(arm: str, code: str, receipt: dict) -> AdmissionResult:
         outcome="transcript-only",
         code=code,
         note=None,
-        receipt={"schema": ADMISSION_SCHEMA, "arm": arm, "outcome": "transcript-only", "code": code, **receipt},
+        receipt={
+            "schema": ADMISSION_SCHEMA,
+            "arm": arm,
+            "outcome": "transcript-only",
+            "code": code,
+            "refusal_category": _refusal_category(code),
+            **receipt,
+        },
     )
 
 
@@ -479,33 +553,73 @@ def run_control_arm(transcript: Transcript) -> AdmissionResult:
 def run_model_arm(
     transcript: Transcript,
     provider: ModelProvider,
-    *,
-    expected_model_tree_sha256: str,
 ) -> AdmissionResult:
     """Run a supplied local provider and fail closed to canonical transcript-only."""
     manifest = generate_manifest(transcript, STRATEGY_CUE)
     request = model_request(transcript, manifest)
     started = time.monotonic()
-    response_receipt: dict[str, str] = {}
+    response_receipt: dict[str, object] = {}
     try:
         raw, observed = provider(request)
-        response_receipt = {"response_sha256": _sha256(raw)}
-        runtime = _runtime_receipt(observed, expected_model_tree_sha256)
+    except TimeoutError:
+        return transcript_only("mlx", "timeout", {
+            "manifest_sha256": manifest["manifest_sha256"],
+            "elapsed_s": round(time.monotonic() - started, 6),
+        })
+    except Exception as exc:
+        return transcript_only("mlx", "provider-generation-failure", {
+            "error_type": type(exc).__name__,
+            "manifest_sha256": manifest["manifest_sha256"],
+            "elapsed_s": round(time.monotonic() - started, 6),
+        })
+    try:
+        response_receipt = {
+            "response_sha256": _sha256(raw),
+            "response_bytes": len(raw.encode("utf-8")),
+            "generation": observed.get("generation") if isinstance(observed, dict) else None,
+        }
+        expected_request_sha256 = _sha256(_canonical_json({
+            "system": request["system"],
+            "user": {key: value for key, value in request.items() if key != "system"},
+        }))
+        runtime = _runtime_receipt(observed, expected_request_sha256)
+        response_receipt["identity"] = {
+            "model_tree_sha256": observed["model_tree_sha256"],
+            "request_sha256": observed["request_sha256"],
+            "rendered_template_sha256": observed["rendered_template_sha256"],
+            "runtime_identity": observed["runtime_identity"],
+            "harness": runtime["harness"],
+        }
+        if observed["generation"].get("finish_reason") == "length":
+            raise AdmissionRefused("response-length-truncation")
         rows = _decode_response(raw, request, transcript)
         if not rows:
             raise AdmissionRefused("no-model-candidates")
         identity = {
             "requested": MLX_RUNTIME["model"]["repository"] + "@" + MLX_RUNTIME["model"]["revision"],
             "name": MLX_RUNTIME["model"]["repository"],
-            "digest": expected_model_tree_sha256,
+            "digest": MLX_RUNTIME["model"]["expected_tree_sha256"],
         }
         note = _note2_candidate(transcript, rows, model_identity=identity, arm="mlx")
     except TimeoutError:
-        return transcript_only("mlx", "timeout", {"manifest_sha256": manifest["manifest_sha256"], **response_receipt})
+        return transcript_only("mlx", "timeout", {
+            "manifest_sha256": manifest["manifest_sha256"],
+            "elapsed_s": round(time.monotonic() - started, 6),
+            **response_receipt,
+        })
     except AdmissionRefused as exc:
-        return transcript_only("mlx", exc.code, {"manifest_sha256": manifest["manifest_sha256"], **response_receipt})
+        return transcript_only("mlx", exc.code, {
+            "manifest_sha256": manifest["manifest_sha256"],
+            "elapsed_s": round(time.monotonic() - started, 6),
+            **response_receipt,
+        })
     except Exception as exc:
-        return transcript_only("mlx", "note2-validation-failed", {"error": type(exc).__name__, "manifest_sha256": manifest["manifest_sha256"], **response_receipt})
+        return transcript_only("mlx", "note2-validation-failed", {
+            "error_type": type(exc).__name__,
+            "manifest_sha256": manifest["manifest_sha256"],
+            "elapsed_s": round(time.monotonic() - started, 6),
+            **response_receipt,
+        })
     return AdmissionResult(
         arm="mlx",
         outcome="accepted-research-candidate",
@@ -527,22 +641,49 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
     if not model_directory.is_dir():
         raise ValueError("model directory does not exist")
 
-    loaded: tuple[object, object] | None = None
+    preflight_tree_sha256 = tree_sha256(model_directory)
+    if preflight_tree_sha256 != MLX_RUNTIME["model"]["expected_tree_sha256"]:
+        raise AdmissionRefused("model-digest-mismatch")
+    try:
+        package = importlib.metadata.version("mlx-lm")
+        import mlx
+        import mlx.core as mx
+        from mlx_lm import load, stream_generate
+        from mlx_lm.sample_utils import make_sampler
+    except (ImportError, importlib.metadata.PackageNotFoundError) as exc:
+        raise AdmissionRefused("runtime-package-mismatch") from exc
+
+    def package_sha256(name: str, filename: str) -> str:
+        distribution = importlib.metadata.distribution(name)
+        target = next(
+            (item for item in distribution.files or () if item.name == filename),
+            None,
+        )
+        if target is None:
+            raise AdmissionRefused("runtime-package-mismatch")
+        return _sha256(distribution.locate_file(target).read_bytes())
+
+    runtime_identity = {
+        "python": platform.python_version(),
+        "implementation": platform.python_implementation(),
+        "mlx": mlx.__version__ if hasattr(mlx, "__version__") else importlib.metadata.version("mlx"),
+        "transformers": importlib.metadata.version("transformers"),
+        "package_metadata_sha256": {
+            name: {
+                "metadata": package_sha256(name, "METADATA"),
+                "record": package_sha256(name, "RECORD"),
+            }
+            for name in ("mlx-lm", "mlx", "transformers")
+        },
+    }
+    if f"mlx-lm=={package}" != MLX_RUNTIME["package"] or runtime_identity != MLX_RUNTIME["runtime_identity"]:
+        raise AdmissionRefused("runtime-package-mismatch")
+
+    loaded_started = time.monotonic()
+    model, tokenizer = load(str(model_directory))
+    load_elapsed_s = round(time.monotonic() - loaded_started, 6)
 
     def provider(request: dict) -> tuple[str, dict]:
-        nonlocal loaded
-        try:
-            package = importlib.metadata.version("mlx-lm")
-            import mlx.core as mx
-            from mlx_lm import generate, load
-            from mlx_lm.sample_utils import make_sampler
-        except (ImportError, importlib.metadata.PackageNotFoundError) as exc:
-            raise AdmissionRefused("runtime-package-mismatch") from exc
-        if f"mlx-lm=={package}" != MLX_RUNTIME["package"]:
-            raise AdmissionRefused("runtime-package-mismatch")
-        if loaded is None:
-            loaded = load(str(model_directory))
-        model, tokenizer = loaded
         mx.random.seed(MLX_RUNTIME["decoding"]["seed"])
         # The selected model's documented chat template receives the instruction separately;
         # keep it out of the canonical user payload so an instruction-like
@@ -553,20 +694,51 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
             {"role": "user", "content": _canonical_json(user_request)},
         ]
         prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-        raw = generate(
+        rendered_template_sha256 = _sha256(_canonical_json(prompt))
+        started = time.monotonic()
+        chunks: list[str] = []
+        prompt_tokens: object = "unavailable"
+        generated_tokens: object = "unavailable"
+        finish_reason: object = None
+        finish_reason_available = False
+        for response in stream_generate(
             model,
             tokenizer,
             prompt=prompt,
             max_tokens=MLX_RUNTIME["decoding"]["max_tokens"],
             max_kv_size=MLX_RUNTIME["decoding"]["max_kv_size"],
             sampler=make_sampler(temp=MLX_RUNTIME["decoding"]["temperature"]),
-            verbose=False,
-        )
+        ):
+            chunks.append(response.text)
+            response_prompt_tokens = getattr(response, "prompt_tokens", None)
+            if isinstance(response_prompt_tokens, int):
+                prompt_tokens = response_prompt_tokens
+            response_generated_tokens = getattr(response, "generation_tokens", None)
+            if isinstance(response_generated_tokens, int):
+                generated_tokens = response_generated_tokens
+            response_finish_reason = getattr(response, "finish_reason", None)
+            if response_finish_reason is not None:
+                finish_reason = response_finish_reason
+                finish_reason_available = True
+        raw = "".join(chunks)
         return raw, {
-            "package": MLX_RUNTIME["package"],
-            "model_tree_sha256": tree_sha256(model_directory),
+            "model_tree_sha256": preflight_tree_sha256,
+            "runtime_identity": runtime_identity,
+            "request_sha256": _sha256(_canonical_json({"system": request["system"], "user": user_request})),
+            "rendered_template_sha256": rendered_template_sha256,
+            "generation": {
+                "call_elapsed_s": round(time.monotonic() - started, 6),
+                "prompt_tokens": prompt_tokens,
+                "generated_tokens": generated_tokens,
+                "finish_reason": finish_reason if finish_reason_available else "unavailable",
+            },
         }
 
+    setattr(provider, "load_receipt", {
+        "model_load_elapsed_s": load_elapsed_s,
+        "preflight_model_tree_sha256": preflight_tree_sha256,
+        "runtime_identity": runtime_identity,
+    })
     return provider
 
 
@@ -623,6 +795,11 @@ def synthetic_measurement_fixtures() -> tuple[tuple[str, Transcript, str, tuple[
         ("abstain-chitchat", Transcript("synthetic", NONE, [Turn("The weather was pleasant and the coffee was warm.")]), "transcript-only", ()),
         ("abstain-plain", Transcript("synthetic", NONE, [Turn("The window is open.")]), "transcript-only", ()),
     )
+
+
+def synthetic_corrective_probe_fixtures() -> tuple[tuple[str, Transcript, str, tuple[str, ...]], ...]:
+    fixtures = {fixture[0]: fixture for fixture in synthetic_measurement_fixtures()}
+    return (fixtures["ordinary-decision"], fixtures["abstain-chitchat"])
 
 
 def main() -> int:

@@ -1,86 +1,96 @@
 #!/usr/bin/env python3
-"""Run only the registered synthetic MLX note-candidate measurement.
+"""Run a content-free synthetic MLX note-candidate probe.
 
-The emitted receipt is content-free: fixture identifiers, outcomes, digests,
-timings, and boolean checks only.  It never opens a product store or writes a
-note artifact.
+The only persisted data is identifiers, hashes, sizes, timings, and refusal
+classes. It never writes a note artifact or retains a transcript/model reply.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import resource
 import time
 from pathlib import Path
 
 from mlx_note_admission import (
+    MLX_RUNTIME,
     _canonical_json,
+    _harness_identity,
     local_mlx_provider,
+    run_control_arm,
     run_model_arm,
+    synthetic_corrective_probe_fixtures,
     synthetic_measurement_fixtures,
+    tree_sha256,
 )
 from summarize import structured_artifact_citations
+
+
+def fixture_receipt(phase: str, identifier: str, transcript, expected_outcome: str, required_terms, provider) -> dict:
+    control = run_control_arm(transcript)
+    result = run_model_arm(transcript, provider)
+    citations = []
+    if result.note is not None:
+        citations = [row["citation"] for row in structured_artifact_citations(result.note, transcript)["items"]]
+    joined = "\n".join(citations).casefold()
+    checks = {
+        "control_expected": control.outcome == (
+            "accepted-research-candidate" if expected_outcome == "accepted-research-candidate" else "transcript-only"
+        ),
+        "expected_outcome": result.outcome == expected_outcome,
+        "required_citation_terms": all(term.casefold() in joined for term in required_terms),
+        "strict_empty_abstention": expected_outcome != "transcript-only" or result.code == "no-model-candidates",
+    }
+    return {
+        "phase": phase,
+        "id": identifier,
+        "control": {"outcome": control.outcome, "code": control.code},
+        "outcome": result.outcome,
+        "code": result.code,
+        "refusal_category": result.receipt.get("refusal_category"),
+        "error_type": result.receipt.get("error_type"),
+        "elapsed_s": result.receipt.get("elapsed_s"),
+        "response_sha256": result.receipt.get("response_sha256"),
+        "response_bytes": result.receipt.get("response_bytes"),
+        "generation": result.receipt.get("generation"),
+        "identity": result.receipt.get("identity"),
+        "checks": checks,
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-directory", required=True, type=Path)
-    parser.add_argument("--tree-sha256", required=True)
-    parser.add_argument("--phase", required=True, choices=("cold-1", "cold-2", "cold-3", "warm"))
+    parser.add_argument("--scope", required=True, choices=("probe", "full"))
     args = parser.parse_args()
+    fixtures = synthetic_corrective_probe_fixtures() if args.scope == "probe" else synthetic_measurement_fixtures()
 
+    preflight_tree_sha256 = tree_sha256(args.model_directory)
+    if preflight_tree_sha256 != MLX_RUNTIME["model"]["expected_tree_sha256"]:
+        raise SystemExit("model tree does not match registered identity")
     provider = local_mlx_provider(args.model_directory)
-    started = time.monotonic()
-    runs = []
-    passed = True
-    for run_index in range(2 if args.phase == "warm" else 1):
-        run_started = time.monotonic()
-        fixtures = []
-        run_passed = True
-        for identifier, transcript, expected_outcome, required_terms in synthetic_measurement_fixtures():
-            result = run_model_arm(
-                transcript,
-                provider,
-                expected_model_tree_sha256=args.tree_sha256,
-            )
-            citations: list[str] = []
-            if result.note is not None:
-                citations = [
-                    row["citation"]
-                    for row in structured_artifact_citations(result.note, transcript)["items"]
-                ]
-            joined_citations = "\n".join(citations).casefold()
-            checks = {
-                "expected_outcome": result.outcome == expected_outcome,
-                "required_citation_terms": all(term.casefold() in joined_citations for term in required_terms),
-                "strict_abstention": (
-                    expected_outcome != "transcript-only"
-                    or (result.outcome == "transcript-only" and result.code == "no-model-candidates")
-                ),
-            }
-            run_passed = run_passed and all(checks.values())
-            fixtures.append({
-                "id": identifier,
-                "outcome": result.outcome,
-                "code": result.code,
-                "response_sha256": result.receipt.get("response_sha256"),
-                "checks": checks,
-            })
-        passed = passed and run_passed
-        runs.append({
-            "index": run_index + 1,
-            "elapsed_s": round(time.monotonic() - run_started, 6),
-            "passed": run_passed,
-            "fixtures": fixtures,
-        })
+    load = getattr(provider, "load_receipt")
+
+    cold = fixture_receipt("cold-call", *fixtures[0], provider)
+    warm = fixture_receipt("warm-call", *fixtures[1], provider)
+    postflight_tree_sha256 = tree_sha256(args.model_directory)
+    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    passed = all(all(row["checks"].values()) for row in (cold, warm)) and postflight_tree_sha256 == preflight_tree_sha256
     receipt = {
-        "schema": "mlx-note-measurement/1",
-        "phase": args.phase,
-        "fixture_count": len(runs[0]["fixtures"]),
-        "run_count": len(runs),
-        "elapsed_s": round(time.monotonic() - started, 6),
+        "schema": "mlx-note-corrective-probe/1",
+        "scope": args.scope,
+        "harness": _harness_identity(),
+        "registered_model": {
+            "repository": MLX_RUNTIME["model"]["repository"],
+            "revision": MLX_RUNTIME["model"]["revision"],
+            "tree_sha256": MLX_RUNTIME["model"]["expected_tree_sha256"],
+        },
+        "preflight_tree_sha256": preflight_tree_sha256,
+        "postflight_tree_sha256": postflight_tree_sha256,
+        "load": load,
+        "peak_rss": peak_rss,
+        "calls": [cold, warm],
         "passed": passed,
-        "runs": runs,
     }
     print(_canonical_json(receipt))
     return 0 if passed else 1

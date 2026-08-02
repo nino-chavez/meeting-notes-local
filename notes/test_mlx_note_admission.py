@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -11,8 +12,12 @@ sys.path.insert(0, str(ROOT / "notes"))
 
 from mlx_note_admission import (
     MLX_RUNTIME,
+    _decode_response,
+    _sha256,
+    model_request,
     run_control_arm,
     run_model_arm,
+    synthetic_corrective_probe_fixtures,
     synthetic_measurement_fixtures,
     synthetic_transcript,
     tree_sha256,
@@ -21,23 +26,58 @@ from candidate_first import STRATEGY_CUE, generate_manifest
 from summarize import structured_artifact_citations
 
 
-MODEL_TREE_DIGEST = "b" * 64
-
-
-def accepted_provider(request: dict) -> tuple[str, dict]:
+def advertised_response(request: dict, *, empty: bool = False) -> str:
+    contract = request["response_contract"]
+    root = contract["root"]
+    root_field = root["ordered_fields"][0]
+    if empty:
+        return json.dumps(contract["empty_response"], separators=(",", ":"))
     candidate = request["candidates"][0]
     fragment = candidate["source_fragments"][0]
-    raw = json.dumps({"items": [{
+    fields = root["properties"][root_field]["item"]["ordered_fields"]
+    values = {
         "candidate_id": candidate["candidate_id"],
         "source_fragment_ids": [fragment["source_fragment_id"]],
         "citation": fragment["text"],
-        "label": "DECISION",
+        "label": contract["root"]["properties"][root_field]["item"]["properties"]["label"]["enum"][0],
         "claim": "Use the compact battery.",
-    }]}, separators=(",", ":"))
-    return raw, {"package": MLX_RUNTIME["package"], "model_tree_sha256": MODEL_TREE_DIGEST}
+    }
+    return json.dumps({root_field: [{field: values[field] for field in fields}]}, separators=(",", ":"))
+
+
+def observed_identity(request: dict) -> dict:
+    user_request = {key: value for key, value in request.items() if key != "system"}
+    return {
+        "model_tree_sha256": MLX_RUNTIME["model"]["expected_tree_sha256"],
+        "runtime_identity": deepcopy(MLX_RUNTIME["runtime_identity"]),
+        "request_sha256": _sha256(json.dumps({"system": request["system"], "user": user_request}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
+        "rendered_template_sha256": "a" * 64,
+        "generation": {
+            "call_elapsed_s": 0.1,
+            "prompt_tokens": "unavailable",
+            "generated_tokens": "unavailable",
+            "finish_reason": "stop",
+        },
+    }
+
+
+def accepted_provider(request: dict) -> tuple[str, dict]:
+    return advertised_response(request), observed_identity(request)
 
 
 class MlxNoteAdmissionTests(unittest.TestCase):
+    def test_advertised_contract_nonempty_and_empty_shapes_pass_unchanged_parser(self) -> None:
+        transcript = synthetic_transcript()
+        manifest = generate_manifest(transcript, STRATEGY_CUE)
+        request = model_request(transcript, manifest)
+        self.assertEqual(request["response_contract"]["root"]["ordered_fields"], ["items"])
+        self.assertEqual(
+            request["response_contract"]["root"]["properties"]["items"]["item"]["ordered_fields"],
+            ["candidate_id", "source_fragment_ids", "citation", "label", "claim"],
+        )
+        self.assertEqual(len(_decode_response(advertised_response(request), request, transcript)), 1)
+        self.assertEqual(_decode_response(advertised_response(request, empty=True), request, transcript), [])
+
     def test_synthetic_measurement_plan_has_registered_coverage(self) -> None:
         fixtures = synthetic_measurement_fixtures()
         self.assertEqual(len(fixtures), 12)
@@ -55,6 +95,11 @@ class MlxNoteAdmissionTests(unittest.TestCase):
             else:
                 self.assertEqual(control.outcome, expected)
 
+    def test_corrective_probe_has_one_supported_and_one_empty_candidate_fixture(self) -> None:
+        fixtures = synthetic_corrective_probe_fixtures()
+        self.assertEqual([fixture[0] for fixture in fixtures], ["ordinary-decision", "abstain-chitchat"])
+        self.assertEqual([fixture[2] for fixture in fixtures], ["accepted-research-candidate", "transcript-only"])
+
     def test_research_model_manifest_is_immutable_and_has_a_download_budget(self) -> None:
         model = MLX_RUNTIME["model"]
         self.assertEqual(model["repository"], "mlx-community/Qwen2.5-1.5B-Instruct-4bit")
@@ -67,7 +112,7 @@ class MlxNoteAdmissionTests(unittest.TestCase):
             model["expected_tree_sha256"],
             "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
         )
-        self.assertEqual(model["status"], "measured-rejected-not-admitted")
+        self.assertEqual(model["status"], "corrective-probe-rejected-not-admitted")
 
 
     def test_control_arm_is_repeatable_and_replays_existing_note2_validation(self) -> None:
@@ -81,7 +126,7 @@ class MlxNoteAdmissionTests(unittest.TestCase):
 
     def test_model_arm_accepts_only_pinned_runtime_and_exact_canonical_citation(self) -> None:
         result = run_model_arm(
-            synthetic_transcript(), accepted_provider, expected_model_tree_sha256=MODEL_TREE_DIGEST
+            synthetic_transcript(), accepted_provider
         )
         self.assertEqual(result.outcome, "accepted-research-candidate")
         assert result.note is not None
@@ -92,52 +137,61 @@ class MlxNoteAdmissionTests(unittest.TestCase):
         transcript = synthetic_transcript()
         request_manifest = generate_manifest(transcript, STRATEGY_CUE)
         candidate = request_manifest["candidates"][0]
-        fragment = candidate["anchor_fragment_id"]
-
         def malformed(_request: dict) -> tuple[str, dict]:
-            return "{", {"package": MLX_RUNTIME["package"], "model_tree_sha256": MODEL_TREE_DIGEST}
+            return "{", observed_identity(_request)
 
         def unknown(_request: dict) -> tuple[str, dict]:
-            return json.dumps({"items": [{
-                "candidate_id": "unknown", "source_fragment_ids": [fragment],
-                "citation": "x", "label": "DECISION", "claim": "x",
-            }]}), {"package": MLX_RUNTIME["package"], "model_tree_sha256": MODEL_TREE_DIGEST}
+            raw = json.loads(advertised_response(_request))
+            raw["items"][0]["candidate_id"] = "unknown"
+            return json.dumps(raw), observed_identity(_request)
 
         def mismatch(_request: dict) -> tuple[str, dict]:
-            return json.dumps({"items": [{
-                "candidate_id": candidate["candidate_id"], "source_fragment_ids": [fragment],
-                "citation": "not canonical words", "label": "DECISION", "claim": "x",
-            }]}), {"package": MLX_RUNTIME["package"], "model_tree_sha256": MODEL_TREE_DIGEST}
+            raw = json.loads(advertised_response(_request))
+            raw["items"][0]["citation"] = "not canonical words"
+            return json.dumps(raw), observed_identity(_request)
 
         def unknown_source(_request: dict) -> tuple[str, dict]:
-            return json.dumps({"items": [{
-                "candidate_id": candidate["candidate_id"], "source_fragment_ids": ["unknown"],
-                "citation": "x", "label": "DECISION", "claim": "x",
-            }]}), {"package": MLX_RUNTIME["package"], "model_tree_sha256": MODEL_TREE_DIGEST}
+            raw = json.loads(advertised_response(_request))
+            raw["items"][0]["source_fragment_ids"] = ["unknown"]
+            return json.dumps(raw), observed_identity(_request)
+
+        def wrong_root(_request: dict) -> tuple[str, dict]:
+            return "[]", observed_identity(_request)
+
+        def truncated(_request: dict) -> tuple[str, dict]:
+            observed = observed_identity(_request)
+            observed["generation"]["finish_reason"] = "length"
+            return advertised_response(_request), observed
 
         def timeout(_request: dict) -> tuple[str, dict]:
             raise TimeoutError()
 
         def changed_digest(request: dict) -> tuple[str, dict]:
             raw, _ = accepted_provider(request)
-            return raw, {"package": MLX_RUNTIME["package"], "model_tree_sha256": "c" * 64}
+            observed = observed_identity(request)
+            observed["model_tree_sha256"] = "c" * 64
+            return raw, observed
 
         def changed_package(request: dict) -> tuple[str, dict]:
             raw, _ = accepted_provider(request)
-            return raw, {"package": "mlx-lm==0.0.0", "model_tree_sha256": MODEL_TREE_DIGEST}
+            observed = observed_identity(request)
+            observed["runtime_identity"]["mlx"] = "0.0.0"
+            return raw, observed
 
         expected = {
-            malformed: "malformed-response",
-            unknown: "unknown-candidate",
-            mismatch: "citation-mismatch",
-            unknown_source: "unknown-source-fragment",
+            malformed: "response-json-syntax",
+            unknown: "citation-locator",
+            mismatch: "citation-locator",
+            unknown_source: "citation-locator",
+            wrong_root: "response-contract",
+            truncated: "response-length-truncation",
             timeout: "timeout",
             changed_digest: "model-digest-mismatch",
             changed_package: "runtime-package-mismatch",
         }
         for provider, code in expected.items():
             with self.subTest(code=code):
-                result = run_model_arm(transcript, provider, expected_model_tree_sha256=MODEL_TREE_DIGEST)
+                result = run_model_arm(transcript, provider)
                 self.assertEqual(result.outcome, "transcript-only")
                 self.assertEqual(result.code, code)
                 self.assertIsNone(result.note)

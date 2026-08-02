@@ -24,12 +24,10 @@
     "maximum_resident_set_bytes": 1176272896
   },
   "result": {
-    "outcome": "rejected-not-admitted",
-    "outcome_code": "malformed-response",
-    "malformed_response_calls": 60,
-    "accepted_note2_calls": 0,
-    "valid_empty_abstention_calls": 0,
-    "repeatable_raw_response_hashes": true,
+    "outcome": "inconclusive-protocol-measurement-not-admitted",
+    "advertised_contract_complete": false,
+    "historical_response_classification": "not-evidence",
+    "historical_latency_classification": "not-evidence",
     "unmeasured_gates": [
       "exact-citation-locator-replay",
       "names-numbers-negation",
