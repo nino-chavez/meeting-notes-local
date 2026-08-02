@@ -46,7 +46,7 @@ human gate.
 | Wave | Current status and active stream | Join or exit | Human gate | ETA |
 |---|---|---|---|---|
 | A. Alpha release closure | The unchanged signed alpha is waiting for its natural one-day deletion event and a clean Mac or account transfer. PR #2 stays draft. | Bind both receipts to the frozen build, then reconcile the draft PR and release record. | Real transfer, permissions, capture, recovery, and deletion observation. | 1–3 calendar days |
-| B. Shared-contract freeze | Complete and independently audited. Rust owns the exact correction/regeneration records, JavaScript-facing command shapes, worker shapes, recovery classification, artifact joins, and terminal meeting-byte receipt. Both runtimes parse the shared `product-operations-v1.json` fixture. The operations remain unadvertised until their implementations exist. | Implementation streams may branch from the audited revision; each must return through the fixture and full verification join. | None. | Complete 2026-08-01 |
+| B. Shared-contract freeze | Reopened only for the note-projector launch boundary. Implementation proved that supported macOS exposes no descriptor-based executable launch, so the audited wording required an impossible primitive. The correction below keeps the signed interpreter, standard library, and dynamic libraries inside the release trust boundary and descriptor-retains every manifest-listed bridge-controlled resource. All other correction/regeneration, worker, recovery, artifact, receipt, and fixture contracts remain frozen. | Independently audit the narrow macOS correction, then refreeze it before admitting the real projector transport. | None. | Correction in progress 2026-08-01 |
 | C. Trust foundation | In progress. The independently audited restoration coordinator covers every durable phase and refuses simultaneous storage mutation. The development-only profile bridge now validates and consumes quarantined candidates without following links, trusting unsafe ownership or modes, overwriting installed bytes, or crashing the worker on malformed data. An audited crate-private manual action reuses `audio-deletion/1` for not-yet-due audio and refuses active or crashed product operations. A private, unregistered desktop facade now requires a closed reviewed confirmation and holds the process writer lock through the target lease, operation scan, and staged deletion/recovery path. No Tauri command or alpha UI is registered. The durable profile-reset contract is frozen; reset and guided enrolment remain. | Implement reset and enrolment, then exercise real profile, withheld-turn, and reviewed deletion paths before command admission. | Retention-policy wording and far-end-notice choices; real profile and withheld-turn decisions. | Cumulative 1–2 weeks |
 | D. Evidence-linked automatic notes | In progress. An independently audited private coordinator carries an injected note request through worker result, exact artifact reinspection, meeting-pointer update, and terminal commit. Accepted notes advance to `ready`; artifact-free rejection advances to `summary-failed`; every durable phase has fresh-coordinator recovery. An independently audited, inspect-only harness now also proves the closed one-shot worker transport, retained artifact snapshots, actual runtime/resource identity, path confinement, and content-free refusal mapping without creating app data or receipts. No generator/model candidate is admitted: the prior list-generating runs failed attribution, compactness, latency, or context bounds, while the registered broad candidate-first classifier has not run. | Obtain human approval of the exact pending event-ledger lock, run the preregistered broad classifier experiment, and build a fixed-cardinality claim-writing experiment only if every registered gate passes. Choose a bundle-owned runtime/model and add the create bridge only after that evidence; the inspect-only harness remains mechanical evidence. | Event-ledger lock approval, then semantic support and usefulness adjudication. | Additional 2–3 weeks after the registered experiment passes |
 | E. Product surfaces and retrieval | In progress. The frozen Tauri correction/regeneration facade remains unregistered. An independently audited private Rust reader now rebuilds a bounded, nonpersisted projection for all seven safe meeting lifecycles. It gives transcript authority only to transcript-bearing rows, reads the exact owner-only `library/metadata.json` contract without following unsafe nodes, performs exact normalized transcript/title/folder search, keeps withheld and malformed metadata text out of debug output, and reopens only projection-owned hits after fresh artifact reinspection. It makes no storage writes and has no Tauri command or UI. Claims, current-note precedence, restored views, pagination, mutations, corpus bounds, and the product surfaces remain. | Add current accepted claims and note precedence around this executable spine, then implement paging and the working reader surfaces. Pass the synthetic corpus and cold interaction review before intentionally registering commands. | Cold operator review of the working surfaces. | Additional 2–3 weeks, partly parallel with D |
@@ -259,15 +259,60 @@ ASCII restricted to letters, digits, `.`, `_`, `-`, and `/`; empty components,
 two-space pretty UTF-8 JSON in this field order with no terminal newline.
 `role: inspect` and `role: project` require `generator: null` and `models: []`; `role: create`
 requires an admitted generator and its complete nonempty model inventory.
-Before spawn, Rust opens every listed resource without following links, requires
-a regular bundle-owned file, hashes its bytes, and compares the result with the
-manifest. The child independently repeats those checks before ready. It must
-load the generator and model only from those resolved verified files, keep their
-file identity stable through load, and recheck size, owner, mode, device, inode,
-and digest before emitting ready. A library that can only reopen an unpinned
-pathname does not meet this contract. Ready echoes the digest of verified
-manifest bytes only after the actual loaded resources pass; echoing a supplied
-digest is not evidence.
+macOS has no supported `fexecve` or `execveat` equivalent and refuses execution
+through `/dev/fd`. The executable therefore has a deliberately separate trust
+boundary from the resources it loads. A product-admitted interpreter must be a
+nested Mach-O named by the closed bundle manifest, signed with the same Developer
+ID team as the strictly verified outer application, covered by the hardened
+runtime, and bound by its exact SHA-256. Release verification checks the nested
+signature, team, path, digest, outer signature, notarization, and Gatekeeper
+result. Rust also opens and hashes that path without following links immediately
+before spawn. Those pre-spawn signature, path, and digest checks are the launch
+trust boundary; the current worker may receive the fixed storage root at spawn.
+Rust then refuses the child before sending a command or meeting identifier unless
+the spawned PID resolves to the same regular-file identity and digest. This is a
+platform-signed executable boundary, not descriptor-pinned execution.
+Development or ad-hoc executables cannot satisfy product admission.
+The interpreter's packaged standard library and dynamic libraries remain inside
+that same strictly verified signed-runtime boundary; they are not
+bridge-controlled manifest resources and are not described as descriptor-pinned.
+
+Every manifest-listed bridge-controlled resource remains descriptor-pinned. Rust opens the
+resource root with Darwin `O_NOFOLLOW_ANY | O_DIRECTORY | O_CLOEXEC`, then opens
+the manifest, bridge, validator, generator, and models relative to that retained
+root with `openat` and `O_NOFOLLOW_ANY | O_CLOEXEC`. It requires regular
+bundle-owned files, hashes their descriptor bytes, and compares them with the
+manifest. The parent descriptors remain `O_CLOEXEC`. Child-only `dup2` actions
+map them to closed deterministic descriptor numbers and clear close-on-exec only
+on those duplicates immediately before launching the interpreter. The
+bootstrap is compiled into the signed Rust application and passed as the fixed
+Python `-c` program; it is not another bundle pathname. For bridge-controlled
+resources, the interpreter receives only those descriptor numbers. Its other
+fixed launch inputs are the compiled bootstrap, fixed storage root, and expected
+parent PID. It receives or reopens no bridge-resource pathname. The bootstrap
+hashes and executes the bridge bytes from its inherited descriptor, and the
+bridge loads the manifest, validator, generator, and models from their inherited
+descriptors. It rechecks size, owner, mode, device, inode, and digest before
+ready. A library that reopens a bridge-resource pathname does not meet this
+contract. Ready echoes the digest of the
+descriptor-read manifest only after the actually loaded resources pass; echoing
+a supplied digest is not evidence.
+
+This boundary protects against stale, linked, replaced, or mismatched bundle
+resources and against sending meeting authority to an unverified child. It does
+not claim to contain a malicious process already running as the owning macOS
+account; that account already has direct authority over the owner-only meeting
+store. A future requirement to defend against that actor would require a
+separately sandboxed, monolithic signed helper and a new security contract.
+
+Three implementable shapes were compared after the descriptor-execution audit
+failed:
+
+| Shape | Consequence | Decision |
+|---|---|---|
+| Port the Python note validator into Rust | Removes the interpreter boundary but creates the second semantic authority this role exists to avoid. | Rejected. |
+| Copy a verified interpreter and resources into a private request snapshot | Conflicts with the receipt-free temporary-copy prohibition and adds a transient writable-executable publication, cleanup, and crash-recovery surface while still relying on a pathname at `exec`. | Rejected. |
+| Use the signed nested interpreter and inherit verified resource descriptors | Matches the existing signed-app boundary, keeps one Python semantic authority, and removes pathname reopening for every bridge-controlled byte. | Chosen. |
 
 The ready frame is exactly:
 
@@ -390,14 +435,19 @@ operation must equal that command.
 A frame is at most 65,536 bytes including its newline; stderr is capped at 16
 KiB and may not contain meeting text. Ready is bounded to 10 seconds and
 inspection or projection to 30 seconds. The initial 15-minute creation ceiling is provisional
-until cold-start measurement. Timeout, cancellation, malformed output, extra
-frames, or identity mismatch terminates the one-shot process group, waits 750
-milliseconds, then kills and waits if needed. Closing the parent's liveness pipe
-also ends the child. The child may not detach, create a new session, or mask or
-close the liveness signal. The first bridge version forbids generator/model
+until cold-start measurement. Timeout, explicit cancellation, malformed output,
+extra frames, or identity mismatch terminates the one-shot process group, waits
+750 milliseconds, then kills and waits if needed. The transport accepts one
+cloneable cancellation token and polls it while waiting for ready, result, or
+exit; cancellation has a distinct internal outcome and may not publish a partial
+snapshot. On macOS the child watches the expected parent PID with `kqueue`
+`EVFILT_PROC | NOTE_EXIT`, checks its parent before and after registering that
+watch, and exits if the parent changes or ends. This avoids the non-atomic
+`pipe` then `FD_CLOEXEC` window on a platform without `pipe2`. The child may not
+detach, create a new session, or mask or close the parent watch. The first bridge version forbids generator/model
 subprocesses, so the owned group contains only the direct one-shot child;
 admitting descendants later requires a new ownership contract. Normal
-shutdown closes liveness, stops, and waits for the one-shot group.
+shutdown stops and waits for the one-shot group.
 
 Each create or inspect spawn that participates in a durable note operation gets
 a UUID request directory below that operation:
