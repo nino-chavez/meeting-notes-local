@@ -89,18 +89,23 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
 }
 
 #[test]
-fn production_and_preview_share_the_product_window_size() {
+fn production_and_preview_keep_their_intentional_window_sizes() {
     let production = config(include_str!("../tauri.conf.json"));
     let preview = config(include_str!("../tauri.preview.conf.json"));
 
-    for config in [&production, &preview] {
-        let window = &config["app"]["windows"][0];
-        assert_eq!(window["width"], 960);
-        assert_eq!(window["height"], 900);
-        assert_eq!(window["minWidth"], 720);
-        assert_eq!(window["minHeight"], 560);
-        assert_eq!(window["resizable"], true);
-    }
+    let production_window = &production["app"]["windows"][0];
+    assert_eq!(production_window["width"], 960);
+    assert_eq!(production_window["height"], 900);
+    assert_eq!(production_window["minWidth"], 720);
+    assert_eq!(production_window["minHeight"], 560);
+    assert_eq!(production_window["resizable"], true);
+
+    let preview_window = &preview["app"]["windows"][0];
+    assert_eq!(preview_window["width"], 1080);
+    assert_eq!(preview_window["height"], 900);
+    assert_eq!(preview_window["minWidth"], 800);
+    assert_eq!(preview_window["minHeight"], 640);
+    assert_eq!(preview_window["resizable"], true);
 }
 
 #[test]

@@ -43,7 +43,9 @@ const stopButton = document.querySelector("#stop-button");
 const stopError = document.querySelector("#stop-error");
 const retryStartup = document.querySelector("#retry-startup");
 const productNav = document.querySelector("#product-nav");
+const findLink = document.querySelector("#find-link");
 const meetingsLink = document.querySelector("#meetings-link");
+const promisesLink = document.querySelector("#promises-link");
 const profileLink = document.querySelector("#profile-link");
 const workflowReturn = document.querySelector("#workflow-return");
 const startMeetingAction = document.querySelector("#start-meeting-action");
@@ -63,6 +65,7 @@ const librarySearch = document.querySelector("#library-search");
 const librarySearchQuery = document.querySelector("#library-search-query");
 const librarySearchSubmit = librarySearch.querySelector("button[type=\"submit\"]");
 const librarySearchResults = document.querySelector("#library-search-results");
+const findStart = document.querySelector("#find-start");
 const meetingDetailState = document.querySelector("#meeting-detail-state");
 const meetingDetailTitle = document.querySelector("#meeting-detail-title");
 const meetingDetailLede = document.querySelector("#meeting-detail-lede");
@@ -95,7 +98,7 @@ let startedAt = null;
 let elapsedTimer = null;
 let meetingAudioDeletionHandle = "";
 let currentScreen = "startup-screen";
-let productRootScreen = "meetings-screen";
+let productRootScreen = "find-screen";
 let transcriptReturnContext = null;
 let routeRevision = 0;
 let findNavigationBusy = false;
@@ -149,13 +152,17 @@ function showScreen(id, { resetScroll = false, focus = true } = {}) {
 
 function syncProductNavigation() {
   const settingsActive = currentScreen === "profile-screen";
-  const productActive = [
-    "meetings-screen",
-    "meeting-detail-screen",
-    "library-transcript-screen",
-  ].includes(currentScreen);
-  if (productActive && !settingsActive) meetingsLink.setAttribute("aria-current", "page");
-  else meetingsLink.removeAttribute("aria-current");
+  const directRoot = ["find-screen", "meetings-screen", "promises-screen"].includes(currentScreen)
+    ? currentScreen
+    : productRootScreen;
+  for (const [link, destination] of [
+    [findLink, "find-screen"],
+    [meetingsLink, "meetings-screen"],
+    [promisesLink, "promises-screen"],
+  ]) {
+    if (!settingsActive && directRoot === destination) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
   if (settingsActive) profileLink.setAttribute("aria-current", "page");
   else profileLink.removeAttribute("aria-current");
 }
@@ -250,6 +257,7 @@ function renderCaptureAction(snapshot) {
     currentScreen,
   });
   productNav.hidden = !policy.showProductNavigation;
+  profileLink.hidden = !policy.showProductNavigation;
   startMeetingAction.hidden = !policy.showStart;
   stopButton.hidden = !policy.showStop;
   stopButton.disabled = policy.stopDisabled;
@@ -280,7 +288,7 @@ async function initializeLibraryReader() {
 }
 
 function initializeFindInBackground() {
-  void refreshFindView();
+  if (currentScreen === "find-screen") void refreshFindView();
 }
 
 function invalidateLibraryHandles() {
@@ -481,7 +489,7 @@ function renderAudioRetention(retention, deletionHandle = "") {
     return;
   }
   meetingRetentionTitle.textContent = "Recording retention needs attention";
-  meetingRetentionPolicy.textContent = retention.message || "Audio retention details are unavailable. Reopen Library and try again.";
+  meetingRetentionPolicy.textContent = retention.message || "Audio retention details are unavailable. Return to Meetings and try again.";
   meetingRetentionConsequence.textContent = "No recording action is available from this Preview view.";
 }
 
@@ -494,8 +502,8 @@ function renderLibrary(snapshot) {
     empty.textContent = snapshot.state === "empty"
       ? "No retained meetings yet. Finish a recording to see it here."
       : snapshot.state === "unavailable"
-        ? "The local library is not available yet. No retained meeting or transcript was opened."
-        : "Some retained meetings could not be read. Reopen Library and try again.";
+        ? "Meetings are not available yet. No retained meeting or transcript was opened."
+        : "Some retained meetings could not be read. Try loading Meetings again.";
     libraryList.append(empty);
     return;
   }
@@ -515,10 +523,12 @@ function renderLibrary(snapshot) {
     const label = document.createElement("strong");
     label.textContent = row.label || "Untitled meeting";
     const time = document.createElement("small");
-    time.textContent = formatMeetingTime(row.createdAtEpochSeconds);
+    time.textContent = row.transcriptAvailable
+      ? formatMeetingTime(row.createdAtEpochSeconds)
+      : `${formatMeetingTime(row.createdAtEpochSeconds)} · No transcript`;
     summary.append(label, time);
     const action = document.createElement("span");
-    action.textContent = row.transcriptAvailable ? "Open meeting" : "No transcript was created";
+    action.textContent = row.transcriptAvailable ? "Open meeting" : "Open details";
     button.append(summary, action);
     libraryList.append(button);
   }
@@ -526,6 +536,7 @@ function renderLibrary(snapshot) {
 
 function renderLibrarySearch(response) {
   librarySearchResults.replaceChildren();
+  findStart.hidden = true;
   clearError(libraryNotice);
   if (response.state !== "results" && response.state !== "results-incomplete") {
     setError(libraryNotice, response.message || "No retained text matched that search.");
@@ -567,7 +578,11 @@ function renderLibrarySearch(response) {
     row.append(summary, action);
     librarySearchResults.append(row);
   }
-  setError(libraryNotice, response.message || "Exact results from your retained meetings.");
+  const resultCount = (response.results || []).length;
+  const resultMessage = response.state === "results-incomplete"
+    ? response.message
+    : `${resultCount} exact ${resultCount === 1 ? "match" : "matches"} found.`;
+  setError(libraryNotice, resultMessage || "Exact results from your retained meetings.");
 }
 
 function renderStartup(state) {
@@ -614,7 +629,7 @@ function render(snapshot) {
 
   switch (capture) {
     case "idle":
-      setHeaderState("Ready · nothing is recording");
+      setHeaderState("Ready");
       endElapsed();
       if (workflowOwnsRoute && currentScreen !== "idle-screen") {
         showWorkflowScreen(snapshot, { resetScroll: true });
@@ -626,7 +641,7 @@ function render(snapshot) {
       updateStartButton();
       break;
     case "arming":
-      setHeaderState("Preparing · nothing is recording");
+      setHeaderState("Preparing recording");
       endElapsed();
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "arming-screen" });
       break;
@@ -654,7 +669,7 @@ function render(snapshot) {
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "processing-screen" });
       break;
     case "transcript-ready":
-      setHeaderState("Transcript ready · nothing is recording");
+      setHeaderState("Transcript ready");
       endElapsed();
       if (workflowOwnsRoute) {
         renderTranscript(snapshot);
@@ -662,7 +677,7 @@ function render(snapshot) {
       }
       break;
     default:
-      setHeaderState("Nothing is recording · needs attention");
+      setHeaderState("Needs attention");
       endElapsed();
       document.querySelector("#error-detail").textContent = snapshot.error || "The attempt stopped before a validated transcript was ready.";
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "error-screen" });
@@ -684,18 +699,28 @@ async function rebuildMeetingsView() {
   }
 }
 
-async function openFind() {
-  await openMeetings();
+async function openFind({ resetQuery = false } = {}) {
+  if (!invoke) return;
+  if (resetQuery) librarySearchQuery.value = "";
+  selectProductScreen("find-screen");
+  await refreshFindView();
 }
 
-async function openMeetings() {
+async function openMeetings({ resetFind = false } = {}) {
   if (!invoke) return;
+  if (resetFind) librarySearchQuery.value = "";
   selectProductScreen("meetings-screen");
   await rebuildMeetingsView();
 }
 
+async function openPromises({ resetFind = false } = {}) {
+  if (resetFind) librarySearchQuery.value = "";
+  invalidateLibraryHandles();
+  selectProductScreen("promises-screen", { resetScroll: true });
+}
+
 function showStartTransitionError() {
-  startTransitionError.textContent = "The current meeting could not be closed safely. A new consent form was not opened. Return to Library and try again.";
+  startTransitionError.textContent = "The current meeting could not be closed safely. A new consent form was not opened. Return to Find and try again.";
   showScreen("start-meeting-error-screen", { resetScroll: true });
 }
 
@@ -764,7 +789,15 @@ async function openProfile() {
 }
 
 async function returnToProductHome() {
-  await openMeetings();
+  if (productRootScreen === "meetings-screen") {
+    await openMeetings();
+    return;
+  }
+  if (productRootScreen === "promises-screen") {
+    await openPromises();
+    return;
+  }
+  await openFind();
 }
 
 function returnToWorkflow() {
@@ -776,7 +809,7 @@ function returnToWorkflow() {
 }
 
 function reportLibraryOpenFailure(messageText) {
-  if (productRootScreen === "meetings-screen" && currentScreen === "meeting-detail-screen") {
+  if (currentScreen === "meeting-detail-screen") {
     message(meetingDetailState, messageText, "stale");
     return;
   }
@@ -841,7 +874,12 @@ function renderMeetingDetail(response) {
   meetingOpenTranscript.hidden = !presentation.canOpenTranscript;
   meetingDetailState.dataset.meetingId = response.meetingId || "";
   renderAudioRetention(response.audioRetention, response.audioDeletionHandle);
-  message(meetingDetailState, response.message || "Opening retained meeting…", response.state || "");
+  const statusCopy = presentation.kind === "transcript-only"
+    ? "Transcript available. Automatic notes are not available yet."
+    : presentation.kind === "metadata-only"
+      ? "Meeting details are available. No transcript was created."
+      : response.message || "Opening retained meeting…";
+  message(meetingDetailState, statusCopy, response.state || "");
   if (response.state !== "note") {
     meetingNoNote.hidden = presentation.kind === "note";
     return;
@@ -894,7 +932,7 @@ async function openMeetingDetail(handle, returnScreen = "meetings-screen", contr
     return true;
   } catch {
     if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
-    message(meetingDetailState, "That meeting could not be opened. Return to Library and try again.", "stale");
+    message(meetingDetailState, "That meeting could not be opened. Return to Meetings and try again.", "stale");
     meetingNoNote.hidden = true;
     return false;
   } finally {
@@ -954,7 +992,7 @@ async function restoreMeetingDetailAfterTranscript(context, transition) {
     if (snapshot) renderLibrary(snapshot);
     productRootScreen = "meetings-screen";
     showScreen("meetings-screen", { resetScroll: false });
-    document.querySelector("#library-copy").textContent = "That meeting could not be reopened from the fresh library view.";
+    document.querySelector("#library-copy").textContent = "That meeting could not be reopened from the refreshed Meetings view.";
     return false;
   }
 }
@@ -992,7 +1030,7 @@ async function openMeetingEvidence(handle, meetingId, claim, control) {
     const result = await invoke("preview_library_open_evidence", { handle, locatorOrdinal: 0 });
     if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
     if (result.state !== "evidence" || !result.transcriptHandle || !Number.isInteger(result.sourceTurnIndex)) {
-      message(meetingDetailState, result.message || "That claim is no longer current. Return to Library and try again.", result.state || "stale");
+      message(meetingDetailState, result.message || "That claim is no longer current. Return to Meetings and try again.", result.state || "stale");
       return false;
     }
     return await openLibraryTranscript(result.transcriptHandle, {
@@ -1002,7 +1040,7 @@ async function openMeetingEvidence(handle, meetingId, claim, control) {
     }, returnContext, transition);
   } catch {
     if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
-    message(meetingDetailState, "That claim could not be opened. Return to Library and try again.", "stale");
+    message(meetingDetailState, "That claim could not be opened. Return to Meetings and try again.", "stale");
     return false;
   } finally {
     finishHandleTransition(transition);
@@ -1017,10 +1055,15 @@ function setFindRefreshBusy(busy) {
 
 async function performFindRefresh() {
   const revision = routeRevision;
-  const ownsRoute = () => currentScreen === "meetings-screen" && routeRevision === revision;
+  const ownsRoute = () => currentScreen === "find-screen" && routeRevision === revision;
   const query = librarySearchQuery.value.trim();
-  if (query) setError(libraryNotice, "Searching your retained meetings…");
-  else clearError(libraryNotice);
+  findStart.hidden = Boolean(query);
+  if (query) {
+    setError(libraryNotice, "Searching your retained meetings…");
+  } else {
+    clearError(libraryNotice);
+    librarySearchResults.replaceChildren();
+  }
   try {
     await refreshFindGeneration(query, {
       isCurrent: ownsRoute,
@@ -1033,14 +1076,13 @@ async function performFindRefresh() {
     });
     if (!query && ownsRoute()) {
       clearError(libraryNotice);
-      const snapshot = await initializeLibraryReader();
-      if (ownsRoute()) renderLibrary(snapshot);
+      findStart.hidden = false;
     }
     return { revision, ok: true };
   } catch {
     if (ownsRoute()) {
       invalidateLibraryHandles();
-      setError(libraryNotice, "Search is unavailable right now. Reopen Library and try again.");
+      setError(libraryNotice, "Search is unavailable right now. Try Find again.");
     }
     return { revision, ok: false };
   }
@@ -1052,7 +1094,7 @@ async function refreshFindView() {
   setFindRefreshBusy(true);
   try {
     const result = await findRefreshOperation.run();
-    if (currentScreen === "meetings-screen"
+    if (currentScreen === "find-screen"
         && requestedRevision === routeRevision
         && result.revision !== routeRevision) {
       return refreshFindView();
@@ -1073,12 +1115,12 @@ async function openLibrarySearchResult(handle, control = null) {
   claimExplicitRoute();
   const transition = beginHandleTransition("open-search-result", control);
   if (!transition) return false;
-  productRootScreen = "meetings-screen";
+  productRootScreen = "find-screen";
   invalidateLibraryHandles();
   setError(libraryNotice, "Opening the selected retained result…");
   try {
     const result = await invoke("preview_library_open_search_result", { handle });
-    if (!currentTransitionOwnsRoute(transition, "meetings-screen")) return false;
+    if (!currentTransitionOwnsRoute(transition, "find-screen")) return false;
     if (!result.transcriptHandle || result.state === "withheld") {
       setError(libraryNotice, result.message || "That result cannot be opened as visible transcript text. Run the search again to continue.");
       return false;
@@ -1096,7 +1138,7 @@ async function openLibrarySearchResult(handle, control = null) {
       : null;
     return await openLibraryTranscript(result.transcriptHandle, exactMatch, null, transition);
   } catch {
-    if (!currentTransitionOwnsRoute(transition, "meetings-screen")) return false;
+    if (!currentTransitionOwnsRoute(transition, "find-screen")) return false;
     setError(libraryNotice, "That search result could not be opened. Run the search again to continue.");
     return false;
   } finally {
@@ -1158,11 +1200,10 @@ async function dismissAttemptAndReturnFind(control) {
       afterOwnedDismiss: invalidateLibraryHandles,
     });
     if (!admitted) return;
-    if (currentScreen !== "meetings-screen") {
-      productRootScreen = "meetings-screen";
-      selectProductScreen("meetings-screen", { resetScroll: true });
-      await rebuildMeetingsView();
-    }
+    productRootScreen = "find-screen";
+    librarySearchQuery.value = "";
+    selectProductScreen("find-screen", { resetScroll: true });
+    await refreshFindView();
   } catch {
     if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
   } finally {
@@ -1186,9 +1227,10 @@ async function returnToFindAfterStartError(control) {
       return;
     }
     if (!workflowRouteIsCurrent(routeToken)) return;
-    productRootScreen = "meetings-screen";
-    selectProductScreen("meetings-screen");
-    await rebuildMeetingsView();
+    productRootScreen = "find-screen";
+    librarySearchQuery.value = "";
+    selectProductScreen("find-screen");
+    await refreshFindView();
   } finally {
     if (control) control.disabled = false;
   }
@@ -1254,11 +1296,13 @@ retryStartup.addEventListener("click", async () => {
   acceptCommandSnapshot(snapshot);
 });
 
-meetingsLink.addEventListener("click", openMeetings);
+findLink.addEventListener("click", () => openFind({ resetQuery: true }));
+meetingsLink.addEventListener("click", () => openMeetings({ resetFind: true }));
+promisesLink.addEventListener("click", () => openPromises({ resetFind: true }));
 profileLink.addEventListener("click", openProfile);
 workflowReturn.addEventListener("click", returnToWorkflow);
 startMeetingAction.addEventListener("click", openStartMeeting);
-document.querySelector("#start-back").addEventListener("click", openMeetings);
+document.querySelector("#start-back").addEventListener("click", returnToProductHome);
 document.querySelector("#start-transition-back").addEventListener(
   "click",
   (event) => returnToFindAfterStartError(event.currentTarget),
@@ -1291,11 +1335,11 @@ recordingDeleteConfirm.addEventListener("click", async () => {
     if (response.audioRetention) renderAudioRetention(response.audioRetention);
     message(meetingDetailState, response.message || "Recording deletion finished.", response.state || "");
     if (!response.audioRetention) {
-      recordingDeleteStatus.textContent = response.message || "Recording deletion could not complete. Reopen Library and try again.";
+      recordingDeleteStatus.textContent = response.message || "Recording deletion could not complete. Return to Meetings and try again.";
       recordingDeleteConfirm.disabled = true;
     }
   } catch {
-    recordingDeleteStatus.textContent = "Recording deletion could not complete. Reopen Library and try again.";
+    recordingDeleteStatus.textContent = "Recording deletion could not complete. Return to Meetings and try again.";
     recordingDeleteConfirm.disabled = true;
   }
 });

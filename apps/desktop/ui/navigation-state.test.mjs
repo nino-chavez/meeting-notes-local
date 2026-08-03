@@ -38,6 +38,7 @@ test("workflow routes advance only while they own the screen", () => {
 
   assert.equal(workflowScreenForSnapshot(recording), "recording-screen");
   assert.equal(workflowScreenForSnapshot(ready), "transcript-screen");
+  assert.equal(workflowScreenForSnapshot({ startup: "ready", capture: "idle" }), "find-screen");
   assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", false), "meetings-screen");
   assert.equal(resolvedScreenForSnapshot(ready, "profile-screen", false), "profile-screen");
   assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", true), "recording-screen");
@@ -83,6 +84,13 @@ test("header actions keep one recording control and offer a return to owned work
     headerActionPolicy(
       { preview: true, startup: "ready", capture: "idle" },
       { currentScreen: "meeting-detail-screen" },
+    ).showStart,
+    true,
+  );
+  assert.equal(
+    headerActionPolicy(
+      { preview: true, startup: "ready", capture: "idle" },
+      { currentScreen: "library-transcript-screen" },
     ).showStart,
     true,
   );
@@ -531,11 +539,14 @@ test("idle start is direct and other capture states refuse consent", async () =>
 });
 
 test("nested routes keep their real product root", () => {
-  assert.equal(rootForDestination("find-screen", "meetings-screen"), "meetings-screen");
+  assert.equal(rootForDestination("find-screen", "meetings-screen"), "find-screen");
+  assert.equal(rootForDestination("meetings-screen", "find-screen"), "meetings-screen");
+  assert.equal(rootForDestination("promises-screen", "find-screen"), "promises-screen");
   assert.equal(rootForDestination("meeting-detail-screen", "meetings-screen"), "meetings-screen");
-  assert.equal(rootForDestination("library-transcript-screen", "meetings-screen"), "meetings-screen");
+  assert.equal(rootForDestination("library-transcript-screen", "find-screen"), "find-screen");
+  assert.equal(rootForDestination("library-transcript-screen", "promises-screen"), "promises-screen");
   assert.equal(rootForDestination("profile-screen", "meetings-screen"), "meetings-screen");
-  assert.equal(rootForDestination("profile-screen", "unknown"), "meetings-screen");
+  assert.equal(rootForDestination("profile-screen", "unknown"), "find-screen");
 });
 
 test("returning restores scroll while new content starts at the top", () => {
@@ -652,7 +663,7 @@ test("metadata-only meeting detail is inspectable but never offers transcript te
       title: "Meeting details.",
       lede: "A transcript is not available from this retained meeting view.",
       fallbackTitle: "Transcript unavailable",
-      fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Library and try again.",
+      fallbackCopy: "No retained words or automatic note can be opened right now. Return to Meetings and try again.",
       canOpenTranscript: false,
     },
   );
@@ -663,7 +674,7 @@ test("metadata-only meeting detail is inspectable but never offers transcript te
       title: "Meeting unavailable.",
       lede: "This retained meeting could not be reopened. Its current transcript, note, and recording facts are unavailable in this view.",
       fallbackTitle: "Meeting unavailable",
-      fallbackCopy: "Reopen Library and try again.",
+      fallbackCopy: "Return to Meetings and try again.",
       canOpenTranscript: false,
     },
   );

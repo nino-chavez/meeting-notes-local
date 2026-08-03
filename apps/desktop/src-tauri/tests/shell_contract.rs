@@ -22,11 +22,11 @@ fn generated_preview_library_buttons_bind_their_own_activation() {
     assert!(shell.contains(
         "row.addEventListener(\"click\", () => openLibrarySearchResult(result.handle, row));"
     ));
-    assert!(shell.contains("const row = document.createElement(metadataOnly ? \"div\" : \"button\");"));
     assert!(
-        shell
-            .contains("row.transcriptAvailable ? \"Open meeting\" : \"No transcript was created\"")
+        shell.contains("const row = document.createElement(metadataOnly ? \"div\" : \"button\");")
     );
+    assert!(shell.contains("row.transcriptAvailable ? \"Open meeting\" : \"Open details\""));
+    assert!(shell.contains("`${formatMeetingTime(row.createdAtEpochSeconds)} · No transcript`"));
     assert!(!shell.contains("Transcript unavailable"));
     assert!(!shell.contains("libraryList.addEventListener(\"click\""));
     assert!(!shell.contains("librarySearchResults.addEventListener(\"click\""));
@@ -44,13 +44,17 @@ fn meeting_detail_status_helper_is_defined_before_use() {
 
     assert!(helper < first_call);
     assert!(shell[helper..first_call].contains("target.dataset.state = state;"));
+    assert!(shell.contains("Transcript available. Automatic notes are not available yet."));
+    assert!(shell.contains("Meeting details are available. No transcript was created."));
 }
 
 #[test]
 fn transcript_only_fallback_requires_a_current_transcript_handle() {
     let navigation = include_str!("../../ui/navigation-state.mjs");
 
-    assert!(navigation.contains("const transcriptAvailable = Boolean(response?.transcriptHandle);"));
+    assert!(
+        navigation.contains("const transcriptAvailable = Boolean(response?.transcriptHandle);")
+    );
     assert!(navigation.contains("response?.state === \"transcript-only\" && !transcriptAvailable"));
     assert!(navigation.contains("response?.state === \"summary-failed\" && !transcriptAvailable"));
     assert!(navigation.contains("canOpenTranscript: transcriptAvailable"));
@@ -302,13 +306,18 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     let styles = include_str!("../../ui/styles.css");
 
     assert!(html.contains("id=\"product-nav\""));
+    assert!(html.contains("id=\"find-link\" type=\"button\">Find"));
     assert!(html.contains("id=\"meetings-link\""));
-    assert!(html.contains("id=\"meetings-link\" type=\"button\">Library"));
-    assert!(html.contains("id=\"profile-link\" type=\"button\">Voice setup"));
+    assert!(html.contains("id=\"meetings-link\" type=\"button\">Meetings"));
+    assert!(html.contains("id=\"promises-link\" type=\"button\">Promises"));
+    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden>Settings"));
+    assert!(html.contains("id=\"find-screen\""));
     assert!(html.contains("id=\"meetings-screen\""));
-    assert!(!html.contains("id=\"find-link\""));
-    assert!(!html.contains("id=\"promises-link\""));
-    assert!(!html.contains("Promises are not available yet."));
+    assert!(html.contains("id=\"promises-screen\""));
+    assert!(html.contains("Automatic notes are not available yet."));
+    assert!(
+        html.contains("this view stays empty instead of guessing promises from transcript words")
+    );
     assert!(html.contains("id=\"library-transcript-screen\""));
     assert!(html.contains("id=\"meeting-detail-screen\""));
     assert!(html.contains("id=\"library-search\""));
@@ -316,11 +325,15 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(html.contains("id=\"workflow-return\" type=\"button\" hidden>View progress"));
     assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert!(html.contains("id=\"start-back\""));
-    assert!(styles.contains("html[data-screen=\"idle-screen\"] main { padding-bottom: var(--space-8); }"));
+    assert!(
+        styles
+            .contains("html[data-screen=\"idle-screen\"] main { padding-bottom: var(--space-8); }")
+    );
     assert!(styles.contains("html[data-screen=\"profile-screen\"] main { padding-top: var(--space-8); padding-bottom: var(--space-2); }"));
     assert!(html.contains("id=\"start-meeting-error-screen\""));
     assert!(script.contains("function syncProductNavigation()"));
-    assert!(script.contains("meetingsLink.setAttribute(\"aria-current\", \"page\")"));
+    assert!(script.contains("for (const [link, destination] of ["));
+    assert!(script.contains("link.setAttribute(\"aria-current\", \"page\")"));
     assert!(script.contains("initializeFindInBackground();"));
     assert!(script.contains("const libraryInitialization = createSingleFlight"));
     assert!(navigation.contains("export function createSingleFlight(loader)"));
@@ -338,7 +351,9 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(script.contains("preview_library_open_note"));
     assert!(script.contains("preview_library_open_evidence"));
     assert!(script.contains("preview_library_open_transcript"));
-    assert!(script.contains("const result = await invoke(\"preview_library_open_search_result\", { handle });"));
+    assert!(script.contains(
+        "const result = await invoke(\"preview_library_open_search_result\", { handle });"
+    ));
 }
 
 #[test]
@@ -347,8 +362,8 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     let script = include_str!("../../ui/main.js");
     let navigation = include_str!("../../ui/navigation-state.mjs");
 
-    assert!(html.contains("id=\"product-nav\" aria-label=\"Meeting notes\" hidden"));
-    assert!(html.contains("id=\"profile-link\" type=\"button\">Voice setup"));
+    assert!(html.contains("id=\"product-nav\" aria-label=\"Meeting memory\" hidden"));
+    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden>Settings"));
     assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert_eq!(html.matches("id=\"stop-button\"").count(), 1);
     assert!(html.contains("id=\"header-state\" role=\"status\" aria-atomic=\"true\""));
@@ -364,11 +379,17 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(script.contains("function renderConnectionUncertainty()"));
     assert!(script.contains("function setHeaderState(text)"));
     assert!(script.contains("changedStatusText(announcedHeaderState, text)"));
-    assert!(script.contains("connectionUncertaintyStatus(lastSnapshot?.capture, {\n    stopFailed: stopCommandFailed,"));
+    assert!(script.contains(
+        "connectionUncertaintyStatus(lastSnapshot?.capture, {\n    stopFailed: stopCommandFailed,"
+    ));
     assert!(script.contains("const snapshotRequestGate = createLatestRequestGate();"));
     assert!(script.contains("const REFRESH_SUPERSEDED = Symbol(\"refresh-superseded\");"));
-    assert!(navigation.contains("export function createFreshSnapshotOperation(refresh, superseded)"));
-    assert!(script.contains("const refreshCurrentOperation = createFreshSnapshotOperation(refresh, REFRESH_SUPERSEDED);"));
+    assert!(
+        navigation.contains("export function createFreshSnapshotOperation(refresh, superseded)")
+    );
+    assert!(script.contains(
+        "const refreshCurrentOperation = createFreshSnapshotOperation(refresh, REFRESH_SUPERSEDED);"
+    ));
     assert!(script.contains("pollTimer = window.setTimeout(refreshCurrent, delay);"));
     assert!(navigation.contains("export function acceptAuthoritativeSnapshot(snapshot, actions)"));
     assert!(navigation.contains("export function isDismissalReadySnapshot(snapshot)"));
@@ -380,15 +401,20 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(script.contains("const dismissMeetingOperation = createSingleFlight(async () => {"));
     assert!(script.contains("const snapshot = await invoke(\"dismiss_meeting\");\n  return acceptCommandSnapshot(snapshot);"));
     assert!(script.contains("const snapshot = await invoke(\"start_meeting\", request);\n    acceptCommandSnapshot(snapshot);"));
-    assert!(script.contains("const snapshot = await invoke(\"stop_meeting\");\n    acceptCommandSnapshot(snapshot);"));
-    assert!(script.contains("const snapshot = await invoke(\"retry_startup\");\n  acceptCommandSnapshot(snapshot);"));
+    assert!(script.contains(
+        "const snapshot = await invoke(\"stop_meeting\");\n    acceptCommandSnapshot(snapshot);"
+    ));
+    assert!(script.contains(
+        "const snapshot = await invoke(\"retry_startup\");\n  acceptCommandSnapshot(snapshot);"
+    ));
     assert!(!script.contains("render({ startup: \"diagnostic-written\", capture: \"idle\""));
     assert!(script.contains("if (currentScreen === id) routeRevision += 1;"));
     assert!(navigation.contains("export function resolvedScreenForSnapshot"));
     assert!(navigation.contains("export function mutableActionPolicy"));
     assert!(navigation.contains("export function headerActionPolicy"));
-    assert!(navigation.contains("currentScreen = \"meetings-screen\""));
-    assert!(navigation.contains("\"meetings-screen\", \"meeting-detail-screen\", \"profile-screen\""));
+    assert!(navigation.contains("currentScreen = \"find-screen\""));
+    assert!(navigation.contains("\"find-screen\","));
+    assert!(navigation.contains("\"promises-screen\","));
     assert!(navigation.contains("export function captureChannelPresentation(state)"));
     assert!(navigation.contains("export function headerStatusPresentation(snapshot)"));
     assert!(script.contains("headerStatusDot.dataset.state = headerStatusPresentation(snapshot);"));
@@ -396,10 +422,15 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(script.contains("renderChannelState(systemChannel, snapshot.system_state);"));
     assert!(navigation.contains("export function workflowReturnPolicy"));
     assert!(script.contains("workflowReturn.addEventListener(\"click\", returnToWorkflow);"));
-    assert!(script.contains("if (lastSnapshot.capture === \"transcript-ready\") renderTranscript(lastSnapshot);"));
+    assert!(script.contains(
+        "if (lastSnapshot.capture === \"transcript-ready\") renderTranscript(lastSnapshot);"
+    ));
 
-    let start = script.find("async function openMeetings()").unwrap();
-    let end = script[start..].find("function showStartTransitionError()").unwrap() + start;
+    let start = script.find("async function openMeetings(").unwrap();
+    let end = script[start..]
+        .find("function showStartTransitionError()")
+        .unwrap()
+        + start;
     let open_library = &script[start..end];
     assert!(open_library.contains("await rebuildMeetingsView();"));
     assert!(!open_library.contains("preview_library_open_"));
@@ -432,16 +463,16 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(script.contains("async function rebuildMeetingsView()"));
     assert!(script.contains("const snapshot = await initializeLibraryReader();"));
     assert!(!script.contains("latestLibrarySnapshot"));
-    assert!(script.contains("async function openFind()"));
-    assert!(script.contains("async function openMeetings()"));
+    assert!(script.contains("async function openFind("));
+    assert!(script.contains("async function openMeetings("));
+    assert!(script.contains("async function openPromises("));
     assert!(script.contains("async function returnToProductHome()"));
     assert!(script.contains("await openMeetings();"));
-    assert!(!script.contains("await openFind();"));
-    assert!(
-        script.contains(
-            "library-transcript-back\").addEventListener(\"click\", returnFromLibraryTranscript)"
-        )
-    );
+    assert!(script.contains("await openFind();"));
+    assert!(script.contains("await openPromises();"));
+    assert!(script.contains(
+        "library-transcript-back\").addEventListener(\"click\", returnFromLibraryTranscript)"
+    ));
     assert!(
         script.contains("meeting-detail-back\").addEventListener(\"click\", returnToProductHome)")
     );
@@ -450,9 +481,17 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(
         script.contains("const findRefreshOperation = createSingleFlight(performFindRefresh);")
     );
-    assert!(script.contains("librarySearchSubmit.disabled = findNavigationBusy || handleNavigationBusy;"));
-    assert!(!script.contains("for (const link of [findLink, meetingsLink, promisesLink]) link.disabled"));
-    assert!(script.contains("const ownsRoute = () => currentScreen === \"meetings-screen\" && routeRevision === revision;"));
+    assert!(
+        script
+            .contains("librarySearchSubmit.disabled = findNavigationBusy || handleNavigationBusy;")
+    );
+    assert!(
+        !script
+            .contains("for (const link of [findLink, meetingsLink, promisesLink]) link.disabled")
+    );
+    assert!(script.contains(
+        "const ownsRoute = () => currentScreen === \"find-screen\" && routeRevision === revision;"
+    ));
     assert!(script.contains("if (ownsRoute()) renderLibrarySearch(response);"));
     assert!(
         script
@@ -503,7 +542,7 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
                 .unwrap()
     );
     assert!(open_result.contains("Opening the selected retained result"));
-    assert!(!script.contains("librarySearchQuery.value = \"\""));
+    assert!(!open_result.contains("librarySearchQuery.value = \"\""));
 
     for (function, command) in [
         (
@@ -543,10 +582,10 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         package["scripts"]["test:ui"],
         "node --test ui/navigation-state.test.mjs"
     );
-    assert!(html.contains("id=\"new-meeting\" type=\"button\">Return to Library"));
-    assert!(html.contains("id=\"recover-button\" type=\"button\">Return to Library"));
+    assert!(html.contains("id=\"new-meeting\" type=\"button\">Return to Find"));
+    assert!(html.contains("id=\"recover-button\" type=\"button\">Return to Find"));
     assert!(!html.contains("Return to Start"));
-    assert!(script.contains("let productRootScreen = \"meetings-screen\";"));
+    assert!(script.contains("let productRootScreen = \"find-screen\";"));
     assert!(script.contains("productRootScreen = rootForDestination(id, productRootScreen);"));
     assert!(script.contains("screenScrollPositions.set(currentScreen, mainRegion.scrollTop)"));
     assert!(script.contains("heading.focus({ preventScroll: true })"));
@@ -561,7 +600,9 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     let settle_start = navigation.find("export function settleDismissal").unwrap();
     let settlement = &navigation[settle_start..start];
     let hidden_cleanup = settlement.find("actions.clearHiddenAttempt()").unwrap();
-    let admission = settlement.find("if (!isDismissalReadySnapshot(snapshot)) return false;").unwrap();
+    let admission = settlement
+        .find("if (!isDismissalReadySnapshot(snapshot)) return false;")
+        .unwrap();
     let visible_cleanup = settlement.find("actions.afterOwnedDismiss()").unwrap();
     assert!(transition.contains("return settleDismissal(snapshot, actions);"));
     assert!(hidden_cleanup < admission && admission < visible_cleanup);
@@ -577,22 +618,32 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     assert!(open.contains("dismiss: () => dismissMeetingOperation.run()"));
     assert!(open.contains("clearHiddenAttempt: () => clearAttemptReview(true)"));
     assert!(open.contains("afterOwnedDismiss: () => {\n        invalidateLibraryHandles();"));
-    assert!(open.contains("if (lastSnapshot?.capture === \"idle\" && !isDismissalReadySnapshot(lastSnapshot)) return;"));
+    assert!(open.contains(
+        "if (lastSnapshot?.capture === \"idle\" && !isDismissalReadySnapshot(lastSnapshot)) return;"
+    ));
     assert!(open.contains("showStartTransitionError()"));
 
-    let dismiss_start = script.find("async function dismissAttemptAndReturnFind").unwrap();
+    let dismiss_start = script
+        .find("async function dismissAttemptAndReturnFind")
+        .unwrap();
     let dismiss_end = script[dismiss_start..]
         .find("async function returnToFindAfterStartError")
         .unwrap()
         + dismiss_start;
     let dismiss_attempt = &script[dismiss_start..dismiss_end];
-    let shared_dismiss = dismiss_attempt.find("await dismissMeetingOperation.run()").unwrap();
-    let settlement = dismiss_attempt.find("const admitted = settleDismissal(snapshot, {").unwrap();
+    let shared_dismiss = dismiss_attempt
+        .find("await dismissMeetingOperation.run()")
+        .unwrap();
+    let settlement = dismiss_attempt
+        .find("const admitted = settleDismissal(snapshot, {")
+        .unwrap();
     assert!(shared_dismiss < settlement);
     assert!(dismiss_attempt.contains("const snapshot = await dismissMeetingOperation.run();"));
     assert!(dismiss_attempt.contains("afterOwnedDismiss: invalidateLibraryHandles,"));
     assert!(script.contains("(event) => returnToFindAfterStartError(event.currentTarget)"));
-    let return_start = script.find("async function returnToFindAfterStartError").unwrap();
+    let return_start = script
+        .find("async function returnToFindAfterStartError")
+        .unwrap();
     let return_end = script[return_start..]
         .find("for (const field of checks)")
         .unwrap()
@@ -698,7 +749,9 @@ fn metadata_only_search_results_have_no_transcript_action() {
     assert!(script.contains(
         "const metadataOnly = result.kind === \"meeting\" && result.transcriptAvailable !== true;"
     ));
-    assert!(script.contains("const row = document.createElement(metadataOnly ? \"div\" : \"button\");"));
+    assert!(
+        script.contains("const row = document.createElement(metadataOnly ? \"div\" : \"button\");")
+    );
     assert!(script.contains("row.dataset.state = \"metadata-only\";"));
     assert!(!script.contains("button.disabled = metadataOnly;"));
     assert!(script.contains("? \"No transcript was created\""));
@@ -714,7 +767,9 @@ fn preview_exact_search_lands_on_opened_unicode_scalar_span() {
     assert!(script.contains("const characters = Array.from(text || \"\");"));
     assert!(script.contains("start: Number.isInteger(result.start) ? result.start : null,"));
     assert!(script.contains("end: Number.isInteger(result.end) ? result.end : null,"));
-    assert!(script.contains("await openLibraryTranscript(result.transcriptHandle, exactMatch, null, transition);"));
+    assert!(script.contains(
+        "await openLibraryTranscript(result.transcriptHandle, exactMatch, null, transition);"
+    ));
     assert!(script.contains("row.setAttribute(\"aria-label\", `Exact transcript match in turn ${match.sourceTurnIndex + 1}`);"));
     assert!(script.contains("destination?.focus({ preventScroll: true });"));
     assert!(!script.contains("result.text.indexOf"));

@@ -1,13 +1,15 @@
 export const PRODUCT_ROOT_SCREENS = Object.freeze([
+  "find-screen",
   "meetings-screen",
+  "promises-screen",
 ]);
 
-export function workflowScreenForSnapshot(snapshot, currentScreen = "meetings-screen") {
+export function workflowScreenForSnapshot(snapshot, currentScreen = "find-screen") {
   const startup = snapshot?.startup || "diagnostic-written";
   const capture = snapshot?.capture || "idle";
   if (startup !== "ready") return "startup-screen";
   if (capture === "idle") {
-    return currentScreen === "idle-screen" ? "idle-screen" : "meetings-screen";
+    return currentScreen === "idle-screen" ? "idle-screen" : "find-screen";
   }
   return {
     arming: "arming-screen",
@@ -50,7 +52,7 @@ export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
 export function headerActionPolicy(snapshot, {
   stopPending = false,
   workflowOwnsRoute = true,
-  currentScreen = "meetings-screen",
+  currentScreen = "find-screen",
 } = {}) {
   const capture = snapshot?.capture || "idle";
   const startup = snapshot?.startup || "diagnostic-written";
@@ -60,7 +62,14 @@ export function headerActionPolicy(snapshot, {
     showProductNavigation: actions.showProductNavigation && startup === "ready",
     showStart: actions.canStartMeeting
       && capture === "idle"
-      && ["meetings-screen", "meeting-detail-screen", "profile-screen"].includes(currentScreen),
+      && [
+        "find-screen",
+        "meetings-screen",
+        "promises-screen",
+        "meeting-detail-screen",
+        "library-transcript-screen",
+        "profile-screen",
+      ].includes(currentScreen),
     showStop: actions.showStop,
     stopDisabled: actions.stopDisabled,
     stopLabel: actions.stopLabel,
@@ -123,9 +132,9 @@ export function changedStatusText(previous, next) {
   return previous === next ? null : next;
 }
 
-export function rootForDestination(destination, currentRoot = "meetings-screen") {
+export function rootForDestination(destination, currentRoot = "find-screen") {
   if (PRODUCT_ROOT_SCREENS.includes(destination)) return destination;
-  return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "meetings-screen";
+  return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "find-screen";
 }
 
 export function restoredScrollPosition(storedPosition, reset = false) {
@@ -200,7 +209,7 @@ export function meetingDetailPresentation(response) {
       title: "Meeting details.",
       lede: "A transcript is not available from this retained meeting view.",
       fallbackTitle: "Transcript unavailable",
-      fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Library and try again.",
+      fallbackCopy: "No retained words or automatic note can be opened right now. Return to Meetings and try again.",
       canOpenTranscript: false,
     };
   }
@@ -210,7 +219,7 @@ export function meetingDetailPresentation(response) {
       title: "Meeting unavailable.",
       lede: "This retained meeting could not be reopened. Its current transcript, note, and recording facts are unavailable in this view.",
       fallbackTitle: "Meeting unavailable",
-      fallbackCopy: "Reopen Library and try again.",
+      fallbackCopy: "Return to Meetings and try again.",
       canOpenTranscript: false,
     };
   }
