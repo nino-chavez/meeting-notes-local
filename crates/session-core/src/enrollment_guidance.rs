@@ -96,27 +96,56 @@ pub fn min_resolvable_held_out(target_frr: f64) -> Option<u32> {
     Some(resolvable as u32)
 }
 
+/// Proof that a recording's owner-only voice material has been derived.
+///
+/// Present only after the ECAPA embeddings and their provenance are safely
+/// stored and the raw work directory is gone under a receipt. This is the
+/// boundary `save_profile` makes physical: it takes a centroid `Profile` and
+/// held-out/negative *scores* — all embedding-derived — so raw audio deleted
+/// before this exists leaves nothing a profile can later be built from.
+/// Whisper segment durations survive such a deletion; enrolment does not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedVoiceMaterial {
+    /// The exact encoder checkpoint the embeddings came from.
+    /// `load_profile` refuses a fingerprint mismatch, because cosines between
+    /// two embedding spaces are not comparable.
+    pub encoder_sha256: String,
+}
+
 /// One dedicated operator calibration sitting, recorded content-free.
 ///
 /// `captured_at_epoch` is `None` for a recording made before the field existed.
 /// `speaker_gate._sitting_metadata_problems` refuses that case outright rather
 /// than assuming an order, because nothing then establishes the recording as a
 /// separate sitting.
+///
+/// `derived` is `None` while the recording is raw-retained: kept whole,
+/// awaiting embedding derivation. Structural facts (when it was captured, its
+/// digest, its scorable segment count) are fixed at record time and are judged
+/// for every sitting; counting toward enrolment requires `derived`. A capture
+/// whose raw audio was deleted before derivation is a rehearsal and never
+/// becomes evidence at all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SittingEvidence {
     pub captured_at_epoch: Option<u64>,
     pub audio_sha256: String,
     pub scorable_segments: u32,
     pub scorable_seconds: f64,
+    pub derived: Option<DerivedVoiceMaterial>,
 }
 
 /// One permitted negative recording, recorded content-free.
+///
+/// Negative material needs derivation for the same reason sittings do: the
+/// admission costs beside each operating point are *scores* of these segments
+/// against the operator centroid, and scores need embeddings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NegativeSourceEvidence {
     pub source_class: String,
     pub audio_sha256: String,
     pub scorable_segments: u32,
     pub scorable_seconds: f64,
+    pub derived: Option<DerivedVoiceMaterial>,
 }
 
 /// Everything accumulated so far for one in-progress enrolment.
@@ -221,6 +250,19 @@ pub enum EnrollmentShortfall {
         have: u32,
         need: u32,
     },
+    /// Recordings are stored whole but their private voice material has not
+    /// been derived, so they cannot count toward enrolment yet. This is
+    /// app-side work, not an operator errand, and it is ordered last so the
+    /// next step stays the thing the operator can actually do.
+    AwaitingVoiceDerivation {
+        sittings: usize,
+        negative_sources: usize,
+    },
+    /// Derived material spans more than one encoder checkpoint. Cosines
+    /// between two embedding spaces are not comparable, so this evidence can
+    /// never combine into one profile — the same reason `load_profile` refuses
+    /// a fingerprint mismatch and § I's `stale` state exists.
+    MixedEncoderMaterial,
 }
 
 impl EnrollmentShortfall {
@@ -288,6 +330,21 @@ impl EnrollmentShortfall {
                 "{have} of {need} comparison speech segments. One long passage cannot \
                  stand in for a spread of separate ones."
             ),
+            Self::AwaitingVoiceDerivation {
+                sittings,
+                negative_sources,
+            } => {
+                let total = sittings + negative_sources;
+                format!(
+                    "{total} recording(s) are stored whole, waiting for their private \
+                     voice material to be prepared. Nothing more to record for them; \
+                     they do not count until that completes."
+                )
+            }
+            Self::MixedEncoderMaterial => "Stored voice material was prepared with \
+                different versions of the voice analyzer and cannot be combined into \
+                one profile. Setup must restart under the current version."
+                .to_string(),
         }
     }
 }
@@ -344,6 +401,10 @@ pub struct GuidedEnrollmentStatus {
     pub shortfalls: Vec<EnrollmentShortfall>,
     pub advisories: Vec<EnrollmentAdvisory>,
     pub sittings_recorded: usize,
+    /// Recorded but not yet derivation-complete. These stay raw-retained and
+    /// count toward nothing until their voice material exists.
+    pub sittings_awaiting_derivation: usize,
+    pub negatives_awaiting_derivation: usize,
     pub scorable_operator_segments: u32,
     pub negative_scorable_segments: u32,
     pub negative_scorable_seconds: f64,
@@ -506,6 +567,51 @@ pub fn evaluate_enrollment_evidence(evidence: &EnrollmentEvidence) -> GuidedEnro
         }
     }
 
+    // Derivation and encoder identity, checked over both evidence kinds.
+    //
+    // The structural checks above run on every recording because their facts —
+    // capture time, digest, Whisper segment counts — are fixed when the audio
+    // is written and survive a raw deletion. Counting toward enrolment does
+    // not: `save_profile` takes a centroid and held-out/negative scores, all of
+    // which need embeddings, so a recording without derived material is a floor
+    // that cannot yet be claimed met. Appended after the operator-actionable
+    // shortfalls so `next_step` stays something the operator can do.
+    let sittings_awaiting_derivation = evidence
+        .sittings
+        .iter()
+        .filter(|sitting| sitting.derived.is_none())
+        .count();
+    let negatives_awaiting_derivation = evidence
+        .negative_sources
+        .iter()
+        .filter(|source| source.derived.is_none())
+        .count();
+
+    let mut derived_encoders: Vec<&str> = evidence
+        .sittings
+        .iter()
+        .filter_map(|sitting| sitting.derived.as_ref())
+        .chain(
+            evidence
+                .negative_sources
+                .iter()
+                .filter_map(|source| source.derived.as_ref()),
+        )
+        .map(|material| material.encoder_sha256.as_str())
+        .collect();
+    derived_encoders.sort_unstable();
+    derived_encoders.dedup();
+    if derived_encoders.len() > 1 {
+        shortfalls.push(EnrollmentShortfall::MixedEncoderMaterial);
+    }
+
+    if sittings_awaiting_derivation + negatives_awaiting_derivation > 0 {
+        shortfalls.push(EnrollmentShortfall::AwaitingVoiceDerivation {
+            sittings: sittings_awaiting_derivation,
+            negative_sources: negatives_awaiting_derivation,
+        });
+    }
+
     let state = guided_state(
         &shortfalls,
         sittings_recorded,
@@ -518,6 +624,8 @@ pub fn evaluate_enrollment_evidence(evidence: &EnrollmentEvidence) -> GuidedEnro
         shortfalls,
         advisories,
         sittings_recorded,
+        sittings_awaiting_derivation,
+        negatives_awaiting_derivation,
         scorable_operator_segments,
         negative_scorable_segments,
         negative_scorable_seconds,
@@ -533,9 +641,10 @@ fn guided_state(
     if shortfalls.is_empty() {
         return GuidedEnrollmentState::ChoosingOperatingPoint;
     }
-    // A repeated recording, an unrecorded capture time, an impermissible source
-    // or a duplicated negative are not shortfalls that another sitting closes:
-    // the evidence already on hand cannot become a supported profile.
+    // A repeated recording, an unrecorded capture time, an impermissible
+    // source, a duplicated negative, or mixed-encoder material are not
+    // shortfalls that another sitting closes: the evidence already on hand
+    // cannot become a supported profile.
     let refused = shortfalls.iter().any(|shortfall| {
         matches!(
             shortfall,
@@ -543,12 +652,25 @@ fn guided_state(
                 | EnrollmentShortfall::RepeatedSittingRecording { .. }
                 | EnrollmentShortfall::NegativeSourceNotPermitted { .. }
                 | EnrollmentShortfall::RepeatedNegativeRecording { .. }
+                | EnrollmentShortfall::MixedEncoderMaterial
         )
     });
     if refused {
         return GuidedEnrollmentState::Refused;
     }
-    if operator_material_is_sufficient {
+    // NeedsOtherVoice only when the negative errand is genuinely the open item.
+    // With derivation still pending on already-recorded material, the honest
+    // state is the sitting-review one: nothing is asked of the operator that
+    // they have not already supplied.
+    let negative_errand_open = shortfalls.iter().any(|shortfall| {
+        matches!(
+            shortfall,
+            EnrollmentShortfall::NegativeSampleMissing
+                | EnrollmentShortfall::NegativeSpeechTooShort { .. }
+                | EnrollmentShortfall::NegativeSegmentsTooFew { .. }
+        )
+    });
+    if operator_material_is_sufficient && negative_errand_open {
         return GuidedEnrollmentState::NeedsOtherVoice;
     }
     match sittings_recorded {
@@ -562,12 +684,29 @@ fn guided_state(
 mod tests {
     use super::*;
 
+    fn derived() -> Option<DerivedVoiceMaterial> {
+        Some(DerivedVoiceMaterial {
+            encoder_sha256: "enc".to_string(),
+        })
+    }
+
+    /// A fully saved sitting: derivation complete under one encoder.
     fn sitting(captured_at_epoch: u64, digest: &str, segments: u32) -> SittingEvidence {
         SittingEvidence {
             captured_at_epoch: Some(captured_at_epoch),
             audio_sha256: digest.to_string(),
             scorable_segments: segments,
             scorable_seconds: f64::from(segments) * 3.0,
+            derived: derived(),
+        }
+    }
+
+    /// A raw-retained sitting: recorded, structurally judgeable, not yet
+    /// derivation-complete.
+    fn raw_sitting(captured_at_epoch: u64, digest: &str, segments: u32) -> SittingEvidence {
+        SittingEvidence {
+            derived: None,
+            ..sitting(captured_at_epoch, digest, segments)
         }
     }
 
@@ -577,6 +716,7 @@ mod tests {
             audio_sha256: digest.to_string(),
             scorable_segments: segments,
             scorable_seconds: seconds,
+            derived: derived(),
         }
     }
 
@@ -791,6 +931,7 @@ mod tests {
                     audio_sha256: "a".to_string(),
                     scorable_segments: 40,
                     scorable_seconds: 120.0,
+                    derived: derived(),
                 },
                 sitting(3_600, "b", 40),
             ],
@@ -875,6 +1016,7 @@ mod tests {
                 audio_sha256: "n".to_string(),
                 scorable_segments: 40,
                 scorable_seconds: 200.0,
+                derived: derived(),
             }],
         };
         let status = evaluate_enrollment_evidence(&evidence);
@@ -1026,6 +1168,11 @@ mod tests {
                 need_seconds: 60.0,
             },
             EnrollmentShortfall::NegativeSegmentsTooFew { have: 4, need: 20 },
+            EnrollmentShortfall::AwaitingVoiceDerivation {
+                sittings: 2,
+                negative_sources: 1,
+            },
+            EnrollmentShortfall::MixedEncoderMaterial,
         ];
         for shortfall in &shortfalls {
             let sentence = shortfall.sentence();
@@ -1048,6 +1195,119 @@ mod tests {
             comfortable: 30,
         };
         assert!(!advisory.sentence().is_empty());
+    }
+
+    /// Raw-retained recordings never reach the choice screen. Structural
+    /// floors read as met — those facts are fixed at record time — but the
+    /// derivation shortfall blocks the claim, because `save_profile` needs a
+    /// centroid and scores that only embeddings can produce. Deleting the raw
+    /// audio before that point would leave nothing to enrol from.
+    #[test]
+    fn underived_recordings_cannot_reach_the_choice_screen() {
+        let evidence = EnrollmentEvidence {
+            sittings: vec![raw_sitting(0, "a", 40), raw_sitting(3_600, "b", 40)],
+            negative_sources: vec![permitted_negative("n", 24, 72.0)],
+        };
+        let status = evaluate_enrollment_evidence(&evidence);
+        assert_eq!(status.state, GuidedEnrollmentState::SecondSittingReview);
+        assert_eq!(status.sittings_awaiting_derivation, 2);
+        assert!(
+            status
+                .shortfalls
+                .contains(&EnrollmentShortfall::AwaitingVoiceDerivation {
+                    sittings: 2,
+                    negative_sources: 0,
+                })
+        );
+        // The sentence asks the operator for nothing: this is app-side work.
+        assert!(status.next_step.unwrap().contains("Nothing more to record"));
+    }
+
+    /// An underived negative blocks the same way: the admission costs beside
+    /// each operating point are scores of that material.
+    #[test]
+    fn an_underived_negative_blocks_the_choice_screen() {
+        let evidence = EnrollmentEvidence {
+            sittings: vec![sitting(0, "a", 40), sitting(3_600, "b", 40)],
+            negative_sources: vec![NegativeSourceEvidence {
+                derived: None,
+                ..permitted_negative("n", 24, 72.0)
+            }],
+        };
+        let status = evaluate_enrollment_evidence(&evidence);
+        assert_ne!(status.state, GuidedEnrollmentState::ChoosingOperatingPoint);
+        assert_eq!(status.negatives_awaiting_derivation, 1);
+        // NeedsOtherVoice would be wrong: the voice was already supplied.
+        assert_ne!(status.state, GuidedEnrollmentState::NeedsOtherVoice);
+    }
+
+    /// While the operator still has recording to do, that stays the next step;
+    /// derivation is app-side and must not displace it.
+    #[test]
+    fn derivation_pending_is_ordered_after_operator_actionable_steps() {
+        let evidence = EnrollmentEvidence {
+            sittings: vec![raw_sitting(0, "a", 40)],
+            negative_sources: Vec::new(),
+        };
+        let status = evaluate_enrollment_evidence(&evidence);
+        assert_eq!(status.state, GuidedEnrollmentState::ResumeAfterGap);
+        assert!(matches!(
+            status.shortfalls.first(),
+            Some(EnrollmentShortfall::TooFewSittings { have: 1, need: 2 })
+        ));
+        assert!(
+            status
+                .shortfalls
+                .contains(&EnrollmentShortfall::AwaitingVoiceDerivation {
+                    sittings: 1,
+                    negative_sources: 0,
+                })
+        );
+    }
+
+    /// Cosines between two embedding spaces are not comparable — the reason
+    /// `load_profile` refuses a fingerprint mismatch and § I's `stale` state
+    /// exists. Mixed-encoder material is terminal, not another sitting away.
+    #[test]
+    fn mixed_encoder_material_is_refused() {
+        let evidence = EnrollmentEvidence {
+            sittings: vec![
+                sitting(0, "a", 40),
+                SittingEvidence {
+                    derived: Some(DerivedVoiceMaterial {
+                        encoder_sha256: "other-enc".to_string(),
+                    }),
+                    ..sitting(3_600, "b", 40)
+                },
+            ],
+            negative_sources: vec![permitted_negative("n", 24, 72.0)],
+        };
+        let status = evaluate_enrollment_evidence(&evidence);
+        assert_eq!(status.state, GuidedEnrollmentState::Refused);
+        assert!(
+            status
+                .shortfalls
+                .contains(&EnrollmentShortfall::MixedEncoderMaterial)
+        );
+    }
+
+    /// Structural refusals survive derivation status: a duplicated recording
+    /// is a duplicate whether or not its embeddings exist yet.
+    #[test]
+    fn structural_refusals_apply_to_underived_recordings_too() {
+        let evidence = EnrollmentEvidence {
+            sittings: vec![sitting(0, "same", 40), raw_sitting(7_200, "same", 40)],
+            negative_sources: vec![permitted_negative("n", 24, 72.0)],
+        };
+        let status = evaluate_enrollment_evidence(&evidence);
+        assert_eq!(status.state, GuidedEnrollmentState::Refused);
+        assert!(
+            status
+                .shortfalls
+                .contains(&EnrollmentShortfall::RepeatedSittingRecording {
+                    audio_sha256: "same".to_string(),
+                })
+        );
     }
 
     #[test]

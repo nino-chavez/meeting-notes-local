@@ -526,6 +526,32 @@ Clearing every requirement named here is not admission: the canonical loader ref
 again, through `worker/adapters.py`'s `profile_inspect`, before any candidate reaches
 the lifecycle.
 
+**A sitting is saved only when its derived voice material exists, and the deletion
+order is the reason.** `first-sitting-saved` promises the dedicated raw recording is
+already gone *because* the owner-only derived material is safely stored. That derived
+material is the ECAPA embeddings, their encoder checkpoint identity, and the
+provenance a later profile build re-verifies — `save_profile` takes a centroid and
+held-out/negative scores, all embedding-derived, so raw audio deleted before
+embeddings exist leaves nothing a profile can be built from. Whisper segment
+durations survive such a deletion and can gate the structural floors above; they
+cannot enrol. Until derivation completes, a recording is **raw-retained** under an
+explicit temporary state and counts toward nothing; the evaluator reports it as
+app-side pending work, never as the operator's next errand. A capture deleted before
+derivation is a rehearsal, not evidence. Derived material spanning two encoder
+checkpoints is refused outright — cosines between embedding spaces are not
+comparable, the same fact behind the `stale` state below.
+
+**The packaged runtime cannot derive that material today.** `worker/build_runtime.sh`
+records `encoder-unavailable.identity` — a text placeholder — as its encoder, and its
+digest is what `profile.inspect` hands `load_profile` as the expected fingerprint, so
+every real ECAPA profile is refused in the packaged app. The same boundary blocks
+meeting-time gating: `dual_capture.load_voiceprint` builds the encoder *before the
+microphone opens*. Admitting a product speaker encoder — packaged
+PyTorch/SpeechBrain, a measured native conversion, or removing voice isolation from
+the beta envelope — is a release decision that precedes any saved-sitting claim.
+CLI-only enrolment is not a middle path: a profile enrolled outside the app still
+needs the in-app encoder to score anything.
+
 Recorded here rather than improvised at implementation time, because this file
 opens with the reason: patching at L1 when the missing primitive is at L4 produces
 bugs that *move* from surface to surface instead of closing.
