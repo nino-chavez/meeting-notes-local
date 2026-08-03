@@ -66,6 +66,7 @@ use local_meeting_notes_session_core::retention::{
 #[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
 use local_meeting_notes_session_core::retention::{
     ProfileEnrollmentWorker, ProfileEnrollmentWorkerError, ProfileLifecycleAdmissionError,
+    SittingEvidenceAdmissionError,
 };
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::{
@@ -256,18 +257,10 @@ struct PreviewProfileSnapshot {
 
 #[cfg(any(feature = "preview-surface", test))]
 impl PreviewProfileSnapshot {
-    /// The guided-enrolment shortfall for whatever evidence this account has
-    /// accumulated. No sitting recorder exists yet, so the evidence set is
-    /// empty and the evaluation truthfully reports `blocked` with the first
-    /// enforced step. When the dedicated sitting recorder lands it supplies
-    /// real evidence here and the same surface starts moving.
-    ///
-    /// The expected encoder is `None` only because no derivation can have
-    /// occurred: this build's runtime manifest records a placeholder encoder,
-    /// so there is nothing to compare. The recorder slice must pass the
-    /// manifest's encoder digest here — with real evidence and `None`, a
-    /// uniformly stale checkpoint would read as a working choice screen while
-    /// `load_profile` refuses all of it.
+    /// The empty-evidence evaluation used wherever the lifecycle could not
+    /// answer: it truthfully reports `blocked` with the first enforced step.
+    /// The expected encoder is `None` because there is no evidence to
+    /// mislabel; real evidence flows through `baseline_from_store` instead.
     fn guidance() -> GuidedEnrollmentStatus {
         evaluate_enrollment_evidence(&EnrollmentEvidence::default(), None)
     }
@@ -288,6 +281,34 @@ impl PreviewProfileSnapshot {
             profile_present: Some(profile_present),
             profile_active: Some(profile_active),
             guided_enrollment: Self::guidance(),
+        }
+    }
+
+    /// The lifecycle answered and the sitting evidence store was read. The
+    /// expected encoder digest comes from the verified runtime manifest, via
+    /// the runtime identity captured at worker spawn.
+    ///
+    /// With recorded evidence and no verified encoder identity the snapshot
+    /// refuses (`needs-attention`) instead of evaluating: evaluated with
+    /// `None`, a uniformly stale checkpoint would read as a working choice
+    /// screen while `load_profile` refuses all of it. Before the worker has
+    /// spawned the store is empty in any packaged build, so the honest
+    /// empty-evidence evaluation still renders.
+    fn baseline_from_store(
+        profile_present: bool,
+        profile_active: bool,
+        evidence: EnrollmentEvidence,
+        expected_encoder_sha256: Option<&str>,
+    ) -> Self {
+        let evidence_empty = evidence.sittings.is_empty() && evidence.negative_sources.is_empty();
+        if expected_encoder_sha256.is_none() && !evidence_empty {
+            return Self::lifecycle_unreadable("needs-attention");
+        }
+        Self {
+            state: "baseline-ready",
+            profile_present: Some(profile_present),
+            profile_active: Some(profile_active),
+            guided_enrollment: evaluate_enrollment_evidence(&evidence, expected_encoder_sha256),
         }
     }
 
@@ -405,6 +426,11 @@ struct RuntimeIdentity {
     worker_executable_sha256: String,
     tap_build_sha256: String,
     tap_path: PathBuf,
+    /// The digest the verified manifest records for the speaker encoder.
+    /// Today that is the `encoder-unavailable.identity` placeholder; guided
+    /// enrolment compares derived material against exactly this value, so a
+    /// build without a real encoder truthfully refuses rather than guessing.
+    encoder_sha256: String,
 }
 
 struct CaptureTaskControl {
@@ -1171,10 +1197,44 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
         .as_ref()
         .ok_or("the app-data writer lock is unavailable")?;
     let lifecycle = match writer.profile_lifecycle_authority().initialize_or_open() {
-        Ok(baseline) => Ok(PreviewProfileSnapshot::baseline(
-            baseline.profile_present(),
-            baseline.profile_active(),
-        )),
+        Ok(baseline) => {
+            // The sitting evidence store reconciles under the same held
+            // authority: crashed recordings become labelled rehearsals and
+            // interrupted cleanups resume before anything is projected. The
+            // expected encoder digest is the verified manifest's, via the
+            // runtime identity captured at worker spawn; before spawn it is
+            // unknown and `baseline_from_store` refuses to evaluate recorded
+            // evidence against nothing.
+            let expected_encoder = state
+                .runtime
+                .lock()
+                .map_err(|_| "the runtime identity is unavailable")?
+                .as_ref()
+                .map(|runtime| runtime.encoder_sha256.clone());
+            match writer
+                .sitting_evidence_authority()
+                .reconcile_and_read(now_epoch_seconds())
+            {
+                Ok((evidence, _summaries)) => Ok(PreviewProfileSnapshot::baseline_from_store(
+                    baseline.profile_present(),
+                    baseline.profile_active(),
+                    evidence,
+                    expected_encoder.as_deref(),
+                )),
+                Err(SittingEvidenceAdmissionError::Evidence(_)) => Ok(
+                    PreviewProfileSnapshot::lifecycle_unreadable("needs-attention"),
+                ),
+                Err(SittingEvidenceAdmissionError::AuthorityLost) => {
+                    Err("the app-data writer authority changed")
+                }
+                Err(SittingEvidenceAdmissionError::ActiveMeeting) => {
+                    Err("sitting evidence startup overlapped an active meeting")
+                }
+                Err(SittingEvidenceAdmissionError::Coordination(_)) => {
+                    Err("sitting evidence storage coordination is unavailable")
+                }
+            }
+        }
         Err(ProfileLifecycleAdmissionError::Lifecycle(
             ProfileLifecycleError::MigrationReviewRequired,
         )) => Ok(PreviewProfileSnapshot::lifecycle_unreadable(
@@ -1883,9 +1943,16 @@ fn initialize_application(app: AppHandle, retry: bool) {
         worker_executable_sha256: manifest.runtime.sha256.clone(),
         tap_build_sha256: manifest.tap.sha256.clone(),
         tap_path: storage_context.resource_root.join(&manifest.tap.path),
+        encoder_sha256: manifest.encoder.sha256.clone(),
     };
     *state.worker.lock().expect("worker process lock") = Some(worker);
     *state.runtime.lock().expect("runtime identity lock") = Some(runtime.clone());
+    // The startup profile reconcile ran before the runtime identity existed,
+    // so its snapshot could not name the manifest's encoder digest. Refresh
+    // once the digest is known; on failure the reconcile itself has already
+    // reset the cached snapshot to `unavailable`, which is the honest surface.
+    #[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+    let _ = reconcile_preview_profile_lifecycle(&state);
     let mut model = state.model.lock().expect("application model lock");
     model.admission = runtime.admission;
     if let Some(projection) = restored_transcript
@@ -3628,6 +3695,107 @@ mod tests {
             preview_profile_snapshot_for(&unsafe_state),
             PreviewProfileSnapshot::lifecycle_unreadable("needs-attention")
         );
+    }
+
+    /// With recorded evidence and no runtime identity there is no verified
+    /// encoder digest to evaluate against, and guessing would let a uniformly
+    /// stale checkpoint read as a working choice screen. The snapshot refuses.
+    #[test]
+    fn recorded_evidence_without_runtime_identity_refuses_to_evaluate() {
+        use local_meeting_notes_session_core::sitting_evidence::{SegmentSpan, SittingKind};
+        let (_temporary, storage) = test_storage();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        let sitting_id = "6f7dce4e-93a9-4c05-a9c6-9c1f60ec2c68";
+        let spans: Vec<SegmentSpan> = (0..5)
+            .map(|index| SegmentSpan {
+                start_seconds: index as f64 * 4.0,
+                end_seconds: index as f64 * 4.0 + 3.0,
+            })
+            .collect();
+        {
+            let held = state.app_data_writer_lock.lock().unwrap();
+            let authority = held.as_ref().unwrap().sitting_evidence_authority();
+            authority
+                .begin_sitting(sitting_id, SittingKind::OperatorSitting, None, 1_000)
+                .unwrap();
+            authority
+                .append_raw_audio(sitting_id, b"synthetic fixture audio bytes")
+                .unwrap();
+            authority.finalize_capture(sitting_id, 1_100).unwrap();
+            authority.record_segments(sitting_id, &spans).unwrap();
+        }
+        reconcile_preview_profile_lifecycle(&state).unwrap();
+        assert_eq!(
+            preview_profile_snapshot_for(&state),
+            PreviewProfileSnapshot::lifecycle_unreadable("needs-attention")
+        );
+    }
+
+    /// Once the runtime identity supplies the manifest's encoder digest, the
+    /// stored evidence reaches the snapshot's guidance: a raw-retained sitting
+    /// reports app-side derivation work, and a saved sitting counts.
+    #[test]
+    fn sitting_evidence_reaches_snapshot_guidance_with_manifest_encoder() {
+        use local_meeting_notes_session_core::sitting_evidence::{SegmentSpan, SittingKind};
+        let encoder = "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2";
+        let (_temporary, storage) = test_storage();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        *state.runtime.lock().unwrap() = Some(RuntimeIdentity {
+            admission: "internal-alpha".into(),
+            worker_build_sha256: "worker-build".into(),
+            worker_executable_sha256: "worker-executable".into(),
+            tap_build_sha256: "tap-build".into(),
+            tap_path: PathBuf::from("/nonexistent/tap"),
+            encoder_sha256: encoder.into(),
+        });
+        let sitting_id = "6f7dce4e-93a9-4c05-a9c6-9c1f60ec2c68";
+        let spans: Vec<SegmentSpan> = (0..5)
+            .map(|index| SegmentSpan {
+                start_seconds: index as f64 * 4.0,
+                end_seconds: index as f64 * 4.0 + 3.0,
+            })
+            .collect();
+        {
+            let held = state.app_data_writer_lock.lock().unwrap();
+            let authority = held.as_ref().unwrap().sitting_evidence_authority();
+            authority
+                .begin_sitting(sitting_id, SittingKind::OperatorSitting, None, 1_000)
+                .unwrap();
+            authority
+                .append_raw_audio(sitting_id, b"synthetic fixture audio bytes")
+                .unwrap();
+            authority.finalize_capture(sitting_id, 1_100).unwrap();
+            authority.record_segments(sitting_id, &spans).unwrap();
+        }
+        reconcile_preview_profile_lifecycle(&state).unwrap();
+        let raw_retained = preview_profile_snapshot_for(&state);
+        assert_eq!(raw_retained.state, "baseline-ready");
+        // `sittings_recorded` counts every projected sitting; the derivation
+        // ledger is what distinguishes raw-retained from saved.
+        assert_eq!(raw_retained.guided_enrollment.sittings_awaiting_derivation, 1);
+        assert_eq!(raw_retained.guided_enrollment.sittings_recorded, 1);
+
+        {
+            let held = state.app_data_writer_lock.lock().unwrap();
+            let authority = held.as_ref().unwrap().sitting_evidence_authority();
+            authority
+                .store_derived_material(
+                    sitting_id,
+                    &vec![7_u8; 5 * 192 * 4],
+                    encoder,
+                    Some("onnx-artifact-digest"),
+                    192,
+                    1_200,
+                )
+                .unwrap();
+        }
+        reconcile_preview_profile_lifecycle(&state).unwrap();
+        let saved = preview_profile_snapshot_for(&state);
+        assert_eq!(saved.state, "baseline-ready");
+        assert_eq!(saved.guided_enrollment.sittings_recorded, 1);
+        assert_eq!(saved.guided_enrollment.sittings_awaiting_derivation, 0);
     }
 
     #[test]

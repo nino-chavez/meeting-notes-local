@@ -541,6 +541,20 @@ derivation is a rehearsal, not evidence. Derived material spanning two encoder
 checkpoints is refused outright — cosines between embedding spaces are not
 comparable, the same fact behind the `stale` state below.
 
+The store enforcing this order exists: `session-core::sitting_evidence` keeps raw
+bytes only in a per-sitting work directory, holds durable write-once evidence rows
+(identity, capture digest, content-free segment timings, embeddings bound to
+encoder and `.onnx` artifact identity), and deletes raw audio only under a
+digest-bound `deleting → staged → removed` receipt copied in shape from
+`audio-deletion/1`. A sitting reports saved only with a terminal receipt and an
+absent work directory; a cleanup interrupted anywhere resumes at startup; a
+recording interrupted before its capture row becomes a durable rehearsal label,
+never silent loss. Preview reads the store under the app-data writer lock and
+evaluates it against the runtime manifest's encoder digest — with recorded
+evidence and no verified encoder identity it refuses (`needs-attention`) rather
+than guessing. The store's derivation seam accepts only synthetic fixtures until
+the preferred ONNX encoder passes both admission checks.
+
 **The packaged runtime cannot derive that material today, and the chosen encoder
 is a preferred candidate, not an admitted one.** `worker/build_runtime.sh`
 records `encoder-unavailable.identity` — a text placeholder — as its encoder, and its

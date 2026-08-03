@@ -582,6 +582,189 @@ impl AppDataWriterLock {
     pub fn profile_lifecycle_authority(&self) -> ProfileLifecycleAuthority<'_> {
         ProfileLifecycleAuthority { lock: self }
     }
+
+    #[cfg(target_os = "macos")]
+    pub fn sitting_evidence_authority(&self) -> SittingEvidenceAuthority<'_> {
+        SittingEvidenceAuthority { lock: self }
+    }
+}
+
+/// Process capability for the guided-enrolment sitting evidence store.
+///
+/// It borrows the process writer lock and admits no caller-provided storage
+/// path or coordination registry. Every operation holds the global storage
+/// sequence and refuses while any meeting capture lease is active: a dedicated
+/// enrolment sitting never overlaps a meeting.
+///
+/// ```compile_fail
+/// use local_meeting_notes_session_core::sitting_evidence::begin_sitting;
+/// # let _ = begin_sitting;
+/// ```
+#[cfg(target_os = "macos")]
+pub struct SittingEvidenceAuthority<'a> {
+    lock: &'a AppDataWriterLock,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Error)]
+pub enum SittingEvidenceAdmissionError {
+    #[error("sitting evidence storage coordination is unavailable")]
+    Coordination(#[from] MeetingCoordinationError),
+    #[error("sitting evidence writer authority was lost")]
+    AuthorityLost,
+    #[error("sitting evidence work is blocked by an active meeting")]
+    ActiveMeeting,
+    #[error(transparent)]
+    Evidence(#[from] crate::sitting_evidence::SittingEvidenceError),
+}
+
+#[cfg(target_os = "macos")]
+impl SittingEvidenceAuthority<'_> {
+    fn run<T>(
+        &self,
+        operation: impl FnOnce(
+            &StorageRoot,
+        )
+            -> Result<T, crate::sitting_evidence::SittingEvidenceError>,
+    ) -> Result<T, SittingEvidenceAdmissionError> {
+        let sequence = self.lock.coordination.lock_sequence()?;
+        let authority_is_current = || {
+            self.lock.storage_root.revalidate().is_ok()
+                && self
+                    .lock
+                    .writer_file
+                    .revalidate(&self.lock.storage_root, 0)
+                    .is_ok()
+        };
+        if !authority_is_current() {
+            return Err(SittingEvidenceAdmissionError::AuthorityLost);
+        }
+        if !sequence.active_meeting_ids()?.is_empty() {
+            return Err(SittingEvidenceAdmissionError::ActiveMeeting);
+        }
+        let outcome = operation(&self.lock.storage);
+        if !authority_is_current() {
+            return Err(SittingEvidenceAdmissionError::AuthorityLost);
+        }
+        outcome.map_err(Into::into)
+    }
+
+    pub fn begin_sitting(
+        &self,
+        sitting_id: &str,
+        kind: crate::sitting_evidence::SittingKind,
+        source_class: Option<&str>,
+        started_at_epoch_seconds: u64,
+    ) -> Result<(), SittingEvidenceAdmissionError> {
+        self.run(|storage| {
+            crate::sitting_evidence::begin_sitting(
+                storage,
+                sitting_id,
+                kind,
+                source_class,
+                started_at_epoch_seconds,
+            )
+        })
+    }
+
+    pub fn append_raw_audio(
+        &self,
+        sitting_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), SittingEvidenceAdmissionError> {
+        self.run(|storage| crate::sitting_evidence::append_raw_audio(storage, sitting_id, bytes))
+    }
+
+    pub fn finalize_capture(
+        &self,
+        sitting_id: &str,
+        captured_at_epoch_seconds: u64,
+    ) -> Result<(), SittingEvidenceAdmissionError> {
+        self.run(|storage| {
+            crate::sitting_evidence::finalize_capture(storage, sitting_id, captured_at_epoch_seconds)
+        })
+    }
+
+    pub fn record_segments(
+        &self,
+        sitting_id: &str,
+        segments: &[crate::sitting_evidence::SegmentSpan],
+    ) -> Result<(), SittingEvidenceAdmissionError> {
+        self.run(|storage| crate::sitting_evidence::record_segments(storage, sitting_id, segments))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn store_derived_material(
+        &self,
+        sitting_id: &str,
+        embeddings: &[u8],
+        encoder_sha256: &str,
+        onnx_artifact_sha256: Option<&str>,
+        embedding_dim: u32,
+        derived_at_epoch_seconds: u64,
+    ) -> Result<crate::sitting_evidence::SittingLifecycleState, SittingEvidenceAdmissionError> {
+        self.run(|storage| {
+            crate::sitting_evidence::store_derived_material(
+                storage,
+                sitting_id,
+                embeddings,
+                encoder_sha256,
+                onnx_artifact_sha256,
+                embedding_dim,
+                derived_at_epoch_seconds,
+            )
+        })
+    }
+
+    pub fn retry_sitting_cleanup(
+        &self,
+        sitting_id: &str,
+    ) -> Result<crate::sitting_evidence::SittingLifecycleState, SittingEvidenceAdmissionError> {
+        self.run(|storage| crate::sitting_evidence::retry_sitting_cleanup(storage, sitting_id))
+    }
+
+    pub fn abandon_sitting(
+        &self,
+        sitting_id: &str,
+        labeled_at_epoch_seconds: u64,
+    ) -> Result<(), SittingEvidenceAdmissionError> {
+        self.run(|storage| {
+            crate::sitting_evidence::abandon_sitting(storage, sitting_id, labeled_at_epoch_seconds)
+        })
+    }
+
+    /// Startup entry: finishes every interrupted deletion or cleanup, labels
+    /// crashed recordings as rehearsals, then projects the store.
+    pub fn reconcile_and_read(
+        &self,
+        reconciled_at_epoch_seconds: u64,
+    ) -> Result<
+        (
+            crate::enrollment_guidance::EnrollmentEvidence,
+            Vec<crate::sitting_evidence::SittingRecordSummary>,
+        ),
+        SittingEvidenceAdmissionError,
+    > {
+        self.run(|storage| {
+            crate::sitting_evidence::reconcile_sitting_evidence(
+                storage,
+                reconciled_at_epoch_seconds,
+            )?;
+            crate::sitting_evidence::read_sitting_evidence(storage)
+        })
+    }
+
+    pub fn read_evidence(
+        &self,
+    ) -> Result<
+        (
+            crate::enrollment_guidance::EnrollmentEvidence,
+            Vec<crate::sitting_evidence::SittingRecordSummary>,
+        ),
+        SittingEvidenceAdmissionError,
+    > {
+        self.run(crate::sitting_evidence::read_sitting_evidence)
+    }
 }
 
 /// Raw storage state machine. It is deliberately crate-private: callers in a

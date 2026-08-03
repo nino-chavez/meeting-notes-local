@@ -16,7 +16,11 @@ Core Audio process tap, your microphone comes through the same path
 > product reader: Library, exact search, meeting detail, canonical transcript,
 > retention/disk state, an honest Voice profile capability surface that states its
 > guided-enrolment requirements in the terms the capture gate enforces and
-> distinguishes a preserved-but-inactive profile from an active one, a separately
+> distinguishes a preserved-but-inactive profile from an active one — backed by a
+> crash-safe sitting evidence store that counts a sitting saved only once derived
+> embeddings and encoder identity are durably stored and the raw recording is
+> deleted under a digest-bound receipt, with anything deleted earlier labelled a
+> rehearsal — a separately
 > confirmed crash-recoverable profile reset that never opens a meeting, and an
 > explicitly approved two-step action that can delete only one meeting's retained
 > audio while preserving its transcript and note. That

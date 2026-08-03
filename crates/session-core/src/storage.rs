@@ -113,7 +113,7 @@ impl StorageRoot {
             return Err(StorageError::RootInsideRepository);
         }
         create_private_dir(&normalized_root)?;
-        for child in ["diagnostics", "profile", "meetings"] {
+        for child in ["diagnostics", "profile", "meetings", "enrollment"] {
             create_private_dir(&normalized_root.join(child))?;
         }
         let canonical = normalized_root.canonicalize()?;

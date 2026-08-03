@@ -17,6 +17,8 @@ pub mod recovery;
 pub mod reducer;
 pub mod retention;
 pub mod runtime;
+#[cfg(target_os = "macos")]
+pub mod sitting_evidence;
 pub mod storage;
 pub mod supervision;
 pub mod transcript_restoration;
