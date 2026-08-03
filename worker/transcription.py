@@ -123,7 +123,9 @@ def create_transcript_revision(
     mic_segments = voicing_filter(
         transcribe_audio(mic, str(model_dir), "en"), mic, "mic"
     )
-    mic_segments = bleed_filter(mic_segments, mic, system, acoustic, "mic")
+    filtered_mic_segments = bleed_filter(mic_segments, mic, system, acoustic, "mic")
+    partial_bleed_detected = len(filtered_mic_segments) < len(mic_segments)
+    mic_segments = filtered_mic_segments
     system_segments = voicing_filter(
         transcribe_audio(system, str(model_dir), "en"), system, "system"
     )
@@ -152,6 +154,7 @@ def create_transcript_revision(
             acoustic,
             gating=None,
             capture_health=health,
+            attribution_untrusted=partial_bleed_detected,
             quiet=True,
         )
         encoded = temporary.read_bytes()

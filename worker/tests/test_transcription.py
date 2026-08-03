@@ -77,13 +77,41 @@ class TranscriptionTests(unittest.TestCase):
         document = load(path)
         self.assertEqual(path.name, f"{digest}.json")
         self.assertEqual(document.attribution, "channel")
-        self.assertEqual([turn.text for turn in document.turns], [
-            "microphone words",
-            "system words",
-        ])
+        self.assertEqual(
+            [(turn.speaker, turn.text) for turn in document.turns],
+            [("Me", "microphone words"), ("Them", "system words")],
+        )
         self.assertTrue(document.capture_health["transcription"]["requested"])
         self.assertFalse((self.capture / "transcript.json").exists())
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_partial_mic_bleed_withdraws_channel_attribution_during_overlap(self) -> None:
+        def overlapping_transcribe(audio, _model, _language):
+            if float(audio[0]) < 0.02:
+                return [
+                    {"start": 0.0, "end": 1.5, "text": "operator words"},
+                    {"start": 1.5, "end": 3.0, "text": "returned system words"},
+                ]
+            return [{"start": 1.0, "end": 3.0, "text": "system words"}]
+
+        def withhold_returned_system(segments, *_arguments):
+            return [segment for segment in segments if segment["text"] != "returned system words"]
+
+        _, path = create_transcript_revision(
+            self.capture,
+            self.root / "transcript",
+            self.model,
+            transcribe_audio=overlapping_transcribe,
+            voicing_filter=self.keep,
+            bleed_filter=withhold_returned_system,
+        )
+
+        document = load(path)
+        self.assertEqual(document.attribution, "none")
+        self.assertEqual(
+            [(turn.speaker, turn.text, turn.start) for turn in document.turns],
+            [(None, "operator words", 0.0), (None, "system words", 1.0)],
+        )
 
     def test_refuses_symlinked_model_file(self) -> None:
         (self.model / "weights.safetensors").unlink()

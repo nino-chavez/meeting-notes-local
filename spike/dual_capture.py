@@ -1952,6 +1952,7 @@ def write_transcript(
     gating=None,
     capture_health=None,
     *,
+    attribution_untrusted=False,
     quiet=False,
 ):
     """Hand the capture to the notes half with its attribution and health evidence.
@@ -1970,7 +1971,14 @@ def write_transcript(
             "a current capture transcript requires final capture-health evidence"
         )
     validate_capture_health(capture_health, transcript_context=True)
-    unattributed = contaminated(b)
+    if not isinstance(attribution_untrusted, bool):
+        raise ValueError("attribution_untrusted must be boolean")
+    # A whole-capture correlation can sit below the session threshold even when
+    # one interval is conclusively the far end returning through the microphone.
+    # If the segment bleed filter withheld any microphone ASR for that reason,
+    # the remaining spans cannot safely keep Me/Them labels until affected-span
+    # provenance exists. Preserve every remaining word, but withdraw the claim.
+    unattributed = contaminated(b) or attribution_untrusted
     payload = {
         "schema": CAPTURE_TRANSCRIPT_SCHEMA,
         "source": f"capture {time.strftime('%Y-%m-%d %H:%M')}",
