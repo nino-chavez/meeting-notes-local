@@ -101,7 +101,7 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
         "Local Meeting Notes — Preview"
     );
     assert_eq!(preview["app"]["windows"][0]["width"], 1080);
-    assert_eq!(preview["app"]["windows"][0]["height"], 800);
+    assert_eq!(preview["app"]["windows"][0]["height"], 900);
     assert_eq!(preview["app"]["windows"][0]["minWidth"], 800);
     assert_eq!(preview["app"]["windows"][0]["minHeight"], 640);
     assert_eq!(preview["app"]["windows"][0]["resizable"], true);
