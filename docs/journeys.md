@@ -388,8 +388,16 @@ change the note corrects nothing.
 ### J5 — "How long is this keeping recordings of other people?" (retention)
 
 **The lifecycle is specified and prototyped, and scheduled audio deletion is
-implemented in the internal alpha. Its first real due-deletion receipt is still open;
-the remaining trust actions are not implemented. This remains the highest-stakes
+implemented in the internal alpha. The unchanged installed executable is byte-bound to
+the original capture attempt; after the `2026-08-02T10:20:01-0500` deadline, a launch
+completed automatic retention and produced an `audio-deletion/1` `removed` receipt
+(SHA-256 `59a500cb4f6c5e05e22425ba2f90c38629d300249b41628f5efb613bb029f4d5`), observed
+at approximately `2026-08-02T20:24:47-0500`. Both bound microphone and system WAVs
+are absent; the exact retained transcript artifact remains present, JSON-readable, and
+digest-matched, without its text being inspected or emitted. This closes automatic
+deletion only. Clean transfer, Gatekeeper, permissions, capture, and recovery on
+another Mac or genuinely clean account remain open; the remaining trust actions are
+not implemented, and no release approval is implied. This remains the highest-stakes
 application gap.**
 
 Every capture writes two WAVs and a transcript of a conversation involving people who
