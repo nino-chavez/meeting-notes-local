@@ -18,7 +18,7 @@ mod product_facade;
 #[allow(dead_code)]
 mod manual_delete_facade;
 
-#[cfg(feature = "preview-surface")]
+#[cfg(any(feature = "preview-surface", test))]
 use manual_delete_facade::{
     AudioDeletionReview, ManualAudioDeletionFacadeError, ManualAudioDeletionFacadeOutcome,
     ManualAudioDeletionUiArgs,
@@ -94,7 +94,7 @@ struct ApplicationState {
     command_lock: Mutex<()>,
     app_data_writer_lock: Mutex<Option<AppDataWriterLock>>,
     retention_started: AtomicBool,
-    #[cfg(feature = "preview-surface")]
+    #[cfg(any(feature = "preview-surface", test))]
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
 }
 
@@ -109,7 +109,7 @@ impl Default for ApplicationState {
             command_lock: Mutex::new(()),
             app_data_writer_lock: Mutex::new(None),
             retention_started: AtomicBool::new(false),
-            #[cfg(feature = "preview-surface")]
+            #[cfg(any(feature = "preview-surface", test))]
             preview_library: Mutex::new(None),
         }
     }
@@ -262,6 +262,28 @@ fn with_meeting_storage_sequence<T>(
     Ok(response)
 }
 
+#[cfg(any(feature = "preview-surface", test))]
+fn preview_storage_clone(state: &ApplicationState) -> Result<StorageRoot, ()> {
+    state
+        .storage
+        .lock()
+        .map_err(|_| ())?
+        .as_ref()
+        .map(|context| context.storage.clone())
+        .ok_or(())
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn with_preview_library_invalidated<T>(
+    state: &ApplicationState,
+    operation: impl FnOnce() -> T,
+) -> Result<T, ()> {
+    let mut library = state.preview_library.lock().map_err(|_| ())?;
+    *library = None;
+    drop(library);
+    Ok(operation())
+}
+
 impl ApplicationState {
     #[allow(dead_code)]
     fn manual_audio_deletion_facade(&self) -> manual_delete_facade::ManualAudioDeletionFacade<'_> {
@@ -277,7 +299,7 @@ impl ApplicationState {
             .ok_or_else(|| "the app-data writer lock is unavailable".to_string())
     }
 
-    #[cfg(feature = "preview-surface")]
+    #[cfg(any(feature = "preview-surface", test))]
     fn with_preview_library<T>(
         &self,
         unavailable: impl Fn() -> T,
@@ -782,13 +804,12 @@ fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reader::LibrarySnapshot {
-    let storage = state
-        .storage
-        .lock()
-        .expect("storage context lock")
-        .as_ref()
-        .map(|context| context.storage.clone());
-    let Some(storage) = storage else {
+    preview_library_snapshot_for(&state)
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn preview_library_snapshot_for(state: &ApplicationState) -> library_reader::LibrarySnapshot {
+    let Ok(storage) = preview_storage_clone(state) else {
         return library_reader::LibraryReader::unavailable_snapshot();
     };
     let coordination = match state.meeting_storage_coordination() {
@@ -883,13 +904,22 @@ fn preview_library_open_note(
     )
 }
 
-#[cfg(feature = "preview-surface")]
+#[cfg(any(feature = "preview-surface", test))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewAudioDeletionResponse {
     state: &'static str,
     audio_retention: Option<library_reader::LibraryAudioRetention>,
     message: String,
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn unavailable_preview_audio_deletion() -> PreviewAudioDeletionResponse {
+    PreviewAudioDeletionResponse {
+        state: "unavailable",
+        audio_retention: None,
+        message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
+    }
 }
 
 #[cfg(any(feature = "preview-surface", test))]
@@ -926,34 +956,34 @@ fn preview_delete_meeting_audio(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> PreviewAudioDeletionResponse {
+    preview_delete_meeting_audio_for(handle, &state)
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn preview_delete_meeting_audio_for(
+    handle: String,
+    state: &ApplicationState,
+) -> PreviewAudioDeletionResponse {
     let Ok(_command) = state.command_lock.lock() else {
-        return PreviewAudioDeletionResponse {
-            state: "unavailable",
-            audio_retention: None,
-            message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
-        };
+        return unavailable_preview_audio_deletion();
     };
     let (startup, capture) = match state.model.lock() {
         Ok(model) => (model.reducer.startup(), model.reducer.capture()),
-        Err(_) => {
-            return PreviewAudioDeletionResponse {
-                state: "unavailable",
-                audio_retention: None,
-                message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
-            };
-        }
+        Err(_) => return unavailable_preview_audio_deletion(),
     };
-    let access = match with_preview_audio_deletion_gate(startup, capture, || {
-        state.with_preview_library(
+    let prepared = match with_preview_audio_deletion_gate(startup, capture, || {
+        let storage = preview_storage_clone(state).ok()?;
+        let access = state.with_preview_library(
             || library_reader::LibraryAudioDeletionAccess {
                 state: "unavailable",
                 meeting_id: None,
                 message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
             },
             |reader, active| reader.authorize_audio_deletion(&handle, active),
-        )
+        );
+        Some((storage, access))
     }) {
-        Ok(access) => access,
+        Ok(prepared) => prepared,
         Err(refusal) => {
             return PreviewAudioDeletionResponse {
                 state: refusal.state,
@@ -962,26 +992,23 @@ fn preview_delete_meeting_audio(
             };
         }
     };
-
-    // Any attempted mutation boundary invalidates every retained reader handle.
-    *state.preview_library.lock().expect("preview library lock") = None;
-
-    let storage = state
-        .storage
-        .lock()
-        .expect("storage context lock")
-        .as_ref()
-        .map(|context| context.storage.clone());
+    let Some((storage, access)) = prepared else {
+        return unavailable_preview_audio_deletion();
+    };
     let retention_for = |meeting_id: &str| {
-        let storage = storage.as_ref()?;
         let coordination = state.meeting_storage_coordination().ok()?;
         with_meeting_storage_sequence(&coordination, |active| {
             (!active.contains(meeting_id))
-                .then(|| library_reader::LibraryReader::read_audio_retention(storage, meeting_id))
+                .then(|| library_reader::LibraryReader::read_audio_retention(&storage, meeting_id))
         })
         .ok()
         .flatten()
     };
+
+    // Any attempted mutation boundary invalidates every retained reader handle.
+    if with_preview_library_invalidated(state, || ()).is_err() {
+        return unavailable_preview_audio_deletion();
+    }
 
     let Some(meeting_id) = access.meeting_id else {
         return PreviewAudioDeletionResponse {
@@ -1577,7 +1604,7 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
                         "retention_coordination_failed",
                         "meeting storage coordination is unavailable",
                     );
-                    mark_retention_unavailable(&app);
+                    mark_retention_unavailable(&state);
                     continue;
                 }
             };
@@ -1589,7 +1616,7 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
                         "retention_coordination_failed",
                         "meeting storage sequence lock is unavailable",
                     );
-                    mark_retention_unavailable(&app);
+                    mark_retention_unavailable(&state);
                     continue;
                 }
             };
@@ -1602,7 +1629,7 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
                         "retention_coordination_failed",
                         "active meeting registry is unavailable",
                     );
-                    mark_retention_unavailable(&app);
+                    mark_retention_unavailable(&state);
                     continue;
                 }
             };
@@ -1627,7 +1654,7 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
                         }
                     }
                     if retention_failed {
-                        mark_retention_unavailable(&app);
+                        mark_retention_unavailable(&state);
                     }
                 }
                 Err(error) => {
@@ -1636,16 +1663,20 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
                         "retention_tick_failed",
                         &error.to_string(),
                     );
-                    mark_retention_unavailable(&app);
+                    mark_retention_unavailable(&state);
                 }
             }
         }
     });
 }
 
-fn mark_retention_unavailable(app: &AppHandle) {
-    let state = app.state::<ApplicationState>();
-    let mut model = state.model.lock().expect("application model lock");
+fn mark_retention_unavailable(state: &ApplicationState) {
+    let Ok(_command) = state.command_lock.lock() else {
+        return;
+    };
+    let Ok(mut model) = state.model.lock() else {
+        return;
+    };
     model.retention_operational = false;
     model.error = Some("Audio retention needs attention before another meeting can start.".into());
     if model.reducer.capture() == CaptureState::Idle
@@ -3175,6 +3206,66 @@ mod tests {
     }
 
     #[test]
+    fn poisoned_preview_storage_returns_unavailable_without_mutation() {
+        let state = Arc::new(ApplicationState::default());
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+            model.retention_operational = true;
+        }
+        let before_model = serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap();
+        let poisoned = Arc::clone(&state);
+        assert!(
+            std::thread::spawn(move || {
+                let _storage = poisoned.storage.lock().unwrap();
+                panic!("synthetic storage poison");
+            })
+            .join()
+            .is_err()
+        );
+
+        let snapshot = preview_library_snapshot_for(&state);
+        let deletion = preview_delete_meeting_audio_for("synthetic-handle".into(), &state);
+
+        assert_eq!(snapshot.state, "unavailable");
+        assert!(snapshot.rows.is_empty());
+        assert_eq!(snapshot.unavailable_count, 0);
+        assert_eq!(deletion.state, "unavailable");
+        assert!(deletion.audio_retention.is_none());
+        assert!(state.preview_library.lock().unwrap().is_none());
+        assert_eq!(
+            serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap(),
+            before_model
+        );
+    }
+
+    #[test]
+    fn poisoned_preview_invalidation_returns_unavailable_before_mutation() {
+        let state = Arc::new(ApplicationState::default());
+        let poisoned = Arc::clone(&state);
+        assert!(
+            std::thread::spawn(move || {
+                let _library = poisoned.preview_library.lock().unwrap();
+                panic!("synthetic Preview library poison");
+            })
+            .join()
+            .is_err()
+        );
+        let mutated = std::cell::Cell::new(false);
+
+        let response = with_preview_library_invalidated(&state, || {
+            mutated.set(true);
+            unavailable_preview_audio_deletion()
+        })
+        .unwrap_or_else(|_| unavailable_preview_audio_deletion());
+
+        assert_eq!(response.state, "unavailable");
+        assert!(response.audio_retention.is_none());
+        assert!(!mutated.get());
+    }
+
+    #[test]
     fn preview_commands_share_sequence_before_reader_mutex_order() {
         let coordination = Arc::new(MeetingStorageCoordination::default());
         let reader = Arc::new(Mutex::new(()));
@@ -3263,6 +3354,42 @@ mod tests {
             .unwrap(),
             Some("transcript-ready-handle")
         );
+    }
+
+    #[test]
+    fn retention_failure_waits_for_command_before_changing_ready_state() {
+        let state = Arc::new(ApplicationState::default());
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+            model.retention_operational = true;
+        }
+        let held_command = state.command_lock.lock().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let task_state = Arc::clone(&state);
+        let task_barrier = Arc::clone(&barrier);
+        let (done_sender, done_receiver) = mpsc::channel();
+        let task = std::thread::spawn(move || {
+            task_barrier.wait();
+            mark_retention_unavailable(&task_state);
+            done_sender.send(()).unwrap();
+        });
+
+        barrier.wait();
+        assert!(done_receiver.try_recv().is_err());
+        {
+            let model = state.model.lock().unwrap();
+            assert_eq!(model.reducer.startup(), StartupState::Ready);
+            assert!(model.retention_operational);
+        }
+
+        drop(held_command);
+        done_receiver.recv().unwrap();
+        task.join().unwrap();
+        let model = state.model.lock().unwrap();
+        assert_eq!(model.reducer.startup(), StartupState::DiagnosticWritten);
+        assert!(!model.retention_operational);
     }
 
     #[test]

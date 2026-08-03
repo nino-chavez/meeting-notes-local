@@ -554,10 +554,42 @@ fn preview_audio_deletion_gates_state_before_handle_authority_or_invalidation() 
     let gate = command
         .find("with_preview_audio_deletion_gate(startup, capture")
         .unwrap();
+    let storage = command.find("preview_storage_clone(state)").unwrap();
     let authorize = command.find("reader.authorize_audio_deletion").unwrap();
-    let invalidate = command.find("*state.preview_library.lock()").unwrap();
-    assert!(command_lock < gate && gate < authorize && authorize < invalidate);
+    let invalidate = command
+        .find("with_preview_library_invalidated(state")
+        .unwrap();
+    let delete = command
+        .find(".delete_audio(ManualAudioDeletionUiArgs")
+        .unwrap();
+    assert!(
+        command_lock < gate
+            && gate < storage
+            && storage < authorize
+            && authorize < invalidate
+            && invalidate < delete
+    );
+    assert!(command.contains("if with_preview_library_invalidated(state, || ()).is_err()"));
+    assert!(!command.contains(".expect("));
     assert!(source.contains("CaptureState::Idle | CaptureState::TranscriptReady"));
+}
+
+#[test]
+fn retention_failure_serializes_before_changing_the_model() {
+    let source = include_str!("../src/main.rs");
+    let start = source
+        .find("fn mark_retention_unavailable(state: &ApplicationState)")
+        .expect("retention failure transition");
+    let end = source[start..]
+        .find("fn run_capture_task(")
+        .expect("next function")
+        + start;
+    let transition = &source[start..end];
+
+    let command_lock = transition.find("state.command_lock.lock()").unwrap();
+    let model_lock = transition.find("state.model.lock()").unwrap();
+    assert!(command_lock < model_lock);
+    assert!(!transition.contains(".expect("));
 }
 
 #[test]
