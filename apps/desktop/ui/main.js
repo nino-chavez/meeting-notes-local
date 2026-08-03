@@ -1,6 +1,8 @@
 import {
   createSingleFlight,
   acceptAuthoritativeSnapshot,
+  isDismissalReadySnapshot,
+  settleDismissal,
   createFreshSnapshotOperation,
   createLatestRequestGate,
   createRouteOwnershipGate,
@@ -704,6 +706,7 @@ async function openStartMeeting() {
     });
     if (!ready) {
       if (!workflowRouteIsCurrent(routeToken)) return;
+      if (lastSnapshot?.capture === "idle" && !isDismissalReadySnapshot(lastSnapshot)) return;
       showStartTransitionError();
       return;
     }
@@ -1135,14 +1138,12 @@ async function dismissAttemptAndReturnFind(control) {
   if (control) control.disabled = true;
   try {
     const snapshot = await dismissMeetingOperation.run();
-    clearAttemptReview(true);
-    if (!workflowRouteIsCurrent(routeToken)) return;
-    if (snapshot?.capture !== "idle") {
-      showStartTransitionError();
-      return;
-    }
-    clearAttemptReview(true);
-    invalidateLibraryHandles();
+    const admitted = settleDismissal(snapshot, {
+      clearHiddenAttempt: () => clearAttemptReview(true),
+      ownsRoute: () => workflowRouteIsCurrent(routeToken),
+      afterOwnedDismiss: invalidateLibraryHandles,
+    });
+    if (!admitted) return;
     if (currentScreen !== "find-screen") {
       productRootScreen = "find-screen";
       selectProductScreen("find-screen", { resetScroll: true });

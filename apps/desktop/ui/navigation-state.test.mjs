@@ -5,6 +5,8 @@ import {
   createTransitionGate,
   createSingleFlight,
   acceptAuthoritativeSnapshot,
+  isDismissalReadySnapshot,
+  settleDismissal,
   createLatestRequestGate,
   createRouteOwnershipGate,
   displayedClaimIdentity,
@@ -214,7 +216,7 @@ test("Start and Done or Recover share the one dismiss command result", async () 
   const transition = createSingleFlight(async () => {
     dismissals += 1;
     await new Promise((resolve) => { releaseDismiss = resolve; });
-    return { capture: "idle" };
+    return { capture: "idle", startup: "ready", preview: true, retention_operational: true };
   });
 
   const routes = createRouteOwnershipGate();
@@ -348,7 +350,7 @@ test("transcript-ready start clears hidden state before owned visible cleanup", 
   const ready = await prepareConsentTransition("transcript-ready", {
     dismiss: async () => {
       events.push("dismiss");
-      return { capture: "idle" };
+      return { capture: "idle", startup: "ready", preview: true, retention_operational: true };
     },
     clearHiddenAttempt: () => { events.push("clear-hidden"); },
     afterOwnedDismiss: () => { events.push("clear-visible"); },
@@ -394,7 +396,7 @@ test("route loss after dismissal still clears hidden consent state but not visib
   const ready = await prepareConsentTransition("transcript-ready", {
     dismiss: async () => {
       events.push("dismiss");
-      return { capture: "idle" };
+      return { capture: "idle", startup: "ready", preview: true, retention_operational: true };
     },
     ownsRoute: () => false,
     clearHiddenAttempt: () => { events.push("clear-hidden"); },
@@ -413,7 +415,7 @@ test("Done or Recover navigation loss prevents visible cleanup", async () => {
     dismiss: async () => {
       events.push("dismiss");
       routes.advance();
-      return { capture: "idle" };
+      return { capture: "idle", startup: "ready", preview: true, retention_operational: true };
     },
     ownsRoute: () => routes.owns(doneOrRecover),
     clearHiddenAttempt: () => { events.push("clear-hidden"); },
@@ -422,6 +424,42 @@ test("Done or Recover navigation loss prevents visible cleanup", async () => {
 
   assert.equal(ready, false);
   assert.deepEqual(events, ["dismiss", "clear-hidden"]);
+});
+
+test("Start leaves a successful diagnostic dismissal rendered and only clears hidden consent", async () => {
+  const events = [];
+  const diagnostic = {
+    capture: "idle",
+    startup: "diagnostic-written",
+    preview: true,
+    retention_operational: false,
+  };
+  const ready = await prepareConsentTransition("transcript-ready", {
+    dismiss: async () => diagnostic,
+    clearHiddenAttempt: () => { events.push("clear-hidden"); },
+    afterOwnedDismiss: () => { events.push("clear-visible"); },
+  });
+
+  assert.equal(isDismissalReadySnapshot(diagnostic), false);
+  assert.equal(ready, false);
+  assert.deepEqual(events, ["clear-hidden"]);
+});
+
+test("Done or Recover leaves a successful diagnostic dismissal on its startup screen", () => {
+  const events = [];
+  const diagnostic = {
+    capture: "idle",
+    startup: "diagnostic-written",
+    preview: true,
+    retention_operational: false,
+  };
+  const admitted = settleDismissal(diagnostic, {
+    clearHiddenAttempt: () => { events.push("clear-hidden"); },
+    afterOwnedDismiss: () => { events.push("clear-visible"); },
+  });
+
+  assert.equal(admitted, false);
+  assert.deepEqual(events, ["clear-hidden"]);
 });
 
 test("idle start is direct and other capture states refuse consent", async () => {

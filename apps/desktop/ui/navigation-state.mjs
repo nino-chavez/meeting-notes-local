@@ -277,6 +277,22 @@ export function acceptAuthoritativeSnapshot(snapshot, actions) {
   return snapshot;
 }
 
+export function isDismissalReadySnapshot(snapshot) {
+  return snapshot?.capture === "idle"
+    && snapshot?.startup === "ready"
+    && snapshot?.preview === true
+    && snapshot?.retention_operational !== false;
+}
+
+export function settleDismissal(snapshot, actions) {
+  if (snapshot?.capture !== "idle") return false;
+  actions.clearHiddenAttempt();
+  if (!isDismissalReadySnapshot(snapshot)) return false;
+  if (actions.ownsRoute && !actions.ownsRoute()) return false;
+  actions.afterOwnedDismiss();
+  return true;
+}
+
 export async function refreshFindGeneration(query, actions) {
   if (actions.isCurrent && !actions.isCurrent()) return null;
   actions.invalidateResults();
@@ -293,9 +309,5 @@ export async function prepareConsentTransition(capture, actions) {
   if (capture === "idle") return true;
   if (capture !== "transcript-ready") return false;
   const snapshot = await actions.dismiss();
-  if (snapshot?.capture !== "idle") return false;
-  actions.clearHiddenAttempt();
-  if (actions.ownsRoute && !actions.ownsRoute()) return false;
-  actions.afterOwnedDismiss();
-  return true;
+  return settleDismissal(snapshot, actions);
 }

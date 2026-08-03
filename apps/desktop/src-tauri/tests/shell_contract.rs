@@ -359,6 +359,8 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(script.contains("const refreshCurrentOperation = createFreshSnapshotOperation(refresh, REFRESH_SUPERSEDED);"));
     assert!(script.contains("pollTimer = window.setTimeout(refreshCurrent, delay);"));
     assert!(navigation.contains("export function acceptAuthoritativeSnapshot(snapshot, actions)"));
+    assert!(navigation.contains("export function isDismissalReadySnapshot(snapshot)"));
+    assert!(navigation.contains("export function settleDismissal(snapshot, actions)"));
     assert!(script.contains("function acceptCommandSnapshot(snapshot)"));
     assert!(script.contains("invalidateSnapshotRequests: () => snapshotRequestGate.invalidate(),"));
     assert!(script.contains("const routeOwnership = createRouteOwnershipGate();"));
@@ -532,10 +534,14 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         .find("export async function prepareConsentTransition")
         .unwrap();
     let transition = &navigation[start..];
-    let dismiss = transition.find("await actions.dismiss()").unwrap();
-    let hidden_cleanup = transition.find("actions.clearHiddenAttempt()").unwrap();
-    let visible_cleanup = transition.find("actions.afterOwnedDismiss()").unwrap();
-    assert!(dismiss < hidden_cleanup && hidden_cleanup < visible_cleanup);
+    assert!(transition.contains("const snapshot = await actions.dismiss();"));
+    let settle_start = navigation.find("export function settleDismissal").unwrap();
+    let settlement = &navigation[settle_start..start];
+    let hidden_cleanup = settlement.find("actions.clearHiddenAttempt()").unwrap();
+    let admission = settlement.find("if (!isDismissalReadySnapshot(snapshot)) return false;").unwrap();
+    let visible_cleanup = settlement.find("actions.afterOwnedDismiss()").unwrap();
+    assert!(transition.contains("return settleDismissal(snapshot, actions);"));
+    assert!(hidden_cleanup < admission && admission < visible_cleanup);
     assert!(script.contains("showScreen(\"start-meeting-error-screen\""));
     assert!(script.contains("startMeetingAction.addEventListener(\"click\", openStartMeeting)"));
 
@@ -548,6 +554,7 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     assert!(open.contains("dismiss: () => dismissMeetingOperation.run()"));
     assert!(open.contains("clearHiddenAttempt: () => clearAttemptReview(true)"));
     assert!(open.contains("afterOwnedDismiss: () => {\n        invalidateLibraryHandles();"));
+    assert!(open.contains("if (lastSnapshot?.capture === \"idle\" && !isDismissalReadySnapshot(lastSnapshot)) return;"));
     assert!(open.contains("showStartTransitionError()"));
 
     let dismiss_start = script.find("async function dismissAttemptAndReturnFind").unwrap();
@@ -557,12 +564,10 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         + dismiss_start;
     let dismiss_attempt = &script[dismiss_start..dismiss_end];
     let shared_dismiss = dismiss_attempt.find("await dismissMeetingOperation.run()").unwrap();
-    let cleanup = dismiss_attempt.find("clearAttemptReview(true)").unwrap();
-    let route_guard = dismiss_attempt
-        .find("if (!workflowRouteIsCurrent(routeToken)) return;")
-        .unwrap();
-    assert!(shared_dismiss < cleanup && cleanup < route_guard);
+    let settlement = dismiss_attempt.find("const admitted = settleDismissal(snapshot, {").unwrap();
+    assert!(shared_dismiss < settlement);
     assert!(dismiss_attempt.contains("const snapshot = await dismissMeetingOperation.run();"));
+    assert!(dismiss_attempt.contains("afterOwnedDismiss: invalidateLibraryHandles,"));
     assert!(script.contains("(event) => returnToFindAfterStartError(event.currentTarget)"));
     let return_start = script.find("async function returnToFindAfterStartError").unwrap();
     let return_end = script[return_start..]
