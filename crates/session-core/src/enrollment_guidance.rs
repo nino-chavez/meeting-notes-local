@@ -263,6 +263,10 @@ pub enum EnrollmentShortfall {
     /// never combine into one profile — the same reason `load_profile` refuses
     /// a fingerprint mismatch and § I's `stale` state exists.
     MixedEncoderMaterial,
+    /// Derived material is internally consistent but does not match the
+    /// checkpoint the running build's loader will demand. § I's `stale` state,
+    /// caught before a profile exists instead of after.
+    StaleVoiceMaterial,
 }
 
 impl EnrollmentShortfall {
@@ -345,6 +349,11 @@ impl EnrollmentShortfall {
                 different versions of the voice analyzer and cannot be combined into \
                 one profile. Setup must restart under the current version."
                 .to_string(),
+            Self::StaleVoiceMaterial => "Stored voice material was prepared with a \
+                different version of the voice analyzer than this app uses, so it \
+                cannot become a profile here. Setup must restart under the current \
+                version."
+                .to_string(),
         }
     }
 }
@@ -413,12 +422,22 @@ pub struct GuidedEnrollmentStatus {
 
 /// Evaluates accumulated evidence against the enforced enrolment contract.
 ///
-/// Ordering is deliberate: operator-material shortfalls are reported before
-/// negative-material ones, because asking someone to find permitted speech that
-/// is not them is the larger errand and should not be raised while their own
-/// sittings are still short.
+/// `expected_encoder_sha256` is the fingerprint the running build's loader
+/// will demand — in the packaged app, the runtime manifest's encoder digest.
+/// Pass `None` only when no derivation can have occurred, because without it
+/// this evaluation cannot see the acute failure the placeholder runtime
+/// creates: material derived under one uniform-but-wrong checkpoint reads
+/// internally consistent while `load_profile` refuses all of it.
+///
+/// Ordering is deliberate: terminal refusals are reported before the
+/// negative-material errand — sending someone to find permitted speech for
+/// evidence that can never enrol is wasted work — and operator-actionable
+/// shortfalls come before app-side pending ones.
 #[must_use]
-pub fn evaluate_enrollment_evidence(evidence: &EnrollmentEvidence) -> GuidedEnrollmentStatus {
+pub fn evaluate_enrollment_evidence(
+    evidence: &EnrollmentEvidence,
+    expected_encoder_sha256: Option<&str>,
+) -> GuidedEnrollmentStatus {
     let mut shortfalls = Vec::new();
     let mut advisories = Vec::new();
 
@@ -526,6 +545,39 @@ pub fn evaluate_enrollment_evidence(evidence: &EnrollmentEvidence) -> GuidedEnro
         }
     }
 
+    // Encoder identity is checked before the negative errand is raised: a
+    // mismatch is terminal for every recording on hand, so `next_step` must
+    // name it rather than send the operator to collect comparison speech for
+    // evidence that can never enrol.
+    let mut derived_encoders: Vec<&str> = evidence
+        .sittings
+        .iter()
+        .filter_map(|sitting| sitting.derived.as_ref())
+        .chain(
+            evidence
+                .negative_sources
+                .iter()
+                .filter_map(|source| source.derived.as_ref()),
+        )
+        .map(|material| material.encoder_sha256.as_str())
+        .collect();
+    derived_encoders.sort_unstable();
+    derived_encoders.dedup();
+    if derived_encoders.len() > 1 {
+        shortfalls.push(EnrollmentShortfall::MixedEncoderMaterial);
+    } else if let (Some(expected), Some(actual)) =
+        (expected_encoder_sha256, derived_encoders.first())
+    {
+        // Uniformly consistent material can still be uniformly wrong: the
+        // loader compares against the running build's checkpoint, not against
+        // the material's own coherence. This is the packaged-runtime case —
+        // its manifest encoder is a placeholder, so every real derivation
+        // mismatches — and it must not read as a working choice screen.
+        if *actual != expected {
+            shortfalls.push(EnrollmentShortfall::StaleVoiceMaterial);
+        }
+    }
+
     let operator_material_is_sufficient = shortfalls.is_empty();
 
     let mut negative_scorable_segments = 0_u32;
@@ -587,24 +639,6 @@ pub fn evaluate_enrollment_evidence(evidence: &EnrollmentEvidence) -> GuidedEnro
         .filter(|source| source.derived.is_none())
         .count();
 
-    let mut derived_encoders: Vec<&str> = evidence
-        .sittings
-        .iter()
-        .filter_map(|sitting| sitting.derived.as_ref())
-        .chain(
-            evidence
-                .negative_sources
-                .iter()
-                .filter_map(|source| source.derived.as_ref()),
-        )
-        .map(|material| material.encoder_sha256.as_str())
-        .collect();
-    derived_encoders.sort_unstable();
-    derived_encoders.dedup();
-    if derived_encoders.len() > 1 {
-        shortfalls.push(EnrollmentShortfall::MixedEncoderMaterial);
-    }
-
     if sittings_awaiting_derivation + negatives_awaiting_derivation > 0 {
         shortfalls.push(EnrollmentShortfall::AwaitingVoiceDerivation {
             sittings: sittings_awaiting_derivation,
@@ -653,6 +687,7 @@ fn guided_state(
                 | EnrollmentShortfall::NegativeSourceNotPermitted { .. }
                 | EnrollmentShortfall::RepeatedNegativeRecording { .. }
                 | EnrollmentShortfall::MixedEncoderMaterial
+                | EnrollmentShortfall::StaleVoiceMaterial
         )
     });
     if refused {
@@ -683,6 +718,11 @@ fn guided_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Most tests exercise the evidence rules with no build encoder declared.
+    fn evaluate(evidence: &EnrollmentEvidence) -> GuidedEnrollmentStatus {
+        evaluate_enrollment_evidence(evidence, None)
+    }
 
     fn derived() -> Option<DerivedVoiceMaterial> {
         Some(DerivedVoiceMaterial {
@@ -817,7 +857,7 @@ mod tests {
 
     #[test]
     fn no_evidence_is_blocked_and_asks_for_the_first_sitting() {
-        let status = evaluate_enrollment_evidence(&EnrollmentEvidence::default());
+        let status = evaluate(&EnrollmentEvidence::default());
         assert_eq!(status.state, GuidedEnrollmentState::Blocked);
         assert_eq!(status.sittings_recorded, 0);
         // The first thing said is about sittings, not about finding another
@@ -835,7 +875,7 @@ mod tests {
             sittings: vec![sitting(0, "a", 40)],
             negative_sources: Vec::new(),
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::ResumeAfterGap);
         assert_eq!(status.sittings_recorded, 1);
     }
@@ -845,7 +885,7 @@ mod tests {
         // `speaker_gate._sitting_problems` refuses `gap < MIN_SITTING_GAP_S`,
         // so the boundary itself is admissible. § I says the same in prose;
         // this pins the code.
-        let status = evaluate_enrollment_evidence(&complete_evidence());
+        let status = evaluate(&complete_evidence());
         assert!(
             !status
                 .shortfalls
@@ -863,7 +903,7 @@ mod tests {
             sittings: vec![sitting(0, "a", 40), sitting(3_599, "b", 40)],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::SecondSittingReview);
         assert!(
             status
@@ -884,7 +924,7 @@ mod tests {
             sittings: vec![sitting(0, "same", 40), sitting(7_200, "same", 40)],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::Refused);
         assert!(
             status
@@ -910,7 +950,7 @@ mod tests {
             ],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::Refused);
         assert!(
             status
@@ -937,7 +977,7 @@ mod tests {
             ],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::Refused);
         assert!(
             status
@@ -959,7 +999,7 @@ mod tests {
             sittings: vec![sitting(0, "a", 40), sitting(3_600, "b", 40)],
             negative_sources: Vec::new(),
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::NeedsOtherVoice);
         assert!(
             status
@@ -976,7 +1016,7 @@ mod tests {
             sittings: vec![sitting(0, "a", 40), sitting(3_600, "b", 40)],
             negative_sources: vec![permitted_negative("n", 4, 90.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert!(
             status
                 .shortfalls
@@ -1000,7 +1040,7 @@ mod tests {
                 permitted_negative("n", 24, 72.0),
             ],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::Refused);
         // The duplicate contributed nothing to the running totals.
         assert_eq!(status.negative_scorable_segments, 24);
@@ -1019,7 +1059,7 @@ mod tests {
                 derived: derived(),
             }],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::Refused);
         assert_eq!(status.negative_scorable_segments, 0);
         assert!(status.negative_scorable_seconds.abs() < f64::EPSILON);
@@ -1035,7 +1075,7 @@ mod tests {
             sittings: vec![sitting(0, "a", 40), sitting(3_600, "b", 4)],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.scorable_operator_segments, 44);
         assert!(
             !status.shortfalls.iter().any(|shortfall| matches!(
@@ -1057,7 +1097,7 @@ mod tests {
             sittings: vec![sitting(0, "a", 5), sitting(3_600, "b", 4)],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.scorable_operator_segments, 9);
         assert!(
             status
@@ -1079,7 +1119,7 @@ mod tests {
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
         assert!(
-            evaluate_enrollment_evidence(&thin)
+            evaluate(&thin)
                 .shortfalls
                 .contains(&EnrollmentShortfall::TooFewScorableSegments { have: 2, need: 4 })
         );
@@ -1089,7 +1129,7 @@ mod tests {
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
         assert!(
-            evaluate_enrollment_evidence(&boundary)
+            evaluate(&boundary)
                 .shortfalls
                 .contains(&EnrollmentShortfall::TooFewScorableSegments { have: 3, need: 4 })
         );
@@ -1098,7 +1138,7 @@ mod tests {
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
         assert!(
-            !evaluate_enrollment_evidence(&admissible)
+            !evaluate(&admissible)
                 .shortfalls
                 .iter()
                 .any(|shortfall| matches!(
@@ -1114,7 +1154,7 @@ mod tests {
             sittings: vec![sitting(0, "a", 10), sitting(3_600, "b", 8)],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.scorable_operator_segments, 18);
         assert_eq!(status.state, GuidedEnrollmentState::ChoosingOperatingPoint);
         assert!(status.shortfalls.is_empty());
@@ -1130,7 +1170,7 @@ mod tests {
 
     #[test]
     fn clearing_every_floor_still_reports_the_gates_it_cannot_decide() {
-        let status = evaluate_enrollment_evidence(&complete_evidence());
+        let status = evaluate(&complete_evidence());
         assert_eq!(status.state, GuidedEnrollmentState::ChoosingOperatingPoint);
         assert!(status.next_step.is_none());
         // Nothing here may read as admission: the operator decision and the
@@ -1173,6 +1213,7 @@ mod tests {
                 negative_sources: 1,
             },
             EnrollmentShortfall::MixedEncoderMaterial,
+            EnrollmentShortfall::StaleVoiceMaterial,
         ];
         for shortfall in &shortfalls {
             let sentence = shortfall.sentence();
@@ -1208,7 +1249,7 @@ mod tests {
             sittings: vec![raw_sitting(0, "a", 40), raw_sitting(3_600, "b", 40)],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::SecondSittingReview);
         assert_eq!(status.sittings_awaiting_derivation, 2);
         assert!(
@@ -1234,7 +1275,7 @@ mod tests {
                 ..permitted_negative("n", 24, 72.0)
             }],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_ne!(status.state, GuidedEnrollmentState::ChoosingOperatingPoint);
         assert_eq!(status.negatives_awaiting_derivation, 1);
         // NeedsOtherVoice would be wrong: the voice was already supplied.
@@ -1249,7 +1290,7 @@ mod tests {
             sittings: vec![raw_sitting(0, "a", 40)],
             negative_sources: Vec::new(),
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::ResumeAfterGap);
         assert!(matches!(
             status.shortfalls.first(),
@@ -1282,12 +1323,75 @@ mod tests {
             ],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::Refused);
         assert!(
             status
                 .shortfalls
                 .contains(&EnrollmentShortfall::MixedEncoderMaterial)
+        );
+    }
+
+    /// A terminal refusal must own `next_step`. With mixed-encoder material
+    /// and no negative sample, sending the operator on the negative errand is
+    /// wasted work for evidence that can never enrol — the encoder checks run
+    /// before the errand shortfalls so the refusal sorts first.
+    #[test]
+    fn a_terminal_encoder_refusal_owns_next_step_over_the_negative_errand() {
+        let evidence = EnrollmentEvidence {
+            sittings: vec![
+                sitting(0, "a", 40),
+                SittingEvidence {
+                    derived: Some(DerivedVoiceMaterial {
+                        encoder_sha256: "other-enc".to_string(),
+                    }),
+                    ..sitting(3_600, "b", 40)
+                },
+            ],
+            negative_sources: Vec::new(),
+        };
+        let status = evaluate(&evidence);
+        assert_eq!(status.state, GuidedEnrollmentState::Refused);
+        assert!(matches!(
+            status.shortfalls.first(),
+            Some(EnrollmentShortfall::MixedEncoderMaterial)
+        ));
+        assert!(
+            status.next_step.unwrap().contains("voice analyzer"),
+            "next_step must name the terminal refusal, not the negative errand"
+        );
+    }
+
+    /// Uniformly consistent material can be uniformly wrong. The loader
+    /// compares against the running build's checkpoint, so material derived
+    /// under one stale encoder must refuse here too — this is exactly the
+    /// packaged-runtime case, where the manifest encoder is a placeholder and
+    /// every real derivation mismatches.
+    #[test]
+    fn uniformly_stale_material_is_refused_against_the_expected_encoder() {
+        let evidence = complete_evidence(); // all derived under "enc"
+        let stale = evaluate_enrollment_evidence(&evidence, Some("current-checkpoint"));
+        assert_eq!(stale.state, GuidedEnrollmentState::Refused);
+        assert!(
+            stale
+                .shortfalls
+                .contains(&EnrollmentShortfall::StaleVoiceMaterial)
+        );
+
+        let matching = evaluate_enrollment_evidence(&evidence, Some("enc"));
+        assert_eq!(
+            matching.state,
+            GuidedEnrollmentState::ChoosingOperatingPoint
+        );
+        assert!(matching.shortfalls.is_empty());
+
+        // Without a declared build encoder there is nothing to compare, and
+        // staleness is deliberately not guessed.
+        let unknown = evaluate(&evidence);
+        assert!(
+            !unknown
+                .shortfalls
+                .contains(&EnrollmentShortfall::StaleVoiceMaterial)
         );
     }
 
@@ -1299,7 +1403,7 @@ mod tests {
             sittings: vec![sitting(0, "same", 40), raw_sitting(7_200, "same", 40)],
             negative_sources: vec![permitted_negative("n", 24, 72.0)],
         };
-        let status = evaluate_enrollment_evidence(&evidence);
+        let status = evaluate(&evidence);
         assert_eq!(status.state, GuidedEnrollmentState::Refused);
         assert!(
             status
@@ -1315,9 +1419,6 @@ mod tests {
         let forward = complete_evidence();
         let mut reversed = forward.clone();
         reversed.sittings.reverse();
-        assert_eq!(
-            evaluate_enrollment_evidence(&forward),
-            evaluate_enrollment_evidence(&reversed)
-        );
+        assert_eq!(evaluate(&forward), evaluate(&reversed));
     }
 }

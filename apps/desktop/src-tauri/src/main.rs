@@ -261,8 +261,15 @@ impl PreviewProfileSnapshot {
     /// empty and the evaluation truthfully reports `blocked` with the first
     /// enforced step. When the dedicated sitting recorder lands it supplies
     /// real evidence here and the same surface starts moving.
+    ///
+    /// The expected encoder is `None` only because no derivation can have
+    /// occurred: this build's runtime manifest records a placeholder encoder,
+    /// so there is nothing to compare. The recorder slice must pass the
+    /// manifest's encoder digest here — with real evidence and `None`, a
+    /// uniformly stale checkpoint would read as a working choice screen while
+    /// `load_profile` refuses all of it.
     fn guidance() -> GuidedEnrollmentStatus {
-        evaluate_enrollment_evidence(&EnrollmentEvidence::default())
+        evaluate_enrollment_evidence(&EnrollmentEvidence::default(), None)
     }
 
     fn unavailable() -> Self {
