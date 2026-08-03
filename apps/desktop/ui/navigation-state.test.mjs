@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createTransitionGate,
   createSingleFlight,
+  createFreshSnapshotOperation,
   createLatestRequestGate,
   createRouteOwnershipGate,
   displayedClaimIdentity,
@@ -169,22 +170,70 @@ test("single-flight initialization deduplicates only an in-flight snapshot", asy
   assert.deepEqual(await third, { state: "empty" });
 });
 
-test("Start and Done or Recover share one in-flight dismissal", async () => {
+test("overlapping fresh snapshot callers share one bounded retry after a superseding poll", async () => {
+  const superseded = Symbol("superseded");
+  const responses = [];
+  let requests = 0;
+  const refresh = () => {
+    requests += 1;
+    return new Promise((resolve) => { responses.push(resolve); });
+  };
+  const fresh = createFreshSnapshotOperation(refresh, superseded);
+
+  const first = fresh.run();
+  const overlappingCaller = fresh.run();
+  await Promise.resolve();
+  assert.equal(first, overlappingCaller);
+  assert.equal(requests, 1);
+
+  responses.shift()(superseded);
+  await Promise.resolve();
+  const scheduledPoll = fresh.run();
+  assert.equal(scheduledPoll, first);
+  assert.equal(requests, 2);
+
+  responses.shift()({ capture: "idle" });
+  const settled = await Promise.all([first, overlappingCaller, scheduledPoll]);
+  assert.deepEqual(settled, [
+    { capture: "idle" },
+    { capture: "idle" },
+    { capture: "idle" },
+  ]);
+  assert.equal(requests, 2);
+});
+
+test("Start and Done or Recover share dismissal through the post-invoke confirmation window", async () => {
   let dismissals = 0;
-  let release;
-  const dismissal = createSingleFlight(() => {
+  let releaseDismiss;
+  let releaseConfirmation;
+  const transition = createSingleFlight(async () => {
     dismissals += 1;
-    return new Promise((resolve) => { release = resolve; });
+    await new Promise((resolve) => { releaseDismiss = resolve; });
+    return new Promise((resolve) => { releaseConfirmation = resolve; });
   });
 
-  const fromStart = dismissal.run();
-  const fromDoneOrRecover = dismissal.run();
+  const routes = createRouteOwnershipGate();
+  const startRoute = routes.advance();
+  const clearedBy = [];
+  const fromStart = prepareConsentTransition("transcript-ready", {
+    dismissAndConfirm: () => transition.run(),
+    ownsRoute: () => routes.owns(startRoute),
+    clearPriorAttempt: () => { clearedBy.push("Start"); },
+  });
   await Promise.resolve();
-  assert.equal(fromStart, fromDoneOrRecover);
+  releaseDismiss();
+  await Promise.resolve();
+  const doneRoute = routes.advance();
+  const fromDoneOrRecover = prepareConsentTransition("transcript-ready", {
+    dismissAndConfirm: () => transition.run(),
+    ownsRoute: () => routes.owns(doneRoute),
+    clearPriorAttempt: () => { clearedBy.push("Done or Recover"); },
+  });
   assert.equal(dismissals, 1);
 
-  release();
-  await Promise.all([fromStart, fromDoneOrRecover]);
+  releaseConfirmation({ capture: "idle" });
+  assert.deepEqual(await Promise.all([fromStart, fromDoneOrRecover]), [false, true]);
+  assert.deepEqual(clearedBy, ["Done or Recover"]);
 });
 
 test("overlapping Find refreshes share one generation and a later refresh is fresh", async () => {
@@ -288,54 +337,62 @@ test("Find does not invalidate or render after its route loses ownership", async
   assert.deepEqual(events, ["invalidate"]);
 });
 
-test("transcript-ready start dismisses and clears before requiring idle", async () => {
+test("transcript-ready start confirms idle before clearing the prior attempt", async () => {
   const events = [];
   const ready = await prepareConsentTransition("transcript-ready", {
-    dismiss: async () => { events.push("dismiss"); },
-    clearPriorAttempt: () => { events.push("clear"); },
-    refresh: async () => {
-      events.push("refresh");
+    dismissAndConfirm: async () => {
+      events.push("dismiss-and-confirm");
       return { capture: "idle" };
     },
+    clearPriorAttempt: () => { events.push("clear"); },
   });
 
   assert.equal(ready, true);
-  assert.deepEqual(events, ["dismiss", "clear", "refresh"]);
+  assert.deepEqual(events, ["dismiss-and-confirm", "clear"]);
+});
+
+test("a non-idle dismissal confirmation never clears the prior attempt", async () => {
+  const events = [];
+  const ready = await prepareConsentTransition("transcript-ready", {
+    dismissAndConfirm: async () => {
+      events.push("dismiss-and-confirm");
+      return { capture: "transcript-ready" };
+    },
+    clearPriorAttempt: () => { events.push("clear"); },
+  });
+
+  assert.equal(ready, false);
+  assert.deepEqual(events, ["dismiss-and-confirm"]);
 });
 
 test("failed dismissal never clears state, refreshes, or admits consent", async () => {
   const events = [];
   await assert.rejects(
     prepareConsentTransition("transcript-ready", {
-      dismiss: async () => {
-        events.push("dismiss");
+      dismissAndConfirm: async () => {
+        events.push("dismiss-and-confirm");
         throw new Error("dismiss failed");
       },
       clearPriorAttempt: () => { events.push("clear"); },
-      refresh: async () => {
-        events.push("refresh");
-        return { capture: "idle" };
-      },
     }),
     /dismiss failed/,
   );
-  assert.deepEqual(events, ["dismiss"]);
+  assert.deepEqual(events, ["dismiss-and-confirm"]);
 });
 
 test("route loss after dismissal prevents consent cleanup and refresh", async () => {
   const events = [];
   const ready = await prepareConsentTransition("transcript-ready", {
-    dismiss: async () => { events.push("dismiss"); },
-    ownsRoute: () => false,
-    clearPriorAttempt: () => { events.push("clear"); },
-    refresh: async () => {
-      events.push("refresh");
+    dismissAndConfirm: async () => {
+      events.push("dismiss-and-confirm");
       return { capture: "idle" };
     },
+    ownsRoute: () => false,
+    clearPriorAttempt: () => { events.push("clear"); },
   });
 
   assert.equal(ready, false);
-  assert.deepEqual(events, ["dismiss"]);
+  assert.deepEqual(events, ["dismiss-and-confirm"]);
 });
 
 test("Done or Recover navigation loss prevents post-dismiss cleanup", async () => {
@@ -355,9 +412,8 @@ test("Done or Recover navigation loss prevents post-dismiss cleanup", async () =
 
 test("idle start is direct and other capture states refuse consent", async () => {
   const actions = {
-    dismiss: async () => { throw new Error("unexpected dismissal"); },
+    dismissAndConfirm: async () => { throw new Error("unexpected dismissal"); },
     clearPriorAttempt: () => { throw new Error("unexpected clear"); },
-    refresh: async () => { throw new Error("unexpected refresh"); },
   };
   assert.equal(await prepareConsentTransition("idle", actions), true);
   assert.equal(await prepareConsentTransition("recording", actions), false);

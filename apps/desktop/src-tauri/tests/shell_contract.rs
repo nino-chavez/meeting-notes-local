@@ -355,10 +355,13 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(script.contains("connectionUncertaintyStatus(lastSnapshot?.capture, {\n    stopFailed: stopCommandFailed,"));
     assert!(script.contains("const snapshotRequestGate = createLatestRequestGate();"));
     assert!(script.contains("const REFRESH_SUPERSEDED = Symbol(\"refresh-superseded\");"));
-    assert!(script.contains("while (snapshot === REFRESH_SUPERSEDED) snapshot = await refresh();"));
+    assert!(navigation.contains("export function createFreshSnapshotOperation(refresh, superseded)"));
+    assert!(script.contains("const refreshCurrentOperation = createFreshSnapshotOperation(refresh, REFRESH_SUPERSEDED);"));
+    assert!(script.contains("pollTimer = window.setTimeout(refreshCurrent, delay);"));
     assert!(script.contains("const routeOwnership = createRouteOwnershipGate();"));
     assert!(script.contains("function claimExplicitRoute()"));
-    assert!(script.contains("const dismissMeetingOperation = createSingleFlight("));
+    assert!(script.contains("const dismissAndConfirmOperation = createSingleFlight(async () => {"));
+    assert!(script.contains("await invoke(\"dismiss_meeting\");\n  return refreshCurrent();"));
     assert!(!script.contains("render({ startup: \"diagnostic-written\", capture: \"idle\""));
     assert!(script.contains("if (currentScreen === id) routeRevision += 1;"));
     assert!(navigation.contains("export function resolvedScreenForSnapshot"));
@@ -523,10 +526,9 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         .find("export async function prepareConsentTransition")
         .unwrap();
     let transition = &navigation[start..];
-    let dismiss = transition.find("await actions.dismiss()").unwrap();
+    let dismiss = transition.find("await actions.dismissAndConfirm()").unwrap();
     let clear = transition.find("actions.clearPriorAttempt()").unwrap();
-    let refresh = transition.find("await actions.refresh()").unwrap();
-    assert!(dismiss < clear && clear < refresh);
+    assert!(dismiss < clear);
     assert!(script.contains("showScreen(\"start-meeting-error-screen\""));
     assert!(script.contains("startMeetingAction.addEventListener(\"click\", openStartMeeting)"));
 
@@ -536,7 +538,7 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     let prepare = open.find("await prepareConsentTransition").unwrap();
     let consent = open.find("showScreen(\"idle-screen\"").unwrap();
     assert!(prepare < consent);
-    assert!(open.contains("dismiss: () => dismissMeetingOperation.run()"));
+    assert!(open.contains("dismissAndConfirm: () => dismissAndConfirmOperation.run()"));
     assert!(open.contains("clearAttemptReview(true)"));
     assert!(open.contains("showStartTransitionError()"));
 
@@ -546,13 +548,22 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         .unwrap()
         + dismiss_start;
     let dismiss_attempt = &script[dismiss_start..dismiss_end];
-    let shared_dismiss = dismiss_attempt.find("await dismissMeetingOperation.run()").unwrap();
+    let shared_dismiss = dismiss_attempt.find("await dismissAndConfirmOperation.run()").unwrap();
     let route_guard = dismiss_attempt
         .find("if (!workflowRouteIsCurrent(routeToken)) return;")
         .unwrap();
     let cleanup = dismiss_attempt.find("clearAttemptReview(true)").unwrap();
     assert!(shared_dismiss < route_guard && route_guard < cleanup);
-    assert!(dismiss_attempt.contains("const snapshot = await refreshCurrent();"));
+    assert!(dismiss_attempt.contains("const snapshot = await dismissAndConfirmOperation.run();"));
+    assert!(script.contains("(event) => returnToFindAfterStartError(event.currentTarget)"));
+    let return_start = script.find("async function returnToFindAfterStartError").unwrap();
+    let return_end = script[return_start..]
+        .find("for (const field of checks)")
+        .unwrap()
+        + return_start;
+    let return_to_find = &script[return_start..return_end];
+    assert!(return_to_find.contains("if (control) control.disabled = true;"));
+    assert!(return_to_find.contains("if (control) control.disabled = false;"));
 }
 
 #[test]

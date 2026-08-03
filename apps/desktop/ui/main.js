@@ -1,5 +1,6 @@
 import {
   createSingleFlight,
+  createFreshSnapshotOperation,
   createLatestRequestGate,
   createRouteOwnershipGate,
   createTransitionGate,
@@ -105,9 +106,11 @@ const handleTransitionGate = createTransitionGate();
 const snapshotRequestGate = createLatestRequestGate();
 const routeOwnership = createRouteOwnershipGate();
 const REFRESH_SUPERSEDED = Symbol("refresh-superseded");
-const dismissMeetingOperation = createSingleFlight(
-  () => invoke("dismiss_meeting"),
-);
+const refreshCurrentOperation = createFreshSnapshotOperation(refresh, REFRESH_SUPERSEDED);
+const dismissAndConfirmOperation = createSingleFlight(async () => {
+  await invoke("dismiss_meeting");
+  return refreshCurrent();
+});
 
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
   const destination = screens.get(id);
@@ -678,7 +681,7 @@ async function openStartMeeting() {
   startMeetingAction.textContent = "Opening…";
   try {
     const ready = await prepareConsentTransition(lastSnapshot.capture, {
-      dismiss: () => dismissMeetingOperation.run(),
+      dismissAndConfirm: () => dismissAndConfirmOperation.run(),
       clearPriorAttempt: () => {
         clearAttemptReview(true);
         invalidateLibraryHandles();
@@ -1070,7 +1073,7 @@ async function openLibrarySearchResult(handle, control = null) {
 
 function schedulePoll(delay) {
   if (pollTimer) window.clearTimeout(pollTimer);
-  pollTimer = window.setTimeout(refresh, delay);
+  pollTimer = window.setTimeout(refreshCurrent, delay);
 }
 
 async function refresh() {
@@ -1094,10 +1097,8 @@ async function refresh() {
   }
 }
 
-async function refreshCurrent() {
-  let snapshot = await refresh();
-  while (snapshot === REFRESH_SUPERSEDED) snapshot = await refresh();
-  return snapshot;
+function refreshCurrent() {
+  return refreshCurrentOperation.run();
 }
 
 function clearAttemptReview(clearRetention = false) {
@@ -1118,16 +1119,14 @@ async function dismissAttemptAndReturnFind(control) {
   const routeToken = beginWorkflowRoute();
   if (control) control.disabled = true;
   try {
-    await dismissMeetingOperation.run();
-    if (!workflowRouteIsCurrent(routeToken)) return;
-    clearAttemptReview(true);
-    invalidateLibraryHandles();
-    const snapshot = await refreshCurrent();
+    const snapshot = await dismissAndConfirmOperation.run();
     if (!workflowRouteIsCurrent(routeToken)) return;
     if (snapshot?.capture !== "idle") {
       showStartTransitionError();
       return;
     }
+    clearAttemptReview(true);
+    invalidateLibraryHandles();
     if (currentScreen !== "find-screen") {
       productRootScreen = "find-screen";
       selectProductScreen("find-screen", { resetScroll: true });
@@ -1140,23 +1139,28 @@ async function dismissAttemptAndReturnFind(control) {
   }
 }
 
-async function returnToFindAfterStartError() {
+async function returnToFindAfterStartError(control) {
   const routeToken = beginWorkflowRoute();
-  const currentCapture = lastSnapshot?.capture;
-  const currentReady = lastSnapshot?.startup === "ready"
-    && lastSnapshot?.preview === true
-    && ["idle", "transcript-ready"].includes(currentCapture);
-  const snapshot = currentReady ? lastSnapshot : await refreshCurrent();
-  if (snapshot?.startup !== "ready"
-      || snapshot?.preview !== true
-      || !["idle", "transcript-ready"].includes(snapshot.capture)) {
-    if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
-    return;
+  if (control) control.disabled = true;
+  try {
+    const currentCapture = lastSnapshot?.capture;
+    const currentReady = lastSnapshot?.startup === "ready"
+      && lastSnapshot?.preview === true
+      && ["idle", "transcript-ready"].includes(currentCapture);
+    const snapshot = currentReady ? lastSnapshot : await refreshCurrent();
+    if (snapshot?.startup !== "ready"
+        || snapshot?.preview !== true
+        || !["idle", "transcript-ready"].includes(snapshot.capture)) {
+      if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
+      return;
+    }
+    if (!workflowRouteIsCurrent(routeToken)) return;
+    productRootScreen = "find-screen";
+    selectProductScreen("find-screen");
+    await refreshFindView();
+  } finally {
+    if (control) control.disabled = false;
   }
-  if (!workflowRouteIsCurrent(routeToken)) return;
-  productRootScreen = "find-screen";
-  selectProductScreen("find-screen");
-  await refreshFindView();
 }
 
 for (const field of checks) field.addEventListener("change", updateStartButton);
@@ -1182,7 +1186,7 @@ startForm.addEventListener("submit", async (event) => {
   updateStartButton();
   try {
     await invoke("start_meeting", request);
-    await refresh();
+    await refreshCurrent();
   } catch (error) {
     setError(startError, String(error));
   } finally {
@@ -1200,7 +1204,7 @@ stopButton.addEventListener("click", async () => {
   renderCaptureAction(lastSnapshot);
   try {
     await invoke("stop_meeting");
-    await refresh();
+    await refreshCurrent();
   } catch (error) {
     setError(stopError, String(error));
     stopCommandPending = false;
@@ -1215,7 +1219,7 @@ recoverButton.addEventListener("click", () => dismissAttemptAndReturnFind(recove
 
 retryStartup.addEventListener("click", async () => {
   if (invoke && mutableActionPolicy(lastSnapshot).canRetryStartup) await invoke("retry_startup");
-  await refresh();
+  await refreshCurrent();
 });
 
 findLink.addEventListener("click", openFind);
@@ -1224,7 +1228,10 @@ promisesLink.addEventListener("click", openPromises);
 profileLink.addEventListener("click", openProfile);
 startMeetingAction.addEventListener("click", openStartMeeting);
 document.querySelector("#start-back").addEventListener("click", openFind);
-document.querySelector("#start-transition-back").addEventListener("click", returnToFindAfterStartError);
+document.querySelector("#start-transition-back").addEventListener(
+  "click",
+  (event) => returnToFindAfterStartError(event.currentTarget),
+);
 librarySearch.addEventListener("submit", searchLibrary);
 document.querySelector("#profile-back").addEventListener("click", returnToProductHome);
 document.querySelector("#library-transcript-back").addEventListener("click", returnFromLibraryTranscript);
@@ -1272,4 +1279,4 @@ meetingOpenTranscript.addEventListener("click", () => {
 });
 
 renderStartup("shell-rendered");
-refresh();
+refreshCurrent();

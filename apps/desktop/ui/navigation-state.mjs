@@ -258,6 +258,14 @@ export function createRouteOwnershipGate() {
   };
 }
 
+export function createFreshSnapshotOperation(refresh, superseded) {
+  return createSingleFlight(async () => {
+    let snapshot = await refresh();
+    while (snapshot === superseded) snapshot = await refresh();
+    return snapshot;
+  });
+}
+
 export async function refreshFindGeneration(query, actions) {
   if (actions.isCurrent && !actions.isCurrent()) return null;
   actions.invalidateResults();
@@ -273,11 +281,10 @@ export async function refreshFindGeneration(query, actions) {
 export async function prepareConsentTransition(capture, actions) {
   if (capture === "idle") return true;
   if (capture !== "transcript-ready") return false;
-  await actions.dismiss();
+  const snapshot = await actions.dismissAndConfirm();
   if (actions.ownsRoute && !actions.ownsRoute()) return false;
+  if (snapshot?.capture !== "idle") return false;
   actions.clearPriorAttempt();
   if (actions.ownsRoute && !actions.ownsRoute()) return false;
-  const snapshot = await actions.refresh();
-  if (actions.ownsRoute && !actions.ownsRoute()) return false;
-  return snapshot?.capture === "idle";
+  return true;
 }
