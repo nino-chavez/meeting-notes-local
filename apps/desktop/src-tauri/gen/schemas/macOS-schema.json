@@ -195,6 +195,12 @@
           "markdownDescription": "Enables the preview_delete_meeting_audio command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_enrollment_surface command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-enrollment-surface",
+          "markdownDescription": "Enables the preview_enrollment_surface command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_library_open_evidence command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-library-open-evidence",
@@ -283,6 +289,12 @@
           "type": "string",
           "const": "deny-preview-delete-meeting-audio",
           "markdownDescription": "Denies the preview_delete_meeting_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_enrollment_surface command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-enrollment-surface",
+          "markdownDescription": "Denies the preview_enrollment_surface command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_library_open_evidence command without any pre-configured scope.",

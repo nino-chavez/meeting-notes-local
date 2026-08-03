@@ -61,6 +61,8 @@ const profileFootnote = document.querySelector("#profile-footnote");
 const profileSetup = document.querySelector("#profile-setup");
 const profileNextStep = document.querySelector("#profile-next-step");
 const profileEnrollmentGates = document.querySelector("#profile-enrollment-gates");
+const profileRecorderEntry = document.querySelector("#profile-recorder-entry");
+const profileSittings = document.querySelector("#profile-sittings");
 const profileResetConfirmation = document.querySelector("#profile-reset-confirmation");
 const profileResetConfirm = document.querySelector("#profile-reset-confirm");
 const profileResetCancel = document.querySelector("#profile-reset-cancel");
@@ -785,6 +787,38 @@ function renderEnrollmentGuidance(snapshot) {
   profileEnrollmentGates.textContent = gates.join(" ");
 }
 
+// Per-sitting lifecycle copy, content-free by construction: state labels come
+// from the evidence store, and nothing here carries an audio digest, timing,
+// or transcript-derived value. "Saved" is only ever the store's terminal
+// state — derived material stored, raw recording deleted under its receipt.
+const SITTING_STATE_COPY = {
+  "recording-in-progress": "This recording did not finish. It will be set aside as a rehearsal.",
+  "raw-retained": "Waiting for the app to derive voice material. The temporary recording is kept until that completes.",
+  "cleanup-pending": "Voice material is stored. The app still has to delete the temporary recording.",
+  saved: "Saved. The temporary recording has been deleted.",
+  rehearsal: "Rehearsal only. It does not count toward setup.",
+};
+
+function renderEnrollmentSittings(surface) {
+  const reason = surface?.recordingAvailable
+    ? ""
+    : surface?.recordingUnavailableReason || "Voice profile status is unavailable, so a setup recording cannot start.";
+  profileRecorderEntry.hidden = !reason;
+  profileRecorderEntry.textContent = reason;
+  const sittings = Array.isArray(surface?.sittings) ? surface.sittings : [];
+  profileSittings.hidden = sittings.length === 0;
+  profileSittings.replaceChildren(
+    ...sittings.map((sitting) => {
+      const item = document.createElement("li");
+      const kind =
+        sitting?.kind === "negative-source" ? "Comparison speech" : "Voice session";
+      const copy = SITTING_STATE_COPY[sitting?.state] || "State unavailable.";
+      item.textContent = `${kind}: ${copy}`;
+      return item;
+    }),
+  );
+}
+
 function renderProfile(snapshot) {
   const state = snapshot?.state || "unavailable";
   profileResetConfirmation.hidden = true;
@@ -938,6 +972,10 @@ async function openProfile() {
     if (currentScreen === "profile-screen" && routeRevision === revision) {
       renderProfile({ state: "unavailable" });
     }
+  }
+  const surface = await invoke("preview_enrollment_surface").catch(() => null);
+  if (currentScreen === "profile-screen" && routeRevision === revision) {
+    renderEnrollmentSittings(surface);
   }
 }
 

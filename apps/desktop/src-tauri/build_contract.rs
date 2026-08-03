@@ -28,6 +28,7 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "dismiss_meeting",
     "retry_startup",
     "preview_profile_snapshot",
+    "preview_enrollment_surface",
     "preview_profile_preserve_legacy",
     "preview_profile_reset",
     "preview_library_snapshot",

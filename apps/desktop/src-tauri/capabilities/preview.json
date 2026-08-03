@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "preview-window",
-  "description": "The separately identified Preview window may exercise the transcript-alpha commands, content-free voice-profile status, explicit preserve-first legacy-profile migration, separately confirmed profile reset, retained-meeting Library, exact transcript/title search, and the reviewed one-meeting audio-deletion boundary. It has no profile activation, enrollment, note generation, generic filesystem, shell, process, dialog, or remote-origin permission.",
+  "description": "The separately identified Preview window may exercise the transcript-alpha commands, content-free voice-profile status, the content-free enrolment evidence listing with its honest recording boundary, explicit preserve-first legacy-profile migration, separately confirmed profile reset, retained-meeting Library, exact transcript/title search, and the reviewed one-meeting audio-deletion boundary. It has no profile activation, enrollment mutation, note generation, generic filesystem, shell, process, dialog, or remote-origin permission.",
   "windows": ["preview"],
   "platforms": ["macOS"],
   "permissions": [
@@ -11,6 +11,7 @@
     "allow-dismiss-meeting",
     "allow-retry-startup",
     "allow-preview-profile-snapshot",
+    "allow-preview-enrollment-surface",
     "allow-preview-profile-preserve-legacy",
     "allow-preview-profile-reset",
     "allow-preview-library-snapshot",

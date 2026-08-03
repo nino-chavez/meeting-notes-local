@@ -186,6 +186,7 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-dismiss-meeting",
             "allow-retry-startup",
             "allow-preview-profile-snapshot",
+            "allow-preview-enrollment-surface",
             "allow-preview-profile-preserve-legacy",
             "allow-preview-profile-reset",
             "allow-preview-library-snapshot",
@@ -485,6 +486,19 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
     assert!(script.contains("The stored voice profile was deleted"));
     assert!(html.contains("does not read meeting or transcript content"));
     assert!(!script.contains("preview_profile_enroll"));
+
+    // The recorder surface lists per-sitting evidence states and names the
+    // honest recording boundary. It is read-only: no mutating enrolment
+    // command may be invoked from the page, and "saved" copy must state the
+    // deletion that the store's terminal receipt guarantees.
+    assert!(html.contains("id=\"profile-recorder-entry\""));
+    assert!(html.contains("id=\"profile-sittings\""));
+    assert!(script.contains("preview_enrollment_surface"));
+    assert!(script.contains("recordingUnavailableReason"));
+    assert!(script.contains("Saved. The temporary recording has been deleted."));
+    assert!(script.contains("does not count toward setup"));
+    assert!(!script.contains("preview_enrollment_begin"));
+    assert!(!script.contains("preview_enrollment_abandon"));
 }
 
 #[test]

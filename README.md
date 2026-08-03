@@ -20,7 +20,8 @@ Core Audio process tap, your microphone comes through the same path
 > crash-safe sitting evidence store that counts a sitting saved only once derived
 > embeddings and encoder identity are durably stored and the raw recording is
 > deleted under a digest-bound receipt, with anything deleted earlier labelled a
-> rehearsal — a separately
+> rehearsal, and surfaced read-only as a per-sitting evidence list whose start
+> control truthfully names the unadmitted encoder — a separately
 > confirmed crash-recoverable profile reset that never opens a meeting, and an
 > explicitly approved two-step action that can delete only one meeting's retained
 > audio while preserving its transcript and note. That

@@ -555,6 +555,18 @@ evidence and no verified encoder identity it refuses (`needs-attention`) rather
 than guessing. The store's derivation seam accepts only synthetic fixtures until
 the preferred ONNX encoder passes both admission checks.
 
+**The recorder surface exists and is read-only.** The Voice profile screen lists
+each sitting's lifecycle state in content-free copy — recording-in-progress,
+raw-retained, cleanup-pending, saved, rehearsal — through the
+`preview_enrollment_surface` command, and names the honest recording boundary in
+place of a start control: today, that this build's runtime has no admitted
+speaker encoder. The boundary sentence derives from the build's own signal (the
+manifest naming `encoder-unavailable.identity`), not a hardcoded digest, so it
+flips exactly when a real encoder is packaged. Preview's capability grants this
+one read; starting, deriving, or abandoning a sitting remains ungranted, so the
+enrolment-mutation boundary is unchanged. `saved` copy states the deletion the
+terminal receipt guarantees; nothing on the surface reads as a progress share.
+
 **The packaged runtime cannot derive that material today, and the chosen encoder
 is a preferred candidate, not an admitted one.** `worker/build_runtime.sh`
 records `encoder-unavailable.identity` — a text placeholder — as its encoder, and its

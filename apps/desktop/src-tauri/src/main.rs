@@ -109,6 +109,8 @@ struct ApplicationState {
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
     #[cfg(any(feature = "preview-surface", test))]
     preview_profile: Mutex<PreviewProfileSnapshot>,
+    #[cfg(any(feature = "preview-surface", test))]
+    preview_enrollment: Mutex<PreviewEnrollmentSurface>,
 }
 
 impl Default for ApplicationState {
@@ -126,6 +128,8 @@ impl Default for ApplicationState {
             preview_library: Mutex::new(None),
             #[cfg(any(feature = "preview-surface", test))]
             preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
+            #[cfg(any(feature = "preview-surface", test))]
+            preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
         }
     }
 }
@@ -324,6 +328,84 @@ impl PreviewProfileSnapshot {
     }
 }
 
+/// Content-free sentences for why the dedicated sitting recorder cannot
+/// start. Each names the actual boundary; none invites retrying around it.
+#[cfg(any(feature = "preview-surface", test))]
+const RECORDER_REASON_RUNTIME_UNKNOWN: &str =
+    "The verified runtime identity is not available yet, so a setup recording cannot start.";
+#[cfg(any(feature = "preview-surface", test))]
+const RECORDER_REASON_NO_ENCODER: &str = "This build's runtime has no admitted speaker encoder, \
+     so a setup recording could not be saved. Recording opens after the preferred ONNX encoder \
+     passes its admission checks.";
+#[cfg(any(feature = "preview-surface", test))]
+const RECORDER_REASON_RECORDER_UNBUILT: &str =
+    "The dedicated sitting recorder is not part of this Preview yet.";
+#[cfg(any(feature = "preview-surface", test))]
+const RECORDER_REASON_STATUS_UNAVAILABLE: &str =
+    "Voice profile status is unavailable, so a setup recording cannot start.";
+
+/// One recorded sitting, content-free: an identifier, what kind of material
+/// it is, and where it sits in the evidence lifecycle. No audio digest,
+/// timing, or transcript-derived value crosses this surface.
+#[cfg(any(feature = "preview-surface", test))]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewSittingSummary {
+    sitting_id: String,
+    kind: &'static str,
+    source_class: Option<String>,
+    state: &'static str,
+}
+
+/// The recorder half of the Voice profile screen. Recording stays
+/// unavailable — with the reason named — until the encoder is admitted and a
+/// real recorder exists; the sittings list is the durable evidence store's
+/// projection, so the surface can already show what the lifecycle holds.
+#[cfg(any(feature = "preview-surface", test))]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewEnrollmentSurface {
+    recording_available: bool,
+    recording_unavailable_reason: Option<&'static str>,
+    sittings: Vec<PreviewSittingSummary>,
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+impl PreviewEnrollmentSurface {
+    fn unavailable() -> Self {
+        Self {
+            recording_available: false,
+            recording_unavailable_reason: Some(RECORDER_REASON_STATUS_UNAVAILABLE),
+            sittings: Vec::new(),
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+fn sitting_kind_label(
+    kind: local_meeting_notes_session_core::sitting_evidence::SittingKind,
+) -> &'static str {
+    use local_meeting_notes_session_core::sitting_evidence::SittingKind;
+    match kind {
+        SittingKind::OperatorSitting => "operator-sitting",
+        SittingKind::NegativeSource => "negative-source",
+    }
+}
+
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+fn sitting_state_label(
+    state: local_meeting_notes_session_core::sitting_evidence::SittingLifecycleState,
+) -> &'static str {
+    use local_meeting_notes_session_core::sitting_evidence::SittingLifecycleState;
+    match state {
+        SittingLifecycleState::RecordingInProgress => "recording-in-progress",
+        SittingLifecycleState::RawRetained => "raw-retained",
+        SittingLifecycleState::CleanupPending => "cleanup-pending",
+        SittingLifecycleState::Saved => "saved",
+        SittingLifecycleState::Rehearsal => "rehearsal",
+    }
+}
+
 fn apply_restored_transcript_projection(
     model: &mut AppModel,
     projection: RestoredTranscriptProjection,
@@ -431,6 +513,13 @@ struct RuntimeIdentity {
     /// enrolment compares derived material against exactly this value, so a
     /// build without a real encoder truthfully refuses rather than guessing.
     encoder_sha256: String,
+    /// Whether the manifest names a real encoder resource at all.
+    /// `worker/build_runtime.sh` deliberately records the
+    /// `encoder-unavailable.identity` placeholder file when no speaker
+    /// encoder is packaged — the file name is the build's own declared
+    /// signal, so the recorder surface derives its honest boundary from it
+    /// instead of hardcoding the placeholder's digest.
+    encoder_available: bool,
 }
 
 struct CaptureTaskControl {
@@ -994,6 +1083,24 @@ fn preview_profile_snapshot(state: State<'_, ApplicationState>) -> PreviewProfil
     preview_profile_snapshot_for(&state)
 }
 
+/// Read-only recorder surface: the cached evidence-store projection plus the
+/// honest recording boundary. Preview gains no enrolment mutation through
+/// this — starting, deriving, or abandoning a sitting stays ungranted.
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
+fn preview_enrollment_surface(state: State<'_, ApplicationState>) -> PreviewEnrollmentSurface {
+    preview_enrollment_surface_for(&state)
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn preview_enrollment_surface_for(state: &ApplicationState) -> PreviewEnrollmentSurface {
+    state
+        .preview_enrollment
+        .lock()
+        .map(|cached| cached.clone())
+        .unwrap_or_else(|_| PreviewEnrollmentSurface::unavailable())
+}
+
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_profile_preserve_legacy(
@@ -1189,6 +1296,11 @@ fn preview_profile_reset_for(
 
 #[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
 fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &'static str> {
+    // Reset first so any refusal below leaves the recorder surface honestly
+    // unavailable instead of retaining a stale sittings list.
+    if let Ok(mut cached) = state.preview_enrollment.lock() {
+        *cached = PreviewEnrollmentSurface::unavailable();
+    }
     let held = state
         .app_data_writer_lock
         .lock()
@@ -1205,22 +1317,48 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
             // runtime identity captured at worker spawn; before spawn it is
             // unknown and `baseline_from_store` refuses to evaluate recorded
             // evidence against nothing.
-            let expected_encoder = state
-                .runtime
-                .lock()
-                .map_err(|_| "the runtime identity is unavailable")?
-                .as_ref()
-                .map(|runtime| runtime.encoder_sha256.clone());
+            let (expected_encoder, encoder_available) = {
+                let runtime = state
+                    .runtime
+                    .lock()
+                    .map_err(|_| "the runtime identity is unavailable")?;
+                (
+                    runtime.as_ref().map(|runtime| runtime.encoder_sha256.clone()),
+                    runtime.as_ref().map(|runtime| runtime.encoder_available),
+                )
+            };
             match writer
                 .sitting_evidence_authority()
                 .reconcile_and_read(now_epoch_seconds())
             {
-                Ok((evidence, _summaries)) => Ok(PreviewProfileSnapshot::baseline_from_store(
-                    baseline.profile_present(),
-                    baseline.profile_active(),
-                    evidence,
-                    expected_encoder.as_deref(),
-                )),
+                Ok((evidence, summaries)) => {
+                    let surface = PreviewEnrollmentSurface {
+                        recording_available: false,
+                        recording_unavailable_reason: Some(match encoder_available {
+                            None => RECORDER_REASON_RUNTIME_UNKNOWN,
+                            Some(false) => RECORDER_REASON_NO_ENCODER,
+                            Some(true) => RECORDER_REASON_RECORDER_UNBUILT,
+                        }),
+                        sittings: summaries
+                            .iter()
+                            .map(|summary| PreviewSittingSummary {
+                                sitting_id: summary.sitting_id.clone(),
+                                kind: sitting_kind_label(summary.kind),
+                                source_class: summary.source_class.clone(),
+                                state: sitting_state_label(summary.state),
+                            })
+                            .collect(),
+                    };
+                    if let Ok(mut cached) = state.preview_enrollment.lock() {
+                        *cached = surface;
+                    }
+                    Ok(PreviewProfileSnapshot::baseline_from_store(
+                        baseline.profile_present(),
+                        baseline.profile_active(),
+                        evidence,
+                        expected_encoder.as_deref(),
+                    ))
+                }
                 Err(SittingEvidenceAdmissionError::Evidence(_)) => Ok(
                     PreviewProfileSnapshot::lifecycle_unreadable("needs-attention"),
                 ),
@@ -1619,6 +1757,8 @@ fn main() {
             #[cfg(feature = "preview-surface")]
             preview_profile_snapshot,
             #[cfg(feature = "preview-surface")]
+            preview_enrollment_surface,
+            #[cfg(feature = "preview-surface")]
             preview_profile_preserve_legacy,
             #[cfg(feature = "preview-surface")]
             preview_profile_reset,
@@ -1944,6 +2084,8 @@ fn initialize_application(app: AppHandle, retry: bool) {
         tap_build_sha256: manifest.tap.sha256.clone(),
         tap_path: storage_context.resource_root.join(&manifest.tap.path),
         encoder_sha256: manifest.encoder.sha256.clone(),
+        encoder_available: manifest.encoder.path.file_name()
+            != Some(std::ffi::OsStr::new("encoder-unavailable.identity")),
     };
     *state.worker.lock().expect("worker process lock") = Some(worker);
     *state.runtime.lock().expect("runtime identity lock") = Some(runtime.clone());
@@ -3749,6 +3891,7 @@ mod tests {
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
             encoder_sha256: encoder.into(),
+            encoder_available: false,
         });
         let sitting_id = "6f7dce4e-93a9-4c05-a9c6-9c1f60ec2c68";
         let spans: Vec<SegmentSpan> = (0..5)
@@ -3777,6 +3920,24 @@ mod tests {
         assert_eq!(raw_retained.guided_enrollment.sittings_awaiting_derivation, 1);
         assert_eq!(raw_retained.guided_enrollment.sittings_recorded, 1);
 
+        // The recorder surface carries the same store read: one raw-retained
+        // sitting, recording honestly unavailable because this runtime's
+        // encoder is the placeholder.
+        let surface = preview_enrollment_surface_for(&state);
+        assert!(!surface.recording_available);
+        assert_eq!(
+            surface.recording_unavailable_reason,
+            Some(RECORDER_REASON_NO_ENCODER)
+        );
+        assert_eq!(surface.sittings.len(), 1);
+        assert_eq!(surface.sittings[0].kind, "operator-sitting");
+        assert_eq!(surface.sittings[0].state, "raw-retained");
+        let rendered = serde_json::to_value(&surface).unwrap();
+        assert_eq!(rendered["sittings"][0]["state"], "raw-retained");
+        assert_eq!(rendered["recordingAvailable"], serde_json::json!(false));
+        let payload = serde_json::to_string(&rendered).unwrap();
+        assert!(!payload.contains('%'), "{payload}");
+
         {
             let held = state.app_data_writer_lock.lock().unwrap();
             let authority = held.as_ref().unwrap().sitting_evidence_authority();
@@ -3796,6 +3957,37 @@ mod tests {
         assert_eq!(saved.state, "baseline-ready");
         assert_eq!(saved.guided_enrollment.sittings_recorded, 1);
         assert_eq!(saved.guided_enrollment.sittings_awaiting_derivation, 0);
+        let surface = preview_enrollment_surface_for(&state);
+        assert_eq!(surface.sittings[0].state, "saved");
+    }
+
+    /// Before the worker spawn there is no verified runtime identity; the
+    /// recorder surface says so instead of guessing about the encoder. A
+    /// reconcile that refuses must also leave the surface unavailable rather
+    /// than retaining a stale sittings list.
+    #[test]
+    fn recorder_surface_reports_runtime_unknown_and_resets_on_refusal() {
+        let (_temporary, storage) = test_storage();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        reconcile_preview_profile_lifecycle(&state).unwrap();
+        let surface = preview_enrollment_surface_for(&state);
+        assert!(!surface.recording_available);
+        assert_eq!(
+            surface.recording_unavailable_reason,
+            Some(RECORDER_REASON_RUNTIME_UNKNOWN)
+        );
+        assert!(surface.sittings.is_empty());
+
+        // Poison the lifecycle by dropping the writer lock: reconcile now
+        // refuses, and the cached surface must fall back to unavailable.
+        *state.app_data_writer_lock.lock().unwrap() = None;
+        assert!(reconcile_preview_profile_lifecycle(&state).is_err());
+        let surface = preview_enrollment_surface_for(&state);
+        assert_eq!(
+            surface.recording_unavailable_reason,
+            Some(RECORDER_REASON_STATUS_UNAVAILABLE)
+        );
     }
 
     #[test]
