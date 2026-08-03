@@ -50,10 +50,16 @@ sign_bundle() {
   )"
   [[ -n "$identity" ]] || identity="-"
 
+  # Finder/Gatekeeper provenance attributes are not product content, but they
+  # make strict verification report an otherwise byte-identical bundle as
+  # modified. Remove bundle metadata before creating the final code seals.
+  xattr -cr "$APP"
   codesign --force --sign "$identity" --entitlements "$ENTITLEMENTS" "$CAPTURE"
   "$RESOURCES/python-runtime/bin/python3.12" -E -s -B \
     "$ROOT/worker/build_manifest.py" "$RESOURCES" --admission internal-alpha
-  codesign --force --sign "$identity" --entitlements "$ENTITLEMENTS" "$MAIN"
+  # Sign the enclosing app last. Signing CFBundleExecutable as a standalone
+  # path first makes it seal the surrounding bundle; replacing the outer
+  # signature afterward then invalidates that inner resource seal.
   codesign --force --sign "$identity" --entitlements "$ENTITLEMENTS" "$APP"
   verify_bundle
 }

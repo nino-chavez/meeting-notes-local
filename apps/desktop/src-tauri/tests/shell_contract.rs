@@ -132,6 +132,31 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
     assert!(preview_preparer.contains("meeting-capture"));
     assert!(preview_preparer.contains("build_manifest.py"));
     assert!(preview_preparer.contains("codesign --verify --deep --strict"));
+    assert!(!preview_preparer.contains(
+        "codesign --force --sign \"$identity\" --entitlements \"$ENTITLEMENTS\" \"$MAIN\""
+    ));
+    assert!(preview_preparer.contains(
+        "codesign --force --sign \"$identity\" --entitlements \"$ENTITLEMENTS\" \"$APP\""
+    ));
+    let capture_sign = preview_preparer
+        .find("codesign --force --sign \"$identity\" --entitlements \"$ENTITLEMENTS\" \"$CAPTURE\"")
+        .expect("Preview must sign its nested capture helper");
+    let metadata_clear = preview_preparer
+        .find("xattr -cr \"$APP\"")
+        .expect("Preview must clear non-content bundle metadata before signing");
+    let manifest_build = preview_preparer
+        .find("build_manifest.py\" \"$RESOURCES\" --admission internal-alpha")
+        .expect("Preview must rebuild the manifest after signing the helper");
+    let app_sign = preview_preparer
+        .find("codesign --force --sign \"$identity\" --entitlements \"$ENTITLEMENTS\" \"$APP\"")
+        .expect("Preview must sign the enclosing app last");
+    let final_verify = preview_preparer
+        .rfind("\n  verify_bundle\n")
+        .expect("Preview must verify after signing the enclosing app");
+    assert!(metadata_clear < capture_sign);
+    assert!(capture_sign < manifest_build);
+    assert!(manifest_build < app_sign);
+    assert!(app_sign < final_verify);
     assert!(preview_preparer.contains("com\\.apple\\.security\\.device\\.audio-input"));
     assert_eq!(capability["windows"], serde_json::json!(["preview"]));
     assert_eq!(
