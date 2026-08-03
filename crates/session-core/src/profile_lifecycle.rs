@@ -2,8 +2,10 @@
 //!
 //! This module establishes and reopens the durable sequence-zero baseline,
 //! preserves ambiguous legacy bytes only after an explicit review action, and
-//! owns the crash-recoverable fixed-slot reset transition. Guided enrollment
-//! reuses the same journal in the next vertical increment.
+//! owns the crash-recoverable fixed-slot reset and enrolled-profile publication
+//! transitions. Dedicated recording and measurement remain separate concerns;
+//! this module accepts only the exact profile bytes already admitted by the
+//! canonical semantic loader and binds those bytes into lifecycle authority.
 
 #![cfg(target_os = "macos")]
 
@@ -45,6 +47,12 @@ pub enum ProfileLifecycleError {
     ResetCountOverflow,
     #[error("profile lifecycle volume does not support atomic file swap")]
     SwapUnsupported,
+    #[error("profile lifecycle already contains profile bytes")]
+    ProfileAlreadyPresent,
+    #[error("profile lifecycle enrollment operation is already in progress")]
+    EnrollmentInProgress,
+    #[error("profile lifecycle enrolled candidate is invalid")]
+    InvalidEnrollmentCandidate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,11 +69,28 @@ pub enum ProfileResetOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProfileEnrollmentOutcome {
+    Activated {
+        operation_id: String,
+        profile_sha256: String,
+    },
+    Recovered {
+        operation_id: String,
+        profile_sha256: String,
+    },
+    AlreadyActive {
+        operation_id: String,
+        profile_sha256: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileLifecycleBaseline {
     receipt_sequence: u64,
     completed_reset_count: u64,
     profile_size: u64,
     profile_sha256: String,
+    profile_active: bool,
 }
 
 impl ProfileLifecycleBaseline {
@@ -87,6 +112,10 @@ impl ProfileLifecycleBaseline {
 
     pub fn profile_sha256(&self) -> &str {
         &self.profile_sha256
+    }
+
+    pub fn profile_active(&self) -> bool {
+        self.profile_active
     }
 }
 
@@ -166,11 +195,71 @@ struct ResetRemovedPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PredecessorReset {
+    completed_reset_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_reset: Option<LastReset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollmentWritingPayload {
+    schema: String,
+    receipt_sequence: u64,
+    operation: String,
+    phase: String,
+    predecessor_payload_sha256: String,
+    operation_id: String,
+    requested_at: u64,
+    predecessor_reset: PredecessorReset,
+    live_zero: ProfileSlot,
+    reset_zero: ProfileSlot,
+    enrollment_zero: ProfileSlot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollmentReadyPayload {
+    schema: String,
+    receipt_sequence: u64,
+    operation: String,
+    phase: String,
+    predecessor_payload_sha256: String,
+    operation_id: String,
+    requested_at: u64,
+    predecessor_reset: PredecessorReset,
+    live_zero: ProfileSlot,
+    reset_zero: ProfileSlot,
+    staged_profile: ProfileSlot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollmentActivePayload {
+    schema: String,
+    receipt_sequence: u64,
+    operation: String,
+    phase: String,
+    predecessor_payload_sha256: String,
+    operation_id: String,
+    requested_at: u64,
+    completed_at: u64,
+    predecessor_reset: PredecessorReset,
+    live_profile: ProfileSlot,
+    reset_zero: ProfileSlot,
+    enrollment_zero: ProfileSlot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 enum LifecyclePayload {
     Baseline(BaselinePayload),
     ResetPending(ResetPendingPayload),
     ResetRemoved(ResetRemovedPayload),
+    EnrollmentWriting(EnrollmentWritingPayload),
+    EnrollmentReady(EnrollmentReadyPayload),
+    EnrollmentActive(EnrollmentActivePayload),
 }
 
 impl LifecyclePayload {
@@ -179,6 +268,9 @@ impl LifecyclePayload {
             Self::Baseline(payload) => payload.receipt_sequence,
             Self::ResetPending(payload) => payload.receipt_sequence,
             Self::ResetRemoved(payload) => payload.receipt_sequence,
+            Self::EnrollmentWriting(payload) => payload.receipt_sequence,
+            Self::EnrollmentReady(payload) => payload.receipt_sequence,
+            Self::EnrollmentActive(payload) => payload.receipt_sequence,
         }
     }
 
@@ -187,6 +279,9 @@ impl LifecyclePayload {
             Self::Baseline(_) => None,
             Self::ResetPending(payload) => Some(&payload.predecessor_payload_sha256),
             Self::ResetRemoved(payload) => Some(&payload.predecessor_payload_sha256),
+            Self::EnrollmentWriting(payload) => Some(&payload.predecessor_payload_sha256),
+            Self::EnrollmentReady(payload) => Some(&payload.predecessor_payload_sha256),
+            Self::EnrollmentActive(payload) => Some(&payload.predecessor_payload_sha256),
         }
     }
 }
@@ -244,6 +339,38 @@ pub(crate) fn reset_profile_lifecycle_bound(
     }
     let profile = app_data.open_directory("profile").map_err(quarantine_io)?;
     let result = reset_bound_profile(&profile, operation_id, requested_at);
+    if app_data.revalidate().is_err() || profile.revalidate().is_err() {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    result
+}
+
+#[allow(dead_code)] // wired by the strict-loader bridge in the next enrollment increment
+pub(crate) fn enroll_profile_lifecycle_bound(
+    app_data: &BoundPrivateDirectory,
+    operation_id: &str,
+    requested_at: u64,
+    admitted_profile: &[u8],
+    admitted_sha256: &str,
+) -> Result<ProfileEnrollmentOutcome, ProfileLifecycleError> {
+    if !canonical_uuid(operation_id) {
+        return Err(ProfileLifecycleError::InvalidOperationId);
+    }
+    if admitted_profile.is_empty()
+        || admitted_profile.len() as u64 > PROFILE_MAX_BYTES
+        || !valid_sha256(admitted_sha256)
+        || format!("{:x}", Sha256::digest(admitted_profile)) != admitted_sha256
+    {
+        return Err(ProfileLifecycleError::InvalidEnrollmentCandidate);
+    }
+    let profile = app_data.open_directory("profile").map_err(quarantine_io)?;
+    let result = enroll_bound_profile(
+        &profile,
+        operation_id,
+        requested_at,
+        admitted_profile,
+        admitted_sha256,
+    );
     if app_data.revalidate().is_err() || profile.revalidate().is_err() {
         return Err(ProfileLifecycleError::Quarantined);
     }
@@ -419,7 +546,7 @@ fn validate_or_recover_published(
         .open_file(RESET_NAME, true, PROFILE_MAX_BYTES)
         .map_err(quarantine_io)?;
     let enrollment = lifecycle
-        .open_file(ENROLLMENT_NAME, false, 0)
+        .open_file(ENROLLMENT_NAME, true, PROFILE_MAX_BYTES)
         .map_err(quarantine_io)?;
     let authority = select_receipt_authority(lifecycle, &receipt_a, &receipt_b)?;
     match authority.payload.clone() {
@@ -447,6 +574,25 @@ fn validate_or_recover_published(
             true,
         )
         .map(|(_, status)| status),
+        LifecyclePayload::EnrollmentWriting(payload) => {
+            recover_enrollment_writing(profile, &live, lifecycle, &reset, &enrollment, &payload)
+        }
+        LifecyclePayload::EnrollmentReady(payload) => recover_enrollment_ready(
+            profile, live, lifecycle, reset, enrollment, receipt_a, receipt_b, authority, payload,
+            true,
+        )
+        .map(|(_, status)| status),
+        LifecyclePayload::EnrollmentActive(payload) => {
+            validate_enrollment_active_layout(
+                profile,
+                &live,
+                lifecycle,
+                &reset,
+                &enrollment,
+                &payload,
+            )?;
+            Ok(status_from_enrollment_active(&payload))
+        }
     }
 }
 
@@ -500,6 +646,7 @@ fn status_from_baseline(payload: &BaselinePayload) -> ProfileLifecycleBaseline {
         completed_reset_count: payload.completed_reset_count,
         profile_size: payload.live.size,
         profile_sha256: payload.live.sha256.clone(),
+        profile_active: false,
     }
 }
 
@@ -509,7 +656,54 @@ fn status_from_removed(payload: &ResetRemovedPayload) -> ProfileLifecycleBaselin
         completed_reset_count: payload.completed_reset_count,
         profile_size: 0,
         profile_sha256: ZERO_SHA256.into(),
+        profile_active: false,
     }
+}
+
+fn status_from_enrollment_writing(payload: &EnrollmentWritingPayload) -> ProfileLifecycleBaseline {
+    ProfileLifecycleBaseline {
+        receipt_sequence: payload.receipt_sequence,
+        completed_reset_count: payload.predecessor_reset.completed_reset_count,
+        profile_size: 0,
+        profile_sha256: ZERO_SHA256.into(),
+        profile_active: false,
+    }
+}
+
+fn status_from_enrollment_active(payload: &EnrollmentActivePayload) -> ProfileLifecycleBaseline {
+    ProfileLifecycleBaseline {
+        receipt_sequence: payload.receipt_sequence,
+        completed_reset_count: payload.predecessor_reset.completed_reset_count,
+        profile_size: payload.live_profile.size,
+        profile_sha256: payload.live_profile.sha256.clone(),
+        profile_active: true,
+    }
+}
+
+fn validate_predecessor_reset(reset: &PredecessorReset) -> bool {
+    match (reset.completed_reset_count, reset.last_reset.as_ref()) {
+        (0, None) => true,
+        (0, Some(_)) | (_, None) => false,
+        (_, Some(last_reset)) => canonical_uuid(&last_reset.operation_id),
+    }
+}
+
+fn validate_enrollment_active_layout(
+    profile: &BoundPrivateDirectory,
+    live: &BoundPrivateFile,
+    lifecycle: &BoundPrivateDirectory,
+    reset: &BoundPrivateFile,
+    enrollment: &BoundPrivateFile,
+    payload: &EnrollmentActivePayload,
+) -> Result<(), ProfileLifecycleError> {
+    if !validate_enrollment_active(payload)
+        || observe_slot(profile, live, PROFILE_MAX_BYTES)? != payload.live_profile
+        || observe_slot(lifecycle, reset, 0)? != payload.reset_zero
+        || observe_slot(lifecycle, enrollment, 0)? != payload.enrollment_zero
+    {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(())
 }
 
 fn validate_removed_layout(
@@ -562,7 +756,7 @@ fn reset_bound_profile(
         .open_file(RESET_NAME, true, PROFILE_MAX_BYTES)
         .map_err(quarantine_io)?;
     let enrollment = lifecycle
-        .open_file(ENROLLMENT_NAME, false, 0)
+        .open_file(ENROLLMENT_NAME, true, PROFILE_MAX_BYTES)
         .map_err(quarantine_io)?;
     let authority = select_receipt_authority(&lifecycle, &receipt_a, &receipt_b)?;
 
@@ -631,7 +825,370 @@ fn reset_bound_profile(
             true,
         )
         .map(|(outcome, _)| outcome),
+        LifecyclePayload::EnrollmentActive(payload) => {
+            validate_enrollment_active_layout(
+                profile,
+                &live,
+                &lifecycle,
+                &reset,
+                &enrollment,
+                &payload,
+            )?;
+            profile
+                .require_file_swap()
+                .map_err(|_| ProfileLifecycleError::SwapUnsupported)?;
+            let pending = ResetPendingPayload {
+                schema: "profile-lifecycle/1".into(),
+                receipt_sequence: next_sequence(payload.receipt_sequence)?,
+                operation: "reset".into(),
+                phase: "deleting".into(),
+                predecessor_payload_sha256: authority.payload_sha256.clone(),
+                operation_id: operation_id.into(),
+                requested_at,
+                prior_completed_reset_count: payload.predecessor_reset.completed_reset_count,
+                prior_last_reset: payload.predecessor_reset.last_reset,
+                profile: payload.live_profile,
+                reset_zero: payload.reset_zero,
+                enrollment_zero: payload.enrollment_zero,
+            };
+            let authority = publish_payload(
+                &lifecycle,
+                &receipt_a,
+                &receipt_b,
+                &authority,
+                LifecyclePayload::ResetPending(pending.clone()),
+            )?;
+            recover_reset(
+                profile,
+                live,
+                &lifecycle,
+                reset,
+                &enrollment,
+                receipt_a,
+                receipt_b,
+                authority,
+                pending,
+                false,
+            )
+            .map(|(outcome, _)| outcome)
+        }
+        LifecyclePayload::EnrollmentWriting(_) | LifecyclePayload::EnrollmentReady(_) => {
+            Err(ProfileLifecycleError::EnrollmentInProgress)
+        }
     }
+}
+
+#[allow(dead_code)] // reachable through the staged crate-private enrollment entry point
+fn enroll_bound_profile(
+    profile: &BoundPrivateDirectory,
+    operation_id: &str,
+    requested_at: u64,
+    admitted_profile: &[u8],
+    admitted_sha256: &str,
+) -> Result<ProfileEnrollmentOutcome, ProfileLifecycleError> {
+    match profile.open_directory(INITIALIZING_NAME) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        _ => return Err(ProfileLifecycleError::Quarantined),
+    }
+    let lifecycle = profile
+        .open_directory(LIFECYCLE_NAME)
+        .map_err(quarantine_io)?;
+    if lifecycle.child_names().map_err(quarantine_io)? != FIXED_NAMES {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let live = profile
+        .open_file(LIVE_NAME, true, PROFILE_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let receipt_a = lifecycle
+        .open_file(RECEIPT_A_NAME, true, RECEIPT_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let receipt_b = lifecycle
+        .open_file(RECEIPT_B_NAME, true, RECEIPT_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let reset = lifecycle
+        .open_file(RESET_NAME, true, PROFILE_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let enrollment = lifecycle
+        .open_file(ENROLLMENT_NAME, true, PROFILE_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let mut authority = select_receipt_authority(&lifecycle, &receipt_a, &receipt_b)?;
+
+    let writing = match authority.payload.clone() {
+        LifecyclePayload::Baseline(payload) => {
+            let expected = baseline_payload(profile, &live, &lifecycle, &reset, &enrollment)?;
+            if payload != expected {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
+            if payload.live.size != 0 {
+                return Err(ProfileLifecycleError::ProfileAlreadyPresent);
+            }
+            profile
+                .require_file_swap()
+                .map_err(|_| ProfileLifecycleError::SwapUnsupported)?;
+            EnrollmentWritingPayload {
+                schema: "profile-lifecycle/1".into(),
+                receipt_sequence: next_sequence(payload.receipt_sequence)?,
+                operation: "enrollment".into(),
+                phase: "writing".into(),
+                predecessor_payload_sha256: authority.payload_sha256.clone(),
+                operation_id: operation_id.into(),
+                requested_at,
+                predecessor_reset: PredecessorReset {
+                    completed_reset_count: payload.completed_reset_count,
+                    last_reset: None,
+                },
+                live_zero: payload.live,
+                reset_zero: payload.reset_slot,
+                enrollment_zero: payload.enrollment_slot,
+            }
+        }
+        LifecyclePayload::ResetRemoved(payload) => {
+            validate_removed_layout(profile, &live, &lifecycle, &reset, &enrollment, &payload)?;
+            profile
+                .require_file_swap()
+                .map_err(|_| ProfileLifecycleError::SwapUnsupported)?;
+            EnrollmentWritingPayload {
+                schema: "profile-lifecycle/1".into(),
+                receipt_sequence: next_sequence(payload.receipt_sequence)?,
+                operation: "enrollment".into(),
+                phase: "writing".into(),
+                predecessor_payload_sha256: authority.payload_sha256.clone(),
+                operation_id: operation_id.into(),
+                requested_at,
+                predecessor_reset: PredecessorReset {
+                    completed_reset_count: payload.completed_reset_count,
+                    last_reset: Some(payload.last_reset),
+                },
+                live_zero: payload.live_zero,
+                reset_zero: payload.reset_zero,
+                enrollment_zero: payload.enrollment_zero,
+            }
+        }
+        LifecyclePayload::EnrollmentWriting(payload) => {
+            if payload.operation_id != operation_id {
+                return Err(ProfileLifecycleError::EnrollmentInProgress);
+            }
+            recover_enrollment_writing(profile, &live, &lifecycle, &reset, &enrollment, &payload)?;
+            payload
+        }
+        LifecyclePayload::EnrollmentReady(payload) => {
+            if payload.operation_id != operation_id
+                || payload.staged_profile.sha256 != admitted_sha256
+            {
+                return Err(ProfileLifecycleError::EnrollmentInProgress);
+            }
+            return recover_enrollment_ready(
+                profile, live, &lifecycle, reset, enrollment, receipt_a, receipt_b, authority,
+                payload, true,
+            )
+            .map(|(outcome, _)| outcome);
+        }
+        LifecyclePayload::EnrollmentActive(payload) => {
+            validate_enrollment_active_layout(
+                profile,
+                &live,
+                &lifecycle,
+                &reset,
+                &enrollment,
+                &payload,
+            )?;
+            if payload.operation_id == operation_id
+                && payload.live_profile.sha256 == admitted_sha256
+            {
+                return Ok(ProfileEnrollmentOutcome::AlreadyActive {
+                    operation_id: payload.operation_id,
+                    profile_sha256: payload.live_profile.sha256,
+                });
+            }
+            return Err(ProfileLifecycleError::ProfileAlreadyPresent);
+        }
+        LifecyclePayload::ResetPending(_) => {
+            return Err(ProfileLifecycleError::EnrollmentInProgress);
+        }
+    };
+
+    if !matches!(authority.payload, LifecyclePayload::EnrollmentWriting(_)) {
+        authority = publish_payload(
+            &lifecycle,
+            &receipt_a,
+            &receipt_b,
+            &authority,
+            LifecyclePayload::EnrollmentWriting(writing.clone()),
+        )?;
+    }
+    continue_enrollment_from_writing(
+        profile,
+        live,
+        &lifecycle,
+        reset,
+        enrollment,
+        receipt_a,
+        receipt_b,
+        authority,
+        writing,
+        admitted_profile,
+        admitted_sha256,
+    )
+}
+
+fn recover_enrollment_writing(
+    profile: &BoundPrivateDirectory,
+    live: &BoundPrivateFile,
+    lifecycle: &BoundPrivateDirectory,
+    reset: &BoundPrivateFile,
+    enrollment: &BoundPrivateFile,
+    payload: &EnrollmentWritingPayload,
+) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
+    validate_enrollment_writing(payload)?;
+    if observe_slot(profile, live, 0)? != payload.live_zero
+        || observe_slot(lifecycle, reset, 0)? != payload.reset_zero
+    {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let current = observe_slot(lifecycle, enrollment, PROFILE_MAX_BYTES)?;
+    if current != payload.enrollment_zero {
+        if current.identity != payload.enrollment_zero.identity {
+            return Err(ProfileLifecycleError::Quarantined);
+        }
+        enrollment
+            .replace_bytes(lifecycle, &[], PROFILE_MAX_BYTES)
+            .map_err(quarantine_io)?;
+    }
+    if observe_slot(lifecycle, enrollment, 0)? != payload.enrollment_zero {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(status_from_enrollment_writing(payload))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // reachable through the staged crate-private enrollment entry point
+fn continue_enrollment_from_writing(
+    profile: &BoundPrivateDirectory,
+    live: BoundPrivateFile,
+    lifecycle: &BoundPrivateDirectory,
+    reset: BoundPrivateFile,
+    enrollment: BoundPrivateFile,
+    receipt_a: BoundPrivateFile,
+    receipt_b: BoundPrivateFile,
+    authority: ReceiptAuthority,
+    writing: EnrollmentWritingPayload,
+    admitted_profile: &[u8],
+    admitted_sha256: &str,
+) -> Result<ProfileEnrollmentOutcome, ProfileLifecycleError> {
+    recover_enrollment_writing(profile, &live, lifecycle, &reset, &enrollment, &writing)?;
+    enrollment
+        .replace_bytes(lifecycle, admitted_profile, PROFILE_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let staged_profile = observe_slot(lifecycle, &enrollment, PROFILE_MAX_BYTES)?;
+    if staged_profile.identity != writing.enrollment_zero.identity
+        || staged_profile.size != admitted_profile.len() as u64
+        || staged_profile.sha256 != admitted_sha256
+    {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let ready = EnrollmentReadyPayload {
+        schema: "profile-lifecycle/1".into(),
+        receipt_sequence: next_sequence(writing.receipt_sequence)?,
+        operation: "enrollment".into(),
+        phase: "ready".into(),
+        predecessor_payload_sha256: authority.payload_sha256.clone(),
+        operation_id: writing.operation_id,
+        requested_at: writing.requested_at,
+        predecessor_reset: writing.predecessor_reset,
+        live_zero: writing.live_zero,
+        reset_zero: writing.reset_zero,
+        staged_profile,
+    };
+    let authority = publish_payload(
+        lifecycle,
+        &receipt_a,
+        &receipt_b,
+        &authority,
+        LifecyclePayload::EnrollmentReady(ready.clone()),
+    )?;
+    recover_enrollment_ready(
+        profile, live, lifecycle, reset, enrollment, receipt_a, receipt_b, authority, ready, false,
+    )
+    .map(|(outcome, _)| outcome)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_enrollment_ready(
+    profile: &BoundPrivateDirectory,
+    mut live: BoundPrivateFile,
+    lifecycle: &BoundPrivateDirectory,
+    reset: BoundPrivateFile,
+    mut enrollment: BoundPrivateFile,
+    receipt_a: BoundPrivateFile,
+    receipt_b: BoundPrivateFile,
+    authority: ReceiptAuthority,
+    ready: EnrollmentReadyPayload,
+    recovered: bool,
+) -> Result<(ProfileEnrollmentOutcome, ProfileLifecycleBaseline), ProfileLifecycleError> {
+    validate_enrollment_ready(&ready)?;
+    if observe_slot(lifecycle, &reset, 0)? != ready.reset_zero {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let live_now = observe_slot(profile, &live, PROFILE_MAX_BYTES)?;
+    let enrollment_now = observe_slot(lifecycle, &enrollment, PROFILE_MAX_BYTES)?;
+    let pre_swap = live_now == ready.live_zero && enrollment_now == ready.staged_profile;
+    let post_swap = live_now == ready.staged_profile && enrollment_now == ready.live_zero;
+    if !pre_swap && !post_swap {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    if pre_swap {
+        profile
+            .require_file_swap()
+            .map_err(|_| ProfileLifecycleError::SwapUnsupported)?;
+        let (zero_at_enrollment, profile_at_live) = profile
+            .swap_files(live, 0, lifecycle, enrollment, PROFILE_MAX_BYTES)
+            .map_err(quarantine_io)?;
+        live = profile_at_live;
+        enrollment = zero_at_enrollment;
+    }
+    let live_profile = observe_slot(profile, &live, PROFILE_MAX_BYTES)?;
+    let enrollment_zero = observe_slot(lifecycle, &enrollment, 0)?;
+    if live_profile != ready.staged_profile || enrollment_zero != ready.live_zero {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let active = EnrollmentActivePayload {
+        schema: "profile-lifecycle/1".into(),
+        receipt_sequence: next_sequence(ready.receipt_sequence)?,
+        operation: "enrollment".into(),
+        phase: "active".into(),
+        predecessor_payload_sha256: authority.payload_sha256.clone(),
+        operation_id: ready.operation_id.clone(),
+        requested_at: ready.requested_at,
+        completed_at: epoch_seconds()?,
+        predecessor_reset: ready.predecessor_reset,
+        live_profile,
+        reset_zero: ready.reset_zero,
+        enrollment_zero,
+    };
+    let published = publish_payload(
+        lifecycle,
+        &receipt_a,
+        &receipt_b,
+        &authority,
+        LifecyclePayload::EnrollmentActive(active.clone()),
+    )?;
+    validate_enrollment_active_layout(profile, &live, lifecycle, &reset, &enrollment, &active)?;
+    let status = status_from_enrollment_active(&active);
+    if published.payload.receipt_sequence() != status.receipt_sequence {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let outcome = if recovered {
+        ProfileEnrollmentOutcome::Recovered {
+            operation_id: ready.operation_id,
+            profile_sha256: active.live_profile.sha256,
+        }
+    } else {
+        ProfileEnrollmentOutcome::Activated {
+            operation_id: ready.operation_id,
+            profile_sha256: active.live_profile.sha256,
+        }
+    };
+    Ok((outcome, status))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -821,6 +1378,62 @@ fn validate_reset_pending(payload: &ResetPendingPayload) -> Result<(), ProfileLi
     Ok(())
 }
 
+fn validate_enrollment_writing(
+    payload: &EnrollmentWritingPayload,
+) -> Result<(), ProfileLifecycleError> {
+    if payload.schema != "profile-lifecycle/1"
+        || payload.operation != "enrollment"
+        || payload.phase != "writing"
+        || !valid_sha256(&payload.predecessor_payload_sha256)
+        || !canonical_uuid(&payload.operation_id)
+        || !validate_predecessor_reset(&payload.predecessor_reset)
+        || !slot_is_zero(&payload.live_zero)
+        || !slot_is_zero(&payload.reset_zero)
+        || !slot_is_zero(&payload.enrollment_zero)
+        || payload.live_zero.identity.device != payload.reset_zero.identity.device
+        || payload.live_zero.identity.device != payload.enrollment_zero.identity.device
+    {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(())
+}
+
+fn validate_enrollment_ready(
+    payload: &EnrollmentReadyPayload,
+) -> Result<(), ProfileLifecycleError> {
+    if payload.schema != "profile-lifecycle/1"
+        || payload.operation != "enrollment"
+        || payload.phase != "ready"
+        || !valid_sha256(&payload.predecessor_payload_sha256)
+        || !canonical_uuid(&payload.operation_id)
+        || !validate_predecessor_reset(&payload.predecessor_reset)
+        || !slot_is_zero(&payload.live_zero)
+        || !slot_is_zero(&payload.reset_zero)
+        || payload.staged_profile.size == 0
+        || !valid_sha256(&payload.staged_profile.sha256)
+        || payload.live_zero.identity.device != payload.reset_zero.identity.device
+        || payload.live_zero.identity.device != payload.staged_profile.identity.device
+    {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(())
+}
+
+fn validate_enrollment_active(payload: &EnrollmentActivePayload) -> bool {
+    payload.schema == "profile-lifecycle/1"
+        && payload.operation == "enrollment"
+        && payload.phase == "active"
+        && valid_sha256(&payload.predecessor_payload_sha256)
+        && canonical_uuid(&payload.operation_id)
+        && validate_predecessor_reset(&payload.predecessor_reset)
+        && payload.live_profile.size != 0
+        && valid_sha256(&payload.live_profile.sha256)
+        && slot_is_zero(&payload.reset_zero)
+        && slot_is_zero(&payload.enrollment_zero)
+        && payload.live_profile.identity.device == payload.reset_zero.identity.device
+        && payload.live_profile.identity.device == payload.enrollment_zero.identity.device
+}
+
 fn next_sequence(sequence: u64) -> Result<u64, ProfileLifecycleError> {
     sequence
         .checked_add(1)
@@ -988,6 +1601,13 @@ fn decode_lifecycle_envelope(
                 return Err(ProfileLifecycleError::Quarantined);
             }
         }
+        LifecyclePayload::EnrollmentWriting(payload) => validate_enrollment_writing(payload)?,
+        LifecyclePayload::EnrollmentReady(payload) => validate_enrollment_ready(payload)?,
+        LifecyclePayload::EnrollmentActive(payload) => {
+            if !validate_enrollment_active(payload) {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
+        }
     }
     let payload_bytes = serde_json::to_vec_pretty(&envelope.payload)
         .map_err(|_| ProfileLifecycleError::Quarantined)?;
@@ -1117,6 +1737,21 @@ mod tests {
         reset_profile_lifecycle_bound(&app_data, "123e4567-e89b-12d3-a456-426614174000", 10)
     }
 
+    fn enroll_profile(
+        storage: &StorageRoot,
+        operation_id: &str,
+        bytes: &[u8],
+    ) -> Result<ProfileEnrollmentOutcome, ProfileLifecycleError> {
+        let app_data = BoundPrivateDirectory::open(storage.path()).map_err(quarantine_io)?;
+        enroll_profile_lifecycle_bound(
+            &app_data,
+            operation_id,
+            20,
+            bytes,
+            &format!("{:x}", Sha256::digest(bytes)),
+        )
+    }
+
     struct Fixture {
         _temp: TempDir,
         storage: StorageRoot,
@@ -1150,6 +1785,7 @@ mod tests {
         assert!(!first.profile_present());
         assert_eq!(first.profile_size(), 0);
         assert_eq!(first.profile_sha256(), ZERO_SHA256);
+        assert!(!first.profile_active());
         let payload = decode_envelope(
             &fs::read(fixture.profile().join(LIFECYCLE_NAME).join(RECEIPT_A_NAME)).unwrap(),
         )
@@ -1203,6 +1839,7 @@ mod tests {
         let baseline = preserve_legacy_profile(&fixture.storage).unwrap();
 
         assert!(baseline.profile_present());
+        assert!(!baseline.profile_active());
         assert_eq!(baseline.profile_size(), legacy.len() as u64);
         assert_eq!(
             baseline.profile_sha256(),
@@ -1248,6 +1885,300 @@ mod tests {
             reset_profile(&fixture.storage).unwrap(),
             ProfileResetOutcome::AlreadyAbsent
         );
+    }
+
+    #[test]
+    fn enrollment_publishes_exact_admitted_bytes_and_reset_removes_only_profile() {
+        let fixture = Fixture::new();
+        initialize_profile_lifecycle(&fixture.storage).unwrap();
+        let candidate = br#"{"schema":"voiceprint-test","owner":"synthetic"}"#;
+        let digest = format!("{:x}", Sha256::digest(candidate));
+
+        assert_eq!(
+            enroll_profile(
+                &fixture.storage,
+                "223e4567-e89b-12d3-a456-426614174000",
+                candidate,
+            )
+            .unwrap(),
+            ProfileEnrollmentOutcome::Activated {
+                operation_id: "223e4567-e89b-12d3-a456-426614174000".into(),
+                profile_sha256: digest.clone(),
+            }
+        );
+        assert_eq!(
+            fs::read(fixture.profile().join(LIVE_NAME)).unwrap(),
+            candidate
+        );
+        assert_eq!(
+            fs::read(fixture.profile().join(LIFECYCLE_NAME).join(ENROLLMENT_NAME)).unwrap(),
+            b""
+        );
+        let reopened = initialize_profile_lifecycle(&fixture.storage).unwrap();
+        assert_eq!(reopened.receipt_sequence(), 3);
+        assert!(reopened.profile_present());
+        assert!(reopened.profile_active());
+        assert_eq!(reopened.profile_sha256(), digest);
+        assert_eq!(
+            enroll_profile(
+                &fixture.storage,
+                "223e4567-e89b-12d3-a456-426614174000",
+                candidate,
+            )
+            .unwrap(),
+            ProfileEnrollmentOutcome::AlreadyActive {
+                operation_id: "223e4567-e89b-12d3-a456-426614174000".into(),
+                profile_sha256: digest,
+            }
+        );
+
+        assert!(matches!(
+            reset_profile(&fixture.storage).unwrap(),
+            ProfileResetOutcome::Removed {
+                completed_reset_count: 1,
+                ..
+            }
+        ));
+        assert_eq!(fs::read(fixture.profile().join(LIVE_NAME)).unwrap(), b"");
+        assert_eq!(
+            initialize_profile_lifecycle(&fixture.storage)
+                .unwrap()
+                .receipt_sequence(),
+            6
+        );
+
+        assert!(matches!(
+            enroll_profile(
+                &fixture.storage,
+                "323e4567-e89b-12d3-a456-426614174000",
+                candidate,
+            )
+            .unwrap(),
+            ProfileEnrollmentOutcome::Activated { .. }
+        ));
+        assert!(matches!(
+            reset_profile_lifecycle_bound(
+                &BoundPrivateDirectory::open(fixture.storage.path()).unwrap(),
+                "423e4567-e89b-12d3-a456-426614174000",
+                30,
+            )
+            .unwrap(),
+            ProfileResetOutcome::Removed {
+                completed_reset_count: 2,
+                ..
+            }
+        ));
+        let second_reset = initialize_profile_lifecycle(&fixture.storage).unwrap();
+        assert_eq!(second_reset.receipt_sequence(), 12);
+        assert_eq!(second_reset.completed_reset_count(), 2);
+        assert!(!second_reset.profile_present());
+    }
+
+    #[test]
+    fn enrollment_refuses_candidate_digest_mismatch_before_receipt_mutation() {
+        let fixture = Fixture::new();
+        let baseline = initialize_profile_lifecycle(&fixture.storage).unwrap();
+        let app_data = BoundPrivateDirectory::open(fixture.storage.path()).unwrap();
+
+        assert!(matches!(
+            enroll_profile_lifecycle_bound(
+                &app_data,
+                "223e4567-e89b-12d3-a456-426614174000",
+                20,
+                b"candidate",
+                ZERO_SHA256,
+            ),
+            Err(ProfileLifecycleError::InvalidEnrollmentCandidate)
+        ));
+        assert_eq!(
+            initialize_profile_lifecycle(&fixture.storage).unwrap(),
+            baseline
+        );
+    }
+
+    #[test]
+    fn fresh_process_cleans_uncommitted_enrollment_and_same_operation_can_retry() {
+        let fixture = Fixture::new();
+        initialize_profile_lifecycle(&fixture.storage).unwrap();
+        let app_data = BoundPrivateDirectory::open(fixture.storage.path()).unwrap();
+        let profile = app_data.open_directory("profile").unwrap();
+        let lifecycle = profile.open_directory(LIFECYCLE_NAME).unwrap();
+        let live = profile.open_file(LIVE_NAME, true, 0).unwrap();
+        let receipt_a = lifecycle
+            .open_file(RECEIPT_A_NAME, true, RECEIPT_MAX_BYTES)
+            .unwrap();
+        let receipt_b = lifecycle
+            .open_file(RECEIPT_B_NAME, true, RECEIPT_MAX_BYTES)
+            .unwrap();
+        let reset = lifecycle.open_file(RESET_NAME, true, 0).unwrap();
+        let enrollment = lifecycle
+            .open_file(ENROLLMENT_NAME, true, PROFILE_MAX_BYTES)
+            .unwrap();
+        let baseline = select_receipt_authority(&lifecycle, &receipt_a, &receipt_b).unwrap();
+        let LifecyclePayload::Baseline(payload) = baseline.payload.clone() else {
+            panic!("expected baseline");
+        };
+        let writing = EnrollmentWritingPayload {
+            schema: "profile-lifecycle/1".into(),
+            receipt_sequence: 1,
+            operation: "enrollment".into(),
+            phase: "writing".into(),
+            predecessor_payload_sha256: baseline.payload_sha256.clone(),
+            operation_id: "223e4567-e89b-12d3-a456-426614174000".into(),
+            requested_at: 20,
+            predecessor_reset: PredecessorReset {
+                completed_reset_count: 0,
+                last_reset: None,
+            },
+            live_zero: payload.live,
+            reset_zero: payload.reset_slot,
+            enrollment_zero: payload.enrollment_slot,
+        };
+        publish_payload(
+            &lifecycle,
+            &receipt_a,
+            &receipt_b,
+            &baseline,
+            LifecyclePayload::EnrollmentWriting(writing),
+        )
+        .unwrap();
+        enrollment
+            .replace_bytes(&lifecycle, b"uncommitted-partial", PROFILE_MAX_BYTES)
+            .unwrap();
+        drop(enrollment);
+        drop(reset);
+        drop(receipt_b);
+        drop(receipt_a);
+        drop(live);
+        drop(lifecycle);
+        drop(profile);
+        drop(app_data);
+
+        let recovered = initialize_profile_lifecycle(&fixture.storage).unwrap();
+        assert_eq!(recovered.receipt_sequence(), 1);
+        assert!(!recovered.profile_present());
+        assert_eq!(
+            fs::read(fixture.profile().join(LIFECYCLE_NAME).join(ENROLLMENT_NAME)).unwrap(),
+            b""
+        );
+        let candidate = b"synthetic-admitted-profile";
+        assert!(matches!(
+            enroll_profile(
+                &fixture.storage,
+                "223e4567-e89b-12d3-a456-426614174000",
+                candidate,
+            )
+            .unwrap(),
+            ProfileEnrollmentOutcome::Activated { .. }
+        ));
+        assert_eq!(
+            fs::read(fixture.profile().join(LIVE_NAME)).unwrap(),
+            candidate
+        );
+    }
+
+    #[test]
+    fn fresh_process_recovers_ready_enrollment_before_or_after_swap() {
+        for crash_point in ["ready", "swapped"] {
+            let fixture = Fixture::new();
+            initialize_profile_lifecycle(&fixture.storage).unwrap();
+            let candidate = b"synthetic-admitted-profile";
+            let app_data = BoundPrivateDirectory::open(fixture.storage.path()).unwrap();
+            let profile = app_data.open_directory("profile").unwrap();
+            let lifecycle = profile.open_directory(LIFECYCLE_NAME).unwrap();
+            let mut live = profile.open_file(LIVE_NAME, true, 0).unwrap();
+            let receipt_a = lifecycle
+                .open_file(RECEIPT_A_NAME, true, RECEIPT_MAX_BYTES)
+                .unwrap();
+            let receipt_b = lifecycle
+                .open_file(RECEIPT_B_NAME, true, RECEIPT_MAX_BYTES)
+                .unwrap();
+            let reset = lifecycle.open_file(RESET_NAME, true, 0).unwrap();
+            let mut enrollment = lifecycle
+                .open_file(ENROLLMENT_NAME, true, PROFILE_MAX_BYTES)
+                .unwrap();
+            let baseline = select_receipt_authority(&lifecycle, &receipt_a, &receipt_b).unwrap();
+            let LifecyclePayload::Baseline(payload) = baseline.payload.clone() else {
+                panic!("expected baseline");
+            };
+            let writing = EnrollmentWritingPayload {
+                schema: "profile-lifecycle/1".into(),
+                receipt_sequence: 1,
+                operation: "enrollment".into(),
+                phase: "writing".into(),
+                predecessor_payload_sha256: baseline.payload_sha256.clone(),
+                operation_id: "223e4567-e89b-12d3-a456-426614174000".into(),
+                requested_at: 20,
+                predecessor_reset: PredecessorReset {
+                    completed_reset_count: 0,
+                    last_reset: None,
+                },
+                live_zero: payload.live,
+                reset_zero: payload.reset_slot,
+                enrollment_zero: payload.enrollment_slot,
+            };
+            let writing_authority = publish_payload(
+                &lifecycle,
+                &receipt_a,
+                &receipt_b,
+                &baseline,
+                LifecyclePayload::EnrollmentWriting(writing.clone()),
+            )
+            .unwrap();
+            enrollment
+                .replace_bytes(&lifecycle, candidate, PROFILE_MAX_BYTES)
+                .unwrap();
+            let ready = EnrollmentReadyPayload {
+                schema: "profile-lifecycle/1".into(),
+                receipt_sequence: 2,
+                operation: "enrollment".into(),
+                phase: "ready".into(),
+                predecessor_payload_sha256: writing_authority.payload_sha256.clone(),
+                operation_id: writing.operation_id,
+                requested_at: writing.requested_at,
+                predecessor_reset: writing.predecessor_reset,
+                live_zero: writing.live_zero,
+                reset_zero: writing.reset_zero,
+                staged_profile: observe_slot(&lifecycle, &enrollment, PROFILE_MAX_BYTES).unwrap(),
+            };
+            publish_payload(
+                &lifecycle,
+                &receipt_a,
+                &receipt_b,
+                &writing_authority,
+                LifecyclePayload::EnrollmentReady(ready),
+            )
+            .unwrap();
+            if crash_point == "swapped" {
+                let swapped = profile
+                    .swap_files(live, 0, &lifecycle, enrollment, PROFILE_MAX_BYTES)
+                    .unwrap();
+                enrollment = swapped.0;
+                live = swapped.1;
+            }
+            drop(enrollment);
+            drop(reset);
+            drop(receipt_b);
+            drop(receipt_a);
+            drop(live);
+            drop(lifecycle);
+            drop(profile);
+            drop(app_data);
+
+            let recovered = initialize_profile_lifecycle(&fixture.storage).unwrap();
+            assert_eq!(recovered.receipt_sequence(), 3, "{crash_point}");
+            assert!(recovered.profile_present(), "{crash_point}");
+            assert_eq!(
+                fs::read(fixture.profile().join(LIVE_NAME)).unwrap(),
+                candidate,
+                "{crash_point}"
+            );
+            assert_eq!(
+                fs::read(fixture.profile().join(LIFECYCLE_NAME).join(ENROLLMENT_NAME)).unwrap(),
+                b"",
+                "{crash_point}"
+            );
+        }
     }
 
     #[test]

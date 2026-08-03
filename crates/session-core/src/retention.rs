@@ -19,9 +19,9 @@ use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordi
 use crate::operation_store::{OperationStore, OperationStoreError, StoredOperationRequest};
 #[cfg(target_os = "macos")]
 use crate::profile_lifecycle::{
-    ProfileLifecycleBaseline, ProfileLifecycleError, ProfileResetOutcome,
-    initialize_profile_lifecycle_bound, preserve_legacy_profile_bound,
-    reset_profile_lifecycle_bound,
+    ProfileEnrollmentOutcome, ProfileLifecycleBaseline, ProfileLifecycleError, ProfileResetOutcome,
+    enroll_profile_lifecycle_bound, initialize_profile_lifecycle_bound,
+    preserve_legacy_profile_bound, reset_profile_lifecycle_bound,
 };
 use crate::storage::{
     BoundPrivateDirectory, BoundPrivateFile, StorageRoot, create_private_dir, durable_create_new,
@@ -223,6 +223,45 @@ impl ProfileLifecycleAuthority<'_> {
         }
         let outcome =
             reset_profile_lifecycle_bound(&self.lock.storage_root, operation_id, requested_at);
+        if !authority_is_current() {
+            return Err(ProfileLifecycleAdmissionError::AuthorityLost);
+        }
+        outcome.map_err(Into::into)
+    }
+
+    /// Publishes exact profile bytes that the caller has already passed through
+    /// the canonical semantic loader. The supplied digest is re-derived before
+    /// any lifecycle mutation; meetings are never opened by this action.
+    #[allow(dead_code)] // exposed only after the strict-loader bridge owns admission
+    pub(crate) fn enroll_admitted_profile(
+        &self,
+        operation_id: &str,
+        requested_at: u64,
+        admitted_profile: &[u8],
+        admitted_sha256: &str,
+    ) -> Result<ProfileEnrollmentOutcome, ProfileLifecycleAdmissionError> {
+        let sequence = self.lock.coordination.lock_sequence()?;
+        let authority_is_current = || {
+            self.lock.storage_root.revalidate().is_ok()
+                && self
+                    .lock
+                    .writer_file
+                    .revalidate(&self.lock.storage_root, 0)
+                    .is_ok()
+        };
+        if !authority_is_current() {
+            return Err(ProfileLifecycleAdmissionError::AuthorityLost);
+        }
+        if !sequence.active_meeting_ids()?.is_empty() {
+            return Err(ProfileLifecycleAdmissionError::ActiveMeeting);
+        }
+        let outcome = enroll_profile_lifecycle_bound(
+            &self.lock.storage_root,
+            operation_id,
+            requested_at,
+            admitted_profile,
+            admitted_sha256,
+        );
         if !authority_is_current() {
             return Err(ProfileLifecycleAdmissionError::AuthorityLost);
         }
@@ -1717,6 +1756,55 @@ mod tests {
         assert_eq!(
             fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
             b""
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn profile_enrollment_uses_writer_authority_and_refuses_active_meetings() {
+        let (_temp, storage) = storage();
+        let writer = AppDataWriterLock::acquire(&storage).unwrap();
+        writer
+            .profile_lifecycle_authority()
+            .initialize_or_open()
+            .unwrap();
+        let candidate = b"synthetic-admitted-profile";
+        let digest = format!("{:x}", Sha256::digest(candidate));
+        let coordination = writer.coordination();
+        let active = coordination.acquire("active-meeting").unwrap();
+
+        assert!(matches!(
+            writer
+                .profile_lifecycle_authority()
+                .enroll_admitted_profile(
+                    "223e4567-e89b-12d3-a456-426614174000",
+                    20,
+                    candidate,
+                    &digest,
+                ),
+            Err(ProfileLifecycleAdmissionError::ActiveMeeting)
+        ));
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            b""
+        );
+
+        drop(active);
+        assert!(matches!(
+            writer
+                .profile_lifecycle_authority()
+                .enroll_admitted_profile(
+                    "223e4567-e89b-12d3-a456-426614174000",
+                    20,
+                    candidate,
+                    &digest,
+                ),
+            Ok(ProfileEnrollmentOutcome::Activated { ref profile_sha256, .. })
+                if profile_sha256 == &digest
+        ));
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            candidate
         );
     }
 
