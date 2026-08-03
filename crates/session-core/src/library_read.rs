@@ -5,7 +5,7 @@
 //! authority.  Library metadata is deliberately outside this transcript-only slice.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -71,6 +71,7 @@ pub struct LibraryProjection {
     snapshot_id: Uuid,
     rows: Vec<LibraryRow>,
     quarantined_meetings: usize,
+    excluded_meeting_ids: HashSet<String>,
     limits: ReadLimits,
     metadata: MetadataState,
     projector: Arc<dyn NoteProjector>,
@@ -243,7 +244,23 @@ pub struct OpenedClaimEvidence {
 
 impl LibraryProjection {
     pub fn rebuild(storage: &StorageRoot, limits: ReadLimits) -> Result<Self, LibraryReadError> {
-        Self::rebuild_with_projector(storage, limits, Arc::new(UnavailableProjector))
+        Self::rebuild_excluding(storage, limits, &HashSet::new())
+    }
+
+    /// Rebuilds while refusing to inspect meeting directories currently owned
+    /// by a writer. The exact exclusion set remains part of this snapshot's
+    /// authority and must match every response-scoped revalidation.
+    pub fn rebuild_excluding(
+        storage: &StorageRoot,
+        limits: ReadLimits,
+        excluded_meeting_ids: &HashSet<String>,
+    ) -> Result<Self, LibraryReadError> {
+        Self::rebuild_with_projector_excluding(
+            storage,
+            limits,
+            Arc::new(UnavailableProjector),
+            excluded_meeting_ids,
+        )
     }
 
     /// Rebuilds through an injected, read-only `note.project` transport.  The
@@ -252,6 +269,15 @@ impl LibraryProjection {
         storage: &StorageRoot,
         limits: ReadLimits,
         projector: Arc<dyn NoteProjector>,
+    ) -> Result<Self, LibraryReadError> {
+        Self::rebuild_with_projector_excluding(storage, limits, projector, &HashSet::new())
+    }
+
+    pub fn rebuild_with_projector_excluding(
+        storage: &StorageRoot,
+        limits: ReadLimits,
+        projector: Arc<dyn NoteProjector>,
+        excluded_meeting_ids: &HashSet<String>,
     ) -> Result<Self, LibraryReadError> {
         if limits.max_meetings == 0
             || limits.max_total_bytes == 0
@@ -272,6 +298,7 @@ impl LibraryProjection {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
             if valid_opaque_id(name)
+                && !excluded_meeting_ids.contains(name)
                 && entry
                     .file_type()
                     .map_err(|_| LibraryReadError::ArtifactUnavailable)?
@@ -311,8 +338,10 @@ impl LibraryProjection {
             // Metadata gains authority only when every row targets a safely
             // projected meeting.  A sparse record may omit any meeting.
             if document.meetings.iter().all(|row| {
-                rows.iter()
-                    .any(|meeting| meeting.meeting_id == row.meeting_id)
+                excluded_meeting_ids.contains(&row.meeting_id)
+                    || rows
+                        .iter()
+                        .any(|meeting| meeting.meeting_id == row.meeting_id)
             }) {
                 for row in &mut rows {
                     if let Some(label) = document
@@ -335,6 +364,7 @@ impl LibraryProjection {
                     snapshot_id: Uuid::new_v4(),
                     rows,
                     quarantined_meetings: quarantined,
+                    excluded_meeting_ids: excluded_meeting_ids.clone(),
                     limits,
                     metadata: metadata.unavailable_after_relative_validation(),
                     projector,
@@ -346,6 +376,7 @@ impl LibraryProjection {
             snapshot_id: Uuid::new_v4(),
             rows,
             quarantined_meetings: quarantined,
+            excluded_meeting_ids: excluded_meeting_ids.clone(),
             limits,
             metadata,
             projector,
@@ -499,7 +530,23 @@ impl LibraryProjection {
     /// Callers may then inspect several already-owned hits without rebuilding
     /// the library once per result.
     pub fn validate_snapshot(&self, storage: &StorageRoot) -> Result<(), LibraryReadError> {
-        let rebuilt = Self::rebuild_with_projector(storage, self.limits, self.projector.clone())?;
+        self.validate_snapshot_excluding(storage, &self.excluded_meeting_ids)
+    }
+
+    pub fn validate_snapshot_excluding(
+        &self,
+        storage: &StorageRoot,
+        excluded_meeting_ids: &HashSet<String>,
+    ) -> Result<(), LibraryReadError> {
+        if excluded_meeting_ids != &self.excluded_meeting_ids {
+            return Err(LibraryReadError::SnapshotStale);
+        }
+        let rebuilt = Self::rebuild_with_projector_excluding(
+            storage,
+            self.limits,
+            self.projector.clone(),
+            excluded_meeting_ids,
+        )?;
         if rebuilt.rows != self.rows
             || rebuilt.quarantined_meetings != self.quarantined_meetings
             || rebuilt.metadata != self.metadata
@@ -514,6 +561,18 @@ impl LibraryProjection {
         storage: &StorageRoot,
         handle: &LibraryHit,
     ) -> Result<OpenedLibraryHit, LibraryReadError> {
+        self.open_excluding(storage, handle, &self.excluded_meeting_ids)
+    }
+
+    pub fn open_excluding(
+        &self,
+        storage: &StorageRoot,
+        handle: &LibraryHit,
+        excluded_meeting_ids: &HashSet<String>,
+    ) -> Result<OpenedLibraryHit, LibraryReadError> {
+        if excluded_meeting_ids != &self.excluded_meeting_ids {
+            return Err(LibraryReadError::SnapshotStale);
+        }
         self.open_inner(Some(storage), handle)
     }
 
@@ -539,7 +598,12 @@ impl LibraryProjection {
             .ok_or(LibraryReadError::SnapshotStale)?;
         let rebuilt = storage
             .map(|storage| {
-                Self::rebuild_with_projector(storage, self.limits, self.projector.clone())
+                Self::rebuild_with_projector_excluding(
+                    storage,
+                    self.limits,
+                    self.projector.clone(),
+                    &self.excluded_meeting_ids,
+                )
             })
             .transpose()
             .map_err(|_| LibraryReadError::SnapshotStale)?;
@@ -688,6 +752,21 @@ impl LibraryProjection {
         handle: &LibraryHit,
         locator_ordinal: usize,
     ) -> Result<OpenedClaimEvidence, LibraryReadError> {
+        self.open_claim_evidence_excluding(
+            storage,
+            handle,
+            locator_ordinal,
+            &self.excluded_meeting_ids,
+        )
+    }
+
+    pub fn open_claim_evidence_excluding(
+        &self,
+        storage: &StorageRoot,
+        handle: &LibraryHit,
+        locator_ordinal: usize,
+        excluded_meeting_ids: &HashSet<String>,
+    ) -> Result<OpenedClaimEvidence, LibraryReadError> {
         let OpenedLibraryHit::Claim {
             meeting_id,
             note_json_sha256,
@@ -695,15 +774,20 @@ impl LibraryProjection {
             transcript_sha256,
             locators,
             ..
-        } = self.open(storage, handle)?
+        } = self.open_excluding(storage, handle, excluded_meeting_ids)?
         else {
             return Err(LibraryReadError::InvalidRequest);
         };
         let locator = locators
             .get(locator_ordinal)
             .ok_or(LibraryReadError::InvalidRequest)?;
-        let rebuilt = Self::rebuild_with_projector(storage, self.limits, self.projector.clone())
-            .map_err(|_| LibraryReadError::SnapshotStale)?;
+        let rebuilt = Self::rebuild_with_projector_excluding(
+            storage,
+            self.limits,
+            self.projector.clone(),
+            excluded_meeting_ids,
+        )
+        .map_err(|_| LibraryReadError::SnapshotStale)?;
         let row = rebuilt
             .rows
             .iter()
@@ -1566,6 +1650,38 @@ mod tests {
         assert_eq!(projection.quarantined_meetings(), 1);
         assert_eq!(before, tree_digest(fixture.storage.path()));
         assert!(fixture.temp.path().exists());
+    }
+
+    #[test]
+    fn exclusion_set_skips_active_directory_and_is_snapshot_authority() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-stable", 10, &[("stable words", false)]);
+        let active = fixture.meeting("meeting-active", 20, &[("partial words", false)]);
+        fs::write(
+            active.join("attempt.json"),
+            b"writer is replacing this receipt",
+        )
+        .unwrap();
+        let excluded = HashSet::from(["meeting-active".to_owned()]);
+
+        let projection = LibraryProjection::rebuild_excluding(
+            &fixture.storage,
+            ReadLimits::default(),
+            &excluded,
+        )
+        .unwrap();
+
+        assert_eq!(projection.rows().len(), 1);
+        assert_eq!(projection.rows()[0].meeting_id, "meeting-stable");
+        assert_eq!(projection.quarantined_meetings(), 0);
+        let handle = projection.search("stable").unwrap().remove(0);
+        assert!(
+            projection
+                .open_excluding(&fixture.storage, &handle, &excluded)
+                .is_ok()
+        );
+        assert_stale!(projection.open_excluding(&fixture.storage, &handle, &HashSet::new()));
+        assert_stale!(projection.validate_snapshot_excluding(&fixture.storage, &HashSet::new()));
     }
 
     #[test]

@@ -539,6 +539,28 @@ fn preview_meeting_detail_requires_two_explicit_steps_for_audio_deletion() {
 }
 
 #[test]
+fn preview_audio_deletion_gates_state_before_handle_authority_or_invalidation() {
+    let source = include_str!("../src/main.rs");
+    let start = source
+        .find("fn preview_delete_meeting_audio(")
+        .expect("Preview audio deletion command");
+    let end = source[start..]
+        .find("fn preview_library_open_evidence(")
+        .expect("next Preview command")
+        + start;
+    let command = &source[start..end];
+
+    let command_lock = command.find("state.command_lock.lock()").unwrap();
+    let gate = command
+        .find("with_preview_audio_deletion_gate(startup, capture")
+        .unwrap();
+    let authorize = command.find("reader.authorize_audio_deletion").unwrap();
+    let invalidate = command.find("*state.preview_library.lock()").unwrap();
+    assert!(command_lock < gate && gate < authorize && authorize < invalidate);
+    assert!(source.contains("CaptureState::Idle | CaptureState::TranscriptReady"));
+}
+
+#[test]
 fn metadata_only_search_results_have_no_transcript_action() {
     let script = include_str!("../../ui/main.js");
     let styles = include_str!("../../ui/styles.css");
@@ -572,23 +594,23 @@ fn preview_transcript_open_rechecks_the_bound_digest_and_path() {
     let reader = include_str!("../src/library_reader.rs");
 
     assert!(reader.contains("pub(crate) transcript_artifact: Option<ArtifactRef>"));
-    assert!(source.contains("(opened.meeting_id, opened.transcript_artifact)"));
+    assert!(source.contains("reader.open_transcript_bound("));
     assert!(source.contains("meeting.artifacts.current_transcript.as_ref() != Some(expected)"));
     assert!(source.contains("Sha256::digest(&bytes)"));
     assert!(source.contains("current.artifacts.current_transcript.as_ref() != Some(expected)"));
     let sequence = source
-        .find("let storage_sequence = match coordination.lock_sequence()")
-        .expect("coordinated transcript read");
+        .find("with_meeting_storage_sequence(&coordination")
+        .expect("coordinated Preview read");
+    let reader_lock = source[sequence..]
+        .find("self.preview_library.lock()")
+        .expect("Preview reader lock after storage sequence")
+        + sequence;
     let load = source
-        .find(
-            "load_bound_preview_transcript_projection(&storage, &meeting_id, &transcript_artifact)",
-        )
+        .find("load_bound_preview_transcript_projection(storage, meeting_id, artifact)")
         .expect("bound transcript load");
-    let release = source
-        .find("drop(storage_sequence);")
-        .expect("coordinated transcript read release");
-    assert!(sequence < load && load < release);
-    assert!(source[sequence..load].contains("active_meeting_ids()"));
+    assert!(sequence < reader_lock && reader_lock < load);
+    assert!(source[sequence..reader_lock].contains("active_meeting_ids"));
+    assert!(reader.contains("if active_meeting_ids.contains(meeting_id)"));
 }
 
 #[test]
@@ -610,7 +632,7 @@ fn preview_commands_are_named_and_preserve_the_production_command_boundary() {
     assert!(handler.contains("preview_library_open_note"));
     assert!(handler.contains("preview_library_open_evidence"));
     assert!(handler.contains("preview_delete_meeting_audio"));
-    assert!(source.contains("reader.open_search_result(&handle)"));
+    assert!(source.contains("reader.open_search_result(&handle, active)"));
     assert!(contract.contains("const PRODUCTION_COMMANDS"));
     assert!(
         !contract[contract.find("const PRODUCTION_COMMANDS").unwrap()

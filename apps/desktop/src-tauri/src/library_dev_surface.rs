@@ -3,6 +3,7 @@
 //! This module is compiled only with `library-dev-surface`. It has no capture,
 //! retention, export, correction, regeneration, or production-data commands.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -35,6 +36,7 @@ const NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 
 struct DevLibrary {
     reader: LibraryReader,
+    active_meeting_ids: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -93,7 +95,7 @@ fn library_dev_snapshot(state: State<'_, DevSurfaceState>) -> LibrarySnapshot {
 fn snapshot_response(state: &DevSurfaceState) -> LibrarySnapshot {
     let mut guard = state.library.lock().expect("development library lock");
     if let Some(library) = guard.as_mut() {
-        let mut response = library.reader.snapshot();
+        let mut response = library.reader.snapshot(&library.active_meeting_ids);
         if response.state == "populated" {
             for row in &mut response.rows {
                 row.label = "Sanitized library sample".into();
@@ -123,7 +125,7 @@ fn search_response(query: &str, state: &DevSurfaceState) -> LibrarySearchRespons
     let Some(library) = guard.as_mut() else {
         return unavailable_search(state);
     };
-    synthetic_search_response(library.reader.search(query))
+    synthetic_search_response(library.reader.search(query, &library.active_meeting_ids))
 }
 
 fn synthetic_search_response(mut response: LibrarySearchResponse) -> LibrarySearchResponse {
@@ -153,7 +155,9 @@ fn open_note_response(handle: &str, state: &DevSurfaceState) -> LibraryNoteRespo
     let Some(library) = guard.as_mut() else {
         return unavailable_note("", state);
     };
-    let mut response = library.reader.open_note(handle);
+    let mut response = library
+        .reader
+        .open_note(handle, &library.active_meeting_ids);
     response.audio_deletion_handle = None;
     response.message = match response.state {
         "note" => "Words located in the transcript. Semantic support has not been reviewed.",
@@ -185,7 +189,10 @@ fn open_evidence_response(
     let Some(library) = guard.as_mut() else {
         return unavailable_evidence(state);
     };
-    let mut response = library.reader.open_evidence(handle, locator_ordinal);
+    let mut response =
+        library
+            .reader
+            .open_evidence(handle, locator_ordinal, &library.active_meeting_ids);
     response.message = match response.state {
         "evidence" => "Exact locator text from the synthetic transcript.",
         "stale" => "That evidence view is stale. Reopen the note and try again.",
@@ -223,6 +230,7 @@ fn project_seeded_library(storage: StorageRoot) -> Result<DevLibrary, String> {
     }
     Ok(DevLibrary {
         reader: LibraryReader::new(storage, projection),
+        active_meeting_ids: HashSet::new(),
     })
 }
 
@@ -664,7 +672,7 @@ mod tests {
         let mut guard = state.library.lock().unwrap();
         let reader = &mut guard.as_mut().unwrap().reader;
 
-        let results = reader.search("café");
+        let results = reader.search("café", &HashSet::new());
         assert_eq!(results.state, "results");
         assert!(results.results.iter().any(|result| result.kind == "claim"));
         assert!(
@@ -678,10 +686,29 @@ mod tests {
             .iter()
             .find(|result| result.kind == "claim")
             .unwrap();
-        let evidence = reader.open_evidence(&claim.handle, 0);
+        let evidence = reader.open_evidence(&claim.handle, 0, &HashSet::new());
         assert_eq!(evidence.state, "evidence");
         assert_eq!(evidence.source_turn_index, Some(0));
         assert_eq!(evidence.text.as_deref(), Some("café"));
+    }
+
+    #[test]
+    fn active_set_change_stales_claim_evidence_handle() {
+        let (_temporary, state) = populated_state();
+        let mut guard = state.library.lock().unwrap();
+        let reader = &mut guard.as_mut().unwrap().reader;
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
+
+        let evidence = reader.open_evidence(
+            &note.claims[0].handle,
+            0,
+            &HashSet::from([FIXTURE_MEETING_ID.to_owned()]),
+        );
+
+        assert_eq!(evidence.state, "stale");
+        assert!(evidence.text.is_none());
+        assert!(evidence.meeting_id.is_none());
     }
 
     #[test]
@@ -689,7 +716,7 @@ mod tests {
         let (_temporary, mut reader, expected_artifact) =
             transcript_ready_reader(&["😀 e\u{301}cho écho", "écho"]);
 
-        let results = reader.search(" ÉCHO ");
+        let results = reader.search(" ÉCHO ", &HashSet::new());
         assert_eq!(results.state, "results");
         assert_eq!(results.results.len(), 3);
         assert_eq!(
@@ -708,14 +735,19 @@ mod tests {
         assert!(serialized.contains("\"start\":2"));
         assert!(serialized.contains("\"end\":7"));
 
-        let opened = reader.open_search_result(&results.results[1].handle);
+        let opened = reader.open_search_result(&results.results[1].handle, &HashSet::new());
         assert_eq!(opened.state, "transcript");
         assert_eq!(opened.source_turn_index, Some(0));
         assert_eq!(opened.start, Some(8));
         assert_eq!(opened.end, Some(12));
-        let transcript = reader.open_transcript(&opened.transcript_handle.unwrap());
-        assert_eq!(transcript.state, "transcript");
-        assert_eq!(transcript.transcript_artifact, Some(expected_artifact));
+        let transcript = reader
+            .open_transcript_bound(
+                &opened.transcript_handle.unwrap(),
+                &HashSet::new(),
+                |_, _, artifact| artifact.clone(),
+            )
+            .unwrap();
+        assert_eq!(transcript, expected_artifact);
     }
 
     #[test]
@@ -723,33 +755,38 @@ mod tests {
         let (_temporary, mut reader, expected_artifact) = transcript_ready_reader(&["oooo"]);
 
         for (ordinal, start, end) in [(0, 0, 2), (1, 1, 3), (2, 2, 4)] {
-            let results = reader.search("oo");
+            let results = reader.search("oo", &HashSet::new());
             assert_eq!(results.results.len(), 3);
             assert_eq!(results.results[ordinal].start, Some(start));
             assert_eq!(results.results[ordinal].end, Some(end));
 
-            let opened = reader.open_search_result(&results.results[ordinal].handle);
+            let opened =
+                reader.open_search_result(&results.results[ordinal].handle, &HashSet::new());
             assert_eq!(opened.start, Some(start));
             assert_eq!(opened.end, Some(end));
-            let transcript = reader.open_transcript(&opened.transcript_handle.unwrap());
-            assert_eq!(transcript.state, "transcript");
-            assert_eq!(
-                transcript.transcript_artifact.as_ref(),
-                Some(&expected_artifact)
-            );
+            let transcript = reader
+                .open_transcript_bound(
+                    &opened.transcript_handle.unwrap(),
+                    &HashSet::new(),
+                    |_, _, artifact| artifact.clone(),
+                )
+                .unwrap();
+            assert_eq!(transcript, expected_artifact);
         }
     }
 
     #[test]
     fn transcript_handle_rejects_a_replaced_current_digest_and_path() {
         let (temporary, mut reader, _) = transcript_ready_reader(&["stable synthetic words"]);
-        let results = reader.search("stable");
-        let opened = reader.open_search_result(&results.results[0].handle);
+        let results = reader.search("stable", &HashSet::new());
+        let opened = reader.open_search_result(&results.results[0].handle, &HashSet::new());
         let transcript_handle = opened.transcript_handle.unwrap();
 
         replace_current_transcript(&temporary, "replacement synthetic words");
 
-        let stale = reader.open_transcript(&transcript_handle);
+        let stale = reader
+            .open_transcript_bound(&transcript_handle, &HashSet::new(), |_, _, _| ())
+            .unwrap_err();
         assert_eq!(stale.state, "stale");
         assert!(stale.meeting_id.is_none());
         assert!(stale.transcript_artifact.is_none());
@@ -763,30 +800,40 @@ mod tests {
 
         let mut prior_search_handle = String::new();
         for _ in 0..8 {
-            let search = reader.search("café");
+            let search = reader.search("café", &HashSet::new());
             assert_eq!(search.state, "results");
             assert_eq!(reader.retained_handle_count(), search.results.len());
             let handle = search.results[0].handle.clone();
-            assert_eq!(reader.open_evidence(&handle, 0).state, "evidence");
+            assert_eq!(
+                reader.open_evidence(&handle, 0, &HashSet::new()).state,
+                "evidence"
+            );
             prior_search_handle = handle;
         }
-        let no_results = reader.search("not-present");
+        let no_results = reader.search("not-present", &HashSet::new());
         assert_eq!(no_results.state, "no-results");
         assert_eq!(reader.retained_handle_count(), 0);
-        assert_eq!(reader.open_evidence(&prior_search_handle, 0).state, "stale");
+        assert_eq!(
+            reader
+                .open_evidence(&prior_search_handle, 0, &HashSet::new())
+                .state,
+            "stale"
+        );
 
         for _ in 0..8 {
-            let snapshot = reader.snapshot();
-            let note = reader.open_note(&snapshot.rows[0].handle);
+            let snapshot = reader.snapshot(&HashSet::new());
+            let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
             assert_eq!(note.state, "note");
             assert!(note.transcript_handle.is_some());
             assert_eq!(reader.retained_handle_count(), note.claims.len() + 1);
             assert_eq!(
-                reader.open_evidence(&note.claims[0].handle, 0).state,
+                reader
+                    .open_evidence(&note.claims[0].handle, 0, &HashSet::new())
+                    .state,
                 "evidence"
             );
         }
-        assert_eq!(reader.open_note("missing").state, "stale");
+        assert_eq!(reader.open_note("missing", &HashSet::new()).state, "stale");
         assert_eq!(reader.retained_handle_count(), 0);
     }
 
@@ -800,7 +847,8 @@ mod tests {
                 .unwrap();
         let empty_projection =
             LibraryProjection::rebuild(&empty_storage, ReadLimits::default()).unwrap();
-        let empty_snapshot = LibraryReader::new(empty_storage, empty_projection).snapshot();
+        let empty_snapshot =
+            LibraryReader::new(empty_storage, empty_projection).snapshot(&HashSet::new());
         assert_eq!(empty_snapshot.state, "empty");
         assert_eq!(
             empty_snapshot.message,
@@ -817,9 +865,9 @@ mod tests {
         let (handle, withheld) = {
             let mut guard = state.library.lock().unwrap();
             let reader = &mut guard.as_mut().unwrap().reader;
-            let withheld = reader.search("withheld");
-            let snapshot = reader.snapshot();
-            let note = reader.open_note(&snapshot.rows[0].handle);
+            let withheld = reader.search("withheld", &HashSet::new());
+            let snapshot = reader.snapshot(&HashSet::new());
+            let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
             (note.claims[0].handle.clone(), withheld)
         };
         assert_eq!(withheld.state, "results");
@@ -849,7 +897,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .reader
-            .open_evidence(&handle, 0);
+            .open_evidence(&handle, 0, &HashSet::new());
         assert_eq!(stale.state, "stale");
         assert!(stale.text.is_none());
         assert!(stale.meeting_id.is_none());
@@ -872,9 +920,9 @@ mod tests {
         write_meeting(&directory, &meeting).unwrap();
 
         let mut reader = project_seeded_library(storage).unwrap().reader;
-        let snapshot = reader.snapshot();
+        let snapshot = reader.snapshot(&HashSet::new());
         assert_eq!(snapshot.state, "populated");
-        let note = reader.open_note(&snapshot.rows[0].handle);
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
         assert_eq!(note.state, "summary-failed");
         assert!(note.claims.is_empty());
     }
@@ -894,8 +942,8 @@ mod tests {
         write_meeting(&directory, &meeting).unwrap();
 
         let mut reader = project_seeded_library(storage).unwrap().reader;
-        let snapshot = reader.snapshot();
-        let note = reader.open_note(&snapshot.rows[0].handle);
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
         assert_eq!(note.state, "transcript-only");
         assert!(note.transcript_handle.is_some());
         assert!(note.claims.is_empty());
@@ -906,16 +954,19 @@ mod tests {
     fn metadata_only_rows_never_issue_transcript_handles() {
         let (_temporary, mut reader) = captured_reader();
 
-        let snapshot = reader.snapshot();
+        let snapshot = reader.snapshot(&HashSet::new());
         assert_eq!(snapshot.rows.len(), 1);
         assert!(!snapshot.rows[0].transcript_available);
         assert_eq!(
-            reader.open_transcript(&snapshot.rows[0].handle).state,
+            reader
+                .open_transcript_bound(&snapshot.rows[0].handle, &HashSet::new(), |_, _, _| ())
+                .unwrap_err()
+                .state,
             "stale"
         );
 
-        let snapshot = reader.snapshot();
-        let note = reader.open_note(&snapshot.rows[0].handle);
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
         assert_eq!(note.state, "transcript-only");
         assert!(note.transcript_handle.is_none());
         assert_eq!(

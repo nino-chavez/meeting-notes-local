@@ -4,11 +4,12 @@
 //! Its only authority is to retain opaque projection handles long enough to reopen
 //! the exact current claim or locator through `LibraryProjection`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use local_meeting_notes_session_core::library_read::{
     ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, OpenedLibraryHit,
+    ReadLimits,
 };
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetentionRule, AudioState, MeetingLifecycle, load_meeting, resolve_artifact,
@@ -27,6 +28,7 @@ const UNAVAILABLE_MESSAGE: &str = "The local library is unavailable. Reopen the 
 pub(crate) struct LibraryReader {
     storage: StorageRoot,
     projection: LibraryProjection,
+    excluded_meeting_ids: HashSet<String>,
     handles: HashMap<String, LibraryHit>,
     audio_deletion_handles: HashMap<String, LibraryHit>,
 }
@@ -152,18 +154,65 @@ pub(crate) struct LibraryTranscriptAccess {
 }
 
 impl LibraryReader {
-    /// Takes an already-built projection. It never creates, rebuilds, or mutates
-    /// storage; `LibraryProjection` performs its own fresh read on every open.
-    pub(crate) fn new(storage: StorageRoot, projection: LibraryProjection) -> Self {
+    /// Builds from an active-ID snapshot taken by the caller while it holds the
+    /// meeting-storage sequence. Reader methods never acquire that sequence;
+    /// commands keep one global sequence-before-reader-mutex lock order.
+    pub(crate) fn rebuild(
+        storage: StorageRoot,
+        excluded_meeting_ids: &HashSet<String>,
+    ) -> Result<Self, ()> {
+        let projection = LibraryProjection::rebuild_excluding(
+            &storage,
+            ReadLimits::default(),
+            excluded_meeting_ids,
+        )
+        .map_err(|_| ())?;
+        Ok(Self::new_excluding(
+            storage,
+            projection,
+            excluded_meeting_ids.clone(),
+        ))
+    }
+
+    fn new_excluding(
+        storage: StorageRoot,
+        projection: LibraryProjection,
+        excluded_meeting_ids: HashSet<String>,
+    ) -> Self {
         Self {
             storage,
             projection,
+            excluded_meeting_ids,
             handles: HashMap::new(),
             audio_deletion_handles: HashMap::new(),
         }
     }
 
-    pub(crate) fn snapshot(&mut self) -> LibrarySnapshot {
+    pub(crate) fn new(storage: StorageRoot, projection: LibraryProjection) -> Self {
+        Self::new_excluding(storage, projection, HashSet::new())
+    }
+
+    fn revalidate(&mut self, active_meeting_ids: &HashSet<String>) -> bool {
+        if active_meeting_ids != &self.excluded_meeting_ids
+            || self
+                .projection
+                .validate_snapshot_excluding(&self.storage, &active_meeting_ids)
+                .is_err()
+        {
+            self.clear_handles();
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn snapshot(&mut self, active_meeting_ids: &HashSet<String>) -> LibrarySnapshot {
+        if !self.revalidate(active_meeting_ids) {
+            return Self::stale_snapshot();
+        }
+        self.snapshot_current()
+    }
+
+    fn snapshot_current(&mut self) -> LibrarySnapshot {
         self.clear_handles();
         let unavailable_count = self.projection.quarantined_meetings();
         if self.projection.rows().is_empty() {
@@ -224,7 +273,18 @@ impl LibraryReader {
         }
     }
 
-    pub(crate) fn search(&mut self, query: &str) -> LibrarySearchResponse {
+    pub(crate) fn search(
+        &mut self,
+        query: &str,
+        active_meeting_ids: &HashSet<String>,
+    ) -> LibrarySearchResponse {
+        if !self.revalidate(active_meeting_ids) {
+            return Self::stale_search();
+        }
+        self.search_current(query)
+    }
+
+    fn search_current(&mut self, query: &str) -> LibrarySearchResponse {
         // A handle is valid only for the response that returned it. Keeping old
         // handles would retain an unbounded amount of private snapshot state.
         self.clear_handles();
@@ -247,9 +307,6 @@ impl LibraryReader {
                 },
             },
             Ok(hits) => {
-                if self.projection.validate_snapshot(&self.storage).is_err() {
-                    return Self::stale_search();
-                }
                 let mut results = Vec::new();
                 for hit in hits {
                     match self.projection.open_snapshot(&hit) {
@@ -348,13 +405,24 @@ impl LibraryReader {
 
     /// Reopens a result through the projection's normal stale-artifact checks.
     /// Search terms never become filesystem or transcript-enumeration authority.
-    pub(crate) fn open_search_result(&mut self, handle: &str) -> LibrarySearchOpenResponse {
+    pub(crate) fn open_search_result(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+    ) -> LibrarySearchOpenResponse {
+        if !self.revalidate(active_meeting_ids) {
+            return Self::stale_search_open();
+        }
+        self.open_search_result_current(handle)
+    }
+
+    fn open_search_result_current(&mut self, handle: &str) -> LibrarySearchOpenResponse {
         let Some(hit) = self.handles.get(handle).cloned() else {
             self.clear_handles();
             return Self::stale_search_open();
         };
         self.clear_handles();
-        match self.projection.open(&self.storage, &hit) {
+        match self.projection.open_snapshot(&hit) {
             Ok(OpenedLibraryHit::Transcript {
                 meeting_id,
                 source_turn_index,
@@ -411,14 +479,25 @@ impl LibraryReader {
         }
     }
 
-    pub(crate) fn open_note(&mut self, handle: &str) -> LibraryNoteResponse {
+    pub(crate) fn open_note(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+    ) -> LibraryNoteResponse {
+        if !self.revalidate(active_meeting_ids) {
+            return Self::stale_note("");
+        }
+        self.open_note_current(handle)
+    }
+
+    fn open_note_current(&mut self, handle: &str) -> LibraryNoteResponse {
         // Opening a note establishes the next evidence-response boundary.
         let Some(hit) = self.handles.get(handle).cloned() else {
             self.clear_handles();
             return Self::stale_note("");
         };
         self.clear_handles();
-        let meeting_id = match self.projection.open(&self.storage, &hit) {
+        let meeting_id = match self.projection.open_snapshot(&hit) {
             Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
             Ok(_) | Err(_) => return Self::stale_note(""),
         };
@@ -507,16 +586,31 @@ impl LibraryReader {
         &mut self,
         handle: &str,
         locator_ordinal: usize,
+        active_meeting_ids: &HashSet<String>,
+    ) -> LibraryEvidenceResponse {
+        if !self.revalidate(active_meeting_ids) {
+            return Self::stale_evidence();
+        }
+        self.open_evidence_current(handle, locator_ordinal, active_meeting_ids)
+    }
+
+    fn open_evidence_current(
+        &mut self,
+        handle: &str,
+        locator_ordinal: usize,
+        active_meeting_ids: &HashSet<String>,
     ) -> LibraryEvidenceResponse {
         let Some(hit) = self.handles.get(handle).cloned() else {
             self.clear_handles();
             return Self::stale_evidence();
         };
         self.clear_handles();
-        match self
-            .projection
-            .open_claim_evidence(&self.storage, &hit, locator_ordinal)
-        {
+        match self.projection.open_claim_evidence_excluding(
+            &self.storage,
+            &hit,
+            locator_ordinal,
+            active_meeting_ids,
+        ) {
             Ok(evidence) => {
                 let transcript_handle = self.retain_transcript_handle(&evidence.meeting_id);
                 LibraryEvidenceResponse {
@@ -534,13 +628,33 @@ impl LibraryReader {
         }
     }
 
-    pub(crate) fn open_transcript(&mut self, handle: &str) -> LibraryTranscriptAccess {
+    /// Revalidates the opaque transcript handle and runs the bound byte loader
+    /// before releasing the same storage sequence. The callback receives only
+    /// the already-authorized meeting and artifact identity.
+    pub(crate) fn open_transcript_bound<T>(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+        load: impl FnOnce(&StorageRoot, &str, &ArtifactRef) -> T,
+    ) -> Result<T, LibraryTranscriptAccess> {
+        if !self.revalidate(active_meeting_ids) {
+            return Err(Self::stale_transcript());
+        }
+        self.open_transcript_current(handle, active_meeting_ids, load)
+    }
+
+    fn open_transcript_current<T>(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+        load: impl FnOnce(&StorageRoot, &str, &ArtifactRef) -> T,
+    ) -> Result<T, LibraryTranscriptAccess> {
         let Some(hit) = self.handles.get(handle).cloned() else {
             self.clear_handles();
-            return Self::stale_transcript();
+            return Err(Self::stale_transcript());
         };
         self.clear_handles();
-        let response = match self.projection.open(&self.storage, &hit) {
+        let response = match self.projection.open_snapshot(&hit) {
             Ok(OpenedLibraryHit::Transcript {
                 meeting_id,
                 transcript_artifact,
@@ -570,7 +684,16 @@ impl LibraryReader {
             },
             Ok(OpenedLibraryHit::Claim { .. }) | Err(_) => Self::stale_transcript(),
         };
-        response
+        let (Some(meeting_id), Some(transcript_artifact)) = (
+            response.meeting_id.as_deref(),
+            response.transcript_artifact.as_ref(),
+        ) else {
+            return Err(response);
+        };
+        if active_meeting_ids.contains(meeting_id) {
+            return Err(Self::stale_transcript());
+        }
+        Ok(load(&self.storage, meeting_id, transcript_artifact))
     }
 
     pub(crate) fn unavailable_snapshot() -> LibrarySnapshot {
@@ -632,13 +755,24 @@ impl LibraryReader {
         Some(handle)
     }
 
-    pub(crate) fn authorize_audio_deletion(&mut self, handle: &str) -> LibraryAudioDeletionAccess {
+    pub(crate) fn authorize_audio_deletion(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+    ) -> LibraryAudioDeletionAccess {
+        if !self.revalidate(active_meeting_ids) {
+            return Self::stale_audio_deletion();
+        }
+        self.authorize_audio_deletion_current(handle)
+    }
+
+    fn authorize_audio_deletion_current(&mut self, handle: &str) -> LibraryAudioDeletionAccess {
         let hit = self.audio_deletion_handles.get(handle).cloned();
         self.clear_handles();
         let Some(hit) = hit else {
             return Self::stale_audio_deletion();
         };
-        let meeting_id = match self.projection.open(&self.storage, &hit) {
+        let meeting_id = match self.projection.open_snapshot(&hit) {
             Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
             Ok(_) | Err(_) => return Self::stale_audio_deletion(),
         };
@@ -825,6 +959,15 @@ impl LibraryReader {
         }
     }
 
+    fn stale_snapshot() -> LibrarySnapshot {
+        LibrarySnapshot {
+            state: "stale",
+            rows: Vec::new(),
+            unavailable_count: 0,
+            message: STALE_MESSAGE.into(),
+        }
+    }
+
     fn stale_search_open() -> LibrarySearchOpenResponse {
         LibrarySearchOpenResponse {
             state: "stale",
@@ -834,6 +977,18 @@ impl LibraryReader {
             start: None,
             end: None,
             message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn unavailable_search_open() -> LibrarySearchOpenResponse {
+        LibrarySearchOpenResponse {
+            state: "unavailable",
+            transcript_handle: None,
+            meeting_id: None,
+            source_turn_index: None,
+            start: None,
+            end: None,
+            message: UNAVAILABLE_MESSAGE.into(),
         }
     }
 
@@ -857,6 +1012,14 @@ impl LibraryReader {
         }
     }
 
+    fn unavailable_audio_deletion() -> LibraryAudioDeletionAccess {
+        LibraryAudioDeletionAccess {
+            state: "unavailable",
+            meeting_id: None,
+            message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
+        }
+    }
+
     fn stale_evidence() -> LibraryEvidenceResponse {
         LibraryEvidenceResponse {
             state: "stale",
@@ -876,6 +1039,15 @@ impl LibraryReader {
             meeting_id: None,
             transcript_artifact: None,
             message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn unavailable_transcript() -> LibraryTranscriptAccess {
+        LibraryTranscriptAccess {
+            state: "unavailable",
+            meeting_id: None,
+            transcript_artifact: None,
+            message: UNAVAILABLE_MESSAGE.into(),
         }
     }
 
@@ -915,8 +1087,10 @@ fn evidence_state_name(value: ClaimEvidenceState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
     use std::os::unix::fs::symlink;
+    use std::path::Path;
 
     use local_meeting_notes_session_core::meeting::{
         AudioRetention, MeetingArtifacts, MeetingRecord, MeetingSchema, artifact_ref,
@@ -976,7 +1150,12 @@ mod tests {
             "bleed": null,
             "voiceprint": null,
             "capture_health": {},
-            "turns": []
+            "turns": [{
+                "start": 0.0,
+                "end": 1.0,
+                "speaker": "Me",
+                "text": "synthetic exact words"
+            }]
         }))
         .unwrap();
         let transcript_relative = format!(
@@ -1054,6 +1233,29 @@ mod tests {
         }
     }
 
+    fn tree_bytes(path: &Path) -> Vec<(String, Vec<u8>)> {
+        fn visit(root: &Path, path: &Path, entries: &mut Vec<(String, Vec<u8>)>) {
+            let mut children = fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            children.sort();
+            for child in children {
+                if child.is_dir() {
+                    visit(root, &child, entries);
+                } else {
+                    entries.push((
+                        child.strip_prefix(root).unwrap().display().to_string(),
+                        fs::read(&child).unwrap(),
+                    ));
+                }
+            }
+        }
+        let mut entries = Vec::new();
+        visit(path, path, &mut entries);
+        entries
+    }
+
     #[test]
     fn retention_projection_reports_exact_two_leg_bytes_and_scheduled_deadline() {
         let fixture = fixture(
@@ -1086,25 +1288,143 @@ mod tests {
         );
         let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
         let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
-        let snapshot = reader.snapshot();
+        let snapshot = reader.snapshot(&HashSet::new());
         let generic_handle = snapshot.rows[0].handle.clone();
 
-        let refused = reader.authorize_audio_deletion(&generic_handle);
+        let refused = reader.authorize_audio_deletion(&generic_handle, &HashSet::new());
         assert_eq!(refused.state, "stale");
         assert_eq!(refused.meeting_id, None);
 
-        let snapshot = reader.snapshot();
-        let note = reader.open_note(&snapshot.rows[0].handle);
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
         let deletion_handle = note
             .audio_deletion_handle
             .expect("retained meeting deletion handle");
-        let authorized = reader.authorize_audio_deletion(&deletion_handle);
+        let authorized = reader.authorize_audio_deletion(&deletion_handle, &HashSet::new());
         assert_eq!(authorized.state, "authorized");
         assert_eq!(authorized.meeting_id.as_deref(), Some(MEETING_ID));
 
-        let reused = reader.authorize_audio_deletion(&deletion_handle);
+        let reused = reader.authorize_audio_deletion(&deletion_handle, &HashSet::new());
         assert_eq!(reused.state, "stale");
         assert_eq!(reused.meeting_id, None);
+    }
+
+    #[test]
+    fn active_set_change_stales_even_an_empty_search_before_input_validation() {
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage, projection);
+
+        let response = reader.search("", &HashSet::from([MEETING_ID.to_owned()]));
+
+        assert_eq!(response.state, "stale");
+        assert!(response.results.is_empty());
+        assert_eq!(reader.retained_handle_count(), 0);
+    }
+
+    #[test]
+    fn active_set_change_stales_search_result_and_note_handles() {
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let changed = HashSet::from([MEETING_ID.to_owned()]);
+
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
+        let search = reader.search("exact", &HashSet::new());
+        assert_eq!(search.state, "results");
+        assert_eq!(
+            reader
+                .open_search_result(&search.results[0].handle, &changed)
+                .state,
+            "stale"
+        );
+
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage, projection);
+        let snapshot = reader.snapshot(&HashSet::new());
+        assert_eq!(
+            reader.open_note(&snapshot.rows[0].handle, &changed).state,
+            "stale"
+        );
+    }
+
+    #[test]
+    fn transcript_loader_runs_only_for_an_inactive_current_generation() {
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
+        let transcript_handle = note.transcript_handle.unwrap();
+        let called = Cell::new(false);
+
+        let loaded = reader
+            .open_transcript_bound(&transcript_handle, &HashSet::new(), |_, meeting_id, _| {
+                called.set(true);
+                meeting_id.to_owned()
+            })
+            .unwrap();
+        assert_eq!(loaded, MEETING_ID);
+        assert!(called.get());
+
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage, projection);
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
+        let transcript_handle = note.transcript_handle.unwrap();
+        called.set(false);
+        let refused = reader.open_transcript_bound(
+            &transcript_handle,
+            &HashSet::from([MEETING_ID.to_owned()]),
+            |_, _, _| called.set(true),
+        );
+        assert_eq!(refused.unwrap_err().state, "stale");
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn response_reads_preserve_exact_storage_bytes() {
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let before = tree_bytes(fixture.storage.path());
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
+
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
+        let transcript_handle = note.transcript_handle.unwrap();
+        let transcript_bytes = reader
+            .open_transcript_bound(
+                &transcript_handle,
+                &HashSet::new(),
+                |storage, meeting_id, artifact| {
+                    let directory = meeting_dir(storage, meeting_id).unwrap();
+                    fs::read(directory.join(&artifact.relative_path)).unwrap()
+                },
+            )
+            .unwrap();
+        assert!(!transcript_bytes.is_empty());
+        assert_eq!(reader.search("", &HashSet::new()).state, "invalid");
+
+        assert_eq!(tree_bytes(fixture.storage.path()), before);
     }
 
     #[test]
@@ -1117,8 +1437,8 @@ mod tests {
         );
         let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
         let mut reader = LibraryReader::new(fixture.storage, projection);
-        let snapshot = reader.snapshot();
-        let note = reader.open_note(&snapshot.rows[0].handle);
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
 
         assert_eq!(note.audio_retention.state, "released");
         assert_eq!(note.audio_deletion_handle, None);

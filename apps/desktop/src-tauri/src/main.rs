@@ -37,8 +37,6 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use local_meeting_notes_session_core::diagnostic::write_private_diagnostic;
-#[cfg(feature = "preview-surface")]
-use local_meeting_notes_session_core::library_read::{LibraryProjection, ReadLimits};
 #[cfg(any(feature = "preview-surface", test))]
 use local_meeting_notes_session_core::meeting::resolve_artifact;
 use local_meeting_notes_session_core::meeting::{
@@ -252,6 +250,18 @@ struct StorageContext {
     diagnostics: PathBuf,
 }
 
+#[cfg(any(feature = "preview-surface", test))]
+fn with_meeting_storage_sequence<T>(
+    coordination: &MeetingStorageCoordination,
+    operation: impl FnOnce(&HashSet<String>) -> T,
+) -> Result<T, ()> {
+    let sequence = coordination.lock_sequence().map_err(|_| ())?;
+    let active_meeting_ids = sequence.active_meeting_ids().map_err(|_| ())?;
+    let response = operation(&active_meeting_ids);
+    drop(sequence);
+    Ok(response)
+}
+
 impl ApplicationState {
     #[allow(dead_code)]
     fn manual_audio_deletion_facade(&self) -> manual_delete_facade::ManualAudioDeletionFacade<'_> {
@@ -265,6 +275,29 @@ impl ApplicationState {
             .as_ref()
             .map(AppDataWriterLock::coordination)
             .ok_or_else(|| "the app-data writer lock is unavailable".to_string())
+    }
+
+    #[cfg(feature = "preview-surface")]
+    fn with_preview_library<T>(
+        &self,
+        unavailable: impl Fn() -> T,
+        operation: impl FnOnce(&mut library_reader::LibraryReader, &HashSet<String>) -> T,
+    ) -> T {
+        let coordination = match self.meeting_storage_coordination() {
+            Ok(coordination) => coordination,
+            Err(_) => return unavailable(),
+        };
+        with_meeting_storage_sequence(&coordination, |active_meeting_ids| {
+            let mut library = match self.preview_library.lock() {
+                Ok(library) => library,
+                Err(_) => return unavailable(),
+            };
+            let Some(reader) = library.as_mut() else {
+                return unavailable();
+            };
+            operation(reader, active_meeting_ids)
+        })
+        .unwrap_or_else(|_| unavailable())
     }
 }
 
@@ -758,13 +791,23 @@ fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reade
     let Some(storage) = storage else {
         return library_reader::LibraryReader::unavailable_snapshot();
     };
-    let mut reader = match LibraryProjection::rebuild(&storage, ReadLimits::default()) {
-        Ok(projection) => library_reader::LibraryReader::new(storage, projection),
+    let coordination = match state.meeting_storage_coordination() {
+        Ok(coordination) => coordination,
         Err(_) => return library_reader::LibraryReader::unavailable_snapshot(),
     };
-    let snapshot = reader.snapshot();
-    *state.preview_library.lock().expect("preview library lock") = Some(reader);
-    snapshot
+    with_meeting_storage_sequence(&coordination, |active_meeting_ids| {
+        let mut reader = match library_reader::LibraryReader::rebuild(storage, active_meeting_ids) {
+            Ok(reader) => reader,
+            Err(_) => return library_reader::LibraryReader::unavailable_snapshot(),
+        };
+        let snapshot = reader.snapshot(active_meeting_ids);
+        let Ok(mut library) = state.preview_library.lock() else {
+            return library_reader::LibraryReader::unavailable_snapshot();
+        };
+        *library = Some(reader);
+        snapshot
+    })
+    .unwrap_or_else(|_| library_reader::LibraryReader::unavailable_snapshot())
 }
 
 #[cfg(feature = "preview-surface")]
@@ -781,11 +824,10 @@ fn preview_library_search(
     query: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibrarySearchResponse {
-    let mut reader = state.preview_library.lock().expect("preview library lock");
-    let mut response = reader
-        .as_mut()
-        .map(|reader| reader.search(&query))
-        .unwrap_or_else(library_reader::LibraryReader::unavailable_search);
+    let mut response = state.with_preview_library(
+        library_reader::LibraryReader::unavailable_search,
+        |reader, active| reader.search(&query, active),
+    );
     // Preview's active reader is deliberately transcript/title metadata only.
     // The broader projection contract also supports future claim readers, but
     // this surface cannot make claim text a search destination yet.
@@ -814,11 +856,8 @@ fn preview_library_open_search_result(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibrarySearchOpenResponse {
-    let mut reader = state.preview_library.lock().expect("preview library lock");
-    reader
-        .as_mut()
-        .map(|reader| reader.open_search_result(&handle))
-        .unwrap_or_else(|| library_reader::LibrarySearchOpenResponse {
+    state.with_preview_library(
+        || library_reader::LibrarySearchOpenResponse {
             state: "unavailable",
             transcript_handle: None,
             meeting_id: None,
@@ -827,7 +866,9 @@ fn preview_library_open_search_result(
             end: None,
             message: "The local Preview library is unavailable. Reopen the app and try again."
                 .into(),
-        })
+        },
+        |reader, active| reader.open_search_result(&handle, active),
+    )
 }
 
 #[cfg(feature = "preview-surface")]
@@ -836,11 +877,10 @@ fn preview_library_open_note(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibraryNoteResponse {
-    let mut reader = state.preview_library.lock().expect("preview library lock");
-    reader
-        .as_mut()
-        .map(|reader| reader.open_note(&handle))
-        .unwrap_or_else(|| library_reader::LibraryReader::unavailable_note(""))
+    state.with_preview_library(
+        || library_reader::LibraryReader::unavailable_note(""),
+        |reader, active| reader.open_note(&handle, active),
+    )
 }
 
 #[cfg(feature = "preview-surface")]
@@ -852,23 +892,76 @@ struct PreviewAudioDeletionResponse {
     message: String,
 }
 
+#[cfg(any(feature = "preview-surface", test))]
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewAudioDeletionGateRefusal {
+    state: &'static str,
+    message: &'static str,
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn with_preview_audio_deletion_gate<T>(
+    startup: StartupState,
+    capture: CaptureState,
+    operation: impl FnOnce() -> T,
+) -> Result<T, PreviewAudioDeletionGateRefusal> {
+    if startup != StartupState::Ready {
+        return Err(PreviewAudioDeletionGateRefusal {
+            state: "not-ready",
+            message: "Recording deletion is available after the installation check is ready.",
+        });
+    }
+    if !matches!(capture, CaptureState::Idle | CaptureState::TranscriptReady) {
+        return Err(PreviewAudioDeletionGateRefusal {
+            state: "capture-active",
+            message: "Recording deletion is unavailable while a meeting is active or recovering.",
+        });
+    }
+    Ok(operation())
+}
+
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_delete_meeting_audio(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> PreviewAudioDeletionResponse {
-    let access = state
-        .preview_library
-        .lock()
-        .expect("preview library lock")
-        .as_mut()
-        .map(|reader| reader.authorize_audio_deletion(&handle))
-        .unwrap_or_else(|| library_reader::LibraryAudioDeletionAccess {
+    let Ok(_command) = state.command_lock.lock() else {
+        return PreviewAudioDeletionResponse {
             state: "unavailable",
-            meeting_id: None,
+            audio_retention: None,
             message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
-        });
+        };
+    };
+    let (startup, capture) = match state.model.lock() {
+        Ok(model) => (model.reducer.startup(), model.reducer.capture()),
+        Err(_) => {
+            return PreviewAudioDeletionResponse {
+                state: "unavailable",
+                audio_retention: None,
+                message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
+            };
+        }
+    };
+    let access = match with_preview_audio_deletion_gate(startup, capture, || {
+        state.with_preview_library(
+            || library_reader::LibraryAudioDeletionAccess {
+                state: "unavailable",
+                meeting_id: None,
+                message: "Recording deletion is unavailable. Reopen Library and try again.".into(),
+            },
+            |reader, active| reader.authorize_audio_deletion(&handle, active),
+        )
+    }) {
+        Ok(access) => access,
+        Err(refusal) => {
+            return PreviewAudioDeletionResponse {
+                state: refusal.state,
+                audio_retention: None,
+                message: refusal.message.into(),
+            };
+        }
+    };
 
     // Any attempted mutation boundary invalidates every retained reader handle.
     *state.preview_library.lock().expect("preview library lock") = None;
@@ -880,9 +973,14 @@ fn preview_delete_meeting_audio(
         .as_ref()
         .map(|context| context.storage.clone());
     let retention_for = |meeting_id: &str| {
-        storage
-            .as_ref()
-            .map(|storage| library_reader::LibraryReader::read_audio_retention(storage, meeting_id))
+        let storage = storage.as_ref()?;
+        let coordination = state.meeting_storage_coordination().ok()?;
+        with_meeting_storage_sequence(&coordination, |active| {
+            (!active.contains(meeting_id))
+                .then(|| library_reader::LibraryReader::read_audio_retention(storage, meeting_id))
+        })
+        .ok()
+        .flatten()
     };
 
     let Some(meeting_id) = access.meeting_id else {
@@ -950,11 +1048,10 @@ fn preview_library_open_evidence(
     locator_ordinal: usize,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibraryEvidenceResponse {
-    let mut reader = state.preview_library.lock().expect("preview library lock");
-    reader
-        .as_mut()
-        .map(|reader| reader.open_evidence(&handle, locator_ordinal))
-        .unwrap_or_else(library_reader::LibraryReader::unavailable_evidence)
+    state.with_preview_library(
+        library_reader::LibraryReader::unavailable_evidence,
+        |reader, active| reader.open_evidence(&handle, locator_ordinal, active),
+    )
 }
 
 #[cfg(feature = "preview-surface")]
@@ -963,117 +1060,49 @@ fn preview_library_open_transcript(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> PreviewLibraryTranscript {
-    let opened = state
-        .preview_library
-        .lock()
-        .expect("preview library lock")
-        .as_mut()
-        .map(|reader| reader.open_transcript(&handle));
-    let Some(opened) = opened else {
-        return PreviewLibraryTranscript {
+    state.with_preview_library(
+        || PreviewLibraryTranscript {
             state: "unavailable",
             meeting_id: None,
             turns: Vec::new(),
             warnings: Vec::new(),
             message: "The local Preview library is unavailable. Reopen the app and try again."
                 .into(),
-        };
-    };
-    if opened.state != "transcript" {
-        return PreviewLibraryTranscript {
-            state: opened.state,
-            meeting_id: None,
-            turns: Vec::new(),
-            warnings: Vec::new(),
-            message: opened.message,
-        };
-    }
-    let (Some(meeting_id), Some(transcript_artifact)) =
-        (opened.meeting_id, opened.transcript_artifact)
-    else {
-        return PreviewLibraryTranscript {
-            state: "stale",
-            meeting_id: None,
-            turns: Vec::new(),
-            warnings: Vec::new(),
-            message: "That transcript is no longer available. Reopen Library and try again.".into(),
-        };
-    };
-    let storage = state
-        .storage
-        .lock()
-        .expect("storage context lock")
-        .as_ref()
-        .map(|context| context.storage.clone());
-    let Some(storage) = storage else {
-        return PreviewLibraryTranscript {
-            state: "unavailable",
-            meeting_id: None,
-            turns: Vec::new(),
-            warnings: Vec::new(),
-            message: "The local Preview library is unavailable. Reopen the app and try again."
-                .into(),
-        };
-    };
-    let coordination = match state.meeting_storage_coordination() {
-        Ok(coordination) => coordination,
-        Err(_) => {
-            return PreviewLibraryTranscript {
-                state: "unavailable",
+        },
+        |reader, active| match reader.open_transcript_bound(
+            &handle,
+            active,
+            |storage, meeting_id, artifact| {
+                (
+                    meeting_id.to_owned(),
+                    load_bound_preview_transcript_projection(storage, meeting_id, artifact),
+                )
+            },
+        ) {
+            Ok((meeting_id, Ok((turns, warnings)))) => PreviewLibraryTranscript {
+                state: "transcript",
+                meeting_id: Some(meeting_id),
+                turns,
+                warnings,
+                message: "Retained transcript from this Preview meeting.".into(),
+            },
+            Ok((_, Err(_))) => PreviewLibraryTranscript {
+                state: "stale",
                 meeting_id: None,
                 turns: Vec::new(),
                 warnings: Vec::new(),
-                message: "The local Preview library is unavailable. Reopen the app and try again."
+                message: "That transcript is no longer available. Reopen Library and try again."
                     .into(),
-            };
-        }
-    };
-    let storage_sequence = match coordination.lock_sequence() {
-        Ok(sequence) => sequence,
-        Err(_) => {
-            return PreviewLibraryTranscript {
-                state: "unavailable",
+            },
+            Err(opened) => PreviewLibraryTranscript {
+                state: opened.state,
                 meeting_id: None,
                 turns: Vec::new(),
                 warnings: Vec::new(),
-                message: "The local Preview library is unavailable. Reopen the app and try again."
-                    .into(),
-            };
-        }
-    };
-    if storage_sequence
-        .active_meeting_ids()
-        .map(|active| active.contains(&meeting_id))
-        .unwrap_or(true)
-    {
-        return PreviewLibraryTranscript {
-            state: "stale",
-            meeting_id: None,
-            turns: Vec::new(),
-            warnings: Vec::new(),
-            message: "That transcript is being updated. Reopen Library and try again.".into(),
-        };
-    }
-    let opened =
-        load_bound_preview_transcript_projection(&storage, &meeting_id, &transcript_artifact);
-    let response = match opened {
-        Ok((turns, warnings)) => PreviewLibraryTranscript {
-            state: "transcript",
-            meeting_id: Some(meeting_id),
-            turns,
-            warnings,
-            message: "Retained transcript from this Preview meeting.".into(),
+                message: opened.message,
+            },
         },
-        Err(_) => PreviewLibraryTranscript {
-            state: "stale",
-            meeting_id: None,
-            turns: Vec::new(),
-            warnings: Vec::new(),
-            message: "That transcript is no longer available. Reopen Library and try again.".into(),
-        },
-    };
-    drop(storage_sequence);
-    response
+    )
 }
 
 #[cfg(any(feature = "preview-surface", test))]
@@ -3019,6 +3048,7 @@ fn io_error(error: io::Error) -> Box<dyn std::error::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
     use tempfile::TempDir;
 
     fn valid_attestation() -> StartAttestation {
@@ -3035,6 +3065,29 @@ mod tests {
         fs::create_dir(&repository).unwrap();
         let storage = StorageRoot::create(&temporary.path().join("app-data"), &repository).unwrap();
         (temporary, storage)
+    }
+
+    fn storage_tree_bytes(path: &Path) -> Vec<(String, Vec<u8>)> {
+        fn visit(root: &Path, path: &Path, entries: &mut Vec<(String, Vec<u8>)>) {
+            let mut children = fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            children.sort();
+            for child in children {
+                if child.is_dir() {
+                    visit(root, &child, entries);
+                } else {
+                    entries.push((
+                        child.strip_prefix(root).unwrap().display().to_string(),
+                        fs::read(&child).unwrap(),
+                    ));
+                }
+            }
+        }
+        let mut entries = Vec::new();
+        visit(path, path, &mut entries);
+        entries
     }
 
     #[test]
@@ -3079,6 +3132,224 @@ mod tests {
     }
 
     #[test]
+    fn preview_sequence_barrier_blocks_reader_entry_without_sleeping() {
+        let coordination = Arc::new(MeetingStorageCoordination::default());
+        let held = coordination.lock_sequence().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let task_coordination = Arc::clone(&coordination);
+        let task_barrier = Arc::clone(&barrier);
+        let task = std::thread::spawn(move || {
+            task_barrier.wait();
+            with_meeting_storage_sequence(&task_coordination, |_| {
+                entered_sender.send(()).unwrap();
+            })
+            .unwrap();
+        });
+
+        barrier.wait();
+        assert!(entered_receiver.try_recv().is_err());
+        drop(held);
+        entered_receiver.recv().unwrap();
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn poisoned_preview_sequence_fails_closed_before_reader_operation() {
+        let coordination = Arc::new(MeetingStorageCoordination::default());
+        let poisoned = Arc::clone(&coordination);
+        assert!(
+            std::thread::spawn(move || {
+                let _sequence = poisoned.lock_sequence().unwrap();
+                panic!("synthetic sequence poison");
+            })
+            .join()
+            .is_err()
+        );
+        let called = std::cell::Cell::new(false);
+
+        let response = with_meeting_storage_sequence(&coordination, |_| called.set(true));
+
+        assert!(response.is_err());
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn preview_commands_share_sequence_before_reader_mutex_order() {
+        let coordination = Arc::new(MeetingStorageCoordination::default());
+        let reader = Arc::new(Mutex::new(()));
+        let (first_entered_sender, first_entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let (second_done_sender, second_done_receiver) = mpsc::channel();
+
+        let first_coordination = Arc::clone(&coordination);
+        let first_reader = Arc::clone(&reader);
+        let first = std::thread::spawn(move || {
+            with_meeting_storage_sequence(&first_coordination, |_| {
+                let _reader = first_reader.lock().unwrap();
+                first_entered_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+            })
+            .unwrap();
+        });
+        first_entered_receiver.recv().unwrap();
+
+        let second_coordination = Arc::clone(&coordination);
+        let second_reader = Arc::clone(&reader);
+        let second = std::thread::spawn(move || {
+            with_meeting_storage_sequence(&second_coordination, |_| {
+                let _reader = second_reader.lock().unwrap();
+                second_done_sender.send(()).unwrap();
+            })
+            .unwrap();
+        });
+        assert!(second_done_receiver.try_recv().is_err());
+        release_sender.send(()).unwrap();
+        second_done_receiver.recv().unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
+    }
+
+    #[test]
+    fn preview_audio_deletion_gate_refuses_before_consuming_handle() {
+        let mut handle = Some("single-use-handle");
+        for startup in [
+            StartupState::ShellRendered,
+            StartupState::Checking,
+            StartupState::RuntimeMissing,
+            StartupState::ServiceTimeout,
+            StartupState::DiagnosticWritten,
+            StartupState::Retrying,
+            StartupState::ReinstallRequired,
+        ] {
+            let refused =
+                with_preview_audio_deletion_gate(startup, CaptureState::Idle, || handle.take());
+            assert_eq!(refused.unwrap_err().state, "not-ready");
+            assert_eq!(handle, Some("single-use-handle"));
+        }
+        for capture in [
+            CaptureState::Arming,
+            CaptureState::Recording,
+            CaptureState::Stopping,
+            CaptureState::Captured,
+            CaptureState::Transcribing,
+            CaptureState::Summarizing,
+            CaptureState::Ready,
+            CaptureState::TranscriptionFailed,
+            CaptureState::SummaryFailed,
+            CaptureState::RecoveredInterrupted,
+        ] {
+            let refused =
+                with_preview_audio_deletion_gate(StartupState::Ready, capture, || handle.take());
+            assert_eq!(refused.unwrap_err().state, "capture-active");
+            assert_eq!(handle, Some("single-use-handle"));
+        }
+
+        let authorized =
+            with_preview_audio_deletion_gate(StartupState::Ready, CaptureState::Idle, || {
+                handle.take()
+            })
+            .unwrap();
+        assert_eq!(authorized, Some("single-use-handle"));
+        assert_eq!(handle, None);
+
+        let mut transcript_ready_handle = Some("transcript-ready-handle");
+        assert_eq!(
+            with_preview_audio_deletion_gate(
+                StartupState::Ready,
+                CaptureState::TranscriptReady,
+                || transcript_ready_handle.take(),
+            )
+            .unwrap(),
+            Some("transcript-ready-handle")
+        );
+    }
+
+    #[test]
+    fn preview_reader_commands_preserve_app_snapshot_and_storage_bytes() {
+        let state = ApplicationState::default();
+        let before_snapshot = serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap();
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4().to_string();
+        write_transcript_fixture(
+            &storage,
+            &meeting_id,
+            10,
+            AudioState::Retained,
+            "stable synthetic words",
+        );
+        let before_storage = storage_tree_bytes(storage.path());
+        let coordination = MeetingStorageCoordination::default();
+
+        with_meeting_storage_sequence(&coordination, |active| {
+            let mut reader = library_reader::LibraryReader::rebuild(storage.clone(), active)
+                .expect("synthetic Preview reader");
+            let snapshot = reader.snapshot(active);
+            let note = reader.open_note(&snapshot.rows[0].handle, active);
+            let transcript_handle = note.transcript_handle.unwrap();
+            let opened = reader
+                .open_transcript_bound(
+                    &transcript_handle,
+                    active,
+                    load_bound_preview_transcript_projection,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(opened.0[0].text, "stable synthetic words");
+            assert_eq!(reader.search("", active).state, "invalid");
+        })
+        .unwrap();
+
+        assert_eq!(storage_tree_bytes(storage.path()), before_storage);
+        assert_eq!(
+            serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap(),
+            before_snapshot
+        );
+    }
+
+    #[test]
+    fn preview_snapshot_excludes_active_meeting_and_keeps_prior_stable_row() {
+        let (_temporary, storage) = test_storage();
+        let stable_id = Uuid::new_v4().to_string();
+        let active_id = Uuid::new_v4().to_string();
+        write_transcript_fixture(
+            &storage,
+            &stable_id,
+            10,
+            AudioState::Retained,
+            "prior stable words",
+        );
+        let active_directory = write_transcript_fixture(
+            &storage,
+            &active_id,
+            20,
+            AudioState::Retained,
+            "partial active words",
+        )
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+        fs::write(
+            active_directory.join("attempt.json"),
+            b"writer is replacing this receipt",
+        )
+        .unwrap();
+        let coordination = MeetingStorageCoordination::default();
+        let _active = coordination.acquire(&active_id).unwrap();
+
+        with_meeting_storage_sequence(&coordination, |active| {
+            let mut reader = library_reader::LibraryReader::rebuild(storage.clone(), active)
+                .expect("stable meetings remain readable");
+            let snapshot = reader.snapshot(active);
+            assert_eq!(snapshot.rows.len(), 1);
+            assert_eq!(snapshot.rows[0].meeting_id, stable_id);
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn app_data_writer_lock_is_exclusive_and_released_with_its_file() {
         let (_temporary, storage) = test_storage();
         let held = acquire_app_data_writer_lock(&storage).unwrap();
@@ -3087,13 +3358,6 @@ mod tests {
 
         drop(held);
         assert!(acquire_app_data_writer_lock(&storage).is_ok());
-    }
-
-    fn fixture_reference(relative_path: &str, byte: char) -> ArtifactRef {
-        ArtifactRef {
-            relative_path: relative_path.into(),
-            sha256: byte.to_string().repeat(64),
-        }
     }
 
     fn write_transcript_fixture(
@@ -3105,7 +3369,23 @@ mod tests {
     ) -> PathBuf {
         let directory = meeting_dir(storage, meeting_id).unwrap();
         create_private_dir(&directory).unwrap();
+        create_private_dir(&directory.join("capture")).unwrap();
         create_private_dir(&directory.join("transcript")).unwrap();
+        create_private_dir(&directory.join("deletion")).unwrap();
+        durable_create_new(&directory.join("ownership.json"), b"{}\n").unwrap();
+        durable_create_new(&directory.join("capture/session.json"), b"{}\n").unwrap();
+        durable_create_new(&directory.join("capture/mic.wav"), b"synthetic microphone").unwrap();
+        durable_create_new(&directory.join("capture/system.wav"), b"synthetic system").unwrap();
+        let microphone_audio = artifact_ref(&directory, "capture/mic.wav").unwrap();
+        let system_audio = artifact_ref(&directory, "capture/system.wav").unwrap();
+        let deletion_receipt = if audio_state == AudioState::Released {
+            fs::remove_file(directory.join("capture/mic.wav")).unwrap();
+            fs::remove_file(directory.join("capture/system.wav")).unwrap();
+            durable_create_new(&directory.join("deletion/audio-deletion.json"), b"{}\n").unwrap();
+            Some(artifact_ref(&directory, "deletion/audio-deletion.json").unwrap())
+        } else {
+            None
+        };
         let rule = AudioRetentionRule::DeleteAfter { seconds: 86_400 };
         let policy_sha256 = retention_policy_sha256(&rule);
         let attempt = CaptureAttemptReceipt {
@@ -3151,15 +3431,14 @@ mod tests {
                 policy_sha256,
                 next_deletion_at_epoch_seconds: Some(created_at_epoch_seconds + 86_400),
                 state: audio_state,
-                deletion_receipt: (audio_state == AudioState::Released)
-                    .then(|| fixture_reference("deletion/audio-deletion.json", 'f')),
+                deletion_receipt,
             },
             artifacts: MeetingArtifacts {
                 attempt: artifact_ref(&directory, "attempt.json").unwrap(),
-                ownership: Some(fixture_reference("ownership.json", 'b')),
-                capture_session: Some(fixture_reference("capture/session.json", 'c')),
-                microphone_audio: Some(fixture_reference("capture/mic.wav", 'd')),
-                system_audio: Some(fixture_reference("capture/system.wav", 'e')),
+                ownership: Some(artifact_ref(&directory, "ownership.json").unwrap()),
+                capture_session: Some(artifact_ref(&directory, "capture/session.json").unwrap()),
+                microphone_audio: Some(microphone_audio),
+                system_audio: Some(system_audio),
                 current_transcript: Some(artifact_ref(&directory, &transcript_relative).unwrap()),
                 current_note: None,
             },
