@@ -78,6 +78,7 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
             "retry_startup",
             "preview_profile_snapshot",
             "preview_profile_preserve_legacy",
+            "preview_profile_reset",
             "preview_library_snapshot",
             "preview_library_search",
             "preview_library_open_search_result",

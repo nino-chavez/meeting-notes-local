@@ -59,6 +59,10 @@ const profileStatusTitle = document.querySelector("#profile-status-title");
 const profileStatusCopy = document.querySelector("#profile-status-copy");
 const profileFootnote = document.querySelector("#profile-footnote");
 const profileSetup = document.querySelector("#profile-setup");
+const profileResetConfirmation = document.querySelector("#profile-reset-confirmation");
+const profileResetConfirm = document.querySelector("#profile-reset-confirm");
+const profileResetCancel = document.querySelector("#profile-reset-cancel");
+const profileResetStatus = document.querySelector("#profile-reset-status");
 const micChannel = document.querySelector("#mic-channel");
 const systemChannel = document.querySelector("#system-channel");
 const libraryList = document.querySelector("#library-list");
@@ -761,8 +765,15 @@ async function openStartMeeting() {
 
 function renderProfile(snapshot) {
   const state = snapshot?.state || "unavailable";
+  profileResetConfirmation.hidden = true;
+  profileResetStatus.hidden = true;
+  profileResetStatus.textContent = "";
+  profileResetConfirm.disabled = false;
+  profileResetConfirm.textContent = "Delete voice profile";
+  profileResetCancel.disabled = false;
   profileSetup.disabled = true;
   profileSetup.textContent = "Set up voice profile";
+  profileSetup.dataset.action = "setup";
   if (state === "baseline-ready" && snapshot?.profilePresent === false) {
     profileKicker.textContent = "Voice profile · Not set up";
     profileTitle.textContent = "Voice isolation is off.";
@@ -777,8 +788,11 @@ function renderProfile(snapshot) {
     profileTitle.textContent = "Stored profile material is not active.";
     profileLede.textContent = "Recording remains available under Preview’s one-operator, headphones-required limit.";
     profileStatusTitle.textContent = "Stored profile is not active";
-    profileStatusCopy.textContent = "Profile activation and reset are not connected in this build, so Preview will not use the stored profile yet.";
-    profileFootnote.textContent = "Opening Settings reads only the cached setup status. It does not open profile, meeting, or transcript content.";
+    profileStatusCopy.textContent = "Preview will not activate these bytes. You can remove them through a separate confirmation without changing any meeting.";
+    profileFootnote.textContent = "Opening Settings reads only the cached setup status. Reset is the only action that opens and changes the stored profile slot.";
+    profileSetup.disabled = false;
+    profileSetup.textContent = "Reset stored profile";
+    profileSetup.dataset.action = "reset";
     return;
   }
   if (state === "migration-review-required") {
@@ -790,6 +804,7 @@ function renderProfile(snapshot) {
     profileFootnote.textContent = "Leaving this screen keeps the stored profile unchanged. Removal will remain a separate confirmed action.";
     profileSetup.disabled = false;
     profileSetup.textContent = "Preserve for review";
+    profileSetup.dataset.action = "preserve";
     return;
   }
   if (state === "needs-attention") {
@@ -809,6 +824,45 @@ function renderProfile(snapshot) {
   profileFootnote.textContent = "Try reopening Settings after the installation check finishes.";
 }
 
+function showProfileResetConfirmation() {
+  if (profileSetup.disabled || profileSetup.dataset.action !== "reset") return;
+  profileResetConfirmation.hidden = false;
+  profileResetStatus.hidden = true;
+  profileResetConfirm.disabled = false;
+  profileResetCancel.disabled = false;
+  profileResetConfirm.focus();
+}
+
+function cancelProfileReset() {
+  profileResetConfirmation.hidden = true;
+  profileResetStatus.hidden = true;
+  profileSetup.focus();
+}
+
+async function resetStoredProfile() {
+  if (!invoke || profileResetConfirm.disabled) return;
+  const revision = routeRevision;
+  profileResetConfirm.disabled = true;
+  profileResetCancel.disabled = true;
+  profileResetConfirm.textContent = "Deleting…";
+  profileResetStatus.hidden = true;
+  try {
+    const snapshot = await invoke("preview_profile_reset", { confirmed: true });
+    if (currentScreen !== "profile-screen" || routeRevision !== revision) return;
+    renderProfile(snapshot);
+    profileStatusCopy.textContent = "The stored voice profile was deleted. Meetings and their retained artifacts were not changed.";
+    profileFootnote.textContent = "The reset journal retains only its completion count, latest event, fixed empty slots, and filesystem metadata.";
+    profileStatusTitle.focus();
+  } catch (error) {
+    if (currentScreen !== "profile-screen" || routeRevision !== revision) return;
+    profileResetConfirm.disabled = false;
+    profileResetCancel.disabled = false;
+    profileResetConfirm.textContent = "Delete voice profile";
+    profileResetStatus.textContent = typeof error === "string" ? error : "The profile was not reset. Review the current status and try again.";
+    profileResetStatus.hidden = false;
+  }
+}
+
 async function preserveLegacyProfile() {
   if (!invoke || profileSetup.disabled) return;
   const revision = routeRevision;
@@ -825,6 +879,14 @@ async function preserveLegacyProfile() {
       profileStatusCopy.textContent = "The stored profile was left unchanged. Finish any active operation, then try again.";
     }
   }
+}
+
+function runProfileAction() {
+  if (profileSetup.dataset.action === "preserve") {
+    preserveLegacyProfile();
+    return;
+  }
+  if (profileSetup.dataset.action === "reset") showProfileResetConfirmation();
 }
 
 async function openProfile() {
@@ -1353,7 +1415,9 @@ findLink.addEventListener("click", () => openFind({ resetQuery: true }));
 meetingsLink.addEventListener("click", () => openMeetings({ resetFind: true }));
 promisesLink.addEventListener("click", () => openPromises({ resetFind: true }));
 profileLink.addEventListener("click", openProfile);
-profileSetup.addEventListener("click", preserveLegacyProfile);
+profileSetup.addEventListener("click", runProfileAction);
+profileResetConfirm.addEventListener("click", resetStoredProfile);
+profileResetCancel.addEventListener("click", cancelProfileReset);
 workflowReturn.addEventListener("click", returnToWorkflow);
 startMeetingAction.addEventListener("click", openStartMeeting);
 document.querySelector("#start-back").addEventListener("click", returnToProductHome);

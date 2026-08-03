@@ -237,6 +237,12 @@
           "markdownDescription": "Enables the preview_profile_preserve_legacy command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_profile_reset command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-profile-reset",
+          "markdownDescription": "Enables the preview_profile_reset command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_profile_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-profile-snapshot",
@@ -319,6 +325,12 @@
           "type": "string",
           "const": "deny-preview-profile-preserve-legacy",
           "markdownDescription": "Denies the preview_profile_preserve_legacy command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_profile_reset command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-profile-reset",
+          "markdownDescription": "Denies the preview_profile_reset command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_profile_snapshot command without any pre-configured scope.",

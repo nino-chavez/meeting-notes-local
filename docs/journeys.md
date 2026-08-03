@@ -403,9 +403,11 @@ application gap.**
 Every capture writes two WAVs and a transcript of a conversation involving people who
 are not the operator. Surface K and the interaction prototype now require a
 no-default retention choice, disk accounting, per-meeting audio deletion, whole-meeting
-deletion, and a separately resettable owner-only voice profile. The internal alpha
-persists a one-day policy and runs due deletion at startup, but the first real deletion
-event is not yet a receipt and the other trust actions remain later work.
+deletion, and a separately resettable owner-only voice profile. The internal alpha's
+first automatic deletion now has its completed content-free receipt. The local Preview
+also has a separately confirmed, crash-recoverable profile reset whose synthetic tests
+prove meeting storage remains untouched. No real profile-reset receipt is claimed, and
+the other trust actions remain later work.
 
 This outranks every interface question above, for three reasons. It is a promise the
 product implicitly makes and does not keep — "the audio never leaves the Mac" says

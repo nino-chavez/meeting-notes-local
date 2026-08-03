@@ -19,8 +19,9 @@ use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordi
 use crate::operation_store::{OperationStore, OperationStoreError, StoredOperationRequest};
 #[cfg(target_os = "macos")]
 use crate::profile_lifecycle::{
-    ProfileLifecycleBaseline, ProfileLifecycleError, initialize_profile_lifecycle_bound,
-    preserve_legacy_profile_bound,
+    ProfileLifecycleBaseline, ProfileLifecycleError, ProfileResetOutcome,
+    initialize_profile_lifecycle_bound, preserve_legacy_profile_bound,
+    reset_profile_lifecycle_bound,
 };
 use crate::storage::{
     BoundPrivateDirectory, BoundPrivateFile, StorageRoot, create_private_dir, durable_create_new,
@@ -196,6 +197,36 @@ impl ProfileLifecycleAuthority<'_> {
         &self,
     ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleAdmissionError> {
         self.run(preserve_legacy_profile_bound)
+    }
+
+    /// Removes only the account-level profile bytes through the fixed rolling
+    /// lifecycle journal. Meetings are never opened by this action.
+    pub fn reset_profile(
+        &self,
+        operation_id: &str,
+        requested_at: u64,
+    ) -> Result<ProfileResetOutcome, ProfileLifecycleAdmissionError> {
+        let sequence = self.lock.coordination.lock_sequence()?;
+        let authority_is_current = || {
+            self.lock.storage_root.revalidate().is_ok()
+                && self
+                    .lock
+                    .writer_file
+                    .revalidate(&self.lock.storage_root, 0)
+                    .is_ok()
+        };
+        if !authority_is_current() {
+            return Err(ProfileLifecycleAdmissionError::AuthorityLost);
+        }
+        if !sequence.active_meeting_ids()?.is_empty() {
+            return Err(ProfileLifecycleAdmissionError::ActiveMeeting);
+        }
+        let outcome =
+            reset_profile_lifecycle_bound(&self.lock.storage_root, operation_id, requested_at);
+        if !authority_is_current() {
+            return Err(ProfileLifecycleAdmissionError::AuthorityLost);
+        }
+        outcome.map_err(Into::into)
     }
 
     fn run(
@@ -1644,6 +1675,48 @@ mod tests {
         assert_eq!(
             fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
             legacy
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn profile_reset_uses_writer_authority_and_refuses_active_meetings() {
+        let (_temp, storage) = storage();
+        let legacy = b"safe-but-not-activated-legacy-profile";
+        durable_create_new(&storage.path().join("profile/voiceprint.json"), legacy).unwrap();
+        let writer = AppDataWriterLock::acquire(&storage).unwrap();
+        writer
+            .profile_lifecycle_authority()
+            .preserve_legacy_for_review()
+            .unwrap();
+        let coordination = writer.coordination();
+        let active = coordination.acquire("active-meeting").unwrap();
+
+        assert!(matches!(
+            writer
+                .profile_lifecycle_authority()
+                .reset_profile("123e4567-e89b-12d3-a456-426614174000", 10,),
+            Err(ProfileLifecycleAdmissionError::ActiveMeeting)
+        ));
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            legacy
+        );
+
+        drop(active);
+        assert!(matches!(
+            writer.profile_lifecycle_authority().reset_profile(
+                "123e4567-e89b-12d3-a456-426614174000",
+                10,
+            ),
+            Ok(ProfileResetOutcome::Removed {
+                ref operation_id,
+                completed_reset_count: 1,
+            }) if operation_id == "123e4567-e89b-12d3-a456-426614174000"
+        ));
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            b""
         );
     }
 

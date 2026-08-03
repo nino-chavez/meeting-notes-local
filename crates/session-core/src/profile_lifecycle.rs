@@ -1,16 +1,19 @@
 //! Fixed-slot profile lifecycle journal.
 //!
-//! This increment establishes and reopens the durable sequence-zero baseline,
-//! including an explicit preserve-first migration for an existing legacy live
-//! slot. Reset and enrollment mutations are intentionally not exposed yet.
+//! This module establishes and reopens the durable sequence-zero baseline,
+//! preserves ambiguous legacy bytes only after an explicit review action, and
+//! owns the crash-recoverable fixed-slot reset transition. Guided enrollment
+//! reuses the same journal in the next vertical increment.
 
 #![cfg(target_os = "macos")]
 
 use std::io;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::storage::{
     BoundPrivateDirectory, BoundPrivateFile, PrivateObjectIdentity, PrivateObjectObservation,
@@ -34,6 +37,27 @@ pub enum ProfileLifecycleError {
     Quarantined,
     #[error("profile lifecycle initialization is ambiguous and requires migration review")]
     MigrationReviewRequired,
+    #[error("profile lifecycle operation identifier is invalid")]
+    InvalidOperationId,
+    #[error("profile lifecycle receipt sequence overflowed")]
+    SequenceOverflow,
+    #[error("profile lifecycle reset count overflowed")]
+    ResetCountOverflow,
+    #[error("profile lifecycle volume does not support atomic file swap")]
+    SwapUnsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileResetOutcome {
+    AlreadyAbsent,
+    Removed {
+        operation_id: String,
+        completed_reset_count: u64,
+    },
+    Recovered {
+        operation_id: String,
+        completed_reset_count: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,10 +127,89 @@ struct BaselinePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BaselineEnvelope {
+struct LastReset {
+    operation_id: String,
+    completed_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResetPendingPayload {
+    schema: String,
+    receipt_sequence: u64,
+    operation: String,
+    phase: String,
+    predecessor_payload_sha256: String,
+    operation_id: String,
+    requested_at: u64,
+    prior_completed_reset_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prior_last_reset: Option<LastReset>,
+    profile: ProfileSlot,
+    reset_zero: ProfileSlot,
+    enrollment_zero: ProfileSlot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResetRemovedPayload {
+    schema: String,
+    receipt_sequence: u64,
+    operation: String,
+    phase: String,
+    predecessor_payload_sha256: String,
+    completed_reset_count: u64,
+    last_reset: LastReset,
+    live_zero: ProfileSlot,
+    reset_zero: ProfileSlot,
+    enrollment_zero: ProfileSlot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum LifecyclePayload {
+    Baseline(BaselinePayload),
+    ResetPending(ResetPendingPayload),
+    ResetRemoved(ResetRemovedPayload),
+}
+
+impl LifecyclePayload {
+    fn receipt_sequence(&self) -> u64 {
+        match self {
+            Self::Baseline(payload) => payload.receipt_sequence,
+            Self::ResetPending(payload) => payload.receipt_sequence,
+            Self::ResetRemoved(payload) => payload.receipt_sequence,
+        }
+    }
+
+    fn predecessor_payload_sha256(&self) -> Option<&str> {
+        match self {
+            Self::Baseline(_) => None,
+            Self::ResetPending(payload) => Some(&payload.predecessor_payload_sha256),
+            Self::ResetRemoved(payload) => Some(&payload.predecessor_payload_sha256),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LifecycleEnvelope {
     schema: String,
     payload_sha256: String,
-    payload: BaselinePayload,
+    payload: LifecyclePayload,
+}
+
+#[derive(Debug, Clone)]
+struct ReceiptAuthority {
+    payload: LifecyclePayload,
+    payload_sha256: String,
+    slot: ReceiptSlot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReceiptSlot {
+    A,
+    B,
 }
 
 pub(crate) fn initialize_profile_lifecycle_bound(
@@ -131,6 +234,22 @@ pub(crate) fn preserve_legacy_profile_bound(
     result
 }
 
+pub(crate) fn reset_profile_lifecycle_bound(
+    app_data: &BoundPrivateDirectory,
+    operation_id: &str,
+    requested_at: u64,
+) -> Result<ProfileResetOutcome, ProfileLifecycleError> {
+    if !canonical_uuid(operation_id) {
+        return Err(ProfileLifecycleError::InvalidOperationId);
+    }
+    let profile = app_data.open_directory("profile").map_err(quarantine_io)?;
+    let result = reset_bound_profile(&profile, operation_id, requested_at);
+    if app_data.revalidate().is_err() || profile.revalidate().is_err() {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    result
+}
+
 fn initialize_bound_profile(
     profile: &BoundPrivateDirectory,
 ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
@@ -143,7 +262,7 @@ fn initialize_bound_profile(
             let live = profile
                 .open_file(LIVE_NAME, true, PROFILE_MAX_BYTES)
                 .map_err(quarantine_io)?;
-            validate_published(profile, &live, &lifecycle)
+            validate_or_recover_published(profile, live, &lifecycle)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let initializing = match profile.open_directory(INITIALIZING_NAME) {
@@ -204,7 +323,10 @@ fn publish_initializing(
     let lifecycle = profile
         .publish_directory_exclusive(initializing, INITIALIZING_NAME, LIFECYCLE_NAME)
         .map_err(quarantine_io)?;
-    validate_published(profile, live, &lifecycle)
+    let live = profile
+        .open_file(LIVE_NAME, true, PROFILE_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    validate_or_recover_published(profile, live, &lifecycle)
 }
 
 fn prepare_initializing(
@@ -279,53 +401,458 @@ fn prepare_initializing(
     Ok(())
 }
 
-fn validate_published(
+fn validate_or_recover_published(
     profile: &BoundPrivateDirectory,
-    live: &BoundPrivateFile,
+    live: BoundPrivateFile,
     lifecycle: &BoundPrivateDirectory,
 ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
     if lifecycle.child_names().map_err(quarantine_io)? != FIXED_NAMES {
         return Err(ProfileLifecycleError::Quarantined);
     }
     let receipt_a = lifecycle
-        .open_file(RECEIPT_A_NAME, false, RECEIPT_MAX_BYTES)
+        .open_file(RECEIPT_A_NAME, true, RECEIPT_MAX_BYTES)
         .map_err(quarantine_io)?;
     let receipt_b = lifecycle
-        .open_file(RECEIPT_B_NAME, false, RECEIPT_MAX_BYTES)
+        .open_file(RECEIPT_B_NAME, true, RECEIPT_MAX_BYTES)
         .map_err(quarantine_io)?;
     let reset = lifecycle
-        .open_file(RESET_NAME, false, 0)
+        .open_file(RESET_NAME, true, PROFILE_MAX_BYTES)
         .map_err(quarantine_io)?;
     let enrollment = lifecycle
         .open_file(ENROLLMENT_NAME, false, 0)
         .map_err(quarantine_io)?;
-    let expected = baseline_payload(profile, live, lifecycle, &reset, &enrollment)?;
+    let authority = select_receipt_authority(lifecycle, &receipt_a, &receipt_b)?;
+    match authority.payload.clone() {
+        LifecyclePayload::Baseline(payload) => {
+            let expected = baseline_payload(profile, &live, lifecycle, &reset, &enrollment)?;
+            if payload != expected {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
+            Ok(status_from_baseline(&payload))
+        }
+        LifecyclePayload::ResetRemoved(payload) => {
+            validate_removed_layout(profile, &live, lifecycle, &reset, &enrollment, &payload)?;
+            Ok(status_from_removed(&payload))
+        }
+        LifecyclePayload::ResetPending(payload) => recover_reset(
+            profile,
+            live,
+            lifecycle,
+            reset,
+            &enrollment,
+            receipt_a,
+            receipt_b,
+            authority,
+            payload,
+            true,
+        )
+        .map(|(_, status)| status),
+    }
+}
 
+fn select_receipt_authority(
+    lifecycle: &BoundPrivateDirectory,
+    receipt_a: &BoundPrivateFile,
+    receipt_b: &BoundPrivateFile,
+) -> Result<ReceiptAuthority, ProfileLifecycleError> {
     let mut valid = Vec::new();
-    for receipt in [&receipt_a, &receipt_b] {
+    for (slot, receipt) in [(ReceiptSlot::A, receipt_a), (ReceiptSlot::B, receipt_b)] {
         let bytes = receipt
             .read_all(lifecycle, RECEIPT_MAX_BYTES)
             .map_err(quarantine_io)?;
         if bytes.is_empty() {
             continue;
         }
-        match decode_envelope(&bytes) {
-            Ok(payload) => valid.push(payload),
+        match decode_lifecycle_envelope(&bytes) {
+            Ok((payload, payload_sha256)) => valid.push(ReceiptAuthority {
+                payload,
+                payload_sha256,
+                slot,
+            }),
             Err(_) if is_self_consistent_unsupported_receipt(&bytes) => {
                 return Err(ProfileLifecycleError::Quarantined);
             }
             Err(_) => {}
         }
     }
-    if valid.len() != 1 || valid[0] != expected {
+    match valid.len() {
+        1 => Ok(valid.remove(0)),
+        2 => {
+            valid.sort_by_key(|authority| authority.payload.receipt_sequence());
+            let older = &valid[0];
+            let newer = &valid[1];
+            if older.payload.receipt_sequence() == newer.payload.receipt_sequence()
+                || older.payload.receipt_sequence().checked_add(1)
+                    != Some(newer.payload.receipt_sequence())
+                || newer.payload.predecessor_payload_sha256() != Some(older.payload_sha256.as_str())
+            {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
+            Ok(valid.remove(1))
+        }
+        _ => Err(ProfileLifecycleError::Quarantined),
+    }
+}
+
+fn status_from_baseline(payload: &BaselinePayload) -> ProfileLifecycleBaseline {
+    ProfileLifecycleBaseline {
+        receipt_sequence: payload.receipt_sequence,
+        completed_reset_count: payload.completed_reset_count,
+        profile_size: payload.live.size,
+        profile_sha256: payload.live.sha256.clone(),
+    }
+}
+
+fn status_from_removed(payload: &ResetRemovedPayload) -> ProfileLifecycleBaseline {
+    ProfileLifecycleBaseline {
+        receipt_sequence: payload.receipt_sequence,
+        completed_reset_count: payload.completed_reset_count,
+        profile_size: 0,
+        profile_sha256: ZERO_SHA256.into(),
+    }
+}
+
+fn validate_removed_layout(
+    profile: &BoundPrivateDirectory,
+    live: &BoundPrivateFile,
+    lifecycle: &BoundPrivateDirectory,
+    reset: &BoundPrivateFile,
+    enrollment: &BoundPrivateFile,
+    payload: &ResetRemovedPayload,
+) -> Result<(), ProfileLifecycleError> {
+    if payload.completed_reset_count == 0
+        || !canonical_uuid(&payload.last_reset.operation_id)
+        || observe_slot(profile, live, 0)? != payload.live_zero
+        || observe_slot(lifecycle, reset, 0)? != payload.reset_zero
+        || observe_slot(lifecycle, enrollment, 0)? != payload.enrollment_zero
+        || !slot_is_zero(&payload.live_zero)
+        || !slot_is_zero(&payload.reset_zero)
+        || !slot_is_zero(&payload.enrollment_zero)
+    {
         return Err(ProfileLifecycleError::Quarantined);
     }
-    Ok(ProfileLifecycleBaseline {
-        receipt_sequence: expected.receipt_sequence,
-        completed_reset_count: expected.completed_reset_count,
-        profile_size: expected.live.size,
-        profile_sha256: expected.live.sha256,
+    Ok(())
+}
+
+fn reset_bound_profile(
+    profile: &BoundPrivateDirectory,
+    operation_id: &str,
+    requested_at: u64,
+) -> Result<ProfileResetOutcome, ProfileLifecycleError> {
+    match profile.open_directory(INITIALIZING_NAME) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        _ => return Err(ProfileLifecycleError::Quarantined),
+    }
+    let lifecycle = profile
+        .open_directory(LIFECYCLE_NAME)
+        .map_err(quarantine_io)?;
+    if lifecycle.child_names().map_err(quarantine_io)? != FIXED_NAMES {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let live = profile
+        .open_file(LIVE_NAME, true, PROFILE_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let receipt_a = lifecycle
+        .open_file(RECEIPT_A_NAME, true, RECEIPT_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let receipt_b = lifecycle
+        .open_file(RECEIPT_B_NAME, true, RECEIPT_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let reset = lifecycle
+        .open_file(RESET_NAME, true, PROFILE_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let enrollment = lifecycle
+        .open_file(ENROLLMENT_NAME, false, 0)
+        .map_err(quarantine_io)?;
+    let authority = select_receipt_authority(&lifecycle, &receipt_a, &receipt_b)?;
+
+    match authority.payload.clone() {
+        LifecyclePayload::Baseline(payload) => {
+            let expected = baseline_payload(profile, &live, &lifecycle, &reset, &enrollment)?;
+            if payload != expected {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
+            if !payload.live.size.eq(&0) {
+                profile
+                    .require_file_swap()
+                    .map_err(|_| ProfileLifecycleError::SwapUnsupported)?;
+                let pending = ResetPendingPayload {
+                    schema: "profile-lifecycle/1".into(),
+                    receipt_sequence: next_sequence(payload.receipt_sequence)?,
+                    operation: "reset".into(),
+                    phase: "deleting".into(),
+                    predecessor_payload_sha256: authority.payload_sha256.clone(),
+                    operation_id: operation_id.into(),
+                    requested_at,
+                    prior_completed_reset_count: payload.completed_reset_count,
+                    prior_last_reset: None,
+                    profile: payload.live,
+                    reset_zero: payload.reset_slot,
+                    enrollment_zero: payload.enrollment_slot,
+                };
+                let authority = publish_payload(
+                    &lifecycle,
+                    &receipt_a,
+                    &receipt_b,
+                    &authority,
+                    LifecyclePayload::ResetPending(pending.clone()),
+                )?;
+                recover_reset(
+                    profile,
+                    live,
+                    &lifecycle,
+                    reset,
+                    &enrollment,
+                    receipt_a,
+                    receipt_b,
+                    authority,
+                    pending,
+                    false,
+                )
+                .map(|(outcome, _)| outcome)
+            } else {
+                Ok(ProfileResetOutcome::AlreadyAbsent)
+            }
+        }
+        LifecyclePayload::ResetRemoved(payload) => {
+            validate_removed_layout(profile, &live, &lifecycle, &reset, &enrollment, &payload)?;
+            Ok(ProfileResetOutcome::AlreadyAbsent)
+        }
+        LifecyclePayload::ResetPending(payload) => recover_reset(
+            profile,
+            live,
+            &lifecycle,
+            reset,
+            &enrollment,
+            receipt_a,
+            receipt_b,
+            authority,
+            payload,
+            true,
+        )
+        .map(|(outcome, _)| outcome),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_reset(
+    profile: &BoundPrivateDirectory,
+    mut live: BoundPrivateFile,
+    lifecycle: &BoundPrivateDirectory,
+    mut reset: BoundPrivateFile,
+    enrollment: &BoundPrivateFile,
+    receipt_a: BoundPrivateFile,
+    receipt_b: BoundPrivateFile,
+    mut authority: ReceiptAuthority,
+    mut pending: ResetPendingPayload,
+    recovered: bool,
+) -> Result<(ProfileResetOutcome, ProfileLifecycleBaseline), ProfileLifecycleError> {
+    validate_reset_pending(&pending)?;
+    let enrollment_now = observe_slot(lifecycle, enrollment, 0)?;
+    if enrollment_now != pending.enrollment_zero || !slot_is_zero(&enrollment_now) {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+
+    let mut live_now = observe_slot(profile, &live, PROFILE_MAX_BYTES)?;
+    let mut reset_now = observe_slot(lifecycle, &reset, PROFILE_MAX_BYTES)?;
+    let pre_swap = live_now == pending.profile && reset_now == pending.reset_zero;
+    let post_swap = live_now == pending.reset_zero && reset_now == pending.profile;
+    let post_truncate =
+        live_now == pending.reset_zero && slot_is_zeroed_version_of(&reset_now, &pending.profile);
+    if !pre_swap && !post_swap && !post_truncate {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    if pending.phase == "staged" && pre_swap {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+
+    if pre_swap {
+        profile
+            .require_file_swap()
+            .map_err(|_| ProfileLifecycleError::SwapUnsupported)?;
+        let (profile_at_reset, zero_at_live) = profile
+            .swap_files(live, PROFILE_MAX_BYTES, lifecycle, reset, 0)
+            .map_err(quarantine_io)?;
+        live = zero_at_live;
+        reset = profile_at_reset;
+        live_now = observe_slot(profile, &live, 0)?;
+        reset_now = observe_slot(lifecycle, &reset, PROFILE_MAX_BYTES)?;
+        if live_now != pending.reset_zero || reset_now != pending.profile {
+            return Err(ProfileLifecycleError::Quarantined);
+        }
+    }
+
+    if !post_truncate && pending.phase == "deleting" {
+        let staged = ResetPendingPayload {
+            receipt_sequence: next_sequence(pending.receipt_sequence)?,
+            phase: "staged".into(),
+            predecessor_payload_sha256: authority.payload_sha256.clone(),
+            ..pending.clone()
+        };
+        authority = publish_payload(
+            lifecycle,
+            &receipt_a,
+            &receipt_b,
+            &authority,
+            LifecyclePayload::ResetPending(staged.clone()),
+        )?;
+        pending = staged;
+    }
+
+    if !post_truncate {
+        reset
+            .replace_bytes(lifecycle, &[], PROFILE_MAX_BYTES)
+            .map_err(quarantine_io)?;
+        live_now = observe_slot(profile, &live, 0)?;
+        reset_now = observe_slot(lifecycle, &reset, 0)?;
+        if live_now != pending.reset_zero
+            || !slot_is_zeroed_version_of(&reset_now, &pending.profile)
+        {
+            return Err(ProfileLifecycleError::Quarantined);
+        }
+    }
+
+    let completed_reset_count = pending
+        .prior_completed_reset_count
+        .checked_add(1)
+        .ok_or(ProfileLifecycleError::ResetCountOverflow)?;
+    let removed = ResetRemovedPayload {
+        schema: "profile-lifecycle/1".into(),
+        receipt_sequence: next_sequence(authority.payload.receipt_sequence())?,
+        operation: "reset".into(),
+        phase: "removed".into(),
+        predecessor_payload_sha256: authority.payload_sha256.clone(),
+        completed_reset_count,
+        last_reset: LastReset {
+            operation_id: pending.operation_id.clone(),
+            completed_at: epoch_seconds()?,
+        },
+        live_zero: live_now,
+        reset_zero: reset_now,
+        enrollment_zero: enrollment_now,
+    };
+    let authority = publish_payload(
+        lifecycle,
+        &receipt_a,
+        &receipt_b,
+        &authority,
+        LifecyclePayload::ResetRemoved(removed.clone()),
+    )?;
+    validate_removed_layout(profile, &live, lifecycle, &reset, enrollment, &removed)?;
+    let status = status_from_removed(&removed);
+    if authority.payload.receipt_sequence() != status.receipt_sequence {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let outcome = if recovered {
+        ProfileResetOutcome::Recovered {
+            operation_id: pending.operation_id,
+            completed_reset_count,
+        }
+    } else {
+        ProfileResetOutcome::Removed {
+            operation_id: pending.operation_id,
+            completed_reset_count,
+        }
+    };
+    Ok((outcome, status))
+}
+
+fn publish_payload(
+    lifecycle: &BoundPrivateDirectory,
+    receipt_a: &BoundPrivateFile,
+    receipt_b: &BoundPrivateFile,
+    current: &ReceiptAuthority,
+    payload: LifecyclePayload,
+) -> Result<ReceiptAuthority, ProfileLifecycleError> {
+    if payload.receipt_sequence()
+        != current
+            .payload
+            .receipt_sequence()
+            .checked_add(1)
+            .ok_or(ProfileLifecycleError::SequenceOverflow)?
+        || payload.predecessor_payload_sha256() != Some(current.payload_sha256.as_str())
+    {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let (slot, target) = match current.slot {
+        ReceiptSlot::A => (ReceiptSlot::B, receipt_b),
+        ReceiptSlot::B => (ReceiptSlot::A, receipt_a),
+    };
+    let bytes = encode_lifecycle_envelope(payload.clone())?;
+    target
+        .replace_bytes(lifecycle, &bytes, RECEIPT_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    lifecycle.sync_all().map_err(quarantine_io)?;
+    let written = target
+        .read_all(lifecycle, RECEIPT_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    let (decoded, payload_sha256) = decode_lifecycle_envelope(&written)?;
+    if decoded != payload {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(ReceiptAuthority {
+        payload,
+        payload_sha256,
+        slot,
     })
+}
+
+fn validate_reset_pending(payload: &ResetPendingPayload) -> Result<(), ProfileLifecycleError> {
+    let last_reset_consistent = match (
+        payload.prior_completed_reset_count,
+        payload.prior_last_reset.as_ref(),
+    ) {
+        (0, None) => true,
+        (0, Some(_)) | (_, None) => false,
+        (_, Some(last)) => canonical_uuid(&last.operation_id),
+    };
+    if payload.schema != "profile-lifecycle/1"
+        || payload.operation != "reset"
+        || !matches!(payload.phase.as_str(), "deleting" | "staged")
+        || !valid_sha256(&payload.predecessor_payload_sha256)
+        || !canonical_uuid(&payload.operation_id)
+        || !last_reset_consistent
+        || !slot_is_zero(&payload.reset_zero)
+        || !slot_is_zero(&payload.enrollment_zero)
+        || payload.profile.size == 0
+    {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(())
+}
+
+fn next_sequence(sequence: u64) -> Result<u64, ProfileLifecycleError> {
+    sequence
+        .checked_add(1)
+        .ok_or(ProfileLifecycleError::SequenceOverflow)
+}
+
+fn slot_is_zero(slot: &ProfileSlot) -> bool {
+    slot.size == 0 && slot.sha256 == ZERO_SHA256
+}
+
+fn slot_is_zeroed_version_of(current: &ProfileSlot, prior: &ProfileSlot) -> bool {
+    current.identity == prior.identity && slot_is_zero(current)
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    Uuid::parse_str(value)
+        .map(|uuid| uuid.to_string() == value)
+        .unwrap_or(false)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn epoch_seconds() -> Result<u64, ProfileLifecycleError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| ProfileLifecycleError::Quarantined)
 }
 
 fn baseline_payload(
@@ -402,38 +929,76 @@ fn identity_receipt(observation: PrivateObjectObservation) -> IdentityReceipt {
 }
 
 fn encode_envelope(payload: BaselinePayload) -> Result<Vec<u8>, ProfileLifecycleError> {
+    encode_lifecycle_envelope(LifecyclePayload::Baseline(payload))
+}
+
+fn encode_lifecycle_envelope(payload: LifecyclePayload) -> Result<Vec<u8>, ProfileLifecycleError> {
     let payload_bytes =
         serde_json::to_vec_pretty(&payload).map_err(|_| ProfileLifecycleError::Quarantined)?;
-    serde_json::to_vec_pretty(&BaselineEnvelope {
+    let bytes = serde_json::to_vec_pretty(&LifecycleEnvelope {
         schema: "profile-lifecycle-slot/1".into(),
         payload_sha256: format!("{:x}", Sha256::digest(payload_bytes)),
         payload,
     })
-    .map_err(|_| ProfileLifecycleError::Quarantined)
+    .map_err(|_| ProfileLifecycleError::Quarantined)?;
+    if bytes.len() as u64 > RECEIPT_MAX_BYTES {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    Ok(bytes)
 }
 
 fn decode_envelope(bytes: &[u8]) -> Result<BaselinePayload, ProfileLifecycleError> {
-    let envelope: BaselineEnvelope =
+    match decode_lifecycle_envelope(bytes)?.0 {
+        LifecyclePayload::Baseline(payload) => Ok(payload),
+        _ => Err(ProfileLifecycleError::Quarantined),
+    }
+}
+
+fn decode_lifecycle_envelope(
+    bytes: &[u8],
+) -> Result<(LifecyclePayload, String), ProfileLifecycleError> {
+    let envelope: LifecycleEnvelope =
         serde_json::from_slice(bytes).map_err(|_| ProfileLifecycleError::Quarantined)?;
-    if envelope.schema != "profile-lifecycle-slot/1"
-        || envelope.payload.schema != "profile-lifecycle/1"
-        || envelope.payload.receipt_sequence != 0
-        || envelope.payload.operation != "baseline"
-        || envelope.payload.phase != "ready"
-        || envelope.payload.completed_reset_count != 0
-        || envelope.payload_sha256.len() != 64
-        || !envelope
-            .payload_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if envelope.schema != "profile-lifecycle-slot/1" || !valid_sha256(&envelope.payload_sha256) {
         return Err(ProfileLifecycleError::Quarantined);
     }
-    let canonical = encode_envelope(envelope.payload.clone())?;
+    match &envelope.payload {
+        LifecyclePayload::Baseline(payload) => {
+            if payload.schema != "profile-lifecycle/1"
+                || payload.receipt_sequence != 0
+                || payload.operation != "baseline"
+                || payload.phase != "ready"
+                || payload.completed_reset_count != 0
+            {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
+        }
+        LifecyclePayload::ResetPending(payload) => validate_reset_pending(payload)?,
+        LifecyclePayload::ResetRemoved(payload) => {
+            if payload.schema != "profile-lifecycle/1"
+                || payload.operation != "reset"
+                || payload.phase != "removed"
+                || payload.completed_reset_count == 0
+                || !valid_sha256(&payload.predecessor_payload_sha256)
+                || !canonical_uuid(&payload.last_reset.operation_id)
+                || !slot_is_zero(&payload.live_zero)
+                || !slot_is_zero(&payload.reset_zero)
+                || !slot_is_zero(&payload.enrollment_zero)
+            {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
+        }
+    }
+    let payload_bytes = serde_json::to_vec_pretty(&envelope.payload)
+        .map_err(|_| ProfileLifecycleError::Quarantined)?;
+    if format!("{:x}", Sha256::digest(&payload_bytes)) != envelope.payload_sha256 {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    let canonical = encode_lifecycle_envelope(envelope.payload.clone())?;
     if canonical != bytes {
         return Err(ProfileLifecycleError::Quarantined);
     }
-    Ok(envelope.payload)
+    Ok((envelope.payload, envelope.payload_sha256))
 }
 
 fn is_self_consistent_unsupported_receipt(bytes: &[u8]) -> bool {
@@ -547,6 +1112,11 @@ mod tests {
         preserve_legacy_profile_bound(&app_data)
     }
 
+    fn reset_profile(storage: &StorageRoot) -> Result<ProfileResetOutcome, ProfileLifecycleError> {
+        let app_data = BoundPrivateDirectory::open(storage.path()).map_err(quarantine_io)?;
+        reset_profile_lifecycle_bound(&app_data, "123e4567-e89b-12d3-a456-426614174000", 10)
+    }
+
     struct Fixture {
         _temp: TempDir,
         storage: StorageRoot,
@@ -646,6 +1216,206 @@ mod tests {
             baseline
         );
         assert_eq!(preserve_legacy_profile(&fixture.storage).unwrap(), baseline);
+    }
+
+    #[test]
+    fn reset_removes_preserved_legacy_bytes_without_opening_a_meeting() {
+        let fixture = Fixture::new();
+        durable_create_new(
+            &fixture.profile().join(LIVE_NAME),
+            b"safe-but-not-activated-legacy-profile",
+        )
+        .unwrap();
+        preserve_legacy_profile(&fixture.storage).unwrap();
+
+        assert_eq!(
+            reset_profile(&fixture.storage).unwrap(),
+            ProfileResetOutcome::Removed {
+                operation_id: "123e4567-e89b-12d3-a456-426614174000".into(),
+                completed_reset_count: 1,
+            }
+        );
+        assert_eq!(fs::read(fixture.profile().join(LIVE_NAME)).unwrap(), b"");
+        assert_eq!(
+            fs::read(fixture.profile().join(LIFECYCLE_NAME).join(RESET_NAME)).unwrap(),
+            b""
+        );
+        let reopened = initialize_profile_lifecycle(&fixture.storage).unwrap();
+        assert_eq!(reopened.receipt_sequence(), 3);
+        assert_eq!(reopened.completed_reset_count(), 1);
+        assert!(!reopened.profile_present());
+        assert_eq!(
+            reset_profile(&fixture.storage).unwrap(),
+            ProfileResetOutcome::AlreadyAbsent
+        );
+    }
+
+    #[test]
+    fn fresh_process_recovers_each_durable_reset_data_layout() {
+        for crash_point in ["deleting", "swapped", "staged", "truncated"] {
+            let fixture = Fixture::new();
+            durable_create_new(
+                &fixture.profile().join(LIVE_NAME),
+                b"safe-but-not-activated-legacy-profile",
+            )
+            .unwrap();
+            preserve_legacy_profile(&fixture.storage).unwrap();
+
+            let app_data = BoundPrivateDirectory::open(fixture.storage.path()).unwrap();
+            let profile = app_data.open_directory("profile").unwrap();
+            let lifecycle = profile.open_directory(LIFECYCLE_NAME).unwrap();
+            let mut live = profile
+                .open_file(LIVE_NAME, true, PROFILE_MAX_BYTES)
+                .unwrap();
+            let receipt_a = lifecycle
+                .open_file(RECEIPT_A_NAME, true, RECEIPT_MAX_BYTES)
+                .unwrap();
+            let receipt_b = lifecycle
+                .open_file(RECEIPT_B_NAME, true, RECEIPT_MAX_BYTES)
+                .unwrap();
+            let mut reset = lifecycle
+                .open_file(RESET_NAME, true, PROFILE_MAX_BYTES)
+                .unwrap();
+            let enrollment = lifecycle.open_file(ENROLLMENT_NAME, false, 0).unwrap();
+            let baseline = select_receipt_authority(&lifecycle, &receipt_a, &receipt_b).unwrap();
+            let LifecyclePayload::Baseline(payload) = baseline.payload.clone() else {
+                panic!("expected baseline");
+            };
+            let deleting = ResetPendingPayload {
+                schema: "profile-lifecycle/1".into(),
+                receipt_sequence: 1,
+                operation: "reset".into(),
+                phase: "deleting".into(),
+                predecessor_payload_sha256: baseline.payload_sha256.clone(),
+                operation_id: "123e4567-e89b-12d3-a456-426614174000".into(),
+                requested_at: 10,
+                prior_completed_reset_count: 0,
+                prior_last_reset: None,
+                profile: payload.live,
+                reset_zero: payload.reset_slot,
+                enrollment_zero: payload.enrollment_slot,
+            };
+            let deleting_authority = publish_payload(
+                &lifecycle,
+                &receipt_a,
+                &receipt_b,
+                &baseline,
+                LifecyclePayload::ResetPending(deleting.clone()),
+            )
+            .unwrap();
+
+            if crash_point != "deleting" {
+                let swapped = profile
+                    .swap_files(live, PROFILE_MAX_BYTES, &lifecycle, reset, 0)
+                    .unwrap();
+                reset = swapped.0;
+                live = swapped.1;
+            }
+            let authority = if matches!(crash_point, "staged" | "truncated") {
+                let staged = ResetPendingPayload {
+                    receipt_sequence: 2,
+                    phase: "staged".into(),
+                    predecessor_payload_sha256: deleting_authority.payload_sha256.clone(),
+                    ..deleting
+                };
+                publish_payload(
+                    &lifecycle,
+                    &receipt_a,
+                    &receipt_b,
+                    &deleting_authority,
+                    LifecyclePayload::ResetPending(staged),
+                )
+                .unwrap()
+            } else {
+                deleting_authority
+            };
+            if crash_point == "truncated" {
+                reset
+                    .replace_bytes(&lifecycle, &[], PROFILE_MAX_BYTES)
+                    .unwrap();
+            }
+            drop(authority);
+            drop(enrollment);
+            drop(reset);
+            drop(live);
+            drop(receipt_b);
+            drop(receipt_a);
+            drop(lifecycle);
+            drop(profile);
+            drop(app_data);
+
+            let recovered = initialize_profile_lifecycle(&fixture.storage).unwrap();
+            assert_eq!(recovered.completed_reset_count(), 1, "{crash_point}");
+            assert!(!recovered.profile_present(), "{crash_point}");
+            assert_eq!(fs::read(fixture.profile().join(LIVE_NAME)).unwrap(), b"");
+            assert_eq!(
+                fs::read(fixture.profile().join(LIFECYCLE_NAME).join(RESET_NAME)).unwrap(),
+                b""
+            );
+        }
+    }
+
+    #[test]
+    fn staged_receipt_never_authorizes_a_swap_that_did_not_happen() {
+        let fixture = Fixture::new();
+        let legacy = b"safe-but-not-activated-legacy-profile";
+        durable_create_new(&fixture.profile().join(LIVE_NAME), legacy).unwrap();
+        preserve_legacy_profile(&fixture.storage).unwrap();
+
+        let app_data = BoundPrivateDirectory::open(fixture.storage.path()).unwrap();
+        let profile = app_data.open_directory("profile").unwrap();
+        let lifecycle = profile.open_directory(LIFECYCLE_NAME).unwrap();
+        let live = profile
+            .open_file(LIVE_NAME, true, PROFILE_MAX_BYTES)
+            .unwrap();
+        let receipt_a = lifecycle
+            .open_file(RECEIPT_A_NAME, true, RECEIPT_MAX_BYTES)
+            .unwrap();
+        let receipt_b = lifecycle
+            .open_file(RECEIPT_B_NAME, true, RECEIPT_MAX_BYTES)
+            .unwrap();
+        let reset = lifecycle.open_file(RESET_NAME, true, 0).unwrap();
+        let enrollment = lifecycle.open_file(ENROLLMENT_NAME, false, 0).unwrap();
+        let baseline = select_receipt_authority(&lifecycle, &receipt_a, &receipt_b).unwrap();
+        let LifecyclePayload::Baseline(_payload) = baseline.payload.clone() else {
+            panic!("expected baseline");
+        };
+        let staged = ResetPendingPayload {
+            schema: "profile-lifecycle/1".into(),
+            receipt_sequence: 1,
+            operation: "reset".into(),
+            phase: "staged".into(),
+            predecessor_payload_sha256: baseline.payload_sha256.clone(),
+            operation_id: "123e4567-e89b-12d3-a456-426614174000".into(),
+            requested_at: 10,
+            prior_completed_reset_count: 0,
+            prior_last_reset: None,
+            profile: observe_slot(&profile, &live, PROFILE_MAX_BYTES).unwrap(),
+            reset_zero: observe_slot(&lifecycle, &reset, 0).unwrap(),
+            enrollment_zero: observe_slot(&lifecycle, &enrollment, 0).unwrap(),
+        };
+        publish_payload(
+            &lifecycle,
+            &receipt_a,
+            &receipt_b,
+            &baseline,
+            LifecyclePayload::ResetPending(staged),
+        )
+        .unwrap();
+        drop(enrollment);
+        drop(reset);
+        drop(receipt_b);
+        drop(receipt_a);
+        drop(lifecycle);
+        drop(live);
+        drop(profile);
+        drop(app_data);
+
+        assert!(matches!(
+            initialize_profile_lifecycle(&fixture.storage),
+            Err(ProfileLifecycleError::Quarantined)
+        ));
+        assert_eq!(fs::read(fixture.profile().join(LIVE_NAME)).unwrap(), legacy);
     }
 
     #[test]

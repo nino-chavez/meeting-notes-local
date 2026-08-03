@@ -216,6 +216,48 @@ impl BoundPrivateDirectory {
         self.file.sync_all()
     }
 
+    pub(crate) fn require_file_swap(&self) -> io::Result<()> {
+        #[repr(C)]
+        struct VolumeCapabilities {
+            length: u32,
+            capabilities: libc::vol_capabilities_attr_t,
+        }
+
+        const VOL_CAP_INT_RENAME_SWAP: u32 = 0x0004_0000;
+        self.revalidate()?;
+        let mut attributes = libc::attrlist {
+            bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+            reserved: 0,
+            commonattr: 0,
+            volattr: libc::ATTR_VOL_CAPABILITIES,
+            dirattr: 0,
+            fileattr: 0,
+            forkattr: 0,
+        };
+        let mut capabilities: VolumeCapabilities = unsafe { std::mem::zeroed() };
+        if unsafe {
+            libc::fgetattrlist(
+                self.file.as_raw_fd(),
+                (&mut attributes as *mut libc::attrlist).cast(),
+                (&mut capabilities as *mut VolumeCapabilities).cast(),
+                std::mem::size_of::<VolumeCapabilities>(),
+                0,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let interfaces = libc::VOL_CAPABILITIES_INTERFACES;
+        if capabilities.capabilities.valid[interfaces] & VOL_CAP_INT_RENAME_SWAP == 0
+            || capabilities.capabilities.capabilities[interfaces] & VOL_CAP_INT_RENAME_SWAP == 0
+        {
+            return Err(io::Error::other(
+                "private storage volume does not support atomic file swap",
+            ));
+        }
+        self.revalidate()
+    }
+
     pub(crate) fn revalidate(&self) -> io::Result<()> {
         let identity = require_private_directory(&self.file)?;
         if stable_binding(identity.identity) != self.binding
@@ -342,6 +384,66 @@ impl BoundPrivateDirectory {
         source.path = self.path.join(to_text);
         source.revalidate()?;
         Ok(source)
+    }
+
+    /// Atomically exchanges two already-bound private files, potentially
+    /// across two private directories on the same volume. The returned first
+    /// file is the original `left` inode now bound below `other_directory`;
+    /// the returned second file is the original `right` inode now bound below
+    /// `self`. No pathname is unlinked or overwritten.
+    pub(crate) fn swap_files(
+        &self,
+        mut left: BoundPrivateFile,
+        left_max_bytes: u64,
+        other_directory: &BoundPrivateDirectory,
+        mut right: BoundPrivateFile,
+        right_max_bytes: u64,
+    ) -> io::Result<(BoundPrivateFile, BoundPrivateFile)> {
+        self.revalidate()?;
+        other_directory.revalidate()?;
+        left.revalidate(self, left_max_bytes)?;
+        right.revalidate(other_directory, right_max_bytes)?;
+        let left_name = left.name.clone();
+        let right_name = right.name.clone();
+        let left_identity = require_private_file(&left.file, left_max_bytes)?.identity;
+        let right_identity = require_private_file(&right.file, right_max_bytes)?.identity;
+        if left_identity.device != right_identity.device
+            || stable_binding(left_identity) == stable_binding(right_identity)
+        {
+            return Err(invalid_private_storage());
+        }
+
+        let result = unsafe {
+            libc::renameatx_np(
+                self.file.as_raw_fd(),
+                left_name.as_ptr(),
+                other_directory.file.as_raw_fd(),
+                right_name.as_ptr(),
+                libc::RENAME_SWAP | RENAME_NOFOLLOW_ANY,
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if !child_binds_file(&other_directory.file, &right_name, &left.file)?
+            || !child_binds_file(&self.file, &left_name, &right.file)?
+        {
+            return Err(invalid_private_storage());
+        }
+        self.file.sync_all()?;
+        if stable_binding(require_private_directory(&self.file)?.identity)
+            != stable_binding(require_private_directory(&other_directory.file)?.identity)
+        {
+            other_directory.file.sync_all()?;
+        }
+        self.revalidate()?;
+        other_directory.revalidate()?;
+
+        left.name = right_name;
+        right.name = left_name;
+        left.revalidate(other_directory, left_max_bytes)?;
+        right.revalidate(self, right_max_bytes)?;
+        Ok((left, right))
     }
 
     pub(crate) fn child_names(&self) -> io::Result<Vec<String>> {
@@ -1047,6 +1149,44 @@ mod tests {
                 .is_err()
         );
         assert!(!parent_path.join("published").exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bound_private_files_swap_across_retained_directories_without_unlinking() {
+        let temp = TempDir::new().unwrap();
+        let profile_path = temp.path().canonicalize().unwrap().join("profile");
+        let lifecycle_path = profile_path.join("lifecycle");
+        create_private_dir(&profile_path).unwrap();
+        create_private_dir(&lifecycle_path).unwrap();
+        durable_create_new(&profile_path.join("voiceprint.json"), b"profile-bytes").unwrap();
+        durable_create_new(&lifecycle_path.join("reset.tombstone"), b"").unwrap();
+
+        let profile = BoundPrivateDirectory::open(&profile_path).unwrap();
+        let lifecycle = profile.open_directory("lifecycle").unwrap();
+        let live = profile.open_file("voiceprint.json", true, 64).unwrap();
+        let reset = lifecycle.open_file("reset.tombstone", true, 0).unwrap();
+        let live_identity = live.identity(&profile, 64).unwrap().identity;
+        let reset_identity = reset.identity(&lifecycle, 0).unwrap().identity;
+
+        let (live_at_reset, reset_at_live) =
+            profile.swap_files(live, 64, &lifecycle, reset, 0).unwrap();
+
+        assert_eq!(fs::read(profile_path.join("voiceprint.json")).unwrap(), b"");
+        assert_eq!(
+            fs::read(lifecycle_path.join("reset.tombstone")).unwrap(),
+            b"profile-bytes"
+        );
+        assert_eq!(
+            live_at_reset.identity(&lifecycle, 64).unwrap().identity,
+            live_identity
+        );
+        assert_eq!(
+            reset_at_live.identity(&profile, 0).unwrap().identity,
+            reset_identity
+        );
+        assert_eq!(fs::read_dir(&profile_path).unwrap().count(), 2);
+        assert_eq!(fs::read_dir(&lifecycle_path).unwrap().count(), 1);
     }
 
     #[cfg(target_os = "macos")]

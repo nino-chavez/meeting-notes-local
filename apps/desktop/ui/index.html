@@ -93,7 +93,7 @@
         <p class="lede" id="profile-lede">Checking whether this Preview can run guided voice setup. No meeting or profile content is opened.</p>
         <section class="profile-status" aria-labelledby="profile-status-title">
           <p class="label">Current status</p>
-          <h2 id="profile-status-title">Checking Preview capability</h2>
+          <h2 id="profile-status-title" tabindex="-1">Checking Preview capability</h2>
           <p id="profile-status-copy">Voice isolation is not active in this Preview.</p>
         </section>
         <section class="profile-requirements" id="profile-requirements">
@@ -102,6 +102,18 @@
         </section>
         <div class="notice" id="profile-boundary">Preview still requires headphones and only you near the microphone. A voice profile filters speech that does not match you; it does not name speakers or make speaker playback supported.</div>
         <p class="footnote" id="profile-footnote">Checking stored profile state does not read meeting or transcript content.</p>
+        <section class="profile-reset-confirmation" id="profile-reset-confirmation" aria-labelledby="profile-reset-title" hidden>
+          <p class="label">Separate confirmation</p>
+          <h2 id="profile-reset-title">Delete the stored voice profile?</h2>
+          <p>This removes the profile, calibrated threshold, and its enrolment provenance. Meetings, transcripts, notes, evidence, and meeting audio remain.</p>
+          <p>Any profile-required recording stays unavailable until setup completes again. Preview’s current one-operator, headphones-required recording limit is unchanged.</p>
+          <p class="footnote">This is logical app-storage deletion, not forensic erasure. The fixed empty slots, completion count, latest reset event, and filesystem metadata remain.</p>
+          <div class="profile-reset-buttons">
+            <button class="danger" id="profile-reset-confirm" type="button">Delete voice profile</button>
+            <button class="secondary" id="profile-reset-cancel" type="button">Keep profile</button>
+          </div>
+          <p class="form-error" id="profile-reset-status" role="alert" hidden></p>
+        </section>
         <div class="screen-actions">
           <button class="primary" id="profile-setup" type="button" disabled>Set up voice profile</button>
           <button class="secondary" id="profile-back" type="button">Back</button>

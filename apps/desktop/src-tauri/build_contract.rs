@@ -29,6 +29,7 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "retry_startup",
     "preview_profile_snapshot",
     "preview_profile_preserve_legacy",
+    "preview_profile_reset",
     "preview_library_snapshot",
     "preview_library_search",
     "preview_library_open_search_result",
