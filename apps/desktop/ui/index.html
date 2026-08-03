@@ -25,7 +25,7 @@
       </div>
     </header>
 
-    <main aria-live="polite">
+    <main tabindex="-1" aria-live="polite">
       <section class="screen active" id="startup-screen" aria-labelledby="startup-title">
         <p class="kicker">Nothing is recording</p>
         <h1 id="startup-title">Checking this installation.</h1>
@@ -91,7 +91,7 @@
 
           <p class="form-error" id="start-error" role="alert" hidden></p>
           <button class="primary" id="start-button" type="submit" disabled>Start recording</button>
-          <button class="secondary start-back" id="start-back" type="button">Back to Find</button>
+          <button class="secondary start-back" id="start-back" type="button">Return to Find</button>
         </form>
       </section>
 
@@ -148,7 +148,7 @@
         <p class="lede">Review this as an internal-alpha transcript. Names, decisions, and action items have not been inferred.</p>
         <div class="notice" id="transcript-warning" hidden></div>
         <article id="transcript-turns" aria-label="Meeting transcript"></article>
-        <button class="primary" id="new-meeting" type="button">Return to Start</button>
+        <button class="primary" id="new-meeting" type="button">Done reviewing</button>
       </section>
 
       <section class="screen library-screen" id="meetings-screen" aria-labelledby="library-title">
@@ -206,7 +206,15 @@
         <p class="lede">This retained transcript is available for review. It is not an automatic note.</p>
         <div class="notice" id="library-transcript-warning" hidden></div>
         <article id="library-transcript-turns" aria-label="Retained meeting transcript"></article>
-        <button class="secondary" id="library-transcript-back" type="button">Back</button>
+        <button class="secondary" id="library-transcript-back" type="button">Done reviewing</button>
+      </section>
+
+      <section class="screen" id="start-meeting-error-screen" aria-labelledby="start-meeting-error-title">
+        <p class="kicker">Start meeting</p>
+        <h1 id="start-meeting-error-title">A new meeting was not opened.</h1>
+        <p class="lede">The existing meeting must close cleanly before a new consent and retention review can begin.</p>
+        <div class="notice error" id="start-transition-error" role="alert"></div>
+        <button class="secondary" id="start-transition-back" type="button">Return to Find</button>
       </section>
 
       <section class="screen" id="error-screen" aria-labelledby="error-title">
@@ -214,7 +222,7 @@
         <h1 id="error-title">This attempt did not complete.</h1>
         <p class="lede" id="error-copy">The app kept any recoverable local evidence and did not mark the meeting complete.</p>
         <div class="notice error" id="error-detail"></div>
-        <button class="secondary" id="recover-button" type="button">Return to Start</button>
+        <button class="secondary" id="recover-button" type="button">Return to Find</button>
       </section>
     </main>
 
@@ -222,6 +230,6 @@
       <span>Offline transcript alpha</span>
       <span id="meeting-id"></span>
     </footer>
-    <script src="main.js" defer></script>
+    <script src="main.js" type="module"></script>
   </body>
 </html>

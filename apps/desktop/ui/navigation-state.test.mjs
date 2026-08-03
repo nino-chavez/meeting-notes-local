@@ -1,0 +1,91 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  createSingleFlight,
+  prepareConsentTransition,
+  restoredScrollPosition,
+  rootForDestination,
+} from "./navigation-state.mjs";
+
+test("single-flight initialization shares one in-flight library snapshot", async () => {
+  let loads = 0;
+  let release;
+  const initializer = createSingleFlight(() => {
+    loads += 1;
+    return new Promise((resolve) => { release = resolve; });
+  });
+
+  const first = initializer.run();
+  const second = initializer.run();
+  await Promise.resolve();
+  assert.equal(first, second);
+  assert.equal(loads, 1);
+  release({ state: "populated" });
+  assert.deepEqual(await first, { state: "populated" });
+
+  initializer.reset();
+  const third = initializer.run();
+  await Promise.resolve();
+  assert.equal(loads, 2);
+  release({ state: "empty" });
+  assert.deepEqual(await third, { state: "empty" });
+});
+
+test("transcript-ready start dismisses and clears before requiring idle", async () => {
+  const events = [];
+  const ready = await prepareConsentTransition("transcript-ready", {
+    dismiss: async () => { events.push("dismiss"); },
+    clearPriorAttempt: () => { events.push("clear"); },
+    refresh: async () => {
+      events.push("refresh");
+      return { capture: "idle" };
+    },
+  });
+
+  assert.equal(ready, true);
+  assert.deepEqual(events, ["dismiss", "clear", "refresh"]);
+});
+
+test("failed dismissal never clears state, refreshes, or admits consent", async () => {
+  const events = [];
+  await assert.rejects(
+    prepareConsentTransition("transcript-ready", {
+      dismiss: async () => {
+        events.push("dismiss");
+        throw new Error("dismiss failed");
+      },
+      clearPriorAttempt: () => { events.push("clear"); },
+      refresh: async () => {
+        events.push("refresh");
+        return { capture: "idle" };
+      },
+    }),
+    /dismiss failed/,
+  );
+  assert.deepEqual(events, ["dismiss"]);
+});
+
+test("idle start is direct and other capture states refuse consent", async () => {
+  const actions = {
+    dismiss: async () => { throw new Error("unexpected dismissal"); },
+    clearPriorAttempt: () => { throw new Error("unexpected clear"); },
+    refresh: async () => { throw new Error("unexpected refresh"); },
+  };
+  assert.equal(await prepareConsentTransition("idle", actions), true);
+  assert.equal(await prepareConsentTransition("recording", actions), false);
+});
+
+test("nested routes keep their real product root", () => {
+  assert.equal(rootForDestination("find-screen", "meetings-screen"), "find-screen");
+  assert.equal(rootForDestination("meeting-detail-screen", "meetings-screen"), "meetings-screen");
+  assert.equal(rootForDestination("library-transcript-screen", "find-screen"), "find-screen");
+  assert.equal(rootForDestination("profile-screen", "promises-screen"), "promises-screen");
+  assert.equal(rootForDestination("profile-screen", "unknown"), "find-screen");
+});
+
+test("returning restores scroll while new content starts at the top", () => {
+  assert.equal(restoredScrollPosition(undefined), 0);
+  assert.equal(restoredScrollPosition(184), 184);
+  assert.equal(restoredScrollPosition(184, true), 0);
+});

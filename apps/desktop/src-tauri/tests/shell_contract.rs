@@ -17,9 +17,9 @@ fn single_instance_is_the_first_plugin_and_precedes_app_setup() {
 fn generated_preview_library_buttons_bind_their_own_activation() {
     let shell = include_str!("../../ui/main.js");
 
-    assert!(
-        shell.contains("button.addEventListener(\"click\", () => openMeetingDetail(row.handle));")
-    );
+    assert!(shell.contains(
+        "button.addEventListener(\"click\", () => openMeetingDetail(row.handle, \"meetings-screen\"));"
+    ));
     assert!(shell.contains(
         "button.addEventListener(\"click\", () => openLibrarySearchResult(result.handle));"
     ));
@@ -259,6 +259,7 @@ fn shell_renders_safe_state_before_runtime_preflight() {
 fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
+    let navigation = include_str!("../../ui/navigation-state.mjs");
 
     assert!(html.contains("id=\"product-nav\""));
     assert!(html.contains("id=\"find-link\""));
@@ -274,9 +275,13 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(html.contains("id=\"library-search\""));
     assert!(html.contains("id=\"start-meeting-action\""));
     assert!(html.contains("id=\"start-back\""));
-    assert!(script.contains("if (!isIdleProductScreen()) showScreen(\"find-screen\");"));
+    assert!(html.contains("id=\"start-meeting-error-screen\""));
     assert!(script.contains("function syncProductNavigation()"));
     assert!(script.contains("link.setAttribute(\"aria-current\", \"page\")"));
+    assert!(script.contains("initializeFindInBackground();"));
+    assert!(script.contains("const libraryInitialization = createSingleFlight"));
+    assert!(navigation.contains("export function createSingleFlight(loader)"));
+    assert!(navigation.contains("export async function prepareConsentTransition"));
     assert!(script.contains("function schedulePoll(delay) {\n  if (pollTimer) window.clearTimeout(pollTimer);"));
     assert!(!script.contains("secondaryViewActive"));
     assert!(script.contains("startMeetingAction.addEventListener(\"click\", openStartMeeting);"));
@@ -314,7 +319,7 @@ fn preview_library_navigation_rebuilds_one_current_handle_generation() {
     let script = include_str!("../../ui/main.js");
 
     assert!(script.contains("async function rebuildMeetingsView()"));
-    assert!(script.contains("const snapshot = await invoke(\"preview_library_snapshot\");"));
+    assert!(script.contains("const snapshot = latestLibrarySnapshot || await initializeLibraryReader();"));
     assert!(script.contains("async function openFind()"));
     assert!(script.contains("async function openMeetings()"));
     assert!(script.contains("async function returnToProductHome()"));
@@ -325,7 +330,62 @@ fn preview_library_navigation_rebuilds_one_current_handle_generation() {
     );
     assert!(script.contains("meeting-detail-back\").addEventListener(\"click\", returnToProductHome)"));
     assert!(script.contains("setError(libraryNotice, \"Searching your retained meetings…\")"));
-    assert!(script.contains("librarySearchResults.replaceChildren();\n  setError(libraryNotice, \"Opening the selected retained result…\")"));
+
+    let search_start = script.find("async function searchLibrary").unwrap();
+    let search_end = script[search_start..]
+        .find("async function openLibrarySearchResult")
+        .unwrap()
+        + search_start;
+    let search = &script[search_start..search_end];
+    assert!(search.find("await initializeLibraryReader()").unwrap()
+        < search.find("invoke(\"preview_library_search\"").unwrap());
+
+    let open_start = search_end;
+    let open_end = script[open_start..]
+        .find("function schedulePoll")
+        .unwrap()
+        + open_start;
+    let open_result = &script[open_start..open_end];
+    assert!(!open_result.contains("librarySearchResults.replaceChildren()"));
+    assert!(!open_result.contains("Opening the selected retained result"));
+}
+
+#[test]
+fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+    let navigation = include_str!("../../ui/navigation-state.mjs");
+    let package: Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
+
+    assert_eq!(package["scripts"]["test:ui"], "node --test ui/navigation-state.test.mjs");
+    assert!(html.contains("id=\"new-meeting\" type=\"button\">Done reviewing"));
+    assert!(html.contains("id=\"recover-button\" type=\"button\">Return to Find"));
+    assert!(!html.contains("Return to Start"));
+    assert!(script.contains("let productRootScreen = \"find-screen\";"));
+    assert!(script.contains("productRootScreen = rootForDestination(id, productRootScreen);"));
+    assert!(script.contains("screenScrollPositions.set(currentScreen, mainRegion.scrollTop)"));
+    assert!(script.contains("heading.focus({ preventScroll: true })"));
+    assert!(navigation.contains("return PRODUCT_ROOT_SCREENS.includes(currentRoot)"));
+    assert!(navigation.contains("export function restoredScrollPosition"));
+
+    let start = navigation.find("export async function prepareConsentTransition").unwrap();
+    let transition = &navigation[start..];
+    let dismiss = transition.find("await actions.dismiss()").unwrap();
+    let clear = transition.find("actions.clearPriorAttempt()").unwrap();
+    let refresh = transition.find("await actions.refresh()").unwrap();
+    assert!(dismiss < clear && clear < refresh);
+    assert!(script.contains("showScreen(\"start-meeting-error-screen\""));
+    assert!(script.contains("startMeetingAction.addEventListener(\"click\", openStartMeeting)"));
+
+    let open_start = script.find("async function openStartMeeting").unwrap();
+    let open_end = script[open_start..].find("function renderProfile").unwrap() + open_start;
+    let open = &script[open_start..open_end];
+    let prepare = open.find("await prepareConsentTransition").unwrap();
+    let consent = open.find("showScreen(\"idle-screen\"").unwrap();
+    assert!(prepare < consent);
+    assert!(open.contains("dismiss: () => invoke(\"dismiss_meeting\")"));
+    assert!(open.contains("clearAttemptReview(true)"));
+    assert!(open.contains("showStartTransitionError()"));
 }
 
 #[test]
