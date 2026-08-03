@@ -444,13 +444,14 @@ fn preview_voice_profile_surface_is_honest_and_non_mutating() {
 
     assert!(html.contains("id=\"profile-link\""));
     assert!(html.contains("id=\"profile-screen\""));
-    assert!(html.contains("Two voice sittings, at least one hour apart"));
-    assert!(html.contains("A voice profile does not identify speakers"));
+    assert!(html.contains("Two short voice sessions, at least one hour apart"));
+    assert!(html.contains("it does not name speakers"));
     assert!(html.contains("id=\"profile-setup\" type=\"button\" disabled>Set up voice profile"));
     assert!(script.contains("await invoke(\"preview_profile_snapshot\")"));
-    assert!(script.contains("setup-unavailable"));
-    assert!(script.contains("Voice setup is not available yet"));
-    assert!(html.contains("does not open, use, change, or delete it"));
+    assert!(script.contains("not-enrolled"));
+    assert!(script.contains("No voice profile is active"));
+    assert!(script.contains("stored-unverified"));
+    assert!(html.contains("does not read meeting or transcript content"));
     assert!(!script.contains("preview_profile_reset"));
     assert!(!script.contains("preview_profile_enroll"));
 }

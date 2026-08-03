@@ -833,9 +833,30 @@ fn preview_library_snapshot_for(state: &ApplicationState) -> library_reader::Lib
 
 #[cfg(feature = "preview-surface")]
 #[tauri::command]
-fn preview_profile_snapshot() -> PreviewProfileSnapshot {
+fn preview_profile_snapshot(state: State<'_, ApplicationState>) -> PreviewProfileSnapshot {
+    preview_profile_snapshot_for(&state)
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn preview_profile_snapshot_for(state: &ApplicationState) -> PreviewProfileSnapshot {
+    let Ok(storage) = preview_storage_clone(state) else {
+        return PreviewProfileSnapshot {
+            state: "unavailable",
+        };
+    };
     PreviewProfileSnapshot {
-        state: "setup-unavailable",
+        state: preview_profile_storage_state(&storage),
+    }
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+fn preview_profile_storage_state(storage: &StorageRoot) -> &'static str {
+    let profile = storage.path().join("profile/voiceprint.json");
+    match fs::symlink_metadata(profile) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => "not-enrolled",
+        Ok(metadata) if metadata.file_type().is_file() && metadata.len() == 0 => "not-enrolled",
+        Ok(metadata) if metadata.file_type().is_file() => "stored-unverified",
+        Ok(_) | Err(_) => "needs-attention",
     }
 }
 
@@ -3119,6 +3140,38 @@ mod tests {
         let mut entries = Vec::new();
         visit(path, path, &mut entries);
         entries
+    }
+
+    #[test]
+    fn profile_preview_classifies_storage_without_opening_profile_bytes() {
+        let (_missing_temporary, missing) = test_storage();
+        assert_eq!(preview_profile_storage_state(&missing), "not-enrolled");
+
+        let (_zero_temporary, zero) = test_storage();
+        create_private_dir(&zero.path().join("profile")).unwrap();
+        durable_create_new(&zero.path().join("profile/voiceprint.json"), b"").unwrap();
+        assert_eq!(preview_profile_storage_state(&zero), "not-enrolled");
+
+        let (_stored_temporary, stored) = test_storage();
+        create_private_dir(&stored.path().join("profile")).unwrap();
+        durable_create_new(
+            &stored.path().join("profile/voiceprint.json"),
+            b"stored-profile-sentinel",
+        )
+        .unwrap();
+        assert_eq!(preview_profile_storage_state(&stored), "stored-unverified");
+
+        let (_unsafe_temporary, unsafe_storage) = test_storage();
+        create_private_dir(&unsafe_storage.path().join("profile")).unwrap();
+        std::os::unix::fs::symlink(
+            unsafe_storage.path().join("elsewhere"),
+            unsafe_storage.path().join("profile/voiceprint.json"),
+        )
+        .unwrap();
+        assert_eq!(
+            preview_profile_storage_state(&unsafe_storage),
+            "needs-attention"
+        );
     }
 
     #[test]

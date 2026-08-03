@@ -57,6 +57,7 @@ const profileTitle = document.querySelector("#profile-title");
 const profileLede = document.querySelector("#profile-lede");
 const profileStatusTitle = document.querySelector("#profile-status-title");
 const profileStatusCopy = document.querySelector("#profile-status-copy");
+const profileFootnote = document.querySelector("#profile-footnote");
 const micChannel = document.querySelector("#mic-channel");
 const systemChannel = document.querySelector("#system-channel");
 const libraryList = document.querySelector("#library-list");
@@ -759,12 +760,31 @@ async function openStartMeeting() {
 
 function renderProfile(snapshot) {
   const state = snapshot?.state || "unavailable";
-  if (state === "setup-unavailable") {
+  if (state === "not-enrolled") {
     profileKicker.textContent = "Voice profile · Setup required";
-    profileTitle.textContent = "Your voice setup takes two sittings.";
-    profileLede.textContent = "Voice isolation is not active in this Preview. Preview recording remains limited to one person near the microphone.";
-    profileStatusTitle.textContent = "Voice setup is not available yet";
-    profileStatusCopy.textContent = "Setup is not available in this Preview yet. Preview recording remains available under its existing one-operator limits.";
+    profileTitle.textContent = "Your voice profile is not set up.";
+    profileLede.textContent = "Voice isolation is off. Recording still works under Preview’s one-operator, headphones-required limit.";
+    profileStatusTitle.textContent = "No voice profile is active";
+    profileStatusCopy.textContent = "This Mac has no voice profile for Preview. Guided voice setup is not available in this build yet.";
+    profileFootnote.textContent = "The app checked only whether its private profile slot exists; it did not open meeting or transcript content.";
+    return;
+  }
+  if (state === "stored-unverified") {
+    profileKicker.textContent = "Voice profile · Stored material found";
+    profileTitle.textContent = "A prior profile needs review.";
+    profileLede.textContent = "This Preview found stored profile material but has not activated it. Recording remains under the one-operator, headphones-required limit.";
+    profileStatusTitle.textContent = "Stored profile is not active";
+    profileStatusCopy.textContent = "Profile validation and reset are not connected in this build, so Preview will not use this profile yet.";
+    profileFootnote.textContent = "The app detected the profile slot without reading or changing its contents.";
+    return;
+  }
+  if (state === "needs-attention") {
+    profileKicker.textContent = "Voice profile · Needs attention";
+    profileTitle.textContent = "Voice profile storage needs attention.";
+    profileLede.textContent = "The private profile slot is not in a state this Preview can safely classify.";
+    profileStatusTitle.textContent = "Voice isolation remains off";
+    profileStatusCopy.textContent = "Current retained meetings remain readable. Recording stays within the existing one-operator limit.";
+    profileFootnote.textContent = "The app did not open, change, or delete profile material.";
     return;
   }
   profileKicker.textContent = "Voice profile · Needs attention";
@@ -772,6 +792,7 @@ function renderProfile(snapshot) {
   profileLede.textContent = "This Preview could not read its own voice-setup capability state.";
   profileStatusTitle.textContent = "Voice isolation is unavailable";
   profileStatusCopy.textContent = "The app did not open or change profile material. Current retained meetings remain readable.";
+  profileFootnote.textContent = "Try reopening Settings after the installation check finishes.";
 }
 
 async function openProfile() {
