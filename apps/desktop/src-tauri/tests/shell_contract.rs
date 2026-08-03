@@ -317,6 +317,7 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert!(html.contains("id=\"start-back\""));
     assert!(styles.contains("html[data-screen=\"idle-screen\"] main { padding-bottom: var(--space-8); }"));
+    assert!(styles.contains("html[data-screen=\"profile-screen\"] main { padding-top: var(--space-8); padding-bottom: var(--space-8); }"));
     assert!(html.contains("id=\"start-meeting-error-screen\""));
     assert!(script.contains("function syncProductNavigation()"));
     assert!(script.contains("meetingsLink.setAttribute(\"aria-current\", \"page\")"));
