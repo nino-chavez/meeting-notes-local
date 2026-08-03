@@ -484,6 +484,13 @@ fn ensure_store_directories(storage: &StorageRoot) -> Result<(), SittingEvidence
     create_private_dir(&resolve(storage, &[ENROLLMENT_DIR])?)?;
     create_private_dir(&resolve(storage, &[ENROLLMENT_DIR, WORK_DIR])?)?;
     create_private_dir(&resolve(storage, &[ENROLLMENT_DIR, SITTINGS_DIR])?)?;
+    // Fsyncing a directory persists its entries, not its own link in the
+    // parent — so the enrollment directory and the storage root must sync
+    // too, or on a fresh store the `work/` chain can survive power loss while
+    // the `sittings/` chain is lost, quarantining the store as an orphan
+    // work directory.
+    sync_directory(&resolve(storage, &[ENROLLMENT_DIR])?)?;
+    sync_directory(storage.path())?;
     Ok(())
 }
 
@@ -748,6 +755,14 @@ fn run_cleanup(paths: &SittingPaths, capture: &CaptureRecord) -> Result<(), Sitt
     let mut receipt: CleanupReceipt = if path_present(&receipt_path)? {
         read_canonical(&receipt_path, RECORD_MAX_BYTES)?
     } else {
+        // Without a receipt the live raw must exist; its absence is an
+        // unexplained loss, not transient storage trouble — reporting it as
+        // retryable would strand the sitting in cleanup-pending forever.
+        if !path_present(&live)? {
+            return Err(SittingEvidenceError::Quarantined(
+                "raw material vanished without a cleanup receipt",
+            ));
+        }
         let (byte_size, sha256) = digest_file_bounded(&live, RAW_MAX_BYTES)?;
         if sha256 != capture.raw.sha256 || byte_size != capture.raw.byte_size {
             return Err(SittingEvidenceError::Quarantined(
@@ -1098,7 +1113,9 @@ fn classify_sitting(
                 SittingLifecycleState::CleanupPending
             }
         } else {
-            if !work_present {
+            // No receipt yet means no byte has moved: the live raw must
+            // still be present and whole, or the loss is unexplained.
+            if !work_present || !path_present(&paths.work.join(RAW_AUDIO_NAME))? {
                 return Err(SittingEvidenceError::Quarantined(
                     "raw material vanished without a cleanup receipt",
                 ));
@@ -1746,6 +1763,33 @@ mod tests {
         std::os::unix::fs::symlink(&copy, &raw).unwrap();
         let refused = read_sitting_evidence(&fixture.storage);
         assert!(matches!(refused, Err(SittingEvidenceError::Quarantined(_))));
+    }
+
+    #[test]
+    fn raw_vanished_before_cleanup_quarantines_instead_of_pending_forever() {
+        let fixture = fixture();
+        record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
+        fs::remove_file(work_dir(&fixture.storage, SID).unwrap().join(RAW_AUDIO_NAME)).unwrap();
+        let outcome = store_derived_material(
+            &fixture.storage,
+            SID,
+            &embeddings_for(5),
+            ENCODER,
+            None,
+            192,
+            1_200,
+        );
+        assert!(
+            matches!(outcome, Err(SittingEvidenceError::Quarantined(_))),
+            "a vanished raw file is unexplained loss, not retryable pending work"
+        );
+        // The stuck shape — derived rows durable, no receipt, raw gone — must
+        // also quarantine at read and reconcile time rather than looping as
+        // transient storage failure.
+        let read = read_sitting_evidence(&fixture.storage);
+        assert!(matches!(read, Err(SittingEvidenceError::Quarantined(_))));
+        let reconcile = reconcile_sitting_evidence(&fixture.storage, 9_000);
+        assert!(matches!(reconcile, Err(SittingEvidenceError::Quarantined(_))));
     }
 
     #[test]
