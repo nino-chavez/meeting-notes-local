@@ -646,6 +646,15 @@ pub fn evaluate_enrollment_evidence(
         });
     }
 
+    // Terminal refusals own `next_step` no matter where a check pushed them.
+    // Insertion order proved fragile twice — first the negative errand
+    // outranked a mixed-encoder refusal, then the sitting errands outranked a
+    // stale one — so the guarantee lives here, not in check placement. The
+    // sort is stable: order within refusals and within errands is preserved,
+    // and `AwaitingVoiceDerivation` stays behind every operator-actionable
+    // step.
+    shortfalls.sort_by_key(|shortfall| !is_terminal_refusal(shortfall));
+
     let state = guided_state(
         &shortfalls,
         sittings_recorded,
@@ -667,6 +676,21 @@ pub fn evaluate_enrollment_evidence(
     }
 }
 
+/// A shortfall no further recording closes: the evidence already on hand
+/// cannot become a supported profile. These own `next_step`, because every
+/// errand suggested beside one is wasted work.
+fn is_terminal_refusal(shortfall: &EnrollmentShortfall) -> bool {
+    matches!(
+        shortfall,
+        EnrollmentShortfall::SittingTimeUnrecorded
+            | EnrollmentShortfall::RepeatedSittingRecording { .. }
+            | EnrollmentShortfall::NegativeSourceNotPermitted { .. }
+            | EnrollmentShortfall::RepeatedNegativeRecording { .. }
+            | EnrollmentShortfall::MixedEncoderMaterial
+            | EnrollmentShortfall::StaleVoiceMaterial
+    )
+}
+
 fn guided_state(
     shortfalls: &[EnrollmentShortfall],
     sittings_recorded: usize,
@@ -675,22 +699,7 @@ fn guided_state(
     if shortfalls.is_empty() {
         return GuidedEnrollmentState::ChoosingOperatingPoint;
     }
-    // A repeated recording, an unrecorded capture time, an impermissible
-    // source, a duplicated negative, or mixed-encoder material are not
-    // shortfalls that another sitting closes: the evidence already on hand
-    // cannot become a supported profile.
-    let refused = shortfalls.iter().any(|shortfall| {
-        matches!(
-            shortfall,
-            EnrollmentShortfall::SittingTimeUnrecorded
-                | EnrollmentShortfall::RepeatedSittingRecording { .. }
-                | EnrollmentShortfall::NegativeSourceNotPermitted { .. }
-                | EnrollmentShortfall::RepeatedNegativeRecording { .. }
-                | EnrollmentShortfall::MixedEncoderMaterial
-                | EnrollmentShortfall::StaleVoiceMaterial
-        )
-    });
-    if refused {
+    if shortfalls.iter().any(is_terminal_refusal) {
         return GuidedEnrollmentState::Refused;
     }
     // NeedsOtherVoice only when the negative errand is genuinely the open item.
@@ -1392,6 +1401,35 @@ mod tests {
             !unknown
                 .shortfalls
                 .contains(&EnrollmentShortfall::StaleVoiceMaterial)
+        );
+    }
+
+    /// The review scenario that broke insertion ordering twice: one sitting
+    /// derived under a checkpoint the build no longer uses. `TooFewSittings`
+    /// is also true, but recording a second sitting is wasted work — its
+    /// derivation under the current encoder just lands in mixed-encoder
+    /// refusal. The refusal must own `next_step` from any flank.
+    #[test]
+    fn a_stale_refusal_owns_next_step_over_sitting_errands() {
+        let evidence = EnrollmentEvidence {
+            sittings: vec![sitting(0, "a", 40)],
+            negative_sources: Vec::new(),
+        };
+        let status = evaluate_enrollment_evidence(&evidence, Some("current-checkpoint"));
+        assert_eq!(status.state, GuidedEnrollmentState::Refused);
+        assert!(matches!(
+            status.shortfalls.first(),
+            Some(EnrollmentShortfall::StaleVoiceMaterial)
+        ));
+        assert!(
+            status.next_step.unwrap().contains("voice analyzer"),
+            "next_step must name the terminal refusal, not ask for a second sitting"
+        );
+        // The errand shortfalls are still reported — after the refusal.
+        assert!(
+            status
+                .shortfalls
+                .contains(&EnrollmentShortfall::TooFewSittings { have: 1, need: 2 })
         );
     }
 
