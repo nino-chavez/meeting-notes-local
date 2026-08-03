@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 #[cfg(target_os = "macos")]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(target_os = "macos")]
@@ -17,6 +17,10 @@ use uuid::Uuid;
 /// Darwin's `<sys/fcntl.h>` O_UNIQUE. libc 0.2.189 does not expose it.
 #[cfg(target_os = "macos")]
 const O_UNIQUE: libc::c_int = 0x2000;
+
+/// Darwin's `<sys/stdio.h>` RENAME_NOFOLLOW_ANY. libc 0.2.189 does not expose it.
+#[cfg(target_os = "macos")]
+const RENAME_NOFOLLOW_ANY: libc::c_uint = 0x0000_0010;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -60,6 +64,10 @@ pub(crate) struct PrivateObjectIdentity {
 pub(crate) struct PrivateObjectObservation {
     pub(crate) identity: PrivateObjectIdentity,
     pub(crate) size: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
 }
 
 #[cfg(target_os = "macos")]
@@ -203,6 +211,11 @@ impl BoundPrivateDirectory {
         require_private_directory(&self.file)
     }
 
+    pub(crate) fn sync_all(&self) -> io::Result<()> {
+        self.revalidate()?;
+        self.file.sync_all()
+    }
+
     pub(crate) fn revalidate(&self) -> io::Result<()> {
         let identity = require_private_directory(&self.file)?;
         if stable_binding(identity.identity) != self.binding
@@ -248,6 +261,131 @@ impl BoundPrivateDirectory {
             file,
             binding: stable_binding(identity.identity),
         })
+    }
+
+    pub(crate) fn open_directory(&self, name: &str) -> io::Result<BoundPrivateDirectory> {
+        self.revalidate()?;
+        let name = private_child_name(name)?;
+        let descriptor = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | O_UNIQUE,
+            )
+        };
+        if descriptor < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        let file = unsafe { File::from_raw_fd(descriptor) };
+        let identity = require_private_directory(&file)?;
+        if !child_binds_directory(&self.file, &name, &file)? {
+            return Err(invalid_private_storage());
+        }
+        self.revalidate()?;
+        Ok(BoundPrivateDirectory {
+            path: self.path.join(Path::new(
+                name.to_str().map_err(|_| invalid_private_storage())?,
+            )),
+            file,
+            binding: stable_binding(identity.identity),
+        })
+    }
+
+    pub(crate) fn create_directory(&self, name: &str) -> io::Result<BoundPrivateDirectory> {
+        self.revalidate()?;
+        let name = private_child_name(name)?;
+        if unsafe { libc::mkdirat(self.file.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.file.sync_all()?;
+        self.open_directory(name.to_str().map_err(|_| invalid_private_storage())?)
+    }
+
+    pub(crate) fn publish_directory_exclusive(
+        &self,
+        mut source: BoundPrivateDirectory,
+        from: &str,
+        to: &str,
+    ) -> io::Result<BoundPrivateDirectory> {
+        self.revalidate()?;
+        let from = private_child_name(from)?;
+        let to = private_child_name(to)?;
+        let from_text = from.to_str().map_err(|_| invalid_private_storage())?;
+        let to_text = to.to_str().map_err(|_| invalid_private_storage())?;
+        source.revalidate()?;
+        if source.path != self.path.join(from_text)
+            || !child_binds_directory(&self.file, &from, &source.file)?
+        {
+            return Err(invalid_private_storage());
+        }
+        let result = unsafe {
+            libc::renameatx_np(
+                self.file.as_raw_fd(),
+                from.as_ptr(),
+                self.file.as_raw_fd(),
+                to.as_ptr(),
+                libc::RENAME_EXCL | RENAME_NOFOLLOW_ANY,
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let after = require_private_directory(&source.file)?;
+        if stable_binding(after.identity) != source.binding
+            || !child_binds_directory(&self.file, &to, &source.file)?
+        {
+            return Err(invalid_private_storage());
+        }
+        self.file.sync_all()?;
+        self.revalidate()?;
+        source.path = self.path.join(to_text);
+        source.revalidate()?;
+        Ok(source)
+    }
+
+    pub(crate) fn child_names(&self) -> io::Result<Vec<String>> {
+        self.revalidate()?;
+        let cursor = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                c".".as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if cursor < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let directory = unsafe { libc::fdopendir(cursor) };
+        if directory.is_null() {
+            let error = io::Error::last_os_error();
+            unsafe { libc::close(cursor) };
+            return Err(error);
+        }
+        let mut names = Vec::new();
+        loop {
+            unsafe { *libc::__error() = 0 };
+            let entry = unsafe { libc::readdir(directory) };
+            if entry.is_null() {
+                let error = io::Error::last_os_error();
+                unsafe { libc::closedir(directory) };
+                if error.raw_os_error() == Some(0) {
+                    break;
+                }
+                return Err(error);
+            }
+            let bytes = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if bytes != b"." && bytes != b".." {
+                let Ok(name) = std::str::from_utf8(bytes) else {
+                    unsafe { libc::closedir(directory) };
+                    return Err(invalid_private_storage());
+                };
+                names.push(name.to_owned());
+            }
+        }
+        names.sort();
+        self.revalidate()?;
+        Ok(names)
     }
 
     pub(crate) fn create_zero_file(&self, name: &str) -> io::Result<BoundPrivateFile> {
@@ -316,6 +454,73 @@ impl BoundPrivateFile {
 
     pub(crate) fn sync_all(&self) -> io::Result<()> {
         self.file.sync_all()
+    }
+
+    pub(crate) fn read_all(
+        &self,
+        directory: &BoundPrivateDirectory,
+        max_bytes: u64,
+    ) -> io::Result<Vec<u8>> {
+        self.read_all_observed(directory, max_bytes, || {})
+    }
+
+    fn read_all_observed<F: FnOnce()>(
+        &self,
+        directory: &BoundPrivateDirectory,
+        max_bytes: u64,
+        after_read: F,
+    ) -> io::Result<Vec<u8>> {
+        let before = self.identity(directory, max_bytes)?;
+        let mut reader = &self.file;
+        reader.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::with_capacity(before.size as usize);
+        reader.take(max_bytes + 1).read_to_end(&mut bytes)?;
+        after_read();
+        if bytes.len() as u64 > max_bytes || self.identity(directory, max_bytes)? != before {
+            return Err(invalid_private_storage());
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn replace_bytes(
+        &self,
+        directory: &BoundPrivateDirectory,
+        bytes: &[u8],
+        max_bytes: u64,
+    ) -> io::Result<()> {
+        if bytes.len() as u64 > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "private file exceeds limit",
+            ));
+        }
+        self.revalidate(directory, max_bytes)?;
+        if unsafe { libc::ftruncate(self.file.as_raw_fd(), 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut written = 0;
+        while written < bytes.len() {
+            let count = unsafe {
+                libc::pwrite(
+                    self.file.as_raw_fd(),
+                    bytes[written..].as_ptr().cast(),
+                    bytes.len() - written,
+                    written as libc::off_t,
+                )
+            };
+            if count < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if count == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "private file write stalled",
+                ));
+            }
+            written += count as usize;
+        }
+        self.file.sync_all()?;
+        self.revalidate(directory, max_bytes)
     }
 }
 
@@ -404,6 +609,10 @@ fn private_object_observation(metadata: &fs::Metadata) -> io::Result<PrivateObje
             flags: metadata.st_flags(),
         },
         size: metadata.len(),
+        modified_seconds: metadata.mtime(),
+        modified_nanoseconds: metadata.mtime_nsec(),
+        changed_seconds: metadata.ctime(),
+        changed_nanoseconds: metadata.ctime_nsec(),
     })
 }
 
@@ -431,6 +640,16 @@ fn path_binds_directory(path: &Path, file: &File) -> io::Result<bool> {
 
 #[cfg(target_os = "macos")]
 fn child_binds_file(directory: &File, name: &CString, file: &File) -> io::Result<bool> {
+    child_binds_object(directory, name, file)
+}
+
+#[cfg(target_os = "macos")]
+fn child_binds_directory(directory: &File, name: &CString, file: &File) -> io::Result<bool> {
+    child_binds_object(directory, name, file)
+}
+
+#[cfg(target_os = "macos")]
+fn child_binds_object(directory: &File, name: &CString, file: &File) -> io::Result<bool> {
     let mut child = std::mem::MaybeUninit::<libc::stat>::uninit();
     let result = unsafe {
         libc::fstatat(
@@ -775,6 +994,73 @@ mod tests {
         assert_eq!(
             reopened.identity(&directory, 0).unwrap(),
             zero.identity(&directory, 0).unwrap()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bound_private_child_directory_rejects_replacement_and_publish_overwrite() {
+        let temp = TempDir::new().unwrap();
+        let parent_path = temp.path().canonicalize().unwrap().join("profile");
+        create_private_dir(&parent_path).unwrap();
+        let parent = BoundPrivateDirectory::open(&parent_path).unwrap();
+        let child = parent.create_directory("initializing").unwrap();
+        child.create_zero_file("receipt.a.json").unwrap();
+        let lifecycle = parent
+            .publish_directory_exclusive(child, "initializing", "lifecycle")
+            .unwrap();
+        assert_eq!(lifecycle.child_names().unwrap(), ["receipt.a.json"]);
+
+        parent.create_directory("initializing").unwrap();
+        assert!(
+            parent
+                .publish_directory_exclusive(
+                    parent.open_directory("initializing").unwrap(),
+                    "initializing",
+                    "lifecycle",
+                )
+                .is_err()
+        );
+
+        fs::rename(
+            parent_path.join("lifecycle"),
+            parent_path.join("lifecycle.displaced"),
+        )
+        .unwrap();
+        create_private_dir(&parent_path.join("lifecycle")).unwrap();
+        assert!(lifecycle.revalidate().is_err());
+
+        let candidate = parent.create_directory("candidate").unwrap();
+        fs::rename(
+            parent_path.join("candidate"),
+            parent_path.join("candidate.displaced"),
+        )
+        .unwrap();
+        create_private_dir(&parent_path.join("candidate")).unwrap();
+        assert!(
+            parent
+                .publish_directory_exclusive(candidate, "candidate", "published")
+                .is_err()
+        );
+        assert!(!parent_path.join("published").exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bound_private_read_detects_same_inode_same_length_mutation() {
+        let temp = TempDir::new().unwrap();
+        let directory_path = temp.path().canonicalize().unwrap().join("profile");
+        create_private_dir(&directory_path).unwrap();
+        durable_create_new(&directory_path.join("receipt.json"), b"first").unwrap();
+        let directory = BoundPrivateDirectory::open(&directory_path).unwrap();
+        let receipt = directory.open_file("receipt.json", false, 64).unwrap();
+
+        assert!(
+            receipt
+                .read_all_observed(&directory, 64, || {
+                    fs::write(directory_path.join("receipt.json"), b"other").unwrap();
+                })
+                .is_err()
         );
     }
 }
