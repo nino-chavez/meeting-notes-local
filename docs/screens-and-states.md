@@ -503,9 +503,10 @@ Added 2026-07-29, when the voiceprint gate landed in the capture
 (`spike/speaker_gate.py`, `spike/dual_capture.py`) and no surface owned its contract.
 The inventory and review prototype now do. The Preview enforces the separately
 confirmed reset branch. The shared lifecycle now implements crash-recoverable
-`writing`, `ready`, and `active` publication, but the strict-loader bridge and guided
-multi-session recording surface remain unimplemented and no enrolment command is
-exposed to Preview.
+`writing`, `ready`, and `active` publication. Its strict-loader bridge binds the
+canonical worker verdict to the exact descriptor-reopened candidate digest and keeps
+candidate cleanup separately retryable. The guided multi-session recording surface
+remains unimplemented, and no enrolment command is exposed to Preview.
 Recorded here rather than improvised at implementation time, because this file
 opens with the reason: patching at L1 when the missing primitive is at L4 produces
 bugs that *move* from surface to surface instead of closing.

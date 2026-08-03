@@ -56,10 +56,12 @@ use local_meeting_notes_session_core::recovery::{
 use local_meeting_notes_session_core::reducer::{
     CaptureState, ExclusiveOperation, Reducer, StartupState,
 };
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
-use local_meeting_notes_session_core::retention::ProfileLifecycleAdmissionError;
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, RetentionOutcome, execute_due_retention_excluding, meeting_dir,
+};
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+use local_meeting_notes_session_core::retention::{
+    ProfileEnrollmentWorker, ProfileEnrollmentWorkerError, ProfileLifecycleAdmissionError,
 };
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::{
@@ -402,6 +404,62 @@ struct AttemptContext {
 enum WorkerCallError {
     Rejected,
     Supervisor(String),
+}
+
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[allow(dead_code)] // registered only when guided enrollment owns a reviewed Preview command
+struct StrictProfileEnrollmentWorker<'a> {
+    state: &'a ApplicationState,
+}
+
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+impl ProfileEnrollmentWorker for StrictProfileEnrollmentWorker<'_> {
+    fn inspect_candidate(
+        &self,
+        operation_id: &str,
+    ) -> Result<String, ProfileEnrollmentWorkerError> {
+        profile_worker_digest(
+            self.state,
+            Operation::ProfileInspect,
+            json!({ "profile_id": operation_id }),
+        )
+    }
+
+    fn discard_candidate(
+        &self,
+        operation_id: &str,
+        profile_sha256: &str,
+    ) -> Result<String, ProfileEnrollmentWorkerError> {
+        profile_worker_digest(
+            self.state,
+            Operation::ProfileDiscard,
+            json!({
+                "profile_id": operation_id,
+                "profile_sha256": profile_sha256,
+            }),
+        )
+    }
+}
+
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+fn profile_worker_digest(
+    state: &ApplicationState,
+    operation: Operation,
+    arguments: Value,
+) -> Result<String, ProfileEnrollmentWorkerError> {
+    let values =
+        request_worker(state, operation, arguments, WORKER_REQUEST_TIMEOUT).map_err(|error| {
+            match error {
+                WorkerCallError::Rejected => ProfileEnrollmentWorkerError::Refused,
+                WorkerCallError::Supervisor(_) => ProfileEnrollmentWorkerError::Unavailable,
+            }
+        })?;
+    let values =
+        exact_digests(&values, &["profile"]).map_err(|_| ProfileEnrollmentWorkerError::Refused)?;
+    values
+        .get("profile")
+        .cloned()
+        .ok_or(ProfileEnrollmentWorkerError::Refused)
 }
 
 impl WorkerCallError {

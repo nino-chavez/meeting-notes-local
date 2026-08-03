@@ -246,6 +246,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 expected_operations |= {
                     "profile.inspect",
                     "profile.adopt",
+                    "profile.discard",
                     "note.inspect",
                 }
             self.assertEqual(set(worker.ready["operations"]), expected_operations)
@@ -644,6 +645,42 @@ class WorkerProtocolTests(unittest.TestCase):
             self.assertEqual(result["artifact_digests"], {})
             self.assertFalse((self.root / "profile" / "voiceprint.json").exists())
             self.assertFalse(candidate_dir.exists())
+        finally:
+            worker.close()
+
+    def test_profile_discard_is_digest_bound_and_idempotent(self) -> None:
+        profile_id = str(uuid.uuid4())
+        candidate_dir = self.root / "profile-candidates" / profile_id
+        candidate_dir.mkdir(mode=0o700, parents=True)
+        candidate_dir.parent.chmod(0o700)
+        profile_path = candidate_dir / "voiceprint.json"
+        profile_bytes = b"synthetic-profile-candidate"
+        private_file(profile_path, profile_bytes)
+        expected_digest = hashlib.sha256(profile_bytes).hexdigest()
+
+        worker = WorkerProcess(self.root, self.manifest)
+        try:
+            refused = worker.request(
+                "profile.discard",
+                {"profile_id": profile_id, "profile_sha256": "0" * 64},
+            )
+            self.assertFalse(refused["ok"])
+            self.assertEqual(profile_path.read_bytes(), profile_bytes)
+
+            discarded = worker.request(
+                "profile.discard",
+                {"profile_id": profile_id, "profile_sha256": expected_digest},
+            )
+            self.assertTrue(discarded["ok"])
+            self.assertEqual(discarded["artifact_digests"], {"profile": expected_digest})
+            self.assertFalse(candidate_dir.exists())
+
+            repeated = worker.request(
+                "profile.discard",
+                {"profile_id": profile_id, "profile_sha256": expected_digest},
+            )
+            self.assertTrue(repeated["ok"])
+            self.assertEqual(repeated["artifact_digests"], {"profile": expected_digest})
         finally:
             worker.close()
 

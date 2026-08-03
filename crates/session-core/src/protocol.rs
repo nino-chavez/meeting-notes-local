@@ -16,6 +16,8 @@ pub enum Operation {
     ProfileInspect,
     #[serde(rename = "profile.adopt")]
     ProfileAdopt,
+    #[serde(rename = "profile.discard")]
+    ProfileDiscard,
     #[serde(rename = "capture.start")]
     CaptureStart,
     #[serde(rename = "capture.finalize")]

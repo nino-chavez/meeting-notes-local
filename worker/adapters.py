@@ -964,6 +964,64 @@ def profile_inspect(root: Path, arguments: object, encoder_digest: str) -> dict[
     return {"profile": digest}
 
 
+def _profile_candidate_is_absent(root: Path, profile_id: str) -> bool:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory is None:
+        raise AdapterRefused("profile cleanup requires no-follow directory support")
+    root_fd = os.open(root, os.O_RDONLY | directory | no_follow)
+    candidates_fd: int | None = None
+    candidate_fd: int | None = None
+    try:
+        _require_private_directory_fd(root_fd, "app data root")
+        try:
+            candidates_fd = os.open(
+                "profile-candidates",
+                os.O_RDONLY | directory | no_follow,
+                dir_fd=root_fd,
+            )
+        except FileNotFoundError:
+            return True
+        _require_private_directory_fd(candidates_fd, "profile quarantine root")
+        try:
+            candidate_fd = os.open(
+                profile_id,
+                os.O_RDONLY | directory | no_follow,
+                dir_fd=candidates_fd,
+            )
+        except FileNotFoundError:
+            return True
+        _require_private_directory_fd(candidate_fd, "profile quarantine")
+        return False
+    except AdapterRefused:
+        raise
+    except OSError as exc:
+        raise AdapterRefused("profile cleanup path is unsafe") from exc
+    finally:
+        if candidate_fd is not None:
+            os.close(candidate_fd)
+        if candidates_fd is not None:
+            os.close(candidates_fd)
+        os.close(root_fd)
+
+
+def profile_discard(root: Path, arguments: object) -> dict[str, str]:
+    """Idempotently removes one digest-bound private enrollment candidate."""
+    root = _private_profile_root(root)
+    values = _exact_arguments(arguments, {"profile_id", "profile_sha256"})
+    profile_id = opaque_id(values["profile_id"], "profile_id")
+    profile_sha256 = content_digest_id(values["profile_sha256"], "profile_sha256")
+    if _profile_candidate_is_absent(root, profile_id):
+        return {"profile": profile_sha256}
+    with _open_profile_quarantine(root, profile_id) as quarantine:
+        with _open_profile_candidate(quarantine) as descriptor:
+            profile_bytes = _read_profile_candidate(descriptor)
+            if hashlib.sha256(profile_bytes).hexdigest() != profile_sha256:
+                raise AdapterRefused("profile cleanup candidate digest changed")
+        _remove_profile_quarantine(quarantine, profile_id)
+    return {"profile": profile_sha256}
+
+
 def profile_adopt(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
     root = _private_profile_root(root)
     values = _exact_arguments(arguments, {"profile_id"})
@@ -1150,6 +1208,7 @@ def dispatch(
     adapters = {
         "profile.inspect": lambda: profile_inspect(root, arguments, encoder_digest),
         "profile.adopt": lambda: profile_adopt(root, arguments, encoder_digest),
+        "profile.discard": lambda: profile_discard(root, arguments),
         "capture.inspect": lambda: capture_inspect(root, arguments),
         "transcript.create": lambda: transcript_create(
             root,

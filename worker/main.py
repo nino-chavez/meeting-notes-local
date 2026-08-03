@@ -22,7 +22,7 @@ ALPHA_OPERATIONS = frozenset(
     {"capture.finalize", "capture.inspect", "transcript.create"}
 )
 BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
-    {"profile.inspect", "profile.adopt", "note.inspect"}
+    {"profile.inspect", "profile.adopt", "profile.discard", "note.inspect"}
 )
 
 

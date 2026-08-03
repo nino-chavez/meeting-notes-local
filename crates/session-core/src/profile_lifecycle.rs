@@ -91,6 +91,7 @@ pub struct ProfileLifecycleBaseline {
     profile_size: u64,
     profile_sha256: String,
     profile_active: bool,
+    active_enrollment_id: Option<String>,
 }
 
 impl ProfileLifecycleBaseline {
@@ -116,6 +117,10 @@ impl ProfileLifecycleBaseline {
 
     pub fn profile_active(&self) -> bool {
         self.profile_active
+    }
+
+    pub fn active_enrollment_id(&self) -> Option<&str> {
+        self.active_enrollment_id.as_deref()
     }
 }
 
@@ -647,6 +652,7 @@ fn status_from_baseline(payload: &BaselinePayload) -> ProfileLifecycleBaseline {
         profile_size: payload.live.size,
         profile_sha256: payload.live.sha256.clone(),
         profile_active: false,
+        active_enrollment_id: None,
     }
 }
 
@@ -657,6 +663,7 @@ fn status_from_removed(payload: &ResetRemovedPayload) -> ProfileLifecycleBaselin
         profile_size: 0,
         profile_sha256: ZERO_SHA256.into(),
         profile_active: false,
+        active_enrollment_id: None,
     }
 }
 
@@ -667,6 +674,7 @@ fn status_from_enrollment_writing(payload: &EnrollmentWritingPayload) -> Profile
         profile_size: 0,
         profile_sha256: ZERO_SHA256.into(),
         profile_active: false,
+        active_enrollment_id: None,
     }
 }
 
@@ -677,6 +685,7 @@ fn status_from_enrollment_active(payload: &EnrollmentActivePayload) -> ProfileLi
         profile_size: payload.live_profile.size,
         profile_sha256: payload.live_profile.sha256.clone(),
         profile_active: true,
+        active_enrollment_id: Some(payload.operation_id.clone()),
     }
 }
 
@@ -1786,6 +1795,7 @@ mod tests {
         assert_eq!(first.profile_size(), 0);
         assert_eq!(first.profile_sha256(), ZERO_SHA256);
         assert!(!first.profile_active());
+        assert_eq!(first.active_enrollment_id(), None);
         let payload = decode_envelope(
             &fs::read(fixture.profile().join(LIFECYCLE_NAME).join(RECEIPT_A_NAME)).unwrap(),
         )
@@ -1918,6 +1928,10 @@ mod tests {
         assert_eq!(reopened.receipt_sequence(), 3);
         assert!(reopened.profile_present());
         assert!(reopened.profile_active());
+        assert_eq!(
+            reopened.active_enrollment_id(),
+            Some("223e4567-e89b-12d3-a456-426614174000")
+        );
         assert_eq!(reopened.profile_sha256(), digest);
         assert_eq!(
             enroll_profile(

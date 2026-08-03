@@ -184,6 +184,65 @@ pub enum ProfileLifecycleAdmissionError {
 }
 
 #[cfg(target_os = "macos")]
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileEnrollmentWorkerError {
+    #[error("profile enrollment worker refused the candidate")]
+    Refused,
+    #[error("profile enrollment worker is unavailable")]
+    Unavailable,
+}
+
+#[cfg(target_os = "macos")]
+pub trait ProfileEnrollmentWorker: Send + Sync {
+    fn inspect_candidate(&self, operation_id: &str)
+    -> Result<String, ProfileEnrollmentWorkerError>;
+
+    fn discard_candidate(
+        &self,
+        operation_id: &str,
+        profile_sha256: &str,
+    ) -> Result<String, ProfileEnrollmentWorkerError>;
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileEnrollmentCompletion {
+    Enrolled {
+        operation_id: String,
+        profile_sha256: String,
+    },
+    CleanupPending {
+        operation_id: String,
+        profile_sha256: String,
+    },
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Error)]
+pub enum ProfileEnrollmentAdmissionError {
+    #[error("profile enrollment storage coordination is unavailable")]
+    Coordination(#[from] MeetingCoordinationError),
+    #[error("profile enrollment writer authority was lost")]
+    AuthorityLost,
+    #[error("profile enrollment is blocked by an active meeting")]
+    ActiveMeeting,
+    #[error("profile enrollment candidate is missing, changed, or unsafe")]
+    CandidateUnsafe,
+    #[error(transparent)]
+    Worker(#[from] ProfileEnrollmentWorkerError),
+    #[error(transparent)]
+    Lifecycle(#[from] ProfileLifecycleError),
+}
+
+#[cfg(target_os = "macos")]
+fn valid_sha256_text(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(target_os = "macos")]
 impl ProfileLifecycleAuthority<'_> {
     pub fn initialize_or_open(
         &self,
@@ -266,6 +325,149 @@ impl ProfileLifecycleAuthority<'_> {
             return Err(ProfileLifecycleAdmissionError::AuthorityLost);
         }
         outcome.map_err(Into::into)
+    }
+
+    /// Strictly admits one private candidate. The worker first validates the
+    /// canonical profile semantics and returns its digest. Rust then reopens the
+    /// exact private candidate through retained descriptors, re-derives that
+    /// digest, publishes only those bytes, and asks the worker to remove the
+    /// candidate. A cleanup failure never rolls back active profile authority.
+    pub fn enroll_profile_candidate(
+        &self,
+        worker: &dyn ProfileEnrollmentWorker,
+        operation_id: &str,
+        requested_at: u64,
+    ) -> Result<ProfileEnrollmentCompletion, ProfileEnrollmentAdmissionError> {
+        const MAX_PROFILE_BYTES: u64 = 4 * 1024 * 1024;
+        let sequence = self.lock.coordination.lock_sequence()?;
+        let authority_is_current = || {
+            self.lock.storage_root.revalidate().is_ok()
+                && self
+                    .lock
+                    .writer_file
+                    .revalidate(&self.lock.storage_root, 0)
+                    .is_ok()
+        };
+        if !authority_is_current() {
+            return Err(ProfileEnrollmentAdmissionError::AuthorityLost);
+        }
+        if !sequence.active_meeting_ids()?.is_empty() {
+            return Err(ProfileEnrollmentAdmissionError::ActiveMeeting);
+        }
+
+        let inspected_sha256 = worker.inspect_candidate(operation_id)?;
+        if !valid_sha256_text(&inspected_sha256) {
+            return Err(ProfileEnrollmentAdmissionError::CandidateUnsafe);
+        }
+        let candidates = self
+            .lock
+            .storage_root
+            .open_directory("profile-candidates")
+            .map_err(|_| ProfileEnrollmentAdmissionError::CandidateUnsafe)?;
+        let candidate = candidates
+            .open_directory(operation_id)
+            .map_err(|_| ProfileEnrollmentAdmissionError::CandidateUnsafe)?;
+        if candidate
+            .child_names()
+            .map_err(|_| ProfileEnrollmentAdmissionError::CandidateUnsafe)?
+            != ["voiceprint.json"]
+        {
+            return Err(ProfileEnrollmentAdmissionError::CandidateUnsafe);
+        }
+        let profile = candidate
+            .open_file("voiceprint.json", false, MAX_PROFILE_BYTES)
+            .map_err(|_| ProfileEnrollmentAdmissionError::CandidateUnsafe)?;
+        let profile_bytes = profile
+            .read_all(&candidate, MAX_PROFILE_BYTES)
+            .map_err(|_| ProfileEnrollmentAdmissionError::CandidateUnsafe)?;
+        if profile_bytes.is_empty()
+            || format!("{:x}", Sha256::digest(&profile_bytes)) != inspected_sha256
+        {
+            return Err(ProfileEnrollmentAdmissionError::CandidateUnsafe);
+        }
+        let outcome = enroll_profile_lifecycle_bound(
+            &self.lock.storage_root,
+            operation_id,
+            requested_at,
+            &profile_bytes,
+            &inspected_sha256,
+        )?;
+        if !authority_is_current()
+            || candidates.revalidate().is_err()
+            || candidate.revalidate().is_err()
+        {
+            return Err(ProfileEnrollmentAdmissionError::AuthorityLost);
+        }
+        let (operation_id, profile_sha256) = match outcome {
+            ProfileEnrollmentOutcome::Activated {
+                operation_id,
+                profile_sha256,
+            }
+            | ProfileEnrollmentOutcome::Recovered {
+                operation_id,
+                profile_sha256,
+            }
+            | ProfileEnrollmentOutcome::AlreadyActive {
+                operation_id,
+                profile_sha256,
+            } => (operation_id, profile_sha256),
+        };
+        let cleanup = worker.discard_candidate(&operation_id, &profile_sha256);
+        if matches!(cleanup, Ok(ref digest) if digest == &profile_sha256) {
+            Ok(ProfileEnrollmentCompletion::Enrolled {
+                operation_id,
+                profile_sha256,
+            })
+        } else {
+            Ok(ProfileEnrollmentCompletion::CleanupPending {
+                operation_id,
+                profile_sha256,
+            })
+        }
+    }
+
+    /// Retries only cleanup for an already-active enrollment receipt. It never
+    /// opens or rewrites the live profile bytes.
+    pub fn cleanup_active_enrollment_candidate(
+        &self,
+        worker: &dyn ProfileEnrollmentWorker,
+    ) -> Result<ProfileEnrollmentCompletion, ProfileEnrollmentAdmissionError> {
+        let sequence = self.lock.coordination.lock_sequence()?;
+        let authority_is_current = || {
+            self.lock.storage_root.revalidate().is_ok()
+                && self
+                    .lock
+                    .writer_file
+                    .revalidate(&self.lock.storage_root, 0)
+                    .is_ok()
+        };
+        if !authority_is_current() {
+            return Err(ProfileEnrollmentAdmissionError::AuthorityLost);
+        }
+        if !sequence.active_meeting_ids()?.is_empty() {
+            return Err(ProfileEnrollmentAdmissionError::ActiveMeeting);
+        }
+        let lifecycle = initialize_profile_lifecycle_bound(&self.lock.storage_root)?;
+        let operation_id = lifecycle
+            .active_enrollment_id()
+            .ok_or(ProfileEnrollmentAdmissionError::CandidateUnsafe)?
+            .to_string();
+        let profile_sha256 = lifecycle.profile_sha256().to_string();
+        let cleanup = worker.discard_candidate(&operation_id, &profile_sha256);
+        if !authority_is_current() {
+            return Err(ProfileEnrollmentAdmissionError::AuthorityLost);
+        }
+        if matches!(cleanup, Ok(ref digest) if digest == &profile_sha256) {
+            Ok(ProfileEnrollmentCompletion::Enrolled {
+                operation_id,
+                profile_sha256,
+            })
+        } else {
+            Ok(ProfileEnrollmentCompletion::CleanupPending {
+                operation_id,
+                profile_sha256,
+            })
+        }
     }
 
     fn run(
@@ -904,6 +1106,8 @@ pub fn meeting_dir(storage: &StorageRoot, meeting_id: &str) -> Result<PathBuf, i
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::meeting::{
         AudioRetention, AudioRetentionRule, MeetingArtifacts, MeetingLifecycle, MeetingSchema,
@@ -915,6 +1119,66 @@ mod tests {
     use serde::de::DeserializeOwned;
     use serde_json::Value;
     use tempfile::TempDir;
+
+    #[cfg(target_os = "macos")]
+    struct EnrollmentWorkerFixture {
+        root: PathBuf,
+        discard_available: Mutex<bool>,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl EnrollmentWorkerFixture {
+        fn new(root: PathBuf, discard_available: bool) -> Self {
+            Self {
+                root,
+                discard_available: Mutex::new(discard_available),
+            }
+        }
+
+        fn candidate(&self, operation_id: &str) -> PathBuf {
+            self.root
+                .join("profile-candidates")
+                .join(operation_id)
+                .join("voiceprint.json")
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl ProfileEnrollmentWorker for EnrollmentWorkerFixture {
+        fn inspect_candidate(
+            &self,
+            operation_id: &str,
+        ) -> Result<String, ProfileEnrollmentWorkerError> {
+            let bytes = fs::read(self.candidate(operation_id))
+                .map_err(|_| ProfileEnrollmentWorkerError::Refused)?;
+            Ok(format!("{:x}", Sha256::digest(bytes)))
+        }
+
+        fn discard_candidate(
+            &self,
+            operation_id: &str,
+            profile_sha256: &str,
+        ) -> Result<String, ProfileEnrollmentWorkerError> {
+            if !*self.discard_available.lock().unwrap() {
+                return Err(ProfileEnrollmentWorkerError::Unavailable);
+            }
+            let candidate = self.candidate(operation_id);
+            let bytes = fs::read(&candidate).map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    ProfileEnrollmentWorkerError::Unavailable
+                } else {
+                    ProfileEnrollmentWorkerError::Refused
+                }
+            })?;
+            if format!("{:x}", Sha256::digest(bytes)) != profile_sha256 {
+                return Err(ProfileEnrollmentWorkerError::Refused);
+            }
+            fs::remove_file(&candidate).map_err(|_| ProfileEnrollmentWorkerError::Unavailable)?;
+            fs::remove_dir(candidate.parent().unwrap())
+                .map_err(|_| ProfileEnrollmentWorkerError::Unavailable)?;
+            Ok(profile_sha256.into())
+        }
+    }
 
     fn fixture(storage: &StorageRoot, id: &str, deadline: Option<u64>) -> (PathBuf, MeetingRecord) {
         let directory = meeting_dir(storage, id).unwrap();
@@ -1802,6 +2066,66 @@ mod tests {
             Ok(ProfileEnrollmentOutcome::Activated { ref profile_sha256, .. })
                 if profile_sha256 == &digest
         ));
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            candidate
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn strict_profile_bridge_binds_worker_digest_and_retries_cleanup_separately() {
+        let (_temp, storage) = storage();
+        let writer = AppDataWriterLock::acquire(&storage).unwrap();
+        writer
+            .profile_lifecycle_authority()
+            .initialize_or_open()
+            .unwrap();
+        let operation_id = "223e4567-e89b-12d3-a456-426614174000";
+        let candidates = storage.path().join("profile-candidates");
+        let candidate_dir = candidates.join(operation_id);
+        create_private_dir(&candidates).unwrap();
+        create_private_dir(&candidate_dir).unwrap();
+        let candidate = b"synthetic-strict-loader-admitted-profile";
+        durable_create_new(&candidate_dir.join("voiceprint.json"), candidate).unwrap();
+        let expected_digest = format!("{:x}", Sha256::digest(candidate));
+        let worker = EnrollmentWorkerFixture::new(storage.path().to_path_buf(), false);
+
+        assert_eq!(
+            writer
+                .profile_lifecycle_authority()
+                .enroll_profile_candidate(&worker, operation_id, 20)
+                .unwrap(),
+            ProfileEnrollmentCompletion::CleanupPending {
+                operation_id: operation_id.into(),
+                profile_sha256: expected_digest.clone(),
+            }
+        );
+        assert!(candidate_dir.exists());
+        let active = writer
+            .profile_lifecycle_authority()
+            .initialize_or_open()
+            .unwrap();
+        assert!(active.profile_active());
+        assert_eq!(active.active_enrollment_id(), Some(operation_id));
+        assert_eq!(active.profile_sha256(), expected_digest);
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            candidate
+        );
+
+        *worker.discard_available.lock().unwrap() = true;
+        assert_eq!(
+            writer
+                .profile_lifecycle_authority()
+                .cleanup_active_enrollment_candidate(&worker)
+                .unwrap(),
+            ProfileEnrollmentCompletion::Enrolled {
+                operation_id: operation_id.into(),
+                profile_sha256: expected_digest,
+            }
+        );
+        assert!(!candidate_dir.exists());
         assert_eq!(
             fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
             candidate
