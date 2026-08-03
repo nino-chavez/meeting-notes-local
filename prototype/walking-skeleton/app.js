@@ -363,6 +363,7 @@ function freshState(defaultDirection, context) {
     capturePhase: "idle",
     consentConfirmed: false,
     captureDegraded: false,
+    captureHadGap: false,
     captureRecovering: false,
     captureOutputMeetingId: null,
     captureHudHidden: false,
@@ -2464,6 +2465,7 @@ function beginCapture() {
   if (state.capturePhase !== "consent" || !state.consentConfirmed) return;
   state.capturePhase = "recording";
   state.captureDegraded = false;
+  state.captureHadGap = false;
   state.captureRecovering = false;
   state.captureHudHidden = false;
   state.focusRequest = "capture";
@@ -2483,6 +2485,7 @@ function cancelCapture() {
 function previewDegradedCapture() {
   if (state.capturePhase !== "recording") return;
   state.captureDegraded = true;
+  state.captureHadGap = true;
   state.captureRecovering = false;
   state.focusRequest = "capture";
   render();
@@ -2504,7 +2507,7 @@ function recoverSystemAudio() {
 function stopCapture() {
   if (state.capturePhase !== "recording") return;
   window.clearTimeout(transitionTimer);
-  state.captureOutputMeetingId = state.captureDegraded ? "m-02" : "m-05";
+  state.captureOutputMeetingId = state.captureHadGap ? "m-02" : "m-05";
   state.capturePhase = "transcribing";
   state.captureDegraded = false;
   state.captureRecovering = false;

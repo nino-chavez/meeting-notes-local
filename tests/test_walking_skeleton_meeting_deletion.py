@@ -95,5 +95,25 @@ def test_960_by_900_uses_internal_recovery_scrolling_not_outer_page_scrolling():
     assert 'target.scrollIntoView({ block: "center", inline: "nearest" })' in APP
 
 
+def test_capture_gap_history_survives_recovery_until_the_next_capture():
+    begin = APP[APP.index("function beginCapture()") : APP.index("function cancelCapture()")]
+    degraded = APP[APP.index("function previewDegradedCapture()") : APP.index("function recoverSystemAudio()")]
+    recover = APP[APP.index("function recoverSystemAudio()") : APP.index("function stopCapture()")]
+    stop = APP[APP.index("function stopCapture()") : APP.index("function openCapturedMeeting()")]
+
+    assert "state.captureHadGap = false;" in begin
+    assert "state.captureHadGap = true;" in degraded
+    assert "state.captureDegraded = false;" in recover
+    assert "captureHadGap" not in recover
+    assert 'state.captureOutputMeetingId = state.captureHadGap ? "m-02" : "m-05";' in stop
+    assert APP.count("state.captureHadGap = false;") == 1
+
+
+def test_programmatic_h1_focus_does_not_reuse_the_keyboard_control_ring():
+    assert '[tabindex]:not(h1[tabindex="-1"]):focus-visible {' in CSS
+    assert 'h1[tabindex="-1"]:focus { outline: none; }' in CSS
+    assert "button:focus-visible," in CSS
+
+
 def test_prototype_has_no_direct_console_writes():
     assert "console." not in APP

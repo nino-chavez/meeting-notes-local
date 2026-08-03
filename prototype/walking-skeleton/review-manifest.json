@@ -20,9 +20,9 @@
   },
   "files": {
     "index.html": "sha256:ae8479c96e1448129b6c5ebfb7dd0dcb9f087b61c5027fb7b95ee30df20acdf8",
-    "styles.css": "sha256:f6d97c91b7992d8db6b1abfdb1a1d29f4a903c6325387695b8117305b6ce6e09",
+    "styles.css": "sha256:54949e44765bb945ca9887d48b5bdd051773a360a621e32a5cdaf1a5776551b1",
     "trust-state.js": "sha256:4392266d4321bed63d1a687e831c2b02133805ad3bfc0310ea85b07b6cf63643",
-    "app.js": "sha256:e2c242a43ef9d077ca0d340782dd241b8b908cc6fbc6b0321cfcfc4bb5c33743"
+    "app.js": "sha256:4f2bb628233bcdbf7da79ca77cdf1e84079dee26897fbc5fa1f5c3b7bc00b210"
   },
   "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
   "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",

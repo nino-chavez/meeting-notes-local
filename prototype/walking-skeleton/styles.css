@@ -49,10 +49,12 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-[tabindex]:focus-visible {
+[tabindex]:not(h1[tabindex="-1"]):focus-visible {
   outline: 3px solid #17201d;
   outline-offset: 3px;
 }
+
+h1[tabindex="-1"]:focus { outline: none; }
 
 .skip-link {
   position: fixed;
