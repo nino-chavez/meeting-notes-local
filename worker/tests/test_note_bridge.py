@@ -112,6 +112,16 @@ class NoteBridgeProcess:
 
 class NoteBridgeHarnessTests(unittest.TestCase):
     def setUp(self) -> None:
+        if os.environ.get("LMN_PACKAGED_RUNTIME_ROOT"):
+            # This harness rebinds a copied interpreter, and the packaged
+            # standalone python cannot start outside its runtime tree (its
+            # install prefix resolves relative to the real layout). Note-bridge
+            # behavior stays covered by the development-interpreter run, and
+            # release bundles exclude the note runtime entirely.
+            self.skipTest(
+                "packaged interpreter cannot start from the harness's copied "
+                "binary; covered by the development-interpreter run"
+            )
         self.role = "inspect"
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name).resolve()

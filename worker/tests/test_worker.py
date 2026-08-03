@@ -221,6 +221,22 @@ class WorkerProtocolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def require_worker_operation(self, operation: str) -> None:
+        """Skip when the packaged runtime's admission does not serve the operation.
+
+        The packaged internal-alpha worker serves only the capture/transcript
+        set; profile and note operations are boundary-test/product surface and
+        stay covered by the fixture-manifest run. A silent drift in the sets
+        themselves still fails the ready-frame operations pin below.
+        """
+        from worker.main import operations_for
+
+        if operation not in operations_for(self.admission):
+            self.skipTest(
+                f"packaged admission {self.admission} does not serve {operation}; "
+                "the boundary-test fixture-manifest run covers it"
+            )
+
     def test_capture_and_transcript_match_direct_validators(self) -> None:
         meeting_id = str(uuid.uuid4())
         capture = self.root / "meetings" / meeting_id / "capture"
@@ -374,6 +390,7 @@ class WorkerProtocolTests(unittest.TestCase):
             worker.close()
 
     def test_note_pair_matches_direct_validator(self) -> None:
+        self.require_worker_operation("note.inspect")
         pack = json.loads(
             (REPO / "docs/prototype/fixtures/accepted-note2.fixture").read_text()
         )
@@ -490,6 +507,7 @@ class WorkerProtocolTests(unittest.TestCase):
             worker.close()
 
     def test_profile_adoption_matches_strict_loader(self) -> None:
+        self.require_worker_operation("profile.adopt")
         profile_id = str(uuid.uuid4())
         candidate_dir = self.root / "profile-candidates" / profile_id
         candidate_dir.mkdir(mode=0o700, parents=True)
@@ -588,6 +606,7 @@ class WorkerProtocolTests(unittest.TestCase):
             worker.close()
 
     def test_profile_adoption_refuses_experimental_calibration(self) -> None:
+        self.require_worker_operation("profile.adopt")
         profile_id = str(uuid.uuid4())
         candidate_dir = self.root / "profile-candidates" / profile_id
         candidate_dir.mkdir(mode=0o700, parents=True)
@@ -649,6 +668,7 @@ class WorkerProtocolTests(unittest.TestCase):
             worker.close()
 
     def test_profile_discard_is_digest_bound_and_idempotent(self) -> None:
+        self.require_worker_operation("profile.discard")
         profile_id = str(uuid.uuid4())
         candidate_dir = self.root / "profile-candidates" / profile_id
         candidate_dir.mkdir(mode=0o700, parents=True)
