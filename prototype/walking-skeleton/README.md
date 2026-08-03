@@ -88,10 +88,21 @@ receipt (`schema`, `scenario`, synthetic meeting ID, operation ID), reloads the
 document before terminal completion, and returns to one safe action: resume that same
 deletion. While that receipt exists, the affected meeting and every derived promise
 and search hit are unavailable from Find, Meetings, and Promises; a second reload
-reconstructs the same recovery surface. Terminal completion clears the receipt and
-removes only that synthetic meeting for the current prototype session. This models
-idempotent browser-state recovery, not native deletion, durable installed recovery,
-or recoverability after terminal deletion.
+reconstructs the same recovery surface. Reset task, the default-opening tabs, product
+navigation, Settings, and Start all return to recovery rather than abandoning the
+request. Mutable synthetic facts live in a separately validated session envelope:
+permission fixtures, retention choice, voice-profile state, released-audio state,
+correction/regeneration state, and terminal deletion tombstones. Terminal completion
+writes and reads back the `m-05` tombstone before it clears the request, so a plain
+reload cannot resurrect the deleted meeting.
+
+Malformed, unknown-field, or mixed recovery records fail closed. The prototype keeps
+the raw browser-storage evidence, withholds every possibly affected meeting, and shows
+a blocked recovery surface instead of guessing or silently resetting. Its sole escape
+is a staged **reviewer repair** that explicitly discards all synthetic fixture state;
+the copy labels that escape as test-only behavior, not a product recovery design. This
+models idempotent browser-state recovery and terminal irreversibility, not native
+deletion, durable installed recovery, or recoverability after terminal deletion.
 
 It is a design instrument, not a second application runtime. It does not read or write
 Preview data, record audio, invoke a model, or prove note usefulness or semantic
@@ -106,6 +117,13 @@ python3 -m http.server 4173 --directory prototype/walking-skeleton
 
 Then open `http://127.0.0.1:4173` at a 960×900 viewport. The outer page never scrolls;
 long meeting and transcript content scrolls inside its reading pane.
+
+Run the focused artifact and executable transition checks from the repository root:
+
+```bash
+python3 -m pytest -q -p no:cacheprovider tests/test_walking_skeleton_meeting_deletion.py
+node --test tests/walking_skeleton_trust_state.test.cjs
+```
 
 `review-manifest.json` binds the three starting-view URLs to the exact HTML, CSS, and
 JavaScript under review. Its `compositionApproval` preserves the operator's explicit

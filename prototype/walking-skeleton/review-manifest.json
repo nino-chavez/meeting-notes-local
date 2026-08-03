@@ -19,9 +19,10 @@
     "height": 900
   },
   "files": {
-    "index.html": "sha256:7ce1c1342a9bd2ead2fe769db138747eef720a06445e915f36d4102dc2f79b45",
-    "styles.css": "sha256:85253197eab73c131feb88c7cfc58f821c1ae089a8ad23d6f6d388a84089b9c4",
-    "app.js": "sha256:08f97ed63f487f0ab2726eed1d44deefe52909211907552a1779a73765dd25a9"
+    "index.html": "sha256:ae8479c96e1448129b6c5ebfb7dd0dcb9f087b61c5027fb7b95ee30df20acdf8",
+    "styles.css": "sha256:f6d97c91b7992d8db6b1abfdb1a1d29f4a903c6325387695b8117305b6ce6e09",
+    "trust-state.js": "sha256:4392266d4321bed63d1a687e831c2b02133805ad3bfc0310ea85b07b6cf63643",
+    "app.js": "sha256:e2c242a43ef9d077ca0d340782dd241b8b908cc6fbc6b0321cfcfc4bb5c33743"
   },
   "persistentProductNavigation": ["retrieval", "meetings", "commitments"],
   "reviewControl": "The dark comparison bar changes only the default opening view; the light app header is the proposed persistent product navigation.",
@@ -260,8 +261,11 @@
       "request-only-interruption",
       "fresh-document-reload",
       "second-document-reload",
+      "blocked-invalid-recovery",
+      "staged-reviewer-fixture-repair",
       "safe-idempotent-resume",
-      "terminal-completion"
+      "terminal-completion",
+      "tombstoned-document-reload"
     ],
     "terminalScope": {
       "removed": [
@@ -283,27 +287,59 @@
       "synthetic-meeting-id",
       "operation-id"
     ],
+    "syntheticSessionStateEnvelope": [
+      "schema",
+      "permission-fixture booleans",
+      "retention-period choice",
+      "voice-profile fixture status",
+      "released-audio synthetic meeting IDs",
+      "correction and regeneration booleans",
+      "terminal synthetic meeting tombstone IDs"
+    ],
     "contracts": [
       "The scope review names every terminal consequence and does not use vague data language.",
       "A second, explicit acknowledgement is required before either the terminal action or reviewer interruption control is enabled.",
       "Cancellation leaves the synthetic meeting unchanged and is labelled as keeping the meeting.",
       "The reviewer interruption persists only a content-free request receipt before document reload; it does not complete deletion or publish a partial current meeting.",
-      "Unknown receipt fields, invalid values, mixed recovery receipts, and unreadable receipts fail closed by clearing the receipt and refusing recovery.",
+      "Reset task, default-opening controls, product navigation, Settings, and Start retain a pending operation and return to its recovery surface.",
+      "Unknown receipt fields, invalid values, mixed recovery receipts, and unreadable session envelopes fail closed by retaining raw browser-storage evidence, withholding possibly affected meetings, and routing to blocked recovery.",
+      "Blocked recovery offers only a staged reviewer-only full fixture repair; it is explicitly not product behavior and cannot silently clear valid operations.",
       "While request-only recovery is pending, the affected meeting, transcript-derived search hits, note claims, and recorded promises are unavailable in Find, Meetings, and Promises.",
       "A second reload reconstructs the same one-action recovery surface; resume is idempotent and clears the receipt only after terminal completion.",
-      "Terminal deletion does not offer undo or imply recovery of the removed meeting content."
+      "Retention, released-audio, correction, voice-profile, permission, and unrelated-meeting state survive interrupted deletion and terminal completion.",
+      "Terminal completion validates and reads back a session-state tombstone before clearing the request; later document reloads cannot resurrect the meeting.",
+      "Terminal deletion does not offer undo or imply recovery of the removed meeting content.",
+      "Deletion and blocked-recovery headings receive focus and are scrolled into the internal pane; the outer 960x900 page remains fixed."
     ],
     "deterministicTestCoverage": {
-      "static": "tests/test_walking_skeleton_meeting_deletion.py",
+      "artifact": "tests/test_walking_skeleton_meeting_deletion.py",
+      "pureTransitions": "tests/walking_skeleton_trust_state.test.cjs",
       "contracts": [
         "scope and staged confirmation",
-        "content-free receipt shape and fail-closed reader",
+        "reset and default-switch recovery guards",
+        "unknown-field and mixed-receipt blocked recovery",
+        "unrelated session-state preservation",
         "cross-view target removal",
-        "idempotent resume and terminal-only receipt clearance",
+        "idempotent completion and post-terminal tombstone reload",
         "manifest file digests and non-approvals",
-        "outer-page overflow contract"
+        "internal focus and outer-page overflow contracts"
       ],
-      "browserExercise": "Run the README server at 960x900 and exercise the reviewer interruption, two reloads, and resume. Browser exercise is evidence for review, not approval."
+      "browserExercise": "Run the README server at 960x900 and exercise interruption, guarded Reset/default controls, two reloads, terminal resume, tombstone reload, malformed and mixed receipt blocks, staged synthetic repair, and focus visibility. Browser evidence supports review but cannot approve native behavior.",
+      "liveBrowserReceipt": {
+        "observedAt": "2026-08-02",
+        "viewport": "960x900",
+        "outerOverflow": false,
+        "scopeConfirmationAndRecoveryFocusVisible": true,
+        "resetAndDefaultControlsRetainedPendingRequest": true,
+        "secondReloadReturnedToRecovery": true,
+        "sessionStatePreserved": true,
+        "tombstoneSurvivedPostTerminalReload": true,
+        "otherMeetingsPreserved": true,
+        "findAndPromisesExcludedTarget": true,
+        "malformedReceiptBlockedAndRetained": true,
+        "mixedValidReceiptsBlockedAndRetained": true,
+        "capturedConsoleOrPageErrors": 0
+      }
     },
     "doesNotApprove": [
       "native deletion implementation",

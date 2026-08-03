@@ -236,104 +236,114 @@ const workspace = document.querySelector("#workspace");
 const footerDirection = document.querySelector("#footer-direction");
 const captureLayer = document.querySelector("#capture-layer");
 const toast = document.querySelector("#toast");
-const recoveryFixtureKey = "local-meeting-notes:walking-skeleton-recovery";
-const meetingDeletionRecoveryKey = "local-meeting-notes:walking-skeleton-meeting-deletion-recovery";
+const trustState = window.WalkingSkeletonTrustState;
+if (!trustState) throw new Error("Synthetic trust-state helper did not load");
+const recoveryFixtureKey = trustState.storageKeys.regeneration;
+const meetingDeletionRecoveryKey = trustState.storageKeys.meetingDeletion;
+const sessionStateKey = trustState.storageKeys.session;
 
 let loadTimer;
 let transitionTimer;
 let captureTimer;
 let toastTimer;
-const persistedFixtures = readPersistedFixtures();
-let state = freshState(readDirection(), persistedFixtures.regeneration, persistedFixtures.meetingDeletion);
+const persistedContext = readPersistedContext();
+let state = freshState(readDirection(), persistedContext);
+if (state.recoveryMode !== "blocked" && (persistedContext.sessionWasAbsent || state.restored !== state.sessionEnvelope.correction.restored)) {
+  if (!persistMutableSessionState()) blockRecovery("synthetic session state could not be initialized safely", ["m-05"]);
+}
 
 function readDirection() {
   const direction = new URLSearchParams(window.location.search).get("direction");
   return Object.hasOwn(viewLabels, direction) ? direction : "retrieval";
 }
 
-function readRecoveryFixture() {
+function readStorageValue(key) {
   try {
-    const raw = window.sessionStorage.getItem(recoveryFixtureKey);
-    if (!raw) return null;
-    const fixture = JSON.parse(raw);
-    const keys = Object.keys(fixture ?? {}).sort().join(",");
-    if (
-      keys !== "meetingId,priorNoteVersion,scenario,schema,transcriptView"
-      || fixture.schema !== "walking-skeleton-recovery/1"
-      || fixture.scenario !== "note-regeneration-request-only"
-      || fixture.meetingId !== "m-02"
-      || fixture.transcriptView !== 2
-      || fixture.priorNoteVersion !== 1
-    ) {
-      clearRecoveryFixture();
-      return null;
-    }
-    return fixture;
+    return window.sessionStorage.getItem(key);
   } catch {
-    clearRecoveryFixture();
     return null;
   }
 }
 
-function readMeetingDeletionRecoveryReceipt() {
-  try {
-    const raw = window.sessionStorage.getItem(meetingDeletionRecoveryKey);
-    if (!raw) return null;
-    const receipt = JSON.parse(raw);
-    const keys = Object.keys(receipt ?? {}).sort().join(",");
-    if (
-      keys !== "meetingId,operationId,scenario,schema"
-      || receipt.schema !== "walking-skeleton-meeting-deletion/1"
-      || receipt.scenario !== "whole-meeting-deletion-request-only"
-      || receipt.meetingId !== "m-05"
-      || receipt.operationId !== "synthetic-delete-m05-v1"
-    ) {
-      clearMeetingDeletionRecoveryReceipt();
-      return null;
-    }
-    return receipt;
-  } catch {
-    clearMeetingDeletionRecoveryReceipt();
-    return null;
-  }
-}
-
-function readPersistedFixtures() {
-  const regeneration = readRecoveryFixture();
-  const meetingDeletion = readMeetingDeletionRecoveryReceipt();
-  // One recovery operation at a time. A mixed or unknown state is not resumed.
-  if (regeneration && meetingDeletion) {
-    clearRecoveryFixture();
-    clearMeetingDeletionRecoveryReceipt();
-    return { regeneration: null, meetingDeletion: null };
-  }
-  return { regeneration, meetingDeletion };
+function readPersistedContext() {
+  return trustState.resolvePersistentContext({
+    session: readStorageValue(sessionStateKey),
+    regeneration: readStorageValue(recoveryFixtureKey),
+    meetingDeletion: readStorageValue(meetingDeletionRecoveryKey)
+  });
 }
 
 function clearRecoveryFixture() {
   try {
     window.sessionStorage.removeItem(recoveryFixtureKey);
+    return window.sessionStorage.getItem(recoveryFixtureKey) === null;
   } catch {
-    // The prototype remains usable when browser storage is unavailable.
+    return false;
   }
 }
 
 function clearMeetingDeletionRecoveryReceipt() {
   try {
     window.sessionStorage.removeItem(meetingDeletionRecoveryKey);
+    return window.sessionStorage.getItem(meetingDeletionRecoveryKey) === null;
   } catch {
-    // The prototype remains usable when browser storage is unavailable.
+    return false;
   }
 }
 
-function freshState(defaultDirection, recoveryFixture = null, meetingDeletionReceipt = null) {
-  const recoveringRegeneration = recoveryFixture?.scenario === "note-regeneration-request-only";
-  const recoveringMeetingDeletion = meetingDeletionReceipt?.scenario === "whole-meeting-deletion-request-only";
+function blockRecovery(issue, affectedMeetingIds = []) {
+  state.recoveryMode = "blocked";
+  state.route = "recovery-error";
+  state.recoveryIssues = [issue];
+  state.unavailableMeetingIds = [...new Set([...state.unavailableMeetingIds, ...affectedMeetingIds])].sort();
+  state.quarantinedEvidence = [recoveryFixtureKey, meetingDeletionRecoveryKey, sessionStateKey]
+    .filter((key) => readStorageValue(key) !== null)
+    .map((key) => ({ key, status: "retained" }));
+  state.focusRequest = "recovery-error";
+  render();
+}
+
+function writeSessionStateEnvelope(envelope) {
+  if (!trustState.validateSessionState(envelope)) return false;
+  try {
+    window.sessionStorage.setItem(sessionStateKey, JSON.stringify(envelope));
+    const written = JSON.parse(window.sessionStorage.getItem(sessionStateKey));
+    return trustState.validateSessionState(written)
+      && JSON.stringify(written) === JSON.stringify(envelope);
+  } catch {
+    return false;
+  }
+}
+
+function currentSessionStateEnvelope() {
+  return {
+    schema: "walking-skeleton-session-state/1",
+    setupPermissions: { ...state.setupPermissions },
+    retentionPeriodDays: state.retentionPeriodDays,
+    voiceProfileStatus: state.voiceProfileStatus,
+    releasedAudioMeetingIds: state.retentionReleased ? ["m-04"] : [],
+    correction: { restored: state.restored, regenerated: state.regenerated },
+    tombstonedMeetingIds: [...state.tombstonedMeetingIds]
+  };
+}
+
+function persistMutableSessionState() {
+  const envelope = currentSessionStateEnvelope();
+  if (!writeSessionStateEnvelope(envelope)) return false;
+  state.sessionEnvelope = envelope;
+  return true;
+}
+
+function freshState(defaultDirection, context) {
+  const recoveringRegeneration = context.mode === "regeneration";
+  const recoveringMeetingDeletion = context.mode === "meeting-deletion";
+  const blockedRecovery = context.mode === "blocked";
+  const envelope = context.session;
   return {
     defaultDirection,
     view: defaultDirection,
     loading: true,
-    route: recoveringMeetingDeletion ? "meeting-deletion-recovery" : recoveringRegeneration ? "meeting" : "home",
+    route: blockedRecovery ? "recovery-error" : recoveringMeetingDeletion ? "meeting-deletion-recovery" : recoveringRegeneration ? "meeting" : "home",
     query: "",
     selectedMeetingId: recoveringRegeneration ? "m-02" : null,
     selectedClaimId: null,
@@ -342,14 +352,14 @@ function freshState(defaultDirection, recoveryFixture = null, meetingDeletionRec
     folderFilter: null,
     focusRequest: null,
     reviewingGap: false,
-    restored: recoveringRegeneration,
+    restored: envelope.correction.restored || recoveringRegeneration,
     regenerating: false,
-    regenerated: false,
+    regenerated: envelope.correction.regenerated,
     recoveryState: recoveringRegeneration ? "interrupted" : "none",
     partnerRecovering: false,
     partnerRecovered: false,
     retentionConfirming: false,
-    retentionReleased: false,
+    retentionReleased: envelope.releasedAudioMeetingIds.includes("m-04"),
     capturePhase: "idle",
     consentConfirmed: false,
     captureDegraded: false,
@@ -358,10 +368,10 @@ function freshState(defaultDirection, recoveryFixture = null, meetingDeletionRec
     captureHudHidden: false,
     settingsReturnRoute: "home",
     setupStep: "overview",
-    setupPermissions: { microphone: true, systemAudio: true },
-    retentionPeriodDays: 14,
+    setupPermissions: { ...envelope.setupPermissions },
+    retentionPeriodDays: envelope.retentionPeriodDays,
     retentionDraftDays: null,
-    voiceProfileStatus: "valid",
+    voiceProfileStatus: envelope.voiceProfileStatus,
     profileResetConfirming: false,
     enrollmentRecording: false,
     enrollmentRecordingKind: null,
@@ -372,7 +382,15 @@ function freshState(defaultDirection, recoveryFixture = null, meetingDeletionRec
     meetingDeletionStage: "none",
     meetingDeletionAcknowledged: false,
     meetingDeletionId: recoveringMeetingDeletion ? "m-05" : null,
-    meetingDeletionRecoveryState: recoveringMeetingDeletion ? "interrupted" : "none"
+    meetingDeletionRecoveryState: recoveringMeetingDeletion ? "interrupted" : "none",
+    recoveryMode: context.mode,
+    recoveryIssues: [...context.issues],
+    quarantinedEvidence: context.quarantinedEvidence.map((item) => ({ ...item })),
+    unavailableMeetingIds: [...context.unavailableMeetingIds],
+    sessionEnvelope: envelope,
+    tombstonedMeetingIds: [...envelope.tombstonedMeetingIds],
+    syntheticRepairStage: "none",
+    syntheticRepairAcknowledged: false
   };
 }
 
@@ -451,8 +469,10 @@ function findClaim(id) {
 }
 
 function meetingIsUnavailable(meeting) {
-  return meeting.id === state.meetingDeletionId
-    && ["interrupted", "resuming", "completed"].includes(state.meetingDeletionRecoveryState);
+  return state.unavailableMeetingIds.includes(meeting.id)
+    || state.tombstonedMeetingIds.includes(meeting.id)
+    || (meeting.id === state.meetingDeletionId
+      && ["interrupted", "resuming", "completed"].includes(state.meetingDeletionRecoveryState));
 }
 
 function activeMeetings() {
@@ -508,6 +528,8 @@ function startLoading() {
   render();
   loadTimer = window.setTimeout(() => {
     state.loading = false;
+    if (state.recoveryMode === "blocked") state.focusRequest = "recovery-error";
+    else if (state.recoveryMode !== "normal") state.focusRequest = "recovery";
     render();
   }, 350);
 }
@@ -515,14 +537,15 @@ function startLoading() {
 function resetPrototype(direction = state.defaultDirection) {
   window.clearTimeout(transitionTimer);
   window.clearTimeout(captureTimer);
-  clearRecoveryFixture();
-  clearMeetingDeletionRecoveryReceipt();
-  state = freshState(direction);
+  if (routeToRecoveryAttention("Reset task cannot abandon persisted recovery.")) return;
+  state = freshState(direction, readPersistedContext());
   startLoading();
 }
 
 function setDirection(direction) {
-  if (!Object.hasOwn(viewLabels, direction) || direction === state.defaultDirection) return;
+  if (!Object.hasOwn(viewLabels, direction)) return;
+  if (routeToRecoveryAttention("Default-opening controls cannot abandon persisted recovery.")) return;
+  if (direction === state.defaultDirection) return;
   const url = new URL(window.location.href);
   url.searchParams.set("direction", direction);
   window.history.replaceState({}, "", url);
@@ -531,6 +554,7 @@ function setDirection(direction) {
 
 function switchView(view) {
   if (!Object.hasOwn(viewLabels, view)) return;
+  if (routeToRecoveryAttention("Finish or repair persisted recovery before leaving this surface.")) return;
   state.view = view;
   state.route = "home";
   state.query = "";
@@ -542,6 +566,17 @@ function switchView(view) {
   state.reviewingGap = false;
   state.focusRequest = "heading";
   render();
+}
+
+function routeToRecoveryAttention(message) {
+  if (state.recoveryMode === "normal") return false;
+  const guarded = trustState.guardReviewerNavigation(state.recoveryMode, state.defaultDirection);
+  state.route = guarded.route;
+  if (state.recoveryMode === "regeneration") state.selectedMeetingId = "m-02";
+  state.focusRequest = state.recoveryMode === "blocked" ? "recovery-error" : "recovery";
+  render();
+  showToast(message);
+  return true;
 }
 
 function syncChrome() {
@@ -564,7 +599,8 @@ function syncChrome() {
     transcribing: { status: "Transcribing locally", action: "Show status", className: "is-transcribing" },
     ready: { status: "Meeting ready", action: "Open meeting", className: "is-ready" }
   };
-  const recoveryPending = state.recoveryState === "interrupted" || state.recoveryState === "resuming"
+  const recoveryPending = state.recoveryMode === "blocked"
+    || state.recoveryState === "interrupted" || state.recoveryState === "resuming"
     || state.meetingDeletionRecoveryState === "interrupted" || state.meetingDeletionRecoveryState === "resuming";
   const captureChrome = state.enrollmentRecording
     ? { status: "Recording · voice enrollment", action: "Show enrollment", className: "is-recording" }
@@ -583,6 +619,8 @@ function syncChrome() {
     ? "Settings"
     : state.route === "meeting-deletion-recovery"
       ? "Interrupted meeting deletion recovery"
+      : state.route === "recovery-error"
+        ? "Blocked synthetic recovery"
       : `${viewLabels[state.view]} view`);
   footerDirection.textContent = `Viewing ${viewLabels[state.view]} · opens on ${viewLabels[state.defaultDirection]}`;
 }
@@ -606,22 +644,28 @@ function restoreRequestedFocus() {
     if (request === "results") target = workspace.querySelector(".section-heading h2, .empty-state h2");
     if (request === "gap") target = workspace.querySelector("#withheld-turn");
     if (request === "status") target = workspace.querySelector(".destructive-card h2, .stale-panel h2, .failure-panel h2, .state-panel h2");
+    if (request === "deletion") target = workspace.querySelector("#meeting-deletion-heading, #meeting-deletion-confirm-heading, [data-action=review-meeting-deletion]");
+    if (request === "recovery") target = workspace.querySelector(".recovery-pane h1, [data-action=resume-meeting-deletion]");
+    if (request === "recovery-error") target = workspace.querySelector(".recovery-error-pane h1, [data-action=review-synthetic-repair]");
+    if (request === "synthetic-repair") target = workspace.querySelector("#synthetic-repair-heading, [data-action=execute-synthetic-repair]");
     if (!target) target = workspace.querySelector("h1");
     if (!target) target = workspace;
     target.setAttribute("tabindex", "-1");
     target.focus({ preventScroll: true });
+    if (target !== workspace) target.scrollIntoView({ block: "center", inline: "nearest" });
   });
 }
 
 function render() {
   syncChrome();
   if (state.loading) {
-    const recovering = state.recoveryState === "interrupted";
+    const recovering = state.recoveryMode !== "normal";
+    const blocked = state.recoveryMode === "blocked";
     workspace.innerHTML = `
       <section class="loading-view" role="status" aria-busy="true">
         <span class="loading-mark" aria-hidden="true"></span>
-        <h1>${recovering ? "Checking interrupted work." : "Opening your meeting memory."}</h1>
-        <p>${recovering ? "Rebuilding one synthetic meeting from a content-free recovery receipt." : "Loading five synthetic meetings without touching Preview data."}</p>
+        <h1>${blocked ? "Recovery needs review." : recovering ? "Checking interrupted work." : "Opening your meeting memory."}</h1>
+        <p>${blocked ? "Keeping affected synthetic meetings unavailable while receipt evidence is retained." : recovering ? "Rebuilding synthetic state from validated content-free receipts." : "Loading synthetic meetings without touching Preview data."}</p>
       </section>`;
     renderCaptureLayer();
     restoreRequestedFocus();
@@ -630,6 +674,8 @@ function render() {
 
   if (state.route === "settings") {
     renderSettings();
+  } else if (state.route === "recovery-error") {
+    renderRecoveryError();
   } else if (state.route === "meeting-deletion-recovery") {
     renderMeetingDeletionRecovery();
   } else if (state.route === "transcript") {
@@ -1753,6 +1799,78 @@ function renderMeetingDeletionRecovery() {
     </div>`;
 }
 
+function renderRecoveryError() {
+  const reviewingRepair = state.syntheticRepairStage === "review";
+  workspace.innerHTML = `
+    <div class="recovery-layout">
+      <section class="recovery-pane recovery-error-pane">
+        <p class="kicker">Recovery blocked · synthetic fixture only</p>
+        <h1>This recovery state cannot be trusted.</h1>
+        <p class="lede">The prototype found an unreadable, unknown-field, or conflicting recovery record. It kept the receipt evidence and made every possibly affected meeting unavailable. Find, Meetings, Promises, Reset task, and default-opening controls cannot bypass this block.</p>
+        <section class="failure-panel">
+          <p class="label">Why recovery stopped</p>
+          <h2>No operation was guessed or silently discarded.</h2>
+          <ul class="recovery-issue-list">${state.recoveryIssues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>
+          <p class="recovery-evidence"><strong>Retained synthetic evidence:</strong> ${state.quarantinedEvidence.map((item) => `${escapeHtml(item.key)} (${escapeHtml(item.status)})`).join("; ")}.</p>
+        </section>
+        ${reviewingRepair ? `
+          <section class="destructive-card synthetic-repair" aria-labelledby="synthetic-repair-heading">
+            <p class="label">Reviewer repair · not product behavior</p>
+            <h2 id="synthetic-repair-heading">Reset every synthetic fixture and receipt?</h2>
+            <p>This deliberately abandons the quarantined synthetic operations, clears the synthetic session envelope and tombstones, and restores the original five-meeting fixture. It does not model a safe product recovery action.</p>
+            <label class="consent-check deletion-check" for="synthetic-repair-acknowledged">
+              <input id="synthetic-repair-acknowledged" type="checkbox" ${state.syntheticRepairAcknowledged ? "checked" : ""} />
+              <span><strong>I understand this discards only quarantined synthetic fixture evidence.</strong><small>No product record or private content is involved.</small></span>
+            </label>
+            <div class="confirmation-actions">
+              <button class="danger-button" type="button" data-action="execute-synthetic-repair" ${state.syntheticRepairAcknowledged ? "" : "disabled"}>Reset all synthetic fixtures</button>
+              <button class="secondary-button" type="button" data-action="cancel-synthetic-repair">Keep recovery blocked</button>
+            </div>
+          </section>` : `
+          <button class="secondary-button prototype-action danger-outline" type="button" data-action="review-synthetic-repair">Reviewer repair: review a full synthetic reset</button>
+          <p class="prototype-boundary">This is the only escape from the corrupted test fixture. It is intentionally separate from product recovery.</p>`}
+      </section>
+    </div>`;
+}
+
+function reviewSyntheticRepair() {
+  if (state.recoveryMode !== "blocked") return;
+  state.syntheticRepairStage = "review";
+  state.syntheticRepairAcknowledged = false;
+  state.focusRequest = "synthetic-repair";
+  render();
+}
+
+function cancelSyntheticRepair() {
+  if (state.recoveryMode !== "blocked") return;
+  state.syntheticRepairStage = "none";
+  state.syntheticRepairAcknowledged = false;
+  state.focusRequest = "recovery-error";
+  render();
+}
+
+function executeSyntheticRepair() {
+  if (state.recoveryMode !== "blocked" || !state.syntheticRepairAcknowledged) return;
+  try {
+    window.sessionStorage.removeItem(recoveryFixtureKey);
+    window.sessionStorage.removeItem(meetingDeletionRecoveryKey);
+    window.sessionStorage.removeItem(sessionStateKey);
+    const cleared = !readStorageValue(recoveryFixtureKey)
+      && !readStorageValue(meetingDeletionRecoveryKey)
+      && !readStorageValue(sessionStateKey);
+    if (!cleared || !writeSessionStateEnvelope(trustState.defaultSessionState())) throw new Error("synthetic repair write failed");
+  } catch {
+    state.syntheticRepairAcknowledged = false;
+    state.focusRequest = "recovery-error";
+    showToast("Synthetic repair could not be completed. Receipt evidence remains blocked.");
+    render();
+    return;
+  }
+  state = freshState(state.defaultDirection, readPersistedContext());
+  showToast("Reviewer-only synthetic fixture reset complete.");
+  startLoading();
+}
+
 function renderTranscript() {
   const meeting = findMeeting(state.selectedMeetingId);
   if (!meeting) {
@@ -1904,6 +2022,10 @@ function restoreTurn() {
   state.reviewingGap = false;
   state.selectedClaimId = null;
   state.selectedTranscriptLocator = null;
+  if (!persistMutableSessionState()) {
+    blockRecovery("synthetic session state could not preserve the transcript correction", ["m-02"]);
+    return;
+  }
   showToast("Turn restored. Note version 1 is now stale.");
   state.focusRequest = "gap";
   render();
@@ -1919,10 +2041,13 @@ function previewDocumentReloadInterruption() {
     priorNoteVersion: 1
   };
   try {
+    if (!persistMutableSessionState()) throw new Error("session state write failed");
     window.sessionStorage.setItem(recoveryFixtureKey, JSON.stringify(fixture));
+    const written = JSON.parse(window.sessionStorage.getItem(recoveryFixtureKey));
+    if (!trustState.validateRegenerationReceipt(written)) throw new Error("receipt verification failed");
     window.location.reload();
   } catch {
-    showToast("This browser blocked the synthetic recovery receipt; the prototype was not reloaded.");
+    blockRecovery("note-regeneration recovery could not be persisted safely", ["m-02"]);
   }
 }
 
@@ -1936,9 +2061,18 @@ function regenerateNote() {
   transitionTimer = window.setTimeout(() => {
     state.regenerating = false;
     state.regenerated = true;
+    if (!persistMutableSessionState()) {
+      blockRecovery("synthetic session state could not preserve the regenerated note", ["m-02"]);
+      return;
+    }
     if (state.recoveryState === "resuming") {
       state.recoveryState = "recovered";
-      clearRecoveryFixture();
+      if (!clearRecoveryFixture()) {
+        blockRecovery("the completed note-regeneration receipt could not be cleared", ["m-02"]);
+        return;
+      }
+      state.recoveryMode = "normal";
+      state.unavailableMeetingIds = state.unavailableMeetingIds.filter((id) => id !== "m-02");
     }
     showToast(`${resumingRecovery ? "Recovery complete. " : ""}Note version 2 now includes the restored promise.`);
     state.focusRequest = "heading";
@@ -1950,7 +2084,7 @@ function reviewMeetingDeletion() {
   if (!findMeeting("m-05") || state.meetingDeletionRecoveryState !== "none") return;
   state.meetingDeletionStage = "review";
   state.meetingDeletionAcknowledged = false;
-  state.focusRequest = "status";
+  state.focusRequest = "deletion";
   render();
 }
 
@@ -1958,7 +2092,7 @@ function continueMeetingDeletion() {
   if (state.meetingDeletionStage !== "review") return;
   state.meetingDeletionStage = "confirm";
   state.meetingDeletionAcknowledged = false;
-  state.focusRequest = "status";
+  state.focusRequest = "deletion";
   render();
 }
 
@@ -1966,13 +2100,32 @@ function cancelMeetingDeletion() {
   if (!state.meetingDeletionStage || state.meetingDeletionRecoveryState !== "none") return;
   state.meetingDeletionStage = "none";
   state.meetingDeletionAcknowledged = false;
-  state.focusRequest = "status";
+  state.focusRequest = "deletion";
   showToast("Deletion canceled. This meeting remains available.");
   render();
 }
 
 function finishMeetingDeletion() {
+  let tombstoned;
+  try {
+    tombstoned = trustState.completeMeetingDeletion(currentSessionStateEnvelope(), "m-05");
+  } catch {
+    blockRecovery("the synthetic deletion tombstone could not be prepared", ["m-05"]);
+    return;
+  }
+  if (!writeSessionStateEnvelope(tombstoned)) {
+    blockRecovery("the synthetic deletion tombstone could not be durably written", ["m-05"]);
+    return;
+  }
+  state.sessionEnvelope = tombstoned;
+  state.tombstonedMeetingIds = [...tombstoned.tombstonedMeetingIds];
+  state.unavailableMeetingIds = [...new Set([...state.unavailableMeetingIds, "m-05"])].sort();
+  if (!clearMeetingDeletionRecoveryReceipt()) {
+    blockRecovery("the deletion tombstone is safe, but its completed request could not be cleared", ["m-05"]);
+    return;
+  }
   state.meetingDeletionRecoveryState = "completed";
+  state.recoveryMode = "normal";
   state.meetingDeletionStage = "none";
   state.meetingDeletionAcknowledged = false;
   state.selectedMeetingId = null;
@@ -1982,19 +2135,21 @@ function finishMeetingDeletion() {
   state.folderFilter = null;
   state.route = "home";
   state.focusRequest = "heading";
-  clearMeetingDeletionRecoveryReceipt();
   showToast("Synthetic meeting deletion complete. Other meetings and settings remain.");
   render();
 }
 
 function confirmMeetingDeletion() {
   if (state.meetingDeletionStage !== "confirm" || !state.meetingDeletionAcknowledged) return;
-  state.meetingDeletionId = "m-05";
-  finishMeetingDeletion();
+  if (!persistMeetingDeletionRequest()) return;
+  state.meetingDeletionRecoveryState = "resuming";
+  state.route = "meeting-deletion-recovery";
+  state.focusRequest = "recovery";
+  render();
+  transitionTimer = window.setTimeout(() => finishMeetingDeletion(), 650);
 }
 
-function previewMeetingDeletionInterruption() {
-  if (state.meetingDeletionStage !== "confirm" || !state.meetingDeletionAcknowledged) return;
+function persistMeetingDeletionRequest() {
   const receipt = {
     schema: "walking-skeleton-meeting-deletion/1",
     scenario: "whole-meeting-deletion-request-only",
@@ -2002,17 +2157,30 @@ function previewMeetingDeletionInterruption() {
     operationId: "synthetic-delete-m05-v1"
   };
   try {
+    if (!persistMutableSessionState()) throw new Error("session state write failed");
     window.sessionStorage.setItem(meetingDeletionRecoveryKey, JSON.stringify(receipt));
-    window.location.reload();
+    const written = JSON.parse(window.sessionStorage.getItem(meetingDeletionRecoveryKey));
+    if (!trustState.validateDeletionReceipt(written)) throw new Error("receipt verification failed");
   } catch {
-    showToast("This browser blocked the synthetic deletion receipt; the prototype was not reloaded.");
+    blockRecovery("whole-meeting deletion could not persist a validated request", ["m-05"]);
+    return false;
   }
+  state.meetingDeletionId = "m-05";
+  state.meetingDeletionRecoveryState = "interrupted";
+  state.recoveryMode = "meeting-deletion";
+  state.unavailableMeetingIds = [...new Set([...state.unavailableMeetingIds, "m-05"])].sort();
+  return true;
+}
+
+function previewMeetingDeletionInterruption() {
+  if (state.meetingDeletionStage !== "confirm" || !state.meetingDeletionAcknowledged) return;
+  if (persistMeetingDeletionRequest()) window.location.reload();
 }
 
 function resumeMeetingDeletion() {
-  if (state.meetingDeletionRecoveryState !== "interrupted") return;
+  if (state.recoveryMode !== "meeting-deletion" || state.meetingDeletionRecoveryState !== "interrupted") return;
   state.meetingDeletionRecoveryState = "resuming";
-  state.focusRequest = "status";
+  state.focusRequest = "recovery";
   render();
   transitionTimer = window.setTimeout(() => finishMeetingDeletion(), 650);
 }
@@ -2041,6 +2209,7 @@ function nextMissingSetupStep() {
 }
 
 function openSettings(step = "overview") {
+  if (routeToRecoveryAttention("Finish or repair persisted recovery before opening Settings.")) return;
   if (state.route !== "settings") state.settingsReturnRoute = state.route;
   state.route = "settings";
   state.setupStep = state.enrollmentRecording ? state.setupStep : step;
@@ -2070,6 +2239,10 @@ function previewFirstRun() {
   state.profileResetConfirming = false;
   state.setupStep = "permissions";
   state.consentConfirmed = false;
+  if (!persistMutableSessionState()) {
+    blockRecovery("synthetic session state could not preserve first-run settings", ["m-05"]);
+    return;
+  }
   state.focusRequest = "heading";
   render();
 }
@@ -2078,6 +2251,10 @@ function grantSetupPermission(permission) {
   if (state.route !== "settings" || state.setupStep !== "permissions") return;
   if (!Object.hasOwn(state.setupPermissions, permission)) return;
   state.setupPermissions[permission] = true;
+  if (!persistMutableSessionState()) {
+    blockRecovery("synthetic session state could not preserve permission settings", ["m-05"]);
+    return;
+  }
   render();
 }
 
@@ -2093,6 +2270,10 @@ function saveRetention() {
   if (!Number.isInteger(state.retentionDraftDays)) return;
   state.retentionPeriodDays = state.retentionDraftDays;
   state.consentConfirmed = false;
+  if (!persistMutableSessionState()) {
+    blockRecovery("synthetic session state could not preserve the retention choice", ["m-05"]);
+    return;
+  }
   if (state.setupStep === "retention-change") {
     state.setupStep = "overview";
     showToast(`Meeting audio will auto-delete after ${state.retentionPeriodDays} days in this fixture.`);
@@ -2118,6 +2299,10 @@ function confirmProfileReset() {
   state.voiceProfileStatus = "missing";
   state.consentConfirmed = false;
   state.setupStep = "profile";
+  if (!persistMutableSessionState()) {
+    blockRecovery("synthetic session state could not preserve the profile reset", ["m-05"]);
+    return;
+  }
   showToast("Synthetic voice profile reset. Meetings and retention remain.");
   state.focusRequest = "heading";
   render();
@@ -2128,6 +2313,10 @@ function loadReturningProfileFixture() {
   clearEnrollmentState();
   state.voiceProfileStatus = "valid";
   state.setupStep = "overview";
+  if (!persistMutableSessionState()) {
+    blockRecovery("synthetic session state could not preserve the returning profile fixture", ["m-05"]);
+    return;
+  }
   showToast("Separate returning-profile fixture loaded. No profile was built here.");
   state.focusRequest = "heading";
   render();
@@ -2200,6 +2389,10 @@ function confirmEnrollmentDiscard() {
   state.voiceProfileStatus = "missing";
   state.setupStep = "profile";
   state.consentConfirmed = false;
+  if (!persistMutableSessionState()) {
+    blockRecovery("synthetic session state could not preserve enrollment discard", ["m-05"]);
+    return;
+  }
   showToast("Synthetic enrollment discarded. Meetings and retention remain.");
   state.focusRequest = "heading";
   render();
@@ -2218,6 +2411,10 @@ function buildEnrollmentProfile() {
       state.voiceProfileStatus = "valid";
       state.enrollmentBuildPhase = null;
       state.setupStep = "overview";
+      if (!persistMutableSessionState()) {
+        blockRecovery("synthetic session state could not preserve the built profile", ["m-05"]);
+        return;
+      }
       showToast("Synthetic owner-only profile saved. This Mac is ready to record.");
       state.focusRequest = "heading";
       render();
@@ -2226,6 +2423,7 @@ function buildEnrollmentProfile() {
 }
 
 function showCapture() {
+  if (routeToRecoveryAttention("Finish or repair persisted recovery before starting another meeting.")) return;
   if (state.enrollmentRecording) {
     openSettings(state.setupStep);
     return;
@@ -2407,6 +2605,11 @@ document.addEventListener("change", (event) => {
     if (confirmButton) confirmButton.disabled = !state.meetingDeletionAcknowledged;
     if (interruptionButton) interruptionButton.disabled = !state.meetingDeletionAcknowledged;
   }
+  if (event.target.id === "synthetic-repair-acknowledged") {
+    state.syntheticRepairAcknowledged = event.target.checked;
+    const resetButton = document.querySelector("[data-action=execute-synthetic-repair]");
+    if (resetButton) resetButton.disabled = !state.syntheticRepairAcknowledged;
+  }
 });
 
 document.addEventListener("click", (event) => {
@@ -2519,6 +2722,9 @@ document.addEventListener("click", (event) => {
   if (action === "confirm-meeting-deletion") confirmMeetingDeletion();
   if (action === "preview-meeting-deletion-interruption") previewMeetingDeletionInterruption();
   if (action === "resume-meeting-deletion") resumeMeetingDeletion();
+  if (action === "review-synthetic-repair") reviewSyntheticRepair();
+  if (action === "cancel-synthetic-repair") cancelSyntheticRepair();
+  if (action === "execute-synthetic-repair") executeSyntheticRepair();
   if (action === "claim-filter") {
     state.claimFilter = button.dataset.filter;
     state.focusRequest = "results";
@@ -2570,6 +2776,10 @@ document.addEventListener("click", (event) => {
   if (action === "confirm-release-audio") {
     state.retentionConfirming = false;
     state.retentionReleased = true;
+    if (!persistMutableSessionState()) {
+      blockRecovery("synthetic session state could not preserve released-audio status", ["m-05"]);
+      return;
+    }
     showToast("Synthetic audio released. Note and transcript remain.");
     state.focusRequest = "status";
     render();

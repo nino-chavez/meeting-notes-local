@@ -1,7 +1,7 @@
-"""Static contracts for the synthetic whole-meeting deletion review slice."""
+"""Artifact contracts complementing executable trust-state transition tests."""
 
-import json
 import hashlib
+import json
 from pathlib import Path
 
 
@@ -31,17 +31,16 @@ def test_whole_meeting_scope_is_explicit_and_staged():
     assert "This is different from deleting the recording." in APP
 
 
-def test_interrupted_request_receipt_is_content_free_and_fails_closed():
-    assert 'keys !== "meetingId,operationId,scenario,schema"' in APP
-    assert 'receipt.schema !== "walking-skeleton-meeting-deletion/1"' in APP
-    assert 'receipt.scenario !== "whole-meeting-deletion-request-only"' in APP
-    assert "clearMeetingDeletionRecoveryReceipt();" in APP
-    assert "One recovery operation at a time. A mixed or unknown state is not resumed." in APP
+def test_interrupted_request_receipt_is_content_free_and_failure_is_visible():
+    assert "trustState.validateDeletionReceipt(written)" in APP
+    assert "This recovery state cannot be trusted." in APP
+    assert "No operation was guessed or silently discarded." in APP
     assert "no meeting title, transcript, note, evidence, audio, or private content" in APP
 
 
 def test_request_only_recovery_hides_target_from_every_current_view():
-    assert 'meetingDeletionId: recoveringMeetingDeletion ? "m-05" : null' in APP
+    assert "state.unavailableMeetingIds.includes(meeting.id)" in APP
+    assert "state.tombstonedMeetingIds.includes(meeting.id)" in APP
     assert 'return meetings.filter((meeting) => !meetingIsUnavailable(meeting));' in APP
     assert 'return activeMeetings().flatMap' in APP
     assert 'for (const meeting of activeMeetings())' in APP
@@ -51,14 +50,16 @@ def test_request_only_recovery_hides_target_from_every_current_view():
 
 
 def test_resume_is_idempotent_and_clears_only_after_terminal_completion():
-    assert 'if (state.meetingDeletionRecoveryState !== "interrupted") return;' in APP
+    assert 'state.recoveryMode !== "meeting-deletion"' in APP
     assert 'state.meetingDeletionRecoveryState = "resuming";' in APP
     assert "transitionTimer = window.setTimeout(() => finishMeetingDeletion(), 650);" in APP
     finish_start = APP.index("function finishMeetingDeletion()")
     finish_end = APP.index("function confirmMeetingDeletion()", finish_start)
     finish_body = APP[finish_start:finish_end]
+    assert "trustState.completeMeetingDeletion" in finish_body
+    assert "writeSessionStateEnvelope(tombstoned)" in finish_body
     assert 'state.meetingDeletionRecoveryState = "completed";' in finish_body
-    assert "clearMeetingDeletionRecoveryReceipt();" in finish_body
+    assert "if (!clearMeetingDeletionRecoveryReceipt())" in finish_body
     assert "a second reload\nreconstructs the same recovery surface" in README
 
 
@@ -91,6 +92,7 @@ def test_manifest_binds_the_current_prototype_files():
 def test_960_by_900_uses_internal_recovery_scrolling_not_outer_page_scrolling():
     assert "overflow: hidden;" in CSS.split("body {", 1)[1].split("}", 1)[0]
     assert ".recovery-pane { min-height: 0; overflow-y: auto;" in CSS
+    assert 'target.scrollIntoView({ block: "center", inline: "nearest" })' in APP
 
 
 def test_prototype_has_no_direct_console_writes():
