@@ -9,20 +9,23 @@
   </head>
   <body>
     <header class="app-header">
-      <div>
-        <p class="eyebrow">Local Meeting Notes</p>
+      <div class="header-identity">
+        <div class="product-mark">
+          <p class="eyebrow">Local Meeting Notes</p>
+          <span class="release-badge" id="release-badge">Preview</span>
+        </div>
         <p class="product-state"><span class="status-dot" aria-hidden="true"></span><span id="header-state" role="status" aria-atomic="true">Opening safely</span></p>
       </div>
       <div class="header-actions">
         <nav class="product-nav" id="product-nav" aria-label="Meeting notes" hidden>
-          <button id="find-link" type="button">Find</button>
           <button id="meetings-link" type="button">Library</button>
-          <button id="promises-link" type="button">Promises</button>
+          <button id="profile-link" type="button">Voice setup</button>
         </nav>
-        <button class="secondary profile-link" id="profile-link" type="button" hidden>Settings</button>
-        <button class="stop header-stop" id="stop-button" type="button" hidden>Stop recording</button>
-        <button class="primary start-meeting-action" id="start-meeting-action" type="button" hidden>Start meeting</button>
-        <span class="release-badge" id="release-badge">Internal alpha</span>
+        <div class="workflow-actions">
+          <button class="secondary workflow-return" id="workflow-return" type="button" hidden>View progress</button>
+          <button class="stop header-stop" id="stop-button" type="button" hidden>Stop recording</button>
+          <button class="primary start-meeting-action" id="start-meeting-action" type="button" hidden>Record a meeting</button>
+        </div>
       </div>
     </header>
 
@@ -41,26 +44,10 @@
         <button class="secondary" id="retry-startup" type="button" hidden>Check again</button>
       </section>
 
-      <section class="screen" id="find-screen" aria-labelledby="find-title">
-        <p class="kicker">Find prior evidence</p>
-        <h1 id="find-title">Find exact words.</h1>
-        <p class="lede">Search retained meeting titles, folders, and transcript words on this Mac. Open a result to review the canonical transcript.</p>
-        <form class="library-search" id="library-search">
-          <label for="library-search-query">Search your retained meetings</label>
-          <div class="library-search-field">
-            <input id="library-search-query" type="search" autocomplete="off" placeholder="Exact words, title, or folder" />
-            <button class="secondary" type="submit">Find</button>
-          </div>
-          <small>Find only matches retained content stored locally. It does not identify people or infer meaning.</small>
-        </form>
-        <div class="notice" id="library-notice" hidden></div>
-        <div class="library-search-results" id="library-search-results" aria-live="polite"></div>
-      </section>
-
       <section class="screen" id="idle-screen" aria-labelledby="idle-title">
         <p class="kicker">Start a meeting</p>
         <h1 id="idle-title">Before you record.</h1>
-        <p class="lede">This alpha keeps audio and transcripts on this Mac. It does not create an automatic note.</p>
+        <p class="lede">This Preview keeps audio and transcripts on this Mac. It does not create an automatic note.</p>
 
         <form id="start-form">
           <fieldset>
@@ -75,7 +62,7 @@
             </label>
             <label class="check-row">
               <input type="checkbox" id="room-check" />
-              <span><strong>I am the only person near this microphone.</strong><small>This alpha does not identify voices in the room.</small></span>
+              <span><strong>I am the only person near this microphone.</strong><small>This Preview does not identify voices in the room.</small></span>
             </label>
           </fieldset>
 
@@ -91,8 +78,10 @@
           </label>
 
           <p class="form-error" id="start-error" role="alert" hidden></p>
-          <button class="primary" id="start-button" type="submit" disabled>Start recording</button>
-          <button class="secondary start-back" id="start-back" type="button">Return to Find</button>
+          <div class="screen-actions">
+            <button class="primary" id="start-button" type="submit" disabled>Start recording</button>
+            <button class="secondary" id="start-back" type="button">Return to Library</button>
+          </div>
         </form>
       </section>
 
@@ -111,15 +100,16 @@
         </section>
         <div class="notice" id="profile-boundary">The supported Preview still requires headphones and only you near the microphone. A voice profile does not identify speakers or make speaker playback supported.</div>
         <p class="footnote">If prior profile material exists, this Preview does not open, use, change, or delete it.</p>
-        <button class="primary" id="profile-setup" type="button" disabled>Set up voice profile</button>
-        <button class="secondary" id="profile-back" type="button">Back</button>
+        <div class="screen-actions">
+          <button class="primary" id="profile-setup" type="button" disabled>Set up voice profile</button>
+          <button class="secondary" id="profile-back" type="button">Back to Library</button>
+        </div>
       </section>
 
       <section class="screen" id="arming-screen" aria-labelledby="arming-title">
         <p class="kicker">Nothing is recording yet</p>
         <h1 id="arming-title">Preparing both audio channels.</h1>
         <p class="lede">macOS may ask for microphone and system-audio access. Recording starts only after both channels are ready.</p>
-        <div class="meter-card" aria-hidden="true"><span></span><span></span></div>
       </section>
 
       <section class="screen recording-screen" id="recording-screen" aria-labelledby="recording-title">
@@ -127,8 +117,8 @@
         <h1 id="recording-title"><time id="elapsed-time">00:00</time></h1>
         <p class="lede" id="capture-health">Microphone and system audio are both arriving.</p>
         <div class="channel-grid" aria-label="Capture channels">
-          <div><span class="channel-mark"></span><strong>Microphone</strong><small id="mic-state">Active</small></div>
-          <div><span class="channel-mark"></span><strong>System audio</strong><small id="system-state">Active</small></div>
+          <div><span class="channel-mark" aria-hidden="true"></span><strong>Microphone</strong><small id="mic-state">Active</small></div>
+          <div><span class="channel-mark" aria-hidden="true"></span><strong>System audio</strong><small id="system-state">Active</small></div>
         </div>
         <p class="form-error" id="stop-error" role="alert" hidden></p>
         <p class="footnote">Stopping flushes both audio files before transcription begins.</p>
@@ -138,37 +128,39 @@
         <p class="kicker">Recording stopped</p>
         <h1 id="processing-title">Transcribing on this Mac.</h1>
         <p class="lede">The fixed offline model is processing both channels. No meeting content is sent to a service.</p>
-        <div class="progress-track" aria-label="Transcription in progress"><span></span></div>
         <p class="footnote">You may leave this window open while the transcript is prepared.</p>
       </section>
 
       <section class="screen transcript-screen" id="transcript-screen" aria-labelledby="transcript-title">
         <p class="kicker">Transcript ready</p>
-        <h1 id="transcript-title">Captured words, not an automatic note.</h1>
-        <p class="lede">Review this as an internal-alpha transcript. Names, decisions, and action items have not been inferred.</p>
+        <h1 id="transcript-title">Transcript</h1>
+        <p class="lede">Review the words captured from this meeting. This Preview has not generated notes, decisions, or action items.</p>
         <div class="notice" id="transcript-warning" hidden></div>
         <article id="transcript-turns" aria-label="Meeting transcript"></article>
-        <button class="primary" id="new-meeting" type="button">Done reviewing</button>
+        <button class="primary" id="new-meeting" type="button">Return to Library</button>
       </section>
 
       <section class="screen library-screen" id="meetings-screen" aria-labelledby="library-title">
         <p class="kicker">Retained meetings</p>
-        <h1 id="library-title">Your meetings.</h1>
+        <h1 id="library-title">Your Library.</h1>
         <p class="lede" id="library-copy">Opening retained meetings on this Mac.</p>
+        <form class="library-search" id="library-search">
+          <label for="library-search-query">Search meetings</label>
+          <div class="library-search-field">
+            <input id="library-search-query" type="search" autocomplete="off" placeholder="Exact words, title, or folder" />
+            <button class="secondary" type="submit">Search</button>
+          </div>
+          <small>Searches titles, folders, and retained transcript words on this Mac. It does not identify people or infer meaning.</small>
+        </form>
+        <div class="notice" id="library-notice" role="status" aria-live="polite" hidden></div>
+        <div class="library-search-results" id="library-search-results" role="status" aria-live="polite"></div>
         <div class="library-list" id="library-list" aria-live="polite"></div>
-      </section>
-
-      <section class="screen" id="promises-screen" aria-labelledby="promises-title">
-        <p class="kicker">Promises</p>
-        <h1 id="promises-title">Promises are not available yet.</h1>
-        <p class="lede">This Preview can show supported note claims inside one meeting, with the exact transcript words behind each one. It does not yet collect promises across meetings.</p>
-        <div class="notice">Use Meetings to open a retained note, then choose “Show exact words in transcript” for any supported action or commitment.</div>
       </section>
 
       <section class="screen" id="meeting-detail-screen" aria-labelledby="meeting-detail-title">
         <p class="kicker">Retained meeting</p>
         <h1 id="meeting-detail-title">Note and transcript.</h1>
-        <p class="lede" id="meeting-detail-lede">A supported note is a reading aid. Every claim opens the exact retained transcript words behind it.</p>
+        <p class="lede" id="meeting-detail-lede">An automatic note is a reading aid. Evidence links locate the exact retained transcript words behind each claim.</p>
         <p class="notice" id="meeting-detail-state" role="status" aria-live="polite">Opening this retained meeting…</p>
         <section class="meeting-retention" id="meeting-retention" aria-labelledby="meeting-retention-title" hidden>
           <p class="label">Recording retention</p>
@@ -193,28 +185,28 @@
         <section id="meeting-claim-list" class="meeting-claim-list" aria-live="polite"></section>
         <section class="meeting-no-note" id="meeting-no-note" hidden aria-labelledby="meeting-no-note-title">
           <h2 id="meeting-no-note-title">Transcript only</h2>
-          <p id="meeting-no-note-copy">No supported automatic note is available for this meeting. The retained transcript remains the source of record.</p>
+          <p id="meeting-no-note-copy">No automatic note is available for this meeting. The retained transcript remains the source of record.</p>
           <button class="secondary" id="meeting-open-transcript" type="button">Open retained transcript</button>
         </section>
         <input id="meeting-detail-transcript-handle" type="hidden" />
-        <button class="secondary" id="meeting-detail-back" type="button">Back to Meetings</button>
+        <button class="secondary" id="meeting-detail-back" type="button">Back to Library</button>
       </section>
 
       <section class="screen transcript-screen" id="library-transcript-screen" aria-labelledby="library-transcript-title">
         <p class="kicker">Retained meeting</p>
-        <h1 id="library-transcript-title">Captured words.</h1>
+        <h1 id="library-transcript-title">Transcript</h1>
         <p class="lede">This retained transcript is available for review. It is not an automatic note.</p>
         <div class="notice" id="library-transcript-warning" hidden></div>
         <article id="library-transcript-turns" aria-label="Retained meeting transcript"></article>
-        <button class="secondary" id="library-transcript-back" type="button">Done reviewing</button>
+        <button class="secondary" id="library-transcript-back" type="button">Back to Library</button>
       </section>
 
       <section class="screen" id="start-meeting-error-screen" aria-labelledby="start-meeting-error-title">
-        <p class="kicker">Start meeting</p>
+        <p class="kicker">Record a meeting</p>
         <h1 id="start-meeting-error-title">A new meeting was not opened.</h1>
         <p class="lede">The existing meeting must close cleanly before a new consent and retention review can begin.</p>
         <div class="notice error" id="start-transition-error" role="alert"></div>
-        <button class="secondary" id="start-transition-back" type="button">Return to Find</button>
+        <button class="secondary" id="start-transition-back" type="button">Return to Library</button>
       </section>
 
       <section class="screen" id="error-screen" aria-labelledby="error-title">
@@ -222,13 +214,13 @@
         <h1 id="error-title">This attempt did not complete.</h1>
         <p class="lede" id="error-copy">The app kept any recoverable local evidence and did not mark the meeting complete.</p>
         <div class="notice error" id="error-detail"></div>
-        <button class="secondary" id="recover-button" type="button">Return to Find</button>
+        <button class="secondary" id="recover-button" type="button">Return to Library</button>
       </section>
     </main>
 
     <footer>
-      <span>Offline transcript alpha</span>
-      <span id="meeting-id"></span>
+      <span>Local-only Preview</span>
+      <span id="meeting-id" hidden></span>
     </footer>
     <script src="main.js" type="module"></script>
   </body>

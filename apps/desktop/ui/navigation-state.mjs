@@ -1,15 +1,13 @@
 export const PRODUCT_ROOT_SCREENS = Object.freeze([
-  "find-screen",
   "meetings-screen",
-  "promises-screen",
 ]);
 
-export function workflowScreenForSnapshot(snapshot, currentScreen = "find-screen") {
+export function workflowScreenForSnapshot(snapshot, currentScreen = "meetings-screen") {
   const startup = snapshot?.startup || "diagnostic-written";
   const capture = snapshot?.capture || "idle";
   if (startup !== "ready") return "startup-screen";
   if (capture === "idle") {
-    return currentScreen === "idle-screen" ? "idle-screen" : "find-screen";
+    return currentScreen === "idle-screen" ? "idle-screen" : "meetings-screen";
   }
   return {
     arming: "arming-screen",
@@ -49,6 +47,43 @@ export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
   };
 }
 
+export function headerActionPolicy(snapshot, { stopPending = false, workflowOwnsRoute = true } = {}) {
+  const capture = snapshot?.capture || "idle";
+  const startup = snapshot?.startup || "diagnostic-written";
+  const actions = mutableActionPolicy(snapshot, { stopPending });
+  const workflow = workflowReturnPolicy(snapshot);
+  return {
+    showProductNavigation: actions.showProductNavigation && startup === "ready",
+    showStart: actions.canStartMeeting && capture === "idle",
+    showStop: actions.showStop,
+    stopDisabled: actions.stopDisabled,
+    stopLabel: actions.stopLabel,
+    showWorkflowReturn: !workflowOwnsRoute && workflow.show,
+    workflowReturnLabel: workflow.label,
+    workflowDestination: workflow.destination,
+    startupReady: startup === "ready",
+  };
+}
+
+export function workflowReturnPolicy(snapshot) {
+  const startup = snapshot?.startup || "diagnostic-written";
+  const capture = snapshot?.capture || "idle";
+  const destination = workflowScreenForSnapshot(snapshot);
+  if (startup !== "ready" || !["idle", "arming", "recording", "stopping", "captured", "transcribing", "transcript-ready"].includes(capture)) {
+    return { show: true, label: "View issue", destination };
+  }
+  if (["arming", "recording", "stopping"].includes(capture)) {
+    return { show: true, label: "View recording", destination };
+  }
+  if (["captured", "transcribing"].includes(capture)) {
+    return { show: true, label: "View progress", destination };
+  }
+  if (capture === "transcript-ready") {
+    return { show: true, label: "View transcript", destination };
+  }
+  return { show: false, label: "", destination };
+}
+
 export function connectionUncertaintyStatus(capture, { stopFailed = false } = {}) {
   if (capture === "recording") {
     return stopFailed
@@ -63,9 +98,9 @@ export function changedStatusText(previous, next) {
   return previous === next ? null : next;
 }
 
-export function rootForDestination(destination, currentRoot = "find-screen") {
+export function rootForDestination(destination, currentRoot = "meetings-screen") {
   if (PRODUCT_ROOT_SCREENS.includes(destination)) return destination;
-  return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "find-screen";
+  return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "meetings-screen";
 }
 
 export function restoredScrollPosition(storedPosition, reset = false) {
@@ -140,7 +175,7 @@ export function meetingDetailPresentation(response) {
       title: "Meeting details.",
       lede: "A transcript is not available from this retained meeting view.",
       fallbackTitle: "Transcript unavailable",
-      fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Meetings and try again.",
+      fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Library and try again.",
       canOpenTranscript: false,
     };
   }
@@ -150,7 +185,7 @@ export function meetingDetailPresentation(response) {
       title: "Meeting unavailable.",
       lede: "This retained meeting could not be reopened. Its current transcript, note, and recording facts are unavailable in this view.",
       fallbackTitle: "Meeting unavailable",
-      fallbackCopy: "Reopen Meetings and try again.",
+      fallbackCopy: "Reopen Library and try again.",
       canOpenTranscript: false,
     };
   }
@@ -158,18 +193,18 @@ export function meetingDetailPresentation(response) {
     return {
       kind: "transcript-only",
       title: "Note and transcript.",
-      lede: "A supported note is a reading aid. Every claim opens the exact retained transcript words behind it.",
+      lede: "An automatic note is a reading aid. Evidence links locate the exact retained transcript words behind each claim.",
       fallbackTitle: "Transcript only",
-      fallbackCopy: "No supported automatic note is available for this meeting. The retained transcript remains the source of record.",
+      fallbackCopy: "No automatic note is available for this meeting. The retained transcript remains the source of record.",
       canOpenTranscript: transcriptAvailable,
     };
   }
   return {
     kind: "note",
     title: "Note and transcript.",
-    lede: "A supported note is a reading aid. Every claim opens the exact retained transcript words behind it.",
+    lede: "An automatic note is a reading aid. Evidence links locate the exact retained transcript words behind each claim.",
     fallbackTitle: "Transcript only",
-    fallbackCopy: "No supported automatic note is available for this meeting. The retained transcript remains the source of record.",
+    fallbackCopy: "No automatic note is available for this meeting. The retained transcript remains the source of record.",
     canOpenTranscript: false,
   };
 }

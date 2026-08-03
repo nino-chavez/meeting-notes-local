@@ -12,6 +12,7 @@ import {
   displayedClaimIdentity,
   changedStatusText,
   connectionUncertaintyStatus,
+  headerActionPolicy,
   normalizedScrollPosition,
   prepareConsentTransition,
   refreshFindGeneration,
@@ -25,6 +26,7 @@ import {
   sameDisplayedClaim,
   transitionOwnsRoute,
   transcriptReturnRoute,
+  workflowReturnPolicy,
   workflowScreenForSnapshot,
 } from "./navigation-state.mjs";
 
@@ -36,8 +38,38 @@ test("workflow routes advance only while they own the screen", () => {
   assert.equal(workflowScreenForSnapshot(ready), "transcript-screen");
   assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", false), "meetings-screen");
   assert.equal(resolvedScreenForSnapshot(ready, "profile-screen", false), "profile-screen");
-  assert.equal(resolvedScreenForSnapshot(recording, "find-screen", true), "recording-screen");
+  assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", true), "recording-screen");
   assert.equal(workflowScreenForSnapshot({ startup: "checking", capture: "idle" }), "startup-screen");
+});
+
+test("header actions keep one recording control and offer a return to owned workflow states", () => {
+  const idle = headerActionPolicy({ preview: true, startup: "ready", capture: "idle" });
+  assert.equal(idle.showProductNavigation, true);
+  assert.equal(idle.showStart, true);
+  assert.equal(idle.showStop, false);
+  assert.equal(idle.showWorkflowReturn, false);
+
+  const transcript = headerActionPolicy(
+    { preview: true, startup: "ready", capture: "transcript-ready" },
+    { workflowOwnsRoute: false },
+  );
+  assert.equal(transcript.showStart, false);
+  assert.equal(transcript.showWorkflowReturn, true);
+  assert.equal(transcript.workflowReturnLabel, "View transcript");
+  assert.equal(transcript.workflowDestination, "transcript-screen");
+
+  assert.deepEqual(
+    workflowReturnPolicy({ preview: true, startup: "ready", capture: "transcribing" }),
+    { show: true, label: "View progress", destination: "processing-screen" },
+  );
+  assert.deepEqual(
+    workflowReturnPolicy({ preview: true, startup: "runtime-missing", capture: "idle" }),
+    { show: true, label: "View issue", destination: "startup-screen" },
+  );
+  assert.equal(
+    headerActionPolicy({ preview: true, startup: "runtime-missing", capture: "idle" }).showProductNavigation,
+    false,
+  );
 });
 
 test("mutable actions match the admitted capture and startup states", () => {
@@ -473,11 +505,11 @@ test("idle start is direct and other capture states refuse consent", async () =>
 });
 
 test("nested routes keep their real product root", () => {
-  assert.equal(rootForDestination("find-screen", "meetings-screen"), "find-screen");
+  assert.equal(rootForDestination("find-screen", "meetings-screen"), "meetings-screen");
   assert.equal(rootForDestination("meeting-detail-screen", "meetings-screen"), "meetings-screen");
-  assert.equal(rootForDestination("library-transcript-screen", "find-screen"), "find-screen");
-  assert.equal(rootForDestination("profile-screen", "promises-screen"), "promises-screen");
-  assert.equal(rootForDestination("profile-screen", "unknown"), "find-screen");
+  assert.equal(rootForDestination("library-transcript-screen", "meetings-screen"), "meetings-screen");
+  assert.equal(rootForDestination("profile-screen", "meetings-screen"), "meetings-screen");
+  assert.equal(rootForDestination("profile-screen", "unknown"), "meetings-screen");
 });
 
 test("returning restores scroll while new content starts at the top", () => {
@@ -572,7 +604,7 @@ test("metadata-only meeting detail is inspectable but never offers transcript te
       title: "Meeting details.",
       lede: "A transcript is not available from this retained meeting view.",
       fallbackTitle: "Transcript unavailable",
-      fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Meetings and try again.",
+      fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Library and try again.",
       canOpenTranscript: false,
     },
   );
@@ -583,7 +615,7 @@ test("metadata-only meeting detail is inspectable but never offers transcript te
       title: "Meeting unavailable.",
       lede: "This retained meeting could not be reopened. Its current transcript, note, and recording facts are unavailable in this view.",
       fallbackTitle: "Meeting unavailable",
-      fallbackCopy: "Reopen Meetings and try again.",
+      fallbackCopy: "Reopen Library and try again.",
       canOpenTranscript: false,
     },
   );
