@@ -30,7 +30,7 @@ isolation, the encoder must be packaged. Two candidate shapes were measured:
 | Native libraries | 8 dylibs, largest `libtorch_cpu.dylib` 326 MB | 2, largest 37 MB |
 | Import + load (cold) | 0.618 s + 0.865 s = **1.48 s** | 0.038 s + 0.068 s = **0.11 s** |
 | First inference | 0.047 s | 0.031 s |
-| Warm inference, 3 s clip | 20.8 ms mean / 23.2 ms max | 29.5 ms mean / 31.5 ms max |
+| Warm inference, 3 s clip | 20.8 ms mean / 23.2 ms max (audio → embedding) | 29.5 ms mean / 31.5 ms max (features → embedding only) |
 | Peak RSS (process) | 472 MB | 251 MB |
 
 Process RSS baseline (venv python + numpy alone): 26 MB. Both arms' RSS
@@ -71,8 +71,11 @@ implementation before any product claim.
   household-separation number from `spike/RESULTS.md` is re-validated here.
   Given score parity at 10⁻⁷, re-measuring those on real material under ONNX
   is expected to reproduce, but that is an expectation, not a result.
-- Latency is CPU execution on the development Mac in both arms. No Core ML /
-  ANE execution provider was tried; Arm B's 29.5 ms is not its floor.
+- Latency is CPU execution on the development Mac in both arms, and the two
+  rows measure unequal work: Arm A's number includes the Fbank front end,
+  Arm B's starts from precomputed features — so on CPU, 29.5 ms is a *lower*
+  bound on Arm B's true per-clip cost, which must add its native feature
+  stage. Separately, no Core ML / ANE execution provider was tried.
 - **Signing and notarization consequences are analyzed, not exercised.** Arm
   B adds 2 Mach-Os totalling ~67 MB; Arm A adds 8 totalling ~360 MB plus
   Python-level packages. Whether either triggers an executable-memory
