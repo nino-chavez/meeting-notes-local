@@ -282,7 +282,9 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(script.contains("const libraryInitialization = createSingleFlight"));
     assert!(navigation.contains("export function createSingleFlight(loader)"));
     assert!(navigation.contains("export async function prepareConsentTransition"));
-    assert!(script.contains("function schedulePoll(delay) {\n  if (pollTimer) window.clearTimeout(pollTimer);"));
+    assert!(script.contains(
+        "function schedulePoll(delay) {\n  if (pollTimer) window.clearTimeout(pollTimer);"
+    ));
     assert!(!script.contains("secondaryViewActive"));
     assert!(script.contains("startMeetingAction.addEventListener(\"click\", openStartMeeting);"));
     assert!(script.contains("await invoke(\"start_meeting\", request);"));
@@ -315,39 +317,92 @@ fn preview_voice_profile_surface_is_honest_and_non_mutating() {
 }
 
 #[test]
-fn preview_library_navigation_rebuilds_one_current_handle_generation() {
+fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     let script = include_str!("../../ui/main.js");
+    let navigation = include_str!("../../ui/navigation-state.mjs");
 
     assert!(script.contains("async function rebuildMeetingsView()"));
-    assert!(script.contains("const snapshot = latestLibrarySnapshot || await initializeLibraryReader();"));
+    assert!(script.contains("const snapshot = await initializeLibraryReader();"));
+    assert!(!script.contains("latestLibrarySnapshot"));
     assert!(script.contains("async function openFind()"));
     assert!(script.contains("async function openMeetings()"));
     assert!(script.contains("async function returnToProductHome()"));
     assert!(script.contains("await openMeetings();"));
     assert!(script.contains("await openFind();"));
     assert!(
-        script.contains("library-transcript-back\").addEventListener(\"click\", returnToProductHome)")
+        script.contains(
+            "library-transcript-back\").addEventListener(\"click\", returnToProductHome)"
+        )
     );
-    assert!(script.contains("meeting-detail-back\").addEventListener(\"click\", returnToProductHome)"));
+    assert!(
+        script.contains("meeting-detail-back\").addEventListener(\"click\", returnToProductHome)")
+    );
     assert!(script.contains("setError(libraryNotice, \"Searching your retained meetings…\")"));
+    assert!(navigation.contains("export async function refreshFindGeneration(query, actions)"));
+    assert!(
+        script
+            .contains("libraryList.replaceChildren();\n  librarySearchResults.replaceChildren();")
+    );
+    assert!(script.contains("meetingClaimList.replaceChildren();"));
+    assert!(script.contains("meeting-detail-transcript-handle\").value = \"\""));
 
-    let search_start = script.find("async function searchLibrary").unwrap();
-    let search_end = script[search_start..]
+    let idle_start = script.find("case \"idle\":").unwrap();
+    let idle_end = script[idle_start..].find("case \"arming\":").unwrap() + idle_start;
+    let idle = &script[idle_start..idle_end];
+    assert!(idle.contains("if (!isIdleProductScreen()) {"));
+    assert_eq!(idle.matches("initializeFindInBackground();").count(), 1);
+
+    let refresh_start = script.find("async function refreshFindView").unwrap();
+    let refresh_end = script[refresh_start..]
+        .find("async function searchLibrary")
+        .unwrap()
+        + refresh_start;
+    let refresh = &script[refresh_start..refresh_end];
+    assert!(
+        refresh.find("snapshot: initializeLibraryReader").unwrap()
+            < refresh.find("invoke(\"preview_library_search\"").unwrap()
+    );
+    assert!(refresh.contains("invalidateResults: invalidateLibraryHandles"));
+
+    let open_start = script
         .find("async function openLibrarySearchResult")
-        .unwrap()
-        + search_start;
-    let search = &script[search_start..search_end];
-    assert!(search.find("await initializeLibraryReader()").unwrap()
-        < search.find("invoke(\"preview_library_search\"").unwrap());
-
-    let open_start = search_end;
-    let open_end = script[open_start..]
-        .find("function schedulePoll")
-        .unwrap()
-        + open_start;
+        .unwrap();
+    let open_end = script[open_start..].find("function schedulePoll").unwrap() + open_start;
     let open_result = &script[open_start..open_end];
-    assert!(!open_result.contains("librarySearchResults.replaceChildren()"));
-    assert!(!open_result.contains("Opening the selected retained result"));
+    assert!(
+        open_result.find("invalidateLibraryHandles()").unwrap()
+            < open_result
+                .find("invoke(\"preview_library_open_search_result\"")
+                .unwrap()
+    );
+    assert!(open_result.contains("Opening the selected retained result"));
+    assert!(!script.contains("librarySearchQuery.value = \"\""));
+
+    for (function, command) in [
+        (
+            "async function openLibraryTranscript",
+            "invoke(\"preview_library_open_transcript\"",
+        ),
+        (
+            "async function openMeetingDetail",
+            "invoke(\"preview_library_open_note\"",
+        ),
+        (
+            "async function openMeetingEvidence",
+            "invoke(\"preview_library_open_evidence\"",
+        ),
+        (
+            "async function openLibrarySearchResult",
+            "invoke(\"preview_library_open_search_result\"",
+        ),
+    ] {
+        let start = script.find(function).unwrap();
+        let operation = &script[start..];
+        assert!(
+            operation.find("invalidateLibraryHandles()").unwrap()
+                < operation.find(command).unwrap()
+        );
+    }
 }
 
 #[test]
@@ -357,7 +412,10 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     let navigation = include_str!("../../ui/navigation-state.mjs");
     let package: Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
 
-    assert_eq!(package["scripts"]["test:ui"], "node --test ui/navigation-state.test.mjs");
+    assert_eq!(
+        package["scripts"]["test:ui"],
+        "node --test ui/navigation-state.test.mjs"
+    );
     assert!(html.contains("id=\"new-meeting\" type=\"button\">Done reviewing"));
     assert!(html.contains("id=\"recover-button\" type=\"button\">Return to Find"));
     assert!(!html.contains("Return to Start"));
@@ -368,7 +426,9 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     assert!(navigation.contains("return PRODUCT_ROOT_SCREENS.includes(currentRoot)"));
     assert!(navigation.contains("export function restoredScrollPosition"));
 
-    let start = navigation.find("export async function prepareConsentTransition").unwrap();
+    let start = navigation
+        .find("export async function prepareConsentTransition")
+        .unwrap();
     let transition = &navigation[start..];
     let dismiss = transition.find("await actions.dismiss()").unwrap();
     let clear = transition.find("actions.clearPriorAttempt()").unwrap();

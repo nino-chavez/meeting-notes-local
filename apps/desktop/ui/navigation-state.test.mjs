@@ -4,11 +4,12 @@ import test from "node:test";
 import {
   createSingleFlight,
   prepareConsentTransition,
+  refreshFindGeneration,
   restoredScrollPosition,
   rootForDestination,
 } from "./navigation-state.mjs";
 
-test("single-flight initialization shares one in-flight library snapshot", async () => {
+test("single-flight initialization deduplicates only an in-flight snapshot", async () => {
   let loads = 0;
   let release;
   const initializer = createSingleFlight(() => {
@@ -24,12 +25,67 @@ test("single-flight initialization shares one in-flight library snapshot", async
   release({ state: "populated" });
   assert.deepEqual(await first, { state: "populated" });
 
-  initializer.reset();
   const third = initializer.run();
   await Promise.resolve();
   assert.equal(loads, 2);
   release({ state: "empty" });
   assert.deepEqual(await third, { state: "empty" });
+});
+
+test("every Find refresh renders handles from a new response generation", async () => {
+  const events = [];
+  const renderedHandles = [];
+  let responseGeneration = 0;
+  const actions = {
+    invalidateResults: () => { events.push("invalidate"); },
+    snapshot: async () => {
+      responseGeneration += 1;
+      events.push(`snapshot:${responseGeneration}`);
+    },
+    search: async (query) => {
+      responseGeneration += 1;
+      events.push(`search:${query}:${responseGeneration}`);
+      return { handle: `search-handle-${responseGeneration}` };
+    },
+    render: (response) => {
+      events.push(`render:${response.handle}`);
+      renderedHandles.push(response.handle);
+    },
+  };
+
+  await refreshFindGeneration("first", actions);
+  await refreshFindGeneration("first", actions);
+  assert.deepEqual(events, [
+    "invalidate", "snapshot:1", "search:first:2", "render:search-handle-2",
+    "invalidate", "snapshot:3", "search:first:4", "render:search-handle-4",
+  ]);
+  assert.deepEqual(renderedHandles, ["search-handle-2", "search-handle-4"]);
+  assert.notEqual(renderedHandles[0], renderedHandles[1]);
+});
+
+test("cold empty Find snapshots once without creating result handles", async () => {
+  const events = [];
+  await refreshFindGeneration("", {
+    invalidateResults: () => { events.push("invalidate"); },
+    snapshot: async () => { events.push("snapshot"); },
+    search: async () => { events.push("search"); },
+    render: () => { events.push("render"); },
+  });
+  assert.deepEqual(events, ["invalidate", "snapshot"]);
+});
+
+test("failed Find refresh leaves invalidated results unrendered", async () => {
+  const events = [];
+  await assert.rejects(refreshFindGeneration("words", {
+    invalidateResults: () => { events.push("invalidate"); },
+    snapshot: async () => {
+      events.push("snapshot");
+      throw new Error("snapshot failed");
+    },
+    search: async () => { events.push("search"); },
+    render: () => { events.push("render"); },
+  }), /snapshot failed/);
+  assert.deepEqual(events, ["invalidate", "snapshot"]);
 });
 
 test("transcript-ready start dismisses and clears before requiring idle", async () => {

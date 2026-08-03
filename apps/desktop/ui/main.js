@@ -1,6 +1,7 @@
 import {
   createSingleFlight,
   prepareConsentTransition,
+  refreshFindGeneration,
   restoredScrollPosition,
   rootForDestination,
 } from "./navigation-state.mjs";
@@ -65,13 +66,10 @@ let elapsedTimer = null;
 let meetingAudioDeletionHandle = "";
 let currentScreen = "startup-screen";
 let productRootScreen = "find-screen";
-let latestLibrarySnapshot = null;
 const screenScrollPositions = new Map();
-const libraryInitialization = createSingleFlight(async () => {
-  const snapshot = await invoke("preview_library_snapshot");
-  latestLibrarySnapshot = snapshot;
-  return snapshot;
-});
+const libraryInitialization = createSingleFlight(
+  () => invoke("preview_library_snapshot"),
+);
 
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
   const destination = screens.get(id);
@@ -130,20 +128,18 @@ async function initializeLibraryReader() {
 }
 
 function initializeFindInBackground() {
-  initializeLibraryReader().catch(() => {
-    if (currentScreen === "find-screen") {
-      setError(libraryNotice, "Find is unavailable right now. Try again after this app finishes opening.");
-    }
-  });
+  void refreshFindView();
 }
 
-function resetLibraryInitialization(clearFind = false) {
-  libraryInitialization.reset();
-  latestLibrarySnapshot = null;
-  if (!clearFind) return;
-  librarySearchQuery.value = "";
+function invalidateLibraryHandles() {
+  libraryList.replaceChildren();
   librarySearchResults.replaceChildren();
-  clearError(libraryNotice);
+  meetingClaimList.replaceChildren();
+  meetingNoNote.hidden = true;
+  document.querySelector("#meeting-detail-transcript-handle").value = "";
+  meetingAudioDeletionHandle = "";
+  recordingDeleteAction.hidden = true;
+  closeRecordingDeleteReview();
 }
 
 function setError(element, message) {
@@ -464,8 +460,10 @@ function render(snapshot) {
     case "idle":
       headerState.textContent = "Ready · nothing is recording";
       endElapsed();
-      if (!isIdleProductScreen()) showScreen("find-screen", { resetScroll: true });
-      if (currentScreen === "find-screen") initializeFindInBackground();
+      if (!isIdleProductScreen()) {
+        showScreen("find-screen", { resetScroll: true });
+        initializeFindInBackground();
+      }
       if (!snapshot.retention_operational) {
         setError(startError, snapshot.error || "Audio retention needs attention before another meeting can start.");
       }
@@ -516,9 +514,9 @@ function render(snapshot) {
 async function rebuildMeetingsView() {
   if (!invoke) return;
   document.querySelector("#library-copy").textContent = "Opening retained meetings on this Mac.";
-  libraryList.replaceChildren();
+  invalidateLibraryHandles();
   try {
-    const snapshot = latestLibrarySnapshot || await initializeLibraryReader();
+    const snapshot = await initializeLibraryReader();
     renderLibrary(snapshot);
   } catch {
     renderLibrary({ state: "unavailable", rows: [], message: "Meetings are unavailable right now." });
@@ -528,7 +526,7 @@ async function rebuildMeetingsView() {
 async function openFind() {
   if (!invoke || lastSnapshot?.preview !== true) return;
   showScreen("find-screen");
-  initializeFindInBackground();
+  await refreshFindView();
 }
 
 async function openMeetings() {
@@ -557,7 +555,7 @@ async function openStartMeeting() {
       dismiss: () => invoke("dismiss_meeting"),
       clearPriorAttempt: () => {
         clearAttemptReview(true);
-        resetLibraryInitialization(true);
+        invalidateLibraryHandles();
       },
       refresh,
     });
@@ -613,12 +611,21 @@ async function returnToProductHome() {
   await openFind();
 }
 
+function reportLibraryOpenFailure(messageText) {
+  if (productRootScreen === "meetings-screen" && currentScreen === "meeting-detail-screen") {
+    message(meetingDetailState, messageText, "stale");
+    return;
+  }
+  setError(libraryNotice, messageText);
+}
+
 async function openLibraryTranscript(handle, matchedSourceTurnIndex = null) {
   if (!invoke || !handle) return;
+  invalidateLibraryHandles();
   try {
     const result = await invoke("preview_library_open_transcript", { handle });
     if (result.state !== "transcript") {
-      setError(libraryNotice, result.message);
+      reportLibraryOpenFailure(result.message || "That transcript is no longer current. Return and try again.");
       return;
     }
     renderTurns(
@@ -630,7 +637,7 @@ async function openLibraryTranscript(handle, matchedSourceTurnIndex = null) {
     );
     showScreen("library-transcript-screen", { resetScroll: true });
   } catch {
-    setError(libraryNotice, "That transcript could not be opened. Reopen Meetings and try again.");
+    reportLibraryOpenFailure("That transcript could not be opened. Return and try again.");
   }
 }
 
@@ -679,14 +686,8 @@ function renderMeetingDetail(response) {
 async function openMeetingDetail(handle, returnScreen = "meetings-screen") {
   if (!invoke || !handle) return;
   productRootScreen = rootForDestination(returnScreen, productRootScreen);
-  libraryList.replaceChildren();
-  meetingClaimList.replaceChildren();
-  meetingNoNote.hidden = true;
+  invalidateLibraryHandles();
   meetingRetention.hidden = true;
-  meetingAudioDeletionHandle = "";
-  recordingDeleteAction.hidden = true;
-  closeRecordingDeleteReview();
-  document.querySelector("#meeting-detail-transcript-handle").value = "";
   message(meetingDetailState, "Opening this retained meeting…");
   showScreen("meeting-detail-screen", { resetScroll: true });
   try {
@@ -701,7 +702,7 @@ async function openMeetingDetail(handle, returnScreen = "meetings-screen") {
 
 async function openMeetingEvidence(handle) {
   if (!invoke || !handle) return;
-  meetingClaimList.replaceChildren();
+  invalidateLibraryHandles();
   message(meetingDetailState, "Opening the claim’s exact retained words…");
   try {
     const result = await invoke("preview_library_open_evidence", { handle, locatorOrdinal: 0 });
@@ -719,35 +720,45 @@ async function openMeetingEvidence(handle) {
   }
 }
 
+async function refreshFindView() {
+  if (!invoke) return false;
+  const query = librarySearchQuery.value.trim();
+  if (query) setError(libraryNotice, "Searching your retained meetings…");
+  else clearError(libraryNotice);
+  try {
+    await refreshFindGeneration(query, {
+      invalidateResults: invalidateLibraryHandles,
+      snapshot: initializeLibraryReader,
+      search: (currentQuery) => invoke("preview_library_search", { query: currentQuery }),
+      render: renderLibrarySearch,
+    });
+    if (!query) clearError(libraryNotice);
+    return true;
+  } catch {
+    invalidateLibraryHandles();
+    setError(libraryNotice, "Find is unavailable right now. Reopen Find and try again.");
+    return false;
+  }
+}
+
 async function searchLibrary(event) {
   event.preventDefault();
-  if (!invoke) return;
-  const query = librarySearchQuery.value.trim();
-  librarySearchResults.replaceChildren();
-  if (!query) {
-    clearError(libraryNotice);
-    return;
-  }
-  setError(libraryNotice, "Searching your retained meetings…");
-  try {
-    await initializeLibraryReader();
-    renderLibrarySearch(await invoke("preview_library_search", { query }));
-  } catch {
-    setError(libraryNotice, "Search is unavailable right now. Reopen Find and try again.");
-  }
+  await refreshFindView();
 }
 
 async function openLibrarySearchResult(handle) {
   if (!invoke || !handle) return;
   productRootScreen = "find-screen";
+  invalidateLibraryHandles();
+  setError(libraryNotice, "Opening the selected retained result…");
   try {
     const result = await invoke("preview_library_open_search_result", { handle });
     if (!result.transcriptHandle || result.state === "withheld") {
-      setError(libraryNotice, result.message || "That result cannot be opened as visible transcript text.");
+      setError(libraryNotice, result.message || "That result cannot be opened as visible transcript text. Run the search again to continue.");
       return;
     }
     if (result.state !== "transcript" && result.state !== "meeting") {
-      setError(libraryNotice, result.message || "That search result is no longer current. Reopen Find and try again.");
+      setError(libraryNotice, result.message || "That search result is no longer current. Run the search again to continue.");
       return;
     }
     const exactMatch = Number.isInteger(result.sourceTurnIndex)
@@ -759,7 +770,7 @@ async function openLibrarySearchResult(handle) {
       : null;
     await openLibraryTranscript(result.transcriptHandle, exactMatch);
   } catch {
-    setError(libraryNotice, "That search result could not be opened. Reopen Find and try again.");
+    setError(libraryNotice, "That search result could not be opened. Run the search again to continue.");
   }
 }
 
@@ -800,15 +811,17 @@ async function dismissAttemptAndReturnFind() {
   try {
     await invoke("dismiss_meeting");
     clearAttemptReview(true);
-    resetLibraryInitialization(true);
+    invalidateLibraryHandles();
     const snapshot = await refresh();
     if (snapshot?.capture !== "idle") {
       showStartTransitionError();
       return;
     }
-    productRootScreen = "find-screen";
-    showScreen("find-screen", { resetScroll: true });
-    initializeFindInBackground();
+    if (currentScreen !== "find-screen") {
+      productRootScreen = "find-screen";
+      showScreen("find-screen", { resetScroll: true });
+      await refreshFindView();
+    }
   } catch {
     showStartTransitionError();
   }
@@ -828,7 +841,7 @@ async function returnToFindAfterStartError() {
   }
   productRootScreen = "find-screen";
   showScreen("find-screen");
-  initializeFindInBackground();
+  await refreshFindView();
 }
 
 for (const field of checks) field.addEventListener("change", updateStartButton);
@@ -910,14 +923,15 @@ recordingDeleteCancel.addEventListener("click", () => {
 recordingDeleteConfirm.addEventListener("click", async () => {
   if (!invoke || !meetingAudioDeletionHandle) return;
   const handle = meetingAudioDeletionHandle;
-  meetingAudioDeletionHandle = "";
+  invalidateLibraryHandles();
+  recordingDeleteAction.hidden = false;
+  recordingDeleteConfirmation.hidden = false;
   recordingDeleteConfirm.disabled = true;
   recordingDeleteConfirm.textContent = "Deleting recording…";
   recordingDeleteStatus.hidden = false;
   recordingDeleteStatus.textContent = "Permanently deleting this meeting’s local audio…";
   try {
     const response = await invoke("preview_delete_meeting_audio", { handle });
-    resetLibraryInitialization(true);
     if (response.audioRetention) renderAudioRetention(response.audioRetention);
     message(meetingDetailState, response.message || "Recording deletion finished.", response.state || "");
     if (!response.audioRetention) {

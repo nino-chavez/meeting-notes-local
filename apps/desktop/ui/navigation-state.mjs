@@ -19,19 +19,24 @@ export function createSingleFlight(loader) {
   return {
     run() {
       if (!activePromise) {
-        activePromise = Promise.resolve()
-          .then(loader)
-          .catch((error) => {
-            activePromise = null;
-            throw error;
-          });
+        const load = Promise.resolve().then(loader);
+        const shared = load.finally(() => {
+          if (activePromise === shared) activePromise = null;
+        });
+        activePromise = shared;
       }
       return activePromise;
     },
-    reset() {
-      activePromise = null;
-    },
   };
+}
+
+export async function refreshFindGeneration(query, actions) {
+  actions.invalidateResults();
+  await actions.snapshot();
+  if (!query) return null;
+  const response = await actions.search(query);
+  actions.render(response);
+  return response;
 }
 
 export async function prepareConsentTransition(capture, actions) {
