@@ -1,6 +1,7 @@
 import {
   createSingleFlight,
   createTransitionGate,
+  mutableActionPolicy,
   prepareConsentTransition,
   retentionDeadlineMessage,
   refreshFindGeneration,
@@ -11,6 +12,7 @@ import {
   sameDisplayedClaim,
   transitionOwnsRoute,
   transcriptReturnRoute,
+  resolvedScreenForSnapshot,
 } from "./navigation-state.mjs";
 
 const invoke = window.__TAURI__?.core?.invoke;
@@ -82,7 +84,11 @@ let productRootScreen = "find-screen";
 let transcriptReturnContext = null;
 let routeRevision = 0;
 let findNavigationBusy = false;
+let findRefreshBusyCount = 0;
 let handleNavigationBusy = false;
+let workflowOwnsRoute = true;
+let stopCommandPending = false;
+let stopCommandFailed = false;
 const screenScrollPositions = new Map();
 const libraryInitialization = createSingleFlight(
   () => invoke("preview_library_snapshot"),
@@ -117,21 +123,22 @@ function showScreen(id, { resetScroll = false, focus = true } = {}) {
 }
 
 function syncProductNavigation() {
+  const settingsActive = currentScreen === "profile-screen";
   const activeLink = {
     "find-screen": findLink,
     "meetings-screen": meetingsLink,
     "promises-screen": promisesLink,
   }[productRootScreen];
   for (const link of [findLink, meetingsLink, promisesLink]) {
-    if (link === activeLink) link.setAttribute("aria-current", "page");
+    if (!settingsActive && link === activeLink) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
+  if (settingsActive) profileLink.setAttribute("aria-current", "page");
+  else profileLink.removeAttribute("aria-current");
 }
 
 function syncNavigationBusy() {
-  const busy = findNavigationBusy || handleNavigationBusy;
-  librarySearchSubmit.disabled = busy;
-  for (const link of [findLink, meetingsLink, promisesLink]) link.disabled = busy;
+  librarySearchSubmit.disabled = findNavigationBusy || handleNavigationBusy;
 }
 
 function beginHandleTransition(kind, control = null) {
@@ -162,18 +169,31 @@ function finishHandleTransition(transition) {
   syncNavigationBusy();
 }
 
-function isIdleProductScreen() {
-  return [
-    "find-screen",
-    "meetings-screen",
-    "promises-screen",
-    "profile-screen",
-    "idle-screen",
-    "meeting-detail-screen",
-    "library-transcript-screen",
-    "transcript-screen",
-    "start-meeting-error-screen",
-  ].includes(currentScreen);
+function selectProductScreen(id, options = {}) {
+  workflowOwnsRoute = false;
+  if (currentScreen === id) routeRevision += 1;
+  showScreen(id, options);
+}
+
+function showWorkflowScreen(snapshot, options = {}) {
+  const destination = resolvedScreenForSnapshot(snapshot, currentScreen, workflowOwnsRoute);
+  if (destination !== currentScreen) showScreen(destination, options);
+  return destination;
+}
+
+function renderCaptureAction(snapshot) {
+  if ((snapshot?.capture || "idle") !== "recording") {
+    stopCommandPending = false;
+    stopCommandFailed = false;
+  }
+  const policy = mutableActionPolicy(snapshot, { stopPending: stopCommandPending });
+  productNav.hidden = !policy.showProductNavigation;
+  profileLink.hidden = !policy.showProductNavigation;
+  startMeetingAction.hidden = !policy.canStartMeeting;
+  stopButton.hidden = !policy.showStop;
+  stopButton.disabled = policy.stopDisabled;
+  stopButton.textContent = policy.stopLabel;
+  return policy;
 }
 
 async function initializeLibraryReader() {
@@ -212,7 +232,8 @@ function message(target, text, state = "") {
 }
 
 function startIsAllowed() {
-  return lastSnapshot?.retention_operational === true
+  return mutableActionPolicy(lastSnapshot).canSubmitStart
+    && lastSnapshot?.retention_operational === true
     && checks.every((check) => check.checked)
     && retention.value !== "";
 }
@@ -392,7 +413,9 @@ function renderLibrary(snapshot) {
     empty.className = "library-empty";
     empty.textContent = snapshot.state === "empty"
       ? "No retained meetings yet. Finish a recording to see it here."
-      : "Some retained meetings could not be read. Reopen Meetings and try again.";
+      : snapshot.state === "unavailable"
+        ? "The local library is not available yet. No retained meeting or transcript was opened."
+        : "Some retained meetings could not be read. Reopen Library and try again.";
     libraryList.append(empty);
     return;
   }
@@ -481,8 +504,8 @@ function renderStartup(state) {
     state === "runtime-missing" || state === "reinstall-required"
       ? "This build cannot start a meeting."
       : "Checking this installation.";
-  retryStartup.hidden = !["service-timeout", "diagnostic-written"].includes(state);
-  showScreen("startup-screen");
+  retryStartup.hidden = !mutableActionPolicy(lastSnapshot).canRetryStartup;
+  showWorkflowScreen(lastSnapshot, { resetScroll: currentScreen !== "startup-screen" });
 }
 
 function render(snapshot) {
@@ -493,10 +516,7 @@ function render(snapshot) {
   document.documentElement.dataset.captureState = capture;
   const preview = snapshot.preview === true;
   releaseBadge.textContent = preview ? "Preview" : "Internal alpha";
-  const productNavigationAvailable = preview && ["idle", "transcript-ready"].includes(capture) && startup === "ready";
-  productNav.hidden = !productNavigationAvailable;
-  profileLink.hidden = !productNavigationAvailable;
-  startMeetingAction.hidden = !productNavigationAvailable;
+  renderCaptureAction(snapshot);
   meetingLabel.textContent = snapshot.meeting_id ? `Meeting ${snapshot.meeting_id.slice(0, 8)}` : "";
 
   if (startup !== "ready") {
@@ -510,8 +530,8 @@ function render(snapshot) {
     case "idle":
       headerState.textContent = "Ready · nothing is recording";
       endElapsed();
-      if (!isIdleProductScreen()) {
-        showScreen("find-screen", { resetScroll: true });
+      if (workflowOwnsRoute && currentScreen !== "idle-screen") {
+        showWorkflowScreen(snapshot, { resetScroll: true });
         initializeFindInBackground();
       }
       if (!snapshot.retention_operational) {
@@ -522,42 +542,44 @@ function render(snapshot) {
     case "arming":
       headerState.textContent = "Preparing · nothing is recording";
       endElapsed();
-      showScreen("arming-screen", { resetScroll: true });
+      showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "arming-screen" });
       break;
     case "recording":
-      headerState.textContent = snapshot.degraded ? "Recording · channel needs attention" : "Recording · both channels active";
-      stopButton.disabled = false;
+      headerState.textContent = stopCommandFailed
+        ? "Recording · Stop needs attention"
+        : snapshot.degraded ? "Recording · channel needs attention" : "Recording · both channels active";
       document.querySelector("#capture-health").textContent = snapshot.degraded
         ? "Recording continues, but one channel reported a problem."
         : "Microphone and system audio are both arriving.";
       document.querySelector("#mic-state").textContent = snapshot.mic_state || "Active";
       document.querySelector("#system-state").textContent = snapshot.system_state || "Active";
       beginElapsed(snapshot.started_at_epoch_seconds);
-      showScreen("recording-screen", { resetScroll: currentScreen !== "recording-screen" });
+      showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "recording-screen" });
       break;
     case "stopping":
       headerState.textContent = "Stopping and flushing audio";
-      stopButton.disabled = true;
       document.querySelector("#capture-health").textContent = "Finalizing both local audio files.";
-      showScreen("recording-screen");
+      showWorkflowScreen(snapshot);
       break;
     case "captured":
     case "transcribing":
       headerState.textContent = "Transcribing locally";
       endElapsed();
-      showScreen("processing-screen", { resetScroll: currentScreen !== "processing-screen" });
+      showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "processing-screen" });
       break;
     case "transcript-ready":
       headerState.textContent = "Transcript ready · nothing is recording";
       endElapsed();
-      renderTranscript(snapshot);
-      if (!isIdleProductScreen()) showScreen("transcript-screen", { resetScroll: true });
+      if (workflowOwnsRoute) {
+        renderTranscript(snapshot);
+        showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "transcript-screen" });
+      }
       break;
     default:
       headerState.textContent = "Nothing is recording · needs attention";
       endElapsed();
       document.querySelector("#error-detail").textContent = snapshot.error || "The attempt stopped before a validated transcript was ready.";
-      showScreen("error-screen");
+      showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "error-screen" });
   }
 }
 
@@ -565,29 +587,32 @@ async function rebuildMeetingsView() {
   if (!invoke) return;
   document.querySelector("#library-copy").textContent = "Opening retained meetings on this Mac.";
   invalidateLibraryHandles();
+  const revision = routeRevision;
   try {
     const snapshot = await initializeLibraryReader();
+    if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
     renderLibrary(snapshot);
   } catch {
+    if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
     renderLibrary({ state: "unavailable", rows: [], message: "Meetings are unavailable right now." });
   }
 }
 
 async function openFind() {
-  if (!invoke || lastSnapshot?.preview !== true) return;
-  showScreen("find-screen");
+  if (!invoke) return;
+  selectProductScreen("find-screen");
   await refreshFindView();
 }
 
 async function openMeetings() {
-  if (!invoke || lastSnapshot?.preview !== true) return;
-  showScreen("meetings-screen");
+  if (!invoke) return;
+  selectProductScreen("meetings-screen");
   await rebuildMeetingsView();
 }
 
 function openPromises() {
-  if (!lastSnapshot?.preview) return;
-  showScreen("promises-screen");
+  if (lastSnapshot?.preview === false) return;
+  selectProductScreen("promises-screen");
 }
 
 function showStartTransitionError() {
@@ -596,8 +621,9 @@ function showStartTransitionError() {
 }
 
 async function openStartMeeting() {
-  if (!invoke || !lastSnapshot?.preview) return;
+  if (!invoke || !mutableActionPolicy(lastSnapshot).canStartMeeting) return;
   clearError(startError);
+  workflowOwnsRoute = true;
   startMeetingAction.disabled = true;
   startMeetingAction.textContent = "Opening…";
   try {
@@ -610,12 +636,13 @@ async function openStartMeeting() {
       refresh,
     });
     if (!ready) {
+      if (!workflowOwnsRoute) return;
       showStartTransitionError();
       return;
     }
-    showScreen("idle-screen", { resetScroll: true });
+    if (workflowOwnsRoute) showScreen("idle-screen", { resetScroll: true });
   } catch {
-    showStartTransitionError();
+    if (workflowOwnsRoute) showStartTransitionError();
   } finally {
     startMeetingAction.disabled = false;
     startMeetingAction.textContent = "Start meeting";
@@ -640,12 +667,16 @@ function renderProfile(snapshot) {
 }
 
 async function openProfile() {
-  if (!invoke || lastSnapshot?.preview !== true) return;
-  showScreen("profile-screen", { resetScroll: true });
+  if (!invoke) return;
+  selectProductScreen("profile-screen", { resetScroll: true });
+  const revision = routeRevision;
   try {
-    renderProfile(await invoke("preview_profile_snapshot"));
+    const snapshot = await invoke("preview_profile_snapshot");
+    if (currentScreen === "profile-screen" && routeRevision === revision) renderProfile(snapshot);
   } catch {
-    renderProfile({ state: "unavailable" });
+    if (currentScreen === "profile-screen" && routeRevision === revision) {
+      renderProfile({ state: "unavailable" });
+    }
   }
 }
 
@@ -892,11 +923,13 @@ async function openMeetingEvidence(handle, meetingId, claim, control) {
 }
 
 function setFindRefreshBusy(busy) {
-  findNavigationBusy = busy;
+  findRefreshBusyCount = Math.max(0, findRefreshBusyCount + (busy ? 1 : -1));
+  findNavigationBusy = findRefreshBusyCount > 0;
   syncNavigationBusy();
 }
 
 async function performFindRefresh() {
+  const revision = routeRevision;
   const query = librarySearchQuery.value.trim();
   if (query) setError(libraryNotice, "Searching your retained meetings…");
   else clearError(libraryNotice);
@@ -906,25 +939,32 @@ async function performFindRefresh() {
       snapshot: initializeLibraryReader,
       search: (currentQuery) => invoke("preview_library_search", { query: currentQuery }),
       render: (response) => {
-        if (currentScreen === "find-screen") renderLibrarySearch(response);
+        if (currentScreen === "find-screen" && routeRevision === revision) renderLibrarySearch(response);
       },
     });
-    if (!query && currentScreen === "find-screen") clearError(libraryNotice);
-    return true;
+    if (!query && currentScreen === "find-screen" && routeRevision === revision) clearError(libraryNotice);
+    return { revision, ok: true };
   } catch {
     invalidateLibraryHandles();
-    if (currentScreen === "find-screen") {
+    if (currentScreen === "find-screen" && routeRevision === revision) {
       setError(libraryNotice, "Find is unavailable right now. Reopen Find and try again.");
     }
-    return false;
+    return { revision, ok: false };
   }
 }
 
 async function refreshFindView() {
   if (!invoke) return false;
+  const requestedRevision = routeRevision;
   setFindRefreshBusy(true);
   try {
-    return await findRefreshOperation.run();
+    const result = await findRefreshOperation.run();
+    if (currentScreen === "find-screen"
+        && requestedRevision === routeRevision
+        && result.revision !== routeRevision) {
+      return refreshFindView();
+    }
+    return result.ok;
   } finally {
     setFindRefreshBusy(false);
   }
@@ -1004,18 +1044,23 @@ async function dismissAttemptAndReturnFind() {
     showStartTransitionError();
     return;
   }
+  if (!mutableActionPolicy(lastSnapshot).canDismissMeeting) {
+    showStartTransitionError();
+    return;
+  }
+  const dismissalRevision = routeRevision;
   try {
     await invoke("dismiss_meeting");
     clearAttemptReview(true);
     invalidateLibraryHandles();
     const snapshot = await refresh();
     if (snapshot?.capture !== "idle") {
-      showStartTransitionError();
+      if (workflowOwnsRoute && routeRevision === dismissalRevision) showStartTransitionError();
       return;
     }
-    if (currentScreen !== "find-screen") {
+    if (workflowOwnsRoute && routeRevision === dismissalRevision && currentScreen !== "find-screen") {
       productRootScreen = "find-screen";
-      showScreen("find-screen", { resetScroll: true });
+      selectProductScreen("find-screen", { resetScroll: true });
       await refreshFindView();
     }
   } catch {
@@ -1036,7 +1081,7 @@ async function returnToFindAfterStartError() {
     return;
   }
   productRootScreen = "find-screen";
-  showScreen("find-screen");
+  selectProductScreen("find-screen");
   await refreshFindView();
 }
 
@@ -1074,17 +1119,20 @@ startForm.addEventListener("submit", async (event) => {
 });
 
 stopButton.addEventListener("click", async () => {
+  if (stopCommandPending || lastSnapshot?.capture !== "recording") return;
   clearError(stopError);
-  stopButton.disabled = true;
-  stopButton.textContent = "Stopping…";
+  stopCommandFailed = false;
+  stopCommandPending = true;
+  renderCaptureAction(lastSnapshot);
   try {
     await invoke("stop_meeting");
     await refresh();
   } catch (error) {
     setError(stopError, String(error));
-    stopButton.disabled = false;
-  } finally {
-    stopButton.textContent = "Stop recording";
+    stopCommandPending = false;
+    stopCommandFailed = true;
+    renderCaptureAction(lastSnapshot);
+    headerState.textContent = "Recording · Stop needs attention";
   }
 });
 
@@ -1092,7 +1140,7 @@ document.querySelector("#new-meeting").addEventListener("click", dismissAttemptA
 document.querySelector("#recover-button").addEventListener("click", dismissAttemptAndReturnFind);
 
 retryStartup.addEventListener("click", async () => {
-  if (invoke) await invoke("retry_startup");
+  if (invoke && mutableActionPolicy(lastSnapshot).canRetryStartup) await invoke("retry_startup");
   await refresh();
 });
 

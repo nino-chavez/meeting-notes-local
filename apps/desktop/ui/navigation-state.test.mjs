@@ -12,11 +12,70 @@ import {
   restoredScrollPosition,
   rowForMeetingId,
   rootForDestination,
+  mutableActionPolicy,
   meetingDetailPresentation,
+  resolvedScreenForSnapshot,
   sameDisplayedClaim,
   transitionOwnsRoute,
   transcriptReturnRoute,
+  workflowScreenForSnapshot,
 } from "./navigation-state.mjs";
+
+test("workflow routes advance only while they own the screen", () => {
+  const recording = { startup: "ready", capture: "recording" };
+  const ready = { startup: "ready", capture: "transcript-ready" };
+
+  assert.equal(workflowScreenForSnapshot(recording), "recording-screen");
+  assert.equal(workflowScreenForSnapshot(ready), "transcript-screen");
+  assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", false), "meetings-screen");
+  assert.equal(resolvedScreenForSnapshot(ready, "profile-screen", false), "profile-screen");
+  assert.equal(resolvedScreenForSnapshot(recording, "find-screen", true), "recording-screen");
+  assert.equal(workflowScreenForSnapshot({ startup: "checking", capture: "idle" }), "startup-screen");
+});
+
+test("mutable actions match the admitted capture and startup states", () => {
+  const recording = mutableActionPolicy({ preview: true, startup: "ready", capture: "recording" });
+  assert.equal(recording.showProductNavigation, true);
+  assert.equal(recording.canStartMeeting, false);
+  assert.equal(recording.canSubmitStart, false);
+  assert.equal(recording.showStop, true);
+  assert.equal(recording.stopDisabled, false);
+
+  const pending = mutableActionPolicy(
+    { preview: true, startup: "ready", capture: "recording" },
+    { stopPending: true },
+  );
+  assert.equal(pending.stopDisabled, true);
+  assert.equal(pending.stopLabel, "Stopping…");
+
+  const stopping = mutableActionPolicy({ preview: true, startup: "ready", capture: "stopping" });
+  assert.equal(stopping.showStop, true);
+  assert.equal(stopping.stopDisabled, true);
+  assert.equal(stopping.stopLabel, "Stopping…");
+
+  const processing = mutableActionPolicy({ preview: true, startup: "ready", capture: "transcribing" });
+  assert.equal(processing.showStop, false);
+  assert.equal(processing.canDismissMeeting, false);
+
+  const transcript = mutableActionPolicy({ preview: true, startup: "ready", capture: "transcript-ready" });
+  assert.equal(transcript.canStartMeeting, true);
+  assert.equal(transcript.canDismissMeeting, true);
+
+  const idle = mutableActionPolicy({ preview: true, startup: "ready", capture: "idle" });
+  assert.equal(idle.canSubmitStart, true);
+  assert.equal(idle.canDismissMeeting, false);
+
+  const recovered = mutableActionPolicy({ preview: true, startup: "ready", capture: "recovered-interrupted" });
+  assert.equal(recovered.canDismissMeeting, true);
+
+  const failure = mutableActionPolicy({ preview: true, startup: "service-timeout", capture: "idle" });
+  assert.equal(failure.canRetryStartup, true);
+  assert.equal(failure.showProductNavigation, true);
+  assert.equal(
+    mutableActionPolicy({ preview: true, startup: "runtime-missing", capture: "idle" }).canRetryStartup,
+    false,
+  );
+});
 
 test("retention copy says when audio becomes due and when deletion can run", () => {
   const copy = retentionDeadlineMessage(1_728_000_060);

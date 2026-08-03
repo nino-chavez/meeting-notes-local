@@ -16,10 +16,11 @@
       <div class="header-actions">
         <nav class="product-nav" id="product-nav" aria-label="Meeting notes" hidden>
           <button id="find-link" type="button">Find</button>
-          <button id="meetings-link" type="button">Meetings</button>
+          <button id="meetings-link" type="button">Library</button>
           <button id="promises-link" type="button">Promises</button>
         </nav>
         <button class="secondary profile-link" id="profile-link" type="button" hidden>Settings</button>
+        <button class="stop header-stop" id="stop-button" type="button" hidden>Stop recording</button>
         <button class="primary start-meeting-action" id="start-meeting-action" type="button" hidden>Start meeting</button>
         <span class="release-badge" id="release-badge">Internal alpha</span>
       </div>
@@ -130,7 +131,6 @@
           <div><span class="channel-mark"></span><strong>System audio</strong><small id="system-state">Active</small></div>
         </div>
         <p class="form-error" id="stop-error" role="alert" hidden></p>
-        <button class="stop" id="stop-button" type="button">Stop recording</button>
         <p class="footnote">Stopping flushes both audio files before transcription begins.</p>
       </section>
 

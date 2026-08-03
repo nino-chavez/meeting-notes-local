@@ -17,11 +17,10 @@ fn single_instance_is_the_first_plugin_and_precedes_app_setup() {
 fn generated_preview_library_buttons_bind_their_own_activation() {
     let shell = include_str!("../../ui/main.js");
 
+    assert!(shell.contains("button.addEventListener(\"click\", () => openMeetingDetail("));
+    assert!(shell.contains("row.handle,\n      \"meetings-screen\",\n      button,"));
     assert!(shell.contains(
-        "button.addEventListener(\"click\", () => openMeetingDetail(row.handle, \"meetings-screen\"));"
-    ));
-    assert!(shell.contains(
-        "button.addEventListener(\"click\", () => openLibrarySearchResult(result.handle));"
+        "button.addEventListener(\"click\", () => openLibrarySearchResult(result.handle, button));"
     ));
     assert!(
         shell
@@ -48,12 +47,12 @@ fn meeting_detail_status_helper_is_defined_before_use() {
 
 #[test]
 fn transcript_only_fallback_requires_a_current_transcript_handle() {
-    let shell = include_str!("../../ui/main.js");
+    let navigation = include_str!("../../ui/navigation-state.mjs");
 
-    assert!(shell.contains("[\"transcript-only\", \"summary-failed\"].includes(response.state)"));
-    assert!(shell.contains("&& Boolean(response.transcriptHandle);"));
-    assert!(shell.contains("meetingNoNote.hidden = !showsTranscriptFallback;"));
-    assert!(!shell.contains("meetingNoNote.hidden = false;"));
+    assert!(navigation.contains("const transcriptAvailable = Boolean(response?.transcriptHandle);"));
+    assert!(navigation.contains("response?.state === \"transcript-only\" && !transcriptAvailable"));
+    assert!(navigation.contains("response?.state === \"summary-failed\" && !transcriptAvailable"));
+    assert!(navigation.contains("canOpenTranscript: transcriptAvailable"));
 }
 
 #[test]
@@ -298,6 +297,7 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(html.contains("id=\"product-nav\""));
     assert!(html.contains("id=\"find-link\""));
     assert!(html.contains("id=\"meetings-link\""));
+    assert!(html.contains("id=\"meetings-link\" type=\"button\">Library"));
     assert!(html.contains("id=\"promises-link\""));
     assert!(html.contains("id=\"find-screen\""));
     assert!(html.contains("id=\"meetings-screen\""));
@@ -308,6 +308,7 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(html.contains("id=\"meeting-detail-screen\""));
     assert!(html.contains("id=\"library-search\""));
     assert!(html.contains("id=\"start-meeting-action\""));
+    assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert!(html.contains("id=\"start-back\""));
     assert!(html.contains("id=\"start-meeting-error-screen\""));
     assert!(script.contains("function syncProductNavigation()"));
@@ -329,7 +330,33 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(script.contains("preview_library_open_note"));
     assert!(script.contains("preview_library_open_evidence"));
     assert!(script.contains("preview_library_open_transcript"));
-    assert!(script.contains("await invoke(\"preview_library_open_search_result\", { handle })"));
+    assert!(script.contains("const result = await invoke(\"preview_library_open_search_result\", { handle });"));
+}
+
+#[test]
+fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free() {
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+    let navigation = include_str!("../../ui/navigation-state.mjs");
+
+    assert!(html.contains("id=\"product-nav\" aria-label=\"Meeting notes\" hidden"));
+    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden>Settings"));
+    assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
+    assert_eq!(html.matches("id=\"stop-button\"").count(), 1);
+    assert!(script.contains("function renderCaptureAction(snapshot)"));
+    assert!(script.contains("productNav.hidden = !policy.showProductNavigation;"));
+    assert!(script.contains("stopCommandPending = true;"));
+    assert!(script.contains("Recording · Stop needs attention"));
+    assert!(script.contains("if (currentScreen === id) routeRevision += 1;"));
+    assert!(navigation.contains("export function resolvedScreenForSnapshot"));
+    assert!(navigation.contains("export function mutableActionPolicy"));
+
+    let start = script.find("async function openMeetings()").unwrap();
+    let end = script[start..].find("function openPromises()").unwrap() + start;
+    let open_library = &script[start..end];
+    assert!(open_library.contains("await rebuildMeetingsView();"));
+    assert!(!open_library.contains("preview_library_open_"));
+    assert!(script.contains("() => invoke(\"preview_library_snapshot\")"));
 }
 
 #[test]
@@ -365,7 +392,7 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(script.contains("await openFind();"));
     assert!(
         script.contains(
-            "library-transcript-back\").addEventListener(\"click\", returnToProductHome)"
+            "library-transcript-back\").addEventListener(\"click\", returnFromLibraryTranscript)"
         )
     );
     assert!(
@@ -376,12 +403,10 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(
         script.contains("const findRefreshOperation = createSingleFlight(performFindRefresh);")
     );
-    assert!(script.contains("librarySearchSubmit.disabled = busy;"));
-    assert!(script.contains(
-        "for (const link of [findLink, meetingsLink, promisesLink]) link.disabled = busy;"
-    ));
+    assert!(script.contains("librarySearchSubmit.disabled = findNavigationBusy || handleNavigationBusy;"));
+    assert!(!script.contains("for (const link of [findLink, meetingsLink, promisesLink]) link.disabled"));
     assert!(
-        script.contains("if (currentScreen === \"find-screen\") renderLibrarySearch(response);")
+        script.contains("if (currentScreen === \"find-screen\" && routeRevision === revision) renderLibrarySearch(response);")
     );
     assert!(
         script
@@ -393,7 +418,7 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     let idle_start = script.find("case \"idle\":").unwrap();
     let idle_end = script[idle_start..].find("case \"arming\":").unwrap() + idle_start;
     let idle = &script[idle_start..idle_end];
-    assert!(idle.contains("if (!isIdleProductScreen()) {"));
+    assert!(idle.contains("if (workflowOwnsRoute && currentScreen !== \"idle-screen\") {"));
     assert_eq!(idle.matches("initializeFindInBackground();").count(), 1);
 
     let refresh_start = script.find("async function performFindRefresh").unwrap();
@@ -615,7 +640,7 @@ fn preview_exact_search_lands_on_opened_unicode_scalar_span() {
     assert!(script.contains("const characters = Array.from(text || \"\");"));
     assert!(script.contains("start: Number.isInteger(result.start) ? result.start : null,"));
     assert!(script.contains("end: Number.isInteger(result.end) ? result.end : null,"));
-    assert!(script.contains("await openLibraryTranscript(result.transcriptHandle, exactMatch);"));
+    assert!(script.contains("await openLibraryTranscript(result.transcriptHandle, exactMatch, null, transition);"));
     assert!(script.contains("container.querySelector(\".matched-locator\")"));
     assert!(!script.contains("result.text.indexOf"));
 }

@@ -44,7 +44,7 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 .product-nav { display: flex; align-items: center; gap: 3px; }
 .product-nav button { min-height: 34px; padding: 0 9px; border-radius: 5px; color: var(--muted); background: transparent; font-size: 0.82rem; }
 .product-nav button[aria-current="page"] { color: var(--ink); background: #e4e9e3; }
-.profile-link, .start-meeting-action { min-height: 34px; padding: 0 13px; font-size: 0.82rem; }
+.profile-link, .start-meeting-action, .header-stop { min-height: 34px; padding: 0 13px; font-size: 0.82rem; }
 
 .eyebrow, .label, .kicker, legend, .retention-field > span, footer {
   font-size: 0.76rem;
@@ -243,6 +243,15 @@ html[data-screen="profile-screen"] main { padding-top: 28px; padding-bottom: 30p
 #profile-setup { margin-right: 9px; }
 
 footer { border-top: 1px solid var(--line); border-bottom: 0; color: #66706a; }
+
+@media (max-width: 1020px) {
+  .app-header { gap: 14px; padding-right: 24px; padding-left: 24px; }
+  .app-header > div { gap: 12px; }
+  .header-actions { gap: 7px; }
+  .product-nav { gap: 0; }
+  .product-nav button { padding-right: 7px; padding-left: 7px; }
+  .profile-link, .start-meeting-action, .header-stop { padding-right: 10px; padding-left: 10px; }
+}
 
 @media (max-width: 640px) {
   .app-header > div { display: block; }

@@ -4,6 +4,51 @@ export const PRODUCT_ROOT_SCREENS = Object.freeze([
   "promises-screen",
 ]);
 
+export function workflowScreenForSnapshot(snapshot, currentScreen = "find-screen") {
+  const startup = snapshot?.startup || "diagnostic-written";
+  const capture = snapshot?.capture || "idle";
+  if (startup !== "ready") return "startup-screen";
+  if (capture === "idle") {
+    return currentScreen === "idle-screen" ? "idle-screen" : "find-screen";
+  }
+  return {
+    arming: "arming-screen",
+    recording: "recording-screen",
+    stopping: "recording-screen",
+    captured: "processing-screen",
+    transcribing: "processing-screen",
+    "transcript-ready": "transcript-screen",
+  }[capture] || "error-screen";
+}
+
+export function resolvedScreenForSnapshot(snapshot, currentScreen, workflowOwnsRoute) {
+  return workflowOwnsRoute
+    ? workflowScreenForSnapshot(snapshot, currentScreen)
+    : currentScreen;
+}
+
+export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
+  const preview = snapshot?.preview === true;
+  const startup = snapshot?.startup || "diagnostic-written";
+  const capture = snapshot?.capture || "idle";
+  const startupReady = startup === "ready";
+  const stopping = capture === "stopping";
+  const recording = capture === "recording";
+  return {
+    showProductNavigation: preview,
+    canStartMeeting: preview && startupReady
+      && ["idle", "transcript-ready"].includes(capture),
+    canSubmitStart: startupReady && capture === "idle",
+    canDismissMeeting: startupReady
+      && ["transcript-ready", "transcription-failed", "recovered-interrupted"].includes(capture),
+    canRetryStartup: ["service-timeout", "diagnostic-written"].includes(startup)
+      && !["arming", "recording", "stopping", "captured", "transcribing"].includes(capture),
+    showStop: startupReady && (recording || stopping),
+    stopDisabled: !recording || stopPending,
+    stopLabel: stopping || stopPending ? "Stopping…" : "Stop recording",
+  };
+}
+
 export function rootForDestination(destination, currentRoot = "find-screen") {
   if (PRODUCT_ROOT_SCREENS.includes(destination)) return destination;
   return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "find-screen";
