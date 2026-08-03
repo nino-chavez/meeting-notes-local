@@ -14,20 +14,53 @@ export function restoredScrollPosition(storedPosition, reset = false) {
   return storedPosition;
 }
 
+export function normalizedScrollPosition(value) {
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
 export function rowForMeetingId(snapshot, meetingId) {
   if (!meetingId || !Array.isArray(snapshot?.rows)) return null;
   return snapshot.rows.find((row) => row?.meetingId === meetingId) || null;
 }
 
-export function transcriptReturnRoute(origin, meetingId, claimOrdinal = null) {
+export function displayedClaimIdentity(claim) {
+  if (!Number.isInteger(claim?.ordinal)
+      || typeof claim?.claimType !== "string"
+      || typeof claim?.claim !== "string") return null;
+  return {
+    ordinal: claim.ordinal,
+    claimType: claim.claimType,
+    claim: claim.claim,
+  };
+}
+
+export function sameDisplayedClaim(left, right) {
+  const first = displayedClaimIdentity(left);
+  const second = displayedClaimIdentity(right);
+  return Boolean(first && second
+    && first.ordinal === second.ordinal
+    && first.claimType === second.claimType
+    && first.claim === second.claim);
+}
+
+export function transcriptReturnRoute(origin, meetingId, {
+  claim = null,
+  detailScrollTop = 0,
+} = {}) {
   if (origin === "meeting-detail" && meetingId) {
     return {
       destination: "meeting-detail",
       meetingId,
-      claimOrdinal: Number.isInteger(claimOrdinal) ? claimOrdinal : null,
+      claim: displayedClaimIdentity(claim),
+      detailScrollTop: normalizedScrollPosition(detailScrollTop),
     };
   }
-  return { destination: "product-root", meetingId: null, claimOrdinal: null };
+  return {
+    destination: "product-root",
+    meetingId: null,
+    claim: null,
+    detailScrollTop: 0,
+  };
 }
 
 export function meetingDetailPresentation(response) {
@@ -42,13 +75,23 @@ export function meetingDetailPresentation(response) {
       canOpenTranscript: false,
     };
   }
-  if (response?.state !== "note" && !transcriptAvailable) {
+  if (response?.state === "summary-failed" && !transcriptAvailable) {
     return {
       kind: "transcript-unavailable",
       title: "Meeting details.",
-      lede: "This meeting’s retained status and recording information are available. Its transcript is not available from this view.",
+      lede: "A transcript is not available from this retained meeting view.",
       fallbackTitle: "Transcript unavailable",
       fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Meetings and try again.",
+      canOpenTranscript: false,
+    };
+  }
+  if (response?.state !== "note" && !transcriptAvailable) {
+    return {
+      kind: "unavailable",
+      title: "Meeting unavailable.",
+      lede: "This retained meeting could not be reopened. Its current transcript, note, and recording facts are unavailable in this view.",
+      fallbackTitle: "Meeting unavailable",
+      fallbackCopy: "Reopen Meetings and try again.",
       canOpenTranscript: false,
     };
   }
@@ -70,6 +113,36 @@ export function meetingDetailPresentation(response) {
     fallbackCopy: "No supported automatic note is available for this meeting. The retained transcript remains the source of record.",
     canOpenTranscript: false,
   };
+}
+
+export function createTransitionGate() {
+  let active = null;
+  let sequence = 0;
+  return {
+    enter(kind, route) {
+      if (active) return null;
+      const ticket = { kind, route, sequence: sequence += 1 };
+      active = ticket;
+      return ticket;
+    },
+    owns(ticket) {
+      return active === ticket;
+    },
+    release(ticket) {
+      if (active !== ticket) return false;
+      active = null;
+      return true;
+    },
+    active() {
+      return active;
+    },
+  };
+}
+
+export function transitionOwnsRoute(gate, ticket, route) {
+  return Boolean(gate?.owns(ticket)
+    && ticket?.route?.screen === route?.screen
+    && ticket?.route?.revision === route?.revision);
 }
 
 export function retentionDeadlineMessage(epochSeconds) {

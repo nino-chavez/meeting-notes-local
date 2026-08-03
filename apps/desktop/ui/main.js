@@ -1,5 +1,6 @@
 import {
   createSingleFlight,
+  createTransitionGate,
   prepareConsentTransition,
   retentionDeadlineMessage,
   refreshFindGeneration,
@@ -7,6 +8,8 @@ import {
   rootForDestination,
   meetingDetailPresentation,
   rowForMeetingId,
+  sameDisplayedClaim,
+  transitionOwnsRoute,
   transcriptReturnRoute,
 } from "./navigation-state.mjs";
 
@@ -77,17 +80,22 @@ let meetingAudioDeletionHandle = "";
 let currentScreen = "startup-screen";
 let productRootScreen = "find-screen";
 let transcriptReturnContext = null;
+let routeRevision = 0;
+let findNavigationBusy = false;
+let handleNavigationBusy = false;
 const screenScrollPositions = new Map();
 const libraryInitialization = createSingleFlight(
   () => invoke("preview_library_snapshot"),
 );
 const findRefreshOperation = createSingleFlight(performFindRefresh);
+const handleTransitionGate = createTransitionGate();
 
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
   const destination = screens.get(id);
   if (!destination) return;
   const routeChanged = currentScreen !== id;
   if (routeChanged) screenScrollPositions.set(currentScreen, mainRegion.scrollTop);
+  if (routeChanged) routeRevision += 1;
   currentScreen = id;
   productRootScreen = rootForDestination(id, productRootScreen);
   document.documentElement.dataset.screen = id;
@@ -118,6 +126,40 @@ function syncProductNavigation() {
     if (link === activeLink) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
+}
+
+function syncNavigationBusy() {
+  const busy = findNavigationBusy || handleNavigationBusy;
+  librarySearchSubmit.disabled = busy;
+  for (const link of [findLink, meetingsLink, promisesLink]) link.disabled = busy;
+}
+
+function beginHandleTransition(kind, control = null) {
+  const ticket = handleTransitionGate.enter(kind, {
+    screen: currentScreen,
+    revision: routeRevision,
+  });
+  if (!ticket) return null;
+  handleNavigationBusy = true;
+  syncNavigationBusy();
+  if (control) control.disabled = true;
+  return { ticket, control };
+}
+
+function currentTransitionOwnsRoute(transition, screen = transition?.ticket?.route?.screen) {
+  return Boolean(transition
+    && transitionOwnsRoute(handleTransitionGate, transition.ticket, {
+      screen,
+      revision: routeRevision,
+    }));
+}
+
+function finishHandleTransition(transition) {
+  if (!transition) return;
+  if (transition.control) transition.control.disabled = false;
+  handleTransitionGate.release(transition.ticket);
+  handleNavigationBusy = Boolean(handleTransitionGate.active());
+  syncNavigationBusy();
 }
 
 function isIdleProductScreen() {
@@ -361,7 +403,11 @@ function renderLibrary(snapshot) {
     button.dataset.meetingHandle = row.handle;
     button.dataset.meetingId = row.meetingId || "";
     button.dataset.label = row.label || "Untitled meeting";
-    button.addEventListener("click", () => openMeetingDetail(row.handle, "meetings-screen"));
+    button.addEventListener("click", () => openMeetingDetail(
+      row.handle,
+      "meetings-screen",
+      button,
+    ));
     const summary = document.createElement("span");
     const label = document.createElement("strong");
     label.textContent = row.label || "Untitled meeting";
@@ -389,7 +435,7 @@ function renderLibrarySearch(response) {
     button.dataset.searchHandle = result.handle;
     const metadataOnly = result.kind === "meeting" && result.transcriptAvailable !== true;
     button.disabled = metadataOnly;
-    button.addEventListener("click", () => openLibrarySearchResult(result.handle));
+    button.addEventListener("click", () => openLibrarySearchResult(result.handle, button));
     const summary = document.createElement("span");
     const label = document.createElement("strong");
     const detail = document.createElement("small");
@@ -623,14 +669,23 @@ function reportLibraryOpenFailure(messageText) {
   setError(libraryNotice, messageText);
 }
 
-async function openLibraryTranscript(handle, matchedSourceTurnIndex = null, returnContext = null) {
+async function openLibraryTranscript(
+  handle,
+  matchedSourceTurnIndex = null,
+  returnContext = null,
+  nestedTransition = null,
+  control = null,
+) {
   if (!invoke || !handle) return;
+  const transition = nestedTransition || beginHandleTransition("open-transcript", control);
+  if (!transition) return false;
   invalidateLibraryHandles();
   try {
     const result = await invoke("preview_library_open_transcript", { handle });
+    if (!currentTransitionOwnsRoute(transition)) return false;
     if (result.state !== "transcript") {
       reportLibraryOpenFailure(result.message || "That transcript is no longer current. Return and try again.");
-      return;
+      return false;
     }
     renderTurns(
       document.querySelector("#library-transcript-turns"),
@@ -641,8 +696,13 @@ async function openLibraryTranscript(handle, matchedSourceTurnIndex = null, retu
     );
     transcriptReturnContext = returnContext;
     showScreen("library-transcript-screen", { resetScroll: true });
+    return true;
   } catch {
+    if (!currentTransitionOwnsRoute(transition)) return false;
     reportLibraryOpenFailure("That transcript could not be opened. Return and try again.");
+    return false;
+  } finally {
+    if (!nestedTransition) finishHandleTransition(transition);
   }
 }
 
@@ -671,7 +731,7 @@ function renderMeetingDetail(response) {
     meetingNoNote.hidden = presentation.kind === "note";
     return;
   }
-  for (const claim of response.claims || []) {
+  for (const [index, claim] of (response.claims || []).entries()) {
     const card = document.createElement("article");
     card.className = "meeting-claim";
     const meta = document.createElement("p");
@@ -684,11 +744,13 @@ function renderMeetingDetail(response) {
     open.type = "button";
     open.className = "secondary claim-evidence";
     open.dataset.claimOrdinal = String(claim.ordinal);
+    open.dataset.claimIndex = String(index);
     open.textContent = "Show exact words in transcript";
     open.addEventListener("click", () => openMeetingEvidence(
       claim.handle,
       response.meetingId,
-      claim.ordinal,
+      claim,
+      open,
     ));
     card.append(meta, text, open);
     meetingClaimList.append(card);
@@ -698,27 +760,60 @@ function renderMeetingDetail(response) {
   }
 }
 
-async function openMeetingDetail(handle, returnScreen = "meetings-screen") {
+async function openMeetingDetail(handle, returnScreen = "meetings-screen", control = null) {
   if (!invoke || !handle) return;
+  if (handleTransitionGate.active()) return false;
   productRootScreen = rootForDestination(returnScreen, productRootScreen);
   invalidateLibraryHandles();
   meetingRetention.hidden = true;
   message(meetingDetailState, "Opening this retained meeting…");
   showScreen("meeting-detail-screen", { resetScroll: true });
+  const transition = beginHandleTransition("open-meeting-detail", control);
+  if (!transition) return false;
   try {
     const response = await invoke("preview_library_open_note", { handle });
+    if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
     document.querySelector("#meeting-detail-transcript-handle").value = response.transcriptHandle || "";
     renderMeetingDetail(response);
+    return true;
   } catch {
+    if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
     message(meetingDetailState, "That meeting could not be opened. Return to Meetings and try again.", "stale");
     meetingNoNote.hidden = true;
+    return false;
+  } finally {
+    finishHandleTransition(transition);
   }
 }
 
-async function restoreMeetingDetailAfterTranscript(context) {
+function focusRestoredMeetingOrigin(context, response) {
+  if (context.claim) {
+    const origin = [...meetingClaimList.querySelectorAll(".claim-evidence")].find((control) => {
+      const claim = response.claims?.[Number(control.dataset.claimIndex)];
+      return sameDisplayedClaim(claim, context.claim);
+    });
+    if (origin) {
+      origin.focus({ preventScroll: true });
+      return;
+    }
+    message(meetingDetailState, "This meeting changed while you were reviewing. The current detail is shown.", "changed");
+    meetingDetailTitle.tabIndex = -1;
+    meetingDetailTitle.focus({ preventScroll: true });
+    return;
+  }
+  if (!meetingOpenTranscript.hidden) {
+    meetingOpenTranscript.focus({ preventScroll: true });
+    return;
+  }
+  meetingDetailTitle.tabIndex = -1;
+  meetingDetailTitle.focus({ preventScroll: true });
+}
+
+async function restoreMeetingDetailAfterTranscript(context, transition) {
   if (!invoke || !context?.meetingId) return false;
   try {
     const snapshot = await initializeLibraryReader();
+    if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
     const row = rowForMeetingId(snapshot, context.meetingId);
     if (!row?.handle) {
       renderLibrary(snapshot);
@@ -728,58 +823,77 @@ async function restoreMeetingDetailAfterTranscript(context) {
       return false;
     }
     const response = await invoke("preview_library_open_note", { handle: row.handle });
+    if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
     document.querySelector("#meeting-detail-transcript-handle").value = response.transcriptHandle || "";
     renderMeetingDetail(response);
+    screenScrollPositions.set("meeting-detail-screen", context.detailScrollTop);
     showScreen("meeting-detail-screen", { resetScroll: false, focus: false });
-    if (Number.isInteger(context.claimOrdinal)) {
-      const origin = meetingClaimList.querySelector(
-        `[data-claim-ordinal="${context.claimOrdinal}"]`,
-      );
-      origin?.focus({ preventScroll: true });
-    } else if (!meetingOpenTranscript.hidden) {
-      meetingOpenTranscript.focus({ preventScroll: true });
-    }
+    mainRegion.scrollTop = context.detailScrollTop;
+    focusRestoredMeetingOrigin(context, response);
     return true;
   } catch {
-    await openMeetings();
+    if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
+    const snapshot = await initializeLibraryReader().catch(() => null);
+    if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
+    if (snapshot) renderLibrary(snapshot);
+    productRootScreen = "meetings-screen";
+    showScreen("meetings-screen", { resetScroll: false });
     document.querySelector("#library-copy").textContent = "That meeting could not be reopened from the fresh library view.";
     return false;
   }
 }
 
 async function returnFromLibraryTranscript() {
+  const transition = beginHandleTransition("return-from-transcript", document.querySelector("#library-transcript-back"));
+  if (!transition) return false;
   const context = transcriptReturnContext;
   transcriptReturnContext = null;
-  if (context?.destination === "meeting-detail") {
-    await restoreMeetingDetailAfterTranscript(context);
-    return;
+  try {
+    if (context?.destination === "meeting-detail") {
+      return await restoreMeetingDetailAfterTranscript(context, transition);
+    }
+    if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
+    await returnToProductHome();
+    return true;
+  } finally {
+    finishHandleTransition(transition);
   }
-  await returnToProductHome();
 }
 
-async function openMeetingEvidence(handle, meetingId, claimOrdinal) {
+async function openMeetingEvidence(handle, meetingId, claim, control) {
   if (!invoke || !handle) return;
+  const returnContext = transcriptReturnRoute("meeting-detail", meetingId, {
+    claim,
+    detailScrollTop: mainRegion.scrollTop,
+  });
+  const transition = beginHandleTransition("open-claim-evidence", control);
+  if (!transition) return false;
   invalidateLibraryHandles();
   message(meetingDetailState, "Opening the claim’s exact retained words…");
   try {
     const result = await invoke("preview_library_open_evidence", { handle, locatorOrdinal: 0 });
+    if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
     if (result.state !== "evidence" || !result.transcriptHandle || !Number.isInteger(result.sourceTurnIndex)) {
       message(meetingDetailState, result.message || "That claim is no longer current. Return to Meetings and try again.", result.state || "stale");
-      return;
+      return false;
     }
-    await openLibraryTranscript(result.transcriptHandle, {
+    return await openLibraryTranscript(result.transcriptHandle, {
       sourceTurnIndex: result.sourceTurnIndex,
       start: result.start,
       end: result.end,
-    }, transcriptReturnRoute("meeting-detail", meetingId, claimOrdinal));
+    }, returnContext, transition);
   } catch {
+    if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
     message(meetingDetailState, "That claim could not be opened. Return to Meetings and try again.", "stale");
+    return false;
+  } finally {
+    finishHandleTransition(transition);
   }
 }
 
 function setFindRefreshBusy(busy) {
-  librarySearchSubmit.disabled = busy;
-  for (const link of [findLink, meetingsLink, promisesLink]) link.disabled = busy;
+  findNavigationBusy = busy;
+  syncNavigationBusy();
 }
 
 async function performFindRefresh() {
@@ -821,20 +935,23 @@ async function searchLibrary(event) {
   await refreshFindView();
 }
 
-async function openLibrarySearchResult(handle) {
+async function openLibrarySearchResult(handle, control = null) {
   if (!invoke || !handle) return;
+  const transition = beginHandleTransition("open-search-result", control);
+  if (!transition) return false;
   productRootScreen = "find-screen";
   invalidateLibraryHandles();
   setError(libraryNotice, "Opening the selected retained result…");
   try {
     const result = await invoke("preview_library_open_search_result", { handle });
+    if (!currentTransitionOwnsRoute(transition, "find-screen")) return false;
     if (!result.transcriptHandle || result.state === "withheld") {
       setError(libraryNotice, result.message || "That result cannot be opened as visible transcript text. Run the search again to continue.");
-      return;
+      return false;
     }
     if (result.state !== "transcript" && result.state !== "meeting") {
       setError(libraryNotice, result.message || "That search result is no longer current. Run the search again to continue.");
-      return;
+      return false;
     }
     const exactMatch = Number.isInteger(result.sourceTurnIndex)
       ? {
@@ -843,9 +960,13 @@ async function openLibrarySearchResult(handle) {
           end: Number.isInteger(result.end) ? result.end : null,
         }
       : null;
-    await openLibraryTranscript(result.transcriptHandle, exactMatch);
+    return await openLibraryTranscript(result.transcriptHandle, exactMatch, null, transition);
   } catch {
+    if (!currentTransitionOwnsRoute(transition, "find-screen")) return false;
     setError(libraryNotice, "That search result could not be opened. Run the search again to continue.");
+    return false;
+  } finally {
+    finishHandleTransition(transition);
   }
 }
 
@@ -1022,7 +1143,9 @@ meetingOpenTranscript.addEventListener("click", () => {
   const handle = document.querySelector("#meeting-detail-transcript-handle").value;
   const meetingId = meetingDetailState.dataset.meetingId || "";
   if (handle) {
-    openLibraryTranscript(handle, null, transcriptReturnRoute("meeting-detail", meetingId));
+    openLibraryTranscript(handle, null, transcriptReturnRoute("meeting-detail", meetingId, {
+      detailScrollTop: mainRegion.scrollTop,
+    }), null, meetingOpenTranscript);
   }
 });
 

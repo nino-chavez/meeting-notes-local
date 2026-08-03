@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createTransitionGate,
   createSingleFlight,
+  displayedClaimIdentity,
+  normalizedScrollPosition,
   prepareConsentTransition,
   refreshFindGeneration,
   retentionDeadlineMessage,
@@ -10,6 +13,8 @@ import {
   rowForMeetingId,
   rootForDestination,
   meetingDetailPresentation,
+  sameDisplayedClaim,
+  transitionOwnsRoute,
   transcriptReturnRoute,
 } from "./navigation-state.mjs";
 
@@ -202,19 +207,57 @@ test("a fresh snapshot looks up a meeting by durable id, not an old handle", () 
   assert.equal(rowForMeetingId({ rows: null }, "meeting-a"), null);
 });
 
-test("evidence opened from a meeting detail returns through a fresh meeting route", () => {
+test("evidence opened from a meeting detail carries normalized scroll and a full claim identity", () => {
+  const claim = { ordinal: 4, claimType: "action", claim: "Follow up with the customer." };
   assert.deepEqual(
-    transcriptReturnRoute("meeting-detail", "meeting-a", 4),
-    { destination: "meeting-detail", meetingId: "meeting-a", claimOrdinal: 4 },
+    transcriptReturnRoute("meeting-detail", "meeting-a", { claim, detailScrollTop: 184.5 }),
+    {
+      destination: "meeting-detail",
+      meetingId: "meeting-a",
+      claim,
+      detailScrollTop: 184.5,
+    },
   );
   assert.deepEqual(
-    transcriptReturnRoute("find", "meeting-a", 4),
-    { destination: "product-root", meetingId: null, claimOrdinal: null },
+    transcriptReturnRoute("find", "meeting-a", { claim, detailScrollTop: 184 }),
+    { destination: "product-root", meetingId: null, claim: null, detailScrollTop: 0 },
   );
   assert.deepEqual(
-    transcriptReturnRoute("meeting-detail", "", 4),
-    { destination: "product-root", meetingId: null, claimOrdinal: null },
+    transcriptReturnRoute("meeting-detail", "", { claim, detailScrollTop: 184 }),
+    { destination: "product-root", meetingId: null, claim: null, detailScrollTop: 0 },
   );
+  assert.equal(normalizedScrollPosition(-1), 0);
+  assert.equal(normalizedScrollPosition(Number.NaN), 0);
+  assert.equal(normalizedScrollPosition(51.25), 51.25);
+});
+
+test("rebuilt claim focus requires the exact displayed identity", () => {
+  const original = { ordinal: 4, claimType: "action", claim: "Follow up with the customer." };
+  assert.deepEqual(displayedClaimIdentity(original), original);
+  assert.equal(sameDisplayedClaim(original, { ...original }), true);
+  assert.equal(sameDisplayedClaim(original, { ...original, claim: "Follow up later." }), false);
+  assert.equal(sameDisplayedClaim(original, { ...original, claimType: "decision" }), false);
+  assert.equal(sameDisplayedClaim(original, { ...original, ordinal: 5 }), false);
+  assert.equal(sameDisplayedClaim(original, { ordinal: 4, claimType: "action" }), false);
+});
+
+test("a transition gate admits one response-scoped operation and releases it for the next", () => {
+  const gate = createTransitionGate();
+  const route = { screen: "meeting-detail-screen", revision: 2 };
+  const first = gate.enter("open-note", route);
+  assert.ok(first);
+  assert.equal(gate.enter("open-evidence", route), null);
+  assert.equal(gate.owns(first), true);
+  assert.equal(transitionOwnsRoute(gate, first, route), true);
+  assert.equal(
+    transitionOwnsRoute(gate, first, { screen: "find-screen", revision: 3 }),
+    false,
+  );
+  assert.equal(gate.release({ ...first }), false);
+  assert.equal(gate.release(first), true);
+  const second = gate.enter("open-evidence", { screen: "meeting-detail-screen", revision: 3 });
+  assert.ok(second);
+  assert.notEqual(second.sequence, first.sequence);
 });
 
 test("metadata-only meeting detail is inspectable but never offers transcript text", () => {
@@ -238,9 +281,20 @@ test("metadata-only meeting detail is inspectable but never offers transcript te
     {
       kind: "transcript-unavailable",
       title: "Meeting details.",
-      lede: "This meeting’s retained status and recording information are available. Its transcript is not available from this view.",
+      lede: "A transcript is not available from this retained meeting view.",
       fallbackTitle: "Transcript unavailable",
       fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Meetings and try again.",
+      canOpenTranscript: false,
+    },
+  );
+  assert.deepEqual(
+    meetingDetailPresentation({ state: "stale", transcriptHandle: null }),
+    {
+      kind: "unavailable",
+      title: "Meeting unavailable.",
+      lede: "This retained meeting could not be reopened. Its current transcript, note, and recording facts are unavailable in this view.",
+      fallbackTitle: "Meeting unavailable",
+      fallbackCopy: "Reopen Meetings and try again.",
       canOpenTranscript: false,
     },
   );
