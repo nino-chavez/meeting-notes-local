@@ -43,13 +43,16 @@ PER_GROUP = 6
 ARCHIVE_URL = "https://www.openslr.org/resources/12/dev-clean.tar.gz"
 
 
-def archive_digests(archive: Path) -> tuple[str, str]:
+def archive_digests(handle) -> tuple[str, str]:
+    """Hash the open handle to EOF. The caller seeks back and extracts from the
+    SAME handle, so the digest and the fixture bytes share one byte stream —
+    two separate opens would let a still-downloading archive record a
+    truncated file's digest beside members read from more complete bytes."""
     sha256 = hashlib.sha256()
     md5 = hashlib.md5()
-    with archive.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            sha256.update(chunk)
-            md5.update(chunk)
+    for chunk in iter(lambda: handle.read(1 << 20), b""):
+        sha256.update(chunk)
+        md5.update(chunk)
     return sha256.hexdigest(), md5.hexdigest()
 
 
@@ -65,14 +68,14 @@ def dev_clean_speakers(speakers_txt: str) -> list[tuple[int, str]]:
 
 
 def collect_from_archive(
-    archive: Path,
+    handle,
 ) -> tuple[str, dict[int, dict[str, bytes]]]:
     """One sequential pass: the speaker table plus every dev-clean flac's bytes,
     grouped by speaker. Member order in the tar is not trusted for anything;
     selection happens afterwards over the collected names."""
     speakers_txt = None
     flacs: dict[int, dict[str, bytes]] = {}
-    with tarfile.open(archive, mode="r:gz") as tar:
+    with tarfile.open(fileobj=handle, mode="r:gz") as tar:
         for member in tar:
             if not member.isfile():
                 continue
@@ -105,8 +108,10 @@ def main() -> None:
     archive, out_dir = Path(sys.argv[1]), Path(sys.argv[2])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    archive_sha256, archive_md5 = archive_digests(archive)
-    speakers_txt, flacs = collect_from_archive(archive)
+    with archive.open("rb") as handle:
+        archive_sha256, archive_md5 = archive_digests(handle)
+        handle.seek(0)
+        speakers_txt, flacs = collect_from_archive(handle)
 
     speakers = dev_clean_speakers(speakers_txt)
     chosen: list[tuple[int, str]] = []
