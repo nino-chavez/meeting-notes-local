@@ -299,6 +299,7 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
     let navigation = include_str!("../../ui/navigation-state.mjs");
+    let styles = include_str!("../../ui/styles.css");
 
     assert!(html.contains("id=\"product-nav\""));
     assert!(html.contains("id=\"meetings-link\""));
@@ -315,6 +316,7 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     assert!(html.contains("id=\"workflow-return\" type=\"button\" hidden>View progress"));
     assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert!(html.contains("id=\"start-back\""));
+    assert!(styles.contains("html[data-screen=\"idle-screen\"] main { padding-bottom: var(--space-8); }"));
     assert!(html.contains("id=\"start-meeting-error-screen\""));
     assert!(script.contains("function syncProductNavigation()"));
     assert!(script.contains("meetingsLink.setAttribute(\"aria-current\", \"page\")"));
