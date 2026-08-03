@@ -128,8 +128,21 @@ def main() -> int:
         action="store_true",
         help="write only the application runtime manifest for a bundle that excludes test-only note resources",
     )
+    parser.add_argument(
+        "--encoder",
+        type=Path,
+        default=Path("encoder-unavailable.identity"),
+        help=(
+            "relative path of the packaged speaker-encoder artifact; the default records the"
+            " placeholder identity, which every consumer reads as encoder-unavailable"
+        ),
+    )
     arguments = parser.parse_args()
     root = arguments.root.resolve(strict=True)
+    if arguments.encoder.is_absolute() or not (root / arguments.encoder).resolve().is_relative_to(
+        root
+    ):
+        raise SystemExit(f"encoder path escapes the runtime root: {arguments.encoder}")
     if arguments.exclude_note_runtime:
         verify_note_runtime_absent(root)
     else:
@@ -143,7 +156,7 @@ def main() -> int:
             if arguments.admission == "internal-alpha"
             else "bin/audiotee"
         ),
-        "encoder": Path("encoder-unavailable.identity"),
+        "encoder": arguments.encoder,
     }
     models = []
     if arguments.admission == "internal-alpha":

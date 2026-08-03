@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import importlib.util
 import plistlib
@@ -298,6 +299,96 @@ class DistributionToolingTests(unittest.TestCase):
             verifier.normalized_requirement(nested.replace(" exists", " /* exists */")),
             nested,
         )
+
+    def test_encoder_candidate_lane_is_pinned_and_refuses_the_wrong_artifact(self) -> None:
+        verifier = load_release_verifier()
+        build_script = source("worker/build_runtime.sh")
+        self.assertIn("build-alpha-encoder", build_script)
+        self.assertIn("requirements-encoder.lock", build_script)
+        digest_lines = [
+            line
+            for line in build_script.splitlines()
+            if line.startswith("ENCODER_ONNX_SHA256=")
+        ]
+        # The build script and the closed verifier pin the same deterministic
+        # export; a candidate that drifts from either is refused, not renamed.
+        self.assertEqual(
+            digest_lines,
+            [f"ENCODER_ONNX_SHA256='{verifier.EXPECTED_ENCODER_ONNX_SHA256}'"],
+        )
+        signing = source("scripts/sign-notarize.sh")
+        self.assertIn('--encoder "$ENCODER_PATH"', signing)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            resources = Path(temporary)
+            (resources / "models/speaker-encoder").mkdir(parents=True)
+            artifact = resources / "models/speaker-encoder/ecapa-tdnn.onnx"
+            artifact.write_bytes(b"not the pinned export")
+            python = resources / "python3.12"  # the refusal paths never reach it
+
+            verifier.verify_encoder_candidate(
+                resources,
+                {"encoder": {"path": "encoder-unavailable.identity"}},
+                python,
+            )
+            with self.assertRaises(verifier.VerificationError):
+                verifier.verify_encoder_candidate(
+                    resources,
+                    {"encoder": {"path": "models/speaker-encoder/ecapa-tdnn.onnx"}},
+                    python,
+                )
+            with self.assertRaises(verifier.VerificationError):
+                verifier.verify_encoder_candidate(
+                    resources, {"encoder": {"path": "worker/main.py"}}, python
+                )
+
+    def test_manifest_encoder_argument_binds_the_named_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixtures = {
+                "python-runtime/bin/python3.12": b"runtime",
+                "worker/main.py": b"worker",
+                "bin/meeting-capture": b"tap",
+                "encoder-unavailable.identity": b"encoder",
+                "models/whisper-large-v3-turbo/config.json": b"config",
+                "models/whisper-large-v3-turbo/weights.safetensors": b"weights",
+                "models/speaker-encoder/ecapa-tdnn.onnx": b"candidate",
+            }
+            for relative, contents in fixtures.items():
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+            arguments = [
+                str(ROOT / "worker/build_manifest.py"),
+                str(root),
+                "--admission",
+                "internal-alpha",
+                "--exclude-note-runtime",
+            ]
+            completed = subprocess.run(
+                [*arguments, "--encoder", "models/speaker-encoder/ecapa-tdnn.onnx"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            manifest = json.loads((root / "app-runtime.json").read_text())
+            self.assertEqual(
+                manifest["encoder"]["path"], "models/speaker-encoder/ecapa-tdnn.onnx"
+            )
+            self.assertEqual(
+                manifest["encoder"]["sha256"], hashlib.sha256(b"candidate").hexdigest()
+            )
+            escaped = subprocess.run(
+                [*arguments, "--encoder", "../outside-the-root"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertNotEqual(escaped.returncode, 0)
+            self.assertIn("escapes the runtime root", escaped.stderr)
 
     def test_frozen_alpha_verification_selects_alpha_admission(self) -> None:
         runbook = source("docs/distribution-runbook.md")

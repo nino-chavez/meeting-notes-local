@@ -106,8 +106,14 @@ done < "$STAGE/machos"
 echo "   $count Mach-O files signed"
 
 echo "== refreshing runtime manifests from signed bytes"
+# Preserve the encoder entry across the refresh: the pre-sign verifier already
+# pinned its digest, and rebuilding without it would silently reset a packaged
+# encoder candidate back to the placeholder identity.
+ENCODER_PATH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["encoder"]["path"])' \
+  "$APP/Contents/Resources/app-runtime.json")"
 "$ROOT/worker/build_manifest.py" \
-  "$APP/Contents/Resources" --admission "$ADMISSION" --exclude-note-runtime
+  "$APP/Contents/Resources" --admission "$ADMISSION" --exclude-note-runtime \
+  --encoder "$ENCODER_PATH"
 
 echo "== signing app bundle"
 codesign --force --options runtime --timestamp \

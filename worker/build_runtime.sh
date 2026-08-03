@@ -12,6 +12,14 @@ WHISPER_CONFIG_SHA256='b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660
 WHISPER_WEIGHTS_SHA256='951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6'
 WHISPER_DEFAULT="$HOME/.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/$WHISPER_REVISION"
 WHISPER_SOURCE="${LMN_WHISPER_MODEL_DIR:-$WHISPER_DEFAULT}"
+# The converted ECAPA encoder is a deterministic export from the pinned
+# checkpoint (spike/encoder-packaging/export_onnx.py); two independent exports
+# reproduce this digest byte-identically. build-alpha-encoder packages it as a
+# candidate for admission check 2 — packaging it admits nothing.
+ENCODER_ONNX_SHA256='1d5e288b1037410fd0c98f618e94523a6b7ca8a99c7069f076efb40aa95759cd'
+ENCODER_DEFAULT="$VENDOR/downloads/ecapa-tdnn.onnx"
+ENCODER_SOURCE="${LMN_ENCODER_ONNX_SOURCE:-$ENCODER_DEFAULT}"
+ENCODER_STAGE_RELATIVE='models/speaker-encoder/ecapa-tdnn.onnx'
 
 if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then
   echo "boundary runtime build requires macOS arm64" >&2
@@ -50,6 +58,21 @@ verify() {
       "$STAGE/python-runtime/bin/python3.12" -E -s -B -m unittest discover \
         -s "$REPO/worker/tests" -v
   fi
+  local encoder_path
+  encoder_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["encoder"]["path"])' "$STAGE/app-runtime.json")"
+  if [[ "$encoder_path" != "encoder-unavailable.identity" ]]; then
+    echo "$ENCODER_ONNX_SHA256  $STAGE/$encoder_path" | shasum -a 256 -c - >/dev/null
+    (cd "$STAGE" && "$STAGE/python-runtime/bin/python3.12" -E -s -B -c "
+import numpy
+import onnxruntime
+from worker.fbank import fbank_features
+session = onnxruntime.InferenceSession('$encoder_path', providers=['CPUExecutionProvider'])
+features = fbank_features(numpy.zeros(16000, dtype=numpy.float32))
+embedding = session.run(None, {'features': features[numpy.newaxis, ...],
+                               'lengths': numpy.ones(1, dtype=numpy.float32)})[0]
+assert embedding.shape[-1] == 192, embedding.shape
+" 1>/dev/null)
+  fi
 }
 
 mode="${1:-build}"
@@ -58,9 +81,9 @@ case "$mode" in
     verify
     exit 0
     ;;
-  build|build-alpha) ;;
+  build|build-alpha|build-alpha-encoder) ;;
   *)
-    echo "usage: worker/build_runtime.sh [build|build-alpha|verify]" >&2
+    echo "usage: worker/build_runtime.sh [build|build-alpha|build-alpha-encoder|verify]" >&2
     exit 64
     ;;
 esac
@@ -76,13 +99,18 @@ rm -rf "$VENDOR/python-runtime" "$STAGE"
 mkdir -p "$STAGE/bin" "$STAGE/worker" "$STAGE/spike" "$STAGE/notes" "$STAGE/models"
 tar -xzf "$ARCHIVE" -C "$VENDOR"
 mv "$VENDOR/python" "$VENDOR/python-runtime"
-if [[ "$mode" == "build-alpha" ]]; then
+if [[ "$mode" == build-alpha* ]]; then
   "$VENDOR/python-runtime/bin/python3" -m pip install --quiet --require-hashes \
     --only-binary=:all: \
     -r "$REPO/worker/requirements-alpha.lock"
   "$VENDOR/python-runtime/bin/python3" -m pip install --quiet --require-hashes \
     --only-binary=:all: --no-deps \
     -r "$REPO/worker/requirements-mlx-whisper.lock"
+  if [[ "$mode" == "build-alpha-encoder" ]]; then
+    "$VENDOR/python-runtime/bin/python3" -m pip install --quiet --require-hashes \
+      --only-binary=:all: --no-deps \
+      -r "$REPO/worker/requirements-encoder.lock"
+  fi
 else
   "$VENDOR/python-runtime/bin/python3" -m pip install --quiet --require-hashes \
     --only-binary=:all: \
@@ -92,7 +120,7 @@ fi
 cp -R "$VENDOR/python-runtime" "$STAGE/python-runtime"
 cp "$REPO/worker/__init__.py" "$REPO/worker/main.py" \
   "$REPO/worker/adapters.py" "$REPO/worker/product_contracts.py" \
-  "$REPO/worker/storage.py" \
+  "$REPO/worker/storage.py" "$REPO/worker/fbank.py" \
   "$REPO/worker/transcription.py" "$STAGE/worker/"
 cp "$REPO/worker/note_bridge.py" "$STAGE/note-bridge.py"
 cp "$REPO/spike/verify_capture.py" "$REPO/spike/capture_health.py" \
@@ -104,7 +132,7 @@ swift build -c release --product audiotee --package-path "$REPO/capture/audiotee
 cp "$REPO/capture/audiotee/.build/arm64-apple-macosx/release/audiotee" \
   "$STAGE/bin/audiotee"
 chmod 0755 "$STAGE/bin/audiotee"
-if [[ "$mode" == "build-alpha" ]]; then
+if [[ "$mode" == build-alpha* ]]; then
   [[ -f "$WHISPER_SOURCE/config.json" && -f "$WHISPER_SOURCE/weights.safetensors" ]] || {
     echo "fixed Whisper snapshot $WHISPER_REVISION is unavailable" >&2
     exit 1
@@ -119,8 +147,23 @@ if [[ "$mode" == "build-alpha" ]]; then
     "$STAGE/bin/meeting-capture"
   chmod 0755 "$STAGE/bin/meeting-capture"
 fi
+if [[ "$mode" == "build-alpha-encoder" ]]; then
+  [[ -f "$ENCODER_SOURCE" ]] || {
+    echo "converted ECAPA encoder is unavailable at $ENCODER_SOURCE" >&2
+    echo "produce it: .venv/bin/python spike/encoder-packaging/export_onnx.py ~/.cache/speaker-gate <path>" >&2
+    exit 1
+  }
+  echo "$ENCODER_ONNX_SHA256  $ENCODER_SOURCE" | shasum -a 256 -c -
+  mkdir -p "$STAGE/models/speaker-encoder"
+  cp -L "$ENCODER_SOURCE" "$STAGE/$ENCODER_STAGE_RELATIVE"
+fi
+# The placeholder identity file is a fixed bundle resource in every mode; the
+# manifest's encoder entry, not this file, is what every consumer reads.
 printf '%s\n' 'phase-2-boundary-no-encoder-model' > "$STAGE/encoder-unavailable.identity"
-if [[ "$mode" == "build-alpha" ]]; then
+if [[ "$mode" == "build-alpha-encoder" ]]; then
+  python3 "$REPO/worker/build_manifest.py" "$STAGE" --admission internal-alpha \
+    --encoder "$ENCODER_STAGE_RELATIVE"
+elif [[ "$mode" == "build-alpha" ]]; then
   python3 "$REPO/worker/build_manifest.py" "$STAGE" --admission internal-alpha
 else
   python3 "$REPO/worker/build_manifest.py" "$STAGE"

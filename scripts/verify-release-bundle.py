@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import plistlib
@@ -32,6 +33,14 @@ CAPTURE_ENTITLEMENTS = {
     "com.apple.security.device.audio-input": True,
 }
 CODE_SIGNATURE_RUNTIME = 0x00010000
+ENCODER_PLACEHOLDER = "encoder-unavailable.identity"
+# Deterministic export from the pinned ECAPA checkpoint; two independent
+# exports reproduce this digest byte-identically (spike/encoder-packaging).
+# A bundle claiming any other encoder is refused: packaging the candidate
+# artifact is measurable here, but nothing in this verifier admits it.
+EXPECTED_ENCODER_ONNX_SHA256 = (
+    "1d5e288b1037410fd0c98f618e94523a6b7ca8a99c7069f076efb40aa95759cd"
+)
 FORBIDDEN_NOTE_RUNTIME_RESOURCES = (
     Path("note-bridge.py"),
     Path("note-runtime-project.json"),
@@ -165,6 +174,51 @@ np.fft.fft(np.ones(4))
             completed.returncode == 0,
             "internal-alpha offline transcription runtime failed to import",
         )
+    verify_encoder_candidate(resources, manifest, python)
+
+
+def verify_encoder_candidate(resources: Path, manifest: dict, python: Path) -> None:
+    encoder = manifest.get("encoder")
+    require(isinstance(encoder, dict), "runtime manifest lacks an encoder entry")
+    path = encoder.get("path")
+    if path == ENCODER_PLACEHOLDER:
+        return
+    require(
+        isinstance(path, str) and path.startswith("models/") and ".." not in path,
+        "packaged encoder path is not inside the models directory",
+    )
+    artifact = resources / path
+    require(
+        not artifact.is_symlink() and artifact.is_file(),
+        "packaged encoder artifact is missing or unsafe",
+    )
+    digest = hashlib.sha256()
+    with artifact.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    require(
+        digest.hexdigest() == EXPECTED_ENCODER_ONNX_SHA256,
+        "packaged encoder artifact does not match the pinned deterministic export",
+    )
+    require(
+        encoder.get("sha256") == EXPECTED_ENCODER_ONNX_SHA256,
+        "runtime manifest does not bind the pinned encoder digest",
+    )
+    encoder_exercise = f"""
+import numpy as np
+import onnxruntime
+from worker.fbank import fbank_features
+session = onnxruntime.InferenceSession({path!r}, providers=['CPUExecutionProvider'])
+features = fbank_features(np.zeros(16000, dtype=np.float32))
+embedding = session.run(None, {{'features': features[np.newaxis, ...],
+                               'lengths': np.ones(1, dtype=np.float32)}})[0]
+assert embedding.shape[-1] == 192, embedding.shape
+"""
+    completed = run(str(python), "-E", "-s", "-B", "-c", encoder_exercise, cwd=resources)
+    require(
+        completed.returncode == 0,
+        "packaged onnxruntime speaker-encoder exercise failed",
+    )
 
 
 def macho_inventory(app: Path) -> list[tuple[Path, str]]:

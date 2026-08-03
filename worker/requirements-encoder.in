@@ -1,0 +1,9 @@
+# ONNX Runtime for the preferred (not admitted) speaker-encoder candidate.
+# Installed --no-deps, like mlx-whisper: numpy comes from the alpha lock, and
+# InferenceSession creation plus inference were verified to run with numpy
+# alone — none of onnxruntime's other declared dependencies is even imported
+# on that path (checked against the exported ECAPA artifact, 2026-08-03).
+# Regenerate with MACOSX_DEPLOYMENT_TARGET=14.4 prefixed to the uv command in
+# the lock header: the wheel's platform floor is macosx_14_0, above uv's
+# default assumption, and the app's own minimum system version is 14.4.
+onnxruntime==1.28.0

@@ -82,6 +82,41 @@ scripts/verify-release-bundle.py \
 requires `product`, so an alpha can enter the signing path only through the
 explicit alpha command.
 
+## Encoder-candidate lane (admission evidence, not a release)
+
+`worker/build_runtime.sh build-alpha-encoder` builds the alpha runtime plus
+the preferred ONNX speaker-encoder candidate: onnxruntime from the hash-pinned
+`worker/requirements-encoder.lock`, and the converted ECAPA model at
+`models/speaker-encoder/ecapa-tdnn.onnx`, accepted only if it matches the
+pinned digest of the deterministic export
+(`spike/encoder-packaging/export_onnx.py` from the pinned checkpoint; two
+independent exports reproduce the digest byte-identically). The manifest's
+`encoder` entry then names that artifact and binds its digest; the
+`encoder-unavailable.identity` file remains in the bundle as a fixed resource,
+but the manifest — not that file — is what every consumer reads.
+
+This lane exists to produce the evidence admission check 2 requires
+(`spike/encoder-packaging/RESULTS.md`), on the real signing path:
+
+1. Build and sign exactly as for the alpha lane; `verify-release-bundle.py`
+   additionally re-derives the packaged encoder's digest against its own
+   pinned constant and exercises onnxruntime inside the packaged Python —
+   after signing, that exercise is the same empty-entitlement control that
+   caught `llvmlite`, now covering onnxruntime's dylibs.
+2. `scripts/verify-offline-coldload.sh "<app>"` — cold-loads the encoder
+   under a deny-network sandbox profile, after first proving the profile
+   actually refuses a socket connection.
+3. `<Resources>/python-runtime/bin/python3.12 -E -s -B
+   scripts/measure-encoder-beside-mlx.py <Resources>` — peak RSS with the
+   encoder session co-resident with MLX transcription of synthetic audio.
+
+A `build-alpha-encoder` bundle is admission evidence, never a distribution
+candidate: packaging the candidate changes no product surface's language —
+everything still says preferred ONNX candidate — and the encoder admission
+verdict, like both release gates, is the operator's alone. The
+transferred-build Gatekeeper check on another Mac remains the manual step
+described below.
+
 ## Check Apple release access
 
 Run the host-level preflight:
