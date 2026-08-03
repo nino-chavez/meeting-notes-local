@@ -20,7 +20,7 @@ if [[ "$ENCODER_PATH" == "encoder-unavailable.identity" ]]; then
   exit 1
 fi
 
-SB="$(mktemp /tmp/lmn-deny-network.XXXXXX.sb)"
+SB="$(mktemp /tmp/lmn-deny-network.XXXXXX)"
 trap 'rm -f "$SB"' EXIT
 cat > "$SB" <<'PROFILE'
 (version 1)
@@ -28,12 +28,20 @@ cat > "$SB" <<'PROFILE'
 (deny network*)
 PROFILE
 
-if sandbox-exec -f "$SB" "$PY" -E -s -B -c \
-  'import socket; socket.create_connection(("1.1.1.1", 443), timeout=4)' 2>/dev/null; then
+# Two-sided bite control. The denied probe alone would pass vacuously on a
+# host whose network is down for any other reason, so first prove the same
+# probe succeeds without the profile; only then does its failure under the
+# profile demonstrate the sandbox, not the weather.
+PROBE='import socket; socket.create_connection(("1.1.1.1", 443), timeout=4)'
+if ! "$PY" -E -s -B -c "$PROBE" 2>/dev/null; then
+  echo "offline cold load: BLOCKED — host has no route to the probe target, so the profile's bite cannot be proven" >&2
+  exit 1
+fi
+if sandbox-exec -f "$SB" "$PY" -E -s -B -c "$PROBE" 2>/dev/null; then
   echo "offline cold load: BLOCKED — deny-network profile did not bite" >&2
   exit 1
 fi
-echo "deny-network control: PASS — socket connection refused under the profile"
+echo "deny-network control: PASS — probe connects unsandboxed and is refused under the profile"
 
 (cd "$RES" && sandbox-exec -f "$SB" "$PY" -E -s -B -c "
 import json, time
