@@ -11,9 +11,16 @@ JSON-only protocol channel. The corrected worker isolates protocol output, and
 the packaged-runtime regression now invokes the real transcript model. The
 corrected installed build then completed two-leg capture and local transcription
 on real hardware, and the completed transcript screen returned after a true quit
-and fresh launch. Its one-day audio-retention deadline is recorded locally. This
-artifact is not yet cleared for team distribution: automatic deletion at that
-deadline and clean transfer to another Mac or account remain open.
+and fresh launch. The unchanged installed alpha is byte-bound to the original capture
+attempt. Its one-day deadline, `2026-08-02T10:20:01-0500`, passed; a launch after that
+time completed automatic retention and produced an `audio-deletion/1` `removed`
+receipt with SHA-256 `59a500cb4f6c5e05e22425ba2f90c38629d300249b41628f5efb613bb029f4d5`,
+observed at approximately `2026-08-02T20:24:47-0500`. Both bound microphone and
+system WAVs are absent. The exact retained transcript artifact remains present, JSON-readable, and
+digest-matched; its text was not inspected or emitted. This closes automatic deletion
+only. This artifact is not cleared for team distribution: clean transfer, Gatekeeper,
+permissions, capture, and recovery on another Mac or genuinely clean account remain
+open; PR #2 and the release remain draft, and no release verdict is recorded.
 
 This is a how-to for the release operator. It assumes a clean release commit,
 Apple-silicon macOS, Xcode command-line tools, and access to the existing
@@ -242,8 +249,14 @@ Before an internal alpha is shared, the unchanged installed build needs a
 consented hardware receipt proving two-leg Start and Stop, post-meeting
 transcript creation, quit/reopen recovery, and the configured audio deletion.
 The current build has passed capture, transcript creation, and fresh-process
-recovery. Its automatic deletion and clean-machine transfer remain open. This
-receipt is mechanical evidence only.
+recovery. Its automatic deletion is mechanically closed: the unchanged executable is
+byte-bound to the original capture attempt; after the `2026-08-02T10:20:01-0500`
+deadline, a post-deadline launch produced the completed `audio-deletion/1` `removed`
+receipt SHA-256 `59a500cb4f6c5e05e22425ba2f90c38629d300249b41628f5efb613bb029f4d5`,
+observed at approximately `2026-08-02T20:24:47-0500`. Both bound microphone and
+system WAVs are absent, and the exact retained transcript artifact is present, JSON-readable, and
+digest-matched; its text was not inspected or emitted. Clean-machine transfer remains
+open. This receipt is mechanical evidence only and is not a release verdict.
 
 Before an internal beta meeting, the unchanged installed build must also have
 the private automatic-note admission receipt required by

@@ -28,6 +28,17 @@ rendered and the digest-bound receipt was recorded on 2026-07-31. Do not regener
 the page merely to start a new session. Do not move its content, paths, manifest, or
 review details into Git or chat.
 
+The public status record also now carries a separate mechanical closure: the unchanged
+installed alpha was byte-bound to the original capture attempt; after its
+`2026-08-02T10:20:01-0500` deadline, a launch produced a completed
+`audio-deletion/1` `removed` receipt with SHA-256
+`59a500cb4f6c5e05e22425ba2f90c38629d300249b41628f5efb613bb029f4d5`, observed at
+approximately `2026-08-02T20:24:47-0500`. Both bound microphone and system WAVs are absent, while
+the exact retained transcript artifact is present, JSON-readable, and digest-matched;
+its text was not inspected or emitted. This closes automatic deletion only. It does
+not change this interaction approval, approve the application, or close clean-transfer,
+Gatekeeper, permission, capture, recovery, PR #2, or release gates.
+
 - The recorded `accept` approves only this interaction. It does not approve automatic
   note quality or the application runtime.
 - `revise` records UI findings without quoting private meeting content. Any interface
@@ -347,6 +358,9 @@ controls. Record a separate answer and finding for each question.
 The last two answers are independent. A mechanically correct encounter can
 still be rejected. Whether an automatically generated note is useful is judged
 later on the product canary and does not inherit this approval.
+
+The separate automatic-deletion observation above is not a cold-review answer or a
+substitute for any checklist finding.
 
 ## Approval receipt
 

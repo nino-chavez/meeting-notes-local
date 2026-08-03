@@ -103,6 +103,18 @@ transcript and metadata search inside the validated local library remains in bet
 | Limited beta | Package, sign, install cold and run a canary followed by real headphone meetings | Participants consent; the operator judges whether the notes are useful |
 | General availability | Prove recovery, updates, fresh-machine permissions and the supported envelope across beta use | Release decision uses beta evidence; passing tests alone cannot make it |
 
+The unchanged installed transcript alpha is byte-bound to its original capture
+attempt. Its one-day deadline, `2026-08-02T10:20:01-0500`, passed; when the alpha
+was launched after that time, automatic retention completed an `audio-deletion/1`
+`removed` receipt (SHA-256
+`59a500cb4f6c5e05e22425ba2f90c38629d300249b41628f5efb613bb029f4d5`) at
+approximately `2026-08-02T20:24:47-0500`. Both bound microphone and system WAVs are absent. The
+exact retained transcript artifact remains present, JSON-readable, and digest-matched;
+its text was not inspected or emitted. This closes automatic deletion only. A clean
+transfer, Gatekeeper and permission exercise, capture, and recovery on another Mac or
+genuinely clean account remain open; PR #2 and the release remain draft, with no
+release verdict.
+
 Work may run in parallel only where the evidence remains separable. The registered
 classifier benchmark remains research; it does not sit on the product critical path.
 Note-contract correctness, profile/provenance hardening and click-through
