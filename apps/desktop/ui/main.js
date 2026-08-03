@@ -59,6 +59,8 @@ const profileStatusTitle = document.querySelector("#profile-status-title");
 const profileStatusCopy = document.querySelector("#profile-status-copy");
 const profileFootnote = document.querySelector("#profile-footnote");
 const profileSetup = document.querySelector("#profile-setup");
+const profileNextStep = document.querySelector("#profile-next-step");
+const profileEnrollmentGates = document.querySelector("#profile-enrollment-gates");
 const profileResetConfirmation = document.querySelector("#profile-reset-confirmation");
 const profileResetConfirm = document.querySelector("#profile-reset-confirm");
 const profileResetCancel = document.querySelector("#profile-reset-cancel");
@@ -763,6 +765,26 @@ async function openStartMeeting() {
   }
 }
 
+// The guided-enrolment shortfall is stated in the terms the capture gate
+// enforces, never as a progress bar: "return at least an hour after the first
+// session" tells the operator what to do, and "80%" tells them to keep going.
+// The gates say what clearing those requirements still would not decide.
+// It is shown only where it can be acted on: the lifecycle answered and no
+// profile is active. When voice status is unavailable or needs attention there
+// is nothing to act on, and while a preserved profile awaits migration review
+// the pending decision is the operator's next step, not a new sitting.
+function renderEnrollmentGuidance(snapshot) {
+  const applies =
+    snapshot?.state === "baseline-ready" && snapshot?.profileActive !== true;
+  const guidance = applies ? snapshot?.guidedEnrollment : null;
+  const nextStep = guidance?.nextStep;
+  profileNextStep.hidden = !nextStep;
+  profileNextStep.textContent = nextStep || "";
+  const gates = applies && Array.isArray(guidance?.gates) ? guidance.gates : [];
+  profileEnrollmentGates.hidden = gates.length === 0;
+  profileEnrollmentGates.textContent = gates.join(" ");
+}
+
 function renderProfile(snapshot) {
   const state = snapshot?.state || "unavailable";
   profileResetConfirmation.hidden = true;
@@ -774,6 +796,22 @@ function renderProfile(snapshot) {
   profileSetup.disabled = true;
   profileSetup.textContent = "Set up voice profile";
   profileSetup.dataset.action = "setup";
+  renderEnrollmentGuidance(snapshot);
+  // Presence and activation are separate lifecycle facts. An active enrolled
+  // profile must never inherit the preserved-legacy copy below, which promises
+  // that Preview will not activate what it found.
+  if (state === "baseline-ready" && snapshot?.profileActive === true) {
+    profileKicker.textContent = "Voice profile · Active";
+    profileTitle.textContent = "A voice profile is active.";
+    profileLede.textContent = "Recording still requires headphones and only you near the microphone.";
+    profileStatusTitle.textContent = "Voice profile is active";
+    profileStatusCopy.textContent = "This profile was admitted by the canonical loader before it was stored. It filters speech that does not match you; it does not name speakers.";
+    profileFootnote.textContent = "Removing it deletes the profile, its calibrated threshold, and its enrolment provenance. Meetings, transcripts, notes, and evidence remain.";
+    profileSetup.disabled = false;
+    profileSetup.textContent = "Reset stored profile";
+    profileSetup.dataset.action = "reset";
+    return;
+  }
   if (state === "baseline-ready" && snapshot?.profilePresent === false) {
     profileKicker.textContent = "Voice profile · Not set up";
     profileTitle.textContent = "Voice isolation is off.";

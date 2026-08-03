@@ -38,6 +38,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use local_meeting_notes_session_core::diagnostic::write_private_diagnostic;
 #[cfg(any(feature = "preview-surface", test))]
+use local_meeting_notes_session_core::enrollment_guidance::{
+    EnrollmentEvidence, GuidedEnrollmentStatus, evaluate_enrollment_evidence,
+};
+#[cfg(any(feature = "preview-surface", test))]
 use local_meeting_notes_session_core::meeting::resolve_artifact;
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
@@ -231,20 +235,63 @@ struct PreviewLibraryTranscript {
     message: String,
 }
 
+/// Content-free voice-setup status cached for Settings.
+///
+/// `profile_present` and `profile_active` are deliberately separate, because
+/// the lifecycle distinguishes them and the operator consequence is opposite.
+/// Preserved legacy bytes are present and inactive: Preview will not activate
+/// them, and saying so is the whole point of the migration-review path. An
+/// enrolled profile is present and active. Collapsing the two would let the
+/// surface describe a live profile as "stored material Preview will not
+/// activate", which is the exact reassurance this product must not get wrong.
 #[cfg(any(feature = "preview-surface", test))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewProfileSnapshot {
     state: &'static str,
     profile_present: Option<bool>,
+    profile_active: Option<bool>,
+    guided_enrollment: GuidedEnrollmentStatus,
 }
 
 #[cfg(any(feature = "preview-surface", test))]
 impl PreviewProfileSnapshot {
-    const fn unavailable() -> Self {
+    /// The guided-enrolment shortfall for whatever evidence this account has
+    /// accumulated. No sitting recorder exists yet, so the evidence set is
+    /// empty and the evaluation truthfully reports `blocked` with the first
+    /// enforced step. When the dedicated sitting recorder lands it supplies
+    /// real evidence here and the same surface starts moving.
+    fn guidance() -> GuidedEnrollmentStatus {
+        evaluate_enrollment_evidence(&EnrollmentEvidence::default())
+    }
+
+    fn unavailable() -> Self {
         Self {
             state: "unavailable",
             profile_present: None,
+            profile_active: None,
+            guided_enrollment: Self::guidance(),
+        }
+    }
+
+    /// The lifecycle answered, so both profile facts are known.
+    fn baseline(profile_present: bool, profile_active: bool) -> Self {
+        Self {
+            state: "baseline-ready",
+            profile_present: Some(profile_present),
+            profile_active: Some(profile_active),
+            guided_enrollment: Self::guidance(),
+        }
+    }
+
+    /// The lifecycle refused to answer. Neither profile fact is known, and
+    /// neither may be guessed: an unread profile is not an absent one.
+    fn lifecycle_unreadable(state: &'static str) -> Self {
+        Self {
+            state,
+            profile_present: None,
+            profile_active: None,
+            guided_enrollment: Self::guidance(),
         }
     }
 }
@@ -936,7 +983,7 @@ fn preview_profile_snapshot_for(state: &ApplicationState) -> PreviewProfileSnaps
     state
         .preview_profile
         .lock()
-        .map(|snapshot| *snapshot)
+        .map(|snapshot| snapshot.clone())
         .unwrap_or_else(|_| PreviewProfileSnapshot::unavailable())
 }
 
@@ -977,23 +1024,21 @@ fn preview_profile_preserve_legacy_for(
     };
     match result {
         Ok(baseline) => {
-            let snapshot = PreviewProfileSnapshot {
-                state: "baseline-ready",
-                profile_present: Some(baseline.profile_present()),
-            };
+            let snapshot = PreviewProfileSnapshot::baseline(
+                baseline.profile_present(),
+                baseline.profile_active(),
+            );
             *state
                 .preview_profile
                 .lock()
-                .map_err(|_| "the cached profile status is unavailable".to_string())? = snapshot;
+                .map_err(|_| "the cached profile status is unavailable".to_string())? =
+                snapshot.clone();
             Ok(snapshot)
         }
         Err(ProfileLifecycleAdmissionError::Lifecycle(ProfileLifecycleError::Quarantined)) => {
-            let snapshot = PreviewProfileSnapshot {
-                state: "needs-attention",
-                profile_present: None,
-            };
+            let snapshot = PreviewProfileSnapshot::lifecycle_unreadable("needs-attention");
             if let Ok(mut cached) = state.preview_profile.lock() {
-                *cached = snapshot;
+                *cached = snapshot.clone();
             }
             Ok(snapshot)
         }
@@ -1001,10 +1046,7 @@ fn preview_profile_preserve_legacy_for(
             ProfileLifecycleError::MigrationReviewRequired,
         )) => Err("The legacy profile still requires review.".into()),
         Err(ProfileLifecycleAdmissionError::Lifecycle(_)) => {
-            let snapshot = PreviewProfileSnapshot {
-                state: "needs-attention",
-                profile_present: None,
-            };
+            let snapshot = PreviewProfileSnapshot::lifecycle_unreadable("needs-attention");
             if let Ok(mut cached) = state.preview_profile.lock() {
                 *cached = snapshot;
             }
@@ -1075,14 +1117,12 @@ fn preview_profile_reset_for(
     };
     match result {
         Ok(_) => {
-            let snapshot = PreviewProfileSnapshot {
-                state: "baseline-ready",
-                profile_present: Some(false),
-            };
+            let snapshot = PreviewProfileSnapshot::baseline(false, false);
             *state
                 .preview_profile
                 .lock()
-                .map_err(|_| "the cached profile status is unavailable".to_string())? = snapshot;
+                .map_err(|_| "the cached profile status is unavailable".to_string())? =
+                snapshot.clone();
             Ok(snapshot)
         }
         Err(ProfileLifecycleAdmissionError::ActiveMeeting) => {
@@ -1092,10 +1132,7 @@ fn preview_profile_reset_for(
             Err("This storage volume cannot safely reset the profile. Nothing was deleted.".into())
         }
         Err(ProfileLifecycleAdmissionError::Lifecycle(_)) => {
-            let snapshot = PreviewProfileSnapshot {
-                state: "needs-attention",
-                profile_present: None,
-            };
+            let snapshot = PreviewProfileSnapshot::lifecycle_unreadable("needs-attention");
             if let Ok(mut cached) = state.preview_profile.lock() {
                 *cached = snapshot;
             }
@@ -1127,26 +1164,21 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
         .as_ref()
         .ok_or("the app-data writer lock is unavailable")?;
     let lifecycle = match writer.profile_lifecycle_authority().initialize_or_open() {
-        Ok(baseline) => Ok(PreviewProfileSnapshot {
-            state: "baseline-ready",
-            profile_present: Some(baseline.profile_present()),
-        }),
+        Ok(baseline) => Ok(PreviewProfileSnapshot::baseline(
+            baseline.profile_present(),
+            baseline.profile_active(),
+        )),
         Err(ProfileLifecycleAdmissionError::Lifecycle(
             ProfileLifecycleError::MigrationReviewRequired,
-        )) => Ok(PreviewProfileSnapshot {
-            state: "migration-review-required",
-            profile_present: None,
-        }),
-        Err(ProfileLifecycleAdmissionError::Lifecycle(ProfileLifecycleError::Quarantined)) => {
-            Ok(PreviewProfileSnapshot {
-                state: "needs-attention",
-                profile_present: None,
-            })
-        }
-        Err(ProfileLifecycleAdmissionError::Lifecycle(_)) => Ok(PreviewProfileSnapshot {
-            state: "needs-attention",
-            profile_present: None,
-        }),
+        )) => Ok(PreviewProfileSnapshot::lifecycle_unreadable(
+            "migration-review-required",
+        )),
+        Err(ProfileLifecycleAdmissionError::Lifecycle(ProfileLifecycleError::Quarantined)) => Ok(
+            PreviewProfileSnapshot::lifecycle_unreadable("needs-attention"),
+        ),
+        Err(ProfileLifecycleAdmissionError::Lifecycle(_)) => Ok(
+            PreviewProfileSnapshot::lifecycle_unreadable("needs-attention"),
+        ),
         Err(ProfileLifecycleAdmissionError::AuthorityLost) => {
             Err("the app-data writer authority changed")
         }
@@ -3470,6 +3502,77 @@ mod tests {
         entries
     }
 
+    /// Preserved legacy bytes and an enrolled profile are both "present", and
+    /// the operator consequence is opposite. The snapshot must carry the
+    /// lifecycle's own activation fact rather than inferring it from presence,
+    /// because the migration path's entire promise is that Preview did not
+    /// activate what it found.
+    #[test]
+    fn preserved_and_absent_profiles_report_activation_separately_from_presence() {
+        let (_temporary, storage) = test_storage();
+        let legacy = b"stored-profile-sentinel";
+        durable_create_new(&storage.path().join("profile/voiceprint.json"), legacy).unwrap();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        *state.preview_profile.lock().unwrap() =
+            PreviewProfileSnapshot::lifecycle_unreadable("migration-review-required");
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+            model.retention_operational = true;
+        }
+
+        let preserved = preview_profile_preserve_legacy_for(&state).unwrap();
+        assert_eq!(preserved.profile_present, Some(true));
+        assert_eq!(
+            preserved.profile_active,
+            Some(false),
+            "preserve-first migration must never report the bytes it preserved as active"
+        );
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            legacy
+        );
+
+        let after_reset = preview_profile_reset_for(&state, true).unwrap();
+        assert_eq!(after_reset.profile_present, Some(false));
+        assert_eq!(after_reset.profile_active, Some(false));
+
+        // An unread lifecycle knows neither fact, and neither may be guessed.
+        let unreadable = PreviewProfileSnapshot::lifecycle_unreadable("needs-attention");
+        assert_eq!(unreadable.profile_present, None);
+        assert_eq!(unreadable.profile_active, None);
+        assert_eq!(PreviewProfileSnapshot::unavailable().profile_active, None);
+    }
+
+    /// The Settings surface receives the guided-enrolment shortfall in the
+    /// terms the capture gate enforces. No sitting recorder exists yet, so the
+    /// honest answer is `blocked` with the first enforced step — never a
+    /// completion share, and never a claim that setup can start.
+    #[test]
+    fn profile_snapshot_carries_content_free_guided_enrollment_guidance() {
+        let snapshot = PreviewProfileSnapshot::baseline(false, false);
+        let guidance = &snapshot.guided_enrollment;
+        assert_eq!(
+            guidance.state,
+            local_meeting_notes_session_core::enrollment_guidance::GuidedEnrollmentState::Blocked
+        );
+        assert_eq!(guidance.sittings_recorded, 0);
+        assert!(guidance.next_step.is_some());
+        assert!(
+            !guidance.gates.is_empty(),
+            "the surface must always carry what this evaluation cannot decide"
+        );
+
+        let rendered = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(rendered["profileActive"], serde_json::json!(false));
+        assert_eq!(rendered["guidedEnrollment"]["state"], "blocked");
+        // Nothing in the delivered payload may read as a progress bar.
+        let payload = serde_json::to_string(&rendered).unwrap();
+        assert!(!payload.contains('%'), "{payload}");
+    }
+
     #[test]
     fn profile_preview_caches_authoritative_lifecycle_state() {
         let (_fresh_temporary, fresh) = test_storage();
@@ -3478,10 +3581,7 @@ mod tests {
         reconcile_preview_profile_lifecycle(&fresh_state).unwrap();
         assert_eq!(
             preview_profile_snapshot_for(&fresh_state),
-            PreviewProfileSnapshot {
-                state: "baseline-ready",
-                profile_present: Some(false),
-            }
+            PreviewProfileSnapshot::baseline(false, false)
         );
 
         let initialized_tree = storage_tree_bytes(fresh.path());
@@ -3489,10 +3589,7 @@ mod tests {
         assert_eq!(storage_tree_bytes(fresh.path()), initialized_tree);
         assert_eq!(
             preview_profile_snapshot_for(&fresh_state),
-            PreviewProfileSnapshot {
-                state: "baseline-ready",
-                profile_present: Some(false),
-            }
+            PreviewProfileSnapshot::baseline(false, false)
         );
 
         let (_legacy_temporary, legacy) = test_storage();
@@ -3508,10 +3605,7 @@ mod tests {
         assert_eq!(storage_tree_bytes(legacy.path()), legacy_tree);
         assert_eq!(
             preview_profile_snapshot_for(&legacy_state),
-            PreviewProfileSnapshot {
-                state: "migration-review-required",
-                profile_present: None,
-            }
+            PreviewProfileSnapshot::lifecycle_unreadable("migration-review-required")
         );
 
         let (_unsafe_temporary, unsafe_storage) = test_storage();
@@ -3525,10 +3619,7 @@ mod tests {
         reconcile_preview_profile_lifecycle(&unsafe_state).unwrap();
         assert_eq!(
             preview_profile_snapshot_for(&unsafe_state),
-            PreviewProfileSnapshot {
-                state: "needs-attention",
-                profile_present: None,
-            }
+            PreviewProfileSnapshot::lifecycle_unreadable("needs-attention")
         );
     }
 
@@ -3571,10 +3662,8 @@ mod tests {
         durable_create_new(&storage.path().join("profile/voiceprint.json"), legacy).unwrap();
         let state = ApplicationState::default();
         ensure_app_data_writer_lock(&state, &storage).unwrap();
-        *state.preview_profile.lock().unwrap() = PreviewProfileSnapshot {
-            state: "migration-review-required",
-            profile_present: None,
-        };
+        *state.preview_profile.lock().unwrap() =
+            PreviewProfileSnapshot::lifecycle_unreadable("migration-review-required");
         {
             let mut model = state.model.lock().unwrap();
             transition_startup(&mut model, StartupState::Checking).unwrap();
@@ -3585,13 +3674,7 @@ mod tests {
 
         let snapshot = preview_profile_preserve_legacy_for(&state).unwrap();
 
-        assert_eq!(
-            snapshot,
-            PreviewProfileSnapshot {
-                state: "baseline-ready",
-                profile_present: Some(true),
-            }
-        );
+        assert_eq!(snapshot, PreviewProfileSnapshot::baseline(true, false));
         assert_eq!(
             fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
             legacy
@@ -3624,10 +3707,8 @@ mod tests {
             transition_startup(&mut model, StartupState::Ready).unwrap();
             model.retention_operational = true;
         }
-        *state.preview_profile.lock().unwrap() = PreviewProfileSnapshot {
-            state: "migration-review-required",
-            profile_present: None,
-        };
+        *state.preview_profile.lock().unwrap() =
+            PreviewProfileSnapshot::lifecycle_unreadable("migration-review-required");
         preview_profile_preserve_legacy_for(&state).unwrap();
 
         assert!(preview_profile_reset_for(&state, false).is_err());
@@ -3638,10 +3719,7 @@ mod tests {
 
         assert_eq!(
             preview_profile_reset_for(&state, true).unwrap(),
-            PreviewProfileSnapshot {
-                state: "baseline-ready",
-                profile_present: Some(false),
-            }
+            PreviewProfileSnapshot::baseline(false, false)
         );
         assert_eq!(
             fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
@@ -3660,10 +3738,8 @@ mod tests {
         durable_create_new(&storage.path().join("profile/voiceprint.json"), legacy).unwrap();
         let state = ApplicationState::default();
         ensure_app_data_writer_lock(&state, &storage).unwrap();
-        *state.preview_profile.lock().unwrap() = PreviewProfileSnapshot {
-            state: "migration-review-required",
-            profile_present: None,
-        };
+        *state.preview_profile.lock().unwrap() =
+            PreviewProfileSnapshot::lifecycle_unreadable("migration-review-required");
         {
             let mut model = state.model.lock().unwrap();
             transition_startup(&mut model, StartupState::Checking).unwrap();

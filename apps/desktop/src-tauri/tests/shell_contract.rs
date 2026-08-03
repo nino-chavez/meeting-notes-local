@@ -455,6 +455,25 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
     assert!(script.contains("baseline-ready"));
     assert!(script.contains("profilePresent"));
     assert!(script.contains("No voice profile is active"));
+
+    // Presence and activation are separate lifecycle facts. The active branch
+    // must be tested first, so an enrolled profile can never inherit the
+    // preserved-legacy copy promising Preview will not activate what it found.
+    assert!(script.contains("profileActive"));
+    let active = script.find("snapshot?.profileActive === true").unwrap();
+    let preserved = script.find("snapshot?.profilePresent === true").unwrap();
+    assert!(
+        active < preserved,
+        "the active-profile branch must precede the preserved-legacy branch"
+    );
+    assert!(script.contains("A voice profile is active."));
+
+    // Guided-enrolment guidance is rendered, and only where it can be acted on.
+    assert!(html.contains("id=\"profile-next-step\""));
+    assert!(html.contains("id=\"profile-enrollment-gates\""));
+    assert!(script.contains("guidedEnrollment"));
+    assert!(script.contains("nextStep"));
+    assert!(script.contains("snapshot?.profileActive !== true"));
     assert!(script.contains("migration-review-required"));
     assert!(script.contains("Recording remains available"));
     assert!(script.contains("reads only the cached"));

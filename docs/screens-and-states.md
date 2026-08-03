@@ -505,8 +505,27 @@ The inventory and review prototype now do. The Preview enforces the separately
 confirmed reset branch. The shared lifecycle now implements crash-recoverable
 `writing`, `ready`, and `active` publication. Its strict-loader bridge binds the
 canonical worker verdict to the exact descriptor-reopened candidate digest and keeps
-candidate cleanup separately retryable. The guided multi-session recording surface
-remains unimplemented, and no enrolment command is exposed to Preview.
+candidate cleanup separately retryable. The shortfall calculation this surface is
+for now exists as `session-core::enrollment_guidance`: a deterministic, content-free
+evaluation that reports `blocked`, `resume-after-gap`, `second-sitting-review`,
+`needs-other-voice`, `choosing-operating-point`, or `refused` over accumulated
+evidence, and names each unmet requirement in the enforced term rather than as a
+share. Its constants are re-derived from `spike/speaker_gate.py` and pinned by test,
+because § I's prose is a restatement of that contract and not the contract. Preview's
+voice panel now renders that evaluation and separates the two lifecycle facts it
+previously collapsed: an active enrolled profile no longer inherits the
+preserved-legacy copy promising that Preview will not activate what it found.
+
+**Three things this does not do, and none of them are close.** No dedicated sitting
+is recorded, so the evidence set is empty and the honest evaluation is `blocked` with
+the first enforced step. `choosing-operating-point` and `ready-to-build` need measured
+choices from the operator's own calibration and an explicit selection with no default,
+neither of which an agent may supply. No enrolment command is exposed to Preview, and
+the Preview capability still grants no enrolment or profile-activation permission.
+Clearing every requirement named here is not admission: the canonical loader refuses
+again, through `worker/adapters.py`'s `profile_inspect`, before any candidate reaches
+the lifecycle.
+
 Recorded here rather than improvised at implementation time, because this file
 opens with the reason: patching at L1 when the missing primitive is at L4 produces
 bugs that *move* from surface to surface instead of closing.
