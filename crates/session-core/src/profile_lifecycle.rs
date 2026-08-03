@@ -1,7 +1,8 @@
 //! Fixed-slot profile lifecycle journal.
 //!
-//! This first increment establishes and reopens the durable sequence-zero
-//! baseline. Reset and enrollment mutations are intentionally not exposed yet.
+//! This increment establishes and reopens the durable sequence-zero baseline,
+//! including an explicit preserve-first migration for an existing legacy live
+//! slot. Reset and enrollment mutations are intentionally not exposed yet.
 
 #![cfg(target_os = "macos")]
 
@@ -119,6 +120,17 @@ pub(crate) fn initialize_profile_lifecycle_bound(
     result
 }
 
+pub(crate) fn preserve_legacy_profile_bound(
+    app_data: &BoundPrivateDirectory,
+) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
+    let profile = app_data.open_directory("profile").map_err(quarantine_io)?;
+    let result = preserve_legacy_bound_profile(&profile);
+    if app_data.revalidate().is_err() || profile.revalidate().is_err() {
+        return Err(ProfileLifecycleError::Quarantined);
+    }
+    result
+}
+
 fn initialize_bound_profile(
     profile: &BoundPrivateDirectory,
 ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
@@ -154,20 +166,52 @@ fn initialize_bound_profile(
                 }
                 Err(error) => return Err(quarantine_io(error)),
             };
-            prepare_initializing(profile, &live, &initializing)?;
-            let lifecycle = profile
-                .publish_directory_exclusive(initializing, INITIALIZING_NAME, LIFECYCLE_NAME)
-                .map_err(quarantine_io)?;
-            validate_published(profile, &live, &lifecycle)
+            publish_initializing(profile, &live, initializing, false)
         }
         Err(error) => Err(quarantine_io(error)),
     }
+}
+
+fn preserve_legacy_bound_profile(
+    profile: &BoundPrivateDirectory,
+) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
+    match profile.open_directory(LIFECYCLE_NAME) {
+        Ok(_) => initialize_bound_profile(profile),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let live = profile
+                .open_file(LIVE_NAME, true, PROFILE_MAX_BYTES)
+                .map_err(quarantine_io)?;
+            let initializing = match profile.open_directory(INITIALIZING_NAME) {
+                Ok(directory) => directory,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => profile
+                    .create_directory(INITIALIZING_NAME)
+                    .map_err(quarantine_io)?,
+                Err(error) => return Err(quarantine_io(error)),
+            };
+            publish_initializing(profile, &live, initializing, true)
+        }
+        Err(error) => Err(quarantine_io(error)),
+    }
+}
+
+fn publish_initializing(
+    profile: &BoundPrivateDirectory,
+    live: &BoundPrivateFile,
+    initializing: BoundPrivateDirectory,
+    allow_unreceipted_nonzero_live: bool,
+) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
+    prepare_initializing(profile, live, &initializing, allow_unreceipted_nonzero_live)?;
+    let lifecycle = profile
+        .publish_directory_exclusive(initializing, INITIALIZING_NAME, LIFECYCLE_NAME)
+        .map_err(quarantine_io)?;
+    validate_published(profile, live, &lifecycle)
 }
 
 fn prepare_initializing(
     profile: &BoundPrivateDirectory,
     live: &BoundPrivateFile,
     initializing: &BoundPrivateDirectory,
+    allow_unreceipted_nonzero_live: bool,
 ) -> Result<(), ProfileLifecycleError> {
     let names = initializing.child_names().map_err(quarantine_io)?;
     if names
@@ -175,6 +219,25 @@ fn prepare_initializing(
         .any(|name| !FIXED_NAMES.contains(&name.as_str()))
     {
         return Err(ProfileLifecycleError::Quarantined);
+    }
+    let live_observation = live
+        .identity(profile, PROFILE_MAX_BYTES)
+        .map_err(quarantine_io)?;
+    if !allow_unreceipted_nonzero_live && live_observation.size != 0 {
+        let receipt_a = match initializing.open_file(RECEIPT_A_NAME, false, RECEIPT_MAX_BYTES) {
+            Ok(receipt) => receipt,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(ProfileLifecycleError::MigrationReviewRequired);
+            }
+            Err(error) => return Err(quarantine_io(error)),
+        };
+        if receipt_a
+            .read_all(initializing, RECEIPT_MAX_BYTES)
+            .map_err(quarantine_io)?
+            .is_empty()
+        {
+            return Err(ProfileLifecycleError::MigrationReviewRequired);
+        }
     }
     for name in FIXED_NAMES {
         if !names.iter().any(|existing| existing == name) {
@@ -477,6 +540,13 @@ mod tests {
         initialize_profile_lifecycle_bound(&app_data)
     }
 
+    fn preserve_legacy_profile(
+        storage: &StorageRoot,
+    ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
+        let app_data = BoundPrivateDirectory::open(storage.path()).map_err(quarantine_io)?;
+        preserve_legacy_profile_bound(&app_data)
+    }
+
     struct Fixture {
         _temp: TempDir,
         storage: StorageRoot,
@@ -552,6 +622,92 @@ mod tests {
         );
         assert!(!fixture.profile().join(LIFECYCLE_NAME).exists());
         assert!(!fixture.profile().join(INITIALIZING_NAME).exists());
+    }
+
+    #[test]
+    fn explicit_migration_preserves_exact_legacy_bytes_for_later_review() {
+        let fixture = Fixture::new();
+        let legacy = b"legacy-profile-sentinel";
+        durable_create_new(&fixture.profile().join(LIVE_NAME), legacy).unwrap();
+
+        let baseline = preserve_legacy_profile(&fixture.storage).unwrap();
+
+        assert!(baseline.profile_present());
+        assert_eq!(baseline.profile_size(), legacy.len() as u64);
+        assert_eq!(
+            baseline.profile_sha256(),
+            format!("{:x}", Sha256::digest(legacy))
+        );
+        assert_eq!(fs::read(fixture.profile().join(LIVE_NAME)).unwrap(), legacy);
+        assert!(!fixture.profile().join(INITIALIZING_NAME).exists());
+        assert!(fixture.profile().join(LIFECYCLE_NAME).is_dir());
+        assert_eq!(
+            initialize_profile_lifecycle(&fixture.storage).unwrap(),
+            baseline
+        );
+        assert_eq!(preserve_legacy_profile(&fixture.storage).unwrap(), baseline);
+    }
+
+    #[test]
+    fn explicit_migration_requires_an_existing_safe_live_slot() {
+        let fixture = Fixture::new();
+
+        assert!(matches!(
+            preserve_legacy_profile(&fixture.storage),
+            Err(ProfileLifecycleError::Quarantined)
+        ));
+        assert!(!fixture.profile().join(LIFECYCLE_NAME).exists());
+        assert!(!fixture.profile().join(INITIALIZING_NAME).exists());
+        assert!(!fixture.profile().join(LIVE_NAME).exists());
+    }
+
+    #[test]
+    fn unreceipted_migration_crash_requires_fresh_explicit_review() {
+        let fixture = Fixture::new();
+        let legacy = b"legacy-profile-sentinel";
+        durable_create_new(&fixture.profile().join(LIVE_NAME), legacy).unwrap();
+        create_private_dir(&fixture.profile().join(INITIALIZING_NAME)).unwrap();
+
+        assert!(matches!(
+            initialize_profile_lifecycle(&fixture.storage),
+            Err(ProfileLifecycleError::MigrationReviewRequired)
+        ));
+        assert_eq!(fs::read(fixture.profile().join(LIVE_NAME)).unwrap(), legacy);
+        assert!(
+            fs::read_dir(fixture.profile().join(INITIALIZING_NAME))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+
+        let baseline = preserve_legacy_profile(&fixture.storage).unwrap();
+        assert!(baseline.profile_present());
+        assert_eq!(fs::read(fixture.profile().join(LIVE_NAME)).unwrap(), legacy);
+    }
+
+    #[test]
+    fn receipted_migration_crash_resumes_without_another_decision() {
+        let fixture = Fixture::new();
+        let legacy = b"legacy-profile-sentinel";
+        durable_create_new(&fixture.profile().join(LIVE_NAME), legacy).unwrap();
+        let app_data = BoundPrivateDirectory::open(fixture.storage.path()).unwrap();
+        let profile = app_data.open_directory("profile").unwrap();
+        let live = profile
+            .open_file(LIVE_NAME, true, PROFILE_MAX_BYTES)
+            .unwrap();
+        let initializing = profile.create_directory(INITIALIZING_NAME).unwrap();
+        prepare_initializing(&profile, &live, &initializing, true).unwrap();
+        drop(initializing);
+        drop(live);
+        drop(profile);
+        drop(app_data);
+
+        let baseline = initialize_profile_lifecycle(&fixture.storage).unwrap();
+
+        assert!(baseline.profile_present());
+        assert_eq!(fs::read(fixture.profile().join(LIVE_NAME)).unwrap(), legacy);
+        assert!(!fixture.profile().join(INITIALIZING_NAME).exists());
+        assert!(fixture.profile().join(LIFECYCLE_NAME).is_dir());
     }
 
     #[test]

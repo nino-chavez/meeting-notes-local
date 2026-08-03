@@ -58,6 +58,7 @@ const profileLede = document.querySelector("#profile-lede");
 const profileStatusTitle = document.querySelector("#profile-status-title");
 const profileStatusCopy = document.querySelector("#profile-status-copy");
 const profileFootnote = document.querySelector("#profile-footnote");
+const profileSetup = document.querySelector("#profile-setup");
 const micChannel = document.querySelector("#mic-channel");
 const systemChannel = document.querySelector("#system-channel");
 const libraryList = document.querySelector("#library-list");
@@ -760,6 +761,8 @@ async function openStartMeeting() {
 
 function renderProfile(snapshot) {
   const state = snapshot?.state || "unavailable";
+  profileSetup.disabled = true;
+  profileSetup.textContent = "Set up voice profile";
   if (state === "baseline-ready" && snapshot?.profilePresent === false) {
     profileKicker.textContent = "Voice profile · Not set up";
     profileTitle.textContent = "Voice isolation is off.";
@@ -783,8 +786,10 @@ function renderProfile(snapshot) {
     profileTitle.textContent = "A prior profile needs migration review.";
     profileLede.textContent = "Preview left the stored profile untouched and will not activate it. Recording remains available under the existing one-operator limit.";
     profileStatusTitle.textContent = "Stored profile is not active";
-    profileStatusCopy.textContent = "A separately reviewed migration is required before this profile can enter the new lifecycle.";
-    profileFootnote.textContent = "Opening Settings reads only the cached review status. It does not open profile, meeting, or transcript content.";
+    profileStatusCopy.textContent = "Preserve for review adds lifecycle records around the exact stored bytes. It does not activate or change them.";
+    profileFootnote.textContent = "Leaving this screen keeps the stored profile unchanged. Removal will remain a separate confirmed action.";
+    profileSetup.disabled = false;
+    profileSetup.textContent = "Preserve for review";
     return;
   }
   if (state === "needs-attention") {
@@ -802,6 +807,24 @@ function renderProfile(snapshot) {
   profileStatusTitle.textContent = "Voice isolation is unavailable";
   profileStatusCopy.textContent = "Recording remains available under the current one-operator limit. Retained meetings remain readable.";
   profileFootnote.textContent = "Try reopening Settings after the installation check finishes.";
+}
+
+async function preserveLegacyProfile() {
+  if (!invoke || profileSetup.disabled) return;
+  const revision = routeRevision;
+  profileSetup.disabled = true;
+  profileSetup.textContent = "Preserving…";
+  try {
+    const snapshot = await invoke("preview_profile_preserve_legacy");
+    if (currentScreen === "profile-screen" && routeRevision === revision) renderProfile(snapshot);
+  } catch {
+    if (currentScreen !== "profile-screen" || routeRevision !== revision) return;
+    const snapshot = await invoke("preview_profile_snapshot").catch(() => ({ state: "unavailable" }));
+    renderProfile(snapshot);
+    if (snapshot?.state === "migration-review-required") {
+      profileStatusCopy.textContent = "The stored profile was left unchanged. Finish any active operation, then try again.";
+    }
+  }
 }
 
 async function openProfile() {
@@ -1330,6 +1353,7 @@ findLink.addEventListener("click", () => openFind({ resetQuery: true }));
 meetingsLink.addEventListener("click", () => openMeetings({ resetFind: true }));
 promisesLink.addEventListener("click", () => openPromises({ resetFind: true }));
 profileLink.addEventListener("click", openProfile);
+profileSetup.addEventListener("click", preserveLegacyProfile);
 workflowReturn.addEventListener("click", returnToWorkflow);
 startMeetingAction.addEventListener("click", openStartMeeting);
 document.querySelector("#start-back").addEventListener("click", returnToProductHome);

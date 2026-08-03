@@ -856,6 +856,14 @@ fn preview_profile_snapshot(state: State<'_, ApplicationState>) -> PreviewProfil
     preview_profile_snapshot_for(&state)
 }
 
+#[cfg(feature = "preview-surface")]
+#[tauri::command]
+fn preview_profile_preserve_legacy(
+    state: State<'_, ApplicationState>,
+) -> Result<PreviewProfileSnapshot, String> {
+    preview_profile_preserve_legacy_for(&state)
+}
+
 #[cfg(any(feature = "preview-surface", test))]
 fn preview_profile_snapshot_for(state: &ApplicationState) -> PreviewProfileSnapshot {
     state
@@ -863,6 +871,85 @@ fn preview_profile_snapshot_for(state: &ApplicationState) -> PreviewProfileSnaps
         .lock()
         .map(|snapshot| *snapshot)
         .unwrap_or_else(|_| PreviewProfileSnapshot::unavailable())
+}
+
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+fn preview_profile_preserve_legacy_for(
+    state: &ApplicationState,
+) -> Result<PreviewProfileSnapshot, String> {
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| "the profile action is unavailable".to_string())?;
+    let current = preview_profile_snapshot_for(state);
+    if current.state != "migration-review-required" {
+        return Err("No legacy profile is awaiting review.".into());
+    }
+    {
+        let model = state
+            .model
+            .lock()
+            .map_err(|_| "the application state is unavailable".to_string())?;
+        if model.reducer.startup() != StartupState::Ready
+            || model.reducer.capture() != CaptureState::Idle
+        {
+            return Err("Finish the current app or recording operation first.".into());
+        }
+    }
+    let result = {
+        let held = state
+            .app_data_writer_lock
+            .lock()
+            .map_err(|_| "the app-data writer lock is unavailable".to_string())?;
+        let writer = held
+            .as_ref()
+            .ok_or_else(|| "the app-data writer lock is unavailable".to_string())?;
+        writer
+            .profile_lifecycle_authority()
+            .preserve_legacy_for_review()
+    };
+    match result {
+        Ok(baseline) => {
+            let snapshot = PreviewProfileSnapshot {
+                state: "baseline-ready",
+                profile_present: Some(baseline.profile_present()),
+            };
+            *state
+                .preview_profile
+                .lock()
+                .map_err(|_| "the cached profile status is unavailable".to_string())? = snapshot;
+            Ok(snapshot)
+        }
+        Err(ProfileLifecycleAdmissionError::Lifecycle(ProfileLifecycleError::Quarantined)) => {
+            let snapshot = PreviewProfileSnapshot {
+                state: "needs-attention",
+                profile_present: None,
+            };
+            if let Ok(mut cached) = state.preview_profile.lock() {
+                *cached = snapshot;
+            }
+            Ok(snapshot)
+        }
+        Err(ProfileLifecycleAdmissionError::Lifecycle(
+            ProfileLifecycleError::MigrationReviewRequired,
+        )) => Err("The legacy profile still requires review.".into()),
+        Err(ProfileLifecycleAdmissionError::ActiveMeeting) => {
+            Err("Finish the current recording before preserving this profile.".into())
+        }
+        Err(ProfileLifecycleAdmissionError::AuthorityLost)
+        | Err(ProfileLifecycleAdmissionError::Coordination(_)) => {
+            if let Ok(mut cached) = state.preview_profile.lock() {
+                *cached = PreviewProfileSnapshot::unavailable();
+            }
+            if let Ok(mut model) = state.model.lock() {
+                if model.reducer.startup() == StartupState::Ready {
+                    let _ = transition_startup(&mut model, StartupState::DiagnosticWritten);
+                }
+                model.error = Some("Private storage needs attention before recording.".into());
+            }
+            Err("Private storage needs attention before preserving this profile.".into())
+        }
+    }
 }
 
 #[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
@@ -1263,6 +1350,8 @@ fn main() {
             preview_library_snapshot,
             #[cfg(feature = "preview-surface")]
             preview_profile_snapshot,
+            #[cfg(feature = "preview-surface")]
+            preview_profile_preserve_legacy,
             #[cfg(feature = "preview-surface")]
             preview_library_search,
             #[cfg(feature = "preview-surface")]
@@ -3302,6 +3391,80 @@ mod tests {
             preview_profile_snapshot_for(&state).state,
             "migration-review-required"
         );
+    }
+
+    #[test]
+    fn preview_preserves_legacy_profile_without_activating_or_changing_it() {
+        let (_temporary, storage) = test_storage();
+        let legacy = b"stored-profile-sentinel";
+        durable_create_new(&storage.path().join("profile/voiceprint.json"), legacy).unwrap();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        *state.preview_profile.lock().unwrap() = PreviewProfileSnapshot {
+            state: "migration-review-required",
+            profile_present: None,
+        };
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+            model.retention_operational = true;
+        }
+        let before_model = serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap();
+
+        let snapshot = preview_profile_preserve_legacy_for(&state).unwrap();
+
+        assert_eq!(
+            snapshot,
+            PreviewProfileSnapshot {
+                state: "baseline-ready",
+                profile_present: Some(true),
+            }
+        );
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            legacy
+        );
+        assert!(storage.path().join("profile/lifecycle").is_dir());
+        assert_eq!(
+            serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap(),
+            before_model
+        );
+        let tree = storage_tree_bytes(storage.path());
+        assert!(preview_profile_preserve_legacy_for(&state).is_err());
+        assert_eq!(storage_tree_bytes(storage.path()), tree);
+    }
+
+    #[test]
+    fn active_meeting_keeps_legacy_profile_and_migration_state_unchanged() {
+        let (_temporary, storage) = test_storage();
+        let legacy = b"stored-profile-sentinel";
+        durable_create_new(&storage.path().join("profile/voiceprint.json"), legacy).unwrap();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        *state.preview_profile.lock().unwrap() = PreviewProfileSnapshot {
+            state: "migration-review-required",
+            profile_present: None,
+        };
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+            model.retention_operational = true;
+        }
+        let coordination = state.meeting_storage_coordination().unwrap();
+        let _active = coordination.acquire("active-meeting").unwrap();
+
+        assert!(preview_profile_preserve_legacy_for(&state).is_err());
+        assert_eq!(
+            preview_profile_snapshot_for(&state).state,
+            "migration-review-required"
+        );
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            legacy
+        );
+        assert!(!storage.path().join("profile/lifecycle").exists());
     }
 
     #[test]

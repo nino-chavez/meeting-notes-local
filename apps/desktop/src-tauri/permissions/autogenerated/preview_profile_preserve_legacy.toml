@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-profile-preserve-legacy"
+description = "Enables the preview_profile_preserve_legacy command without any pre-configured scope."
+commands.allow = ["preview_profile_preserve_legacy"]
+
+[[permission]]
+identifier = "deny-preview-profile-preserve-legacy"
+description = "Denies the preview_profile_preserve_legacy command without any pre-configured scope."
+commands.deny = ["preview_profile_preserve_legacy"]

@@ -20,6 +20,7 @@ use crate::operation_store::{OperationStore, OperationStoreError, StoredOperatio
 #[cfg(target_os = "macos")]
 use crate::profile_lifecycle::{
     ProfileLifecycleBaseline, ProfileLifecycleError, initialize_profile_lifecycle_bound,
+    preserve_legacy_profile_bound,
 };
 use crate::storage::{
     BoundPrivateDirectory, BoundPrivateFile, StorageRoot, create_private_dir, durable_create_new,
@@ -186,6 +187,23 @@ impl ProfileLifecycleAuthority<'_> {
     pub fn initialize_or_open(
         &self,
     ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleAdmissionError> {
+        self.run(initialize_profile_lifecycle_bound)
+    }
+
+    /// Preserves an existing safe legacy live slot as the sequence-zero
+    /// baseline. It does not validate, activate, replace, or delete its bytes.
+    pub fn preserve_legacy_for_review(
+        &self,
+    ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleAdmissionError> {
+        self.run(preserve_legacy_profile_bound)
+    }
+
+    fn run(
+        &self,
+        operation: impl FnOnce(
+            &BoundPrivateDirectory,
+        ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError>,
+    ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleAdmissionError> {
         let sequence = self.lock.coordination.lock_sequence()?;
         let authority_is_current = || {
             self.lock.storage_root.revalidate().is_ok()
@@ -201,7 +219,7 @@ impl ProfileLifecycleAuthority<'_> {
         if !sequence.active_meeting_ids()?.is_empty() {
             return Err(ProfileLifecycleAdmissionError::ActiveMeeting);
         }
-        let lifecycle = initialize_profile_lifecycle_bound(&self.lock.storage_root);
+        let lifecycle = operation(&self.lock.storage_root);
         if !authority_is_current() {
             return Err(ProfileLifecycleAdmissionError::AuthorityLost);
         }
@@ -1592,6 +1610,40 @@ mod tests {
                 .path()
                 .join("profile/.lifecycle.initializing")
                 .exists()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn explicit_legacy_preservation_uses_the_same_writer_and_meeting_gate() {
+        let (_temp, storage) = storage();
+        let legacy = b"legacy-profile-sentinel";
+        durable_create_new(&storage.path().join("profile/voiceprint.json"), legacy).unwrap();
+        let writer = AppDataWriterLock::acquire(&storage).unwrap();
+        let coordination = writer.coordination();
+        let active = coordination.acquire("active-meeting").unwrap();
+
+        assert!(matches!(
+            writer
+                .profile_lifecycle_authority()
+                .preserve_legacy_for_review(),
+            Err(ProfileLifecycleAdmissionError::ActiveMeeting)
+        ));
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            legacy
+        );
+        assert!(!storage.path().join("profile/lifecycle").exists());
+
+        drop(active);
+        let baseline = writer
+            .profile_lifecycle_authority()
+            .preserve_legacy_for_review()
+            .unwrap();
+        assert!(baseline.profile_present());
+        assert_eq!(
+            fs::read(storage.path().join("profile/voiceprint.json")).unwrap(),
+            legacy
         );
     }
 

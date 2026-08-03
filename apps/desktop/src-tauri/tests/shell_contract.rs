@@ -186,6 +186,7 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-dismiss-meeting",
             "allow-retry-startup",
             "allow-preview-profile-snapshot",
+            "allow-preview-profile-preserve-legacy",
             "allow-preview-library-snapshot",
             "allow-preview-library-search",
             "allow-preview-library-open-search-result",
@@ -438,7 +439,7 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
 }
 
 #[test]
-fn preview_voice_profile_surface_is_honest_and_non_mutating() {
+fn preview_voice_profile_surface_is_honest_and_bounds_legacy_preservation() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
 
@@ -448,12 +449,15 @@ fn preview_voice_profile_surface_is_honest_and_non_mutating() {
     assert!(html.contains("it does not name speakers"));
     assert!(html.contains("id=\"profile-setup\" type=\"button\" disabled>Set up voice profile"));
     assert!(script.contains("await invoke(\"preview_profile_snapshot\")"));
+    assert!(script.contains("await invoke(\"preview_profile_preserve_legacy\")"));
     assert!(script.contains("baseline-ready"));
     assert!(script.contains("profilePresent"));
     assert!(script.contains("No voice profile is active"));
     assert!(script.contains("migration-review-required"));
     assert!(script.contains("Recording remains available"));
     assert!(script.contains("reads only the cached"));
+    assert!(script.contains("adds lifecycle records around the exact stored bytes"));
+    assert!(script.contains("Removal will remain a separate confirmed action"));
     assert!(html.contains("does not read meeting or transcript content"));
     assert!(!script.contains("preview_profile_reset"));
     assert!(!script.contains("preview_profile_enroll"));
@@ -825,6 +829,7 @@ fn preview_commands_are_named_and_preserve_the_production_command_boundary() {
 
     assert!(handler.contains("preview_library_search"));
     assert!(handler.contains("preview_profile_snapshot"));
+    assert!(handler.contains("preview_profile_preserve_legacy"));
     assert!(handler.contains("preview_library_open_search_result"));
     assert!(handler.contains("preview_library_open_note"));
     assert!(handler.contains("preview_library_open_evidence"));
