@@ -760,38 +760,47 @@ async function openStartMeeting() {
 
 function renderProfile(snapshot) {
   const state = snapshot?.state || "unavailable";
-  if (state === "not-enrolled") {
-    profileKicker.textContent = "Voice profile · Setup required";
-    profileTitle.textContent = "Your voice profile is not set up.";
-    profileLede.textContent = "Voice isolation is off. Recording still works under Preview’s one-operator, headphones-required limit.";
+  if (state === "baseline-ready" && snapshot?.profilePresent === false) {
+    profileKicker.textContent = "Voice profile · Not set up";
+    profileTitle.textContent = "Voice isolation is off.";
+    profileLede.textContent = "Recording is available under Preview’s one-operator, headphones-required limit.";
     profileStatusTitle.textContent = "No voice profile is active";
-    profileStatusCopy.textContent = "This Mac has no voice profile for Preview. Guided voice setup is not available in this build yet.";
-    profileFootnote.textContent = "The app checked only whether its private profile slot exists; it did not open meeting or transcript content.";
+    profileStatusCopy.textContent = "Private setup storage is ready. Guided voice setup is not available in this build yet.";
+    profileFootnote.textContent = "Opening Settings reads only the cached setup status. It does not open profile, meeting, or transcript content.";
     return;
   }
-  if (state === "stored-unverified") {
+  if (state === "baseline-ready" && snapshot?.profilePresent === true) {
     profileKicker.textContent = "Voice profile · Stored material found";
-    profileTitle.textContent = "A prior profile needs review.";
-    profileLede.textContent = "This Preview found stored profile material but has not activated it. Recording remains under the one-operator, headphones-required limit.";
+    profileTitle.textContent = "Stored profile material is not active.";
+    profileLede.textContent = "Recording remains available under Preview’s one-operator, headphones-required limit.";
     profileStatusTitle.textContent = "Stored profile is not active";
-    profileStatusCopy.textContent = "Profile validation and reset are not connected in this build, so Preview will not use this profile yet.";
-    profileFootnote.textContent = "The app detected the profile slot without reading or changing its contents.";
+    profileStatusCopy.textContent = "Profile activation and reset are not connected in this build, so Preview will not use the stored profile yet.";
+    profileFootnote.textContent = "Opening Settings reads only the cached setup status. It does not open profile, meeting, or transcript content.";
+    return;
+  }
+  if (state === "migration-review-required") {
+    profileKicker.textContent = "Voice profile · Review required";
+    profileTitle.textContent = "A prior profile needs migration review.";
+    profileLede.textContent = "Preview left the stored profile untouched and will not activate it. Recording remains available under the existing one-operator limit.";
+    profileStatusTitle.textContent = "Stored profile is not active";
+    profileStatusCopy.textContent = "A separately reviewed migration is required before this profile can enter the new lifecycle.";
+    profileFootnote.textContent = "Opening Settings reads only the cached review status. It does not open profile, meeting, or transcript content.";
     return;
   }
   if (state === "needs-attention") {
     profileKicker.textContent = "Voice profile · Needs attention";
     profileTitle.textContent = "Voice profile storage needs attention.";
-    profileLede.textContent = "The private profile slot is not in a state this Preview can safely classify.";
+    profileLede.textContent = "Preview did not activate or delete stored profile material. Recording remains available under the existing one-operator limit.";
     profileStatusTitle.textContent = "Voice isolation remains off";
-    profileStatusCopy.textContent = "Current retained meetings remain readable. Recording stays within the existing one-operator limit.";
-    profileFootnote.textContent = "The app did not open, change, or delete profile material.";
+    profileStatusCopy.textContent = "Current retained meetings remain readable. Guided setup and reset remain unavailable in this build.";
+    profileFootnote.textContent = "Opening Settings reads only the cached attention state. It does not open profile, meeting, or transcript content.";
     return;
   }
   profileKicker.textContent = "Voice profile · Needs attention";
   profileTitle.textContent = "Voice setup status is unavailable.";
   profileLede.textContent = "This Preview could not read its own voice-setup capability state.";
   profileStatusTitle.textContent = "Voice isolation is unavailable";
-  profileStatusCopy.textContent = "The app did not open or change profile material. Current retained meetings remain readable.";
+  profileStatusCopy.textContent = "Recording remains available under the current one-operator limit. Retained meetings remain readable.";
   profileFootnote.textContent = "Try reopening Settings after the installation check finishes.";
 }
 

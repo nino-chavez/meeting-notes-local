@@ -5,6 +5,7 @@ use std::{env, fs};
 use build_contract::{BuildMode, plan, validate};
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
     let mode = BuildMode::from_enabled_features(
         env::var_os("CARGO_FEATURE_LIBRARY_DEV_SURFACE").is_some(),
         env::var_os("CARGO_FEATURE_PREVIEW_SURFACE").is_some(),

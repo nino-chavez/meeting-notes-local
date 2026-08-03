@@ -448,12 +448,21 @@ fn preview_voice_profile_surface_is_honest_and_non_mutating() {
     assert!(html.contains("it does not name speakers"));
     assert!(html.contains("id=\"profile-setup\" type=\"button\" disabled>Set up voice profile"));
     assert!(script.contains("await invoke(\"preview_profile_snapshot\")"));
-    assert!(script.contains("not-enrolled"));
+    assert!(script.contains("baseline-ready"));
+    assert!(script.contains("profilePresent"));
     assert!(script.contains("No voice profile is active"));
-    assert!(script.contains("stored-unverified"));
+    assert!(script.contains("migration-review-required"));
+    assert!(script.contains("Recording remains available"));
+    assert!(script.contains("reads only the cached"));
     assert!(html.contains("does not read meeting or transcript content"));
     assert!(!script.contains("preview_profile_reset"));
     assert!(!script.contains("preview_profile_enroll"));
+}
+
+#[test]
+fn tauri_build_tracks_the_active_configuration() {
+    let build = include_str!("../build.rs");
+    assert!(build.contains("cargo:rerun-if-env-changed=TAURI_CONFIG"));
 }
 
 #[test]

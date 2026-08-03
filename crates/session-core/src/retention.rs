@@ -173,6 +173,8 @@ pub struct ProfileLifecycleAuthority<'a> {
 pub enum ProfileLifecycleAdmissionError {
     #[error("profile lifecycle storage coordination is unavailable")]
     Coordination(#[from] MeetingCoordinationError),
+    #[error("profile lifecycle writer authority was lost")]
+    AuthorityLost,
     #[error("profile lifecycle is blocked by an active meeting")]
     ActiveMeeting,
     #[error(transparent)]
@@ -185,19 +187,25 @@ impl ProfileLifecycleAuthority<'_> {
         &self,
     ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleAdmissionError> {
         let sequence = self.lock.coordination.lock_sequence()?;
-        if self.lock.storage_root.revalidate().is_err()
-            || self
-                .lock
-                .writer_file
-                .revalidate(&self.lock.storage_root, 0)
-                .is_err()
-        {
-            return Err(ProfileLifecycleError::Quarantined.into());
+        let authority_is_current = || {
+            self.lock.storage_root.revalidate().is_ok()
+                && self
+                    .lock
+                    .writer_file
+                    .revalidate(&self.lock.storage_root, 0)
+                    .is_ok()
+        };
+        if !authority_is_current() {
+            return Err(ProfileLifecycleAdmissionError::AuthorityLost);
         }
         if !sequence.active_meeting_ids()?.is_empty() {
             return Err(ProfileLifecycleAdmissionError::ActiveMeeting);
         }
-        initialize_profile_lifecycle_bound(&self.lock.storage_root).map_err(Into::into)
+        let lifecycle = initialize_profile_lifecycle_bound(&self.lock.storage_root);
+        if !authority_is_current() {
+            return Err(ProfileLifecycleAdmissionError::AuthorityLost);
+        }
+        lifecycle.map_err(Into::into)
     }
 }
 
@@ -1610,9 +1618,7 @@ mod tests {
             original_writer
                 .profile_lifecycle_authority()
                 .initialize_or_open(),
-            Err(ProfileLifecycleAdmissionError::Lifecycle(
-                ProfileLifecycleError::Quarantined
-            ))
+            Err(ProfileLifecycleAdmissionError::AuthorityLost)
         ));
         assert!(!original_root.join("profile/voiceprint.json").exists());
         assert!(!displaced_root.join("profile/voiceprint.json").exists());
@@ -1636,9 +1642,7 @@ mod tests {
             original_writer
                 .profile_lifecycle_authority()
                 .initialize_or_open(),
-            Err(ProfileLifecycleAdmissionError::Lifecycle(
-                ProfileLifecycleError::Quarantined
-            ))
+            Err(ProfileLifecycleAdmissionError::AuthorityLost)
         ));
         assert!(!storage.path().join("profile/voiceprint.json").exists());
         assert!(

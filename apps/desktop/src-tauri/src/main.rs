@@ -45,6 +45,8 @@ use local_meeting_notes_session_core::meeting::{
     retention_policy_sha256, write_meeting,
 };
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+use local_meeting_notes_session_core::profile_lifecycle::ProfileLifecycleError;
 use local_meeting_notes_session_core::protocol::{
     Operation, ProtocolError, WorkerCommand, WorkerResult,
 };
@@ -54,6 +56,8 @@ use local_meeting_notes_session_core::recovery::{
 use local_meeting_notes_session_core::reducer::{
     CaptureState, ExclusiveOperation, Reducer, StartupState,
 };
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+use local_meeting_notes_session_core::retention::ProfileLifecycleAdmissionError;
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, RetentionOutcome, execute_due_retention_excluding, meeting_dir,
 };
@@ -96,6 +100,8 @@ struct ApplicationState {
     retention_started: AtomicBool,
     #[cfg(any(feature = "preview-surface", test))]
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
+    #[cfg(any(feature = "preview-surface", test))]
+    preview_profile: Mutex<PreviewProfileSnapshot>,
 }
 
 impl Default for ApplicationState {
@@ -111,6 +117,8 @@ impl Default for ApplicationState {
             retention_started: AtomicBool::new(false),
             #[cfg(any(feature = "preview-surface", test))]
             preview_library: Mutex::new(None),
+            #[cfg(any(feature = "preview-surface", test))]
+            preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
         }
     }
 }
@@ -222,10 +230,21 @@ struct PreviewLibraryTranscript {
 }
 
 #[cfg(any(feature = "preview-surface", test))]
-#[derive(Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewProfileSnapshot {
     state: &'static str,
+    profile_present: Option<bool>,
+}
+
+#[cfg(any(feature = "preview-surface", test))]
+impl PreviewProfileSnapshot {
+    const fn unavailable() -> Self {
+        Self {
+            state: "unavailable",
+            profile_present: None,
+        }
+    }
 }
 
 fn apply_restored_transcript_projection(
@@ -839,24 +858,64 @@ fn preview_profile_snapshot(state: State<'_, ApplicationState>) -> PreviewProfil
 
 #[cfg(any(feature = "preview-surface", test))]
 fn preview_profile_snapshot_for(state: &ApplicationState) -> PreviewProfileSnapshot {
-    let Ok(storage) = preview_storage_clone(state) else {
-        return PreviewProfileSnapshot {
-            state: "unavailable",
-        };
-    };
-    PreviewProfileSnapshot {
-        state: preview_profile_storage_state(&storage),
-    }
+    state
+        .preview_profile
+        .lock()
+        .map(|snapshot| *snapshot)
+        .unwrap_or_else(|_| PreviewProfileSnapshot::unavailable())
 }
 
-#[cfg(any(feature = "preview-surface", test))]
-fn preview_profile_storage_state(storage: &StorageRoot) -> &'static str {
-    let profile = storage.path().join("profile/voiceprint.json");
-    match fs::symlink_metadata(profile) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => "not-enrolled",
-        Ok(metadata) if metadata.file_type().is_file() && metadata.len() == 0 => "not-enrolled",
-        Ok(metadata) if metadata.file_type().is_file() => "stored-unverified",
-        Ok(_) | Err(_) => "needs-attention",
+#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &'static str> {
+    let held = state
+        .app_data_writer_lock
+        .lock()
+        .map_err(|_| "the app-data writer lock is unavailable")?;
+    let writer = held
+        .as_ref()
+        .ok_or("the app-data writer lock is unavailable")?;
+    let lifecycle = match writer.profile_lifecycle_authority().initialize_or_open() {
+        Ok(baseline) => Ok(PreviewProfileSnapshot {
+            state: "baseline-ready",
+            profile_present: Some(baseline.profile_present()),
+        }),
+        Err(ProfileLifecycleAdmissionError::Lifecycle(
+            ProfileLifecycleError::MigrationReviewRequired,
+        )) => Ok(PreviewProfileSnapshot {
+            state: "migration-review-required",
+            profile_present: None,
+        }),
+        Err(ProfileLifecycleAdmissionError::Lifecycle(ProfileLifecycleError::Quarantined)) => {
+            Ok(PreviewProfileSnapshot {
+                state: "needs-attention",
+                profile_present: None,
+            })
+        }
+        Err(ProfileLifecycleAdmissionError::AuthorityLost) => {
+            Err("the app-data writer authority changed")
+        }
+        Err(ProfileLifecycleAdmissionError::ActiveMeeting) => {
+            Err("profile lifecycle startup overlapped an active meeting")
+        }
+        Err(ProfileLifecycleAdmissionError::Coordination(_)) => {
+            Err("profile lifecycle storage coordination is unavailable")
+        }
+    };
+    drop(held);
+    match lifecycle {
+        Ok(profile) => {
+            *state
+                .preview_profile
+                .lock()
+                .map_err(|_| "the cached profile status is unavailable")? = profile;
+            Ok(())
+        }
+        Err(error) => {
+            if let Ok(mut cached) = state.preview_profile.lock() {
+                *cached = PreviewProfileSnapshot::unavailable();
+            }
+            Err(error)
+        }
     }
 }
 
@@ -1236,6 +1295,10 @@ fn main() {
 
 fn initialize_application(app: AppHandle, retry: bool) {
     let state = app.state::<ApplicationState>();
+    #[cfg(any(feature = "preview-surface", test))]
+    if let Ok(mut profile) = state.preview_profile.lock() {
+        *profile = PreviewProfileSnapshot::unavailable();
+    }
     {
         let mut model = state.model.lock().expect("application model lock");
         model.retention_operational = false;
@@ -1271,6 +1334,11 @@ fn initialize_application(app: AppHandle, retry: bool) {
     };
     if let Err(error) = ensure_app_data_writer_lock(&state, &storage_context.storage) {
         finish_startup_failure(&state, retry, StartupFailure::Diagnostic, &error);
+        return;
+    }
+    #[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+    if let Err(error) = reconcile_preview_profile_lifecycle(&state) {
+        finish_startup_failure(&state, retry, StartupFailure::Diagnostic, error);
         return;
     }
     *state.storage.lock().expect("storage context lock") = Some(storage_context.clone());
@@ -3143,35 +3211,122 @@ mod tests {
     }
 
     #[test]
-    fn profile_preview_classifies_storage_without_opening_profile_bytes() {
-        let (_missing_temporary, missing) = test_storage();
-        assert_eq!(preview_profile_storage_state(&missing), "not-enrolled");
+    fn profile_preview_caches_authoritative_lifecycle_state() {
+        let (_fresh_temporary, fresh) = test_storage();
+        let fresh_state = ApplicationState::default();
+        ensure_app_data_writer_lock(&fresh_state, &fresh).unwrap();
+        reconcile_preview_profile_lifecycle(&fresh_state).unwrap();
+        assert_eq!(
+            preview_profile_snapshot_for(&fresh_state),
+            PreviewProfileSnapshot {
+                state: "baseline-ready",
+                profile_present: Some(false),
+            }
+        );
 
-        let (_zero_temporary, zero) = test_storage();
-        create_private_dir(&zero.path().join("profile")).unwrap();
-        durable_create_new(&zero.path().join("profile/voiceprint.json"), b"").unwrap();
-        assert_eq!(preview_profile_storage_state(&zero), "not-enrolled");
+        let initialized_tree = storage_tree_bytes(fresh.path());
+        reconcile_preview_profile_lifecycle(&fresh_state).unwrap();
+        assert_eq!(storage_tree_bytes(fresh.path()), initialized_tree);
+        assert_eq!(
+            preview_profile_snapshot_for(&fresh_state),
+            PreviewProfileSnapshot {
+                state: "baseline-ready",
+                profile_present: Some(false),
+            }
+        );
 
-        let (_stored_temporary, stored) = test_storage();
-        create_private_dir(&stored.path().join("profile")).unwrap();
+        let (_legacy_temporary, legacy) = test_storage();
         durable_create_new(
-            &stored.path().join("profile/voiceprint.json"),
+            &legacy.path().join("profile/voiceprint.json"),
             b"stored-profile-sentinel",
         )
         .unwrap();
-        assert_eq!(preview_profile_storage_state(&stored), "stored-unverified");
+        let legacy_state = ApplicationState::default();
+        ensure_app_data_writer_lock(&legacy_state, &legacy).unwrap();
+        let legacy_tree = storage_tree_bytes(legacy.path());
+        reconcile_preview_profile_lifecycle(&legacy_state).unwrap();
+        assert_eq!(storage_tree_bytes(legacy.path()), legacy_tree);
+        assert_eq!(
+            preview_profile_snapshot_for(&legacy_state),
+            PreviewProfileSnapshot {
+                state: "migration-review-required",
+                profile_present: None,
+            }
+        );
 
         let (_unsafe_temporary, unsafe_storage) = test_storage();
-        create_private_dir(&unsafe_storage.path().join("profile")).unwrap();
         std::os::unix::fs::symlink(
             unsafe_storage.path().join("elsewhere"),
             unsafe_storage.path().join("profile/voiceprint.json"),
         )
         .unwrap();
+        let unsafe_state = ApplicationState::default();
+        ensure_app_data_writer_lock(&unsafe_state, &unsafe_storage).unwrap();
+        reconcile_preview_profile_lifecycle(&unsafe_state).unwrap();
         assert_eq!(
-            preview_profile_storage_state(&unsafe_storage),
-            "needs-attention"
+            preview_profile_snapshot_for(&unsafe_state),
+            PreviewProfileSnapshot {
+                state: "needs-attention",
+                profile_present: None,
+            }
         );
+    }
+
+    #[test]
+    fn profile_lifecycle_attention_does_not_reduce_capture_admission() {
+        let (_temporary, storage) = test_storage();
+        durable_create_new(
+            &storage.path().join("profile/voiceprint.json"),
+            b"stored-profile-sentinel",
+        )
+        .unwrap();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+            model.retention_operational = true;
+        }
+        let before = serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap();
+
+        reconcile_preview_profile_lifecycle(&state).unwrap();
+
+        let after = serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap();
+        assert_eq!(after, before);
+        let model = state.model.lock().unwrap();
+        assert_eq!(model.reducer.startup(), StartupState::Ready);
+        assert_eq!(model.reducer.capture(), CaptureState::Idle);
+        assert!(model.retention_operational);
+        assert_eq!(
+            preview_profile_snapshot_for(&state).state,
+            "migration-review-required"
+        );
+    }
+
+    #[test]
+    fn profile_lifecycle_authority_loss_is_not_profile_attention() {
+        let (_temporary, storage) = test_storage();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        let original_root = storage.path().to_path_buf();
+        let displaced_root = original_root.with_file_name("app-data.displaced");
+        fs::rename(&original_root, &displaced_root).unwrap();
+        create_private_dir(&original_root).unwrap();
+        for child in ["diagnostics", "profile", "meetings"] {
+            create_private_dir(&original_root.join(child)).unwrap();
+        }
+
+        assert_eq!(
+            reconcile_preview_profile_lifecycle(&state),
+            Err("the app-data writer authority changed")
+        );
+        assert_eq!(
+            preview_profile_snapshot_for(&state),
+            PreviewProfileSnapshot::unavailable()
+        );
+        assert!(!original_root.join("profile/voiceprint.json").exists());
+        assert!(!displaced_root.join("profile/voiceprint.json").exists());
     }
 
     #[test]
