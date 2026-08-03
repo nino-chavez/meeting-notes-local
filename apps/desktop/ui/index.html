@@ -11,7 +11,7 @@
     <header class="app-header">
       <div>
         <p class="eyebrow">Local Meeting Notes</p>
-        <p class="product-state"><span class="status-dot" aria-hidden="true"></span><span id="header-state">Opening safely</span></p>
+        <p class="product-state"><span class="status-dot" aria-hidden="true"></span><span id="header-state" role="status" aria-atomic="true">Opening safely</span></p>
       </div>
       <div class="header-actions">
         <nav class="product-nav" id="product-nav" aria-label="Meeting notes" hidden>
@@ -26,7 +26,7 @@
       </div>
     </header>
 
-    <main tabindex="-1" aria-live="polite">
+    <main tabindex="-1">
       <section class="screen active" id="startup-screen" aria-labelledby="startup-title">
         <p class="kicker">Nothing is recording</p>
         <h1 id="startup-title">Checking this installation.</h1>

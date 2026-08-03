@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createTransitionGate,
   createSingleFlight,
+  createLatestRequestGate,
   displayedClaimIdentity,
   normalizedScrollPosition,
   prepareConsentTransition,
@@ -73,8 +74,22 @@ test("mutable actions match the admitted capture and startup states", () => {
   assert.equal(failure.showProductNavigation, true);
   assert.equal(
     mutableActionPolicy({ preview: true, startup: "runtime-missing", capture: "idle" }).canRetryStartup,
-    false,
+    true,
   );
+});
+
+test("latest snapshot request wins when responses resolve out of order", () => {
+  const gate = createLatestRequestGate();
+  const first = gate.begin();
+  const second = gate.begin();
+  const applied = [];
+
+  if (gate.isCurrent(second)) applied.push("stopping");
+  if (gate.isCurrent(first)) applied.push("recording");
+
+  assert.equal(gate.isCurrent(first), false);
+  assert.equal(gate.isCurrent(second), true);
+  assert.deepEqual(applied, ["stopping"]);
 });
 
 test("retention copy says when audio becomes due and when deletion can run", () => {
@@ -198,6 +213,27 @@ test("failed Find refresh leaves invalidated results unrendered", async () => {
   assert.deepEqual(events, ["invalidate", "snapshot"]);
 });
 
+test("Find does not invalidate or render after its route loses ownership", async () => {
+  const events = [];
+  let ownsRoute = true;
+  let releaseSnapshot;
+  const refresh = refreshFindGeneration("words", {
+    isCurrent: () => ownsRoute,
+    invalidateResults: () => { events.push("invalidate"); },
+    snapshot: () => new Promise((resolve) => { releaseSnapshot = resolve; }),
+    search: async () => {
+      events.push("search");
+      return { handle: "result" };
+    },
+    render: () => { events.push("render"); },
+  });
+  await Promise.resolve();
+  ownsRoute = false;
+  releaseSnapshot();
+  assert.equal(await refresh, null);
+  assert.deepEqual(events, ["invalidate"]);
+});
+
 test("transcript-ready start dismisses and clears before requiring idle", async () => {
   const events = [];
   const ready = await prepareConsentTransition("transcript-ready", {
@@ -229,6 +265,22 @@ test("failed dismissal never clears state, refreshes, or admits consent", async 
     }),
     /dismiss failed/,
   );
+  assert.deepEqual(events, ["dismiss"]);
+});
+
+test("route loss after dismissal prevents consent cleanup and refresh", async () => {
+  const events = [];
+  const ready = await prepareConsentTransition("transcript-ready", {
+    dismiss: async () => { events.push("dismiss"); },
+    ownsRoute: () => false,
+    clearPriorAttempt: () => { events.push("clear"); },
+    refresh: async () => {
+      events.push("refresh");
+      return { capture: "idle" };
+    },
+  });
+
+  assert.equal(ready, false);
   assert.deepEqual(events, ["dismiss"]);
 });
 

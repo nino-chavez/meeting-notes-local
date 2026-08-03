@@ -343,10 +343,15 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(html.contains("id=\"profile-link\" type=\"button\" hidden>Settings"));
     assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert_eq!(html.matches("id=\"stop-button\"").count(), 1);
+    assert!(html.contains("id=\"header-state\" role=\"status\" aria-atomic=\"true\""));
+    assert!(!html.contains("<main tabindex=\"-1\" aria-live"));
     assert!(script.contains("function renderCaptureAction(snapshot)"));
     assert!(script.contains("productNav.hidden = !policy.showProductNavigation;"));
     assert!(script.contains("stopCommandPending = true;"));
     assert!(script.contains("Recording · Stop needs attention"));
+    assert!(script.contains("function renderConnectionUncertainty()"));
+    assert!(script.contains("const snapshotRequestGate = createLatestRequestGate();"));
+    assert!(!script.contains("render({ startup: \"diagnostic-written\", capture: \"idle\""));
     assert!(script.contains("if (currentScreen === id) routeRevision += 1;"));
     assert!(navigation.contains("export function resolvedScreenForSnapshot"));
     assert!(navigation.contains("export function mutableActionPolicy"));
@@ -405,9 +410,8 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     );
     assert!(script.contains("librarySearchSubmit.disabled = findNavigationBusy || handleNavigationBusy;"));
     assert!(!script.contains("for (const link of [findLink, meetingsLink, promisesLink]) link.disabled"));
-    assert!(
-        script.contains("if (currentScreen === \"find-screen\" && routeRevision === revision) renderLibrarySearch(response);")
-    );
+    assert!(script.contains("const ownsRoute = () => currentScreen === \"find-screen\" && routeRevision === revision;"));
+    assert!(script.contains("if (ownsRoute()) renderLibrarySearch(response);"));
     assert!(
         script
             .contains("libraryList.replaceChildren();\n  librarySearchResults.replaceChildren();")

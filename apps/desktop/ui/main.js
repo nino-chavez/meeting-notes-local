@@ -1,5 +1,6 @@
 import {
   createSingleFlight,
+  createLatestRequestGate,
   createTransitionGate,
   mutableActionPolicy,
   prepareConsentTransition,
@@ -83,6 +84,7 @@ let currentScreen = "startup-screen";
 let productRootScreen = "find-screen";
 let transcriptReturnContext = null;
 let routeRevision = 0;
+let productSelectionRevision = 0;
 let findNavigationBusy = false;
 let findRefreshBusyCount = 0;
 let handleNavigationBusy = false;
@@ -95,6 +97,7 @@ const libraryInitialization = createSingleFlight(
 );
 const findRefreshOperation = createSingleFlight(performFindRefresh);
 const handleTransitionGate = createTransitionGate();
+const snapshotRequestGate = createLatestRequestGate();
 
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
   const destination = screens.get(id);
@@ -124,13 +127,20 @@ function showScreen(id, { resetScroll = false, focus = true } = {}) {
 
 function syncProductNavigation() {
   const settingsActive = currentScreen === "profile-screen";
+  const productActive = [
+    "find-screen",
+    "meetings-screen",
+    "promises-screen",
+    "meeting-detail-screen",
+    "library-transcript-screen",
+  ].includes(currentScreen);
   const activeLink = {
     "find-screen": findLink,
     "meetings-screen": meetingsLink,
     "promises-screen": promisesLink,
   }[productRootScreen];
   for (const link of [findLink, meetingsLink, promisesLink]) {
-    if (!settingsActive && link === activeLink) link.setAttribute("aria-current", "page");
+    if (productActive && !settingsActive && link === activeLink) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
   if (settingsActive) profileLink.setAttribute("aria-current", "page");
@@ -171,8 +181,13 @@ function finishHandleTransition(transition) {
 
 function selectProductScreen(id, options = {}) {
   workflowOwnsRoute = false;
+  productSelectionRevision += 1;
   if (currentScreen === id) routeRevision += 1;
   showScreen(id, options);
+}
+
+function workflowRouteIsCurrent(selectionRevision) {
+  return workflowOwnsRoute && productSelectionRevision === selectionRevision;
 }
 
 function showWorkflowScreen(snapshot, options = {}) {
@@ -194,6 +209,20 @@ function renderCaptureAction(snapshot) {
   stopButton.disabled = policy.stopDisabled;
   stopButton.textContent = policy.stopLabel;
   return policy;
+}
+
+function renderConnectionUncertainty() {
+  document.documentElement.dataset.connectionState = "uncertain";
+  const capture = lastSnapshot?.capture;
+  if (capture === "recording") {
+    headerState.textContent = "Recording · connection uncertain";
+    return;
+  }
+  if (capture === "stopping") {
+    headerState.textContent = "Stopping · connection uncertain";
+    return;
+  }
+  headerState.textContent = "Connection uncertain · local state has not changed";
 }
 
 async function initializeLibraryReader() {
@@ -514,6 +543,7 @@ function render(snapshot) {
   const capture = snapshot.capture || "idle";
   document.documentElement.dataset.startupState = startup;
   document.documentElement.dataset.captureState = capture;
+  document.documentElement.dataset.connectionState = "connected";
   const preview = snapshot.preview === true;
   releaseBadge.textContent = preview ? "Preview" : "Internal alpha";
   renderCaptureAction(snapshot);
@@ -624,6 +654,7 @@ async function openStartMeeting() {
   if (!invoke || !mutableActionPolicy(lastSnapshot).canStartMeeting) return;
   clearError(startError);
   workflowOwnsRoute = true;
+  const selectionRevision = productSelectionRevision;
   startMeetingAction.disabled = true;
   startMeetingAction.textContent = "Opening…";
   try {
@@ -633,16 +664,17 @@ async function openStartMeeting() {
         clearAttemptReview(true);
         invalidateLibraryHandles();
       },
+      ownsRoute: () => workflowRouteIsCurrent(selectionRevision),
       refresh,
     });
     if (!ready) {
-      if (!workflowOwnsRoute) return;
+      if (!workflowRouteIsCurrent(selectionRevision)) return;
       showStartTransitionError();
       return;
     }
-    if (workflowOwnsRoute) showScreen("idle-screen", { resetScroll: true });
+    if (workflowRouteIsCurrent(selectionRevision)) showScreen("idle-screen", { resetScroll: true });
   } catch {
-    if (workflowOwnsRoute) showStartTransitionError();
+    if (workflowRouteIsCurrent(selectionRevision)) showStartTransitionError();
   } finally {
     startMeetingAction.disabled = false;
     startMeetingAction.textContent = "Start meeting";
@@ -930,23 +962,25 @@ function setFindRefreshBusy(busy) {
 
 async function performFindRefresh() {
   const revision = routeRevision;
+  const ownsRoute = () => currentScreen === "find-screen" && routeRevision === revision;
   const query = librarySearchQuery.value.trim();
   if (query) setError(libraryNotice, "Searching your retained meetings…");
   else clearError(libraryNotice);
   try {
     await refreshFindGeneration(query, {
+      isCurrent: ownsRoute,
       invalidateResults: invalidateLibraryHandles,
       snapshot: initializeLibraryReader,
       search: (currentQuery) => invoke("preview_library_search", { query: currentQuery }),
       render: (response) => {
-        if (currentScreen === "find-screen" && routeRevision === revision) renderLibrarySearch(response);
+        if (ownsRoute()) renderLibrarySearch(response);
       },
     });
-    if (!query && currentScreen === "find-screen" && routeRevision === revision) clearError(libraryNotice);
+    if (!query && ownsRoute()) clearError(libraryNotice);
     return { revision, ok: true };
   } catch {
-    invalidateLibraryHandles();
-    if (currentScreen === "find-screen" && routeRevision === revision) {
+    if (ownsRoute()) {
+      invalidateLibraryHandles();
       setError(libraryNotice, "Find is unavailable right now. Reopen Find and try again.");
     }
     return { revision, ok: false };
@@ -1017,17 +1051,20 @@ function schedulePoll(delay) {
 
 async function refresh() {
   if (!invoke) {
-    render({ startup: "diagnostic-written", capture: "idle", error: "The local application bridge is unavailable." });
+    renderConnectionUncertainty();
     return null;
   }
+  const ticket = snapshotRequestGate.begin();
   try {
     const snapshot = await invoke("app_snapshot");
+    if (!snapshotRequestGate.isCurrent(ticket)) return lastSnapshot;
     render(snapshot);
     const active = ["arming", "recording", "stopping", "captured", "transcribing"].includes(snapshot.capture);
     schedulePoll(active ? 400 : 1500);
     return snapshot;
   } catch {
-    render({ startup: "diagnostic-written", capture: "idle", error: "The local safety check could not finish." });
+    if (!snapshotRequestGate.isCurrent(ticket)) return lastSnapshot;
+    renderConnectionUncertainty();
     schedulePoll(2000);
     return null;
   }
@@ -1048,27 +1085,28 @@ async function dismissAttemptAndReturnFind() {
     showStartTransitionError();
     return;
   }
-  const dismissalRevision = routeRevision;
+  const selectionRevision = productSelectionRevision;
   try {
     await invoke("dismiss_meeting");
     clearAttemptReview(true);
     invalidateLibraryHandles();
     const snapshot = await refresh();
     if (snapshot?.capture !== "idle") {
-      if (workflowOwnsRoute && routeRevision === dismissalRevision) showStartTransitionError();
+      if (workflowRouteIsCurrent(selectionRevision)) showStartTransitionError();
       return;
     }
-    if (workflowOwnsRoute && routeRevision === dismissalRevision && currentScreen !== "find-screen") {
+    if (workflowRouteIsCurrent(selectionRevision) && currentScreen !== "find-screen") {
       productRootScreen = "find-screen";
       selectProductScreen("find-screen", { resetScroll: true });
       await refreshFindView();
     }
   } catch {
-    showStartTransitionError();
+    if (workflowRouteIsCurrent(selectionRevision)) showStartTransitionError();
   }
 }
 
 async function returnToFindAfterStartError() {
+  const selectionRevision = productSelectionRevision;
   const currentCapture = lastSnapshot?.capture;
   const currentReady = lastSnapshot?.startup === "ready"
     && lastSnapshot?.preview === true
@@ -1077,9 +1115,10 @@ async function returnToFindAfterStartError() {
   if (snapshot?.startup !== "ready"
       || snapshot?.preview !== true
       || !["idle", "transcript-ready"].includes(snapshot.capture)) {
-    showStartTransitionError();
+    if (workflowRouteIsCurrent(selectionRevision)) showStartTransitionError();
     return;
   }
+  if (!workflowRouteIsCurrent(selectionRevision)) return;
   productRootScreen = "find-screen";
   selectProductScreen("find-screen");
   await refreshFindView();

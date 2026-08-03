@@ -41,7 +41,7 @@ export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
     canSubmitStart: startupReady && capture === "idle",
     canDismissMeeting: startupReady
       && ["transcript-ready", "transcription-failed", "recovered-interrupted"].includes(capture),
-    canRetryStartup: ["service-timeout", "diagnostic-written"].includes(startup)
+    canRetryStartup: ["runtime-missing", "service-timeout", "diagnostic-written"].includes(startup)
       && !["arming", "recording", "stopping", "captured", "transcribing"].includes(capture),
     showStop: startupReady && (recording || stopping),
     stopDisabled: !recording || stopPending,
@@ -218,11 +218,27 @@ export function createSingleFlight(loader) {
   };
 }
 
+export function createLatestRequestGate() {
+  let latest = 0;
+  return {
+    begin() {
+      latest += 1;
+      return latest;
+    },
+    isCurrent(ticket) {
+      return ticket === latest;
+    },
+  };
+}
+
 export async function refreshFindGeneration(query, actions) {
+  if (actions.isCurrent && !actions.isCurrent()) return null;
   actions.invalidateResults();
   await actions.snapshot();
+  if (actions.isCurrent && !actions.isCurrent()) return null;
   if (!query) return null;
   const response = await actions.search(query);
+  if (actions.isCurrent && !actions.isCurrent()) return null;
   actions.render(response);
   return response;
 }
@@ -231,7 +247,10 @@ export async function prepareConsentTransition(capture, actions) {
   if (capture === "idle") return true;
   if (capture !== "transcript-ready") return false;
   await actions.dismiss();
+  if (actions.ownsRoute && !actions.ownsRoute()) return false;
   actions.clearPriorAttempt();
+  if (actions.ownsRoute && !actions.ownsRoute()) return false;
   const snapshot = await actions.refresh();
+  if (actions.ownsRoute && !actions.ownsRoute()) return false;
   return snapshot?.capture === "idle";
 }
