@@ -22,7 +22,12 @@ Core Audio process tap, your microphone comes through the same path
 > audio while preserving its transcript and note. That
 > Preview is not the frozen alpha distribution build or a beta. What also exists is a working
 > two-leg research capture — validated end to end over a 75-minute meeting — a
-> voiceprint gate wired into that capture but never yet run on a real meeting, and a
+> voiceprint gate wired into that capture but never yet run on a real meeting —
+> its packaged-encoder direction is decided (2026-08-03): ONNX Runtime CPU is the
+> preferred beta candidate, measured ~3.8× smaller as a complete stack and ~13×
+> faster to cold-load with score parity within 5.4 × 10⁻⁷, pending a torch-free
+> Fbank-parity check and a release-lane signed-build proof, with
+> PyTorch/SpeechBrain kept only as reference and fallback — and a
 > local summarizer whose
 > evidence graph completes, rechecks and fails closed. Two bounded corpus runs
 > under the current list-generating model contract produced rejected diagnostics,

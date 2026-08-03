@@ -541,16 +541,23 @@ derivation is a rehearsal, not evidence. Derived material spanning two encoder
 checkpoints is refused outright — cosines between embedding spaces are not
 comparable, the same fact behind the `stale` state below.
 
-**The packaged runtime cannot derive that material today.** `worker/build_runtime.sh`
+**The packaged runtime cannot derive that material today, and the chosen encoder
+is a preferred candidate, not an admitted one.** `worker/build_runtime.sh`
 records `encoder-unavailable.identity` — a text placeholder — as its encoder, and its
 digest is what `profile.inspect` hands `load_profile` as the expected fingerprint, so
 every real ECAPA profile is refused in the packaged app. The same boundary blocks
 meeting-time gating: `dual_capture.load_voiceprint` builds the encoder *before the
-microphone opens*. Admitting a product speaker encoder — packaged
-PyTorch/SpeechBrain, a measured native conversion, or removing voice isolation from
-the beta envelope — is a release decision that precedes any saved-sitting claim.
-CLI-only enrolment is not a middle path: a profile enrolled outside the app still
-needs the in-app encoder to score anything.
+microphone opens*. The packaging direction was decided on 2026-08-03 from the
+measured spike (`spike/encoder-packaging/RESULTS.md`): voice isolation stays in the
+first beta, served by ONNX Runtime CPU execution with the converted ECAPA model
+pinned by its own `.onnx` digest and a torch-free feature front end;
+PyTorch/SpeechBrain remains only the reference implementation and packaging
+fallback. Two mandatory checks stand between preferred and admitted — a registered
+Fbank-parity comparison whose score/classification agreement decides, and the
+release-lane packaging proof against the actual signed bundle — and until both
+pass, every surface says *preferred ONNX candidate*, and no real sitting may be
+claimed saved. CLI-only enrolment is not a middle path: a profile enrolled outside
+the app still needs the in-app encoder to score anything.
 
 Recorded here rather than improvised at implementation time, because this file
 opens with the reason: patching at L1 when the missing primitive is at L4 produces

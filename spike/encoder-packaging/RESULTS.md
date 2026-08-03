@@ -36,6 +36,11 @@ isolation, the encoder must be packaged. Two candidate shapes were measured:
 Process RSS baseline (venv python + numpy alone): 26 MB. Both arms' RSS
 include the 12-clip fixture set; Arm B's also includes the features array.
 
+The size rows compare runtime libraries alone. The complete speaker stack —
+runtime plus the model artifact both arms must carry — is 504 + 85 = **589 MB**
+for Arm A and 70 + 83.4 = **153 MB** for Arm B, about **3.8× smaller** overall.
+The ~7× figure in the Reading below is the runtime-only ratio.
+
 ## Parity
 
 Measured at the exact boundary the ONNX artifact reproduces
@@ -98,6 +103,39 @@ remains the fallback that requires no new parity work. Neither this spike nor
 any test in it admits an encoder into the product runtime; that admission,
 and whether voice isolation stays in the beta envelope at all, are operator
 decisions.
+
+## Decision (2026-08-03)
+
+The operator reviewed this record and selected **ONNX Runtime CPU execution as
+the preferred beta candidate**, keeping voice isolation in the first beta.
+Terms of the decision:
+
+- The converted ECAPA model is pinned by its own `.onnx` digest in the runtime
+  manifest; the checkpoint fingerprint alone does not identify it.
+- The feature front end is torch-free, built on already-packaged numerical
+  dependencies where practical.
+- PyTorch/SpeechBrain is retained only as the reference implementation and
+  packaging fallback, not a shipping path.
+- No Core ML or ANE work until CPU ONNX fails latency/memory admission or a
+  later optimization is separately justified. Voice scoring is post-meeting,
+  so CPU headroom over the missing Fbank stage is real.
+
+**Preferred is not admitted.** Two checks stand between them, both mandatory:
+
+1. **Fbank parity.** Identical deterministic and registered public-audio
+   fixtures through SpeechBrain and the torch-free front end, comparing
+   feature shapes, feature values, final embeddings, pairwise cosine scores,
+   and resulting gate classifications around registered margins. The
+   score/classification comparison decides, not raw feature equality.
+2. **Release-lane packaging.** The actual signed app built with ONNX Runtime
+   and the model must prove: every Mach-O signed, the bundle passes its closed
+   verifier, hardened-runtime launch without unnecessary entitlements,
+   Gatekeeper acceptance of the transferred build, offline cold load,
+   runtime/model digests matching the manifest, and peak memory acceptable
+   beside MLX transcription.
+
+Until both pass, every product surface says **preferred ONNX candidate**,
+never admitted encoder.
 
 ## Reproduce
 
