@@ -427,6 +427,10 @@ impl BoundPrivateDirectory {
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 impl BoundPrivateFile {
+    pub(crate) fn raw_fd(&self) -> libc::c_int {
+        self.file.as_raw_fd()
+    }
+
     pub(crate) fn identity(
         &self,
         directory: &BoundPrivateDirectory,

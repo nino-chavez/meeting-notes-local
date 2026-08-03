@@ -1,8 +1,6 @@
 use std::collections::HashSet;
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::io::{self, Read};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,8 +17,13 @@ use crate::meeting::{
 };
 use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
 use crate::operation_store::{OperationStore, OperationStoreError, StoredOperationRequest};
+#[cfg(target_os = "macos")]
+use crate::profile_lifecycle::{
+    ProfileLifecycleBaseline, ProfileLifecycleError, initialize_profile_lifecycle_bound,
+};
 use crate::storage::{
-    StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
+    BoundPrivateDirectory, BoundPrivateFile, StorageRoot, create_private_dir, durable_create_new,
+    durable_replace, sync_directory,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +153,54 @@ pub struct ManualAudioDeletionAuthority<'a> {
     lock: &'a AppDataWriterLock,
 }
 
+/// The sole capability that may initialize or reopen profile lifecycle state.
+///
+/// It borrows the process writer lock and admits no caller-provided storage
+/// path or coordination registry. The operation holds the global storage
+/// sequence and refuses while any meeting capture lease is active.
+///
+/// ```compile_fail
+/// use local_meeting_notes_session_core::profile_lifecycle::initialize_profile_lifecycle_bound;
+/// # let _ = initialize_profile_lifecycle_bound;
+/// ```
+#[cfg(target_os = "macos")]
+pub struct ProfileLifecycleAuthority<'a> {
+    lock: &'a AppDataWriterLock,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Error)]
+pub enum ProfileLifecycleAdmissionError {
+    #[error("profile lifecycle storage coordination is unavailable")]
+    Coordination(#[from] MeetingCoordinationError),
+    #[error("profile lifecycle is blocked by an active meeting")]
+    ActiveMeeting,
+    #[error(transparent)]
+    Lifecycle(#[from] ProfileLifecycleError),
+}
+
+#[cfg(target_os = "macos")]
+impl ProfileLifecycleAuthority<'_> {
+    pub fn initialize_or_open(
+        &self,
+    ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleAdmissionError> {
+        let sequence = self.lock.coordination.lock_sequence()?;
+        if self.lock.storage_root.revalidate().is_err()
+            || self
+                .lock
+                .writer_file
+                .revalidate(&self.lock.storage_root, 0)
+                .is_err()
+        {
+            return Err(ProfileLifecycleError::Quarantined.into());
+        }
+        if !sequence.active_meeting_ids()?.is_empty() {
+            return Err(ProfileLifecycleAdmissionError::ActiveMeeting);
+        }
+        initialize_profile_lifecycle_bound(&self.lock.storage_root).map_err(Into::into)
+    }
+}
+
 impl ManualAudioDeletionAuthority<'_> {
     /// Releases only the bound audio for one exact, non-active meeting.
     pub fn delete_audio(
@@ -171,7 +222,8 @@ impl ManualAudioDeletionAuthority<'_> {
 /// bound coordinator is the same registry used for capture and retention.
 pub struct AppDataWriterLock {
     storage: StorageRoot,
-    _file: File,
+    storage_root: BoundPrivateDirectory,
+    writer_file: BoundPrivateFile,
     coordination: Arc<MeetingStorageCoordination>,
 }
 
@@ -195,31 +247,24 @@ impl AppDataWriterLock {
     /// Acquires the canonical app-data writer lock and creates the one
     /// process-local registry that serializes capture, recovery, and retention.
     pub fn acquire(storage: &StorageRoot) -> Result<Self, AppDataWriterLockError> {
-        let path = storage
-            .resolve(Path::new(".writer.lock"))
+        let storage_root = BoundPrivateDirectory::open(storage.path())
             .map_err(|_| AppDataWriterLockError::Path)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .mode(0o600)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-            .open(path)
-            .map_err(|_| AppDataWriterLockError::Open)?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| AppDataWriterLockError::Inspect)?;
-        if !metadata.is_file() {
-            return Err(AppDataWriterLockError::NotRegular);
-        }
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|_| AppDataWriterLockError::Permissions)?;
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let file = match storage_root.open_file(".writer.lock", true, 0) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => storage_root
+                .create_zero_file(".writer.lock")
+                .map_err(|_| AppDataWriterLockError::Open)?,
+            Err(_) => return Err(AppDataWriterLockError::Open),
+        };
+        if unsafe { libc::flock(file.raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(AppDataWriterLockError::Contended);
         }
+        file.revalidate(&storage_root, 0)
+            .map_err(|_| AppDataWriterLockError::Open)?;
         Ok(Self {
             storage: storage.clone(),
-            _file: file,
+            storage_root,
+            writer_file: file,
             coordination: Arc::new(MeetingStorageCoordination::default()),
         })
     }
@@ -233,6 +278,11 @@ impl AppDataWriterLock {
 
     pub fn deletion_authority(&self) -> ManualAudioDeletionAuthority<'_> {
         ManualAudioDeletionAuthority { lock: self }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn profile_lifecycle_authority(&self) -> ProfileLifecycleAuthority<'_> {
+        ProfileLifecycleAuthority { lock: self }
     }
 }
 
@@ -1498,5 +1548,104 @@ mod tests {
         assert!(!directory.join("deletion/audio-deletion.json").exists());
         assert!(directory.join("capture/mic.wav").exists());
         assert!(directory.join("capture/.mic.wav.partial").exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn profile_lifecycle_requires_the_bound_process_writer_authority() {
+        let (_temp, storage) = storage();
+        let writer = AppDataWriterLock::acquire(&storage).unwrap();
+        let baseline = writer
+            .profile_lifecycle_authority()
+            .initialize_or_open()
+            .unwrap();
+        assert_eq!(baseline.receipt_sequence(), 0);
+        assert!(!baseline.profile_present());
+        assert!(matches!(
+            AppDataWriterLock::acquire(&storage),
+            Err(AppDataWriterLockError::Contended)
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn active_meeting_blocks_profile_initialization_before_mutation() {
+        let (_temp, storage) = storage();
+        let writer = AppDataWriterLock::acquire(&storage).unwrap();
+        let coordination = writer.coordination();
+        let _active = coordination.acquire("active-meeting").unwrap();
+        assert!(matches!(
+            writer.profile_lifecycle_authority().initialize_or_open(),
+            Err(ProfileLifecycleAdmissionError::ActiveMeeting)
+        ));
+        assert!(!storage.path().join("profile/voiceprint.json").exists());
+        assert!(
+            !storage
+                .path()
+                .join("profile/.lifecycle.initializing")
+                .exists()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn writer_authority_never_redirects_to_a_replacement_app_data_root() {
+        let (_temp, storage) = storage();
+        let original_root = storage.path().to_path_buf();
+        let displaced_root = original_root.with_file_name("app.displaced");
+        let original_writer = AppDataWriterLock::acquire(&storage).unwrap();
+
+        fs::rename(&original_root, &displaced_root).unwrap();
+        create_private_dir(&original_root).unwrap();
+        for child in ["diagnostics", "profile", "meetings"] {
+            create_private_dir(&original_root.join(child)).unwrap();
+        }
+        let replacement_writer = AppDataWriterLock::acquire(&storage).unwrap();
+        let replacement_coordination = replacement_writer.coordination();
+        let _replacement_active = replacement_coordination
+            .acquire("replacement-active")
+            .unwrap();
+
+        assert!(matches!(
+            original_writer
+                .profile_lifecycle_authority()
+                .initialize_or_open(),
+            Err(ProfileLifecycleAdmissionError::Lifecycle(
+                ProfileLifecycleError::Quarantined
+            ))
+        ));
+        assert!(!original_root.join("profile/voiceprint.json").exists());
+        assert!(!displaced_root.join("profile/voiceprint.json").exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn replaced_writer_lock_never_creates_a_second_profile_authority() {
+        let (_temp, storage) = storage();
+        let original_writer = AppDataWriterLock::acquire(&storage).unwrap();
+        let lock_path = storage.path().join(".writer.lock");
+        fs::rename(&lock_path, storage.path().join(".writer.lock.displaced")).unwrap();
+        durable_create_new(&lock_path, b"").unwrap();
+        let replacement_writer = AppDataWriterLock::acquire(&storage).unwrap();
+        let replacement_coordination = replacement_writer.coordination();
+        let _replacement_active = replacement_coordination
+            .acquire("replacement-active")
+            .unwrap();
+
+        assert!(matches!(
+            original_writer
+                .profile_lifecycle_authority()
+                .initialize_or_open(),
+            Err(ProfileLifecycleAdmissionError::Lifecycle(
+                ProfileLifecycleError::Quarantined
+            ))
+        ));
+        assert!(!storage.path().join("profile/voiceprint.json").exists());
+        assert!(
+            !storage
+                .path()
+                .join("profile/.lifecycle.initializing")
+                .exists()
+        );
     }
 }

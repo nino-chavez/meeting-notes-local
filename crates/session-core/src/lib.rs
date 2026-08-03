@@ -10,8 +10,7 @@ mod note_projector_process;
 pub mod operation_store;
 pub mod operations;
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
-pub(crate) mod profile_lifecycle;
+pub mod profile_lifecycle;
 pub mod protocol;
 pub mod recovery;
 pub mod reducer;

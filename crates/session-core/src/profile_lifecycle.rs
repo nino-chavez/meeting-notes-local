@@ -13,7 +13,6 @@ use thiserror::Error;
 
 use crate::storage::{
     BoundPrivateDirectory, BoundPrivateFile, PrivateObjectIdentity, PrivateObjectObservation,
-    StorageRoot,
 };
 
 const LIVE_NAME: &str = "voiceprint.json";
@@ -29,7 +28,7 @@ const ZERO_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca4959
 const FIXED_NAMES: [&str; 4] = [ENROLLMENT_NAME, RECEIPT_A_NAME, RECEIPT_B_NAME, RESET_NAME];
 
 #[derive(Debug, Error)]
-pub(crate) enum ProfileLifecycleError {
+pub enum ProfileLifecycleError {
     #[error("profile lifecycle is quarantined")]
     Quarantined,
     #[error("profile lifecycle initialization is ambiguous and requires migration review")]
@@ -37,7 +36,7 @@ pub(crate) enum ProfileLifecycleError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProfileLifecycleBaseline {
+pub struct ProfileLifecycleBaseline {
     receipt_sequence: u64,
     completed_reset_count: u64,
     profile_size: u64,
@@ -45,23 +44,23 @@ pub(crate) struct ProfileLifecycleBaseline {
 }
 
 impl ProfileLifecycleBaseline {
-    pub(crate) fn receipt_sequence(&self) -> u64 {
+    pub fn receipt_sequence(&self) -> u64 {
         self.receipt_sequence
     }
 
-    pub(crate) fn completed_reset_count(&self) -> u64 {
+    pub fn completed_reset_count(&self) -> u64 {
         self.completed_reset_count
     }
 
-    pub(crate) fn profile_present(&self) -> bool {
+    pub fn profile_present(&self) -> bool {
         self.profile_size != 0
     }
 
-    pub(crate) fn profile_size(&self) -> u64 {
+    pub fn profile_size(&self) -> u64 {
         self.profile_size
     }
 
-    pub(crate) fn profile_sha256(&self) -> &str {
+    pub fn profile_sha256(&self) -> &str {
         &self.profile_sha256
     }
 }
@@ -109,10 +108,9 @@ struct BaselineEnvelope {
     payload: BaselinePayload,
 }
 
-pub(crate) fn initialize_profile_lifecycle(
-    storage: &StorageRoot,
+pub(crate) fn initialize_profile_lifecycle_bound(
+    app_data: &BoundPrivateDirectory,
 ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
-    let app_data = BoundPrivateDirectory::open(storage.path()).map_err(quarantine_io)?;
     let profile = app_data.open_directory("profile").map_err(quarantine_io)?;
     let result = initialize_bound_profile(&profile);
     if app_data.revalidate().is_err() || profile.revalidate().is_err() {
@@ -470,7 +468,14 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::storage::{create_private_dir, durable_create_new};
+    use crate::storage::{StorageRoot, create_private_dir, durable_create_new};
+
+    fn initialize_profile_lifecycle(
+        storage: &StorageRoot,
+    ) -> Result<ProfileLifecycleBaseline, ProfileLifecycleError> {
+        let app_data = BoundPrivateDirectory::open(storage.path()).map_err(quarantine_io)?;
+        initialize_profile_lifecycle_bound(&app_data)
+    }
 
     struct Fixture {
         _temp: TempDir,
