@@ -14,7 +14,7 @@
           <p class="eyebrow">Local Meeting Notes</p>
           <span class="release-badge" id="release-badge">Preview</span>
         </div>
-        <p class="product-state"><span class="status-dot" aria-hidden="true"></span><span id="header-state" role="status" aria-atomic="true">Opening safely</span></p>
+        <p class="product-state"><span class="status-dot" id="header-status-dot" aria-hidden="true"></span><span id="header-state" role="status" aria-atomic="true">Opening safely</span></p>
       </div>
       <div class="header-actions">
         <nav class="product-nav" id="product-nav" aria-label="Meeting notes" hidden>
@@ -117,8 +117,8 @@
         <h1 id="recording-title"><time id="elapsed-time">00:00</time></h1>
         <p class="lede" id="capture-health">Microphone and system audio are both arriving.</p>
         <div class="channel-grid" aria-label="Capture channels">
-          <div><span class="channel-mark" aria-hidden="true"></span><strong>Microphone</strong><small id="mic-state">Active</small></div>
-          <div><span class="channel-mark" aria-hidden="true"></span><strong>System audio</strong><small id="system-state">Active</small></div>
+          <div id="mic-channel" data-state="unknown"><span class="channel-mark" aria-hidden="true"></span><strong>Microphone</strong><small id="mic-state">Unknown</small></div>
+          <div id="system-channel" data-state="unknown"><span class="channel-mark" aria-hidden="true"></span><strong>System audio</strong><small id="system-state">Unknown</small></div>
         </div>
         <p class="form-error" id="stop-error" role="alert" hidden></p>
         <p class="footnote">Stopping flushes both audio files before transcription begins.</p>
@@ -153,7 +153,7 @@
           <small>Searches titles, folders, and retained transcript words on this Mac. It does not identify people or infer meaning.</small>
         </form>
         <div class="notice" id="library-notice" role="status" aria-live="polite" hidden></div>
-        <div class="library-search-results" id="library-search-results" role="status" aria-live="polite"></div>
+        <div class="library-search-results" id="library-search-results"></div>
         <div class="library-list" id="library-list" aria-live="polite"></div>
       </section>
 

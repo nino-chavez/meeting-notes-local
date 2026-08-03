@@ -11,8 +11,10 @@ import {
   createRouteOwnershipGate,
   displayedClaimIdentity,
   changedStatusText,
+  captureChannelPresentation,
   connectionUncertaintyStatus,
   headerActionPolicy,
+  headerStatusPresentation,
   normalizedScrollPosition,
   prepareConsentTransition,
   refreshFindGeneration,
@@ -70,6 +72,30 @@ test("header actions keep one recording control and offer a return to owned work
     headerActionPolicy({ preview: true, startup: "runtime-missing", capture: "idle" }).showProductNavigation,
     false,
   );
+  assert.equal(
+    headerActionPolicy(
+      { preview: true, startup: "ready", capture: "idle" },
+      { currentScreen: "idle-screen" },
+    ).showStart,
+    false,
+  );
+  assert.equal(
+    headerActionPolicy(
+      { preview: true, startup: "ready", capture: "idle" },
+      { currentScreen: "meeting-detail-screen" },
+    ).showStart,
+    true,
+  );
+});
+
+test("channel and header visual states use only the relevant snapshot facts", () => {
+  assert.deepEqual(captureChannelPresentation(undefined), { label: "Unknown", state: "unknown" });
+  assert.deepEqual(captureChannelPresentation("Active"), { label: "Active", state: "active" });
+  assert.deepEqual(captureChannelPresentation("Unavailable"), { label: "Unavailable", state: "attention" });
+  assert.equal(headerStatusPresentation({ startup: "ready", capture: "idle" }), "unknown");
+  assert.equal(headerStatusPresentation({ startup: "ready", capture: "recording" }), "active");
+  assert.equal(headerStatusPresentation({ startup: "ready", capture: "recording", degraded: true }), "attention");
+  assert.equal(headerStatusPresentation({ startup: "runtime-missing", capture: "idle" }), "attention");
 });
 
 test("mutable actions match the admitted capture and startup states", () => {
@@ -596,6 +622,28 @@ test("metadata-only meeting detail is inspectable but never offers transcript te
   assert.equal(
     meetingDetailPresentation({ state: "transcript-only", transcriptHandle: "fresh-handle" }).canOpenTranscript,
     true,
+  );
+  assert.deepEqual(
+    meetingDetailPresentation({ state: "transcript-only", transcriptHandle: "fresh-handle" }),
+    {
+      kind: "transcript-only",
+      title: "Transcript",
+      lede: "No automatic note was created for this meeting. The retained transcript remains the source of record.",
+      fallbackTitle: "Transcript only",
+      fallbackCopy: "Open the retained transcript to review this meeting’s words.",
+      canOpenTranscript: true,
+    },
+  );
+  assert.deepEqual(
+    meetingDetailPresentation({ state: "summary-failed", transcriptHandle: "fresh-handle" }),
+    {
+      kind: "transcript-only",
+      title: "Transcript",
+      lede: "An automatic note is not available for this meeting. The retained transcript remains the source of record.",
+      fallbackTitle: "Transcript only",
+      fallbackCopy: "Open the retained transcript to review this meeting’s words.",
+      canOpenTranscript: true,
+    },
   );
   assert.deepEqual(
     meetingDetailPresentation({ state: "summary-failed", transcriptHandle: null }),

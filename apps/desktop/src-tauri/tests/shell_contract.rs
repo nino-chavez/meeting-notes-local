@@ -20,8 +20,9 @@ fn generated_preview_library_buttons_bind_their_own_activation() {
     assert!(shell.contains("button.addEventListener(\"click\", () => openMeetingDetail("));
     assert!(shell.contains("row.handle,\n      \"meetings-screen\",\n      button,"));
     assert!(shell.contains(
-        "button.addEventListener(\"click\", () => openLibrarySearchResult(result.handle, button));"
+        "row.addEventListener(\"click\", () => openLibrarySearchResult(result.handle, row));"
     ));
+    assert!(shell.contains("const row = document.createElement(metadataOnly ? \"div\" : \"button\");"));
     assert!(
         shell
             .contains("row.transcriptAvailable ? \"Open meeting\" : \"No transcript was created\"")
@@ -348,6 +349,10 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert_eq!(html.matches("id=\"stop-button\"").count(), 1);
     assert!(html.contains("id=\"header-state\" role=\"status\" aria-atomic=\"true\""));
+    assert!(html.contains("id=\"header-status-dot\""));
+    assert!(html.contains("id=\"mic-channel\" data-state=\"unknown\""));
+    assert!(html.contains("id=\"system-channel\" data-state=\"unknown\""));
+    assert!(!html.contains("id=\"library-search-results\" role=\"status\""));
     assert!(!html.contains("<main tabindex=\"-1\" aria-live"));
     assert!(script.contains("function renderCaptureAction(snapshot)"));
     assert!(script.contains("productNav.hidden = !policy.showProductNavigation;"));
@@ -379,6 +384,13 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(navigation.contains("export function resolvedScreenForSnapshot"));
     assert!(navigation.contains("export function mutableActionPolicy"));
     assert!(navigation.contains("export function headerActionPolicy"));
+    assert!(navigation.contains("currentScreen = \"meetings-screen\""));
+    assert!(navigation.contains("\"meetings-screen\", \"meeting-detail-screen\", \"profile-screen\""));
+    assert!(navigation.contains("export function captureChannelPresentation(state)"));
+    assert!(navigation.contains("export function headerStatusPresentation(snapshot)"));
+    assert!(script.contains("headerStatusDot.dataset.state = headerStatusPresentation(snapshot);"));
+    assert!(script.contains("renderChannelState(micChannel, snapshot.mic_state);"));
+    assert!(script.contains("renderChannelState(systemChannel, snapshot.system_state);"));
     assert!(navigation.contains("export function workflowReturnPolicy"));
     assert!(script.contains("workflowReturn.addEventListener(\"click\", returnToWorkflow);"));
     assert!(script.contains("if (lastSnapshot.capture === \"transcript-ready\") renderTranscript(lastSnapshot);"));
@@ -683,7 +695,9 @@ fn metadata_only_search_results_have_no_transcript_action() {
     assert!(script.contains(
         "const metadataOnly = result.kind === \"meeting\" && result.transcriptAvailable !== true;"
     ));
-    assert!(script.contains("button.disabled = metadataOnly;"));
+    assert!(script.contains("const row = document.createElement(metadataOnly ? \"div\" : \"button\");"));
+    assert!(script.contains("row.dataset.state = \"metadata-only\";"));
+    assert!(!script.contains("button.disabled = metadataOnly;"));
     assert!(script.contains("? \"No transcript was created\""));
     assert!(!styles.contains("var(--serif)"));
     assert!(styles.contains(".meeting-retention h2, .meeting-no-note h2, .profile-status h2"));
@@ -698,7 +712,8 @@ fn preview_exact_search_lands_on_opened_unicode_scalar_span() {
     assert!(script.contains("start: Number.isInteger(result.start) ? result.start : null,"));
     assert!(script.contains("end: Number.isInteger(result.end) ? result.end : null,"));
     assert!(script.contains("await openLibraryTranscript(result.transcriptHandle, exactMatch, null, transition);"));
-    assert!(script.contains("container.querySelector(\".matched-locator\")"));
+    assert!(script.contains("row.setAttribute(\"aria-label\", `Exact transcript match in turn ${match.sourceTurnIndex + 1}`);"));
+    assert!(script.contains("destination?.focus({ preventScroll: true });"));
     assert!(!script.contains("result.text.indexOf"));
 }
 

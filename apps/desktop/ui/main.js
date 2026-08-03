@@ -8,8 +8,10 @@ import {
   createRouteOwnershipGate,
   createTransitionGate,
   changedStatusText,
+  captureChannelPresentation,
   connectionUncertaintyStatus,
   headerActionPolicy,
+  headerStatusPresentation,
   mutableActionPolicy,
   prepareConsentTransition,
   retentionDeadlineMessage,
@@ -30,6 +32,7 @@ const screens = new Map(
   [...document.querySelectorAll(".screen")].map((screen) => [screen.id, screen]),
 );
 const headerState = document.querySelector("#header-state");
+const headerStatusDot = document.querySelector("#header-status-dot");
 const releaseBadge = document.querySelector("#release-badge");
 const meetingLabel = document.querySelector("#meeting-id");
 const mainRegion = document.querySelector("main");
@@ -52,6 +55,8 @@ const profileTitle = document.querySelector("#profile-title");
 const profileLede = document.querySelector("#profile-lede");
 const profileStatusTitle = document.querySelector("#profile-status-title");
 const profileStatusCopy = document.querySelector("#profile-status-copy");
+const micChannel = document.querySelector("#mic-channel");
+const systemChannel = document.querySelector("#system-channel");
 const libraryList = document.querySelector("#library-list");
 const libraryNotice = document.querySelector("#library-notice");
 const librarySearch = document.querySelector("#library-search");
@@ -242,6 +247,7 @@ function renderCaptureAction(snapshot) {
   const policy = headerActionPolicy(snapshot, {
     stopPending: stopCommandPending,
     workflowOwnsRoute,
+    currentScreen,
   });
   productNav.hidden = !policy.showProductNavigation;
   startMeetingAction.hidden = !policy.showStart;
@@ -254,8 +260,15 @@ function renderCaptureAction(snapshot) {
   return policy;
 }
 
+function renderChannelState(target, state) {
+  const presentation = captureChannelPresentation(state);
+  target.dataset.state = presentation.state;
+  target.querySelector("small").textContent = presentation.label;
+}
+
 function renderConnectionUncertainty() {
   document.documentElement.dataset.connectionState = "uncertain";
+  headerStatusDot.dataset.state = "attention";
   setHeaderState(connectionUncertaintyStatus(lastSnapshot?.capture, {
     stopFailed: stopCommandFailed,
   }));
@@ -367,6 +380,8 @@ function renderTurns(container, warning, turns, warnings, match = null) {
     if (matchesTurn) {
       row.classList.add("matched-turn");
       row.dataset.sourceTurnIndex = String(match.sourceTurnIndex);
+      row.tabIndex = -1;
+      row.setAttribute("aria-label", `Exact transcript match in turn ${match.sourceTurnIndex + 1}`);
     }
     const meta = document.createElement("div");
     meta.className = "turn-meta";
@@ -388,9 +403,9 @@ function renderTurns(container, warning, turns, warnings, match = null) {
   }
   if (Number.isInteger(match?.sourceTurnIndex)) {
     window.requestAnimationFrame(() => {
-      const destination = container.querySelector(".matched-locator")
-        || container.querySelector(`[data-source-turn-index="${match.sourceTurnIndex}"]`);
+      const destination = container.querySelector(`[data-source-turn-index="${match.sourceTurnIndex}"]`);
       destination?.scrollIntoView({ block: "center" });
+      destination?.focus({ preventScroll: true });
     });
   }
 }
@@ -517,13 +532,16 @@ function renderLibrarySearch(response) {
     return;
   }
   for (const result of response.results || []) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "library-search-result";
-    button.dataset.searchHandle = result.handle;
     const metadataOnly = result.kind === "meeting" && result.transcriptAvailable !== true;
-    button.disabled = metadataOnly;
-    button.addEventListener("click", () => openLibrarySearchResult(result.handle, button));
+    const row = document.createElement(metadataOnly ? "div" : "button");
+    row.className = "library-search-result";
+    if (metadataOnly) {
+      row.dataset.state = "metadata-only";
+    } else {
+      row.type = "button";
+      row.dataset.searchHandle = result.handle;
+      row.addEventListener("click", () => openLibrarySearchResult(result.handle, row));
+    }
     const summary = document.createElement("span");
     const label = document.createElement("strong");
     const detail = document.createElement("small");
@@ -546,8 +564,8 @@ function renderLibrarySearch(response) {
       : result.kind === "withheld"
         ? "Review status"
         : "Open transcript";
-    button.append(summary, action);
-    librarySearchResults.append(button);
+    row.append(summary, action);
+    librarySearchResults.append(row);
   }
   setError(libraryNotice, response.message || "Exact results from your retained meetings.");
 }
@@ -580,6 +598,7 @@ function render(snapshot) {
   document.documentElement.dataset.startupState = startup;
   document.documentElement.dataset.captureState = capture;
   document.documentElement.dataset.connectionState = "connected";
+  headerStatusDot.dataset.state = headerStatusPresentation(snapshot);
   const preview = snapshot.preview === true;
   releaseBadge.textContent = "Preview";
   renderCaptureAction(snapshot);
@@ -618,8 +637,8 @@ function render(snapshot) {
       document.querySelector("#capture-health").textContent = snapshot.degraded
         ? "Recording continues, but one channel reported a problem."
         : "Microphone and system audio are both arriving.";
-      document.querySelector("#mic-state").textContent = snapshot.mic_state || "Active";
-      document.querySelector("#system-state").textContent = snapshot.system_state || "Active";
+      renderChannelState(micChannel, snapshot.mic_state);
+      renderChannelState(systemChannel, snapshot.system_state);
       beginElapsed(snapshot.started_at_epoch_seconds);
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "recording-screen" });
       break;

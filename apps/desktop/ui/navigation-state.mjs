@@ -47,14 +47,20 @@ export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
   };
 }
 
-export function headerActionPolicy(snapshot, { stopPending = false, workflowOwnsRoute = true } = {}) {
+export function headerActionPolicy(snapshot, {
+  stopPending = false,
+  workflowOwnsRoute = true,
+  currentScreen = "meetings-screen",
+} = {}) {
   const capture = snapshot?.capture || "idle";
   const startup = snapshot?.startup || "diagnostic-written";
   const actions = mutableActionPolicy(snapshot, { stopPending });
   const workflow = workflowReturnPolicy(snapshot);
   return {
     showProductNavigation: actions.showProductNavigation && startup === "ready",
-    showStart: actions.canStartMeeting && capture === "idle",
+    showStart: actions.canStartMeeting
+      && capture === "idle"
+      && ["meetings-screen", "meeting-detail-screen", "profile-screen"].includes(currentScreen),
     showStop: actions.showStop,
     stopDisabled: actions.stopDisabled,
     stopLabel: actions.stopLabel,
@@ -63,6 +69,25 @@ export function headerActionPolicy(snapshot, { stopPending = false, workflowOwns
     workflowDestination: workflow.destination,
     startupReady: startup === "ready",
   };
+}
+
+export function captureChannelPresentation(state) {
+  if (state === "Active") return { label: "Active", state: "active" };
+  if (typeof state === "string" && state.trim()) return { label: state, state: "attention" };
+  return { label: "Unknown", state: "unknown" };
+}
+
+export function headerStatusPresentation(snapshot) {
+  const startup = snapshot?.startup || "diagnostic-written";
+  const capture = snapshot?.capture || "idle";
+  if (capture === "recording") {
+    return snapshot?.degraded ? "attention" : "active";
+  }
+  if (["runtime-missing", "service-timeout", "diagnostic-written", "reinstall-required"].includes(startup)
+      || !["idle", "arming", "stopping", "captured", "transcribing", "transcript-ready"].includes(capture)) {
+    return "attention";
+  }
+  return "unknown";
 }
 
 export function workflowReturnPolicy(snapshot) {
@@ -190,12 +215,15 @@ export function meetingDetailPresentation(response) {
     };
   }
   if (response?.state === "transcript-only" || response?.state === "summary-failed") {
+    const summaryFailed = response.state === "summary-failed";
     return {
       kind: "transcript-only",
-      title: "Note and transcript.",
-      lede: "An automatic note is a reading aid. Evidence links locate the exact retained transcript words behind each claim.",
+      title: "Transcript",
+      lede: summaryFailed
+        ? "An automatic note is not available for this meeting. The retained transcript remains the source of record."
+        : "No automatic note was created for this meeting. The retained transcript remains the source of record.",
       fallbackTitle: "Transcript only",
-      fallbackCopy: "No automatic note is available for this meeting. The retained transcript remains the source of record.",
+      fallbackCopy: "Open the retained transcript to review this meeting’s words.",
       canOpenTranscript: transcriptAvailable,
     };
   }
