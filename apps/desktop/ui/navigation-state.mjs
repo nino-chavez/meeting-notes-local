@@ -49,6 +49,20 @@ export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
   };
 }
 
+export function connectionUncertaintyStatus(capture, { stopFailed = false } = {}) {
+  if (capture === "recording") {
+    return stopFailed
+      ? "Recording · Stop needs attention · connection uncertain"
+      : "Recording · connection uncertain";
+  }
+  if (capture === "stopping") return "Stopping · connection uncertain";
+  return "Connection uncertain · local state has not changed";
+}
+
+export function changedStatusText(previous, next) {
+  return previous === next ? null : next;
+}
+
 export function rootForDestination(destination, currentRoot = "find-screen") {
   if (PRODUCT_ROOT_SCREENS.includes(destination)) return destination;
   return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "find-screen";
@@ -227,6 +241,19 @@ export function createLatestRequestGate() {
     },
     isCurrent(ticket) {
       return ticket === latest;
+    },
+  };
+}
+
+export function createRouteOwnershipGate() {
+  let current = 0;
+  return {
+    advance() {
+      current += 1;
+      return current;
+    },
+    owns(ticket) {
+      return ticket === current;
     },
   };
 }

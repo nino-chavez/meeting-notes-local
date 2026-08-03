@@ -350,7 +350,15 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(script.contains("stopCommandPending = true;"));
     assert!(script.contains("Recording · Stop needs attention"));
     assert!(script.contains("function renderConnectionUncertainty()"));
+    assert!(script.contains("function setHeaderState(text)"));
+    assert!(script.contains("changedStatusText(announcedHeaderState, text)"));
+    assert!(script.contains("connectionUncertaintyStatus(lastSnapshot?.capture, {\n    stopFailed: stopCommandFailed,"));
     assert!(script.contains("const snapshotRequestGate = createLatestRequestGate();"));
+    assert!(script.contains("const REFRESH_SUPERSEDED = Symbol(\"refresh-superseded\");"));
+    assert!(script.contains("while (snapshot === REFRESH_SUPERSEDED) snapshot = await refresh();"));
+    assert!(script.contains("const routeOwnership = createRouteOwnershipGate();"));
+    assert!(script.contains("function claimExplicitRoute()"));
+    assert!(script.contains("const dismissMeetingOperation = createSingleFlight("));
     assert!(!script.contains("render({ startup: \"diagnostic-written\", capture: \"idle\""));
     assert!(script.contains("if (currentScreen === id) routeRevision += 1;"));
     assert!(navigation.contains("export function resolvedScreenForSnapshot"));
@@ -528,9 +536,23 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     let prepare = open.find("await prepareConsentTransition").unwrap();
     let consent = open.find("showScreen(\"idle-screen\"").unwrap();
     assert!(prepare < consent);
-    assert!(open.contains("dismiss: () => invoke(\"dismiss_meeting\")"));
+    assert!(open.contains("dismiss: () => dismissMeetingOperation.run()"));
     assert!(open.contains("clearAttemptReview(true)"));
     assert!(open.contains("showStartTransitionError()"));
+
+    let dismiss_start = script.find("async function dismissAttemptAndReturnFind").unwrap();
+    let dismiss_end = script[dismiss_start..]
+        .find("async function returnToFindAfterStartError")
+        .unwrap()
+        + dismiss_start;
+    let dismiss_attempt = &script[dismiss_start..dismiss_end];
+    let shared_dismiss = dismiss_attempt.find("await dismissMeetingOperation.run()").unwrap();
+    let route_guard = dismiss_attempt
+        .find("if (!workflowRouteIsCurrent(routeToken)) return;")
+        .unwrap();
+    let cleanup = dismiss_attempt.find("clearAttemptReview(true)").unwrap();
+    assert!(shared_dismiss < route_guard && route_guard < cleanup);
+    assert!(dismiss_attempt.contains("const snapshot = await refreshCurrent();"));
 }
 
 #[test]

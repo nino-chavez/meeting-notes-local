@@ -1,7 +1,10 @@
 import {
   createSingleFlight,
   createLatestRequestGate,
+  createRouteOwnershipGate,
   createTransitionGate,
+  changedStatusText,
+  connectionUncertaintyStatus,
   mutableActionPolicy,
   prepareConsentTransition,
   retentionDeadlineMessage,
@@ -37,6 +40,8 @@ const meetingsLink = document.querySelector("#meetings-link");
 const promisesLink = document.querySelector("#promises-link");
 const profileLink = document.querySelector("#profile-link");
 const startMeetingAction = document.querySelector("#start-meeting-action");
+const newMeetingButton = document.querySelector("#new-meeting");
+const recoverButton = document.querySelector("#recover-button");
 const startTransitionError = document.querySelector("#start-transition-error");
 const profileKicker = document.querySelector("#profile-kicker");
 const profileTitle = document.querySelector("#profile-title");
@@ -84,13 +89,13 @@ let currentScreen = "startup-screen";
 let productRootScreen = "find-screen";
 let transcriptReturnContext = null;
 let routeRevision = 0;
-let productSelectionRevision = 0;
 let findNavigationBusy = false;
 let findRefreshBusyCount = 0;
 let handleNavigationBusy = false;
 let workflowOwnsRoute = true;
 let stopCommandPending = false;
 let stopCommandFailed = false;
+let announcedHeaderState = headerState.textContent;
 const screenScrollPositions = new Map();
 const libraryInitialization = createSingleFlight(
   () => invoke("preview_library_snapshot"),
@@ -98,6 +103,11 @@ const libraryInitialization = createSingleFlight(
 const findRefreshOperation = createSingleFlight(performFindRefresh);
 const handleTransitionGate = createTransitionGate();
 const snapshotRequestGate = createLatestRequestGate();
+const routeOwnership = createRouteOwnershipGate();
+const REFRESH_SUPERSEDED = Symbol("refresh-superseded");
+const dismissMeetingOperation = createSingleFlight(
+  () => invoke("dismiss_meeting"),
+);
 
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
   const destination = screens.get(id);
@@ -181,13 +191,30 @@ function finishHandleTransition(transition) {
 
 function selectProductScreen(id, options = {}) {
   workflowOwnsRoute = false;
-  productSelectionRevision += 1;
+  routeOwnership.advance();
   if (currentScreen === id) routeRevision += 1;
   showScreen(id, options);
 }
 
-function workflowRouteIsCurrent(selectionRevision) {
-  return workflowOwnsRoute && productSelectionRevision === selectionRevision;
+function beginWorkflowRoute() {
+  workflowOwnsRoute = true;
+  return routeOwnership.advance();
+}
+
+function workflowRouteIsCurrent(token) {
+  return workflowOwnsRoute && routeOwnership.owns(token);
+}
+
+function claimExplicitRoute() {
+  workflowOwnsRoute = false;
+  return routeOwnership.advance();
+}
+
+function setHeaderState(text) {
+  const next = changedStatusText(announcedHeaderState, text);
+  if (next === null) return;
+  announcedHeaderState = next;
+  headerState.textContent = next;
 }
 
 function showWorkflowScreen(snapshot, options = {}) {
@@ -213,16 +240,9 @@ function renderCaptureAction(snapshot) {
 
 function renderConnectionUncertainty() {
   document.documentElement.dataset.connectionState = "uncertain";
-  const capture = lastSnapshot?.capture;
-  if (capture === "recording") {
-    headerState.textContent = "Recording · connection uncertain";
-    return;
-  }
-  if (capture === "stopping") {
-    headerState.textContent = "Stopping · connection uncertain";
-    return;
-  }
-  headerState.textContent = "Connection uncertain · local state has not changed";
+  setHeaderState(connectionUncertaintyStatus(lastSnapshot?.capture, {
+    stopFailed: stopCommandFailed,
+  }));
 }
 
 async function initializeLibraryReader() {
@@ -550,7 +570,7 @@ function render(snapshot) {
   meetingLabel.textContent = snapshot.meeting_id ? `Meeting ${snapshot.meeting_id.slice(0, 8)}` : "";
 
   if (startup !== "ready") {
-    headerState.textContent = "Nothing is recording";
+    setHeaderState("Nothing is recording");
     endElapsed();
     renderStartup(startup);
     return;
@@ -558,7 +578,7 @@ function render(snapshot) {
 
   switch (capture) {
     case "idle":
-      headerState.textContent = "Ready · nothing is recording";
+      setHeaderState("Ready · nothing is recording");
       endElapsed();
       if (workflowOwnsRoute && currentScreen !== "idle-screen") {
         showWorkflowScreen(snapshot, { resetScroll: true });
@@ -570,14 +590,14 @@ function render(snapshot) {
       updateStartButton();
       break;
     case "arming":
-      headerState.textContent = "Preparing · nothing is recording";
+      setHeaderState("Preparing · nothing is recording");
       endElapsed();
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "arming-screen" });
       break;
     case "recording":
-      headerState.textContent = stopCommandFailed
+      setHeaderState(stopCommandFailed
         ? "Recording · Stop needs attention"
-        : snapshot.degraded ? "Recording · channel needs attention" : "Recording · both channels active";
+        : snapshot.degraded ? "Recording · channel needs attention" : "Recording · both channels active");
       document.querySelector("#capture-health").textContent = snapshot.degraded
         ? "Recording continues, but one channel reported a problem."
         : "Microphone and system audio are both arriving.";
@@ -587,18 +607,18 @@ function render(snapshot) {
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "recording-screen" });
       break;
     case "stopping":
-      headerState.textContent = "Stopping and flushing audio";
+      setHeaderState("Stopping and flushing audio");
       document.querySelector("#capture-health").textContent = "Finalizing both local audio files.";
       showWorkflowScreen(snapshot);
       break;
     case "captured":
     case "transcribing":
-      headerState.textContent = "Transcribing locally";
+      setHeaderState("Transcribing locally");
       endElapsed();
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "processing-screen" });
       break;
     case "transcript-ready":
-      headerState.textContent = "Transcript ready · nothing is recording";
+      setHeaderState("Transcript ready · nothing is recording");
       endElapsed();
       if (workflowOwnsRoute) {
         renderTranscript(snapshot);
@@ -606,7 +626,7 @@ function render(snapshot) {
       }
       break;
     default:
-      headerState.textContent = "Nothing is recording · needs attention";
+      setHeaderState("Nothing is recording · needs attention");
       endElapsed();
       document.querySelector("#error-detail").textContent = snapshot.error || "The attempt stopped before a validated transcript was ready.";
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "error-screen" });
@@ -653,28 +673,27 @@ function showStartTransitionError() {
 async function openStartMeeting() {
   if (!invoke || !mutableActionPolicy(lastSnapshot).canStartMeeting) return;
   clearError(startError);
-  workflowOwnsRoute = true;
-  const selectionRevision = productSelectionRevision;
+  const routeToken = beginWorkflowRoute();
   startMeetingAction.disabled = true;
   startMeetingAction.textContent = "Opening…";
   try {
     const ready = await prepareConsentTransition(lastSnapshot.capture, {
-      dismiss: () => invoke("dismiss_meeting"),
+      dismiss: () => dismissMeetingOperation.run(),
       clearPriorAttempt: () => {
         clearAttemptReview(true);
         invalidateLibraryHandles();
       },
-      ownsRoute: () => workflowRouteIsCurrent(selectionRevision),
-      refresh,
+      ownsRoute: () => workflowRouteIsCurrent(routeToken),
+      refresh: refreshCurrent,
     });
     if (!ready) {
-      if (!workflowRouteIsCurrent(selectionRevision)) return;
+      if (!workflowRouteIsCurrent(routeToken)) return;
       showStartTransitionError();
       return;
     }
-    if (workflowRouteIsCurrent(selectionRevision)) showScreen("idle-screen", { resetScroll: true });
+    if (workflowRouteIsCurrent(routeToken)) showScreen("idle-screen", { resetScroll: true });
   } catch {
-    if (workflowRouteIsCurrent(selectionRevision)) showStartTransitionError();
+    if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
   } finally {
     startMeetingAction.disabled = false;
     startMeetingAction.textContent = "Start meeting";
@@ -740,6 +759,7 @@ async function openLibraryTranscript(
   control = null,
 ) {
   if (!invoke || !handle) return;
+  if (!nestedTransition) claimExplicitRoute();
   const transition = nestedTransition || beginHandleTransition("open-transcript", control);
   if (!transition) return false;
   invalidateLibraryHandles();
@@ -826,6 +846,7 @@ function renderMeetingDetail(response) {
 async function openMeetingDetail(handle, returnScreen = "meetings-screen", control = null) {
   if (!invoke || !handle) return;
   if (handleTransitionGate.active()) return false;
+  claimExplicitRoute();
   productRootScreen = rootForDestination(returnScreen, productRootScreen);
   invalidateLibraryHandles();
   meetingRetention.hidden = true;
@@ -907,6 +928,7 @@ async function restoreMeetingDetailAfterTranscript(context, transition) {
 }
 
 async function returnFromLibraryTranscript() {
+  claimExplicitRoute();
   const transition = beginHandleTransition("return-from-transcript", document.querySelector("#library-transcript-back"));
   if (!transition) return false;
   const context = transcriptReturnContext;
@@ -925,6 +947,7 @@ async function returnFromLibraryTranscript() {
 
 async function openMeetingEvidence(handle, meetingId, claim, control) {
   if (!invoke || !handle) return;
+  claimExplicitRoute();
   const returnContext = transcriptReturnRoute("meeting-detail", meetingId, {
     claim,
     detailScrollTop: mainRegion.scrollTop,
@@ -1011,6 +1034,7 @@ async function searchLibrary(event) {
 
 async function openLibrarySearchResult(handle, control = null) {
   if (!invoke || !handle) return;
+  claimExplicitRoute();
   const transition = beginHandleTransition("open-search-result", control);
   if (!transition) return false;
   productRootScreen = "find-screen";
@@ -1057,17 +1081,23 @@ async function refresh() {
   const ticket = snapshotRequestGate.begin();
   try {
     const snapshot = await invoke("app_snapshot");
-    if (!snapshotRequestGate.isCurrent(ticket)) return lastSnapshot;
+    if (!snapshotRequestGate.isCurrent(ticket)) return REFRESH_SUPERSEDED;
     render(snapshot);
     const active = ["arming", "recording", "stopping", "captured", "transcribing"].includes(snapshot.capture);
     schedulePoll(active ? 400 : 1500);
     return snapshot;
   } catch {
-    if (!snapshotRequestGate.isCurrent(ticket)) return lastSnapshot;
+    if (!snapshotRequestGate.isCurrent(ticket)) return REFRESH_SUPERSEDED;
     renderConnectionUncertainty();
     schedulePoll(2000);
     return null;
   }
+}
+
+async function refreshCurrent() {
+  let snapshot = await refresh();
+  while (snapshot === REFRESH_SUPERSEDED) snapshot = await refresh();
+  return snapshot;
 }
 
 function clearAttemptReview(clearRetention = false) {
@@ -1076,7 +1106,7 @@ function clearAttemptReview(clearRetention = false) {
   updateStartButton();
 }
 
-async function dismissAttemptAndReturnFind() {
+async function dismissAttemptAndReturnFind(control) {
   if (!invoke) {
     showStartTransitionError();
     return;
@@ -1085,40 +1115,45 @@ async function dismissAttemptAndReturnFind() {
     showStartTransitionError();
     return;
   }
-  const selectionRevision = productSelectionRevision;
+  const routeToken = beginWorkflowRoute();
+  if (control) control.disabled = true;
   try {
-    await invoke("dismiss_meeting");
+    await dismissMeetingOperation.run();
+    if (!workflowRouteIsCurrent(routeToken)) return;
     clearAttemptReview(true);
     invalidateLibraryHandles();
-    const snapshot = await refresh();
+    const snapshot = await refreshCurrent();
+    if (!workflowRouteIsCurrent(routeToken)) return;
     if (snapshot?.capture !== "idle") {
-      if (workflowRouteIsCurrent(selectionRevision)) showStartTransitionError();
+      showStartTransitionError();
       return;
     }
-    if (workflowRouteIsCurrent(selectionRevision) && currentScreen !== "find-screen") {
+    if (currentScreen !== "find-screen") {
       productRootScreen = "find-screen";
       selectProductScreen("find-screen", { resetScroll: true });
       await refreshFindView();
     }
   } catch {
-    if (workflowRouteIsCurrent(selectionRevision)) showStartTransitionError();
+    if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
+  } finally {
+    if (control) control.disabled = false;
   }
 }
 
 async function returnToFindAfterStartError() {
-  const selectionRevision = productSelectionRevision;
+  const routeToken = beginWorkflowRoute();
   const currentCapture = lastSnapshot?.capture;
   const currentReady = lastSnapshot?.startup === "ready"
     && lastSnapshot?.preview === true
     && ["idle", "transcript-ready"].includes(currentCapture);
-  const snapshot = currentReady ? lastSnapshot : await refresh();
+  const snapshot = currentReady ? lastSnapshot : await refreshCurrent();
   if (snapshot?.startup !== "ready"
       || snapshot?.preview !== true
       || !["idle", "transcript-ready"].includes(snapshot.capture)) {
-    if (workflowRouteIsCurrent(selectionRevision)) showStartTransitionError();
+    if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
     return;
   }
-  if (!workflowRouteIsCurrent(selectionRevision)) return;
+  if (!workflowRouteIsCurrent(routeToken)) return;
   productRootScreen = "find-screen";
   selectProductScreen("find-screen");
   await refreshFindView();
@@ -1171,12 +1206,12 @@ stopButton.addEventListener("click", async () => {
     stopCommandPending = false;
     stopCommandFailed = true;
     renderCaptureAction(lastSnapshot);
-    headerState.textContent = "Recording · Stop needs attention";
+    setHeaderState("Recording · Stop needs attention");
   }
 });
 
-document.querySelector("#new-meeting").addEventListener("click", dismissAttemptAndReturnFind);
-document.querySelector("#recover-button").addEventListener("click", dismissAttemptAndReturnFind);
+newMeetingButton.addEventListener("click", () => dismissAttemptAndReturnFind(newMeetingButton));
+recoverButton.addEventListener("click", () => dismissAttemptAndReturnFind(recoverButton));
 
 retryStartup.addEventListener("click", async () => {
   if (invoke && mutableActionPolicy(lastSnapshot).canRetryStartup) await invoke("retry_startup");

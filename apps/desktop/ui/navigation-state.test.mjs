@@ -5,7 +5,10 @@ import {
   createTransitionGate,
   createSingleFlight,
   createLatestRequestGate,
+  createRouteOwnershipGate,
   displayedClaimIdentity,
+  changedStatusText,
+  connectionUncertaintyStatus,
   normalizedScrollPosition,
   prepareConsentTransition,
   refreshFindGeneration,
@@ -92,6 +95,39 @@ test("latest snapshot request wins when responses resolve out of order", () => {
   assert.deepEqual(applied, ["stopping"]);
 });
 
+test("a superseded snapshot result is distinguishable from a fresh snapshot", () => {
+  const gate = createLatestRequestGate();
+  const first = gate.begin();
+  const second = gate.begin();
+  const firstResult = gate.isCurrent(first) ? { capture: "recording" } : null;
+  const secondResult = gate.isCurrent(second) ? { capture: "stopping" } : null;
+
+  assert.equal(firstResult, null);
+  assert.deepEqual(secondResult, { capture: "stopping" });
+});
+
+test("explicit row and result routes supersede a pending Done or Recover workflow", () => {
+  const routes = createRouteOwnershipGate();
+  const doneOrRecover = routes.advance();
+  const rowRoute = routes.advance();
+  assert.equal(routes.owns(doneOrRecover), false);
+  assert.equal(routes.owns(rowRoute), true);
+
+  const resultRoute = routes.advance();
+  assert.equal(routes.owns(rowRoute), false);
+  assert.equal(routes.owns(resultRoute), true);
+});
+
+test("header status avoids repeated announcements and keeps a Stop warning through uncertainty", () => {
+  assert.equal(changedStatusText("Recording", "Recording"), null);
+  assert.equal(changedStatusText("Recording", "Stopping"), "Stopping");
+  assert.equal(
+    connectionUncertaintyStatus("recording", { stopFailed: true }),
+    "Recording · Stop needs attention · connection uncertain",
+  );
+  assert.equal(connectionUncertaintyStatus("stopping"), "Stopping · connection uncertain");
+});
+
 test("retention copy says when audio becomes due and when deletion can run", () => {
   const copy = retentionDeadlineMessage(1_728_000_060);
 
@@ -131,6 +167,24 @@ test("single-flight initialization deduplicates only an in-flight snapshot", asy
   assert.equal(loads, 2);
   release({ state: "empty" });
   assert.deepEqual(await third, { state: "empty" });
+});
+
+test("Start and Done or Recover share one in-flight dismissal", async () => {
+  let dismissals = 0;
+  let release;
+  const dismissal = createSingleFlight(() => {
+    dismissals += 1;
+    return new Promise((resolve) => { release = resolve; });
+  });
+
+  const fromStart = dismissal.run();
+  const fromDoneOrRecover = dismissal.run();
+  await Promise.resolve();
+  assert.equal(fromStart, fromDoneOrRecover);
+  assert.equal(dismissals, 1);
+
+  release();
+  await Promise.all([fromStart, fromDoneOrRecover]);
 });
 
 test("overlapping Find refreshes share one generation and a later refresh is fresh", async () => {
@@ -281,6 +335,21 @@ test("route loss after dismissal prevents consent cleanup and refresh", async ()
   });
 
   assert.equal(ready, false);
+  assert.deepEqual(events, ["dismiss"]);
+});
+
+test("Done or Recover navigation loss prevents post-dismiss cleanup", async () => {
+  const routes = createRouteOwnershipGate();
+  const doneOrRecover = routes.advance();
+  const events = [];
+
+  await (async () => {
+    events.push("dismiss");
+    routes.advance();
+    if (!routes.owns(doneOrRecover)) return;
+    events.push("clear");
+  })();
+
   assert.deepEqual(events, ["dismiss"]);
 });
 
