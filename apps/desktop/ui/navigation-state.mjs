@@ -242,6 +242,10 @@ export function createLatestRequestGate() {
     isCurrent(ticket) {
       return ticket === latest;
     },
+    invalidate() {
+      latest += 1;
+      return latest;
+    },
   };
 }
 
@@ -266,6 +270,13 @@ export function createFreshSnapshotOperation(refresh, superseded) {
   });
 }
 
+export function acceptAuthoritativeSnapshot(snapshot, actions) {
+  actions.invalidateSnapshotRequests();
+  actions.render(snapshot);
+  actions.schedule(snapshot);
+  return snapshot;
+}
+
 export async function refreshFindGeneration(query, actions) {
   if (actions.isCurrent && !actions.isCurrent()) return null;
   actions.invalidateResults();
@@ -281,10 +292,10 @@ export async function refreshFindGeneration(query, actions) {
 export async function prepareConsentTransition(capture, actions) {
   if (capture === "idle") return true;
   if (capture !== "transcript-ready") return false;
-  const snapshot = await actions.dismissAndConfirm();
-  if (actions.ownsRoute && !actions.ownsRoute()) return false;
+  const snapshot = await actions.dismiss();
   if (snapshot?.capture !== "idle") return false;
-  actions.clearPriorAttempt();
+  actions.clearHiddenAttempt();
   if (actions.ownsRoute && !actions.ownsRoute()) return false;
+  actions.afterOwnedDismiss();
   return true;
 }

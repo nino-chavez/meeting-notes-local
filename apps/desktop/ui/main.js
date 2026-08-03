@@ -1,5 +1,6 @@
 import {
   createSingleFlight,
+  acceptAuthoritativeSnapshot,
   createFreshSnapshotOperation,
   createLatestRequestGate,
   createRouteOwnershipGate,
@@ -107,9 +108,9 @@ const snapshotRequestGate = createLatestRequestGate();
 const routeOwnership = createRouteOwnershipGate();
 const REFRESH_SUPERSEDED = Symbol("refresh-superseded");
 const refreshCurrentOperation = createFreshSnapshotOperation(refresh, REFRESH_SUPERSEDED);
-const dismissAndConfirmOperation = createSingleFlight(async () => {
-  await invoke("dismiss_meeting");
-  return refreshCurrent();
+const dismissMeetingOperation = createSingleFlight(async () => {
+  const snapshot = await invoke("dismiss_meeting");
+  return acceptCommandSnapshot(snapshot);
 });
 
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
@@ -218,6 +219,19 @@ function setHeaderState(text) {
   if (next === null) return;
   announcedHeaderState = next;
   headerState.textContent = next;
+}
+
+function scheduleSnapshotPoll(snapshot) {
+  const active = ["arming", "recording", "stopping", "captured", "transcribing"].includes(snapshot.capture);
+  schedulePoll(active ? 400 : 1500);
+}
+
+function acceptCommandSnapshot(snapshot) {
+  return acceptAuthoritativeSnapshot(snapshot, {
+    invalidateSnapshotRequests: () => snapshotRequestGate.invalidate(),
+    render,
+    schedule: scheduleSnapshotPoll,
+  });
 }
 
 function showWorkflowScreen(snapshot, options = {}) {
@@ -681,20 +695,22 @@ async function openStartMeeting() {
   startMeetingAction.textContent = "Opening…";
   try {
     const ready = await prepareConsentTransition(lastSnapshot.capture, {
-      dismissAndConfirm: () => dismissAndConfirmOperation.run(),
-      clearPriorAttempt: () => {
-        clearAttemptReview(true);
+      dismiss: () => dismissMeetingOperation.run(),
+      clearHiddenAttempt: () => clearAttemptReview(true),
+      afterOwnedDismiss: () => {
         invalidateLibraryHandles();
       },
       ownsRoute: () => workflowRouteIsCurrent(routeToken),
-      refresh: refreshCurrent,
     });
     if (!ready) {
       if (!workflowRouteIsCurrent(routeToken)) return;
       showStartTransitionError();
       return;
     }
-    if (workflowRouteIsCurrent(routeToken)) showScreen("idle-screen", { resetScroll: true });
+    if (workflowRouteIsCurrent(routeToken)) {
+      clearAttemptReview(true);
+      showScreen("idle-screen", { resetScroll: true });
+    }
   } catch {
     if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
   } finally {
@@ -1086,8 +1102,7 @@ async function refresh() {
     const snapshot = await invoke("app_snapshot");
     if (!snapshotRequestGate.isCurrent(ticket)) return REFRESH_SUPERSEDED;
     render(snapshot);
-    const active = ["arming", "recording", "stopping", "captured", "transcribing"].includes(snapshot.capture);
-    schedulePoll(active ? 400 : 1500);
+    scheduleSnapshotPoll(snapshot);
     return snapshot;
   } catch {
     if (!snapshotRequestGate.isCurrent(ticket)) return REFRESH_SUPERSEDED;
@@ -1119,7 +1134,8 @@ async function dismissAttemptAndReturnFind(control) {
   const routeToken = beginWorkflowRoute();
   if (control) control.disabled = true;
   try {
-    const snapshot = await dismissAndConfirmOperation.run();
+    const snapshot = await dismissMeetingOperation.run();
+    clearAttemptReview(true);
     if (!workflowRouteIsCurrent(routeToken)) return;
     if (snapshot?.capture !== "idle") {
       showStartTransitionError();
@@ -1185,8 +1201,8 @@ startForm.addEventListener("submit", async (event) => {
   startButton.textContent = "Preparing…";
   updateStartButton();
   try {
-    await invoke("start_meeting", request);
-    await refreshCurrent();
+    const snapshot = await invoke("start_meeting", request);
+    acceptCommandSnapshot(snapshot);
   } catch (error) {
     setError(startError, String(error));
   } finally {
@@ -1203,8 +1219,8 @@ stopButton.addEventListener("click", async () => {
   stopCommandPending = true;
   renderCaptureAction(lastSnapshot);
   try {
-    await invoke("stop_meeting");
-    await refreshCurrent();
+    const snapshot = await invoke("stop_meeting");
+    acceptCommandSnapshot(snapshot);
   } catch (error) {
     setError(stopError, String(error));
     stopCommandPending = false;
@@ -1218,8 +1234,9 @@ newMeetingButton.addEventListener("click", () => dismissAttemptAndReturnFind(new
 recoverButton.addEventListener("click", () => dismissAttemptAndReturnFind(recoverButton));
 
 retryStartup.addEventListener("click", async () => {
-  if (invoke && mutableActionPolicy(lastSnapshot).canRetryStartup) await invoke("retry_startup");
-  await refreshCurrent();
+  if (!invoke || !mutableActionPolicy(lastSnapshot).canRetryStartup) return;
+  const snapshot = await invoke("retry_startup");
+  acceptCommandSnapshot(snapshot);
 });
 
 findLink.addEventListener("click", openFind);

@@ -358,10 +358,16 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(navigation.contains("export function createFreshSnapshotOperation(refresh, superseded)"));
     assert!(script.contains("const refreshCurrentOperation = createFreshSnapshotOperation(refresh, REFRESH_SUPERSEDED);"));
     assert!(script.contains("pollTimer = window.setTimeout(refreshCurrent, delay);"));
+    assert!(navigation.contains("export function acceptAuthoritativeSnapshot(snapshot, actions)"));
+    assert!(script.contains("function acceptCommandSnapshot(snapshot)"));
+    assert!(script.contains("invalidateSnapshotRequests: () => snapshotRequestGate.invalidate(),"));
     assert!(script.contains("const routeOwnership = createRouteOwnershipGate();"));
     assert!(script.contains("function claimExplicitRoute()"));
-    assert!(script.contains("const dismissAndConfirmOperation = createSingleFlight(async () => {"));
-    assert!(script.contains("await invoke(\"dismiss_meeting\");\n  return refreshCurrent();"));
+    assert!(script.contains("const dismissMeetingOperation = createSingleFlight(async () => {"));
+    assert!(script.contains("const snapshot = await invoke(\"dismiss_meeting\");\n  return acceptCommandSnapshot(snapshot);"));
+    assert!(script.contains("const snapshot = await invoke(\"start_meeting\", request);\n    acceptCommandSnapshot(snapshot);"));
+    assert!(script.contains("const snapshot = await invoke(\"stop_meeting\");\n    acceptCommandSnapshot(snapshot);"));
+    assert!(script.contains("const snapshot = await invoke(\"retry_startup\");\n  acceptCommandSnapshot(snapshot);"));
     assert!(!script.contains("render({ startup: \"diagnostic-written\", capture: \"idle\""));
     assert!(script.contains("if (currentScreen === id) routeRevision += 1;"));
     assert!(navigation.contains("export function resolvedScreenForSnapshot"));
@@ -526,9 +532,10 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         .find("export async function prepareConsentTransition")
         .unwrap();
     let transition = &navigation[start..];
-    let dismiss = transition.find("await actions.dismissAndConfirm()").unwrap();
-    let clear = transition.find("actions.clearPriorAttempt()").unwrap();
-    assert!(dismiss < clear);
+    let dismiss = transition.find("await actions.dismiss()").unwrap();
+    let hidden_cleanup = transition.find("actions.clearHiddenAttempt()").unwrap();
+    let visible_cleanup = transition.find("actions.afterOwnedDismiss()").unwrap();
+    assert!(dismiss < hidden_cleanup && hidden_cleanup < visible_cleanup);
     assert!(script.contains("showScreen(\"start-meeting-error-screen\""));
     assert!(script.contains("startMeetingAction.addEventListener(\"click\", openStartMeeting)"));
 
@@ -538,8 +545,9 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     let prepare = open.find("await prepareConsentTransition").unwrap();
     let consent = open.find("showScreen(\"idle-screen\"").unwrap();
     assert!(prepare < consent);
-    assert!(open.contains("dismissAndConfirm: () => dismissAndConfirmOperation.run()"));
-    assert!(open.contains("clearAttemptReview(true)"));
+    assert!(open.contains("dismiss: () => dismissMeetingOperation.run()"));
+    assert!(open.contains("clearHiddenAttempt: () => clearAttemptReview(true)"));
+    assert!(open.contains("afterOwnedDismiss: () => {\n        invalidateLibraryHandles();"));
     assert!(open.contains("showStartTransitionError()"));
 
     let dismiss_start = script.find("async function dismissAttemptAndReturnFind").unwrap();
@@ -548,13 +556,13 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         .unwrap()
         + dismiss_start;
     let dismiss_attempt = &script[dismiss_start..dismiss_end];
-    let shared_dismiss = dismiss_attempt.find("await dismissAndConfirmOperation.run()").unwrap();
+    let shared_dismiss = dismiss_attempt.find("await dismissMeetingOperation.run()").unwrap();
+    let cleanup = dismiss_attempt.find("clearAttemptReview(true)").unwrap();
     let route_guard = dismiss_attempt
         .find("if (!workflowRouteIsCurrent(routeToken)) return;")
         .unwrap();
-    let cleanup = dismiss_attempt.find("clearAttemptReview(true)").unwrap();
-    assert!(shared_dismiss < route_guard && route_guard < cleanup);
-    assert!(dismiss_attempt.contains("const snapshot = await dismissAndConfirmOperation.run();"));
+    assert!(shared_dismiss < cleanup && cleanup < route_guard);
+    assert!(dismiss_attempt.contains("const snapshot = await dismissMeetingOperation.run();"));
     assert!(script.contains("(event) => returnToFindAfterStartError(event.currentTarget)"));
     let return_start = script.find("async function returnToFindAfterStartError").unwrap();
     let return_end = script[return_start..]
