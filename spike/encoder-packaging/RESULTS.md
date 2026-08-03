@@ -128,7 +128,7 @@ Terms of the decision:
    and resulting gate classifications around registered margins. The
    score/classification comparison decides, not raw feature equality.
    *Status: both fixture halves are measured — `FBANK-PARITY.md` records a
-   numpy front end (`native_fbank.py`) whose score-matrix delta against the
+   numpy front end (`worker/fbank.py`) whose score-matrix delta against the
    torch reference is 9.68 × 10⁻⁷ on the seeded synthetic fixtures and
    7.38 × 10⁻⁷ on twelve registered LibriSpeech speakers (operator-approved
    corpus, CC BY 4.0, digest-registered in

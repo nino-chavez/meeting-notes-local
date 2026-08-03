@@ -3,7 +3,8 @@
 Runs torch-free, like `bench_onnx.py`, because a front end that only reproduces features
 inside a torch process proves nothing about a native deployment. Reads the torch reference
 features and boundary embeddings that `prep_features.py` wrote, recomputes the same features
-with `native_fbank.py`, and pushes both through the exported ONNX embedding model.
+with the packaged `worker/fbank.py`, and pushes both through the exported ONNX embedding
+model.
 
 Three embedding sets are compared, because "parity" hides two different errors:
 
@@ -28,9 +29,11 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fixtures import synthetic_clips
-from native_fbank import fbank_features
+
+from worker.fbank import fbank_features
 
 assert "torch" not in sys.modules
 

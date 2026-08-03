@@ -1,10 +1,12 @@
-"""Torch-free Fbank front end: the candidate native feature stage for admission check 1.
+"""Torch-free Fbank front end for the preferred (not admitted) ONNX speaker encoder.
 
 The exported ONNX artifact is embedding-only — full-chain export fails on STFT complex
-types (see `export_onnx.py`) — so a native deployment has to reproduce SpeechBrain's
-`compute_features` (Fbank) and `mean_var_norm` (InputNormalization) itself. This module is
-that reproduction in numpy, and `bench_fbank_parity.py` measures how far it lands from the
-torch reference. It certifies nothing; it is the artifact the parity measurement is about.
+types (see `spike/encoder-packaging/export_onnx.py`) — so the packaged runtime has to
+reproduce SpeechBrain's `compute_features` (Fbank) and `mean_var_norm` (InputNormalization)
+itself. This module is that reproduction in numpy, on dependencies the runtime already
+packages. Its parity against the torch reference is measured and recorded in
+`spike/encoder-packaging/FBANK-PARITY.md`; this module certifies nothing by itself, and
+nothing about its presence admits an encoder into the product runtime.
 
 Every constant below is read off the pinned snapshot rather than recalled: `hyperparams.yaml`
 at `~/.cache/speaker-gate` sets only `n_mels: 80` for `speechbrain.lobes.features.Fbank` and

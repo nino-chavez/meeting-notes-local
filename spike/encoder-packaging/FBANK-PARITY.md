@@ -50,7 +50,9 @@ Norm: type sentence std_norm False eps 1e-10
 
 ## Derived pipeline
 
-Implemented in `native_fbank.py`; the docstring there maps each stage to its speechbrain
+Implemented in `worker/fbank.py` (promoted from this spike into the packaged worker, so the
+measured module and the packaged module are the same file); the docstring there maps each
+stage to its speechbrain
 source lines.
 
 1. **Frame.** Zero-pad the signal by `n_fft // 2 = 200` on both sides, then take 400-sample
