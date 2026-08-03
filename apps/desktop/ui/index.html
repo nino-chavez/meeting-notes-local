@@ -168,7 +168,7 @@
       <section class="screen" id="meeting-detail-screen" aria-labelledby="meeting-detail-title">
         <p class="kicker">Retained meeting</p>
         <h1 id="meeting-detail-title">Note and transcript.</h1>
-        <p class="lede">A supported note is a reading aid. Every claim opens the exact retained transcript words behind it.</p>
+        <p class="lede" id="meeting-detail-lede">A supported note is a reading aid. Every claim opens the exact retained transcript words behind it.</p>
         <p class="notice" id="meeting-detail-state" role="status" aria-live="polite">Opening this retained meeting…</p>
         <section class="meeting-retention" id="meeting-retention" aria-labelledby="meeting-retention-title" hidden>
           <p class="label">Recording retention</p>
@@ -193,7 +193,7 @@
         <section id="meeting-claim-list" class="meeting-claim-list" aria-live="polite"></section>
         <section class="meeting-no-note" id="meeting-no-note" hidden aria-labelledby="meeting-no-note-title">
           <h2 id="meeting-no-note-title">Transcript only</h2>
-          <p>No supported automatic note is available for this meeting. The retained transcript remains the source of record.</p>
+          <p id="meeting-no-note-copy">No supported automatic note is available for this meeting. The retained transcript remains the source of record.</p>
           <button class="secondary" id="meeting-open-transcript" type="button">Open retained transcript</button>
         </section>
         <input id="meeting-detail-transcript-handle" type="hidden" />

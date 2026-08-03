@@ -5,6 +5,9 @@ import {
   refreshFindGeneration,
   restoredScrollPosition,
   rootForDestination,
+  meetingDetailPresentation,
+  rowForMeetingId,
+  transcriptReturnRoute,
 } from "./navigation-state.mjs";
 
 const invoke = window.__TAURI__?.core?.invoke;
@@ -41,8 +44,13 @@ const librarySearchQuery = document.querySelector("#library-search-query");
 const librarySearchSubmit = librarySearch.querySelector("button[type=\"submit\"]");
 const librarySearchResults = document.querySelector("#library-search-results");
 const meetingDetailState = document.querySelector("#meeting-detail-state");
+const meetingDetailTitle = document.querySelector("#meeting-detail-title");
+const meetingDetailLede = document.querySelector("#meeting-detail-lede");
 const meetingClaimList = document.querySelector("#meeting-claim-list");
 const meetingNoNote = document.querySelector("#meeting-no-note");
+const meetingNoNoteTitle = document.querySelector("#meeting-no-note-title");
+const meetingNoNoteCopy = document.querySelector("#meeting-no-note-copy");
+const meetingOpenTranscript = document.querySelector("#meeting-open-transcript");
 const meetingRetention = document.querySelector("#meeting-retention");
 const meetingRetentionTitle = document.querySelector("#meeting-retention-title");
 const meetingRetentionPolicy = document.querySelector("#meeting-retention-policy");
@@ -68,6 +76,7 @@ let elapsedTimer = null;
 let meetingAudioDeletionHandle = "";
 let currentScreen = "startup-screen";
 let productRootScreen = "find-screen";
+let transcriptReturnContext = null;
 const screenScrollPositions = new Map();
 const libraryInitialization = createSingleFlight(
   () => invoke("preview_library_snapshot"),
@@ -350,8 +359,8 @@ function renderLibrary(snapshot) {
     button.type = "button";
     button.className = "library-row";
     button.dataset.meetingHandle = row.handle;
+    button.dataset.meetingId = row.meetingId || "";
     button.dataset.label = row.label || "Untitled meeting";
-    button.disabled = row.transcriptAvailable !== true;
     button.addEventListener("click", () => openMeetingDetail(row.handle, "meetings-screen"));
     const summary = document.createElement("span");
     const label = document.createElement("strong");
@@ -614,7 +623,7 @@ function reportLibraryOpenFailure(messageText) {
   setError(libraryNotice, messageText);
 }
 
-async function openLibraryTranscript(handle, matchedSourceTurnIndex = null) {
+async function openLibraryTranscript(handle, matchedSourceTurnIndex = null, returnContext = null) {
   if (!invoke || !handle) return;
   invalidateLibraryHandles();
   try {
@@ -630,6 +639,7 @@ async function openLibraryTranscript(handle, matchedSourceTurnIndex = null) {
       result.warnings,
       matchedSourceTurnIndex,
     );
+    transcriptReturnContext = returnContext;
     showScreen("library-transcript-screen", { resetScroll: true });
   } catch {
     reportLibraryOpenFailure("That transcript could not be opened. Return and try again.");
@@ -646,14 +656,19 @@ function claimTypeLabel(value) {
 }
 
 function renderMeetingDetail(response) {
+  const presentation = meetingDetailPresentation(response);
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
+  meetingDetailTitle.textContent = presentation.title;
+  meetingDetailLede.textContent = presentation.lede;
+  meetingNoNoteTitle.textContent = presentation.fallbackTitle;
+  meetingNoNoteCopy.textContent = presentation.fallbackCopy;
+  meetingOpenTranscript.hidden = !presentation.canOpenTranscript;
+  meetingDetailState.dataset.meetingId = response.meetingId || "";
   renderAudioRetention(response.audioRetention, response.audioDeletionHandle);
   message(meetingDetailState, response.message || "Opening retained meeting…", response.state || "");
   if (response.state !== "note") {
-    const showsTranscriptFallback = ["transcript-only", "summary-failed"].includes(response.state)
-      && Boolean(response.transcriptHandle);
-    meetingNoNote.hidden = !showsTranscriptFallback;
+    meetingNoNote.hidden = presentation.kind === "note";
     return;
   }
   for (const claim of response.claims || []) {
@@ -668,8 +683,13 @@ function renderMeetingDetail(response) {
     const open = document.createElement("button");
     open.type = "button";
     open.className = "secondary claim-evidence";
+    open.dataset.claimOrdinal = String(claim.ordinal);
     open.textContent = "Show exact words in transcript";
-    open.addEventListener("click", () => openMeetingEvidence(claim.handle));
+    open.addEventListener("click", () => openMeetingEvidence(
+      claim.handle,
+      response.meetingId,
+      claim.ordinal,
+    ));
     card.append(meta, text, open);
     meetingClaimList.append(card);
   }
@@ -695,7 +715,49 @@ async function openMeetingDetail(handle, returnScreen = "meetings-screen") {
   }
 }
 
-async function openMeetingEvidence(handle) {
+async function restoreMeetingDetailAfterTranscript(context) {
+  if (!invoke || !context?.meetingId) return false;
+  try {
+    const snapshot = await initializeLibraryReader();
+    const row = rowForMeetingId(snapshot, context.meetingId);
+    if (!row?.handle) {
+      renderLibrary(snapshot);
+      productRootScreen = "meetings-screen";
+      showScreen("meetings-screen", { resetScroll: false });
+      document.querySelector("#library-copy").textContent = "That meeting is no longer available in this fresh library view.";
+      return false;
+    }
+    const response = await invoke("preview_library_open_note", { handle: row.handle });
+    document.querySelector("#meeting-detail-transcript-handle").value = response.transcriptHandle || "";
+    renderMeetingDetail(response);
+    showScreen("meeting-detail-screen", { resetScroll: false, focus: false });
+    if (Number.isInteger(context.claimOrdinal)) {
+      const origin = meetingClaimList.querySelector(
+        `[data-claim-ordinal="${context.claimOrdinal}"]`,
+      );
+      origin?.focus({ preventScroll: true });
+    } else if (!meetingOpenTranscript.hidden) {
+      meetingOpenTranscript.focus({ preventScroll: true });
+    }
+    return true;
+  } catch {
+    await openMeetings();
+    document.querySelector("#library-copy").textContent = "That meeting could not be reopened from the fresh library view.";
+    return false;
+  }
+}
+
+async function returnFromLibraryTranscript() {
+  const context = transcriptReturnContext;
+  transcriptReturnContext = null;
+  if (context?.destination === "meeting-detail") {
+    await restoreMeetingDetailAfterTranscript(context);
+    return;
+  }
+  await returnToProductHome();
+}
+
+async function openMeetingEvidence(handle, meetingId, claimOrdinal) {
   if (!invoke || !handle) return;
   invalidateLibraryHandles();
   message(meetingDetailState, "Opening the claim’s exact retained words…");
@@ -709,7 +771,7 @@ async function openMeetingEvidence(handle) {
       sourceTurnIndex: result.sourceTurnIndex,
       start: result.start,
       end: result.end,
-    });
+    }, transcriptReturnRoute("meeting-detail", meetingId, claimOrdinal));
   } catch {
     message(meetingDetailState, "That claim could not be opened. Return to Meetings and try again.", "stale");
   }
@@ -922,7 +984,7 @@ document.querySelector("#start-back").addEventListener("click", openFind);
 document.querySelector("#start-transition-back").addEventListener("click", returnToFindAfterStartError);
 librarySearch.addEventListener("submit", searchLibrary);
 document.querySelector("#profile-back").addEventListener("click", returnToProductHome);
-document.querySelector("#library-transcript-back").addEventListener("click", returnToProductHome);
+document.querySelector("#library-transcript-back").addEventListener("click", returnFromLibraryTranscript);
 document.querySelector("#meeting-detail-back").addEventListener("click", returnToProductHome);
 recordingDeleteReview.addEventListener("click", () => {
   if (!meetingAudioDeletionHandle) return;
@@ -956,9 +1018,12 @@ recordingDeleteConfirm.addEventListener("click", async () => {
     recordingDeleteConfirm.disabled = true;
   }
 });
-document.querySelector("#meeting-open-transcript").addEventListener("click", () => {
+meetingOpenTranscript.addEventListener("click", () => {
   const handle = document.querySelector("#meeting-detail-transcript-handle").value;
-  if (handle) openLibraryTranscript(handle);
+  const meetingId = meetingDetailState.dataset.meetingId || "";
+  if (handle) {
+    openLibraryTranscript(handle, null, transcriptReturnRoute("meeting-detail", meetingId));
+  }
 });
 
 renderStartup("shell-rendered");

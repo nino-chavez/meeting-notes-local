@@ -7,7 +7,10 @@ import {
   refreshFindGeneration,
   retentionDeadlineMessage,
   restoredScrollPosition,
+  rowForMeetingId,
   rootForDestination,
+  meetingDetailPresentation,
+  transcriptReturnRoute,
 } from "./navigation-state.mjs";
 
 test("retention copy says when audio becomes due and when deletion can run", () => {
@@ -187,4 +190,58 @@ test("returning restores scroll while new content starts at the top", () => {
   assert.equal(restoredScrollPosition(undefined), 0);
   assert.equal(restoredScrollPosition(184), 184);
   assert.equal(restoredScrollPosition(184, true), 0);
+});
+
+test("a fresh snapshot looks up a meeting by durable id, not an old handle", () => {
+  const first = { rows: [{ meetingId: "meeting-a", handle: "old-handle" }] };
+  const fresh = { rows: [{ meetingId: "meeting-a", handle: "fresh-handle" }] };
+
+  assert.equal(rowForMeetingId(first, "meeting-a")?.handle, "old-handle");
+  assert.equal(rowForMeetingId(fresh, "meeting-a")?.handle, "fresh-handle");
+  assert.equal(rowForMeetingId(fresh, "missing"), null);
+  assert.equal(rowForMeetingId({ rows: null }, "meeting-a"), null);
+});
+
+test("evidence opened from a meeting detail returns through a fresh meeting route", () => {
+  assert.deepEqual(
+    transcriptReturnRoute("meeting-detail", "meeting-a", 4),
+    { destination: "meeting-detail", meetingId: "meeting-a", claimOrdinal: 4 },
+  );
+  assert.deepEqual(
+    transcriptReturnRoute("find", "meeting-a", 4),
+    { destination: "product-root", meetingId: null, claimOrdinal: null },
+  );
+  assert.deepEqual(
+    transcriptReturnRoute("meeting-detail", "", 4),
+    { destination: "product-root", meetingId: null, claimOrdinal: null },
+  );
+});
+
+test("metadata-only meeting detail is inspectable but never offers transcript text", () => {
+  assert.deepEqual(
+    meetingDetailPresentation({ state: "transcript-only", transcriptHandle: null }),
+    {
+      kind: "metadata-only",
+      title: "Meeting details.",
+      lede: "This meeting’s retained status and recording information are available. No transcript was created.",
+      fallbackTitle: "No transcript was created",
+      fallbackCopy: "There are no retained words or automatic note to open for this meeting.",
+      canOpenTranscript: false,
+    },
+  );
+  assert.equal(
+    meetingDetailPresentation({ state: "transcript-only", transcriptHandle: "fresh-handle" }).canOpenTranscript,
+    true,
+  );
+  assert.deepEqual(
+    meetingDetailPresentation({ state: "summary-failed", transcriptHandle: null }),
+    {
+      kind: "transcript-unavailable",
+      title: "Meeting details.",
+      lede: "This meeting’s retained status and recording information are available. Its transcript is not available from this view.",
+      fallbackTitle: "Transcript unavailable",
+      fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Meetings and try again.",
+      canOpenTranscript: false,
+    },
+  );
 });

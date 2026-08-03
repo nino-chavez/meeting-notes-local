@@ -14,6 +14,64 @@ export function restoredScrollPosition(storedPosition, reset = false) {
   return storedPosition;
 }
 
+export function rowForMeetingId(snapshot, meetingId) {
+  if (!meetingId || !Array.isArray(snapshot?.rows)) return null;
+  return snapshot.rows.find((row) => row?.meetingId === meetingId) || null;
+}
+
+export function transcriptReturnRoute(origin, meetingId, claimOrdinal = null) {
+  if (origin === "meeting-detail" && meetingId) {
+    return {
+      destination: "meeting-detail",
+      meetingId,
+      claimOrdinal: Number.isInteger(claimOrdinal) ? claimOrdinal : null,
+    };
+  }
+  return { destination: "product-root", meetingId: null, claimOrdinal: null };
+}
+
+export function meetingDetailPresentation(response) {
+  const transcriptAvailable = Boolean(response?.transcriptHandle);
+  if (response?.state === "transcript-only" && !transcriptAvailable) {
+    return {
+      kind: "metadata-only",
+      title: "Meeting details.",
+      lede: "This meeting’s retained status and recording information are available. No transcript was created.",
+      fallbackTitle: "No transcript was created",
+      fallbackCopy: "There are no retained words or automatic note to open for this meeting.",
+      canOpenTranscript: false,
+    };
+  }
+  if (response?.state !== "note" && !transcriptAvailable) {
+    return {
+      kind: "transcript-unavailable",
+      title: "Meeting details.",
+      lede: "This meeting’s retained status and recording information are available. Its transcript is not available from this view.",
+      fallbackTitle: "Transcript unavailable",
+      fallbackCopy: "No retained words or automatic note can be opened right now. Reopen Meetings and try again.",
+      canOpenTranscript: false,
+    };
+  }
+  if (response?.state === "transcript-only" || response?.state === "summary-failed") {
+    return {
+      kind: "transcript-only",
+      title: "Note and transcript.",
+      lede: "A supported note is a reading aid. Every claim opens the exact retained transcript words behind it.",
+      fallbackTitle: "Transcript only",
+      fallbackCopy: "No supported automatic note is available for this meeting. The retained transcript remains the source of record.",
+      canOpenTranscript: transcriptAvailable,
+    };
+  }
+  return {
+    kind: "note",
+    title: "Note and transcript.",
+    lede: "A supported note is a reading aid. Every claim opens the exact retained transcript words behind it.",
+    fallbackTitle: "Transcript only",
+    fallbackCopy: "No supported automatic note is available for this meeting. The retained transcript remains the source of record.",
+    canOpenTranscript: false,
+  };
+}
+
 export function retentionDeadlineMessage(epochSeconds) {
   const value = Number(epochSeconds) * 1000;
   const deadline = new Date(value);
