@@ -170,29 +170,61 @@ artifact, not a finding. These features are mean-subtracted, so a cell whose ref
 reference value alongside the ratio so the number cannot be read as a 28% error. Read the
 span-relative figure.
 
+## Registered public-audio fixtures — the real-speech half
+
+Added 2026-08-03 after the operator approved LibriSpeech as the public corpus. Twelve flac
+clips, twelve distinct speakers (six recorded F, six recorded M), copied **byte-unmodified**
+from LibriSpeech `dev-clean` (openslr.org/12, **CC BY 4.0**; Panayotov, Chen, Povey and
+Khudanpur, "LibriSpeech: an ASR corpus based on public domain audio books", ICASSP 2015).
+Provenance chain, verified in-session rather than recalled: archive
+`dev-clean.tar.gz` sha256 `76f87d090650617fca0cac8f88b9416e0ebf80350acb97b343a85fa903728ab3`,
+md5 `42e2234ba48799c1f50f24a7926300a1` — byte-equal to the line openslr publishes in its
+`md5sum.txt`. Selection is a deterministic rule, not hand-picking, and the rule is executable:
+`select_librispeech_fixtures.py` (6 lowest-ID speakers per recorded sex; per speaker the
+lexicographically first clip ≥ 3.0 s). Per-file digests live in
+`fixtures-librispeech/manifest.json`; `public_fixtures.py` refuses any fixture whose bytes
+disagree with its registered digest before a measurement can run.
+
+Results over the twelve real-speech clips (4.0 s to 20.2 s — 400 to 2023 frames, so
+variable length is now exercised on real material with shape asserted per clip):
+
+| Measure | Synthetic (above) | LibriSpeech |
+|---|---|---|
+| Feature max abs diff | 7.19 × 10⁻⁴ dB | 1.53 × 10⁻³ dB |
+| …as a fraction of the feature span | 7.7 × 10⁻⁶ | 1.5 × 10⁻⁵ |
+| Worst per-clip cosine, native vs torch | 1 − 3.41 × 10⁻¹² | 1 − 4.12 × 10⁻¹² |
+| **Score matrix max abs Δ, native vs torch** | **9.68 × 10⁻⁷** | **7.38 × 10⁻⁷** |
+| Score matrix max abs Δ, native vs bridged | 5.90 × 10⁻⁷ | 7.27 × 10⁻⁷ |
+| Score matrix max abs Δ, bridged vs torch (control) | 4.24 × 10⁻⁷ | 3.74 × 10⁻⁷ |
+
+The twelve distinct speakers give the score matrix genuine structure — cross-speaker cosines
+span **−0.065 to 0.473** — so the ~7 × 10⁻⁷ delta is measured across realistic score
+diversity, not a degenerate cluster. Real speech lands in the same float32-rounding class as
+the synthetic clips; no new error mode appears, and the deciding score figure stays roughly
+4,000× below the 0.003 margin.
+
 ## What these fixtures bound, and what they do not
 
-The 12 clips are speech-*shaped* harmonic stacks with formant-like filtering, not speech. They
-bound **conversion and reimplementation error only**. No operating-point, threshold, or
-household-separation number is re-validated here.
+The 12 synthetic clips are speech-*shaped* harmonic stacks with formant-like filtering, not
+speech; the 12 LibriSpeech clips are real read speech from twelve speakers. Together they
+bound **conversion and reimplementation error on real single-speaker speech**. No
+operating-point, threshold, or household-separation number is re-validated here.
 
 ## Gaps
 
 These are open, and each is a reason this measurement is not admission check 1:
 
-- **No registered public-audio fixtures.** The decision in `RESULTS.md` requires "identical
-  deterministic *and registered public-audio* fixtures". Only the deterministic half exists.
+- ~~No registered public-audio fixtures.~~ **Closed 2026-08-03**: the LibriSpeech half above,
+  operator-approved corpus, digest-registered, deterministic selection rule.
 - **No gate-classification comparison.** The check also requires comparing resulting gate
   classifications around registered margins. This measures features, embeddings, and scores —
-  it stops short of classifications.
-- **Variable length is exercised only by truncation, and padded batching not at all.** All 12
-  fixtures are exactly 3.0 s, so the bench itself only ever sees 301 frames. Truncated copies
-  of fixture clip 0 were checked separately against torch at 48000, 27200, 16000, 12345, 8001,
-  4000 and 401 samples (3.0 s down to 25 ms): frame counts agree at every length (301, 171,
-  101, 78, 51, 26, 3) and the residual stays at the same float32 level (≤ 2.37 × 10⁻⁴), so the
-  framing formula generalizes off the 3.0 s grid. What remains untested is the padded-batch
-  path: `fbank_features` takes one unpadded utterance and never exercises the
-  relative-`lengths` masking in `InputNormalization`. A caller that batches utterances of
+  it stops short of classifications, because registered operating points do not exist until
+  real calibration material does.
+- **Padded batching is untested.** Variable length is now exercised on real speech (400 to
+  2023 frames, shape asserted per clip) and was separately checked by truncation down to 25 ms
+  (frame counts 301, 171, 101, 78, 51, 26, 3; residual ≤ 2.37 × 10⁻⁴). What remains untested
+  is the padded-batch path: `fbank_features` takes one unpadded utterance and never exercises
+  the relative-`lengths` masking in `InputNormalization`. A caller that batches utterances of
   unequal length is on untested ground.
 - **The `top_db` floor is barely exercised.** It fires on 54 cells out of 288,960 across the
   12 clips (0.019%), so the one genuine nonlinearity in the chain is thinly covered. It is
@@ -211,9 +243,13 @@ These are open, and each is a reason this measurement is not admission check 1:
 
 ```sh
 WORK=/tmp/fbank-work && mkdir -p $WORK
-.venv/bin/python spike/encoder-packaging/prep_features.py ~/.cache/speaker-gate $WORK
+FIX=spike/encoder-packaging/fixtures-librispeech
+.venv/bin/python spike/encoder-packaging/prep_features.py ~/.cache/speaker-gate $WORK $FIX
 .venv/bin/python spike/encoder-packaging/export_onnx.py ~/.cache/speaker-gate $WORK/ecapa.onnx
-.venv/bin/python spike/encoder-packaging/bench_fbank_parity.py $WORK/ecapa.onnx $WORK
+.venv/bin/python spike/encoder-packaging/bench_fbank_parity.py $WORK/ecapa.onnx $WORK $FIX
 ```
 
-The first two commands import torch; the third asserts it has not been imported.
+The first two commands import torch; the third asserts it has not been imported. Omit the
+`$FIX` argument to run the synthetic half alone. Regenerating the fixtures themselves needs
+the public archive: download `dev-clean.tar.gz`, verify the digests above, extract, and run
+`select_librispeech_fixtures.py <LibriSpeech-root> <fixtures-dir> <sha256> <md5>`.

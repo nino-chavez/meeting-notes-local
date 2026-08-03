@@ -56,6 +56,74 @@ def embed(session, features: np.ndarray) -> np.ndarray:
     return np.stack([np.squeeze(row) for row in rows])
 
 
+def public_parity(session, work_dir: Path, fixtures_dir: Path) -> dict:
+    """The registered LibriSpeech half: real speech, unequal clip lengths."""
+    from public_fixtures import load_public_clips
+
+    clips = load_public_clips(fixtures_dir)
+    reference = np.load(work_dir / "features_public.npz")
+    torch_boundary = np.load(work_dir / "torch_boundary_public.npy")
+
+    feature_max_abs = 0.0
+    span_low = float("inf")
+    span_high = float("-inf")
+    native_rows = []
+    bridged_rows = []
+    frame_counts = []
+    for name, audio in clips:
+        native = fbank_features(audio)
+        torch_feats = reference[name]
+        assert native.shape == torch_feats.shape, (
+            f"{name}: native {native.shape} vs torch {torch_feats.shape}"
+        )
+        frame_counts.append(int(native.shape[0]))
+        wide = torch_feats.astype(np.float64)
+        feature_max_abs = max(feature_max_abs, float(np.abs(native - wide).max()))
+        span_low = min(span_low, float(wide.min()))
+        span_high = max(span_high, float(wide.max()))
+        lengths = np.ones(1, dtype=np.float32)
+        native_rows.append(
+            np.squeeze(session.run(None, {"features": native[None, ...], "lengths": lengths})[0])
+        )
+        bridged_rows.append(
+            np.squeeze(
+                session.run(None, {"features": torch_feats[None, ...], "lengths": lengths})[0]
+            )
+        )
+    native_emb = np.stack(native_rows)
+    bridged_emb = np.stack(bridged_rows)
+    native_vs_torch = np.sum(unit(native_emb) * unit(torch_boundary), axis=-1)
+    scores_native = score_matrix(native_emb)
+    scores_bridged = score_matrix(bridged_emb)
+    scores_torch = score_matrix(torch_boundary)
+    # Twelve distinct real speakers give the score matrix genuine structure;
+    # reporting the off-diagonal range shows the deltas hold across realistic
+    # speaker-score diversity, not a degenerate cluster.
+    off_diagonal = scores_torch[~np.eye(len(clips), dtype=bool)]
+    return {
+        "fixtures": "librispeech-parity-fixtures/1",
+        "clips": len(clips),
+        "frame_count_min": min(frame_counts),
+        "frame_count_max": max(frame_counts),
+        "feature_max_abs_diff": round(feature_max_abs, 9),
+        "feature_max_abs_diff_over_span": round(feature_max_abs / (span_high - span_low), 12),
+        "cross_speaker_score_min": round(float(off_diagonal.min()), 6),
+        "cross_speaker_score_max": round(float(off_diagonal.max()), 6),
+        "max_one_minus_cosine_native_vs_torch": float(
+            f"{1.0 - float(native_vs_torch.min()):.3e}"
+        ),
+        "score_delta_native_vs_bridged": round(
+            float(np.max(np.abs(scores_native - scores_bridged))), 9
+        ),
+        "score_delta_native_vs_torch": round(
+            float(np.max(np.abs(scores_native - scores_torch))), 9
+        ),
+        "score_delta_bridged_vs_torch": round(
+            float(np.max(np.abs(scores_bridged - scores_torch))), 9
+        ),
+    }
+
+
 def main() -> None:
     model_path, work_dir = sys.argv[1], Path(sys.argv[2])
 
@@ -125,6 +193,9 @@ def main() -> None:
             }
         )
     )
+
+    if len(sys.argv) > 3:
+        print(json.dumps(public_parity(session, work_dir, Path(sys.argv[3]))))
 
 
 if __name__ == "__main__":

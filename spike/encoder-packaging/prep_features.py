@@ -24,6 +24,18 @@ from fixtures import synthetic_clips
 from speechbrain.inference.speaker import EncoderClassifier
 
 
+def torch_features(classifier: EncoderClassifier, clip) -> np.ndarray:
+    audio = torch.from_numpy(clip).unsqueeze(0)
+    feats = classifier.mods.compute_features(audio)
+    feats = classifier.mods.mean_var_norm(feats, torch.ones(1))
+    return feats.squeeze(0).numpy()
+
+
+def torch_boundary(classifier: EncoderClassifier, feats) -> np.ndarray:
+    emb = classifier.mods.embedding_model(torch.from_numpy(feats).unsqueeze(0), torch.ones(1))
+    return emb.squeeze().numpy()
+
+
 def main() -> None:
     savedir, out_dir = sys.argv[1], Path(sys.argv[2])
     classifier = EncoderClassifier.from_hparams(
@@ -33,10 +45,7 @@ def main() -> None:
     features = []
     with torch.no_grad():
         for clip in synthetic_clips():
-            audio = torch.from_numpy(clip).unsqueeze(0)
-            feats = classifier.mods.compute_features(audio)
-            feats = classifier.mods.mean_var_norm(feats, torch.ones(1))
-            features.append(feats.squeeze(0).numpy())
+            features.append(torch_features(classifier, clip))
     np.save(out_dir / "features.npy", np.stack(features))
     # Torch reference at the exact boundary the ONNX artifact reproduces:
     # embedding_model output, before the embedding-space normalizer that
@@ -45,12 +54,27 @@ def main() -> None:
     boundary = []
     with torch.no_grad():
         for feats in features:
-            emb = classifier.mods.embedding_model(
-                torch.from_numpy(feats).unsqueeze(0), torch.ones(1)
-            )
-            boundary.append(emb.squeeze().numpy())
+            boundary.append(torch_boundary(classifier, feats))
     np.save(out_dir / "torch_boundary_embeddings.npy", np.stack(boundary))
     print("features:", np.stack(features).shape, "boundary:", np.stack(boundary).shape)
+
+    # Optional third argument: the registered LibriSpeech fixtures directory.
+    # Clips have unequal lengths, so per-clip features go into one npz keyed
+    # by fixture name; boundary embeddings stack at a fixed 192.
+    if len(sys.argv) > 3:
+        from public_fixtures import load_public_clips
+
+        clips = load_public_clips(Path(sys.argv[3]))
+        public_features = {}
+        public_boundary = []
+        with torch.no_grad():
+            for name, audio in clips:
+                feats = torch_features(classifier, audio)
+                public_features[name] = feats
+                public_boundary.append(torch_boundary(classifier, feats))
+        np.savez(out_dir / "features_public.npz", **public_features)
+        np.save(out_dir / "torch_boundary_public.npy", np.stack(public_boundary))
+        print("public:", len(clips), "clips, boundary:", np.stack(public_boundary).shape)
 
 
 if __name__ == "__main__":

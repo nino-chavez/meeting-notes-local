@@ -127,12 +127,15 @@ Terms of the decision:
    feature shapes, feature values, final embeddings, pairwise cosine scores,
    and resulting gate classifications around registered margins. The
    score/classification comparison decides, not raw feature equality.
-   *Status: the deterministic half is measured — `FBANK-PARITY.md` records a
+   *Status: both fixture halves are measured — `FBANK-PARITY.md` records a
    numpy front end (`native_fbank.py`) whose score-matrix delta against the
-   torch reference is 9.68 × 10⁻⁷ on the seeded fixtures, with a
-   conversion-only control at 4.24 × 10⁻⁷. Registered public-audio fixtures
-   and the gate-classification comparison remain open, so the check is not
-   passed.*
+   torch reference is 9.68 × 10⁻⁷ on the seeded synthetic fixtures and
+   7.38 × 10⁻⁷ on twelve registered LibriSpeech speakers (operator-approved
+   corpus, CC BY 4.0, digest-registered in
+   `fixtures-librispeech/manifest.json`), with conversion-only controls at
+   4.24 × 10⁻⁷ and 3.74 × 10⁻⁷. The gate-classification comparison around
+   registered margins remains open — registered operating points do not exist
+   until real calibration material does — so the check is not passed.*
 2. **Release-lane packaging.** The actual signed app built with ONNX Runtime
    and the model must prove: every Mach-O signed, the bundle passes its closed
    verifier, hardened-runtime launch without unnecessary entitlements,
