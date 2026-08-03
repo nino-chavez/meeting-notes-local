@@ -633,6 +633,36 @@ mod tests {
         );
     }
 
+    /// `as_str` and the serde derive are two spellings of one mapping, and the
+    /// UI reads the serialized one. Pinning them together stops a silent
+    /// divergence, and pins both against § I's state names, which the screen
+    /// inventory and this module have to keep agreeing on.
+    #[test]
+    fn state_names_match_between_serde_and_as_str() {
+        let states = [
+            (GuidedEnrollmentState::Blocked, "blocked"),
+            (GuidedEnrollmentState::ResumeAfterGap, "resume-after-gap"),
+            (
+                GuidedEnrollmentState::SecondSittingReview,
+                "second-sitting-review",
+            ),
+            (GuidedEnrollmentState::NeedsOtherVoice, "needs-other-voice"),
+            (
+                GuidedEnrollmentState::ChoosingOperatingPoint,
+                "choosing-operating-point",
+            ),
+            (GuidedEnrollmentState::Refused, "refused"),
+        ];
+        for (state, expected) in states {
+            assert_eq!(state.as_str(), expected);
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::Value::String(expected.to_string()),
+                "serde and as_str must not diverge for {expected}"
+            );
+        }
+    }
+
     #[test]
     fn min_resolvable_matches_ceil_of_one_over_target() {
         assert_eq!(min_resolvable_held_out(0.01), Some(100));
