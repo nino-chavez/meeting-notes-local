@@ -307,9 +307,27 @@ fn digest_bytes(bytes: &[u8]) -> String {
 }
 
 /// Streamed digest with a hard size bound, for raw audio that should never be
-/// held in memory whole.
+/// held in memory whole. Symlinks are refused twice: a deterministic lstat
+/// check first, then `O_NOFOLLOW` on the open guards the race — a link swapped
+/// in for a raw artifact must quarantine, because cleanup's rename and unlink
+/// would otherwise delete only the link while the receipt claims the bytes.
 fn digest_file_bounded(path: &Path, max_bytes: u64) -> Result<(u64, String), SittingEvidenceError> {
-    let file = fs::OpenOptions::new().read(true).open(path)?;
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(SittingEvidenceError::Quarantined(
+            "a raw artifact is not a bounded regular file",
+        ));
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| {
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                SittingEvidenceError::Quarantined("a raw artifact is not a bounded regular file")
+            } else {
+                SittingEvidenceError::from(error)
+            }
+        })?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() > max_bytes {
         return Err(SittingEvidenceError::Quarantined(
@@ -334,6 +352,18 @@ fn digest_file_bounded(path: &Path, max_bytes: u64) -> Result<(u64, String), Sit
         hasher.update(&buffer[..read]);
     }
     Ok((total, format!("{:x}", hasher.finalize())))
+}
+
+/// Write-side bound: a row the read side would refuse under its size bound
+/// must be refused here, at write time, as a bad argument — otherwise one
+/// oversized row turns into a permanent fail-closed store on every later read.
+fn require_writable_size(bytes: &[u8], max_bytes: u64) -> Result<(), SittingEvidenceError> {
+    if bytes.len() as u64 > max_bytes {
+        return Err(SittingEvidenceError::Refused(
+            "an evidence row exceeds its storage bound",
+        ));
+    }
+    Ok(())
 }
 
 /// Write-once with the `operation_store` identity rule: an existing file must
@@ -413,6 +443,7 @@ fn scorable_segments(segments: &[SegmentSpan]) -> (u32, f64) {
 }
 
 fn validate_segments(segments: &[SegmentSpan]) -> Result<(), SittingEvidenceError> {
+    let mut previous_end = 0.0_f64;
     for span in segments {
         if !span.start_seconds.is_finite()
             || !span.end_seconds.is_finite()
@@ -423,6 +454,15 @@ fn validate_segments(segments: &[SegmentSpan]) -> Result<(), SittingEvidenceErro
                 "segment timings must be finite, ordered, and non-negative",
             ));
         }
+        // Segments feed the enrolment-sufficiency thresholds, so duplicated
+        // or overlapping spans would inflate evidence. Whisper segments are
+        // sequential; require the same here.
+        if span.start_seconds < previous_end {
+            return Err(SittingEvidenceError::Refused(
+                "segment timings must not overlap or repeat",
+            ));
+        }
+        previous_end = span.end_seconds;
     }
     Ok(())
 }
@@ -479,7 +519,6 @@ pub(crate) fn begin_sitting(
         }
     }
     ensure_store_directories(storage)?;
-    create_exclusive_private_dir(&paths.durable)?;
     let record = SittingStartedRecord {
         schema: SittingSchema::V1,
         sitting_id: sitting_id.to_string(),
@@ -487,8 +526,16 @@ pub(crate) fn begin_sitting(
         source_class: source_class.map(str::to_string),
         started_at_epoch_seconds,
     };
-    write_once(&paths.durable.join(SITTING_FILE), &canonical_bytes(&record)?)?;
+    let record_bytes = canonical_bytes(&record)?;
+    require_writable_size(&record_bytes, RECORD_MAX_BYTES)?;
+    create_exclusive_private_dir(&paths.durable)?;
+    // The identity row must be durable — including the directory entries above
+    // it — before the work directory can exist on disk after power loss;
+    // otherwise startup would find an orphan work directory and quarantine.
+    sync_directory(&resolve(storage, &[ENROLLMENT_DIR, SITTINGS_DIR])?)?;
+    write_once(&paths.durable.join(SITTING_FILE), &record_bytes)?;
     create_exclusive_private_dir(&paths.work)?;
+    sync_directory(&resolve(storage, &[ENROLLMENT_DIR, WORK_DIR])?)?;
     Ok(())
 }
 
@@ -518,6 +565,7 @@ pub(crate) fn append_raw_audio(
         .create(true)
         .append(true)
         .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&raw)?;
     file.write_all(bytes)?;
     file.sync_all()?;
@@ -544,6 +592,10 @@ pub(crate) fn finalize_capture(
             "no raw recording exists to finalize",
         ));
     }
+    // The raw recording's directory entry must be durable before the capture
+    // row is: after power loss, `capture.json` without `audio.raw` would read
+    // as unexplained raw loss forever.
+    sync_directory(&paths.work)?;
     let (byte_size, sha256) = digest_file_bounded(&raw, RAW_MAX_BYTES)?;
     if byte_size == 0 {
         return Err(SittingEvidenceError::Refused(
@@ -582,10 +634,9 @@ pub(crate) fn record_segments(
         raw_sha256: capture.raw.sha256,
         segments: segments.to_vec(),
     };
-    write_once(
-        &paths.durable.join(SEGMENTS_FILE),
-        &canonical_bytes(&record)?,
-    )?;
+    let record_bytes = canonical_bytes(&record)?;
+    require_writable_size(&record_bytes, SEGMENTS_MAX_BYTES)?;
+    write_once(&paths.durable.join(SEGMENTS_FILE), &record_bytes)?;
     sync_directory(&paths.durable)?;
     Ok(())
 }
@@ -657,11 +708,18 @@ pub(crate) fn store_derived_material(
         embedding_dim,
         derived_at_epoch_seconds,
     };
-    write_once(&paths.durable.join(DERIVED_FILE), &canonical_bytes(&record)?)?;
+    let record_bytes = canonical_bytes(&record)?;
+    require_writable_size(&record_bytes, RECORD_MAX_BYTES)?;
+    write_once(&paths.durable.join(DERIVED_FILE), &record_bytes)?;
     sync_directory(&paths.durable)?;
+    // A transient storage failure leaves cleanup separately retryable without
+    // rolling back the durable derivation, mirroring
+    // `ProfileEnrollmentCompletion::CleanupPending`. A detected identity
+    // violation is not retryable and must not report as benign pending work.
     match run_cleanup(&paths, &capture) {
         Ok(()) => Ok(SittingLifecycleState::Saved),
-        Err(_) => Ok(SittingLifecycleState::CleanupPending),
+        Err(SittingEvidenceError::Storage) => Ok(SittingLifecycleState::CleanupPending),
+        Err(error) => Err(error),
     }
 }
 
@@ -1048,7 +1106,7 @@ fn classify_sitting(
             SittingLifecycleState::CleanupPending
         }
     } else if let Some(capture) = &capture {
-        if !work_present {
+        if !work_present || !path_present(&paths.work.join(RAW_AUDIO_NAME))? {
             return Err(SittingEvidenceError::Quarantined(
                 "raw material vanished without a receipt or rehearsal label",
             ));
@@ -1169,9 +1227,9 @@ pub(crate) fn read_sitting_evidence(
             source_class: classified.started.source_class.clone(),
             state: classified.state,
         });
-        let (capture, segments) = match (&classified.capture, &classified.segments) {
-            (Some(capture), Some(segments)) => (capture, segments),
-            _ => continue,
+        let capture = match &classified.capture {
+            Some(capture) => capture,
+            None => continue,
         };
         if matches!(
             classified.state,
@@ -1179,7 +1237,16 @@ pub(crate) fn read_sitting_evidence(
         ) {
             continue;
         }
-        let (scorable_count, scorable_seconds) = scorable_segments(&segments.segments);
+        // A finalized capture without segment evidence yet still projects —
+        // with zero scorable material — so retained raw audio is never
+        // invisible to the evaluator or to the refuse-without-encoder gate.
+        // The canonical gate would refuse a segmentless sitting as too thin,
+        // so zero is also the honest count.
+        let (scorable_count, scorable_seconds) = classified
+            .segments
+            .as_ref()
+            .map(|record| scorable_segments(&record.segments))
+            .unwrap_or((0, 0.0));
         let derived = if classified.state == SittingLifecycleState::Saved {
             classified.derived.as_ref().map(|record| DerivedVoiceMaterial {
                 encoder_sha256: record.encoder_sha256.clone(),
@@ -1595,5 +1662,112 @@ mod tests {
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
         let refused = append_raw_audio(&fixture.storage, SID, b"more");
         assert!(matches!(refused, Err(SittingEvidenceError::Refused(_))));
+    }
+
+    #[test]
+    fn oversized_rows_are_refused_at_write_time_not_bricked_at_read_time() {
+        let fixture = fixture();
+        let refused = begin_sitting(
+            &fixture.storage,
+            SID,
+            SittingKind::NegativeSource,
+            Some(&"x".repeat(20_000)),
+            1_000,
+        );
+        assert!(matches!(refused, Err(SittingEvidenceError::Refused(_))));
+
+        record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
+        let oversized: Vec<SegmentSpan> = (0..20_000)
+            .map(|index| SegmentSpan {
+                start_seconds: index as f64 * 4.0,
+                end_seconds: index as f64 * 4.0 + 3.0,
+            })
+            .collect();
+        let refused = record_segments(&fixture.storage, SID, &oversized);
+        assert!(matches!(refused, Err(SittingEvidenceError::Refused(_))));
+        // The store must still be fully readable after both refusals.
+        read_sitting_evidence(&fixture.storage).unwrap();
+    }
+
+    #[test]
+    fn overlapping_or_repeated_segments_are_refused() {
+        let fixture = fixture();
+        begin_sitting(&fixture.storage, SID, SittingKind::OperatorSitting, None, 1_000).unwrap();
+        append_raw_audio(&fixture.storage, SID, b"synthetic fixture audio bytes").unwrap();
+        finalize_capture(&fixture.storage, SID, 1_100).unwrap();
+        let overlapping = [
+            SegmentSpan {
+                start_seconds: 0.0,
+                end_seconds: 3.0,
+            },
+            SegmentSpan {
+                start_seconds: 2.0,
+                end_seconds: 5.0,
+            },
+        ];
+        let refused = record_segments(&fixture.storage, SID, &overlapping);
+        assert!(matches!(refused, Err(SittingEvidenceError::Refused(_))));
+        let repeated = [
+            SegmentSpan {
+                start_seconds: 0.0,
+                end_seconds: 3.0,
+            },
+            SegmentSpan {
+                start_seconds: 0.0,
+                end_seconds: 3.0,
+            },
+        ];
+        let refused = record_segments(&fixture.storage, SID, &repeated);
+        assert!(matches!(refused, Err(SittingEvidenceError::Refused(_))));
+    }
+
+    #[test]
+    fn a_capture_without_segments_still_projects_as_retained_evidence() {
+        let fixture = fixture();
+        begin_sitting(&fixture.storage, SID, SittingKind::OperatorSitting, None, 1_000).unwrap();
+        append_raw_audio(&fixture.storage, SID, b"synthetic fixture audio bytes").unwrap();
+        finalize_capture(&fixture.storage, SID, 1_100).unwrap();
+        reconcile_sitting_evidence(&fixture.storage, 2_000).unwrap();
+        assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::RawRetained);
+        let (evidence, _) = read_sitting_evidence(&fixture.storage).unwrap();
+        assert_eq!(evidence.sittings.len(), 1, "retained raw audio must never be invisible");
+        assert_eq!(evidence.sittings[0].scorable_segments, 0);
+        assert!(evidence.sittings[0].derived.is_none());
+    }
+
+    #[test]
+    fn a_symlinked_raw_artifact_quarantines() {
+        let fixture = fixture();
+        record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
+        let raw = work_dir(&fixture.storage, SID).unwrap().join(RAW_AUDIO_NAME);
+        let copy = fixture.storage.path().join("diagnostics/decoy-bytes");
+        fs::copy(&raw, &copy).unwrap();
+        fs::remove_file(&raw).unwrap();
+        std::os::unix::fs::symlink(&copy, &raw).unwrap();
+        let refused = read_sitting_evidence(&fixture.storage);
+        assert!(matches!(refused, Err(SittingEvidenceError::Quarantined(_))));
+    }
+
+    #[test]
+    fn a_detected_identity_violation_during_cleanup_is_not_reported_as_pending() {
+        let fixture = fixture();
+        record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
+        fs::write(
+            work_dir(&fixture.storage, SID).unwrap().join(RAW_AUDIO_NAME),
+            b"tampered bytes that no longer match the capture row",
+        )
+        .unwrap();
+        let outcome = store_derived_material(
+            &fixture.storage,
+            SID,
+            &embeddings_for(5),
+            ENCODER,
+            None,
+            192,
+            1_200,
+        );
+        assert!(matches!(outcome, Err(SittingEvidenceError::Quarantined(_))));
+        // The durable derivation must survive the refused cleanup.
+        assert!(sitting_dir(&fixture.storage, SID).unwrap().join(DERIVED_FILE).exists());
     }
 }
