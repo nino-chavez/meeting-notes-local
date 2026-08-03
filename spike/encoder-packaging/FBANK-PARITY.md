@@ -251,5 +251,8 @@ FIX=spike/encoder-packaging/fixtures-librispeech
 
 The first two commands import torch; the third asserts it has not been imported. Omit the
 `$FIX` argument to run the synthetic half alone. Regenerating the fixtures themselves needs
-the public archive: download `dev-clean.tar.gz`, verify the digests above, extract, and run
-`select_librispeech_fixtures.py <LibriSpeech-root> <fixtures-dir> <sha256> <md5>`.
+the public archive: download `dev-clean.tar.gz` and run
+`select_librispeech_fixtures.py <dev-clean.tar.gz> <fixtures-dir>` — the script computes the
+archive digests itself and reads every fixture byte out of that same archive, so the manifest
+records only what the run derived, never a caller-asserted digest. A re-registration from the
+digested archive reproduced every committed flac and per-file digest byte-identically.

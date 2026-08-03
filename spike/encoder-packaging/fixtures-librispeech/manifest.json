@@ -7,7 +7,7 @@
     "sha256": "76f87d090650617fca0cac8f88b9416e0ebf80350acb97b343a85fa903728ab3",
     "md5": "42e2234ba48799c1f50f24a7926300a1"
   },
-  "selection_rule": "6 lowest-ID F + 6 lowest-ID M dev-clean speakers from SPEAKERS.TXT; per speaker, the lexicographically first flac with duration >= 3.0 s at 16 kHz; files copied byte-unmodified",
+  "selection_rule": "6 lowest-ID F + 6 lowest-ID M dev-clean speakers from SPEAKERS.TXT; per speaker, the lexicographically first flac with duration >= 3.0 s at 16 kHz; member bytes written unmodified from the digested archive",
   "fixtures": [
     {
       "file": "84-121123-0001.flac",
