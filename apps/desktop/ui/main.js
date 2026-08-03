@@ -37,6 +37,7 @@ const libraryList = document.querySelector("#library-list");
 const libraryNotice = document.querySelector("#library-notice");
 const librarySearch = document.querySelector("#library-search");
 const librarySearchQuery = document.querySelector("#library-search-query");
+const librarySearchSubmit = librarySearch.querySelector("button[type=\"submit\"]");
 const librarySearchResults = document.querySelector("#library-search-results");
 const meetingDetailState = document.querySelector("#meeting-detail-state");
 const meetingClaimList = document.querySelector("#meeting-claim-list");
@@ -70,6 +71,7 @@ const screenScrollPositions = new Map();
 const libraryInitialization = createSingleFlight(
   () => invoke("preview_library_snapshot"),
 );
+const findRefreshOperation = createSingleFlight(performFindRefresh);
 
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
   const destination = screens.get(id);
@@ -720,8 +722,12 @@ async function openMeetingEvidence(handle) {
   }
 }
 
-async function refreshFindView() {
-  if (!invoke) return false;
+function setFindRefreshBusy(busy) {
+  librarySearchSubmit.disabled = busy;
+  for (const link of [findLink, meetingsLink, promisesLink]) link.disabled = busy;
+}
+
+async function performFindRefresh() {
   const query = librarySearchQuery.value.trim();
   if (query) setError(libraryNotice, "Searching your retained meetings…");
   else clearError(libraryNotice);
@@ -730,14 +736,28 @@ async function refreshFindView() {
       invalidateResults: invalidateLibraryHandles,
       snapshot: initializeLibraryReader,
       search: (currentQuery) => invoke("preview_library_search", { query: currentQuery }),
-      render: renderLibrarySearch,
+      render: (response) => {
+        if (currentScreen === "find-screen") renderLibrarySearch(response);
+      },
     });
-    if (!query) clearError(libraryNotice);
+    if (!query && currentScreen === "find-screen") clearError(libraryNotice);
     return true;
   } catch {
     invalidateLibraryHandles();
-    setError(libraryNotice, "Find is unavailable right now. Reopen Find and try again.");
+    if (currentScreen === "find-screen") {
+      setError(libraryNotice, "Find is unavailable right now. Reopen Find and try again.");
+    }
     return false;
+  }
+}
+
+async function refreshFindView() {
+  if (!invoke) return false;
+  setFindRefreshBusy(true);
+  try {
+    return await findRefreshOperation.run();
+  } finally {
+    setFindRefreshBusy(false);
   }
 }
 

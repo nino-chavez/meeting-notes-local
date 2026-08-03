@@ -340,6 +340,16 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(script.contains("setError(libraryNotice, \"Searching your retained meetings…\")"));
     assert!(navigation.contains("export async function refreshFindGeneration(query, actions)"));
     assert!(
+        script.contains("const findRefreshOperation = createSingleFlight(performFindRefresh);")
+    );
+    assert!(script.contains("librarySearchSubmit.disabled = busy;"));
+    assert!(script.contains(
+        "for (const link of [findLink, meetingsLink, promisesLink]) link.disabled = busy;"
+    ));
+    assert!(
+        script.contains("if (currentScreen === \"find-screen\") renderLibrarySearch(response);")
+    );
+    assert!(
         script
             .contains("libraryList.replaceChildren();\n  librarySearchResults.replaceChildren();")
     );
@@ -352,9 +362,9 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(idle.contains("if (!isIdleProductScreen()) {"));
     assert_eq!(idle.matches("initializeFindInBackground();").count(), 1);
 
-    let refresh_start = script.find("async function refreshFindView").unwrap();
+    let refresh_start = script.find("async function performFindRefresh").unwrap();
     let refresh_end = script[refresh_start..]
-        .find("async function searchLibrary")
+        .find("async function refreshFindView")
         .unwrap()
         + refresh_start;
     let refresh = &script[refresh_start..refresh_end];
@@ -363,6 +373,18 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
             < refresh.find("invoke(\"preview_library_search\"").unwrap()
     );
     assert!(refresh.contains("invalidateResults: invalidateLibraryHandles"));
+
+    let wrapper_start = refresh_end;
+    let wrapper_end = script[wrapper_start..]
+        .find("async function searchLibrary")
+        .unwrap()
+        + wrapper_start;
+    let wrapper = &script[wrapper_start..wrapper_end];
+    assert!(
+        wrapper.find("setFindRefreshBusy(true)").unwrap()
+            < wrapper.find("findRefreshOperation.run()").unwrap()
+    );
+    assert!(wrapper.contains("finally {\n    setFindRefreshBusy(false);"));
 
     let open_start = script
         .find("async function openLibrarySearchResult")

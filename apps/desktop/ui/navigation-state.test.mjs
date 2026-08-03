@@ -32,15 +32,17 @@ test("single-flight initialization deduplicates only an in-flight snapshot", asy
   assert.deepEqual(await third, { state: "empty" });
 });
 
-test("every Find refresh renders handles from a new response generation", async () => {
+test("overlapping Find refreshes share one generation and a later refresh is fresh", async () => {
   const events = [];
   const renderedHandles = [];
+  const releaseSnapshots = [];
   let responseGeneration = 0;
   const actions = {
     invalidateResults: () => { events.push("invalidate"); },
-    snapshot: async () => {
+    snapshot: () => {
       responseGeneration += 1;
       events.push(`snapshot:${responseGeneration}`);
+      return new Promise((resolve) => { releaseSnapshots.push(resolve); });
     },
     search: async (query) => {
       responseGeneration += 1;
@@ -52,9 +54,31 @@ test("every Find refresh renders handles from a new response generation", async 
       renderedHandles.push(response.handle);
     },
   };
+  const refresh = createSingleFlight(
+    () => refreshFindGeneration("first", actions),
+  );
 
-  await refreshFindGeneration("first", actions);
-  await refreshFindGeneration("first", actions);
+  const first = refresh.run();
+  await Promise.resolve();
+  const overlapping = refresh.run();
+  assert.equal(first, overlapping);
+  assert.deepEqual(events, ["invalidate", "snapshot:1"]);
+
+  releaseSnapshots.shift()();
+  await Promise.all([first, overlapping]);
+  assert.deepEqual(events, [
+    "invalidate", "snapshot:1", "search:first:2", "render:search-handle-2",
+  ]);
+
+  const later = refresh.run();
+  await Promise.resolve();
+  assert.notEqual(later, first);
+  assert.deepEqual(events, [
+    "invalidate", "snapshot:1", "search:first:2", "render:search-handle-2",
+    "invalidate", "snapshot:3",
+  ]);
+  releaseSnapshots.shift()();
+  await later;
   assert.deepEqual(events, [
     "invalidate", "snapshot:1", "search:first:2", "render:search-handle-2",
     "invalidate", "snapshot:3", "search:first:4", "render:search-handle-4",
