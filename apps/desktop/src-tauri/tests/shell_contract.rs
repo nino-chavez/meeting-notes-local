@@ -131,6 +131,15 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
     assert!(preview_preparer.contains("capture-entitlements.plist"));
     assert!(preview_preparer.contains("meeting-capture"));
     assert!(preview_preparer.contains("build_manifest.py"));
+    assert!(preview_preparer.contains("require_note_runtime_absent"));
+    assert!(preview_preparer.contains("[[ ! -e \"$path\" && ! -L \"$path\" ]]"));
+    for forbidden in [
+        "note-bridge.py",
+        "note-runtime-project.json",
+        "note-validator.zip",
+    ] {
+        assert!(preview_preparer.contains(forbidden));
+    }
     assert!(preview_preparer.contains("codesign --verify --deep --strict"));
     assert!(!preview_preparer.contains(
         "codesign --force --sign \"$identity\" --entitlements \"$ENTITLEMENTS\" \"$MAIN\""
@@ -499,10 +508,17 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
 fn preview_meeting_detail_requires_two_explicit_steps_for_audio_deletion() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
+    let navigation = include_str!("../../ui/navigation-state.mjs");
 
     assert!(html.contains("id=\"meeting-retention\""));
     assert!(script.contains("function formatByteSize(bytes)"));
-    assert!(script.contains("function localRetentionDeadline(epochSeconds)"));
+    assert!(script.contains("retentionDeadlineMessage(deadline)"));
+    assert!(navigation.contains("export function retentionDeadlineMessage(epochSeconds)"));
+    assert!(navigation.contains("Deletion runs while the app is open, or the next time it opens."));
+    assert!(navigation.contains(
+        "The audio deletion time is unavailable. This Preview cannot show when the audio becomes due."
+    ));
+    assert!(!navigation.contains("Scheduled to delete"));
     assert!(script.contains("function renderAudioRetention(retention, deletionHandle = \"\")"));
     assert!(script.contains(
         "Retained audio: ${formatByteSize(retention.retainedBytes)} across both recording channels."

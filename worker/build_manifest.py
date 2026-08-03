@@ -108,6 +108,13 @@ def verify_note_runtime(root: Path) -> None:
                 raise SystemExit(f"note validator source differs: {name}")
 
 
+def verify_note_runtime_absent(root: Path) -> None:
+    for relative in (NOTE_BRIDGE, NOTE_MANIFEST, NOTE_VALIDATOR):
+        path = root / relative
+        if path.exists() or path.is_symlink():
+            raise SystemExit(f"test-only note runtime resource is present in bundle root: {relative}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -116,10 +123,18 @@ def main() -> int:
         choices=("boundary-test", "internal-alpha", "product"),
         default="boundary-test",
     )
+    parser.add_argument(
+        "--exclude-note-runtime",
+        action="store_true",
+        help="write only the application runtime manifest for a bundle that excludes test-only note resources",
+    )
     arguments = parser.parse_args()
     root = arguments.root.resolve(strict=True)
-    atomic_write(root / NOTE_VALIDATOR, validator_bundle())
-    atomic_write(root / NOTE_MANIFEST, canonical_note_manifest(note_manifest(root)))
+    if arguments.exclude_note_runtime:
+        verify_note_runtime_absent(root)
+    else:
+        atomic_write(root / NOTE_VALIDATOR, validator_bundle())
+        atomic_write(root / NOTE_MANIFEST, canonical_note_manifest(note_manifest(root)))
     resources = {
         "runtime": Path("python-runtime/bin/python3.12"),
         "worker": Path("worker/main.py"),
@@ -155,7 +170,8 @@ def main() -> int:
         ],
     }
     atomic_write(root / "app-runtime.json", (json.dumps(manifest, indent=2) + "\n").encode())
-    verify_note_runtime(root)
+    if not arguments.exclude_note_runtime:
+        verify_note_runtime(root)
     return 0
 
 

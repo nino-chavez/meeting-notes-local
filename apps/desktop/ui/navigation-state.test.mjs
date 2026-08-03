@@ -5,9 +5,28 @@ import {
   createSingleFlight,
   prepareConsentTransition,
   refreshFindGeneration,
+  retentionDeadlineMessage,
   restoredScrollPosition,
   rootForDestination,
 } from "./navigation-state.mjs";
+
+test("retention copy says when audio becomes due and when deletion can run", () => {
+  const copy = retentionDeadlineMessage(1_728_000_060);
+
+  assert.match(copy, /^Audio becomes due for deletion on .+\. Deletion runs while the app is open, or the next time it opens\.$/);
+  assert.doesNotMatch(copy, /Scheduled to delete/);
+});
+
+test("retention copy does not invent a deletion time for invalid deadlines", () => {
+  assert.equal(
+    retentionDeadlineMessage("not-a-deadline"),
+    "The audio deletion time is unavailable. This Preview cannot show when the audio becomes due.",
+  );
+  assert.equal(
+    retentionDeadlineMessage(0),
+    "The audio deletion time is unavailable. This Preview cannot show when the audio becomes due.",
+  );
+});
 
 test("single-flight initialization deduplicates only an in-flight snapshot", async () => {
   let loads = 0;

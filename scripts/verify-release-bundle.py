@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import plistlib
 import re
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 from xml.parsers.expat import ExpatError
 
@@ -34,16 +32,10 @@ CAPTURE_ENTITLEMENTS = {
     "com.apple.security.device.audio-input": True,
 }
 CODE_SIGNATURE_RUNTIME = 0x00010000
-NOTE_RUNTIME_RESOURCES = {
-    "runtime": Path("python-runtime/bin/python3.12"),
-    "bridge": Path("note-bridge.py"),
-    "validator": Path("note-validator.zip"),
-}
-NOTE_VALIDATOR_INVENTORY = (
-    "note_validator.py",
-    "summarize.py",
-    "transcript.py",
-    "capture_health.py",
+FORBIDDEN_NOTE_RUNTIME_RESOURCES = (
+    Path("note-bridge.py"),
+    Path("note-runtime-project.json"),
+    Path("note-validator.zip"),
 )
 
 
@@ -67,70 +59,13 @@ def require(condition: bool, message: str) -> None:
         raise VerificationError(message)
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    require(path.is_file() and not path.is_symlink(), "runtime resource is missing or unsafe")
-    try:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError as exc:
-        raise VerificationError(f"runtime resource is unreadable ({exc})") from None
-    return digest.hexdigest()
-
-
-def verify_note_runtime(resources: Path) -> None:
-    manifest_path = resources / "note-runtime-project.json"
-    try:
-        raw = manifest_path.read_bytes()
-        require(b"\\" not in raw, "note runtime manifest contains JSON escapes")
-        document = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise VerificationError(f"note runtime manifest is unreadable ({exc})") from None
-    require(
-        isinstance(document, dict)
-        and list(document) == [
-            "schema",
-            "role",
-            "runtime",
-            "bridge",
-            "validator",
-            "generator",
-            "models",
-        ],
-        "note runtime manifest fields are not exact",
-    )
-    require(
-        json.dumps(document, ensure_ascii=False, indent=2).encode() == raw,
-        "note runtime manifest is not canonical",
-    )
-    require(
-        document["schema"] == "note-runtime/1"
-        and document["role"] == "project"
-        and document["generator"] is None
-        and document["models"] == [],
-        "note runtime role is not the closed project role",
-    )
-    for name, relative in NOTE_RUNTIME_RESOURCES.items():
-        value = document.get(name)
+def verify_forbidden_note_runtime_resources_absent(resources: Path) -> None:
+    for relative in FORBIDDEN_NOTE_RUNTIME_RESOURCES:
+        path = resources / relative
         require(
-            isinstance(value, dict)
-            and list(value) == ["relative_path", "sha256"]
-            and value["relative_path"] == str(relative)
-            and value["sha256"] == sha256(resources / relative),
-            f"note runtime {name} is not path- and digest-bound",
+            not path.exists() and not path.is_symlink(),
+            f"forbidden test-only note runtime resource is bundled: {relative}",
         )
-    try:
-        with zipfile.ZipFile(resources / NOTE_RUNTIME_RESOURCES["validator"]) as archive:
-            require(
-                tuple(archive.namelist()) == NOTE_VALIDATOR_INVENTORY,
-                "note validator ZIP inventory is not exact",
-            )
-            for entry in archive.infolist():
-                require(not entry.is_dir(), "note validator ZIP contains a directory")
-                archive.read(entry)
-    except (OSError, zipfile.BadZipFile, KeyError) as exc:
-        raise VerificationError(f"note validator ZIP is unreadable ({exc})") from None
 
 
 def load_plist(path: Path) -> dict:
@@ -179,7 +114,7 @@ def verify_runtime(resources: Path, admission: str) -> None:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise VerificationError(f"runtime manifest is unreadable ({exc})") from None
     require(manifest.get("schema") == "app-runtime/1", "runtime schema is not current")
-    verify_note_runtime(resources)
+    verify_forbidden_note_runtime_resources_absent(resources)
     require(
         manifest.get("admission") == admission,
         f"runtime admission is not {admission}; refusing this distribution candidate",

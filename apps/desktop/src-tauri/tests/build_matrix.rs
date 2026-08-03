@@ -28,6 +28,27 @@ fn production_config_without_feature_is_production_only() {
 }
 
 #[test]
+fn production_and_preview_exclude_the_unadmitted_note_runtime_resources() {
+    let production = config(include_str!("../tauri.conf.json"));
+    let preview = config(include_str!("../tauri.preview.conf.json"));
+    let forbidden = [
+        "../runtime/note-bridge.py",
+        "../runtime/note-runtime-project.json",
+        "../runtime/note-validator.zip",
+    ];
+
+    for config in [&production, &preview] {
+        let resources = config["bundle"]["resources"].as_object().unwrap();
+        for path in forbidden {
+            assert!(
+                !resources.contains_key(path),
+                "unadmitted note runtime resource must not be bundled: {path}"
+            );
+        }
+    }
+}
+
+#[test]
 fn isolated_development_config_with_feature_is_development_only() {
     let development = config(include_str!("../tauri.library-dev.conf.json"));
     let plan = plan(BuildMode::Development);
@@ -261,6 +282,22 @@ fn preview_rejects_production_development_and_hybrid_fields() {
     let mut changed_resources = preview.clone();
     changed_resources["bundle"]["resources"] = Value::Null;
     hybrids.push(changed_resources);
+
+    for (source, destination) in [
+        ("../runtime/note-bridge.py", "note-bridge.py"),
+        (
+            "../runtime/note-runtime-project.json",
+            "note-runtime-project.json",
+        ),
+        ("../runtime/note-validator.zip", "note-validator.zip"),
+    ] {
+        let mut unadmitted_note_runtime = preview.clone();
+        unadmitted_note_runtime["bundle"]["resources"]
+            .as_object_mut()
+            .unwrap()
+            .insert(source.into(), Value::String(destination.into()));
+        hybrids.push(unadmitted_note_runtime);
+    }
 
     let mut non_adhoc = preview.clone();
     non_adhoc["bundle"]["macOS"]["signingIdentity"] = Value::String("not-ad-hoc".into());

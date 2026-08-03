@@ -107,7 +107,7 @@ echo "   $count Mach-O files signed"
 
 echo "== refreshing runtime manifests from signed bytes"
 "$ROOT/worker/build_manifest.py" \
-  "$APP/Contents/Resources" --admission "$ADMISSION"
+  "$APP/Contents/Resources" --admission "$ADMISSION" --exclude-note-runtime
 
 echo "== signing app bundle"
 codesign --force --options runtime --timestamp \

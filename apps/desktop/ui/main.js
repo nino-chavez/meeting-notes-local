@@ -1,6 +1,7 @@
 import {
   createSingleFlight,
   prepareConsentTransition,
+  retentionDeadlineMessage,
   refreshFindGeneration,
   restoredScrollPosition,
   rootForDestination,
@@ -276,14 +277,6 @@ function formatByteSize(bytes) {
   return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]} (${bytes.toLocaleString()} bytes)`;
 }
 
-function localRetentionDeadline(epochSeconds) {
-  const value = Number(epochSeconds) * 1000;
-  if (!Number.isFinite(value) || value <= 0) return "The scheduled deletion time is unavailable.";
-  return `Scheduled to delete on ${new Intl.DateTimeFormat(undefined, {
-    dateStyle: "full", timeStyle: "short",
-  }).format(new Date(value))}.`;
-}
-
 function closeRecordingDeleteReview() {
   recordingDeleteConfirmation.hidden = true;
   recordingDeleteStatus.hidden = true;
@@ -307,7 +300,7 @@ function renderAudioRetention(retention, deletionHandle = "") {
     meetingRetentionTitle.textContent = "Recording retained";
     meetingRetentionPolicy.textContent = policy === "manual"
       ? "Kept until you delete the recording."
-      : localRetentionDeadline(deadline);
+      : retentionDeadlineMessage(deadline);
     meetingRetentionSize.hidden = false;
     meetingRetentionSize.textContent = `Retained audio: ${formatByteSize(retention.retainedBytes)} across both recording channels.`;
     meetingRetentionConsequence.textContent = "The separate voice profile is unaffected by this meeting’s retention state.";

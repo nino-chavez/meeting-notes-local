@@ -9,10 +9,10 @@ Core Audio process tap, your microphone comes through the same path
 
 > **Status: product definition, an accepted private real-content encounter, and a
 > working internal transcript-alpha app.** The signed and notarized alpha has
-> completed two-leg capture, local transcription, and true quit/fresh-launch recovery
-> on real hardware. It is not cleared for distribution until the unchanged build
-> proves its scheduled audio deletion and clean transfer to another Mac or genuinely
-> clean account. A separately identified local Preview now continually delivers the
+> completed two-leg capture, local transcription, true quit/fresh-launch recovery, and
+> automatic audio deletion on real hardware. Automatic deletion is closed. It is not
+> cleared for distribution until a clean transfer to another Mac or genuinely clean
+> account is proven. A separately identified local Preview now continually delivers the
 > product reader: Library, exact search, meeting detail, canonical transcript,
 > retention/disk state, an honest Voice profile capability surface, and an explicitly approved two-step action that can delete
 > only one meeting's retained audio while preserving its transcript and note. That

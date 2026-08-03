@@ -96,7 +96,7 @@ pub fn validate(mode: BuildMode, config: &Value) -> Result<(), &'static str> {
         ),
         BuildMode::Preview if is_preview_config(config) => Ok(()),
         BuildMode::Preview => Err(
-            "preview-surface requires tauri.preview.conf.json with its isolated identifier, product frontend, sole window/capability, ad-hoc signing, and the complete runtime resource contract",
+            "preview-surface requires tauri.preview.conf.json with its isolated identifier, product frontend, sole window/capability, ad-hoc signing, and the admitted runtime resource contract",
         ),
     }
 }
@@ -189,9 +189,6 @@ fn production_resources() -> Value {
         "../runtime/bin": "bin",
         "../runtime/encoder-unavailable.identity": "encoder-unavailable.identity",
         "../runtime/models": "models",
-        "../runtime/note-bridge.py": "note-bridge.py",
-        "../runtime/note-runtime-project.json": "note-runtime-project.json",
-        "../runtime/note-validator.zip": "note-validator.zip",
         "../runtime/notes": "notes",
         "../runtime/python-runtime": "python-runtime",
         "../runtime/spike": "spike",

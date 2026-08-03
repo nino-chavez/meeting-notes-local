@@ -14,6 +14,18 @@ export function restoredScrollPosition(storedPosition, reset = false) {
   return storedPosition;
 }
 
+export function retentionDeadlineMessage(epochSeconds) {
+  const value = Number(epochSeconds) * 1000;
+  const deadline = new Date(value);
+  if (!Number.isFinite(value) || value <= 0 || Number.isNaN(deadline.getTime())) {
+    return "The audio deletion time is unavailable. This Preview cannot show when the audio becomes due.";
+  }
+  const localDateTime = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "full", timeStyle: "short",
+  }).format(deadline);
+  return `Audio becomes due for deletion on ${localDateTime}. Deletion runs while the app is open, or the next time it opens.`;
+}
+
 export function createSingleFlight(loader) {
   let activePromise = null;
   return {

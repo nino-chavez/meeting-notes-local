@@ -138,7 +138,9 @@ class DistributionToolingTests(unittest.TestCase):
             "CODE_SIGNATURE_RUNTIME = 0x00010000",
             "expected_designated_requirement(identifier)",
             "entitlements(app) == CAPTURE_ENTITLEMENTS",
-            "verify_note_runtime(resources)",
+            "verify_forbidden_note_runtime_resources_absent(resources)",
+            "FORBIDDEN_NOTE_RUNTIME_RESOURCES",
+            'Path("note-bridge.py")',
             '"note-runtime-project.json"',
             '"note-validator.zip"',
         ):
@@ -187,15 +189,96 @@ class DistributionToolingTests(unittest.TestCase):
                     ["note_validator.py", "summarize.py", "transcript.py", "capture_health.py"],
                 )
 
-    def test_tauri_product_resource_contract_carries_the_note_project_runtime(self) -> None:
-        config = json.loads(source("apps/desktop/src-tauri/tauri.conf.json"))
-        resources = config["bundle"]["resources"]
-        self.assertEqual(resources["../runtime/note-bridge.py"], "note-bridge.py")
-        self.assertEqual(
-            resources["../runtime/note-runtime-project.json"],
-            "note-runtime-project.json",
-        )
-        self.assertEqual(resources["../runtime/note-validator.zip"], "note-validator.zip")
+    def test_bundle_contract_excludes_unadmitted_note_project_runtime(self) -> None:
+        forbidden = {
+            "../runtime/note-bridge.py",
+            "../runtime/note-runtime-project.json",
+            "../runtime/note-validator.zip",
+        }
+        for config_path in (
+            "apps/desktop/src-tauri/tauri.conf.json",
+            "apps/desktop/src-tauri/tauri.preview.conf.json",
+        ):
+            resources = json.loads(source(config_path))["bundle"]["resources"]
+            self.assertTrue(forbidden.isdisjoint(resources), config_path)
+
+        preview_preparer = source("scripts/prepare-preview-bundle.sh")
+        self.assertIn("require_note_runtime_absent", preview_preparer)
+        self.assertIn('[[ ! -e "$path" && ! -L "$path" ]]', preview_preparer)
+        for name in forbidden:
+            self.assertIn(name.removeprefix("../runtime/"), preview_preparer)
+
+    def test_bundle_manifest_rebuild_excludes_and_refuses_note_runtime_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixtures = {
+                "python-runtime/bin/python3.12": b"runtime",
+                "worker/main.py": b"worker",
+                "bin/meeting-capture": b"tap",
+                "encoder-unavailable.identity": b"encoder",
+                "models/whisper-large-v3-turbo/config.json": b"config",
+                "models/whisper-large-v3-turbo/weights.safetensors": b"weights",
+            }
+            for relative, contents in fixtures.items():
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+            completed = subprocess.run(
+                [
+                    str(ROOT / "worker/build_manifest.py"),
+                    str(root),
+                    "--admission",
+                    "internal-alpha",
+                    "--exclude-note-runtime",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue((root / "app-runtime.json").is_file())
+            for name in (
+                "note-bridge.py",
+                "note-runtime-project.json",
+                "note-validator.zip",
+            ):
+                self.assertFalse((root / name).exists(), name)
+
+            forbidden = root / "note-bridge.py"
+            forbidden.write_bytes(b"unadmitted")
+            blocked = subprocess.run(
+                [
+                    str(ROOT / "worker/build_manifest.py"),
+                    str(root),
+                    "--admission",
+                    "internal-alpha",
+                    "--exclude-note-runtime",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertNotEqual(blocked.returncode, 0)
+            self.assertIn("test-only note runtime resource is present", blocked.stderr)
+
+    def test_release_verifier_requires_note_runtime_resources_to_be_absent(self) -> None:
+        verifier = load_release_verifier()
+        with tempfile.TemporaryDirectory() as temporary:
+            resources = Path(temporary)
+            verifier.verify_forbidden_note_runtime_resources_absent(resources)
+            for relative in verifier.FORBIDDEN_NOTE_RUNTIME_RESOURCES:
+                path = resources / relative
+                path.write_bytes(b"unadmitted")
+                with self.assertRaises(verifier.VerificationError):
+                    verifier.verify_forbidden_note_runtime_resources_absent(resources)
+                path.unlink()
+
+            broken_link = resources / verifier.FORBIDDEN_NOTE_RUNTIME_RESOURCES[0]
+            broken_link.symlink_to("missing-test-only-runtime")
+            with self.assertRaises(verifier.VerificationError):
+                verifier.verify_forbidden_note_runtime_resources_absent(resources)
 
     def test_release_identifiers_have_the_exact_developer_id_requirement_relationship(self) -> None:
         verifier = load_release_verifier()
