@@ -407,16 +407,10 @@ fn xattrs_empty(file: &File) -> Result<bool, ()> {
         .split(|byte| *byte == 0)
         .filter(|name| !name.is_empty())
         .collect();
-    #[cfg(not(test))]
-    {
-        Ok(names.is_empty())
-    }
-    #[cfg(test)]
-    {
-        // The macOS test sandbox may attach this marker to every tempfile.
-        // Production builds use the branch above and reject it.
-        Ok(names.iter().all(|name| *name == b"com.apple.provenance"))
-    }
+    // macOS attaches this platform marker to app-created private storage on
+    // the supported systems. It carries no application authority. Every other
+    // attribute, including resource forks, remains outside the safe shape.
+    Ok(names.iter().all(|name| *name == b"com.apple.provenance"))
 }
 
 #[cfg(target_os = "macos")]
