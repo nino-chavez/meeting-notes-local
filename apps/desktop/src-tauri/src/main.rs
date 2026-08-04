@@ -1093,10 +1093,16 @@ fn drive_sitting_helper(
                         Err(mpsc::TryRecvError::Empty) => false,
                     };
                     if requested {
+                        // Flag before byte: the receipt-ordering refusal in
+                        // handle_sitting_event documents that the stop flag
+                        // is set before the helper can observe X, so keep
+                        // the assignment ahead of the send that makes X
+                        // observable. (A send failure returns immediately;
+                        // the already-set deadline leaks nothing.)
+                        stop_deadline = Some(Instant::now() + CAPTURE_STOP_TIMEOUT);
                         helper.send(b'X').map_err(|error| {
                             sitting_failure("sitting_stop_signal_failed", error)
                         })?;
-                        stop_deadline = Some(Instant::now() + CAPTURE_STOP_TIMEOUT);
                     }
                 }
                 Some(deadline) if Instant::now() >= deadline => {
