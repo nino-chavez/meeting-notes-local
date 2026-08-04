@@ -17,6 +17,10 @@ mod product_facade;
 // into the current internal-alpha command set.
 #[allow(dead_code)]
 mod manual_delete_facade;
+// The storage-backed coordinator and worker bridge behind product_facade.
+// Managed as state so the facade commands can be registered in one move once
+// the operator widens the packaged admission; the commands stay unregistered.
+mod product_coordinator;
 
 #[cfg(any(feature = "preview-surface", test))]
 use manual_delete_facade::{
@@ -51,9 +55,7 @@ use local_meeting_notes_session_core::meeting::{
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 #[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
 use local_meeting_notes_session_core::profile_lifecycle::ProfileLifecycleError;
-use local_meeting_notes_session_core::protocol::{
-    Operation, ProtocolError, WorkerCommand, WorkerResult,
-};
+use local_meeting_notes_session_core::protocol::{Operation, WorkerResult};
 use local_meeting_notes_session_core::recovery::{
     RecoveryCode, RecoveryDisposition, scan_and_recover,
 };
@@ -99,12 +101,15 @@ const ACTIVE_WINDOW_LABEL: &str = "main";
 
 struct ApplicationState {
     model: Mutex<AppModel>,
-    storage: Mutex<Option<StorageContext>>,
+    // The storage, worker, and writer-lock slots are shared (Arc) so the
+    // product coordinator can hold live handles to the same runtime state the
+    // commands mutate, instead of a startup snapshot.
+    storage: Arc<Mutex<Option<StorageContext>>>,
     runtime: Mutex<Option<RuntimeIdentity>>,
-    worker: Mutex<Option<OwnedChild>>,
+    worker: Arc<Mutex<Option<OwnedChild>>>,
     capture_task: Mutex<Option<CaptureTaskControl>>,
     command_lock: Mutex<()>,
-    app_data_writer_lock: Mutex<Option<AppDataWriterLock>>,
+    app_data_writer_lock: Arc<Mutex<Option<AppDataWriterLock>>>,
     retention_started: AtomicBool,
     #[cfg(any(feature = "preview-surface", test))]
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
@@ -118,12 +123,12 @@ impl Default for ApplicationState {
     fn default() -> Self {
         Self {
             model: Mutex::new(AppModel::default()),
-            storage: Mutex::new(None),
+            storage: Arc::new(Mutex::new(None)),
             runtime: Mutex::new(None),
-            worker: Mutex::new(None),
+            worker: Arc::new(Mutex::new(None)),
             capture_task: Mutex::new(None),
             command_lock: Mutex::new(()),
-            app_data_writer_lock: Mutex::new(None),
+            app_data_writer_lock: Arc::new(Mutex::new(None)),
             retention_started: AtomicBool::new(false),
             #[cfg(any(feature = "preview-surface", test))]
             preview_library: Mutex::new(None),
@@ -1746,13 +1751,27 @@ fn load_bound_preview_transcript_projection(
 
 #[cfg(not(feature = "library-dev-surface"))]
 fn main() {
+    let state = ApplicationState::default();
+    // Managed now so registering the facade commands later is one move; the
+    // commands themselves stay out of the handler until the operator's
+    // admission decision.
+    let product_operations = product_facade::ProductOperationFacade::new(Arc::new(
+        product_coordinator::DesktopProductCoordinator::new(
+            state.storage.clone(),
+            state.app_data_writer_lock.clone(),
+            Arc::new(product_coordinator::ProcessWorkerPort::new(
+                state.worker.clone(),
+            )),
+        ),
+    ));
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window(ACTIVE_WINDOW_LABEL) {
                 let _ = window.set_focus();
             }
         }))
-        .manage(ApplicationState::default())
+        .manage(state)
+        .manage(product_operations)
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
             start_meeting,
@@ -3104,21 +3123,11 @@ fn request_worker(
     arguments: Value,
     timeout: Duration,
 ) -> Result<HashMap<String, String>, WorkerCallError> {
-    let command = WorkerCommand::new(operation, arguments);
-    let mut guard = state.worker.lock().expect("worker process lock");
-    let result = match guard.as_mut() {
-        Some(worker) => worker.request_until(&command, Instant::now() + timeout, |_| {
-            Err(ProtocolError::InvalidEvent)
-        }),
-        None => return Err(WorkerCallError::Supervisor("worker is unavailable".into())),
-    };
-    let result: WorkerResult = match result {
-        Ok(result) => result,
-        Err(error) => {
-            guard.take();
-            return Err(WorkerCallError::Supervisor(error.to_string()));
-        }
-    };
+    use product_coordinator::WorkerPort;
+    let port = product_coordinator::ProcessWorkerPort::new(state.worker.clone());
+    let result: WorkerResult = port
+        .request(operation, arguments, timeout)
+        .map_err(|unavailable| WorkerCallError::Supervisor(unavailable.0))?;
     if !result.ok {
         return Err(WorkerCallError::Rejected);
     }
@@ -3757,7 +3766,7 @@ mod tests {
         }
     }
 
-    fn test_storage() -> (TempDir, StorageRoot) {
+    pub(crate) fn test_storage() -> (TempDir, StorageRoot) {
         let temporary = TempDir::new().unwrap();
         let repository = temporary.path().join("repository");
         fs::create_dir(&repository).unwrap();
@@ -4599,6 +4608,27 @@ mod tests {
         audio_state: AudioState,
         text: &str,
     ) -> PathBuf {
+        write_transcript_fixture_with_turns(
+            storage,
+            meeting_id,
+            created_at_epoch_seconds,
+            audio_state,
+            json!([{
+                "start": 0.0,
+                "end": 1.0,
+                "speaker": "Me",
+                "text": text,
+            }]),
+        )
+    }
+
+    pub(crate) fn write_transcript_fixture_with_turns(
+        storage: &StorageRoot,
+        meeting_id: &str,
+        created_at_epoch_seconds: u64,
+        audio_state: AudioState,
+        turns: Value,
+    ) -> PathBuf {
         let directory = meeting_dir(storage, meeting_id).unwrap();
         create_private_dir(&directory).unwrap();
         create_private_dir(&directory.join("capture")).unwrap();
@@ -4642,12 +4672,7 @@ mod tests {
             "bleed": null,
             "voiceprint": null,
             "capture_health": {},
-            "turns": [{
-                "start": 0.0,
-                "end": 1.0,
-                "speaker": "Me",
-                "text": text,
-            }],
+            "turns": turns,
         }))
         .unwrap();
         let transcript_digest = format!("{:x}", Sha256::digest(&transcript_bytes));
