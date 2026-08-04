@@ -931,8 +931,10 @@ fn sitting_failure(code: &str, detail: impl std::fmt::Display) -> SittingCapture
 /// `SittingEvidenceAuthority::append_raw_audio`. Admission authority is the
 /// helper's `finalized` receipt — the capture is finalized only when the
 /// receipt's sample count matches the bytes actually drained. End-of-stream
-/// and a clean helper exit are never treated as completion; every other
-/// outcome abandons the sitting, which the store labels a rehearsal.
+/// and a clean helper exit are never treated as completion, and a vanished
+/// stop channel is a control-plane fault rather than an implied Stop; every
+/// outcome other than a matching receipt after an explicit Stop abandons the
+/// sitting, which the store labels a rehearsal.
 ///
 /// Helper identity attestation and command registration stay with the future
 /// registration slice; this is the machinery underneath it.
@@ -1075,7 +1077,19 @@ fn drive_sitting_helper(
             match stop_deadline {
                 None => {
                     let requested = match stop.try_recv() {
-                        Ok(()) | Err(mpsc::TryRecvError::Disconnected) => true,
+                        Ok(()) => true,
+                        // A vanished stop channel is a control-plane fault,
+                        // not an operator Stop: admitting the take here would
+                        // let a panicked caller turn a partial recording into
+                        // completed enrolment evidence. The meeting loop
+                        // refuses the identical condition
+                        // (capture_control_disconnected).
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            return Err(sitting_failure(
+                                "sitting_control_disconnected",
+                                "the sitting stop channel vanished before Stop",
+                            ));
+                        }
                         Err(mpsc::TryRecvError::Empty) => false,
                     };
                     if requested {
@@ -5097,6 +5111,16 @@ mod tests {
         command.spawn().unwrap()
     }
 
+    /// What the caller does with the stop channel during a harness run:
+    /// request Stop up front, hold it silent for the whole take, or drop it
+    /// unsent — the control-plane fault the driver must refuse to admit.
+    #[derive(Clone, Copy)]
+    enum StopScript {
+        Requested,
+        Never,
+        Dropped,
+    }
+
     struct SittingDriverHarness {
         _temporary: TempDir,
         _scripts: TempDir,
@@ -5127,12 +5151,14 @@ mod tests {
         fn run(
             &self,
             sitting_id: &str,
-            stop_requested: bool,
+            stop: StopScript,
         ) -> Result<SittingCaptureReceipt, SittingCaptureFailure> {
             use local_meeting_notes_session_core::sitting_evidence::SittingKind;
-            let (stop_sender, stop) = mpsc::channel();
-            if stop_requested {
-                stop_sender.send(()).unwrap();
+            let (stop_sender, stop_receiver) = mpsc::channel();
+            match stop {
+                StopScript::Requested => stop_sender.send(()).unwrap(),
+                StopScript::Never => {}
+                StopScript::Dropped => drop(stop_sender),
             }
             let held = self.state.app_data_writer_lock.lock().unwrap();
             let authority = held.as_ref().unwrap().sitting_evidence_authority();
@@ -5143,7 +5169,7 @@ mod tests {
                 sitting_id,
                 SittingKind::OperatorSitting,
                 None,
-                &stop,
+                &stop_receiver,
             )
         }
 
@@ -5179,7 +5205,7 @@ mod tests {
         );
         let harness = SittingDriverHarness::new(&body);
         let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b01";
-        let receipt = harness.run(sitting_id, true).unwrap();
+        let receipt = harness.run(sitting_id, StopScript::Requested).unwrap();
         assert_eq!(
             receipt,
             SittingCaptureReceipt {
@@ -5201,6 +5227,30 @@ mod tests {
     }
 
     #[test]
+    fn sitting_capture_refuses_a_vanished_stop_channel_and_abandons() {
+        // A dropped stop sender is a control-plane fault, not an operator
+        // Stop: admitting the take would let a panicked caller turn a partial
+        // recording into completed enrolment evidence. Mirrors the meeting
+        // loop's capture_control_disconnected refusal. The helper here is the
+        // fully cooperative happy-path script — only the control channel is
+        // at fault.
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             dd if=/dev/zero bs=320 count=100 >&\"$AUDIO\" 2>/dev/null\n\
+             await_control\n\
+             emit '{{\"schema\":\"capture-event/1\",\"event\":\"finalized\",\"legs\":{{\"mic\":{{\"samples\":16000}}}}}}'\n\
+             exit 0"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b06";
+        let failure = harness.run(sitting_id, StopScript::Dropped).unwrap_err();
+        assert_eq!(failure.code, "sitting_control_disconnected");
+        harness.assert_abandoned(sitting_id);
+    }
+
+    #[test]
     fn sitting_capture_refuses_end_of_stream_without_finalized_receipt() {
         // The helper streams bytes and exits zero without ever finalizing.
         // A clean exit plus end-of-stream must not admit the sitting.
@@ -5213,7 +5263,7 @@ mod tests {
         );
         let harness = SittingDriverHarness::new(&body);
         let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b02";
-        let failure = harness.run(sitting_id, false).unwrap_err();
+        let failure = harness.run(sitting_id, StopScript::Never).unwrap_err();
         assert_eq!(failure.code, "sitting_finalize_receipt_missing");
         assert!(failure.detail.contains("not completion authority"));
         harness.assert_abandoned(sitting_id);
@@ -5232,7 +5282,7 @@ mod tests {
         );
         let harness = SittingDriverHarness::new(&body);
         let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b03";
-        let failure = harness.run(sitting_id, true).unwrap_err();
+        let failure = harness.run(sitting_id, StopScript::Requested).unwrap_err();
         assert_eq!(failure.code, "sitting_sample_count_mismatch");
         harness.assert_abandoned(sitting_id);
     }
@@ -5248,7 +5298,7 @@ mod tests {
         );
         let harness = SittingDriverHarness::new(&body);
         let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b04";
-        let failure = harness.run(sitting_id, false).unwrap_err();
+        let failure = harness.run(sitting_id, StopScript::Never).unwrap_err();
         assert_eq!(failure.code, "sitting_stream_write_failed");
         harness.assert_abandoned(sitting_id);
     }
@@ -5265,7 +5315,7 @@ mod tests {
         );
         let harness = SittingDriverHarness::new(&body);
         let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b05";
-        let failure = harness.run(sitting_id, false).unwrap_err();
+        let failure = harness.run(sitting_id, StopScript::Never).unwrap_err();
         assert_eq!(failure.code, "sitting_helper_protocol_violation");
         harness.assert_abandoned(sitting_id);
     }
