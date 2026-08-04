@@ -1135,6 +1135,17 @@ fn drive_sitting_helper(
     helper
         .finish_cleanly(Instant::now() + Duration::from_secs(5))
         .map_err(|error| sitting_failure("sitting_helper_exit_failed", error))?;
+    // The helper is not admission authority: a helper that finalizes and
+    // exits on its own initiative — no Stop ever sent — could hand back a
+    // self-consistent receipt for a take it chose to truncate. Admission
+    // requires the parent to have requested Stop, matching the documented
+    // contract.
+    if stop_deadline.is_none() {
+        return Err(sitting_failure(
+            "sitting_finalize_without_stop",
+            "the stream ended before Stop was requested; a self-finalizing helper is not admission authority",
+        ));
+    }
     let Some(mic_samples) = receipt else {
         return Err(sitting_failure(
             "sitting_finalize_receipt_missing",
@@ -5252,20 +5263,47 @@ mod tests {
 
     #[test]
     fn sitting_capture_refuses_end_of_stream_without_finalized_receipt() {
-        // The helper streams bytes and exits zero without ever finalizing.
-        // A clean exit plus end-of-stream must not admit the sitting.
+        // Stop is requested and honored, but the helper exits zero without
+        // ever finalizing. A clean exit plus end-of-stream must not admit
+        // the sitting: the receipt is the only completion authority.
         let body = format!(
             "{SITTING_EMIT_PAUSED}\n\
              await_control\n\
              {SITTING_EMIT_RECORDING}\n\
              dd if=/dev/zero bs=320 count=10 >&\"$AUDIO\" 2>/dev/null\n\
+             await_control\n\
              exit 0"
         );
         let harness = SittingDriverHarness::new(&body);
         let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b02";
-        let failure = harness.run(sitting_id, StopScript::Never).unwrap_err();
+        let failure = harness.run(sitting_id, StopScript::Requested).unwrap_err();
         assert_eq!(failure.code, "sitting_finalize_receipt_missing");
         assert!(failure.detail.contains("not completion authority"));
+        harness.assert_abandoned(sitting_id);
+    }
+
+    #[test]
+    fn sitting_capture_refuses_a_self_finalizing_helper_without_stop() {
+        // The helper finalizes with a receipt that matches every byte it
+        // streamed and exits cleanly — but nobody ever requested Stop. A
+        // helper deciding on its own that the take is over could truncate a
+        // recording and hand back self-consistent evidence for the part it
+        // kept, so admission additionally requires the parent's explicit
+        // Stop. (Unreachable with the shipped helper, which finalizes only
+        // on the X control byte — this pins the parent-side boundary the
+        // driver documents, since helper identity attestation is deferred.)
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             dd if=/dev/zero bs=320 count=100 >&\"$AUDIO\" 2>/dev/null\n\
+             emit '{{\"schema\":\"capture-event/1\",\"event\":\"finalized\",\"legs\":{{\"mic\":{{\"samples\":16000}}}}}}'\n\
+             exit 0"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b07";
+        let failure = harness.run(sitting_id, StopScript::Never).unwrap_err();
+        assert_eq!(failure.code, "sitting_finalize_without_stop");
         harness.assert_abandoned(sitting_id);
     }
 
