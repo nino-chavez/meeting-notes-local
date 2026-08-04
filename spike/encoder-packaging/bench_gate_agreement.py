@@ -79,6 +79,35 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def duplicate_audio_problem(
+    calibrate_wavs: list[Path], against_wavs: list[Path]
+) -> str | None:
+    """One recording, one role, once. Duplicates corrupt silently, not loudly:
+    a sitting reused as --against puts the operator's own voice in the negative
+    pool and inflates every false-admit figure the registered points carry, and
+    one negative recording passed twice double-counts toward the 60 s /
+    20-segment floors. The refusal spans BOTH lists — review of 67e7fa8 found
+    the sitting-only version left the cross-role path open."""
+    seen: dict[str, str] = {}
+    for role, wavs in (("--calibrate", calibrate_wavs), ("--against", against_wavs)):
+        for wav in wavs:
+            digest = ab.sha256(wav)
+            prior = seen.get(digest)
+            if prior == "--calibrate" and role == "--against":
+                return (
+                    f"{wav} repeats a --calibrate recording (digest {digest}); a "
+                    "sitting cannot also price the negative pool — that scores "
+                    "the operator's own voice as an impostor"
+                )
+            if prior is not None:
+                return (
+                    f"{role} repeats audio digest {digest}; one recording cannot "
+                    "count twice"
+                )
+            seen[digest] = role
+    return None
+
+
 # ---------------------------------------------------------------------------
 # prepare (torch reference arm)
 # ---------------------------------------------------------------------------
@@ -144,15 +173,12 @@ def run_prepare(args) -> int:
     for path in paths:
         if not path.is_file():
             raise SystemExit(f"{path} is not an existing file")
-    seen: set[str] = set()
-    for _seg, wav in args.calibrate:
-        digest = ab.sha256(Path(wav))
-        if digest in seen:
-            raise SystemExit(
-                f"--calibrate repeats audio digest {digest}; one recording "
-                "cannot count as two sittings"
-            )
-        seen.add(digest)
+    problem = duplicate_audio_problem(
+        [Path(wav) for _seg, wav in args.calibrate],
+        [Path(wav) for _cls, _seg, wav in args.against],
+    )
+    if problem:
+        raise SystemExit(problem)
 
     embed = sg.load_encoder(args.model_dir)
 
@@ -495,6 +521,25 @@ def run_self_test() -> int:
     outside = Path(tempfile.gettempdir())
     check("a temp directory outside the repository is accepted",
           not ab.inside_repo(outside))
+
+    with tempfile.TemporaryDirectory() as temporary:
+        base = Path(temporary)
+        first = base / "first.wav"
+        second = base / "second.wav"
+        copy = base / "copy.wav"
+        first.write_bytes(b"take-one")
+        second.write_bytes(b"take-two")
+        copy.write_bytes(b"take-one")
+        check("distinct recordings in distinct roles are accepted",
+              duplicate_audio_problem([first], [second]) is None)
+        check("a sitting repeated as negative material is refused (operator "
+              "voice must not price the impostor pool)",
+              "cannot also price" in (duplicate_audio_problem([first], [copy]) or ""))
+        check("a negative recording passed twice is refused (floors cannot be "
+              "cleared by duplication)",
+              "count twice" in (duplicate_audio_problem([second], [first, copy]) or ""))
+        check("a sitting passed twice is refused",
+              "count twice" in (duplicate_audio_problem([first, copy], []) or ""))
 
     print(f"\n{len(failures)} failure(s)")
     return 1 if failures else 0
