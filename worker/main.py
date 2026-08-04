@@ -21,8 +21,11 @@ MAX_FRAME_BYTES = 64 * 1024
 ALPHA_OPERATIONS = frozenset(
     {"capture.finalize", "capture.inspect", "transcript.create"}
 )
+# sitting.derive is boundary-lane only: widening the packaged alpha set is the
+# operator's recorded admission decision, not a side effect of building the op.
 BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
-    {"profile.inspect", "profile.adopt", "profile.discard", "note.inspect"}
+    {"profile.inspect", "profile.adopt", "profile.discard", "note.inspect",
+     "sitting.derive"}
 )
 
 
@@ -193,6 +196,7 @@ def dispatch_without_protocol_output(
     encoder_digest: str,
     admission: str,
     model_dir: Path | None,
+    encoder_path: Path | None = None,
 ) -> dict:
     # The worker owns stdout as a newline-delimited JSON protocol. Research
     # adapters and model libraries may print progress on data-dependent paths;
@@ -208,6 +212,7 @@ def dispatch_without_protocol_output(
                 encoder_digest=encoder_digest,
                 admission=admission,
                 model_dir=model_dir,
+                encoder_path=encoder_path,
             )
 
 
@@ -254,6 +259,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                 encoder_digest=manifest["encoder"]["sha256"],
                 admission=manifest["admission"],
                 model_dir=model_dir,
+                encoder_path=manifest_path.parent / manifest["encoder"]["path"],
             )
             emit(
                 {

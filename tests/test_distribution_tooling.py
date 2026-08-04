@@ -349,6 +349,42 @@ class DistributionToolingTests(unittest.TestCase):
                     resources, {"encoder": {"path": "worker/main.py"}}, python
                 )
 
+    def test_sitting_derivation_mirrors_the_store_and_respects_the_frozen_admission(
+        self,
+    ) -> None:
+        # The Python producer and the Rust sitting evidence store are two
+        # authorities over the same artifacts; these mirrors are how they stay
+        # one contract. A drifted name or bound would let the worker write what
+        # the store refuses — or worse, what it silently accepts unbounded.
+        store = source("crates/session-core/src/sitting_evidence.rs")
+        producer = source("worker/sitting_derivation.py")
+        for rust_line, python_line in [
+            ('const RAW_AUDIO_NAME: &str = "audio.raw";', 'RAW_AUDIO_NAME = "audio.raw"'),
+            ('const SEGMENTS_FILE: &str = "segments.json";', 'SEGMENTS_NAME = "segments.json"'),
+            ('const EMBEDDINGS_FILE: &str = "embeddings.bin";', 'EMBEDDINGS_NAME = "embeddings.bin"'),
+            ("const SEGMENTS_MAX_BYTES: u64 = 1_048_576;", "SEGMENTS_MAX_BYTES = 1_048_576"),
+            ("const EMBEDDINGS_MAX_BYTES: u64 = 16_777_216;", "EMBEDDINGS_MAX_BYTES = 16_777_216"),
+            ("const RAW_MAX_BYTES: u64 = 1_073_741_824;", "RAW_MAX_BYTES = 1_073_741_824"),
+        ]:
+            self.assertIn(rust_line, store)
+            self.assertIn(python_line, producer)
+        guidance = source("crates/session-core/src/enrollment_guidance.rs")
+        self.assertIn("MIN_SCORABLE_SECONDS: f64 = 2.0", guidance)
+        self.assertIn("MIN_SCORABLE_SECONDS = 2.0", producer)
+
+        # The packaged internal-alpha operation set is frozen on both sides of
+        # the process boundary; sitting.derive stays boundary-lane until the
+        # operator widens that admission.
+        worker_main = source("worker/main.py")
+        self.assertIn(
+            'ALPHA_OPERATIONS = frozenset(\n    {"capture.finalize", "capture.inspect", "transcript.create"}\n)',
+            worker_main,
+        )
+        supervision = source("crates/session-core/src/supervision.rs")
+        self.assertNotIn("SittingDerive", supervision)
+        alpha_block = supervision.split("pub fn internal_alpha_operations")[1].split("}")[0]
+        self.assertNotIn("sitting", alpha_block.lower())
+
     def test_manifest_encoder_argument_binds_the_named_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

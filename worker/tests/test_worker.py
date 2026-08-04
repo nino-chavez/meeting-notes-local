@@ -264,6 +264,7 @@ class WorkerProtocolTests(unittest.TestCase):
                     "profile.adopt",
                     "profile.discard",
                     "note.inspect",
+                    "sitting.derive",
                 }
             self.assertEqual(set(worker.ready["operations"]), expected_operations)
             inspected = worker.request("capture.inspect", {"meeting_id": meeting_id})
@@ -1734,6 +1735,212 @@ class ProfileAdoptionSafetyTests(unittest.TestCase):
         installed = self.root / "profile" / "voiceprint.json"
         self.assertEqual(installed.read_bytes(), initial_bytes)
         self.assertFalse((self.root / "profile-candidates" / different_id).exists())
+
+
+class SittingDerivationTests(unittest.TestCase):
+    """The producer for the sitting evidence store's derivation seam.
+
+    The core is exercised with injected transcription and embedding seams —
+    synthetic audio only, no model, no encoder. The adapter's refusal ladder
+    and the frozen-admission boundary are pinned separately.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = (Path(self.temporary.name) / "app").resolve()
+        self.root.mkdir(mode=0o700)
+        self.sitting_id = str(uuid.uuid4())
+        self.work_dir = self.root / "enrollment" / "work" / self.sitting_id
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _scaffold_sitting(self, seconds: float = 10.0) -> bytes:
+        row = self.root / "enrollment" / "sittings" / self.sitting_id / "sitting.json"
+        row.parent.mkdir(mode=0o700, parents=True)
+        private_file(row, b"{}\n")
+        self.work_dir.mkdir(mode=0o700, parents=True)
+        t = np.arange(int(seconds * 16_000)) / 16_000
+        audio = (np.sin(2 * np.pi * 220.0 * t) * 20_000).astype("<i2").tobytes()
+        private_file(self.work_dir / "audio.raw", audio)
+        return audio
+
+    @staticmethod
+    def _fake_embed(clip: np.ndarray) -> np.ndarray:
+        return np.array([float(np.abs(clip).sum()), float(len(clip)), 1.0])
+
+    def _derive(self, segments: list[dict]) -> dict[str, str]:
+        from worker.sitting_derivation import derive_sitting_material
+
+        return derive_sitting_material(
+            self.work_dir,
+            self.sitting_id,
+            encoder_sha256="e" * 64,
+            onnx_artifact_sha256="e" * 64,
+            embed_segment=self._fake_embed,
+            transcribe_audio=lambda _samples: segments,
+        )
+
+    def test_derivation_writes_content_free_spans_and_unit_embeddings(self) -> None:
+        audio = self._scaffold_sitting()
+        digests = self._derive([
+            {"start": 0.5, "end": 3.0, "text": "SECRET-OPERATOR-WORDS"},
+            {"start": 3.5, "end": 4.5, "text": "too short to score"},
+            {"start": 5.0, "end": 8.0, "text": "MORE-SECRET-WORDS"},
+        ])
+
+        segments_bytes = (self.work_dir / "segments.json").read_bytes()
+        embeddings_bytes = (self.work_dir / "embeddings.bin").read_bytes()
+        self.assertEqual(digests["segments"], hashlib.sha256(segments_bytes).hexdigest())
+        self.assertEqual(
+            digests["embeddings"], hashlib.sha256(embeddings_bytes).hexdigest()
+        )
+
+        # The transcript exists only inside the process; times, counts, and
+        # digests are the entire persisted vocabulary.
+        self.assertNotIn(b"SECRET", segments_bytes)
+        self.assertNotIn(b"text", segments_bytes)
+
+        document = json.loads(segments_bytes)
+        self.assertEqual(document["schema"], "sitting-derivation/1")
+        self.assertEqual(document["sitting_id"], self.sitting_id)
+        self.assertEqual(document["raw_sha256"], hashlib.sha256(audio).hexdigest())
+        self.assertEqual(document["samples"], 160_000)
+        self.assertEqual(len(document["segments"]), 3)
+        self.assertEqual(document["embedding"]["count"], 2)
+        self.assertEqual(document["embedding"]["dim"], 3)
+        self.assertEqual(document["embedding"]["sha256"], digests["embeddings"])
+        self.assertEqual(document["embedding"]["encoder_sha256"], "e" * 64)
+
+        rows = np.frombuffer(embeddings_bytes, dtype="<f4").reshape(2, 3)
+        for row in rows:
+            self.assertAlmostEqual(float(np.linalg.norm(row)), 1.0, places=5)
+
+    def test_rederivation_is_idempotent_and_disagreement_is_refused(self) -> None:
+        from worker.sitting_derivation import DerivationRefused
+
+        self._scaffold_sitting()
+        spans = [{"start": 0.0, "end": 4.0}]
+        first = self._derive(spans)
+        self.assertEqual(self._derive(spans), first)
+
+        (self.work_dir / "embeddings.bin").write_bytes(b"tampered")
+        with self.assertRaisesRegex(DerivationRefused, "disagrees"):
+            self._derive(spans)
+
+    def test_span_validation_refuses_disorder_and_clamps_overshoot(self) -> None:
+        from worker.sitting_derivation import DerivationRefused
+
+        self._scaffold_sitting()
+        with self.assertRaisesRegex(DerivationRefused, "overlap"):
+            self._derive([{"start": 0.0, "end": 5.0}, {"start": 4.0, "end": 9.0}])
+        with self.assertRaisesRegex(DerivationRefused, "outside the recording"):
+            self._derive([{"start": 11.0, "end": 12.0}])
+        with self.assertRaisesRegex(DerivationRefused, "non-finite"):
+            self._derive([{"start": 0.0, "end": float("nan")}])
+        with self.assertRaisesRegex(DerivationRefused, "numeric bounds"):
+            self._derive([{"start": 0.0}])
+
+        # Transcription may overshoot the final sample; the end clamps to the
+        # recording instead of refusing the whole sitting.
+        digests = self._derive([{"start": 5.0, "end": 100.0}])
+        document = json.loads((self.work_dir / "segments.json").read_bytes())
+        self.assertEqual(document["segments"][0]["end_seconds"], 10.0)
+        self.assertEqual(document["embedding"]["count"], 1)
+        self.assertIn("segments", digests)
+
+    def test_no_scorable_speech_is_refused(self) -> None:
+        from worker.sitting_derivation import DerivationRefused
+
+        self._scaffold_sitting()
+        with self.assertRaisesRegex(DerivationRefused, "no scorable speech"):
+            self._derive([{"start": 0.0, "end": 1.0}])
+
+    def test_raw_audio_refusals(self) -> None:
+        from worker.sitting_derivation import DerivationRefused, read_raw_sitting_audio
+
+        self.work_dir.mkdir(mode=0o700, parents=True)
+        with self.assertRaisesRegex(DerivationRefused, "missing or unsafe"):
+            read_raw_sitting_audio(self.work_dir)
+        private_file(self.work_dir / "audio.raw", b"")
+        with self.assertRaisesRegex(DerivationRefused, "empty"):
+            read_raw_sitting_audio(self.work_dir)
+        (self.work_dir / "audio.raw").write_bytes(b"\x00\x01\x02")
+        with self.assertRaisesRegex(DerivationRefused, "16-bit mono PCM"):
+            read_raw_sitting_audio(self.work_dir)
+
+    def test_adapter_refusal_ladder(self) -> None:
+        arguments = {"sitting_id": self.sitting_id}
+        with self.assertRaisesRegex(AdapterRefused, "canonical lowercase UUID"):
+            adapters.sitting_derive(
+                self.root, {"sitting_id": self.sitting_id.upper()},
+                admission="boundary-test", model_dir=None,
+                encoder_digest="e" * 64, encoder_path=None,
+            )
+        with self.assertRaisesRegex(AdapterRefused, "identity row is missing"):
+            adapters.sitting_derive(
+                self.root, arguments,
+                admission="boundary-test", model_dir=None,
+                encoder_digest="e" * 64, encoder_path=None,
+            )
+
+        row = self.root / "enrollment" / "sittings" / self.sitting_id / "sitting.json"
+        row.parent.mkdir(mode=0o700, parents=True)
+        private_file(row, b"{}\n")
+        with self.assertRaisesRegex(AdapterRefused, "work directory is missing"):
+            adapters.sitting_derive(
+                self.root, arguments,
+                admission="boundary-test", model_dir=None,
+                encoder_digest="e" * 64, encoder_path=None,
+            )
+
+        self.work_dir.mkdir(mode=0o700, parents=True)
+        with self.assertRaisesRegex(AdapterRefused, "fixed transcript model"):
+            adapters.sitting_derive(
+                self.root, arguments,
+                admission="boundary-test", model_dir=None,
+                encoder_digest="e" * 64, encoder_path=None,
+            )
+
+        model_dir = self.root / "model"
+        model_dir.mkdir(mode=0o700)
+        with self.assertRaisesRegex(AdapterRefused, "no admitted speaker encoder"):
+            adapters.sitting_derive(
+                self.root, arguments,
+                admission="boundary-test", model_dir=model_dir,
+                encoder_digest="e" * 64, encoder_path=None,
+            )
+
+        placeholder = self.root / "encoder-unavailable.identity"
+        private_file(placeholder, b"no encoder is admitted\n")
+        with self.assertRaisesRegex(AdapterRefused, "disagrees with its manifest"):
+            adapters.sitting_derive(
+                self.root, arguments,
+                admission="boundary-test", model_dir=model_dir,
+                encoder_digest="e" * 64, encoder_path=placeholder,
+            )
+        with self.assertRaisesRegex(AdapterRefused, "no admitted speaker encoder"):
+            adapters.sitting_derive(
+                self.root, arguments,
+                admission="boundary-test", model_dir=model_dir,
+                encoder_digest=digest(placeholder), encoder_path=placeholder,
+            )
+
+    def test_dispatch_registers_the_operation(self) -> None:
+        with self.assertRaisesRegex(AdapterRefused, "identity row is missing"):
+            adapters.dispatch(
+                self.root,
+                "sitting.derive",
+                {"sitting_id": self.sitting_id},
+                encoder_digest="e" * 64,
+                admission="boundary-test",
+            )
+
+    def test_frozen_alpha_set_excludes_derivation(self) -> None:
+        from worker.main import operations_for
+
+        self.assertNotIn("sitting.derive", operations_for("internal-alpha"))
+        self.assertIn("sitting.derive", operations_for("boundary-test"))
 
 
 if __name__ == "__main__":

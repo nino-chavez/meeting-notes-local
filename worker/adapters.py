@@ -490,6 +490,117 @@ def transcript_create(
     return {"transcript": transcript_digest}
 
 
+def _canonical_sitting_id(value: object) -> str:
+    if not isinstance(value, str):
+        raise AdapterRefused("sitting_id must be a canonical lowercase UUID")
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError:
+        raise AdapterRefused("sitting_id must be a canonical lowercase UUID") from None
+    if str(parsed) != value:
+        raise AdapterRefused("sitting_id must be a canonical lowercase UUID")
+    return value
+
+
+def _onnx_sitting_embedder(encoder_path: Path):
+    """The deployable embedding chain, or the refusal that no encoder is admitted.
+
+    The default runtime records a text placeholder as its encoder and does not
+    package onnxruntime, so both the import and the session load refuse on that
+    lane; only an encoder-candidate build reaches inference. Nothing here
+    admits an encoder — the manifest already digest-verified the artifact, and
+    admission remains the operator's recorded decision.
+    """
+    try:
+        import numpy as np
+        import onnxruntime as ort
+
+        from .fbank import fbank_features
+    except ImportError:
+        raise AdapterRefused("runtime has no admitted speaker encoder") from None
+    try:
+        session = ort.InferenceSession(
+            str(encoder_path), providers=["CPUExecutionProvider"]
+        )
+    except Exception:
+        raise AdapterRefused("runtime has no admitted speaker encoder") from None
+    lengths = np.ones(1, dtype=np.float32)
+
+    def embed(clip):
+        features = fbank_features(clip)
+        return np.squeeze(
+            session.run(None, {"features": features[None, ...], "lengths": lengths})[0]
+        )
+
+    return embed
+
+
+def sitting_derive(
+    root: Path,
+    arguments: object,
+    *,
+    admission: str,
+    model_dir: Path | None,
+    encoder_digest: str,
+    encoder_path: Path | None,
+) -> dict[str, str]:
+    """Derive segment evidence and embeddings for one recorded sitting.
+
+    Deliberately absent from the packaged internal-alpha operation set; it is
+    announced only on the boundary lane until the operator widens the frozen
+    admission. Outputs land in the sitting's work directory for the Rust
+    authority to re-verify — see worker/sitting_derivation.py for the artifact
+    contract and the content boundary.
+    """
+    root = require_private_root(root)
+    values = _exact_arguments(arguments, {"sitting_id"})
+    sitting_id = _canonical_sitting_id(values["sitting_id"])
+    # resolve_below resolves strictly, so an absent enrollment tree surfaces as
+    # OSError; both absences mean the same thing to the caller.
+    try:
+        identity_row = resolve_below(
+            root, "enrollment", "sittings", sitting_id, "sitting.json"
+        )
+        if identity_row.is_symlink() or not identity_row.is_file():
+            raise AdapterRefused("sitting identity row is missing")
+    except OSError:
+        raise AdapterRefused("sitting identity row is missing") from None
+    try:
+        work_dir = resolve_below(root, "enrollment", "work", sitting_id)
+        if work_dir.is_symlink() or not work_dir.is_dir():
+            raise AdapterRefused("sitting work directory is missing")
+    except OSError:
+        raise AdapterRefused("sitting work directory is missing") from None
+    if model_dir is None:
+        raise AdapterRefused("runtime admission lacks the fixed transcript model")
+    if encoder_path is None:
+        raise AdapterRefused("runtime has no admitted speaker encoder")
+    if encoder_path.is_symlink() or not encoder_path.is_file():
+        raise AdapterRefused("runtime has no admitted speaker encoder")
+    if sha256(encoder_path) != encoder_digest:
+        raise AdapterRefused("packaged encoder disagrees with its manifest")
+    embed_segment = _onnx_sitting_embedder(encoder_path)
+
+    from .transcription import require_whisper_model
+
+    model = require_whisper_model(model_dir)
+    from dual_capture import drop_unvoiced, transcribe
+
+    def transcribe_audio(samples):
+        return drop_unvoiced(transcribe(samples, str(model), "en"), samples, "mic")
+
+    from .sitting_derivation import derive_sitting_material
+
+    return derive_sitting_material(
+        work_dir,
+        sitting_id,
+        encoder_sha256=encoder_digest,
+        onnx_artifact_sha256=encoder_digest,
+        embed_segment=embed_segment,
+        transcribe_audio=transcribe_audio,
+    )
+
+
 @dataclass(frozen=True)
 class _ProfileQuarantine:
     root_fd: int
@@ -1232,6 +1343,7 @@ def dispatch(
     encoder_digest: str,
     admission: str = "boundary-test",
     model_dir: Path | None = None,
+    encoder_path: Path | None = None,
 ) -> dict[str, str]:
     adapters = {
         "profile.inspect": lambda: profile_inspect(root, arguments, encoder_digest),
@@ -1243,6 +1355,14 @@ def dispatch(
             arguments,
             admission=admission,
             model_dir=model_dir,
+        ),
+        "sitting.derive": lambda: sitting_derive(
+            root,
+            arguments,
+            admission=admission,
+            model_dir=model_dir,
+            encoder_digest=encoder_digest,
+            encoder_path=encoder_path,
         ),
         "note.inspect": lambda: note_inspect(root, arguments),
         "capture.finalize": lambda: capture_finalize(root, arguments),
