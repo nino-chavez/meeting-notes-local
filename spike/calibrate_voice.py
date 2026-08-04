@@ -137,7 +137,7 @@ def assess_take(take_dir: Path, take: str) -> Verdict:
         return Verdict("retake", "capture did not finish — no mic-segments.json "
                                  "was written. Re-record this take.")
     try:
-        mic_segs, _ = _leg(take_dir, "mic")
+        mic_segs, payload = _leg(take_dir, "mic")
     except Exception as exc:  # the loader's refusals are the diagnosis
         return Verdict("retake", f"mic segments unusable: {exc}")
 
@@ -172,6 +172,23 @@ def assess_take(take_dir: Path, take: str) -> Verdict:
             f"this Mac was playing audio during the sitting ({len(sys_segs)} "
             f"speech segments on the system leg). A sitting must be your voice "
             f"alone — close players and notifications and re-record.")
+
+    # A sitting the gap check cannot place in time is a retake, not a crash.
+    # speaker_gate refuses both a missing captured_at and a timezone-less one
+    # (a naive stamp silently means local time); mirroring that here keeps the
+    # failure a verdict instead of a traceback in a guided operator tool.
+    raw = payload.get("captured_at")
+    if not raw:
+        return Verdict("retake", "no captured_at was recorded, so nothing can "
+                                 "establish this as a separate sitting. It was "
+                                 "made with an older capture tool — re-record.")
+    try:
+        stamp = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return Verdict("retake", f"captured_at {raw!r} is unreadable — re-record.")
+    if stamp.tzinfo is None:
+        return Verdict("retake", f"captured_at {raw!r} carries no timezone, so "
+                                 f"the sitting gap cannot be checked — re-record.")
     return Verdict("ok", f"{len(scorable)} scorable segments")
 
 
@@ -225,6 +242,23 @@ def next_take(verdicts: dict[str, Verdict], root: Path,
                           f"days are ideal). Run this again then.")
         return "sitting2", "the hour has passed"
     return None, "all three takes pass — run the harness commands below"
+
+
+def explicit_take_problem(take: str, verdicts: dict[str, Verdict], root: Path,
+                          now: dt.datetime) -> str | None:
+    """Why an explicitly requested take must not record right now.
+
+    `--take` exists to redo one take, but it skips `next_take`, which is where
+    the sitting-gap lock lives — the one remaining path that could burn a
+    five-minute recording on a gap already known to be too short.
+    """
+    if take == "sitting2" and verdicts["sitting1"].state == "ok":
+        wait = gap_wait_seconds(root, now)
+        if wait > 0:
+            return (f"sitting2 unlocks in {wait / 60:.0f} min — recording it now "
+                    f"would fail the ≥{sg.MIN_SITTING_GAP_S // 3600}h sitting gap "
+                    f"and waste the take.")
+    return None
 
 
 def completion_commands(root: Path) -> str:
@@ -382,15 +416,17 @@ def self_test() -> bool:
         duration = max([e for _, e in [*mic_spans, *sys_spans]] or [10.0]) + 1.0
         for leg, spans in (("mic", mic_spans), ("system", sys_spans)):
             digest, samples = write_wav(d / f"{leg}.wav", duration)
-            (d / f"{leg}-segments.json").write_text(json.dumps({
+            payload = {
                 "schema": "mic-segments/1", "timeline": f"{leg}-local",
                 "leg": leg, "duration_s": round(duration, 3),
                 "filtered": ["voicing"], "labels": None,
                 "audio_sha256": digest, "audio_samples": samples,
-                "captured_at": captured_at,
                 "segments": [{"start": s, "end": e, "text": "fixture"}
                              for s, e in spans],
-            }))
+            }
+            if captured_at is not None:  # None mimics a pre-captured_at capture
+                payload["captured_at"] = captured_at
+            (d / f"{leg}-segments.json").write_text(json.dumps(payload))
 
     talk = [(i * 10.0, i * 10.0 + 4.0) for i in range(5)]
     chatter = [(i * 5.0, i * 5.0 + 4.0) for i in range(25)]  # 100 s scorable
@@ -416,10 +452,17 @@ def self_test() -> bool:
         check("sitting2 stays locked until the hour passes",
               take is None and "unlocks" in why)
         check("the lock names the remaining minutes", "40 min" in why)
+        check("an explicit --take sitting2 is refused inside the gap",
+              "unlocks" in (explicit_take_problem("sitting2", v, root, now) or ""))
+        check("an explicit negative retake is never gap-locked",
+              explicit_take_problem("negative", v, root, now) is None)
 
         later = dt.datetime(2026, 8, 4, 12, 45, tzinfo=dt.timezone.utc)
-        take, _ = next_take(assess_all(root, later), root, later)
+        v = assess_all(root, later)
+        take, _ = next_take(v, root, later)
         check("sitting2 unlocks after the gap", take == "sitting2")
+        check("an explicit --take sitting2 is allowed after the gap",
+              explicit_take_problem("sitting2", v, root, later) is None)
 
         write_take(root, "sitting2", talk, "2026-08-04T12:20:00+0000")
         v = assess_all(root, later)
@@ -447,6 +490,17 @@ def self_test() -> bool:
 
         check("completion commands carry the real directory",
               str(root) in completion_commands(root))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "calib"
+        write_take(root, "sitting1", talk, None)
+        v = assess_take(root / "sitting1", "sitting1")
+        check("a sitting without captured_at is a retake, not a crash",
+              v.state == "retake" and "captured_at" in v.detail)
+        write_take(root, "sitting2", talk, "2026-08-04T10:00:00")
+        v = assess_take(root / "sitting2", "sitting2")
+        check("a timezone-less captured_at is a retake, not a crash",
+              v.state == "retake" and "timezone" in v.detail)
 
     print(f"\n{'FAILED: ' + ', '.join(failures) if failures else 'all controls pass'}")
     return not failures
@@ -481,6 +535,8 @@ def main() -> None:
         take, _ = next_take(verdicts, args.dir, now)
         if take is None:
             return
+    elif problem := explicit_take_problem(take, verdicts, args.dir, now):
+        raise SystemExit(problem)
     if args.status:
         return
 
