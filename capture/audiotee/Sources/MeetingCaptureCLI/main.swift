@@ -6,15 +6,24 @@ import Foundation
 
 private let captureRate = 16_000.0
 
+private enum CaptureMode {
+  /// Two-leg meeting capture writing the private WAV pair into the capture dir.
+  case meeting(captureDirectoryFD: Int32)
+  /// One-leg voice-profile sitting streaming microphone PCM over a pipe; the
+  /// application's evidence store owns every byte that becomes durable.
+  case sitting(audioFD: Int32)
+}
+
 private struct Options {
-  let captureDirectoryFD: Int32
+  let mode: CaptureMode
   let controlFD: Int32
   let eventFD: Int32
   let parentLivenessFD: Int32
 
   static func parse(_ arguments: [String]) throws -> Options {
     let allowed = Set([
-      "--capture-dir-fd", "--control-fd", "--event-fd", "--parent-liveness-fd",
+      "--capture-dir-fd", "--sitting-audio-fd",
+      "--control-fd", "--event-fd", "--parent-liveness-fd",
     ])
     var values: [String: Int32] = [:]
     var index = 0
@@ -30,7 +39,19 @@ private struct Options {
       values[name] = value
       index += 2
     }
-    guard values.count == allowed.count else {
+    let mode: CaptureMode
+    switch (values["--capture-dir-fd"], values["--sitting-audio-fd"]) {
+    case (let directory?, nil):
+      mode = .meeting(captureDirectoryFD: directory)
+    case (nil, let audio?):
+      mode = .sitting(audioFD: audio)
+    default:
+      throw MeetingCaptureFault(
+        code: "invalid_arguments",
+        detail: "meeting-capture requires exactly one of the capture-dir and "
+          + "sitting-audio descriptors")
+    }
+    guard values.count == 4 else {
       throw MeetingCaptureFault(
         code: "invalid_arguments",
         detail: "meeting-capture requires capture, control, event, and liveness descriptors")
@@ -41,7 +62,7 @@ private struct Options {
         code: "invalid_arguments", detail: "meeting-capture descriptors must be distinct")
     }
     return Options(
-      captureDirectoryFD: values["--capture-dir-fd"]!,
+      mode: mode,
       controlFD: values["--control-fd"]!,
       eventFD: values["--event-fd"]!,
       parentLivenessFD: values["--parent-liveness-fd"]!)
@@ -431,40 +452,87 @@ private func run() throws -> Int32 {
 
   let events = try EventWriter(descriptor: options.eventFD)
   let terminal = TerminalState()
-  let coordinator = try MeetingCaptureCoordinator(
-    directoryFD: options.captureDirectoryFD,
-    mic: MicrophoneMeetingAudioSource(),
-    system: SystemMeetingAudioSource()
-  ) { update in
-    switch update {
-    case .recording:
-      if !events.emit(
-        event: "recording",
-        extra: [
-          "format": ["encoding": "pcm_s16le", "sample_rate": 16_000, "channels": 1]
-        ])
-      {
-        terminal.set(2)
-      }
-    case .finalized(let receipt):
-      let sent = events.emit(
-        event: "finalized",
-        extra: [
-          "legs": [
-            "mic": ["samples": receipt.micSamples],
-            "system": ["samples": receipt.systemSamples],
-          ]
-        ])
-      terminal.set(sent ? 0 : 2)
-    case .failed(let fault):
-      var evidence: [String: Any] = ["code": fault.code, "detail": fault.detail]
-      if let leg = fault.leg { evidence["leg"] = leg.rawValue }
-      let sent = events.emit(event: "failed", extra: evidence)
-      let protocolFault = fault.code == "invalid_control" || fault.code == "invalid_start"
-      terminal.set(sent ? (protocolFault ? 2 : 1) : 2)
-    case .interrupted:
-      terminal.set(events.emit(event: "interrupted") ? 1 : 2)
+
+  @Sendable func emitRecording() {
+    if !events.emit(
+      event: "recording",
+      extra: [
+        "format": ["encoding": "pcm_s16le", "sample_rate": 16_000, "channels": 1]
+      ])
+    {
+      terminal.set(2)
     }
+  }
+  @Sendable func emitFinalized(legs: [String: Any]) {
+    let sent = events.emit(event: "finalized", extra: ["legs": legs])
+    terminal.set(sent ? 0 : 2)
+  }
+  @Sendable func emitFailed(_ fault: MeetingCaptureFault) {
+    var evidence: [String: Any] = ["code": fault.code, "detail": fault.detail]
+    if let leg = fault.leg { evidence["leg"] = leg.rawValue }
+    let sent = events.emit(event: "failed", extra: evidence)
+    let protocolFault = fault.code == "invalid_control" || fault.code == "invalid_start"
+    terminal.set(sent ? (protocolFault ? 2 : 1) : 2)
+  }
+  @Sendable func emitInterrupted() {
+    terminal.set(events.emit(event: "interrupted") ? 1 : 2)
+  }
+
+  let activate: () -> Void
+  let stopCapture: () -> Void
+  let interrupt: () -> Void
+  let abort: (MeetingCaptureFault) -> Void
+  let isTerminal: () -> Bool
+
+  switch options.mode {
+  case .meeting(let captureDirectoryFD):
+    let coordinator = try MeetingCaptureCoordinator(
+      directoryFD: captureDirectoryFD,
+      mic: MicrophoneMeetingAudioSource(),
+      system: SystemMeetingAudioSource()
+    ) { update in
+      switch update {
+      case .recording:
+        emitRecording()
+      case .finalized(let receipt):
+        emitFinalized(legs: [
+          "mic": ["samples": receipt.micSamples],
+          "system": ["samples": receipt.systemSamples],
+        ])
+      case .failed(let fault):
+        emitFailed(fault)
+      case .interrupted:
+        emitInterrupted()
+      }
+    }
+    activate = { coordinator.activate() }
+    stopCapture = { _ = coordinator.stop() }
+    interrupt = { coordinator.interrupt() }
+    abort = { coordinator.abort($0) }
+    isTerminal = { coordinator.state == .terminal }
+  case .sitting(let audioFD):
+    // Same event vocabulary with a one-leg receipt: the parent's event parser
+    // stays uniform, and the absent system entry states the mode honestly.
+    let coordinator = try SittingCaptureCoordinator(
+      audioFD: audioFD,
+      mic: MicrophoneMeetingAudioSource()
+    ) { update in
+      switch update {
+      case .recording:
+        emitRecording()
+      case .finalized(let receipt):
+        emitFinalized(legs: ["mic": ["samples": receipt.micSamples]])
+      case .failed(let fault):
+        emitFailed(fault)
+      case .interrupted:
+        emitInterrupted()
+      }
+    }
+    activate = { coordinator.activate() }
+    stopCapture = { _ = coordinator.stop() }
+    interrupt = { coordinator.interrupt() }
+    abort = { coordinator.abort($0) }
+    isTerminal = { coordinator.state == .terminal }
   }
   guard events.emit(event: "paused") else { return 2 }
 
@@ -479,7 +547,7 @@ private func run() throws -> Int32 {
     let result = poll(&descriptors, nfds_t(descriptors.count), 100)
     if result < 0 {
       if errno == EINTR { continue }
-      coordinator.interrupt()
+      interrupt()
       return 2
     }
     if result == 0 { continue }
@@ -487,7 +555,7 @@ private func run() throws -> Int32 {
     if descriptors[1].revents & Int16(POLLIN | POLLHUP | POLLERR) != 0 {
       var byte: UInt8 = 0
       if read(options.parentLivenessFD, &byte, 1) <= 0 {
-        coordinator.interrupt()
+        interrupt()
         break
       }
     }
@@ -495,22 +563,22 @@ private func run() throws -> Int32 {
       var command: UInt8 = 0
       let count = read(options.controlFD, &command, 1)
       if count <= 0 {
-        coordinator.interrupt()
+        interrupt()
         break
       }
       switch command {
       case Character("S").asciiValue:
-        coordinator.activate()
+        activate()
       case Character("X").asciiValue:
-        _ = coordinator.stop()
+        stopCapture()
       default:
-        coordinator.abort(
+        abort(
           MeetingCaptureFault(
             code: "invalid_control", detail: "unknown capture control byte"))
       }
     }
   }
-  if coordinator.state != .terminal { coordinator.interrupt() }
+  if !isTerminal() { interrupt() }
   return terminal.get() ?? 1
 }
 

@@ -306,12 +306,164 @@ private func testCoreBufferOverflowAndTailDrain() throws {
   try require(drained == expected, "core capture buffer dropped its final partial chunk")
 }
 
+
+private final class SittingUpdateBox: @unchecked Sendable {
+  let recording = DispatchSemaphore(value: 0)
+  let terminal = DispatchSemaphore(value: 0)
+  private let lock = NSLock()
+  private(set) var updates: [SittingCaptureUpdate] = []
+
+  func receive(_ update: SittingCaptureUpdate) {
+    lock.lock()
+    updates.append(update)
+    lock.unlock()
+    if update == .recording { recording.signal() }
+    if update != .recording { terminal.signal() }
+  }
+}
+
+private final class PipeReader: @unchecked Sendable {
+  private let lock = NSLock()
+  private var collected = Data()
+  private let finished = DispatchSemaphore(value: 0)
+
+  init(descriptor: Int32) {
+    Thread.detachNewThread { [self] in
+      var chunk = [UInt8](repeating: 0, count: 4096)
+      while true {
+        let count = read(descriptor, &chunk, chunk.count)
+        if count > 0 {
+          lock.lock()
+          collected.append(contentsOf: chunk[0..<count])
+          lock.unlock()
+        } else if count < 0, errno == EINTR {
+          continue
+        } else {
+          break
+        }
+      }
+      close(descriptor)
+      finished.signal()
+    }
+  }
+
+  func drained() throws -> Data {
+    try require(finished.wait(timeout: .now() + 2) == .success, "sitting stream never closed")
+    lock.lock()
+    defer { lock.unlock() }
+    return collected
+  }
+}
+
+private func testSittingStreamsExactBytesAndRefusesFiles() throws {
+  // A regular file must be refused: the evidence store is the only writer of
+  // durable sitting bytes, so the helper only ever holds a pipe.
+  let filePath = FileManager.default.temporaryDirectory
+    .appendingPathComponent("sitting-self-test-\(UUID().uuidString)")
+  FileManager.default.createFile(atPath: filePath.path, contents: Data())
+  defer { try? FileManager.default.removeItem(at: filePath) }
+  let fileFD = open(filePath.path, O_WRONLY)
+  try require(fileFD >= 0, "cannot open sitting file fixture")
+  defer { close(fileFD) }
+  do {
+    _ = try SittingCaptureCoordinator(
+      audioFD: fileFD, mic: FakeSource(.mic), onUpdate: { _ in })
+    try require(false, "sitting coordinator accepted a regular file")
+  } catch let fault as MeetingCaptureFault {
+    try require(
+      fault.code == "sitting_stream_unavailable", "file refusal used the wrong code")
+  }
+
+  var descriptors: [Int32] = [0, 0]
+  try require(pipe(&descriptors) == 0, "cannot create sitting pipe")
+  let mic = FakeSource(.mic)
+  let updates = SittingUpdateBox()
+  let coordinator = try SittingCaptureCoordinator(
+    audioFD: descriptors[1], mic: mic, onUpdate: { update in updates.receive(update) })
+  let reader = PipeReader(descriptor: descriptors[0])
+
+  do {
+    _ = try SittingCaptureCoordinator(
+      audioFD: descriptors[1], mic: FakeSource(.system), onUpdate: { _ in })
+    try require(false, "sitting coordinator accepted a non-microphone source")
+  } catch let fault as MeetingCaptureFault {
+    try require(fault.code == "source_leg_mismatch", "leg refusal used the wrong code")
+  }
+  coordinator.activate()
+  try wait(mic.started, "sitting mic did not start")
+  mic.emit(Data([9, 9]))  // readiness block: establishes recording, never streamed
+  try wait(updates.recording, "sitting readiness did not enter recording")
+  close(descriptors[1])  // the writer holds its own retained descriptor now
+
+  mic.emit(Data([0x11, 0, 0x12, 0, 0x13, 0]))
+  mic.stopTail = Data([0x14, 0, 0x15, 0])
+  let receipt = coordinator.stop()
+  try wait(updates.terminal, "sitting stop did not produce a terminal event")
+  try require(
+    receipt == SittingCaptureReceipt(micSamples: 5),
+    "sitting stop did not preserve the synchronous tail frames")
+  try require(
+    try reader.drained() == Data([0x11, 0, 0x12, 0, 0x13, 0, 0x14, 0, 0x15, 0]),
+    "sitting stream bytes do not match the emitted PCM exactly")
+}
+
+private func testSittingOverflowAndInterrupt() throws {
+  do {
+    var descriptors: [Int32] = [0, 0]
+    try require(pipe(&descriptors) == 0, "cannot create overflow pipe")
+    let mic = FakeSource(.mic)
+    let updates = SittingUpdateBox()
+    let coordinator = try SittingCaptureCoordinator(
+      audioFD: descriptors[1], mic: mic, maxPendingBytes: 4,
+      onUpdate: { update in updates.receive(update) })
+    let reader = PipeReader(descriptor: descriptors[0])
+    coordinator.activate()
+    try wait(mic.started, "overflow sitting mic did not start")
+    mic.emit(Data([9, 9]))
+    try wait(updates.recording, "overflow sitting did not record")
+    close(descriptors[1])
+    mic.emit(Data([1, 0, 2, 0, 3, 0]))
+    try wait(updates.terminal, "sitting overflow was not terminal")
+    var sawOverflow = false
+    if case .failed(let fault) = updates.updates.last, fault.code == "sitting_stream_overflow" {
+      sawOverflow = true
+    }
+    try require(sawOverflow, "sitting overflow did not fail with its own code")
+    _ = try reader.drained()
+  }
+
+  do {
+    var descriptors: [Int32] = [0, 0]
+    try require(pipe(&descriptors) == 0, "cannot create interrupt pipe")
+    let mic = FakeSource(.mic)
+    let updates = SittingUpdateBox()
+    let coordinator = try SittingCaptureCoordinator(
+      audioFD: descriptors[1], mic: mic, onUpdate: { update in updates.receive(update) })
+    let reader = PipeReader(descriptor: descriptors[0])
+    coordinator.activate()
+    try wait(mic.started, "interrupt sitting mic did not start")
+    mic.emit(Data([9, 9]))
+    try wait(updates.recording, "interrupt sitting did not record")
+    close(descriptors[1])
+    mic.emit(Data([1, 0, 2, 0]))
+    coordinator.interrupt()
+    try wait(updates.terminal, "sitting interrupt was not terminal")
+    try require(
+      updates.updates.last == .interrupted, "sitting interrupt emitted the wrong terminal")
+    // Bytes may have been streamed before the interruption; the parent's
+    // finalized-event join is what refuses them, and EOF must still arrive.
+    _ = try reader.drained()
+  }
+}
+
 do {
   try testOrderedFinalization()
   try testNoOverwrite()
   try testLateSecondLegCollisionRollsBackFirstPromotion()
   try testOverflowAndInterrupt()
   try testCoreBufferOverflowAndTailDrain()
+  try testSittingStreamsExactBytesAndRefusesFiles()
+  try testSittingOverflowAndInterrupt()
   print("meeting-capture self-test: pass")
   exit(0)
 } catch {
