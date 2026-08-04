@@ -507,6 +507,7 @@ private func testSittingStalledReaderFailsInsteadOfWedging() throws {
   // semaphore is what turns a regression back into a test failure instead of
   // a hung suite.
   usleep(50_000)  // let the first block enter its write before stopping
+  let stopStarted = DispatchTime.now()
   let stopReturned = DispatchSemaphore(value: 0)
   let stopReceipt = SittingReceiptBox()
   Thread.detachNewThread {
@@ -516,6 +517,19 @@ private func testSittingStalledReaderFailsInsteadOfWedging() throws {
   try require(
     stopReturned.wait(timeout: .now() + 4) == .success,
     "stop() during a stalled write did not return; the reviewed deadlock is back")
+  // Positive evidence that stop() actually parked behind the stalled write:
+  // the intended path blocks until the 1.0 s stall deadline fires (~0.95 s
+  // from here). If the writer faulted on its own first — this thread
+  // descheduled past the stall — stop() returns at the terminal guard in ~0 s
+  // without touching the writer queue, which is the vacuous shape this test
+  // was rewritten to eliminate. Fail loudly rather than pass without the
+  // coverage.
+  let stopElapsed =
+    Double(DispatchTime.now().uptimeNanoseconds - stopStarted.uptimeNanoseconds)
+    / 1_000_000_000
+  try require(
+    stopElapsed >= 0.3,
+    "stop() returned in \(stopElapsed)s; it never blocked on the stalled writer queue")
   try require(stopReceipt.value == nil, "stop during a stalled write returned a receipt")
   try require(
     updates.terminal.wait(timeout: .now() + 4) == .success,
