@@ -757,23 +757,71 @@ fn require_no_pending_storage(
     Ok(())
 }
 
+/// A reader-resolved current transcript: the audited chain inspection plus
+/// the base revision's verified bytes, so a reader parses exactly the bytes
+/// the chain walk validated.
+#[derive(Debug, Clone)]
+pub struct ResolvedStoredTranscript {
+    pub inspection: InspectedTranscriptRevision,
+    pub base_bytes: Vec<u8>,
+}
+
+pub fn resolve_stored_transcript(
+    meeting_dir: &Path,
+    meeting_id: Uuid,
+    transcript_sha256: &str,
+) -> Result<ResolvedStoredTranscript, TranscriptArtifactError> {
+    let mut read = |digest: &str| read_revision(meeting_dir, digest);
+    resolve_stored_transcript_with(&mut read, meeting_id, transcript_sha256)
+}
+
+/// The same resolution under a caller-supplied byte reader, so budgeted
+/// readers (the library projection) account every hop against their own
+/// limits. Each hop's content address is re-verified here regardless of what
+/// the reader returned.
+pub fn resolve_stored_transcript_with(
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, TranscriptArtifactError>,
+    meeting_id: Uuid,
+    transcript_sha256: &str,
+) -> Result<ResolvedStoredTranscript, TranscriptArtifactError> {
+    inspect_revision_chain(read, meeting_id, transcript_sha256).map(|(inspection, base_bytes)| {
+        ResolvedStoredTranscript {
+            inspection,
+            base_bytes,
+        }
+    })
+}
+
 fn inspect_stored_revision(
     meeting_dir: &Path,
     meeting_id: Uuid,
     transcript_sha256: &str,
 ) -> Result<InspectedTranscriptRevision, TranscriptArtifactError> {
+    let mut read = |digest: &str| read_revision(meeting_dir, digest);
+    inspect_revision_chain(&mut read, meeting_id, transcript_sha256)
+        .map(|(inspection, _)| inspection)
+}
+
+fn inspect_revision_chain(
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, TranscriptArtifactError>,
+    meeting_id: Uuid,
+    transcript_sha256: &str,
+) -> Result<(InspectedTranscriptRevision, Vec<u8>), TranscriptArtifactError> {
     validate_digest(transcript_sha256)?;
     let mut current = transcript_sha256.to_owned();
     let mut seen = BTreeSet::new();
     let mut views = Vec::new();
-    let (base_digest, withheld) = loop {
+    let (base_digest, withheld, base_bytes) = loop {
         if !seen.insert(current.clone()) {
             return Err(TranscriptArtifactError::Cyclic);
         }
         if views.len() > MAX_TRANSCRIPT_VIEW_DEPTH {
             return Err(TranscriptArtifactError::TooDeep);
         }
-        let bytes = read_revision(meeting_dir, &current)?;
+        let bytes = read(&current)?;
+        if digest_bytes(&bytes) != current {
+            return Err(TranscriptArtifactError::Changed);
+        }
         let document: Value =
             serde_json::from_slice(&bytes).map_err(|_| TranscriptArtifactError::Malformed)?;
         if document
@@ -797,7 +845,7 @@ fn inspect_stored_revision(
             continue;
         }
         let withheld = inspect_base_transcript(&document)?;
-        break (current, withheld);
+        break (current, withheld, bytes);
     };
 
     let mut previous_digest = base_digest.clone();
@@ -824,13 +872,16 @@ fn inspect_stored_revision(
         previous_digest = digest.clone();
     }
 
-    Ok(InspectedTranscriptRevision {
-        digest: transcript_sha256.to_owned(),
-        base_transcript_sha256: base_digest,
-        head_view: views.first().map(|(_, view)| view.clone()),
-        restored_source_turn_indices: restored,
-        withheld_source_turn_indices: withheld,
-    })
+    Ok((
+        InspectedTranscriptRevision {
+            digest: transcript_sha256.to_owned(),
+            base_transcript_sha256: base_digest,
+            head_view: views.first().map(|(_, view)| view.clone()),
+            restored_source_turn_indices: restored,
+            withheld_source_turn_indices: withheld,
+        },
+        base_bytes,
+    ))
 }
 
 fn read_revision(meeting_dir: &Path, digest: &str) -> Result<Vec<u8>, TranscriptArtifactError> {

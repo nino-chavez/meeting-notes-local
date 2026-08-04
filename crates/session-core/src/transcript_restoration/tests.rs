@@ -13,6 +13,7 @@ use crate::meeting::{
     PendingStorageOperation, artifact_ref, retention_policy_sha256,
 };
 use crate::operation_store::OperationReceiptState;
+use crate::operations::TranscriptViewSchema;
 use crate::storage::{create_private_dir, durable_create_new, durable_replace};
 
 const MEETING_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -911,4 +912,51 @@ fn successor_artifact_collision_is_refused_without_overwrite_or_publication() {
         receipt(&fixture).state(),
         OperationReceiptState::RequestOnly
     );
+}
+
+#[test]
+fn resolver_returns_verified_base_bytes_and_restored_set_for_readers() {
+    let fixture = Fixture::new(false);
+    let view = TranscriptView {
+        schema: TranscriptViewSchema::V1,
+        meeting_id: fixture.meeting_id,
+        base_transcript_sha256: fixture.base_sha256.clone(),
+        parent_transcript_sha256: fixture.base_sha256.clone(),
+        restored_source_turn_indices: vec![6],
+    };
+    let view_bytes = serde_json::to_vec_pretty(&view).unwrap();
+    let view_digest = digest_bytes(&view_bytes);
+    durable_create_new(
+        &fixture
+            .meeting_dir
+            .join("transcript")
+            .join(format!("{view_digest}.json")),
+        &view_bytes,
+    )
+    .unwrap();
+
+    let resolved =
+        resolve_stored_transcript(&fixture.meeting_dir, fixture.meeting_id, &view_digest).unwrap();
+    assert_eq!(resolved.inspection.restored_source_turn_indices, vec![6]);
+    assert_eq!(
+        resolved.inspection.base_transcript_sha256,
+        fixture.base_sha256
+    );
+    // Readers parse exactly the bytes the chain walk verified.
+    assert_eq!(digest_bytes(&resolved.base_bytes), fixture.base_sha256);
+    assert!(
+        resolved
+            .inspection
+            .withheld_source_turn_indices
+            .contains(&7)
+    );
+
+    let base = resolve_stored_transcript(
+        &fixture.meeting_dir,
+        fixture.meeting_id,
+        &fixture.base_sha256,
+    )
+    .unwrap();
+    assert!(base.inspection.restored_source_turn_indices.is_empty());
+    assert_eq!(digest_bytes(&base.base_bytes), fixture.base_sha256);
 }

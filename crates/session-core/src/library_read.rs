@@ -5,7 +5,7 @@
 //! authority.  Library metadata is deliberately outside this transcript-only slice.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -27,6 +27,7 @@ use crate::note_projection::{
     NoteProjector, ProjectRequest, ProjectionError, UnavailableProjector, project_claims,
 };
 use crate::storage::StorageRoot;
+use crate::transcript_restoration::{TranscriptArtifactError, resolve_stored_transcript_with};
 
 const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TURNS: usize = 20_000;
@@ -940,12 +941,60 @@ fn inspect_meeting(
             total,
             limits,
         )?;
+        let is_view = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|document| {
+                document
+                    .get("schema")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some("transcript-view/1");
+        let (base_bytes, restored) = if is_view {
+            // A restored view is resolved by the audited chain walker; every
+            // hop is read under this projection's own byte budget, and the
+            // walker re-verifies each hop's content address itself.
+            let meeting_uuid = Uuid::parse_str(&meeting.meeting_id)
+                .map_err(|_| MeetingInspectionError::Quarantine)?;
+            let mut read_failure: Option<MeetingInspectionError> = None;
+            let resolved = {
+                let mut read = |digest: &str| {
+                    let relative = format!("transcript/{digest}.json");
+                    bounded_read(
+                        &directory.join(&relative),
+                        limits.max_transcript_bytes,
+                        total,
+                        limits,
+                    )
+                    .map_err(|error| {
+                        read_failure = Some(MeetingInspectionError::from(error));
+                        TranscriptArtifactError::Changed
+                    })
+                };
+                resolve_stored_transcript_with(&mut read, meeting_uuid, &current.sha256)
+            };
+            let resolved = resolved.map_err(|_| {
+                read_failure
+                    .take()
+                    .unwrap_or(MeetingInspectionError::Quarantine)
+            })?;
+            let restored: BTreeSet<u32> = resolved
+                .inspection
+                .restored_source_turn_indices
+                .iter()
+                .copied()
+                .collect();
+            (resolved.base_bytes, restored)
+        } else {
+            (bytes, BTreeSet::new())
+        };
         let document: Transcript =
-            serde_json::from_slice(&bytes).map_err(|_| MeetingInspectionError::Quarantine)?;
+            serde_json::from_slice(&base_bytes).map_err(|_| MeetingInspectionError::Quarantine)?;
         (
             Some(current.sha256.clone()),
             Some(current.relative_path.clone()),
-            validate_transcript(document)?,
+            validate_transcript(document, &restored)?,
             Some(actual),
         )
     } else {
@@ -1148,7 +1197,10 @@ struct Turn {
     gate_reason: Option<String>,
 }
 
-fn validate_transcript(document: Transcript) -> Result<Vec<StoredTurn>, LibraryReadError> {
+fn validate_transcript(
+    document: Transcript,
+    restored: &BTreeSet<u32>,
+) -> Result<Vec<StoredTurn>, LibraryReadError> {
     if document.schema != "capture-transcript/1"
         || document.source.is_empty()
         || !matches!(document.attribution.as_str(), "channel" | "none")
@@ -1185,7 +1237,13 @@ fn validate_transcript(document: Transcript) -> Result<Vec<StoredTurn>, LibraryR
             {
                 return Err(LibraryReadError::ArtifactUnavailable);
             }
-            let gated = turn.gated == Some(true);
+            let restored_here = restored.contains(&(index as u32));
+            if restored_here && turn.gated != Some(true) {
+                // The chain walker already refuses this; a second refusal here
+                // keeps the invariant local to the visibility decision.
+                return Err(LibraryReadError::ArtifactUnavailable);
+            }
+            let gated = turn.gated == Some(true) && !restored_here;
             let current_visible_index = (!gated).then(|| {
                 let current = visible_index;
                 visible_index += 1;
@@ -2212,6 +2270,49 @@ mod tests {
                 original_scalar_end: 7,
                 ..
             }
+        ));
+        let withheld = projection.search("hidden").unwrap().remove(0);
+        assert!(matches!(
+            projection.open(&fixture.storage, &withheld).unwrap(),
+            OpenedLibraryHit::Withheld { .. }
+        ));
+    }
+
+    #[test]
+    fn restored_view_resolves_instead_of_quarantining_and_frees_the_turn() {
+        let fixture = Fixture::new();
+        let meeting_id = "22222222-2222-4222-8222-222222222222";
+        let directory = fixture.meeting(
+            meeting_id,
+            10,
+            &[
+                ("visible token", false),
+                ("freed token", true),
+                ("hidden token", true),
+            ],
+        );
+        let mut record = load_meeting(&directory).unwrap();
+        let base = record.artifacts.current_transcript.clone().unwrap();
+        let view = crate::operations::TranscriptView {
+            schema: crate::operations::TranscriptViewSchema::V1,
+            meeting_id: Uuid::parse_str(meeting_id).unwrap(),
+            base_transcript_sha256: base.sha256.clone(),
+            parent_transcript_sha256: base.sha256.clone(),
+            restored_source_turn_indices: vec![1],
+        };
+        let view_bytes = serde_json::to_vec_pretty(&view).unwrap();
+        let view_digest = format!("{:x}", Sha256::digest(&view_bytes));
+        let relative = format!("transcript/{view_digest}.json");
+        durable_create_new(&directory.join(&relative), &view_bytes).unwrap();
+        record.artifacts.current_transcript = Some(artifact_ref(&directory, &relative).unwrap());
+        crate::meeting::write_meeting(&directory, &record).unwrap();
+
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let freed = projection.search("freed").unwrap().remove(0);
+        assert!(matches!(
+            projection.open(&fixture.storage, &freed).unwrap(),
+            OpenedLibraryHit::Transcript { .. }
         ));
         let withheld = projection.search("hidden").unwrap().remove(0);
         assert!(matches!(

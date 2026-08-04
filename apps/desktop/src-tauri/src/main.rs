@@ -24,7 +24,7 @@ use manual_delete_facade::{
     ManualAudioDeletionUiArgs,
 };
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
@@ -77,6 +77,7 @@ use local_meeting_notes_session_core::supervision::{
     ProcessInspector, SupervisionError, SystemGroupSignaler, SystemProcessInspector,
     internal_alpha_operations,
 };
+use local_meeting_notes_session_core::transcript_restoration::resolve_stored_transcript;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1726,7 +1727,8 @@ fn load_bound_preview_transcript_projection(
     if format!("{:x}", Sha256::digest(&bytes)) != expected.sha256 {
         return Err("the selected transcript bytes changed".into());
     }
-    let (turns, mut warnings) = parse_transcript_projection(&bytes)?;
+    let (turns, mut warnings) =
+        project_current_transcript(&directory, meeting_id, expected, &bytes)?;
     let current = load_meeting(&directory).map_err(error_text)?;
     if current.artifacts.current_transcript.as_ref() != Some(expected)
         || artifact_ref(&directory, &expected.relative_path).map_err(error_text)? != *expected
@@ -2900,22 +2902,25 @@ fn run_capture_task(
             return;
         }
     };
-    let (turns, warnings) =
-        match load_transcript_projection(&attempt.meeting_dir, &transcript_reference) {
-            Ok(projection) => projection,
-            Err(error) => {
-                finish_transcription_failure(
-                    &app,
-                    &attempt.meeting_dir,
-                    &meeting_id,
-                    false,
-                    "transcript_projection_invalid",
-                    &error,
-                    "The transcript could not be displayed safely.",
-                );
-                return;
-            }
-        };
+    let (turns, warnings) = match load_transcript_projection(
+        &attempt.meeting_dir,
+        &meeting_id,
+        &transcript_reference,
+    ) {
+        Ok(projection) => projection,
+        Err(error) => {
+            finish_transcription_failure(
+                &app,
+                &attempt.meeting_dir,
+                &meeting_id,
+                false,
+                "transcript_projection_invalid",
+                &error,
+                "The transcript could not be displayed safely.",
+            );
+            return;
+        }
+    };
     let mut meeting = match load_meeting(&attempt.meeting_dir) {
         Ok(meeting) => meeting,
         Err(error) => {
@@ -3251,7 +3256,7 @@ fn load_latest_transcript_projection(
     let Some((_created, meeting_id, directory, transcript, audio_state)) = latest else {
         return Ok(None);
     };
-    let (turns, mut warnings) = load_transcript_projection(&directory, &transcript)?;
+    let (turns, mut warnings) = load_transcript_projection(&directory, &meeting_id, &transcript)?;
     if audio_state == AudioState::Released {
         warnings.push(
             "Meeting audio was deleted under the selected retention period. The transcript remains."
@@ -3294,6 +3299,7 @@ fn load_attempt_created_at(meeting_dir: &Path, meeting: &MeetingRecord) -> Resul
 
 fn load_transcript_projection(
     meeting_dir: &Path,
+    meeting_id: &str,
     reference: &ArtifactRef,
 ) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
     let actual = artifact_ref(meeting_dir, &reference.relative_path).map_err(error_text)?;
@@ -3302,10 +3308,48 @@ fn load_transcript_projection(
     }
     let path = meeting_dir.join(&reference.relative_path);
     let bytes = read_private_bytes(&path, TRANSCRIPT_MAX_BYTES).map_err(error_text)?;
-    parse_transcript_projection(&bytes)
+    project_current_transcript(meeting_dir, meeting_id, reference, &bytes)
 }
 
-fn parse_transcript_projection(bytes: &[u8]) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
+/// Projects the meeting's current transcript pointer whether it names a base
+/// capture transcript or a restored `transcript-view/1`. Views resolve through
+/// session-core's audited chain walker; restored turns become ordinary rows,
+/// still-withheld turns stay content-free.
+fn project_current_transcript(
+    meeting_dir: &Path,
+    meeting_id: &str,
+    reference: &ArtifactRef,
+    bytes: &[u8],
+) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
+    let is_view = serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|document| {
+            document
+                .get("schema")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some("transcript-view/1");
+    if !is_view {
+        return parse_transcript_projection_with(bytes, &BTreeSet::new());
+    }
+    let meeting_uuid = Uuid::parse_str(meeting_id).map_err(error_text)?;
+    let resolved = resolve_stored_transcript(meeting_dir, meeting_uuid, &reference.sha256)
+        .map_err(error_text)?;
+    let restored: BTreeSet<u32> = resolved
+        .inspection
+        .restored_source_turn_indices
+        .iter()
+        .copied()
+        .collect();
+    parse_transcript_projection_with(&resolved.base_bytes, &restored)
+}
+
+fn parse_transcript_projection_with(
+    bytes: &[u8],
+    restored: &BTreeSet<u32>,
+) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
     let document: TranscriptDocument = serde_json::from_slice(bytes).map_err(error_text)?;
     if document.schema != "capture-transcript/1"
         || !matches!(document.attribution.as_str(), "channel" | "none")
@@ -3336,7 +3380,11 @@ fn parse_transcript_projection(bytes: &[u8]) -> Result<(Vec<TranscriptTurn>, Vec
         {
             return Err("transcript turn is invalid".into());
         }
-        if turn.gated == Some(true) {
+        let restored_here = restored.contains(&(source_turn_index as u32));
+        if restored_here && turn.gated != Some(true) {
+            return Err("a restored turn is not withheld in the base transcript".into());
+        }
+        if turn.gated == Some(true) && !restored_here {
             gated += 1;
             turns.push(TranscriptTurn {
                 source_turn_index: source_turn_index as u32,
@@ -4692,7 +4740,8 @@ mod tests {
             {"start":1.0,"end":2.0,"speaker":"Me","text":"withheld","gated":true,"gate_score":0.1,"gate_reason":"fixture"}
           ]
         }"#;
-        let (turns, warnings) = parse_transcript_projection(document).unwrap();
+        let (turns, warnings) =
+            parse_transcript_projection_with(document, &BTreeSet::new()).unwrap();
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].text, "visible");
         assert!(!turns[0].withheld);
@@ -4705,6 +4754,68 @@ mod tests {
         assert!(!payload.contains("withheld\":false"));
         assert!(!payload.contains("gate_score"));
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn view_current_transcript_resolves_with_restored_turn_visible() {
+        use local_meeting_notes_session_core::operations::{TranscriptView, TranscriptViewSchema};
+        use local_meeting_notes_session_core::storage::{create_private_dir, durable_create_new};
+
+        let temporary = tempfile::TempDir::new().unwrap();
+        let meeting_dir = temporary.path().join("meeting");
+        create_private_dir(&meeting_dir).unwrap();
+        create_private_dir(&meeting_dir.join("transcript")).unwrap();
+        let base_bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": "capture-transcript/1",
+            "source": "fixture",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": [
+                {"start": 0.0, "end": 1.0, "speaker": "Me", "text": "visible"},
+                {"start": 1.0, "end": 2.0, "speaker": "Me", "text": "restored words",
+                 "gated": true, "gate_score": 0.1, "gate_reason": "fixture"},
+                {"start": 2.0, "end": 3.0, "speaker": "Me", "text": "still hidden",
+                 "gated": true, "gate_score": 0.2, "gate_reason": "fixture"}
+            ]
+        }))
+        .unwrap();
+        let base_digest = format!("{:x}", Sha256::digest(&base_bytes));
+        durable_create_new(
+            &meeting_dir.join(format!("transcript/{base_digest}.json")),
+            &base_bytes,
+        )
+        .unwrap();
+        let meeting_id = Uuid::new_v4();
+        let view = TranscriptView {
+            schema: TranscriptViewSchema::V1,
+            meeting_id,
+            base_transcript_sha256: base_digest.clone(),
+            parent_transcript_sha256: base_digest,
+            restored_source_turn_indices: vec![1],
+        };
+        let view_bytes = serde_json::to_vec_pretty(&view).unwrap();
+        let view_relative = format!("transcript/{:x}.json", Sha256::digest(&view_bytes));
+        durable_create_new(&meeting_dir.join(&view_relative), &view_bytes).unwrap();
+        let reference = artifact_ref(&meeting_dir, &view_relative).unwrap();
+
+        let (turns, warnings) = project_current_transcript(
+            &meeting_dir,
+            &meeting_id.to_string(),
+            &reference,
+            &view_bytes,
+        )
+        .unwrap();
+        assert_eq!(turns.len(), 3);
+        assert!(!turns[1].withheld);
+        assert_eq!(turns[1].text, "restored words");
+        assert_eq!(turns[1].speaker.as_deref(), Some("Me"));
+        assert!(turns[2].withheld);
+        assert!(turns[2].text.is_empty());
+        // Only the still-withheld turn is counted in the warning.
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("withheld 1"));
     }
 
     #[test]
