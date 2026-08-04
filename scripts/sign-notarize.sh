@@ -140,4 +140,7 @@ xcrun stapler staple "$DMG"
 spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
 
 "$ROOT/scripts/verify-signed-release.sh" "$APP" "$DMG" "$ADMISSION"
+# Durable checksum receipt: delivery surfaces must copy this file's value,
+# never retype the hash by hand.
+shasum -a 256 "$DMG" | tee "$DMG.sha256"
 echo "DONE: $DMG"
