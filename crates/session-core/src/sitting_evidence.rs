@@ -1074,11 +1074,25 @@ fn write_rehearsal_and_sweep(
 
 /// Finishes a rehearsal's physical deletion. Idempotent; safe to re-run after
 /// any crash because the durable label already exists.
+///
+/// Worker derivation output is swept alongside the raw artifacts: a sitting
+/// abandoned after `sitting.derive` ran but before its admission leaves
+/// `segments.json`/`embeddings.bin` in the work directory, and the rehearsal
+/// label is precisely the authority to delete derivation output — refusing
+/// here would leave the label durable, the sweep failing, and startup
+/// reconciliation quarantining the whole store on every launch. The worker's
+/// own recovery instruction for a disagreeing re-derivation is to abandon, so
+/// this window is a documented path, not a theoretical interleaving.
 fn sweep_rehearsal_work(paths: &SittingPaths) -> Result<(), SittingEvidenceError> {
     if !path_present(&paths.work)? {
         return Ok(());
     }
-    for name in [RAW_AUDIO_NAME, RAW_STAGED_NAME] {
+    for name in [
+        RAW_AUDIO_NAME,
+        RAW_STAGED_NAME,
+        SEGMENTS_FILE,
+        EMBEDDINGS_FILE,
+    ] {
         let path = paths.work.join(name);
         if path_present(&path)? {
             fs::remove_file(&path)?;
@@ -2276,5 +2290,42 @@ mod tests {
                 "the worker derivation artifacts are missing"
             ))
         ));
+    }
+
+    /// The worker's documented recovery for a disagreeing re-derivation is to
+    /// abandon the sitting. That abandonment lands while derivation output
+    /// still sits in the work directory, so the rehearsal sweep must own those
+    /// artifacts too — a sweep that refuses would leave the durable rehearsal
+    /// label pointing at an undeletable directory and fail the whole store's
+    /// startup reconciliation on every launch (review of 409b82d).
+    #[test]
+    fn abandoning_after_derivation_but_before_admission_sweeps_cleanly() {
+        let fixture = fixture();
+        record_through_finalize(&fixture, SID);
+        plant_worker_derivation(&fixture, SID, |_| {});
+
+        abandon_sitting(&fixture.storage, SID, 1_400).unwrap();
+        assert_eq!(
+            sitting_state(&fixture, SID),
+            SittingLifecycleState::Rehearsal
+        );
+        assert!(!work_dir(&fixture.storage, SID).unwrap().exists());
+
+        // The store stays healthy: reconciliation completes and a neighbor
+        // sitting still projects.
+        record_through_segments(&fixture, SID_B, SittingKind::OperatorSitting);
+        reconcile_sitting_evidence(&fixture.storage, 1_500).unwrap();
+        let (_, summaries) = read_sitting_evidence(&fixture.storage).unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert!(
+            summaries
+                .iter()
+                .any(|summary| summary.state == SittingLifecycleState::Rehearsal)
+        );
+        assert!(
+            summaries
+                .iter()
+                .any(|summary| summary.state == SittingLifecycleState::RawRetained)
+        );
     }
 }
