@@ -62,7 +62,9 @@ use crate::enrollment_guidance::{
     DerivedVoiceMaterial, EnrollmentEvidence, MIN_SCORABLE_SECONDS, NegativeSourceEvidence,
     SittingEvidence,
 };
-use crate::storage::{StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory};
+use crate::storage::{
+    StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
+};
 
 const ENROLLMENT_DIR: &str = "enrollment";
 const WORK_DIR: &str = "work";
@@ -556,7 +558,9 @@ pub(crate) fn append_raw_audio(
 ) -> Result<(), SittingEvidenceError> {
     let paths = sitting_paths(storage, sitting_id)?;
     if !path_present(&paths.durable.join(SITTING_FILE))? {
-        return Err(SittingEvidenceError::Refused("the sitting was never started"));
+        return Err(SittingEvidenceError::Refused(
+            "the sitting was never started",
+        ));
     }
     if path_present(&paths.durable.join(CAPTURE_FILE))? {
         return Err(SittingEvidenceError::Refused(
@@ -588,7 +592,9 @@ pub(crate) fn finalize_capture(
 ) -> Result<(), SittingEvidenceError> {
     let paths = sitting_paths(storage, sitting_id)?;
     if !path_present(&paths.durable.join(SITTING_FILE))? {
-        return Err(SittingEvidenceError::Refused("the sitting was never started"));
+        return Err(SittingEvidenceError::Refused(
+            "the sitting was never started",
+        ));
     }
     if path_present(&paths.durable.join(REHEARSAL_FILE))? {
         return Err(SittingEvidenceError::Refused("the sitting is a rehearsal"));
@@ -619,7 +625,10 @@ pub(crate) fn finalize_capture(
         },
         captured_at_epoch_seconds,
     };
-    write_once(&paths.durable.join(CAPTURE_FILE), &canonical_bytes(&record)?)?;
+    write_once(
+        &paths.durable.join(CAPTURE_FILE),
+        &canonical_bytes(&record)?,
+    )?;
     sync_directory(&paths.durable)?;
     Ok(())
 }
@@ -855,7 +864,9 @@ pub(crate) fn abandon_sitting(
 ) -> Result<(), SittingEvidenceError> {
     let paths = sitting_paths(storage, sitting_id)?;
     if !path_present(&paths.durable.join(SITTING_FILE))? {
-        return Err(SittingEvidenceError::Refused("the sitting was never started"));
+        return Err(SittingEvidenceError::Refused(
+            "the sitting was never started",
+        ));
     }
     if path_present(&paths.durable.join(DERIVED_FILE))? {
         return Err(SittingEvidenceError::Refused(
@@ -1208,11 +1219,13 @@ pub(crate) fn reconcile_sitting_evidence(
                 )?;
             }
             SittingLifecycleState::CleanupPending => {
-                let capture = classified.capture.as_ref().ok_or(
-                    SittingEvidenceError::Quarantined(
-                        "a cleanup-pending sitting lost its capture row",
-                    ),
-                )?;
+                let capture =
+                    classified
+                        .capture
+                        .as_ref()
+                        .ok_or(SittingEvidenceError::Quarantined(
+                            "a cleanup-pending sitting lost its capture row",
+                        ))?;
                 run_cleanup(&paths, capture)?;
             }
             SittingLifecycleState::Rehearsal => {
@@ -1265,9 +1278,12 @@ pub(crate) fn read_sitting_evidence(
             .map(|record| scorable_segments(&record.segments))
             .unwrap_or((0, 0.0));
         let derived = if classified.state == SittingLifecycleState::Saved {
-            classified.derived.as_ref().map(|record| DerivedVoiceMaterial {
-                encoder_sha256: record.encoder_sha256.clone(),
-            })
+            classified
+                .derived
+                .as_ref()
+                .map(|record| DerivedVoiceMaterial {
+                    encoder_sha256: record.encoder_sha256.clone(),
+                })
         } else {
             None
         };
@@ -1279,19 +1295,13 @@ pub(crate) fn read_sitting_evidence(
                 scorable_seconds,
                 derived,
             }),
-            SittingKind::NegativeSource => {
-                evidence.negative_sources.push(NegativeSourceEvidence {
-                    source_class: classified
-                        .started
-                        .source_class
-                        .clone()
-                        .unwrap_or_default(),
-                    audio_sha256: capture.raw.sha256.clone(),
-                    scorable_segments: scorable_count,
-                    scorable_seconds,
-                    derived,
-                })
-            }
+            SittingKind::NegativeSource => evidence.negative_sources.push(NegativeSourceEvidence {
+                source_class: classified.started.source_class.clone().unwrap_or_default(),
+                audio_sha256: capture.raw.sha256.clone(),
+                scorable_segments: scorable_count,
+                scorable_seconds,
+                derived,
+            }),
         }
     }
     Ok((evidence, summaries))
@@ -1355,7 +1365,10 @@ mod tests {
     fn a_sitting_saves_only_after_derivation_cleanup_and_absent_work_directory() {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
-        assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::RawRetained);
+        assert_eq!(
+            sitting_state(&fixture, SID),
+            SittingLifecycleState::RawRetained
+        );
         let state = store_derived_material(
             &fixture.storage,
             SID,
@@ -1386,10 +1399,10 @@ mod tests {
         assert_eq!(evidence.sittings.len(), 1);
         assert!(evidence.sittings[0].derived.is_none());
         let status = evaluate_enrollment_evidence(&evidence, Some(ENCODER));
-        assert!(status
-            .shortfalls
-            .iter()
-            .any(|shortfall| matches!(shortfall, EnrollmentShortfall::AwaitingVoiceDerivation { .. })));
+        assert!(status.shortfalls.iter().any(|shortfall| matches!(
+            shortfall,
+            EnrollmentShortfall::AwaitingVoiceDerivation { .. }
+        )));
     }
 
     #[test]
@@ -1405,10 +1418,15 @@ mod tests {
         .unwrap();
         append_raw_audio(&fixture.storage, SID, b"partial bytes").unwrap();
         reconcile_sitting_evidence(&fixture.storage, 2_000).unwrap();
-        assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::Rehearsal);
+        assert_eq!(
+            sitting_state(&fixture, SID),
+            SittingLifecycleState::Rehearsal
+        );
         assert!(!work_dir(&fixture.storage, SID).unwrap().exists());
         let rehearsal: RehearsalRecord = read_canonical(
-            &sitting_dir(&fixture.storage, SID).unwrap().join(REHEARSAL_FILE),
+            &sitting_dir(&fixture.storage, SID)
+                .unwrap()
+                .join(REHEARSAL_FILE),
             RECORD_MAX_BYTES,
         )
         .unwrap();
@@ -1424,7 +1442,10 @@ mod tests {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
         abandon_sitting(&fixture.storage, SID, 3_000).unwrap();
-        assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::Rehearsal);
+        assert_eq!(
+            sitting_state(&fixture, SID),
+            SittingLifecycleState::Rehearsal
+        );
         let (evidence, _) = read_sitting_evidence(&fixture.storage).unwrap();
         assert!(evidence.sittings.is_empty());
         let status = evaluate_enrollment_evidence(&evidence, Some(ENCODER));
@@ -1465,12 +1486,18 @@ mod tests {
             recorded_raw: None,
             labeled_at_epoch_seconds: 3_000,
         };
-        durable_create_new(&paths.durable.join(REHEARSAL_FILE), &canonical_bytes(&record).unwrap())
-            .unwrap();
+        durable_create_new(
+            &paths.durable.join(REHEARSAL_FILE),
+            &canonical_bytes(&record).unwrap(),
+        )
+        .unwrap();
         assert!(paths.work.join(RAW_AUDIO_NAME).exists());
         reconcile_sitting_evidence(&fixture.storage, 4_000).unwrap();
         assert!(!paths.work.exists());
-        assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::Rehearsal);
+        assert_eq!(
+            sitting_state(&fixture, SID),
+            SittingLifecycleState::Rehearsal
+        );
     }
 
     #[test]
@@ -1498,10 +1525,20 @@ mod tests {
             embedding_dim: 192,
             derived_at_epoch_seconds: 1_200,
         };
-        write_once(&paths.durable.join(DERIVED_FILE), &canonical_bytes(&derived).unwrap()).unwrap();
-        assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::CleanupPending);
+        write_once(
+            &paths.durable.join(DERIVED_FILE),
+            &canonical_bytes(&derived).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            sitting_state(&fixture, SID),
+            SittingLifecycleState::CleanupPending
+        );
         let (evidence, _) = read_sitting_evidence(&fixture.storage).unwrap();
-        assert!(evidence.sittings[0].derived.is_none(), "cleanup-pending must not report saved");
+        assert!(
+            evidence.sittings[0].derived.is_none(),
+            "cleanup-pending must not report saved"
+        );
         reconcile_sitting_evidence(&fixture.storage, 5_000).unwrap();
         assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::Saved);
         assert!(!paths.work.exists());
@@ -1511,8 +1548,16 @@ mod tests {
     fn crash_mid_cleanup_with_staged_raw_resumes_to_saved() {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
-        store_derived_material(&fixture.storage, SID, &embeddings_for(5), ENCODER, None, 192, 1_200)
-            .unwrap();
+        store_derived_material(
+            &fixture.storage,
+            SID,
+            &embeddings_for(5),
+            ENCODER,
+            None,
+            192,
+            1_200,
+        )
+        .unwrap();
         // Rewind the terminal receipt to the staged state with a staged file
         // present, simulating a crash between staging and removal.
         let paths = SittingPaths {
@@ -1528,9 +1573,15 @@ mod tests {
             b"synthetic fixture audio bytes",
         )
         .unwrap();
-        durable_replace(&paths.durable.join(CLEANUP_FILE), &canonical_bytes(&receipt).unwrap())
-            .unwrap();
-        assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::CleanupPending);
+        durable_replace(
+            &paths.durable.join(CLEANUP_FILE),
+            &canonical_bytes(&receipt).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            sitting_state(&fixture, SID),
+            SittingLifecycleState::CleanupPending
+        );
         reconcile_sitting_evidence(&fixture.storage, 6_000).unwrap();
         assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::Saved);
     }
@@ -1539,7 +1590,12 @@ mod tests {
     fn raw_loss_without_receipt_or_label_quarantines() {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
-        fs::remove_file(work_dir(&fixture.storage, SID).unwrap().join(RAW_AUDIO_NAME)).unwrap();
+        fs::remove_file(
+            work_dir(&fixture.storage, SID)
+                .unwrap()
+                .join(RAW_AUDIO_NAME),
+        )
+        .unwrap();
         fs::remove_dir(work_dir(&fixture.storage, SID).unwrap()).unwrap();
         let refused = read_sitting_evidence(&fixture.storage);
         assert!(matches!(refused, Err(SittingEvidenceError::Quarantined(_))));
@@ -1550,7 +1606,9 @@ mod tests {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
         fs::write(
-            work_dir(&fixture.storage, SID).unwrap().join(RAW_AUDIO_NAME),
+            work_dir(&fixture.storage, SID)
+                .unwrap()
+                .join(RAW_AUDIO_NAME),
             b"different bytes entirely",
         )
         .unwrap();
@@ -1562,9 +1620,19 @@ mod tests {
     fn tampered_embeddings_quarantine() {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
-        store_derived_material(&fixture.storage, SID, &embeddings_for(5), ENCODER, None, 192, 1_200)
-            .unwrap();
-        let path = sitting_dir(&fixture.storage, SID).unwrap().join(EMBEDDINGS_FILE);
+        store_derived_material(
+            &fixture.storage,
+            SID,
+            &embeddings_for(5),
+            ENCODER,
+            None,
+            192,
+            1_200,
+        )
+        .unwrap();
+        let path = sitting_dir(&fixture.storage, SID)
+            .unwrap()
+            .join(EMBEDDINGS_FILE);
         fs::write(&path, embeddings_for(4)).unwrap();
         let refused = read_sitting_evidence(&fixture.storage);
         assert!(matches!(refused, Err(SittingEvidenceError::Quarantined(_))));
@@ -1585,7 +1653,9 @@ mod tests {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
         fs::write(
-            sitting_dir(&fixture.storage, SID).unwrap().join("extra.json"),
+            sitting_dir(&fixture.storage, SID)
+                .unwrap()
+                .join("extra.json"),
             b"{}",
         )
         .unwrap();
@@ -1613,12 +1683,23 @@ mod tests {
     fn negative_source_projects_with_its_source_class() {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::NegativeSource);
-        store_derived_material(&fixture.storage, SID, &embeddings_for(5), ENCODER, None, 192, 1_200)
-            .unwrap();
+        store_derived_material(
+            &fixture.storage,
+            SID,
+            &embeddings_for(5),
+            ENCODER,
+            None,
+            192,
+            1_200,
+        )
+        .unwrap();
         let (evidence, _) = read_sitting_evidence(&fixture.storage).unwrap();
         assert!(evidence.sittings.is_empty());
         assert_eq!(evidence.negative_sources.len(), 1);
-        assert_eq!(evidence.negative_sources[0].source_class, "public-or-licensed");
+        assert_eq!(
+            evidence.negative_sources[0].source_class,
+            "public-or-licensed"
+        );
         assert!(evidence.negative_sources[0].derived.is_some());
     }
 
@@ -1639,11 +1720,27 @@ mod tests {
     fn two_saved_sittings_and_a_negative_project_into_guidance_counts() {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
-        store_derived_material(&fixture.storage, SID, &embeddings_for(5), ENCODER, None, 192, 1_200)
-            .unwrap();
+        store_derived_material(
+            &fixture.storage,
+            SID,
+            &embeddings_for(5),
+            ENCODER,
+            None,
+            192,
+            1_200,
+        )
+        .unwrap();
         record_through_segments(&fixture, SID_B, SittingKind::NegativeSource);
-        store_derived_material(&fixture.storage, SID_B, &embeddings_for(5), ENCODER, None, 192, 9_000)
-            .unwrap();
+        store_derived_material(
+            &fixture.storage,
+            SID_B,
+            &embeddings_for(5),
+            ENCODER,
+            None,
+            192,
+            9_000,
+        )
+        .unwrap();
         let (evidence, summaries) = read_sitting_evidence(&fixture.storage).unwrap();
         assert_eq!(summaries.len(), 2);
         let status = evaluate_enrollment_evidence(&evidence, Some(ENCODER));
@@ -1661,7 +1758,10 @@ mod tests {
             None,
             1_000,
         );
-        assert!(matches!(refused, Err(SittingEvidenceError::MalformedIdentifier)));
+        assert!(matches!(
+            refused,
+            Err(SittingEvidenceError::MalformedIdentifier)
+        ));
     }
 
     #[test]
@@ -1709,7 +1809,14 @@ mod tests {
     #[test]
     fn overlapping_or_repeated_segments_are_refused() {
         let fixture = fixture();
-        begin_sitting(&fixture.storage, SID, SittingKind::OperatorSitting, None, 1_000).unwrap();
+        begin_sitting(
+            &fixture.storage,
+            SID,
+            SittingKind::OperatorSitting,
+            None,
+            1_000,
+        )
+        .unwrap();
         append_raw_audio(&fixture.storage, SID, b"synthetic fixture audio bytes").unwrap();
         finalize_capture(&fixture.storage, SID, 1_100).unwrap();
         let overlapping = [
@@ -1741,13 +1848,27 @@ mod tests {
     #[test]
     fn a_capture_without_segments_still_projects_as_retained_evidence() {
         let fixture = fixture();
-        begin_sitting(&fixture.storage, SID, SittingKind::OperatorSitting, None, 1_000).unwrap();
+        begin_sitting(
+            &fixture.storage,
+            SID,
+            SittingKind::OperatorSitting,
+            None,
+            1_000,
+        )
+        .unwrap();
         append_raw_audio(&fixture.storage, SID, b"synthetic fixture audio bytes").unwrap();
         finalize_capture(&fixture.storage, SID, 1_100).unwrap();
         reconcile_sitting_evidence(&fixture.storage, 2_000).unwrap();
-        assert_eq!(sitting_state(&fixture, SID), SittingLifecycleState::RawRetained);
+        assert_eq!(
+            sitting_state(&fixture, SID),
+            SittingLifecycleState::RawRetained
+        );
         let (evidence, _) = read_sitting_evidence(&fixture.storage).unwrap();
-        assert_eq!(evidence.sittings.len(), 1, "retained raw audio must never be invisible");
+        assert_eq!(
+            evidence.sittings.len(),
+            1,
+            "retained raw audio must never be invisible"
+        );
         assert_eq!(evidence.sittings[0].scorable_segments, 0);
         assert!(evidence.sittings[0].derived.is_none());
     }
@@ -1756,7 +1877,9 @@ mod tests {
     fn a_symlinked_raw_artifact_quarantines() {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
-        let raw = work_dir(&fixture.storage, SID).unwrap().join(RAW_AUDIO_NAME);
+        let raw = work_dir(&fixture.storage, SID)
+            .unwrap()
+            .join(RAW_AUDIO_NAME);
         let copy = fixture.storage.path().join("diagnostics/decoy-bytes");
         fs::copy(&raw, &copy).unwrap();
         fs::remove_file(&raw).unwrap();
@@ -1769,7 +1892,12 @@ mod tests {
     fn raw_vanished_before_cleanup_quarantines_instead_of_pending_forever() {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
-        fs::remove_file(work_dir(&fixture.storage, SID).unwrap().join(RAW_AUDIO_NAME)).unwrap();
+        fs::remove_file(
+            work_dir(&fixture.storage, SID)
+                .unwrap()
+                .join(RAW_AUDIO_NAME),
+        )
+        .unwrap();
         let outcome = store_derived_material(
             &fixture.storage,
             SID,
@@ -1789,7 +1917,10 @@ mod tests {
         let read = read_sitting_evidence(&fixture.storage);
         assert!(matches!(read, Err(SittingEvidenceError::Quarantined(_))));
         let reconcile = reconcile_sitting_evidence(&fixture.storage, 9_000);
-        assert!(matches!(reconcile, Err(SittingEvidenceError::Quarantined(_))));
+        assert!(matches!(
+            reconcile,
+            Err(SittingEvidenceError::Quarantined(_))
+        ));
     }
 
     #[test]
@@ -1797,7 +1928,9 @@ mod tests {
         let fixture = fixture();
         record_through_segments(&fixture, SID, SittingKind::OperatorSitting);
         fs::write(
-            work_dir(&fixture.storage, SID).unwrap().join(RAW_AUDIO_NAME),
+            work_dir(&fixture.storage, SID)
+                .unwrap()
+                .join(RAW_AUDIO_NAME),
             b"tampered bytes that no longer match the capture row",
         )
         .unwrap();
@@ -1812,6 +1945,11 @@ mod tests {
         );
         assert!(matches!(outcome, Err(SittingEvidenceError::Quarantined(_))));
         // The durable derivation must survive the refused cleanup.
-        assert!(sitting_dir(&fixture.storage, SID).unwrap().join(DERIVED_FILE).exists());
+        assert!(
+            sitting_dir(&fixture.storage, SID)
+                .unwrap()
+                .join(DERIVED_FILE)
+                .exists()
+        );
     }
 }

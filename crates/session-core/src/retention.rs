@@ -622,10 +622,7 @@ pub enum SittingEvidenceAdmissionError {
 impl SittingEvidenceAuthority<'_> {
     fn run<T>(
         &self,
-        operation: impl FnOnce(
-            &StorageRoot,
-        )
-            -> Result<T, crate::sitting_evidence::SittingEvidenceError>,
+        operation: impl FnOnce(&StorageRoot) -> Result<T, crate::sitting_evidence::SittingEvidenceError>,
     ) -> Result<T, SittingEvidenceAdmissionError> {
         let sequence = self.lock.coordination.lock_sequence()?;
         let authority_is_current = || {
@@ -681,7 +678,11 @@ impl SittingEvidenceAuthority<'_> {
         captured_at_epoch_seconds: u64,
     ) -> Result<(), SittingEvidenceAdmissionError> {
         self.run(|storage| {
-            crate::sitting_evidence::finalize_capture(storage, sitting_id, captured_at_epoch_seconds)
+            crate::sitting_evidence::finalize_capture(
+                storage,
+                sitting_id,
+                captured_at_epoch_seconds,
+            )
         })
     }
 
