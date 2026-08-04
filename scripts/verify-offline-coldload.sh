@@ -9,6 +9,7 @@
 set -euo pipefail
 
 APP="${1:?usage: verify-offline-coldload.sh <app-bundle>}"
+APP="$(cd "$APP" && pwd)"   # the exercise runs from inside Resources, so the path must survive the cd
 RES="$APP/Contents/Resources"
 PY="$RES/python-runtime/bin/python3.12"
 [[ -x "$PY" ]] || { echo "offline cold load: BLOCKED — no packaged Python at $PY" >&2; exit 1; }

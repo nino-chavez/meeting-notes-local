@@ -30,8 +30,13 @@ Core Audio process tap, your microphone comes through the same path
 > voiceprint gate wired into that capture but never yet run on a real meeting —
 > its packaged-encoder direction is decided (2026-08-03): ONNX Runtime CPU is the
 > preferred beta candidate, measured ~3.8× smaller as a complete stack and ~13×
-> faster to cold-load with score parity within 5.4 × 10⁻⁷, pending a torch-free
-> Fbank-parity check and a release-lane signed-build proof, with
+> faster to cold-load with score parity within 5.4 × 10⁻⁷; its torch-free
+> Fbank front end measures within 9.7 × 10⁻⁷ of the reference on synthetic and
+> 7.4 × 10⁻⁷ on registered LibriSpeech fixtures, and a signed, notarized
+> encoder-candidate build has passed the release lane's closed verifier,
+> entitlement control, deny-network cold load, and memory-beside-MLX
+> measurement — still pending the gate-classification comparison, a
+> transferred-build Gatekeeper check, and the admission verdict, with
 > PyTorch/SpeechBrain kept only as reference and fallback — and a
 > local summarizer whose
 > evidence graph completes, rechecks and fails closed. Two bounded corpus runs

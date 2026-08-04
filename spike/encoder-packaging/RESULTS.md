@@ -142,6 +142,31 @@ Terms of the decision:
    Gatekeeper acceptance of the transferred build, offline cold load,
    runtime/model digests matching the manifest, and peak memory acceptable
    beside MLX transcription.
+   *Status: measured 2026-08-03 on an actual signed build (the
+   `build-alpha-encoder` lane in `docs/distribution-runbook.md`, source tree
+   at `dc08210`). onnxruntime 1.28.0 came from a hash-pinned `--no-deps` lock
+   and the deterministic `.onnx` export (digest `1d5e288b…9cd`, reproduced
+   byte-identically by two independent exports) was staged, manifest-bound,
+   and re-derived by the closed verifier against its own pinned constant. The
+   built app carried 169 Mach-O files, every one signed with Developer ID
+   under the hardened runtime; the closed verifier passed unsigned, signed,
+   and again after stapling, exercising onnxruntime inside the packaged
+   Python with the entitlement allowlist unchanged — only `python3.12`
+   carries `allow-unsigned-executable-memory`, so onnxruntime needed nothing
+   the llvmlite control would have caught. Apple notarized and stapled both
+   the app and the DMG; local Gatekeeper assessed both as Notarized Developer
+   ID, and the credential-free frozen recheck passed. Offline cold load under
+   a deny-network sandbox — whose bite was first proven by an
+   unsandboxed-success/sandboxed-refusal probe pair — completed in 1.07 s
+   process-cold (0.19 s imports, 0.78 s manifest digest verification, 0.06 s
+   session, 0.04 s first inference). Peak RSS with the encoder session
+   co-resident with MLX transcription of 60 s of synthetic audio: 205 MB with
+   the session live before MLX, 1,925 MB once MLX transcribed, and computing
+   embeddings with both stacks live left that peak unchanged — the encoder
+   stack is roughly 8% of MLX's own footprint and adds nothing to the
+   co-resident high-water mark. Still open: Gatekeeper acceptance of a
+   TRANSFERRED build on another Mac (the manual runbook step), and the
+   admission verdict itself, which is the operator's.*
 
 Until both pass, every product surface says **preferred ONNX candidate**,
 never admitted encoder.
