@@ -64,6 +64,10 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   outline: 2px solid #425049;
   outline-offset: 3px;
 }
+/* Screen changes move focus to the heading so assistive tech announces the
+   new context; that programmatic focus must not paint a ring the way a
+   keyboard Tab would. */
+main:focus, h1:focus, h2:focus { outline: none; }
 
 .app-header {
   min-width: 0;
@@ -145,18 +149,33 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   white-space: nowrap;
 }
 
+/* The scroll container spans the whole window so its scrollbar hugs the
+   window edge like a native document view; each screen carries the centered
+   reading column. The thumb styling below keeps WKWebView from painting a
+   permanent track through the content. */
 main {
-  width: min(800px, calc(100% - 48px));
+  width: 100%;
   min-height: 0;
-  margin: 0 auto;
   padding: clamp(var(--space-8), 6vh, var(--space-12)) 0 var(--space-12);
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
 }
+main::-webkit-scrollbar { width: 9px; }
+main::-webkit-scrollbar-track { background: transparent; }
+main::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: rgba(23, 32, 29, 0.28);
+  background-clip: padding-box;
+}
+main::-webkit-scrollbar-thumb:hover { background-color: rgba(23, 32, 29, 0.45); }
 .screen { display: none; }
-.screen.active { display: block; }
+.screen.active {
+  display: block;
+  width: min(800px, calc(100% - 48px));
+  margin: 0 auto;
+}
 html[data-screen="idle-screen"] main { padding-bottom: var(--space-8); }
 html[data-screen="profile-screen"] main { padding-top: var(--space-8); padding-bottom: var(--space-2); }
 
@@ -189,6 +208,8 @@ h1 {
 }
 .status-card p, .status-card h2 { margin: 0; }
 .status-card h2 { margin-top: var(--space-2); font-size: 1rem; }
+.status-card .status-copy { margin-top: var(--space-1); max-width: 58ch; color: var(--muted); font-size: 0.9rem; line-height: 1.45; }
+.profile-status-card { margin-top: var(--space-8); }
 
 form { margin-top: var(--space-8); }
 fieldset { margin: 0; padding: 0; border: 0; }
@@ -324,8 +345,8 @@ button.library-search-result:hover:not(:disabled), button.library-row:hover:not(
   background: var(--paper);
 }
 .meeting-retention, .meeting-no-note { max-width: 62ch; margin: var(--space-8) 0; padding: var(--space-6) 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.meeting-retention h2, .meeting-no-note h2, .profile-status h2 { margin: var(--space-2) 0 var(--space-3); font-family: ui-serif, Georgia, serif; font-size: clamp(1.75rem, 3vw, 2.1rem); font-weight: 500; letter-spacing: -0.025em; line-height: 1.05; }
-.meeting-retention p, .meeting-no-note p, .profile-status p { max-width: 60ch; margin: var(--space-2) 0 0; color: var(--muted); line-height: 1.55; }
+.meeting-retention h2, .meeting-no-note h2 { margin: var(--space-2) 0 var(--space-3); font-family: ui-serif, Georgia, serif; font-size: clamp(1.75rem, 3vw, 2.1rem); font-weight: 500; letter-spacing: -0.025em; line-height: 1.05; }
+.meeting-retention p, .meeting-no-note p { max-width: 60ch; margin: var(--space-2) 0 0; color: var(--muted); line-height: 1.55; }
 #meeting-retention-consequence, .recording-delete-confirmation p { color: var(--ink); }
 .recording-delete-action { margin-top: var(--space-4); }
 .recording-delete-confirmation { max-width: 58ch; margin-top: var(--space-4); padding: var(--space-4); border: 1px solid #b99b92; border-radius: var(--radius-control); background: #f5ece8; }
@@ -347,10 +368,16 @@ button.library-search-result:hover:not(:disabled), button.library-row:hover:not(
 .profile-screen .lede { margin-top: var(--space-4); }
 .profile-screen .notice { margin: var(--space-4) 0 var(--space-2); padding: var(--space-3); }
 .profile-screen .footnote { margin: 0 0 var(--space-3); }
-.profile-status { max-width: 62ch; margin: var(--space-6) 0 var(--space-4); padding: var(--space-3) 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .profile-requirements { max-width: 62ch; margin: 0 0 var(--space-3); }
 .profile-requirements p:last-child { margin: var(--space-2) 0 0; color: var(--muted); line-height: 1.5; }
 .profile-requirements strong { color: var(--ink); }
+.setup-steps { margin: var(--space-3) 0 0; padding-left: 1.5em; line-height: 1.55; }
+.setup-steps li { max-width: 56ch; margin-top: var(--space-2); }
+.setup-steps li::marker { color: #49645a; font-weight: 720; }
+.profile-recorder { max-width: 62ch; margin: var(--space-6) 0 0; }
+.profile-recorder p { margin: var(--space-2) 0 0; color: var(--muted); line-height: 1.5; }
+#profile-sittings { margin: var(--space-2) 0 0; padding-left: 1.3em; line-height: 1.55; }
+#profile-sittings li { margin-top: var(--space-1); }
 .profile-reset-confirmation { max-width: 58ch; margin: var(--space-4) 0; padding: var(--space-4); border: 1px solid #b99b92; border-radius: var(--radius-control); background: #f5ece8; }
 .profile-reset-confirmation h2 { margin: var(--space-2) 0 var(--space-3); font-family: ui-serif, Georgia, serif; font-size: 1.65rem; font-weight: 500; letter-spacing: -0.02em; }
 .profile-reset-confirmation p { margin: var(--space-2) 0 0; color: var(--ink); line-height: 1.5; }
@@ -377,7 +404,8 @@ footer {
 }
 
 @media (max-width: 640px) {
-  main { width: min(100% - 32px, 800px); padding-top: var(--space-6); }
+  main { padding-top: var(--space-6); }
+  .screen.active { width: min(100% - 32px, 800px); }
   .header-identity { grid-template-columns: 1fr; gap: var(--space-2); }
   .channel-grid { grid-template-columns: 1fr; }
   .library-search-field { flex-direction: column; }

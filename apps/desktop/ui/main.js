@@ -52,8 +52,6 @@ const startMeetingAction = document.querySelector("#start-meeting-action");
 const newMeetingButton = document.querySelector("#new-meeting");
 const recoverButton = document.querySelector("#recover-button");
 const startTransitionError = document.querySelector("#start-transition-error");
-const profileKicker = document.querySelector("#profile-kicker");
-const profileTitle = document.querySelector("#profile-title");
 const profileLede = document.querySelector("#profile-lede");
 const profileStatusTitle = document.querySelector("#profile-status-title");
 const profileStatusCopy = document.querySelector("#profile-status-copy");
@@ -848,67 +846,57 @@ function renderProfile(snapshot) {
   renderEnrollmentGuidance(snapshot);
   // Presence and activation are separate lifecycle facts. An active enrolled
   // profile must never inherit the preserved-legacy copy below, which promises
-  // that Preview will not activate what it found.
+  // that this build will not activate what it found. The heading stays
+  // "Voice profile." in every state — the state lives in the lede and the
+  // status card, so no state ever reads as two competing headlines.
   if (state === "baseline-ready" && snapshot?.profileActive === true) {
-    profileKicker.textContent = "Voice profile · Active";
-    profileTitle.textContent = "A voice profile is active.";
-    profileLede.textContent = "Recording still requires headphones and only you near the microphone.";
-    profileStatusTitle.textContent = "Voice profile is active";
-    profileStatusCopy.textContent = "This profile was admitted by the canonical loader before it was stored. It filters speech that does not match you; it does not name speakers.";
-    profileFootnote.textContent = "Removing it deletes the profile, its calibrated threshold, and its enrolment provenance. Meetings, transcripts, notes, and evidence remain.";
+    profileLede.textContent = "A profile is active. Recording still requires headphones and only you near the microphone.";
+    profileStatusTitle.textContent = "Voice isolation is on";
+    profileStatusCopy.textContent = "This profile passed the app’s final checks before it was stored. It sets aside speech that does not match you; it does not name speakers.";
+    profileFootnote.textContent = "Removing the profile deletes it, its calibrated setting, and its setup records. Meetings, transcripts, notes, and evidence remain.";
     profileSetup.disabled = false;
     profileSetup.textContent = "Reset stored profile";
     profileSetup.dataset.action = "reset";
     return;
   }
   if (state === "baseline-ready" && snapshot?.profilePresent === false) {
-    profileKicker.textContent = "Voice profile · Not set up";
-    profileTitle.textContent = "Voice isolation is off.";
-    profileLede.textContent = "Recording is available under Preview’s one-operator, headphones-required limit.";
-    profileStatusTitle.textContent = "No voice profile is active";
-    profileStatusCopy.textContent = "Private setup storage is ready. Guided voice setup is not available in this build yet.";
-    profileFootnote.textContent = "Opening Settings reads only the cached setup status. It does not open profile, meeting, or transcript content.";
+    profileLede.textContent = "Voice isolation is off. You can record now — one speaker, wearing headphones. A profile will let the app set aside speech that is not yours.";
+    profileStatusTitle.textContent = "No profile is set up";
+    profileStatusCopy.textContent = "Private setup storage is ready. Guided setup is not part of this build yet.";
+    profileFootnote.textContent = "Opening this screen reads only the setup status. It never opens meetings or transcripts.";
     return;
   }
   if (state === "baseline-ready" && snapshot?.profilePresent === true) {
-    profileKicker.textContent = "Voice profile · Stored material found";
-    profileTitle.textContent = "Stored profile material is not active.";
-    profileLede.textContent = "Recording remains available under Preview’s one-operator, headphones-required limit.";
-    profileStatusTitle.textContent = "Stored profile is not active";
-    profileStatusCopy.textContent = "Preview will not activate these bytes. You can remove them through a separate confirmation without changing any meeting.";
-    profileFootnote.textContent = "Opening Settings reads only the cached setup status. Reset is the only action that opens and changes the stored profile slot.";
+    profileLede.textContent = "Stored profile material was found, but it is not active. Recording works the same either way — one speaker, wearing headphones.";
+    profileStatusTitle.textContent = "Stored material is not active";
+    profileStatusCopy.textContent = "This build will not turn these bytes on. You can remove them through a separate confirmation without changing any meeting.";
+    profileFootnote.textContent = "Opening this screen reads only the setup status. Reset is the only action that opens and changes the stored profile slot.";
     profileSetup.disabled = false;
     profileSetup.textContent = "Reset stored profile";
     profileSetup.dataset.action = "reset";
     return;
   }
   if (state === "migration-review-required") {
-    profileKicker.textContent = "Voice profile · Review required";
-    profileTitle.textContent = "A prior profile needs migration review.";
-    profileLede.textContent = "Preview left the stored profile untouched and will not activate it. Recording remains available under the existing one-operator limit.";
-    profileStatusTitle.textContent = "Stored profile is not active";
-    profileStatusCopy.textContent = "Preserve for review adds lifecycle records around the exact stored bytes. It does not activate or change them.";
-    profileFootnote.textContent = "Leaving this screen keeps the stored profile unchanged. Removal will remain a separate confirmed action.";
+    profileLede.textContent = "A profile from an earlier version was found. This build left it untouched and will not turn it on.";
+    profileStatusTitle.textContent = "Earlier profile needs review";
+    profileStatusCopy.textContent = "Preserve for review adds lifecycle records around the exact stored bytes. It does not turn them on or change them.";
+    profileFootnote.textContent = "Leaving this screen keeps the stored profile unchanged. Removal stays a separate confirmed action.";
     profileSetup.disabled = false;
     profileSetup.textContent = "Preserve for review";
     profileSetup.dataset.action = "preserve";
     return;
   }
   if (state === "needs-attention") {
-    profileKicker.textContent = "Voice profile · Needs attention";
-    profileTitle.textContent = "Voice profile storage needs attention.";
-    profileLede.textContent = "Preview did not activate or delete stored profile material. Recording remains available under the existing one-operator limit.";
-    profileStatusTitle.textContent = "Voice isolation remains off";
-    profileStatusCopy.textContent = "Current retained meetings remain readable. Guided setup and reset remain unavailable in this build.";
-    profileFootnote.textContent = "Opening Settings reads only the cached attention state. It does not open profile, meeting, or transcript content.";
+    profileLede.textContent = "Profile storage needs attention. Nothing was turned on or deleted.";
+    profileStatusTitle.textContent = "Storage needs attention";
+    profileStatusCopy.textContent = "Your retained meetings are still readable. Guided setup and reset stay unavailable in this build.";
+    profileFootnote.textContent = "Opening this screen reads only the attention state. It never opens meetings or transcripts.";
     return;
   }
-  profileKicker.textContent = "Voice profile · Needs attention";
-  profileTitle.textContent = "Voice setup status is unavailable.";
-  profileLede.textContent = "This Preview could not read its own voice-setup capability state.";
-  profileStatusTitle.textContent = "Voice isolation is unavailable";
-  profileStatusCopy.textContent = "Recording remains available under the current one-operator limit. Retained meetings remain readable.";
-  profileFootnote.textContent = "Try reopening Settings after the installation check finishes.";
+  profileLede.textContent = "This build could not read its own voice-setup state.";
+  profileStatusTitle.textContent = "Status unavailable";
+  profileStatusCopy.textContent = "Recording stays available under the current one-speaker limit. Retained meetings remain readable.";
+  profileFootnote.textContent = "Try opening Settings again after the installation check finishes.";
 }
 
 function showProfileResetConfirmation() {
@@ -1441,9 +1429,10 @@ async function returnToFindAfterStartError(control) {
 }
 
 for (const field of checks) field.addEventListener("change", updateStartButton);
-retention.addEventListener("change", () => {
-  clearAttemptReview();
-});
+// Changing the retention period never invalidates the attestation checkboxes:
+// consent, headphones, and one-operator are facts about the room, not about
+// how long audio is kept.
+retention.addEventListener("change", updateStartButton);
 
 startForm.addEventListener("submit", async (event) => {
   event.preventDefault();

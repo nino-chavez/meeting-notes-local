@@ -333,9 +333,9 @@ impl PreviewProfileSnapshot {
 /// start. Each names the actual boundary; none invites retrying around it.
 const RECORDER_REASON_RUNTIME_UNKNOWN: &str =
     "The verified runtime identity is not available yet, so a setup recording cannot start.";
-const RECORDER_REASON_NO_ENCODER: &str = "This build's runtime has no admitted speaker encoder, \
-     so a setup recording could not be saved. Recording opens after the preferred ONNX encoder \
-     passes its admission checks.";
+const RECORDER_REASON_NO_ENCODER: &str = "This build does not yet include an approved \
+     voice-measurement model, so a setup recording cannot be saved. Recording opens in a \
+     build where that model has passed its checks.";
 const RECORDER_REASON_RECORDER_UNBUILT: &str =
     "The dedicated sitting recorder is not part of this Preview yet.";
 const RECORDER_REASON_STATUS_UNAVAILABLE: &str =

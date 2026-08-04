@@ -524,7 +524,7 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
 
     assert!(html.contains("id=\"profile-link\""));
     assert!(html.contains("id=\"profile-screen\""));
-    assert!(html.contains("Two short voice sessions, at least one hour apart"));
+    assert!(html.contains("Record two short sessions of you talking, at least an hour apart"));
     assert!(html.contains("it does not name speakers"));
     assert!(html.contains("id=\"profile-setup\" type=\"button\" disabled>Set up voice profile"));
     assert!(script.contains("await invoke(\"preview_profile_snapshot\")"));
@@ -532,7 +532,7 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
     assert!(script.contains("await invoke(\"preview_profile_reset\", { confirmed: true })"));
     assert!(script.contains("baseline-ready"));
     assert!(script.contains("profilePresent"));
-    assert!(script.contains("No voice profile is active"));
+    assert!(script.contains("No profile is set up"));
 
     // Presence and activation are separate lifecycle facts. The active branch
     // must be tested first, so an enrolled profile can never inherit the
@@ -544,7 +544,7 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
         active < preserved,
         "the active-profile branch must precede the preserved-legacy branch"
     );
-    assert!(script.contains("A voice profile is active."));
+    assert!(script.contains("A profile is active."));
 
     // Guided-enrolment guidance is rendered, and only where it can be acted on.
     assert!(html.contains("id=\"profile-next-step\""));
@@ -553,15 +553,15 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
     assert!(script.contains("nextStep"));
     assert!(script.contains("snapshot?.profileActive !== true"));
     assert!(script.contains("migration-review-required"));
-    assert!(script.contains("Recording remains available"));
-    assert!(script.contains("reads only the cached"));
+    assert!(script.contains("Recording stays available"));
+    assert!(script.contains("Opening this screen reads only the"));
     assert!(script.contains("adds lifecycle records around the exact stored bytes"));
     assert!(html.contains("id=\"profile-reset-confirmation\""));
     assert!(html.contains("Meetings, transcripts, notes, evidence, and meeting audio remain"));
     assert!(html.contains("logical app-storage deletion, not forensic erasure"));
     assert!(script.contains("showProfileResetConfirmation"));
     assert!(script.contains("The stored voice profile was deleted"));
-    assert!(html.contains("does not read meeting or transcript content"));
+    assert!(html.contains("It never opens meetings or transcripts"));
     assert!(!script.contains("preview_profile_enroll"));
 
     // The recorder surface lists per-sitting evidence states and names the
@@ -885,7 +885,7 @@ fn metadata_only_search_results_have_no_transcript_action() {
     assert!(!script.contains("button.disabled = metadataOnly;"));
     assert!(script.contains("? \"No transcript was created\""));
     assert!(!styles.contains("var(--serif)"));
-    assert!(styles.contains(".meeting-retention h2, .meeting-no-note h2, .profile-status h2"));
+    assert!(styles.contains(".meeting-retention h2, .meeting-no-note h2"));
     assert!(styles.contains("font-family: ui-serif, Georgia, serif;"));
 }
 

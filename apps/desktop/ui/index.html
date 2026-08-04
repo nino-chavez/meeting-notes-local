@@ -88,17 +88,24 @@
       </section>
 
       <section class="screen profile-screen" id="profile-screen" aria-labelledby="profile-title">
-        <p class="kicker" id="profile-kicker">Voice profile · Checking</p>
-        <h1 id="profile-title">Checking voice setup.</h1>
-        <p class="lede" id="profile-lede">Checking whether this Preview can run guided voice setup. No meeting or profile content is opened.</p>
-        <section class="profile-status" aria-labelledby="profile-status-title">
-          <p class="label">Current status</p>
-          <h2 id="profile-status-title" tabindex="-1">Checking Preview capability</h2>
-          <p id="profile-status-copy">Voice isolation is not active in this Preview.</p>
-        </section>
+        <p class="kicker" id="profile-kicker">Settings</p>
+        <h1 id="profile-title">Voice profile.</h1>
+        <p class="lede" id="profile-lede">Checking whether this build can run guided voice setup.</p>
+        <div class="status-card profile-status-card">
+          <div>
+            <p class="label">Current status</p>
+            <h2 id="profile-status-title" tabindex="-1">Checking</h2>
+            <p class="status-copy" id="profile-status-copy">Voice isolation is not active in this build.</p>
+          </div>
+        </div>
         <section class="profile-requirements" id="profile-requirements">
-          <p class="label">What setup requires</p>
-          <p><strong>Two short voice sessions, at least one hour apart.</strong> You will also play permitted comparison speech and choose between measured options; the app will not choose for you. Temporary setup audio and transcripts will be deleted after the private profile is stored.</p>
+          <p class="label">How setup will work</p>
+          <ol class="setup-steps">
+            <li>Record two short sessions of you talking, at least an hour apart.</li>
+            <li>Play a stretch of speech that is not you — licensed or public audio — so the app can measure the difference.</li>
+            <li>Review the measured options and choose one. Nothing is chosen for you.</li>
+          </ol>
+          <p class="footnote">Setup recordings and their transcripts are deleted once the private profile is stored.</p>
           <p id="profile-next-step" hidden></p>
           <p class="footnote" id="profile-enrollment-gates" hidden></p>
         </section>
@@ -107,8 +114,8 @@
           <p id="profile-recorder-entry">Checking whether a setup recording can start.</p>
           <ul id="profile-sittings" hidden></ul>
         </section>
-        <div class="notice" id="profile-boundary">Preview still requires headphones and only you near the microphone. A voice profile filters speech that does not match you; it does not name speakers or make speaker playback supported.</div>
-        <p class="footnote" id="profile-footnote">Checking stored profile state does not read meeting or transcript content.</p>
+        <div class="notice" id="profile-boundary">Recording requires headphones and only you near the microphone, with or without a profile. A profile sets aside speech that is not yours; it does not name speakers, and speaker playback stays unsupported.</div>
+        <p class="footnote" id="profile-footnote">Opening this screen reads only the setup status. It never opens meetings or transcripts.</p>
         <section class="profile-reset-confirmation" id="profile-reset-confirmation" aria-labelledby="profile-reset-title" hidden>
           <p class="label">Separate confirmation</p>
           <h2 id="profile-reset-title">Delete the stored voice profile?</h2>

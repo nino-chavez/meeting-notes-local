@@ -279,8 +279,8 @@ impl EnrollmentShortfall {
                 captured, so nothing establishes it as a separate session. Record it again."
                 .to_string(),
             Self::TooFewSittings { have, need } => format!(
-                "{have} of {need} voice sessions recorded. A threshold needs speech from \
-                 more than one session before it means anything."
+                "{have} of {need} voice sessions recorded. A setting tuned on one session \
+                 alone cannot be trusted, so the app needs both before it offers one."
             ),
             Self::SittingsTooClose {
                 gap_minutes,
@@ -389,12 +389,11 @@ impl EnrollmentAdvisory {
 /// Rendered beside the state so a surface can never imply that clearing every
 /// deterministic floor completes enrolment.
 pub const GUIDED_ENROLLMENT_GATES: [&str; 3] = [
-    "Recording a dedicated voice session is an operator action on real hardware; this \
-     Preview does not record one yet.",
-    "The measured options come from your own calibration at runtime, and no option is \
-     selected by default.",
-    "Building a profile is refused again by the canonical loader before anything is \
-     stored, so clearing these requirements is not admission.",
+    "Voice sessions are recorded by you, on this Mac. This build cannot record one yet.",
+    "The options you review are measured from your own recordings; none is chosen in \
+     advance.",
+    "Completing these steps does not approve a profile: the app runs its own final \
+     check again before anything is stored.",
 ];
 
 /// The result of evaluating one accumulated evidence set.
