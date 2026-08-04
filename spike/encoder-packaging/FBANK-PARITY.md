@@ -218,10 +218,19 @@ These are open, and each is a reason this measurement is not admission check 1:
 
 - ~~No registered public-audio fixtures.~~ **Closed 2026-08-03**: the LibriSpeech half above,
   operator-approved corpus, digest-registered, deterministic selection rule.
-- **No gate-classification comparison.** The check also requires comparing resulting gate
-  classifications around registered margins. This measures features, embeddings, and scores —
-  it stops short of classifications, because registered operating points do not exist until
-  real calibration material does.
+- **Gate-classification comparison: harness ready, measurement open.** The check also
+  requires comparing resulting gate classifications around registered margins.
+  `bench_gate_agreement.py` now closes the mechanism (see "Gate-classification
+  comparison" below): it derives the full gating chain under both encoders with
+  `speaker_gate.py`'s own math, registers operating points from the torch reference
+  chain, and reports flips, margins, and threshold deltas. Its self-test is a
+  two-sided control (identical chains report zero flips with nonzero off-boundary
+  margins; a bounded perturbation is detected as flips), and the two-process
+  pipeline is smoke-proven end to end on synthetic material against the registered
+  export. What remains is the only thing the harness cannot supply: the operator's
+  two real calibration sittings and attested negative material. Until that
+  measurement runs, the check is not passed and no number from the synthetic smoke
+  may be quoted as admission evidence.
 - **Padded batching is untested.** Variable length is now exercised on real speech (400 to
   2023 frames, shape asserted per clip) and was separately checked by truncation down to 25 ms
   (frame counts 301, 171, 101, 78, 51, 26, 3; residual ≤ 2.37 × 10⁻⁴). What remains untested
@@ -241,6 +250,59 @@ These are open, and each is a reason this measurement is not admission check 1:
 - **The `.onnx` digest still is not bound in a runtime manifest** — carried over from
   `RESULTS.md`, unchanged by this work.
 
+## Gate-classification comparison — the deciding half, awaiting real material
+
+`bench_gate_agreement.py` runs the comparison the check's definition names: gate
+*classifications* around registered operating points, torch reference chain against
+the deployable chain (`worker/fbank.py` + ONNX Runtime on the registered export,
+whose digest it refuses to substitute). It reuses `speaker_gate.py`'s own
+derivation — the same `load_segments`/`load_wav` loaders and slicing arithmetic,
+`enroll`, leave-one-sitting-out held-out scores, `operating_point_choices` — with
+only the embedding callable swapped, so the thing measured is the encoder swap and
+nothing else.
+
+The report separates one structural effect from real disagreement: `calibrate`
+takes each threshold as an observed order statistic, so exactly one reference score
+*equals* the threshold and has zero margin by construction. Any nonzero drift can
+flip that one decision — quantile-on-sample discreteness, not front-end damage —
+so flips are reported as `flips_at_boundary` and `flips_off_boundary`, and margins
+are computed off-boundary. The synthetic end-to-end smoke (2 pseudo-sittings,
+24 negative segments, real ECAPA + registered export) showed exactly that: zero
+off-boundary flips with margins around 3 × 10⁻⁴ against a measured score delta of
+5.5 × 10⁻⁷, and a single boundary flip at one point. Synthetic numbers; not
+admission evidence.
+
+**Operator: the measurement needs your two real sittings.** Record each with the
+existing capture CLI (a sitting is one continuous take; the two must be ≥ 1 h
+apart, different days ideal), plus negative material that is public/licensed
+playback or a knowingly consenting person:
+
+```sh
+# One capture per sitting, and one for the negative material:
+.venv/bin/python spike/dual_capture.py --no-transcribe --out ~/calib/sitting1
+.venv/bin/python spike/dual_capture.py --no-transcribe --out ~/calib/sitting2   # ≥1h later
+.venv/bin/python spike/dual_capture.py --no-transcribe --out ~/calib/negative   # not your voice
+
+# Torch arm (embeds + stores slices; work dir must be OUTSIDE the repo):
+.venv/bin/python spike/encoder-packaging/bench_gate_agreement.py prepare \
+  --calibrate ~/calib/sitting1/mic-segments.json ~/calib/sitting1/mic.wav \
+  --calibrate ~/calib/sitting2/mic-segments.json ~/calib/sitting2/mic.wav \
+  --against public-or-licensed ~/calib/negative/mic-segments.json ~/calib/negative/mic.wav \
+  --work-dir ~/calib/agreement-work
+
+# Torch-free deployable arm against the registered export:
+.venv/bin/python spike/encoder-packaging/bench_gate_agreement.py compare \
+  --work-dir ~/calib/agreement-work \
+  --onnx apps/desktop/vendor/downloads/ecapa-tdnn.onnx \
+  --json-out ~/calib/agreement.json
+
+# The work directory holds waveform slices and embeddings of your voice:
+rm -rf ~/calib/agreement-work
+```
+
+Record the resulting numbers in `RESULTS.md` under check 1; the verdict on what
+they admit is the operator's, not the harness's.
+
 ## Reproduce
 
 ```sh
@@ -249,6 +311,7 @@ FIX=spike/encoder-packaging/fixtures-librispeech
 .venv/bin/python spike/encoder-packaging/prep_features.py ~/.cache/speaker-gate $WORK $FIX
 .venv/bin/python spike/encoder-packaging/export_onnx.py ~/.cache/speaker-gate $WORK/ecapa.onnx
 .venv/bin/python spike/encoder-packaging/bench_fbank_parity.py $WORK/ecapa.onnx $WORK $FIX
+python3 spike/encoder-packaging/bench_gate_agreement.py --self-test
 ```
 
 The first two commands import torch; the third asserts it has not been imported. Omit the

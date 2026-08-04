@@ -135,7 +135,12 @@ Terms of the decision:
    `fixtures-librispeech/manifest.json`), with conversion-only controls at
    4.24 × 10⁻⁷ and 3.74 × 10⁻⁷. The gate-classification comparison around
    registered margins remains open — registered operating points do not exist
-   until real calibration material does — so the check is not passed.*
+   until real calibration material does — so the check is not passed. The
+   comparison harness itself is ready (`bench_gate_agreement.py`: two-process,
+   torch-free deployable arm, registered-export digest enforced, two-sided
+   self-test control, synthetic end-to-end smoke; `FBANK-PARITY.md` records the
+   operator commands), so the operator's two real sittings plus attested
+   negative material are the only remaining input.*
 2. **Release-lane packaging.** The actual signed app built with ONNX Runtime
    and the model must prove: every Mach-O signed, the bundle passes its closed
    verifier, hardened-runtime launch without unnecessary entitlements,

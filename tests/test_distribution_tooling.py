@@ -318,6 +318,13 @@ class DistributionToolingTests(unittest.TestCase):
         )
         signing = source("scripts/sign-notarize.sh")
         self.assertIn('--encoder "$ENCODER_PATH"', signing)
+        # The classification-agreement harness measures the same registered
+        # export; a drifted pin would let it silently measure another artifact.
+        agreement_harness = source("spike/encoder-packaging/bench_gate_agreement.py")
+        self.assertIn(
+            f'EXPECTED_ONNX_SHA256 = "{verifier.EXPECTED_ENCODER_ONNX_SHA256}"',
+            agreement_harness,
+        )
 
         with tempfile.TemporaryDirectory() as temporary:
             resources = Path(temporary)
