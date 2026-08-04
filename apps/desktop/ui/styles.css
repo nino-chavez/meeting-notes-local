@@ -244,6 +244,8 @@ legend { margin-bottom: var(--space-3); }
 .turn-meta time { color: var(--muted); font-variant-numeric: tabular-nums; }
 .turn p { margin: 0; line-height: 1.58; }
 .empty-transcript { padding: var(--space-6) 0; color: var(--muted); }
+.turn.withheld-turn .turn-meta strong { color: var(--muted); }
+.withheld-note { color: var(--muted); font-style: italic; }
 
 .library-search { margin-top: var(--space-8); }
 .library-search > label { display: block; margin-bottom: var(--space-2); color: var(--ink); font-weight: 720; }

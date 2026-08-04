@@ -302,6 +302,24 @@ fn shell_renders_safe_state_before_runtime_preflight() {
 }
 
 #[test]
+fn withheld_turns_render_positionally_without_meeting_text() {
+    let script = include_str!("../../ui/main.js");
+    let styles = include_str!("../../ui/styles.css");
+    assert!(script.contains("turn.withheld"));
+    assert!(script.contains("A voice check withheld this turn's text."));
+    // The withheld branch renders its fixed note and never the turn's text
+    // field: the gate's decision is visible, the withheld words are not.
+    let branch = script
+        .split("if (turn.withheld) {")
+        .nth(1)
+        .and_then(|rest| rest.split("continue;").next())
+        .expect("withheld render branch exists");
+    assert!(!branch.contains("turn.text"));
+    assert!(!branch.contains("appendTurnText"));
+    assert!(styles.contains(".withheld-note"));
+}
+
+#[test]
 fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");

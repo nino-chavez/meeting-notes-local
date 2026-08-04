@@ -221,6 +221,9 @@ struct TranscriptTurn {
     speaker: Option<String>,
     start: f64,
     text: String,
+    // Withheld rows are positional only: the gate's decision is visible, the
+    // withheld words never leave the artifact, so `text` stays empty.
+    withheld: bool,
 }
 
 struct RestoredTranscriptProjection {
@@ -1323,7 +1326,9 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
                     .lock()
                     .map_err(|_| "the runtime identity is unavailable")?;
                 (
-                    runtime.as_ref().map(|runtime| runtime.encoder_sha256.clone()),
+                    runtime
+                        .as_ref()
+                        .map(|runtime| runtime.encoder_sha256.clone()),
                     runtime.as_ref().map(|runtime| runtime.encoder_available),
                 )
             };
@@ -3333,6 +3338,13 @@ fn parse_transcript_projection(bytes: &[u8]) -> Result<(Vec<TranscriptTurn>, Vec
         }
         if turn.gated == Some(true) {
             gated += 1;
+            turns.push(TranscriptTurn {
+                source_turn_index: source_turn_index as u32,
+                speaker: None,
+                start: turn.start,
+                text: String::new(),
+                withheld: true,
+            });
             continue;
         }
         turns.push(TranscriptTurn {
@@ -3340,6 +3352,7 @@ fn parse_transcript_projection(bytes: &[u8]) -> Result<(Vec<TranscriptTurn>, Vec
             speaker: if unattributed { None } else { turn.speaker },
             start: turn.start,
             text: turn.text,
+            withheld: false,
         });
     }
     let mut warnings = Vec::new();
@@ -3917,7 +3930,10 @@ mod tests {
         assert_eq!(raw_retained.state, "baseline-ready");
         // `sittings_recorded` counts every projected sitting; the derivation
         // ledger is what distinguishes raw-retained from saved.
-        assert_eq!(raw_retained.guided_enrollment.sittings_awaiting_derivation, 1);
+        assert_eq!(
+            raw_retained.guided_enrollment.sittings_awaiting_derivation,
+            1
+        );
         assert_eq!(raw_retained.guided_enrollment.sittings_recorded, 1);
 
         // The recorder surface carries the same store read: one raw-retained
@@ -4663,7 +4679,7 @@ mod tests {
     }
 
     #[test]
-    fn transcript_projection_filters_gated_words_without_claiming_a_note() {
+    fn transcript_projection_projects_gated_turns_as_content_free_withheld_rows() {
         let document = br#"{
           "schema":"capture-transcript/1",
           "source":"fixture",
@@ -4677,8 +4693,17 @@ mod tests {
           ]
         }"#;
         let (turns, warnings) = parse_transcript_projection(document).unwrap();
-        assert_eq!(turns.len(), 1);
+        assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].text, "visible");
+        assert!(!turns[0].withheld);
+        // The withheld row is positional only: no words, no speaker authority.
+        assert!(turns[1].withheld);
+        assert!(turns[1].text.is_empty());
+        assert!(turns[1].speaker.is_none());
+        assert_eq!(turns[1].source_turn_index, 1);
+        let payload = serde_json::to_string(&turns[1]).unwrap();
+        assert!(!payload.contains("withheld\":false"));
+        assert!(!payload.contains("gate_score"));
         assert_eq!(warnings.len(), 1);
     }
 
@@ -4710,6 +4735,7 @@ mod tests {
                     speaker: Some("Me".into()),
                     start: 0.0,
                     text: "visible".into(),
+                    withheld: false,
                 }],
                 warnings: Vec::new(),
             },

@@ -393,6 +393,22 @@ function renderTurns(container, warning, turns, warnings, match = null) {
   for (const turn of turns || []) {
     const row = document.createElement("section");
     row.className = "turn";
+    if (turn.withheld) {
+      row.classList.add("withheld-turn");
+      const meta = document.createElement("div");
+      meta.className = "turn-meta";
+      const speaker = document.createElement("strong");
+      speaker.textContent = "Withheld";
+      const time = document.createElement("time");
+      time.textContent = formatElapsed(turn.start || 0);
+      meta.append(speaker, time);
+      const note = document.createElement("p");
+      note.className = "withheld-note";
+      note.textContent = "A voice check withheld this turn's text.";
+      row.append(meta, note);
+      container.append(row);
+      continue;
+    }
     const matchesTurn = Number.isInteger(match?.sourceTurnIndex)
       && turn.sourceTurnIndex === match.sourceTurnIndex;
     if (matchesTurn) {
