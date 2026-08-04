@@ -960,3 +960,34 @@ fn resolver_returns_verified_base_bytes_and_restored_set_for_readers() {
     assert!(base.inspection.restored_source_turn_indices.is_empty());
     assert_eq!(digest_bytes(&base.base_bytes), fixture.base_sha256);
 }
+
+#[test]
+fn resolver_refuses_a_chain_whose_view_bytes_exceed_the_cumulative_cap() {
+    let fixture = Fixture::new(false);
+    // A single canonical view whose restored-index list alone exceeds the
+    // chain byte cap; the cap must trip during the walk, before any
+    // successor-shape rule gets a say.
+    let view = TranscriptView {
+        schema: TranscriptViewSchema::V1,
+        meeting_id: fixture.meeting_id,
+        base_transcript_sha256: fixture.base_sha256.clone(),
+        parent_transcript_sha256: fixture.base_sha256.clone(),
+        restored_source_turn_indices: (0..600_000).collect(),
+    };
+    let view_bytes = serde_json::to_vec_pretty(&view).unwrap();
+    assert!(view_bytes.len() as u64 > MAX_TRANSCRIPT_VIEW_CHAIN_BYTES);
+    let view_digest = digest_bytes(&view_bytes);
+    durable_create_new(
+        &fixture
+            .meeting_dir
+            .join("transcript")
+            .join(format!("{view_digest}.json")),
+        &view_bytes,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        resolve_stored_transcript(&fixture.meeting_dir, fixture.meeting_id, &view_digest),
+        Err(TranscriptArtifactError::TooDeep)
+    ));
+}

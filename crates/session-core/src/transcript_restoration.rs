@@ -30,6 +30,13 @@ use crate::storage::StorageRoot;
 const MAX_TRANSCRIPT_REVISION_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TRANSCRIPT_TURNS: usize = 20_000;
 const MAX_TRANSCRIPT_VIEW_DEPTH: usize = 20_000;
+// A legitimate view is a few hundred bytes plus ~11 bytes per cumulative
+// restored index, so even a fully restored 20,000-turn base stays well under
+// 1 MiB per view. This cap bounds what any single chain walk may read and
+// retain across ALL its view hops, so a hostile chain cannot amplify one
+// meeting into unbounded reader I/O or memory; the base revision keeps its
+// own separate per-file bound.
+const MAX_TRANSCRIPT_VIEW_CHAIN_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestorationDurablePhase {
@@ -775,6 +782,29 @@ pub fn resolve_stored_transcript(
     resolve_stored_transcript_with(&mut read, meeting_id, transcript_sha256)
 }
 
+/// Resolution that serves the head revision from bytes the caller already
+/// read and verified against the meeting record, so the head file is not
+/// read (or budget-charged) twice. The walker still re-verifies the digest
+/// of the primed bytes like any other hop.
+pub fn resolve_stored_transcript_primed(
+    meeting_dir: &Path,
+    meeting_id: Uuid,
+    transcript_sha256: &str,
+    head_bytes: Vec<u8>,
+) -> Result<ResolvedStoredTranscript, TranscriptArtifactError> {
+    let mut primed = Some(head_bytes);
+    let head_digest = transcript_sha256.to_owned();
+    let mut read = |digest: &str| {
+        if digest == head_digest {
+            if let Some(bytes) = primed.take() {
+                return Ok(bytes);
+            }
+        }
+        read_revision(meeting_dir, digest)
+    };
+    resolve_stored_transcript_with(&mut read, meeting_id, transcript_sha256)
+}
+
 /// The same resolution under a caller-supplied byte reader, so budgeted
 /// readers (the library projection) account every hop against their own
 /// limits. Each hop's content address is re-verified here regardless of what
@@ -811,11 +841,12 @@ fn inspect_revision_chain(
     let mut current = transcript_sha256.to_owned();
     let mut seen = BTreeSet::new();
     let mut views = Vec::new();
+    let mut view_bytes_total: u64 = 0;
     let (base_digest, withheld, base_bytes) = loop {
         if !seen.insert(current.clone()) {
             return Err(TranscriptArtifactError::Cyclic);
         }
-        if views.len() > MAX_TRANSCRIPT_VIEW_DEPTH {
+        if views.len() >= MAX_TRANSCRIPT_VIEW_DEPTH {
             return Err(TranscriptArtifactError::TooDeep);
         }
         let bytes = read(&current)?;
@@ -838,6 +869,10 @@ fn inspect_revision_chain(
                 || canonical_bytes(&view).map_err(|_| TranscriptArtifactError::Malformed)? != bytes
             {
                 return Err(TranscriptArtifactError::Malformed);
+            }
+            view_bytes_total = view_bytes_total.saturating_add(bytes.len() as u64);
+            if view_bytes_total > MAX_TRANSCRIPT_VIEW_CHAIN_BYTES {
+                return Err(TranscriptArtifactError::TooDeep);
             }
             let parent = view.parent_transcript_sha256.clone();
             views.push((current, view));
@@ -943,12 +978,16 @@ fn inspect_base_transcript(document: &Value) -> Result<BTreeSet<u32>, Transcript
             Some(_) => return Err(TranscriptArtifactError::Malformed),
             None => false,
         };
+        // An explicit JSON null counts as absent, matching both typed readers,
+        // so the same base bytes get one verdict whether or not a view sits
+        // above them.
+        let gate_field_present = |name: &str| turn.get(name).is_some_and(|value| !value.is_null());
         if !start.is_finite()
             || !end.is_finite()
             || start < 0.0
             || end < start
             || text.len() > 100_000
-            || ((turn.contains_key("gate_score") || turn.contains_key("gate_reason")) && !gated)
+            || ((gate_field_present("gate_score") || gate_field_present("gate_reason")) && !gated)
         {
             return Err(TranscriptArtifactError::Malformed);
         }

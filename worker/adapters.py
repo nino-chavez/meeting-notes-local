@@ -161,81 +161,109 @@ def _base_gated_turn_indices(document: dict) -> set[int]:
     return gated
 
 
+MAX_TRANSCRIPT_VIEW_DEPTH = 20_000
+MAX_TRANSCRIPT_VIEW_CHAIN_BYTES = 4 * 1024 * 1024
+
+
 def _resolve_transcript_revision(
     root: Path,
     meeting_id: str,
     transcript_sha256: str,
-    *,
-    ancestors: frozenset[str] = frozenset(),
 ) -> _ResolvedTranscript:
-    """Resolve a base transcript or a closed transcript-view/1 chain."""
-    transcript_sha256 = content_digest_id(transcript_sha256, "transcript digest")
-    if transcript_sha256 in ancestors:
-        raise AdapterRefused("transcript view chain is cyclic")
-    path = _transcript_path(root, meeting_id, transcript_sha256)
-    try:
-        revision_bytes = read_private_file(
-            path,
-            max_bytes=MAX_TRANSCRIPT_REVISION_BYTES,
-            label="transcript revision",
-        )
-    except StorageRefused as exc:
-        raise AdapterRefused(str(exc)) from None
-    if hashlib.sha256(revision_bytes).hexdigest() != transcript_sha256:
-        raise AdapterRefused("transcript revision changed from its content address")
-    try:
-        document = json.loads(revision_bytes)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise AdapterRefused("transcript revision is not valid UTF-8 JSON") from exc
+    """Resolve a base transcript or a closed transcript-view/1 chain.
 
-    if isinstance(document, dict) and document.get("schema") == "transcript-view/1":
+    Iterative on purpose: recursion would hit CPython's recursion limit far
+    below the contract's depth cap and kill the worker with an exception the
+    protocol loop does not catch. The walk also bounds cumulative view bytes,
+    matching the Rust walker, so a hostile chain cannot amplify one meeting
+    into unbounded reads.
+    """
+    current = content_digest_id(transcript_sha256, "transcript digest")
+    seen: set[str] = set()
+    views: list[dict] = []
+    view_bytes_total = 0
+    while True:
+        if current in seen:
+            raise AdapterRefused("transcript view chain is cyclic")
+        seen.add(current)
+        if len(views) >= MAX_TRANSCRIPT_VIEW_DEPTH:
+            raise AdapterRefused("transcript view chain is too deep")
+        path = _transcript_path(root, meeting_id, current)
         try:
-            view = validate_transcript_view(document)
-        except ProductContractRefused as exc:
+            revision_bytes = read_private_file(
+                path,
+                max_bytes=MAX_TRANSCRIPT_REVISION_BYTES,
+                label="transcript revision",
+            )
+        except StorageRefused as exc:
             raise AdapterRefused(str(exc)) from None
-        if view["meeting_id"] != meeting_id:
-            raise AdapterRefused("transcript view belongs to another meeting")
-        if transcript_view_digest(view) != transcript_sha256:
-            raise AdapterRefused("transcript view bytes disagree with its content address")
-        parent = _resolve_transcript_revision(
-            root,
-            meeting_id,
-            view["parent_transcript_sha256"],
-            ancestors=ancestors | {transcript_sha256},
+        if hashlib.sha256(revision_bytes).hexdigest() != current:
+            raise AdapterRefused("transcript revision changed from its content address")
+        try:
+            document = json.loads(revision_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AdapterRefused("transcript revision is not valid UTF-8 JSON") from exc
+
+        if isinstance(document, dict) and document.get("schema") == "transcript-view/1":
+            try:
+                view = validate_transcript_view(document)
+            except ProductContractRefused as exc:
+                raise AdapterRefused(str(exc)) from None
+            if view["meeting_id"] != meeting_id:
+                raise AdapterRefused("transcript view belongs to another meeting")
+            if transcript_view_digest(view) != current:
+                raise AdapterRefused("transcript view bytes disagree with its content address")
+            view_bytes_total += len(revision_bytes)
+            if view_bytes_total > MAX_TRANSCRIPT_VIEW_CHAIN_BYTES:
+                raise AdapterRefused("transcript view chain is too deep")
+            views.append(view)
+            current = content_digest_id(
+                view["parent_transcript_sha256"], "transcript digest"
+            )
+            continue
+
+        # `load` remains the canonical capture-transcript parser. It is
+        # deliberately invoked only for base bytes; a view stores no meeting
+        # words of its own.
+        try:
+            base_transcript = _load_bounded_base_transcript(revision_bytes)
+        except (KeyError, ValueError, TypeError, OSError) as exc:
+            raise AdapterRefused(f"base transcript is invalid: {exc}") from None
+        withheld = _base_gated_turn_indices(document)
+        base = _ResolvedTranscript(
+            base_path=path,
+            base_sha256=current,
+            base_document=document,
+            base_transcript=base_transcript,
+            restored_source_turn_indices=(),
         )
-        if parent.base_sha256 != view["base_transcript_sha256"]:
+        break
+
+    restored_current: tuple[int, ...] = ()
+    parent_restored: set[int] = set()
+    for view in reversed(views):
+        if view["base_transcript_sha256"] != base.base_sha256:
             raise AdapterRefused("transcript view base differs from its parent chain")
         restored = tuple(view["restored_source_turn_indices"])
-        parent_restored = set(parent.restored_source_turn_indices)
         if (
             not parent_restored < set(restored)
             or len(set(restored) - parent_restored) != 1
             or not set(restored).issuperset(parent_restored)
         ):
             raise AdapterRefused("transcript view is not a one-turn successor")
-        if not set(restored).issubset(_base_gated_turn_indices(parent.base_document)):
+        if not set(restored).issubset(withheld):
             raise AdapterRefused("transcript view restores a source turn that was not withheld")
-        return _ResolvedTranscript(
-            base_path=parent.base_path,
-            base_sha256=parent.base_sha256,
-            base_document=parent.base_document,
-            base_transcript=parent.base_transcript,
-            restored_source_turn_indices=restored,
-        )
+        parent_restored = set(restored)
+        restored_current = restored
 
-    # `load` remains the canonical capture-transcript parser. It is deliberately
-    # invoked only for base bytes; a view stores no meeting words of its own.
-    try:
-        base_transcript = _load_bounded_base_transcript(revision_bytes)
-    except (KeyError, ValueError, TypeError, OSError) as exc:
-        raise AdapterRefused(f"base transcript is invalid: {exc}") from None
-    _base_gated_turn_indices(document)
+    if not views:
+        return base
     return _ResolvedTranscript(
-        base_path=path,
-        base_sha256=transcript_sha256,
-        base_document=document,
-        base_transcript=base_transcript,
-        restored_source_turn_indices=(),
+        base_path=base.base_path,
+        base_sha256=base.base_sha256,
+        base_document=base.base_document,
+        base_transcript=base.base_transcript,
+        restored_source_turn_indices=restored_current,
     )
 
 

@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use icu_normalizer::ComposingNormalizer;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
@@ -954,23 +955,52 @@ fn inspect_meeting(
         let (base_bytes, restored) = if is_view {
             // A restored view is resolved by the audited chain walker; every
             // hop is read under this projection's own byte budget, and the
-            // walker re-verifies each hop's content address itself.
+            // walker re-verifies each hop's content address itself. The head
+            // revision is served from the bytes already read and charged
+            // above, and the rest of the chain draws on a fixed per-meeting
+            // allowance, so one hostile chain overspends into its own
+            // quarantine instead of failing the whole library build.
             let meeting_uuid = Uuid::parse_str(&meeting.meeting_id)
                 .map_err(|_| MeetingInspectionError::Quarantine)?;
             let mut read_failure: Option<MeetingInspectionError> = None;
             let resolved = {
+                let mut primed = Some(bytes);
+                let mut chain_allowance = limits.max_transcript_bytes.saturating_mul(2);
                 let mut read = |digest: &str| {
+                    if digest == current.sha256 {
+                        if let Some(head) = primed.take() {
+                            return Ok(head);
+                        }
+                    }
+                    if chain_allowance == 0 {
+                        read_failure = Some(MeetingInspectionError::Quarantine);
+                        return Err(TranscriptArtifactError::TooDeep);
+                    }
                     let relative = format!("transcript/{digest}.json");
-                    bounded_read(
+                    match bounded_read(
                         &directory.join(&relative),
-                        limits.max_transcript_bytes,
+                        limits.max_transcript_bytes.min(chain_allowance),
                         total,
                         limits,
-                    )
-                    .map_err(|error| {
-                        read_failure = Some(MeetingInspectionError::from(error));
-                        TranscriptArtifactError::Changed
-                    })
+                    ) {
+                        Ok(hop) => {
+                            chain_allowance = chain_allowance.saturating_sub(hop.len() as u64);
+                            Ok(hop)
+                        }
+                        // A chain hop that oversteps its allowance is a
+                        // defective chain, not global budget exhaustion; it
+                        // quarantines this meeting alone. If the shared
+                        // budget is genuinely spent, the next meeting's
+                        // ordinary read still aborts the build.
+                        Err(LibraryReadError::CapacityExceeded) => {
+                            read_failure = Some(MeetingInspectionError::Quarantine);
+                            Err(TranscriptArtifactError::TooDeep)
+                        }
+                        Err(error) => {
+                            read_failure = Some(MeetingInspectionError::from(error));
+                            Err(TranscriptArtifactError::Changed)
+                        }
+                    }
                 };
                 resolve_stored_transcript_with(&mut read, meeting_uuid, &current.sha256)
             };
@@ -987,6 +1017,12 @@ fn inspect_meeting(
                 .collect();
             (resolved.base_bytes, restored)
         } else {
+            // The view branch re-verifies its bytes inside the walker; this
+            // branch must not trust a file that changed between the
+            // artifact_ref hash above and the read here.
+            if format!("{:x}", Sha256::digest(&bytes)) != current.sha256 {
+                return Err(MeetingInspectionError::Quarantine);
+            }
             (bytes, BTreeSet::new())
         };
         let document: Transcript =
@@ -2319,6 +2355,51 @@ mod tests {
             projection.open(&fixture.storage, &withheld).unwrap(),
             OpenedLibraryHit::Withheld { .. }
         ));
+    }
+
+    #[test]
+    fn a_hostile_view_chain_quarantines_its_meeting_without_failing_the_library() {
+        let fixture = Fixture::new();
+        fixture.meeting(
+            "33333333-3333-4333-8333-333333333333",
+            20,
+            &[("good token", false)],
+        );
+        let meeting_id = "44444444-4444-4444-8444-444444444444";
+        let directory = fixture.meeting(
+            meeting_id,
+            10,
+            &[("bad token", false), ("gated token", true)],
+        );
+        let mut record = load_meeting(&directory).unwrap();
+        let base = record.artifacts.current_transcript.clone().unwrap();
+        // The view's parent digest names an oversized file: the chain must
+        // quarantine this one meeting, never abort the whole build.
+        let big = vec![b'x'; (ReadLimits::default().max_transcript_bytes + 1) as usize];
+        let big_digest = format!("{:x}", Sha256::digest(&big));
+        durable_create_new(
+            &directory.join(format!("transcript/{big_digest}.json")),
+            &big,
+        )
+        .unwrap();
+        let view = crate::operations::TranscriptView {
+            schema: crate::operations::TranscriptViewSchema::V1,
+            meeting_id: Uuid::parse_str(meeting_id).unwrap(),
+            base_transcript_sha256: base.sha256.clone(),
+            parent_transcript_sha256: big_digest,
+            restored_source_turn_indices: vec![1],
+        };
+        let view_bytes = serde_json::to_vec_pretty(&view).unwrap();
+        let view_digest = format!("{:x}", Sha256::digest(&view_bytes));
+        let relative = format!("transcript/{view_digest}.json");
+        durable_create_new(&directory.join(&relative), &view_bytes).unwrap();
+        record.artifacts.current_transcript = Some(artifact_ref(&directory, &relative).unwrap());
+        crate::meeting::write_meeting(&directory, &record).unwrap();
+
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert_eq!(projection.search("good").unwrap().len(), 1);
+        assert!(projection.search("bad").unwrap().is_empty());
     }
 
     #[test]

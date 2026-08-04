@@ -77,7 +77,7 @@ use local_meeting_notes_session_core::supervision::{
     ProcessInspector, SupervisionError, SystemGroupSignaler, SystemProcessInspector,
     internal_alpha_operations,
 };
-use local_meeting_notes_session_core::transcript_restoration::resolve_stored_transcript;
+use local_meeting_notes_session_core::transcript_restoration::resolve_stored_transcript_primed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -3308,6 +3308,9 @@ fn load_transcript_projection(
     }
     let path = meeting_dir.join(&reference.relative_path);
     let bytes = read_private_bytes(&path, TRANSCRIPT_MAX_BYTES).map_err(error_text)?;
+    if format!("{:x}", Sha256::digest(&bytes)) != reference.sha256 {
+        return Err("retained transcript bytes changed while opening".into());
+    }
     project_current_transcript(meeting_dir, meeting_id, reference, &bytes)
 }
 
@@ -3335,8 +3338,13 @@ fn project_current_transcript(
         return parse_transcript_projection_with(bytes, &BTreeSet::new());
     }
     let meeting_uuid = Uuid::parse_str(meeting_id).map_err(error_text)?;
-    let resolved = resolve_stored_transcript(meeting_dir, meeting_uuid, &reference.sha256)
-        .map_err(error_text)?;
+    let resolved = resolve_stored_transcript_primed(
+        meeting_dir,
+        meeting_uuid,
+        &reference.sha256,
+        bytes.to_vec(),
+    )
+    .map_err(error_text)?;
     let restored: BTreeSet<u32> = resolved
         .inspection
         .restored_source_turn_indices
@@ -3377,6 +3385,7 @@ fn parse_transcript_projection_with(
                     .is_some_and(|speaker| !matches!(speaker, "Me" | "Them")))
             || ((turn.gate_score.is_some() || turn.gate_reason.is_some())
                 && turn.gated != Some(true))
+            || (!unattributed && turn.gated == Some(true) && turn.speaker.as_deref() != Some("Me"))
         {
             return Err("transcript turn is invalid".into());
         }
@@ -4754,6 +4763,22 @@ mod tests {
         assert!(!payload.contains("withheld\":false"));
         assert!(!payload.contains("gate_score"));
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn channel_gated_turn_not_labeled_me_is_refused() {
+        let document = br#"{
+          "schema":"capture-transcript/1",
+          "source":"fixture",
+          "attribution":"channel",
+          "bleed":null,
+          "voiceprint":null,
+          "capture_health":{},
+          "turns":[
+            {"start":0.0,"end":1.0,"speaker":"Them","text":"withheld","gated":true}
+          ]
+        }"#;
+        assert!(parse_transcript_projection_with(document, &BTreeSet::new()).is_err());
     }
 
     #[test]
