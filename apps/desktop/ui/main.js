@@ -640,7 +640,6 @@ function render(snapshot) {
   document.documentElement.dataset.captureState = capture;
   document.documentElement.dataset.connectionState = "connected";
   headerStatusDot.dataset.state = headerStatusPresentation(snapshot);
-  const preview = snapshot.preview === true;
   releaseBadge.textContent = "Preview";
   renderCaptureAction(snapshot);
   meetingLabel.hidden = !snapshot.meeting_id;
@@ -1424,11 +1423,9 @@ async function returnToFindAfterStartError(control) {
   try {
     const currentCapture = lastSnapshot?.capture;
     const currentReady = lastSnapshot?.startup === "ready"
-      && lastSnapshot?.preview === true
       && ["idle", "transcript-ready"].includes(currentCapture);
     const snapshot = currentReady ? lastSnapshot : await refreshCurrent();
     if (snapshot?.startup !== "ready"
-        || snapshot?.preview !== true
         || !["idle", "transcript-ready"].includes(snapshot.capture)) {
       if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
       return;

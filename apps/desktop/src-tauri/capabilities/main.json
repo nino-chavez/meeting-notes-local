@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "The bundled main window renders local state. It receives no shell, process, filesystem, dialog, or remote-origin permission.",
+  "description": "The bundled main window ships the internal-alpha product surface: transcript-alpha capture commands, retained-meeting Library, exact transcript/title search, content-free voice-profile status, the content-free enrolment evidence listing with its honest recording boundary, explicit preserve-first legacy-profile migration, separately confirmed profile reset, and the reviewed one-meeting audio-deletion boundary. It has no profile activation, enrollment mutation, note generation, generic filesystem, shell, process, dialog, or remote-origin permission.",
   "windows": ["main"],
   "platforms": ["macOS"],
   "permissions": [
@@ -9,6 +9,17 @@
     "allow-start-meeting",
     "allow-stop-meeting",
     "allow-dismiss-meeting",
-    "allow-retry-startup"
+    "allow-retry-startup",
+    "allow-preview-profile-snapshot",
+    "allow-preview-enrollment-surface",
+    "allow-preview-profile-preserve-legacy",
+    "allow-preview-profile-reset",
+    "allow-preview-library-snapshot",
+    "allow-preview-library-search",
+    "allow-preview-library-open-search-result",
+    "allow-preview-library-open-note",
+    "allow-preview-library-open-evidence",
+    "allow-preview-library-open-transcript",
+    "allow-preview-delete-meeting-audio"
   ]
 }

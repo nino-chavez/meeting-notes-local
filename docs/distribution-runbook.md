@@ -40,6 +40,19 @@ presents an automatic note as ready. It requires manual Start and Stop,
 headphones, one operator at the microphone, and nobody else in the room. It is
 not a beta and does not satisfy the automatic-note gate.
 
+The alpha lane's main window carries the reviewed internal-alpha surface
+command set — capture, Library and exact search, content-free voice status,
+preserve-first migration, confirmed reset, and the one-meeting audio-deletion
+boundary — the same list the Preview window grants, with enrollment mutation
+and profile activation absent from both. This was decided 2026-08-04 after the
+0.2.0 coworker-cohort DMG shipped with the shell's record entry and search
+gated on the dev-only preview lane flag, so neither was reachable on any
+machine while the mechanical release suite stayed green. Two pins now hold the
+boundary: `main_window_has_only_named_commands_and_no_generic_capability`
+freezes the exact list, and `shipped_shell_is_permitted_every_command_it_invokes`
+fails any build whose shell invokes a command its window capability does not
+grant. The first fixed cohort version is 0.2.1.
+
 The second lane is the **internal beta** described by the accepted vertical
 slice. It carries `product` runtime admission and remains blocked until the
 private automatic-note admission receipt exists for the exact build and model

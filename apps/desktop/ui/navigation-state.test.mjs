@@ -46,14 +46,14 @@ test("workflow routes advance only while they own the screen", () => {
 });
 
 test("header actions keep one recording control and offer a return to owned workflow states", () => {
-  const idle = headerActionPolicy({ preview: true, startup: "ready", capture: "idle" });
+  const idle = headerActionPolicy({ startup: "ready", capture: "idle" });
   assert.equal(idle.showProductNavigation, true);
   assert.equal(idle.showStart, true);
   assert.equal(idle.showStop, false);
   assert.equal(idle.showWorkflowReturn, false);
 
   const transcript = headerActionPolicy(
-    { preview: true, startup: "ready", capture: "transcript-ready" },
+    { startup: "ready", capture: "transcript-ready" },
     { workflowOwnsRoute: false },
   );
   assert.equal(transcript.showStart, false);
@@ -62,34 +62,34 @@ test("header actions keep one recording control and offer a return to owned work
   assert.equal(transcript.workflowDestination, "transcript-screen");
 
   assert.deepEqual(
-    workflowReturnPolicy({ preview: true, startup: "ready", capture: "transcribing" }),
+    workflowReturnPolicy({ startup: "ready", capture: "transcribing" }),
     { show: true, label: "View progress", destination: "processing-screen" },
   );
   assert.deepEqual(
-    workflowReturnPolicy({ preview: true, startup: "runtime-missing", capture: "idle" }),
+    workflowReturnPolicy({ startup: "runtime-missing", capture: "idle" }),
     { show: true, label: "View issue", destination: "startup-screen" },
   );
   assert.equal(
-    headerActionPolicy({ preview: true, startup: "runtime-missing", capture: "idle" }).showProductNavigation,
+    headerActionPolicy({ startup: "runtime-missing", capture: "idle" }).showProductNavigation,
     false,
   );
   assert.equal(
     headerActionPolicy(
-      { preview: true, startup: "ready", capture: "idle" },
+      { startup: "ready", capture: "idle" },
       { currentScreen: "idle-screen" },
     ).showStart,
     false,
   );
   assert.equal(
     headerActionPolicy(
-      { preview: true, startup: "ready", capture: "idle" },
+      { startup: "ready", capture: "idle" },
       { currentScreen: "meeting-detail-screen" },
     ).showStart,
     true,
   );
   assert.equal(
     headerActionPolicy(
-      { preview: true, startup: "ready", capture: "idle" },
+      { startup: "ready", capture: "idle" },
       { currentScreen: "library-transcript-screen" },
     ).showStart,
     true,
@@ -107,7 +107,7 @@ test("channel and header visual states use only the relevant snapshot facts", ()
 });
 
 test("mutable actions match the admitted capture and startup states", () => {
-  const recording = mutableActionPolicy({ preview: true, startup: "ready", capture: "recording" });
+  const recording = mutableActionPolicy({ startup: "ready", capture: "recording" });
   assert.equal(recording.showProductNavigation, true);
   assert.equal(recording.canStartMeeting, false);
   assert.equal(recording.canSubmitStart, false);
@@ -115,37 +115,37 @@ test("mutable actions match the admitted capture and startup states", () => {
   assert.equal(recording.stopDisabled, false);
 
   const pending = mutableActionPolicy(
-    { preview: true, startup: "ready", capture: "recording" },
+    { startup: "ready", capture: "recording" },
     { stopPending: true },
   );
   assert.equal(pending.stopDisabled, true);
   assert.equal(pending.stopLabel, "Stopping…");
 
-  const stopping = mutableActionPolicy({ preview: true, startup: "ready", capture: "stopping" });
+  const stopping = mutableActionPolicy({ startup: "ready", capture: "stopping" });
   assert.equal(stopping.showStop, true);
   assert.equal(stopping.stopDisabled, true);
   assert.equal(stopping.stopLabel, "Stopping…");
 
-  const processing = mutableActionPolicy({ preview: true, startup: "ready", capture: "transcribing" });
+  const processing = mutableActionPolicy({ startup: "ready", capture: "transcribing" });
   assert.equal(processing.showStop, false);
   assert.equal(processing.canDismissMeeting, false);
 
-  const transcript = mutableActionPolicy({ preview: true, startup: "ready", capture: "transcript-ready" });
+  const transcript = mutableActionPolicy({ startup: "ready", capture: "transcript-ready" });
   assert.equal(transcript.canStartMeeting, true);
   assert.equal(transcript.canDismissMeeting, true);
 
-  const idle = mutableActionPolicy({ preview: true, startup: "ready", capture: "idle" });
+  const idle = mutableActionPolicy({ startup: "ready", capture: "idle" });
   assert.equal(idle.canSubmitStart, true);
   assert.equal(idle.canDismissMeeting, false);
 
-  const recovered = mutableActionPolicy({ preview: true, startup: "ready", capture: "recovered-interrupted" });
+  const recovered = mutableActionPolicy({ startup: "ready", capture: "recovered-interrupted" });
   assert.equal(recovered.canDismissMeeting, true);
 
-  const failure = mutableActionPolicy({ preview: true, startup: "service-timeout", capture: "idle" });
+  const failure = mutableActionPolicy({ startup: "service-timeout", capture: "idle" });
   assert.equal(failure.canRetryStartup, true);
   assert.equal(failure.showProductNavigation, true);
   assert.equal(
-    mutableActionPolicy({ preview: true, startup: "runtime-missing", capture: "idle" }).canRetryStartup,
+    mutableActionPolicy({ startup: "runtime-missing", capture: "idle" }).canRetryStartup,
     true,
   );
 });
@@ -282,7 +282,7 @@ test("Start and Done or Recover share the one dismiss command result", async () 
   const transition = createSingleFlight(async () => {
     dismissals += 1;
     await new Promise((resolve) => { releaseDismiss = resolve; });
-    return { capture: "idle", startup: "ready", preview: true, retention_operational: true };
+    return { capture: "idle", startup: "ready", retention_operational: true };
   });
 
   const routes = createRouteOwnershipGate();
@@ -416,7 +416,7 @@ test("transcript-ready start clears hidden state before owned visible cleanup", 
   const ready = await prepareConsentTransition("transcript-ready", {
     dismiss: async () => {
       events.push("dismiss");
-      return { capture: "idle", startup: "ready", preview: true, retention_operational: true };
+      return { capture: "idle", startup: "ready", retention_operational: true };
     },
     clearHiddenAttempt: () => { events.push("clear-hidden"); },
     afterOwnedDismiss: () => { events.push("clear-visible"); },
@@ -462,7 +462,7 @@ test("route loss after dismissal still clears hidden consent state but not visib
   const ready = await prepareConsentTransition("transcript-ready", {
     dismiss: async () => {
       events.push("dismiss");
-      return { capture: "idle", startup: "ready", preview: true, retention_operational: true };
+      return { capture: "idle", startup: "ready", retention_operational: true };
     },
     ownsRoute: () => false,
     clearHiddenAttempt: () => { events.push("clear-hidden"); },
@@ -481,7 +481,7 @@ test("Done or Recover navigation loss prevents visible cleanup", async () => {
     dismiss: async () => {
       events.push("dismiss");
       routes.advance();
-      return { capture: "idle", startup: "ready", preview: true, retention_operational: true };
+      return { capture: "idle", startup: "ready", retention_operational: true };
     },
     ownsRoute: () => routes.owns(doneOrRecover),
     clearHiddenAttempt: () => { events.push("clear-hidden"); },
@@ -497,7 +497,6 @@ test("Start leaves a successful diagnostic dismissal rendered and only clears hi
   const diagnostic = {
     capture: "idle",
     startup: "diagnostic-written",
-    preview: true,
     retention_operational: false,
   };
   const ready = await prepareConsentTransition("transcript-ready", {
@@ -516,7 +515,6 @@ test("Done or Recover leaves a successful diagnostic dismissal on its startup sc
   const diagnostic = {
     capture: "idle",
     startup: "diagnostic-written",
-    preview: true,
     retention_operational: false,
   };
   const admitted = settleDismissal(diagnostic, {
@@ -677,5 +675,20 @@ test("metadata-only meeting detail is inspectable but never offers transcript te
       fallbackCopy: "Return to Meetings and try again.",
       canOpenTranscript: false,
     },
+  );
+});
+
+test("the release snapshot carries no lane flag and still reaches Start recording", () => {
+  // The 0.2.0 cohort DMG shipped a shell whose record entry and navigation
+  // required a preview-lane flag the release backend never sends, so the
+  // button was unreachable on every machine. The product surface keys off
+  // startup and capture state alone; lanes differ only in which commands
+  // their window capability permits.
+  const shipped = headerActionPolicy({ startup: "ready", capture: "idle" });
+  assert.equal(shipped.showProductNavigation, true);
+  assert.equal(shipped.showStart, true);
+  assert.equal(
+    mutableActionPolicy({ startup: "ready", capture: "idle" }).canStartMeeting,
+    true,
   );
 });

@@ -28,15 +28,14 @@ export function resolvedScreenForSnapshot(snapshot, currentScreen, workflowOwnsR
 }
 
 export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
-  const preview = snapshot?.preview === true;
   const startup = snapshot?.startup || "diagnostic-written";
   const capture = snapshot?.capture || "idle";
   const startupReady = startup === "ready";
   const stopping = capture === "stopping";
   const recording = capture === "recording";
   return {
-    showProductNavigation: preview,
-    canStartMeeting: preview && startupReady
+    showProductNavigation: true,
+    canStartMeeting: startupReady
       && ["idle", "transcript-ready"].includes(capture),
     canSubmitStart: startupReady && capture === "idle",
     canDismissMeeting: startupReady
@@ -352,7 +351,6 @@ export function acceptAuthoritativeSnapshot(snapshot, actions) {
 export function isDismissalReadySnapshot(snapshot) {
   return snapshot?.capture === "idle"
     && snapshot?.startup === "ready"
-    && snapshot?.preview === true
     && snapshot?.retention_operational !== false;
 }
 

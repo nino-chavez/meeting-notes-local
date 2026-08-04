@@ -65,6 +65,10 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
     assert_eq!(capability["windows"], serde_json::json!(["main"]));
+    // The shipped internal-alpha surface: the same reviewed command set the
+    // Preview window carries, decided 2026-08-04 after the 0.2.0 cohort DMG
+    // proved the narrower list left the shell without record or search.
+    // Enrollment mutation and profile activation remain absent from both.
     assert_eq!(
         capability["permissions"],
         serde_json::json!([
@@ -72,7 +76,18 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-start-meeting",
             "allow-stop-meeting",
             "allow-dismiss-meeting",
-            "allow-retry-startup"
+            "allow-retry-startup",
+            "allow-preview-profile-snapshot",
+            "allow-preview-enrollment-surface",
+            "allow-preview-profile-preserve-legacy",
+            "allow-preview-profile-reset",
+            "allow-preview-library-snapshot",
+            "allow-preview-library-search",
+            "allow-preview-library-open-search-result",
+            "allow-preview-library-open-note",
+            "allow-preview-library-open-evidence",
+            "allow-preview-library-open-transcript",
+            "allow-preview-delete-meeting-audio"
         ])
     );
     assert!(capability.get("remote").is_none());
@@ -82,6 +97,50 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             !serialized.contains(forbidden),
             "forbidden capability {forbidden}"
         );
+    }
+}
+
+#[test]
+fn shipped_shell_is_permitted_every_command_it_invokes() {
+    // The 0.2.0 cohort DMG proved the failure mode this pins: the shell is one
+    // artifact shared by both lanes, and it shipped invoking commands the main
+    // window's capability never granted — record and search were unreachable on
+    // every machine while the mechanical release suite stayed green. Every
+    // command the shell invokes must be permitted by BOTH window capabilities.
+    let script = include_str!("../../ui/main.js");
+    let mut invoked: Vec<String> = script
+        .match_indices("invoke(\"")
+        .map(|(at, _)| {
+            let rest = &script[at + "invoke(\"".len()..];
+            rest[..rest.find('"').expect("unterminated invoke name")].to_string()
+        })
+        .collect();
+    invoked.sort();
+    invoked.dedup();
+    assert!(
+        invoked.iter().any(|command| command == "start_meeting"),
+        "the shipped shell no longer reaches Start recording at all"
+    );
+    for (name, source) in [
+        ("main", include_str!("../capabilities/main.json")),
+        ("preview", include_str!("../capabilities/preview.json")),
+    ] {
+        let capability: Value = serde_json::from_str(source).unwrap();
+        let permissions: Vec<String> = capability["permissions"]
+            .as_array()
+            .expect("permission list")
+            .iter()
+            .map(|permission| permission.as_str().expect("permission name").to_string())
+            .collect();
+        for command in &invoked {
+            let needed = format!("allow-{}", command.replace('_', "-"));
+            assert!(
+                permissions.contains(&needed),
+                "ui/main.js invokes `{command}` but capabilities/{name}.json \
+                 grants no `{needed}`; that window renders a control that \
+                 cannot work"
+            );
+        }
     }
 }
 

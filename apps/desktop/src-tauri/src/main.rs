@@ -22,7 +22,6 @@ mod manual_delete_facade;
 // the operator widens the packaged admission; the commands stay unregistered.
 mod product_coordinator;
 
-#[cfg(any(feature = "preview-surface", test))]
 use manual_delete_facade::{
     AudioDeletionReview, ManualAudioDeletionFacadeError, ManualAudioDeletionFacadeOutcome,
     ManualAudioDeletionUiArgs,
@@ -41,11 +40,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use local_meeting_notes_session_core::diagnostic::write_private_diagnostic;
-#[cfg(any(feature = "preview-surface", test))]
 use local_meeting_notes_session_core::enrollment_guidance::{
     EnrollmentEvidence, GuidedEnrollmentStatus, evaluate_enrollment_evidence,
 };
-#[cfg(any(feature = "preview-surface", test))]
 use local_meeting_notes_session_core::meeting::resolve_artifact;
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
@@ -53,7 +50,7 @@ use local_meeting_notes_session_core::meeting::{
     retention_policy_sha256, write_meeting,
 };
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::profile_lifecycle::ProfileLifecycleError;
 use local_meeting_notes_session_core::protocol::{Operation, WorkerResult};
 use local_meeting_notes_session_core::recovery::{
@@ -65,7 +62,7 @@ use local_meeting_notes_session_core::reducer::{
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, RetentionOutcome, execute_due_retention_excluding, meeting_dir,
 };
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::retention::{
     ProfileEnrollmentWorker, ProfileEnrollmentWorkerError, ProfileLifecycleAdmissionError,
     SittingEvidenceAdmissionError,
@@ -111,12 +108,9 @@ struct ApplicationState {
     command_lock: Mutex<()>,
     app_data_writer_lock: Arc<Mutex<Option<AppDataWriterLock>>>,
     retention_started: AtomicBool,
-    #[cfg(any(feature = "preview-surface", test))]
-    preview_library: Mutex<Option<library_reader::LibraryReader>>,
-    #[cfg(any(feature = "preview-surface", test))]
-    preview_profile: Mutex<PreviewProfileSnapshot>,
-    #[cfg(any(feature = "preview-surface", test))]
-    preview_enrollment: Mutex<PreviewEnrollmentSurface>,
+        preview_library: Mutex<Option<library_reader::LibraryReader>>,
+        preview_profile: Mutex<PreviewProfileSnapshot>,
+        preview_enrollment: Mutex<PreviewEnrollmentSurface>,
 }
 
 impl Default for ApplicationState {
@@ -130,12 +124,9 @@ impl Default for ApplicationState {
             command_lock: Mutex::new(()),
             app_data_writer_lock: Arc::new(Mutex::new(None)),
             retention_started: AtomicBool::new(false),
-            #[cfg(any(feature = "preview-surface", test))]
-            preview_library: Mutex::new(None),
-            #[cfg(any(feature = "preview-surface", test))]
-            preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
-            #[cfg(any(feature = "preview-surface", test))]
-            preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
+                        preview_library: Mutex::new(None),
+                        preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
+                        preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
         }
     }
 }
@@ -177,7 +168,6 @@ impl AppModel {
         AppSnapshot {
             startup: self.reducer.startup(),
             admission: self.admission.clone(),
-            preview: cfg!(feature = "preview-surface"),
             retention_operational: self.retention_operational,
             capture: self.reducer.capture(),
             meeting_id: self.meeting_id.clone(),
@@ -207,7 +197,6 @@ impl AppModel {
 struct AppSnapshot {
     startup: StartupState,
     admission: String,
-    preview: bool,
     retention_operational: bool,
     capture: CaptureState,
     meeting_id: Option<String>,
@@ -238,7 +227,6 @@ struct RestoredTranscriptProjection {
     warnings: Vec<String>,
 }
 
-#[cfg(feature = "preview-surface")]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewLibraryTranscript {
@@ -258,7 +246,6 @@ struct PreviewLibraryTranscript {
 /// enrolled profile is present and active. Collapsing the two would let the
 /// surface describe a live profile as "stored material Preview will not
 /// activate", which is the exact reassurance this product must not get wrong.
-#[cfg(any(feature = "preview-surface", test))]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewProfileSnapshot {
@@ -268,7 +255,6 @@ struct PreviewProfileSnapshot {
     guided_enrollment: GuidedEnrollmentStatus,
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 impl PreviewProfileSnapshot {
     /// The empty-evidence evaluation used wherever the lifecycle could not
     /// answer: it truthfully reports `blocked` with the first enforced step.
@@ -339,24 +325,19 @@ impl PreviewProfileSnapshot {
 
 /// Content-free sentences for why the dedicated sitting recorder cannot
 /// start. Each names the actual boundary; none invites retrying around it.
-#[cfg(any(feature = "preview-surface", test))]
 const RECORDER_REASON_RUNTIME_UNKNOWN: &str =
     "The verified runtime identity is not available yet, so a setup recording cannot start.";
-#[cfg(any(feature = "preview-surface", test))]
 const RECORDER_REASON_NO_ENCODER: &str = "This build's runtime has no admitted speaker encoder, \
      so a setup recording could not be saved. Recording opens after the preferred ONNX encoder \
      passes its admission checks.";
-#[cfg(any(feature = "preview-surface", test))]
 const RECORDER_REASON_RECORDER_UNBUILT: &str =
     "The dedicated sitting recorder is not part of this Preview yet.";
-#[cfg(any(feature = "preview-surface", test))]
 const RECORDER_REASON_STATUS_UNAVAILABLE: &str =
     "Voice profile status is unavailable, so a setup recording cannot start.";
 
 /// One recorded sitting, content-free: an identifier, what kind of material
 /// it is, and where it sits in the evidence lifecycle. No audio digest,
 /// timing, or transcript-derived value crosses this surface.
-#[cfg(any(feature = "preview-surface", test))]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewSittingSummary {
@@ -370,7 +351,6 @@ struct PreviewSittingSummary {
 /// unavailable — with the reason named — until the encoder is admitted and a
 /// real recorder exists; the sittings list is the durable evidence store's
 /// projection, so the surface can already show what the lifecycle holds.
-#[cfg(any(feature = "preview-surface", test))]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewEnrollmentSurface {
@@ -379,7 +359,6 @@ struct PreviewEnrollmentSurface {
     sittings: Vec<PreviewSittingSummary>,
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 impl PreviewEnrollmentSurface {
     fn unavailable() -> Self {
         Self {
@@ -390,7 +369,7 @@ impl PreviewEnrollmentSurface {
     }
 }
 
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 fn sitting_kind_label(
     kind: local_meeting_notes_session_core::sitting_evidence::SittingKind,
 ) -> &'static str {
@@ -401,7 +380,7 @@ fn sitting_kind_label(
     }
 }
 
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 fn sitting_state_label(
     state: local_meeting_notes_session_core::sitting_evidence::SittingLifecycleState,
 ) -> &'static str {
@@ -437,7 +416,6 @@ struct StorageContext {
     diagnostics: PathBuf,
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn with_meeting_storage_sequence<T>(
     coordination: &MeetingStorageCoordination,
     operation: impl FnOnce(&HashSet<String>) -> T,
@@ -449,7 +427,6 @@ fn with_meeting_storage_sequence<T>(
     Ok(response)
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn preview_storage_clone(state: &ApplicationState) -> Result<StorageRoot, ()> {
     state
         .storage
@@ -460,7 +437,6 @@ fn preview_storage_clone(state: &ApplicationState) -> Result<StorageRoot, ()> {
         .ok_or(())
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn with_preview_library_invalidated<T>(
     state: &ApplicationState,
     operation: impl FnOnce() -> T,
@@ -486,8 +462,7 @@ impl ApplicationState {
             .ok_or_else(|| "the app-data writer lock is unavailable".to_string())
     }
 
-    #[cfg(any(feature = "preview-surface", test))]
-    fn with_preview_library<T>(
+        fn with_preview_library<T>(
         &self,
         unavailable: impl Fn() -> T,
         operation: impl FnOnce(&mut library_reader::LibraryReader, &HashSet<String>) -> T,
@@ -584,13 +559,13 @@ enum WorkerCallError {
     Supervisor(String),
 }
 
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 #[allow(dead_code)] // registered only when guided enrollment owns a reviewed Preview command
 struct StrictProfileEnrollmentWorker<'a> {
     state: &'a ApplicationState,
 }
 
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 impl ProfileEnrollmentWorker for StrictProfileEnrollmentWorker<'_> {
     fn inspect_candidate(
         &self,
@@ -619,7 +594,8 @@ impl ProfileEnrollmentWorker for StrictProfileEnrollmentWorker<'_> {
     }
 }
 
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
+#[allow(dead_code)] // reached only through StrictProfileEnrollmentWorker, same registration gate
 fn profile_worker_digest(
     state: &ApplicationState,
     operation: Operation,
@@ -1056,13 +1032,11 @@ fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
     Ok(snapshot)
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reader::LibrarySnapshot {
     preview_library_snapshot_for(&state)
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn preview_library_snapshot_for(state: &ApplicationState) -> library_reader::LibrarySnapshot {
     let Ok(storage) = preview_storage_clone(state) else {
         return library_reader::LibraryReader::unavailable_snapshot();
@@ -1086,7 +1060,6 @@ fn preview_library_snapshot_for(state: &ApplicationState) -> library_reader::Lib
     .unwrap_or_else(|_| library_reader::LibraryReader::unavailable_snapshot())
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_profile_snapshot(state: State<'_, ApplicationState>) -> PreviewProfileSnapshot {
     preview_profile_snapshot_for(&state)
@@ -1095,13 +1068,11 @@ fn preview_profile_snapshot(state: State<'_, ApplicationState>) -> PreviewProfil
 /// Read-only recorder surface: the cached evidence-store projection plus the
 /// honest recording boundary. Preview gains no enrolment mutation through
 /// this — starting, deriving, or abandoning a sitting stays ungranted.
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_enrollment_surface(state: State<'_, ApplicationState>) -> PreviewEnrollmentSurface {
     preview_enrollment_surface_for(&state)
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn preview_enrollment_surface_for(state: &ApplicationState) -> PreviewEnrollmentSurface {
     state
         .preview_enrollment
@@ -1110,7 +1081,6 @@ fn preview_enrollment_surface_for(state: &ApplicationState) -> PreviewEnrollment
         .unwrap_or_else(|_| PreviewEnrollmentSurface::unavailable())
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_profile_preserve_legacy(
     state: State<'_, ApplicationState>,
@@ -1118,7 +1088,6 @@ fn preview_profile_preserve_legacy(
     preview_profile_preserve_legacy_for(&state)
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_profile_reset(
     confirmed: bool,
@@ -1127,7 +1096,6 @@ fn preview_profile_reset(
     preview_profile_reset_for(&state, confirmed)
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn preview_profile_snapshot_for(state: &ApplicationState) -> PreviewProfileSnapshot {
     state
         .preview_profile
@@ -1136,7 +1104,7 @@ fn preview_profile_snapshot_for(state: &ApplicationState) -> PreviewProfileSnaps
         .unwrap_or_else(|_| PreviewProfileSnapshot::unavailable())
 }
 
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 fn preview_profile_preserve_legacy_for(
     state: &ApplicationState,
 ) -> Result<PreviewProfileSnapshot, String> {
@@ -1220,7 +1188,7 @@ fn preview_profile_preserve_legacy_for(
     }
 }
 
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 fn preview_profile_reset_for(
     state: &ApplicationState,
     confirmed: bool,
@@ -1303,7 +1271,7 @@ fn preview_profile_reset_for(
     }
 }
 
-#[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+#[cfg(target_os = "macos")]
 fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &'static str> {
     // Reset first so any refusal below leaves the recorder surface honestly
     // unavailable instead of retaining a stale sittings list.
@@ -1423,7 +1391,6 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
     }
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_search(
     query: String,
@@ -1455,7 +1422,6 @@ fn preview_library_search(
     response
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_open_search_result(
     handle: String,
@@ -1476,7 +1442,6 @@ fn preview_library_open_search_result(
     )
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_open_note(
     handle: String,
@@ -1488,7 +1453,6 @@ fn preview_library_open_note(
     )
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewAudioDeletionResponse {
@@ -1497,7 +1461,6 @@ struct PreviewAudioDeletionResponse {
     message: String,
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn unavailable_preview_audio_deletion() -> PreviewAudioDeletionResponse {
     PreviewAudioDeletionResponse {
         state: "unavailable",
@@ -1506,14 +1469,12 @@ fn unavailable_preview_audio_deletion() -> PreviewAudioDeletionResponse {
     }
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 #[derive(Debug, PartialEq, Eq)]
 struct PreviewAudioDeletionGateRefusal {
     state: &'static str,
     message: &'static str,
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn with_preview_audio_deletion_gate<T>(
     startup: StartupState,
     capture: CaptureState,
@@ -1534,7 +1495,6 @@ fn with_preview_audio_deletion_gate<T>(
     Ok(operation())
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_delete_meeting_audio(
     handle: String,
@@ -1543,7 +1503,6 @@ fn preview_delete_meeting_audio(
     preview_delete_meeting_audio_for(handle, &state)
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn preview_delete_meeting_audio_for(
     handle: String,
     state: &ApplicationState,
@@ -1652,7 +1611,6 @@ fn preview_delete_meeting_audio_for(
     }
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_open_evidence(
     handle: String,
@@ -1665,7 +1623,6 @@ fn preview_library_open_evidence(
     )
 }
 
-#[cfg(feature = "preview-surface")]
 #[tauri::command]
 fn preview_library_open_transcript(
     handle: String,
@@ -1716,7 +1673,6 @@ fn preview_library_open_transcript(
     )
 }
 
-#[cfg(any(feature = "preview-surface", test))]
 fn load_bound_preview_transcript_projection(
     storage: &StorageRoot,
     meeting_id: &str,
@@ -1778,27 +1734,16 @@ fn main() {
             stop_meeting,
             dismiss_meeting,
             retry_startup,
-            #[cfg(feature = "preview-surface")]
             preview_library_snapshot,
-            #[cfg(feature = "preview-surface")]
             preview_profile_snapshot,
-            #[cfg(feature = "preview-surface")]
             preview_enrollment_surface,
-            #[cfg(feature = "preview-surface")]
             preview_profile_preserve_legacy,
-            #[cfg(feature = "preview-surface")]
             preview_profile_reset,
-            #[cfg(feature = "preview-surface")]
             preview_library_search,
-            #[cfg(feature = "preview-surface")]
             preview_library_open_search_result,
-            #[cfg(feature = "preview-surface")]
             preview_library_open_note,
-            #[cfg(feature = "preview-surface")]
             preview_library_open_evidence,
-            #[cfg(feature = "preview-surface")]
             preview_library_open_transcript,
-            #[cfg(feature = "preview-surface")]
             preview_delete_meeting_audio
         ])
         .setup(|app| {
@@ -1820,8 +1765,7 @@ fn main() {
 
 fn initialize_application(app: AppHandle, retry: bool) {
     let state = app.state::<ApplicationState>();
-    #[cfg(any(feature = "preview-surface", test))]
-    if let Ok(mut profile) = state.preview_profile.lock() {
+        if let Ok(mut profile) = state.preview_profile.lock() {
         *profile = PreviewProfileSnapshot::unavailable();
     }
     {
@@ -1861,7 +1805,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
         finish_startup_failure(&state, retry, StartupFailure::Diagnostic, &error);
         return;
     }
-    #[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+    #[cfg(target_os = "macos")]
     if let Err(error) = reconcile_preview_profile_lifecycle(&state) {
         finish_startup_failure(&state, retry, StartupFailure::Diagnostic, error);
         return;
@@ -2119,7 +2063,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
     // so its snapshot could not name the manifest's encoder digest. Refresh
     // once the digest is known; on failure the reconcile itself has already
     // reset the cached snapshot to `unavailable`, which is the honest surface.
-    #[cfg(all(target_os = "macos", any(feature = "preview-surface", test)))]
+    #[cfg(target_os = "macos")]
     let _ = reconcile_preview_profile_lifecycle(&state);
     let mut model = state.model.lock().expect("application model lock");
     model.admission = runtime.admission;

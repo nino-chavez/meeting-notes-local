@@ -39,8 +39,17 @@ to prove a real meeting path.
 
 ## Current milestone plan
 
-Status as of 2026-08-03. ETA ranges assume timely human review and no major reset in
-automatic-note quality. Passing tests are bounded evidence; they do not advance a
+Status as of 2026-08-04. ETA ranges assume timely human review and no major reset in
+automatic-note quality.
+
+The first coworker install (2026-08-04) surfaced a release-surface defect: the
+0.2.0 cohort DMG's shell gated its record entry and search on the dev-only
+preview lane flag, so neither was reachable on any machine while the mechanical
+release suite stayed green. The main window now ships the reviewed
+internal-alpha surface command set (0.2.1), and a shell-contract pin fails any
+build whose shell invokes a command its window capability does not grant. The
+install's Gatekeeper and drag-install outcomes stand as transfer evidence;
+capture, permission, and recovery evidence needs the rebuilt 0.2.1 DMG. Passing tests are bounded evidence; they do not advance a
 human gate.
 
 | Wave | Current status and active stream | Join or exit | Human gate | ETA |
