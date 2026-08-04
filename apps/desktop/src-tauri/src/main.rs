@@ -1059,7 +1059,7 @@ fn drive_sitting_helper(
         while events_open && stream_open {
             match helper.events.try_recv() {
                 Ok(CaptureStreamItem::Event(event)) => {
-                    handle_sitting_event(event, &mut receipt)?;
+                    handle_sitting_event(event, &mut receipt, stop_deadline.is_some())?;
                 }
                 Ok(CaptureStreamItem::ProtocolFailure) => {
                     return Err(sitting_failure(
@@ -1119,7 +1119,9 @@ fn drive_sitting_helper(
             break;
         }
         match helper.events.recv_timeout(remaining) {
-            Ok(CaptureStreamItem::Event(event)) => handle_sitting_event(event, &mut receipt)?,
+            Ok(CaptureStreamItem::Event(event)) => {
+                handle_sitting_event(event, &mut receipt, stop_deadline.is_some())?
+            }
             Ok(CaptureStreamItem::ProtocolFailure) => {
                 return Err(sitting_failure(
                     "sitting_event_invalid",
@@ -1135,11 +1137,10 @@ fn drive_sitting_helper(
     helper
         .finish_cleanly(Instant::now() + Duration::from_secs(5))
         .map_err(|error| sitting_failure("sitting_helper_exit_failed", error))?;
-    // The helper is not admission authority: a helper that finalizes and
-    // exits on its own initiative — no Stop ever sent — could hand back a
-    // self-consistent receipt for a take it chose to truncate. Admission
-    // requires the parent to have requested Stop, matching the documented
-    // contract.
+    // The stream must not end before the parent requested Stop. A receipt
+    // arriving pre-Stop is already refused at the event itself, so reaching
+    // here with no Stop sent means the helper simply walked away — also not
+    // its call to make.
     if stop_deadline.is_none() {
         return Err(sitting_failure(
             "sitting_finalize_without_stop",
@@ -1164,15 +1165,31 @@ fn drive_sitting_helper(
 }
 
 /// The only events a sitting helper may emit after recording begins: its own
-/// mic-only finalized receipt (once), or a fault. The meeting-shaped two-leg
-/// receipt and repeated lifecycle events are protocol violations.
+/// mic-only finalized receipt (once, and only after the parent sent Stop),
+/// or a fault. The meeting-shaped two-leg receipt and repeated lifecycle
+/// events are protocol violations.
+///
+/// A receipt observed while `stop_requested` is false is refused outright:
+/// the driver sets its stop flag locally before the helper can possibly
+/// observe the X byte, so a legitimate finalize can never precede it — but a
+/// helper finalizing on its own initiative could truncate the take, hold the
+/// stream open until the operator's eventual Stop, and exit with every
+/// end-of-stream gate green. The receipt itself is where that ordering is
+/// enforceable race-free.
 #[cfg(target_os = "macos")]
 fn handle_sitting_event(
     event: CaptureEvent,
     receipt: &mut Option<u64>,
+    stop_requested: bool,
 ) -> Result<(), SittingCaptureFailure> {
     match event {
         CaptureEvent::FinalizedMicOnly { mic_samples } => {
+            if !stop_requested {
+                return Err(sitting_failure(
+                    "sitting_finalize_before_stop",
+                    "the helper finalized before Stop was requested; a self-finalizing helper is not admission authority",
+                ));
+            }
             if receipt.replace(mic_samples).is_some() {
                 return Err(sitting_failure(
                     "sitting_helper_protocol_violation",
@@ -5123,11 +5140,14 @@ mod tests {
     }
 
     /// What the caller does with the stop channel during a harness run:
-    /// request Stop up front, hold it silent for the whole take, or drop it
-    /// unsent — the control-plane fault the driver must refuse to admit.
+    /// request Stop up front, request it only after a delay long enough for
+    /// the helper's early events to land first, hold it silent for the whole
+    /// take, or drop it unsent — the control-plane fault the driver must
+    /// refuse to admit.
     #[derive(Clone, Copy)]
     enum StopScript {
         Requested,
+        DelayedRequested,
         Never,
         Dropped,
     }
@@ -5168,6 +5188,13 @@ mod tests {
             let (stop_sender, stop_receiver) = mpsc::channel();
             match stop {
                 StopScript::Requested => stop_sender.send(()).unwrap(),
+                StopScript::DelayedRequested => {
+                    let sender = stop_sender.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(1));
+                        let _ = sender.send(());
+                    });
+                }
                 StopScript::Never => {}
                 StopScript::Dropped => drop(stop_sender),
             }
@@ -5303,7 +5330,54 @@ mod tests {
         let harness = SittingDriverHarness::new(&body);
         let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b07";
         let failure = harness.run(sitting_id, StopScript::Never).unwrap_err();
+        assert_eq!(failure.code, "sitting_finalize_before_stop");
+        harness.assert_abandoned(sitting_id);
+    }
+
+    #[test]
+    fn sitting_capture_refuses_end_of_stream_without_stop() {
+        // The helper streams and exits cleanly without finalizing, and Stop
+        // was never requested. This pins the end-of-stream half of the Stop
+        // requirement on its own: no receipt-ordering refusal fires first,
+        // so the without-stop gate must.
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             dd if=/dev/zero bs=320 count=10 >&\"$AUDIO\" 2>/dev/null\n\
+             exit 0"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b08";
+        let failure = harness.run(sitting_id, StopScript::Never).unwrap_err();
         assert_eq!(failure.code, "sitting_finalize_without_stop");
+        harness.assert_abandoned(sitting_id);
+    }
+
+    #[test]
+    fn sitting_capture_refuses_a_receipt_that_precedes_stop() {
+        // The truncation attack the end-of-stream gate alone misses: the
+        // helper finalizes early with a byte-exact receipt for the part it
+        // kept, holds the stream open until the operator's eventual Stop,
+        // honors it, and exits cleanly. By end of stream every state gate
+        // is green — Stop was requested, the receipt matches the drained
+        // bytes — so the receipt must be refused at the moment it is
+        // observed, before Stop was ever sent.
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             dd if=/dev/zero bs=320 count=100 >&\"$AUDIO\" 2>/dev/null\n\
+             emit '{{\"schema\":\"capture-event/1\",\"event\":\"finalized\",\"legs\":{{\"mic\":{{\"samples\":16000}}}}}}'\n\
+             await_control\n\
+             exit 0"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b09";
+        let failure = harness
+            .run(sitting_id, StopScript::DelayedRequested)
+            .unwrap_err();
+        assert_eq!(failure.code, "sitting_finalize_before_stop");
         harness.assert_abandoned(sitting_id);
     }
 
