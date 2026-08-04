@@ -456,6 +456,43 @@ private func testSittingOverflowAndInterrupt() throws {
   }
 }
 
+
+private func testSittingStalledReaderFailsInsteadOfWedging() throws {
+  // The reviewed deadlock: a reader that stays alive but stops draining fills
+  // the pipe, a blocking write wedges the writer queue, finish() wedges behind
+  // it, and every control path hangs with no terminal event. The non-blocking
+  // stall deadline must turn that into a terminal failure instead — and stop()
+  // must return rather than hang.
+  var descriptors: [Int32] = [0, 0]
+  try require(pipe(&descriptors) == 0, "cannot create stall pipe")
+  let mic = FakeSource(.mic)
+  let updates = SittingUpdateBox()
+  let coordinator = try SittingCaptureCoordinator(
+    audioFD: descriptors[1], mic: mic, maxPendingBytes: 4 << 20,
+    writeStallSeconds: 0.2,
+    onUpdate: { update in updates.receive(update) })
+  coordinator.activate()
+  try wait(mic.started, "stall sitting mic did not start")
+  mic.emit(Data([9, 9]))
+  try wait(updates.recording, "stall sitting did not record")
+  close(descriptors[1])
+
+  // Nobody reads descriptors[0]; a macOS pipe absorbs at most 64 KiB, so the
+  // second emission is guaranteed to hit EAGAIN and ride the stall deadline.
+  mic.emit(Data(repeating: 0, count: 64 << 10))
+  mic.emit(Data(repeating: 0, count: 64 << 10))
+  try require(
+    updates.terminal.wait(timeout: .now() + 4) == .success,
+    "stalled reader did not produce a terminal event; the helper would hang")
+  var sawStall = false
+  if case .failed(let fault) = updates.updates.last, fault.code == "sitting_stream_write_failed" {
+    sawStall = true
+  }
+  try require(sawStall, "stalled reader did not fail with the write-stall code")
+  try require(coordinator.stop() == nil, "stop after stall returned a receipt")
+  close(descriptors[0])
+}
+
 do {
   try testOrderedFinalization()
   try testNoOverwrite()
@@ -464,6 +501,7 @@ do {
   try testCoreBufferOverflowAndTailDrain()
   try testSittingStreamsExactBytesAndRefusesFiles()
   try testSittingOverflowAndInterrupt()
+  try testSittingStalledReaderFailsInsteadOfWedging()
   print("meeting-capture self-test: pass")
   exit(0)
 } catch {

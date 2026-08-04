@@ -39,6 +39,7 @@ public final class SittingCaptureCoordinator: @unchecked Sendable {
   private let mic: MeetingAudioSource
   private let audioFD: Int32
   private let maxPendingBytes: Int
+  private let writeStallSeconds: TimeInterval
   private let onUpdate: @Sendable (SittingCaptureUpdate) -> Void
   private let controlQueue = DispatchQueue(label: "local-meeting-notes.sitting-control")
   private let lock = NSLock()
@@ -52,6 +53,7 @@ public final class SittingCaptureCoordinator: @unchecked Sendable {
     audioFD: Int32,
     mic: MeetingAudioSource,
     maxPendingBytes: Int = 16_000 * 2 * 5,
+    writeStallSeconds: TimeInterval = 5.0,
     onUpdate: @escaping @Sendable (SittingCaptureUpdate) -> Void
   ) throws {
     guard mic.leg == .mic else {
@@ -76,6 +78,7 @@ public final class SittingCaptureCoordinator: @unchecked Sendable {
     self.audioFD = audioFD
     self.mic = mic
     self.maxPendingBytes = maxPendingBytes
+    self.writeStallSeconds = writeStallSeconds
     self.onUpdate = onUpdate
   }
 
@@ -174,6 +177,7 @@ public final class SittingCaptureCoordinator: @unchecked Sendable {
     do {
       let newWriter = try BoundedPipeWriter(
         audioFD: audioFD, maxPendingBytes: maxPendingBytes,
+        stallDeadline: writeStallSeconds,
         onFailure: { [weak self] fault in self?.record(fault) })
       lock.withLock {
         writer = newWriter
@@ -255,9 +259,19 @@ public final class SittingCaptureCoordinator: @unchecked Sendable {
 /// if it stops draining, buffering here would hide that failure until memory
 /// pressure made it somebody else's. Refusal surfaces it immediately as a
 /// capture fault instead.
+///
+/// Writes are non-blocking with a per-block stall deadline, and the reason is
+/// a reviewed deadlock, not politeness: a blocking write on a full pipe wedges
+/// this serial queue, `finish()` drains that queue with `queue.sync`, and every
+/// coordinator control path runs through `finish` — so a stalled-but-alive
+/// reader would hang the whole helper with no terminal event, the exact
+/// failure the bound exists to refuse. A reader that stalls past the deadline
+/// costs a `sitting_stream_write_failed` fault instead, and the terminal path
+/// stays reachable.
 private final class BoundedPipeWriter: @unchecked Sendable {
   private let descriptor: Int32
   private let maxPendingBytes: Int
+  private let stallDeadline: TimeInterval
   private let onFailure: @Sendable (MeetingCaptureFault) -> Void
   private let queue = DispatchQueue(label: "local-meeting-notes.sitting-stream")
   private let lock = NSLock()
@@ -271,6 +285,7 @@ private final class BoundedPipeWriter: @unchecked Sendable {
   init(
     audioFD: Int32,
     maxPendingBytes: Int,
+    stallDeadline: TimeInterval,
     onFailure: @escaping @Sendable (MeetingCaptureFault) -> Void
   ) throws {
     let retained = dup(audioFD)
@@ -278,8 +293,15 @@ private final class BoundedPipeWriter: @unchecked Sendable {
       throw MeetingCaptureFault(
         code: "sitting_stream_unavailable", detail: "cannot retain sitting audio descriptor")
     }
+    guard fcntl(retained, F_SETFL, O_NONBLOCK) != -1 else {
+      close(retained)
+      throw MeetingCaptureFault(
+        code: "sitting_stream_unavailable",
+        detail: "cannot make the sitting stream non-blocking")
+    }
     self.descriptor = retained
     self.maxPendingBytes = maxPendingBytes
+    self.stallDeadline = stallDeadline
     self.onFailure = onFailure
   }
 
@@ -305,31 +327,18 @@ private final class BoundedPipeWriter: @unchecked Sendable {
     guard accepted else { return false }
 
     queue.async { [self] in
-      var failure: MeetingCaptureFault?
-      data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
-        guard let base = bytes.baseAddress else { return }
-        var written = 0
-        while written < bytes.count {
-          let result = Darwin.write(descriptor, base.advanced(by: written), bytes.count - written)
-          if result > 0 {
-            written += result
-          } else if result < 0, errno == EINTR {
-            continue
-          } else {
-            failure = MeetingCaptureFault(
-              code: "sitting_stream_write_failed", leg: .mic,
-              detail: "sitting stream write failed with errno \(errno)")
-            return
-          }
-        }
-      }
+      // After a fault every queued block is dead weight; skipping keeps a
+      // stalled reader from charging one stall deadline per queued block on
+      // the way to the terminal transition.
+      let alreadyFailed = lock.withLock { storedFault != nil }
+      let failure = alreadyFailed ? nil : writeWholeBlock(data)
       let report = lock.withLock { () -> MeetingCaptureFault? in
         pendingBytes -= data.count
         if let failure, storedFault == nil {
           storedFault = failure
           return failure
         }
-        if failure == nil { frames += data.count / 2 }
+        if failure == nil, !alreadyFailed { frames += data.count / 2 }
         return nil
       }
       if let report { onFailure(report) }
@@ -337,9 +346,54 @@ private final class BoundedPipeWriter: @unchecked Sendable {
     return true
   }
 
-  /// Drains the serial queue, half-closes the pipe so the reader sees EOF, and
-  /// returns the exact frames written. Idempotence is not needed: the
-  /// coordinator's terminal transition calls this once.
+  /// Writes one block against the non-blocking descriptor, polling for
+  /// writability up to the stall deadline. Runs only on the serial queue.
+  private func writeWholeBlock(_ data: Data) -> MeetingCaptureFault? {
+    let deadline = Date().addingTimeInterval(stallDeadline)
+    var failure: MeetingCaptureFault?
+    data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+      guard let base = bytes.baseAddress else { return }
+      var written = 0
+      while written < bytes.count {
+        let result = Darwin.write(descriptor, base.advanced(by: written), bytes.count - written)
+        if result > 0 {
+          written += result
+          continue
+        }
+        if result < 0, errno == EINTR { continue }
+        if result < 0, errno == EAGAIN {
+          let remaining = deadline.timeIntervalSinceNow
+          guard remaining > 0 else {
+            failure = MeetingCaptureFault(
+              code: "sitting_stream_write_failed", leg: .mic,
+              detail: "sitting stream reader stalled past \(stallDeadline)s without draining")
+            return
+          }
+          var readiness = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+          let outcome = poll(&readiness, 1, Int32(min(remaining * 1000, 100)))
+          if outcome < 0, errno != EINTR {
+            failure = MeetingCaptureFault(
+              code: "sitting_stream_write_failed", leg: .mic,
+              detail: "sitting stream poll failed with errno \(errno)")
+            return
+          }
+          continue
+        }
+        failure = MeetingCaptureFault(
+          code: "sitting_stream_write_failed", leg: .mic,
+          detail: "sitting stream write failed with errno \(errno)")
+        return
+      }
+    }
+    return failure
+  }
+
+  /// Drains the serial queue, closes the writer's retained descriptor, and
+  /// returns the exact frames written. This alone does NOT deliver EOF: the
+  /// caller's original descriptor is still open, so the reader sees EOF only
+  /// once the caller closes it — in the CLI, at process exit within one poll
+  /// cycle of the terminal event. Idempotence is not needed: the coordinator's
+  /// terminal transition calls this once.
   func finish() -> Int {
     lock.withLock { closing = true }
     queue.sync {}
