@@ -268,6 +268,12 @@ public final class SittingCaptureCoordinator: @unchecked Sendable {
 /// failure the bound exists to refuse. A reader that stalls past the deadline
 /// costs a `sitting_stream_write_failed` fault instead, and the terminal path
 /// stays reachable.
+///
+/// `O_NONBLOCK` lives on the open file description, which `dup` shares with
+/// the caller's `audioFD` — so every descriptor over this pipe end becomes
+/// non-blocking, not just the retained one. This writer is that description's
+/// only in-process user, but code that writes `audioFD` directly must not
+/// assume blocking semantics.
 private final class BoundedPipeWriter: @unchecked Sendable {
   private let descriptor: Int32
   private let maxPendingBytes: Int
@@ -293,7 +299,8 @@ private final class BoundedPipeWriter: @unchecked Sendable {
       throw MeetingCaptureFault(
         code: "sitting_stream_unavailable", detail: "cannot retain sitting audio descriptor")
     }
-    guard fcntl(retained, F_SETFL, O_NONBLOCK) != -1 else {
+    let flags = fcntl(retained, F_GETFL)
+    guard flags != -1, fcntl(retained, F_SETFL, flags | O_NONBLOCK) != -1 else {
       close(retained)
       throw MeetingCaptureFault(
         code: "sitting_stream_unavailable",
@@ -348,8 +355,12 @@ private final class BoundedPipeWriter: @unchecked Sendable {
 
   /// Writes one block against the non-blocking descriptor, polling for
   /// writability up to the stall deadline. Runs only on the serial queue.
+  /// The deadline is monotonic (`DispatchTime`, mach absolute time): a
+  /// wall-clock step backward must not re-open the reviewed deadlock by
+  /// keeping the deadline forever in the future, and a step forward (or
+  /// system sleep) must not spend the budget and fault a healthy reader.
   private func writeWholeBlock(_ data: Data) -> MeetingCaptureFault? {
-    let deadline = Date().addingTimeInterval(stallDeadline)
+    let deadline = DispatchTime.now() + stallDeadline
     var failure: MeetingCaptureFault?
     data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
       guard let base = bytes.baseAddress else { return }
@@ -362,7 +373,11 @@ private final class BoundedPipeWriter: @unchecked Sendable {
         }
         if result < 0, errno == EINTR { continue }
         if result < 0, errno == EAGAIN {
-          let remaining = deadline.timeIntervalSinceNow
+          let now = DispatchTime.now()
+          let remaining =
+            now < deadline
+            ? Double(deadline.uptimeNanoseconds - now.uptimeNanoseconds) / 1_000_000_000
+            : 0
           guard remaining > 0 else {
             failure = MeetingCaptureFault(
               code: "sitting_stream_write_failed", leg: .mic,

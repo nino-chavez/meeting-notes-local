@@ -322,6 +322,23 @@ private final class SittingUpdateBox: @unchecked Sendable {
   }
 }
 
+private final class SittingReceiptBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: SittingCaptureReceipt?
+
+  var value: SittingCaptureReceipt? {
+    lock.lock()
+    defer { lock.unlock() }
+    return stored
+  }
+
+  func store(_ receipt: SittingCaptureReceipt?) {
+    lock.lock()
+    stored = receipt
+    lock.unlock()
+  }
+}
+
 private final class PipeReader: @unchecked Sendable {
   private let lock = NSLock()
   private var collected = Data()
@@ -469,7 +486,7 @@ private func testSittingStalledReaderFailsInsteadOfWedging() throws {
   let updates = SittingUpdateBox()
   let coordinator = try SittingCaptureCoordinator(
     audioFD: descriptors[1], mic: mic, maxPendingBytes: 4 << 20,
-    writeStallSeconds: 0.2,
+    writeStallSeconds: 1.0,
     onUpdate: { update in updates.receive(update) })
   coordinator.activate()
   try wait(mic.started, "stall sitting mic did not start")
@@ -481,6 +498,25 @@ private func testSittingStalledReaderFailsInsteadOfWedging() throws {
   // second emission is guaranteed to hit EAGAIN and ride the stall deadline.
   mic.emit(Data(repeating: 0, count: 64 << 10))
   mic.emit(Data(repeating: 0, count: 64 << 10))
+
+  // Call stop() while the first block is still riding its 1.0 s stall — this
+  // is the exact control path that deadlocked before the non-blocking
+  // rewrite: stop → controlQueue.sync → finish → queue.sync parked behind the
+  // blocked write, forever, because the stalled reader never drains. The call
+  // must come back (without a receipt) once the writer faults; the watchdog
+  // semaphore is what turns a regression back into a test failure instead of
+  // a hung suite.
+  usleep(50_000)  // let the first block enter its write before stopping
+  let stopReturned = DispatchSemaphore(value: 0)
+  let stopReceipt = SittingReceiptBox()
+  Thread.detachNewThread {
+    stopReceipt.store(coordinator.stop())
+    stopReturned.signal()
+  }
+  try require(
+    stopReturned.wait(timeout: .now() + 4) == .success,
+    "stop() during a stalled write did not return; the reviewed deadlock is back")
+  try require(stopReceipt.value == nil, "stop during a stalled write returned a receipt")
   try require(
     updates.terminal.wait(timeout: .now() + 4) == .success,
     "stalled reader did not produce a terminal event; the helper would hang")
@@ -489,7 +525,6 @@ private func testSittingStalledReaderFailsInsteadOfWedging() throws {
     sawStall = true
   }
   try require(sawStall, "stalled reader did not fail with the write-stall code")
-  try require(coordinator.stop() == nil, "stop after stall returned a receipt")
   close(descriptors[0])
 }
 
