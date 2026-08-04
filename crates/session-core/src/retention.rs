@@ -724,6 +724,27 @@ impl SittingEvidenceAuthority<'_> {
         self.run(|storage| crate::sitting_evidence::retry_sitting_cleanup(storage, sitting_id))
     }
 
+    /// Admits the worker's `sitting.derive` work-directory output into the
+    /// store's durable rows, re-verifying the whole join against the capture
+    /// record and the caller-supplied manifest encoder identity first. The
+    /// store then owns segment and derived rows, the cleanup receipt, and the
+    /// raw deletion exactly as if the rows had been written directly.
+    pub fn admit_derived_material(
+        &self,
+        sitting_id: &str,
+        expected_encoder_sha256: &str,
+        derived_at_epoch_seconds: u64,
+    ) -> Result<crate::sitting_evidence::SittingLifecycleState, SittingEvidenceAdmissionError> {
+        self.run(|storage| {
+            crate::sitting_evidence::admit_worker_derivation(
+                storage,
+                sitting_id,
+                expected_encoder_sha256,
+                derived_at_epoch_seconds,
+            )
+        })
+    }
+
     pub fn abandon_sitting(
         &self,
         sitting_id: &str,

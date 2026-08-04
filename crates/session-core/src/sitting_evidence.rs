@@ -240,6 +240,38 @@ struct DerivedRecord {
     derived_at_epoch_seconds: u64,
 }
 
+/// The worker's `sitting.derive` output (`worker/sitting_derivation.py`),
+/// read strictly from the WORK directory. It is a claim, never a row: every
+/// field is re-verified against this store's own capture record and the
+/// runtime manifest before anything durable is written.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerDerivationDocument {
+    schema: WorkerDerivationSchema,
+    sitting_id: String,
+    raw_sha256: String,
+    sample_rate: u32,
+    samples: u64,
+    segments: Vec<SegmentSpan>,
+    embedding: WorkerDerivationEmbedding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+enum WorkerDerivationSchema {
+    #[serde(rename = "sitting-derivation/1")]
+    V1,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerDerivationEmbedding {
+    count: u32,
+    dim: u32,
+    sha256: String,
+    encoder_sha256: String,
+    onnx_artifact_sha256: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum CleanupState {
@@ -737,6 +769,133 @@ pub(crate) fn store_derived_material(
         Err(SittingEvidenceError::Storage) => Ok(SittingLifecycleState::CleanupPending),
         Err(error) => Err(error),
     }
+}
+
+/// Admits the worker's `sitting.derive` output into the store's durable rows.
+///
+/// The whole join is verified before the first durable write, so a defective
+/// worker artifact can never strand a sitting half-recorded: the document must
+/// name this sitting and the exact raw bytes the capture row finalized, the
+/// embedding bytes must match their claimed digest and divide into one vector
+/// per scorable segment under this store's own rule, and the encoder identity
+/// must equal what the runtime manifest expects — the worker's claim about
+/// which encoder ran is never taken on its word. Re-admitting an
+/// already-derived sitting routes to cleanup retry instead of re-deriving,
+/// because the derived rows are write-once and the first admission's
+/// timestamp is part of their identity.
+pub(crate) fn admit_worker_derivation(
+    storage: &StorageRoot,
+    sitting_id: &str,
+    expected_encoder_sha256: &str,
+    derived_at_epoch_seconds: u64,
+) -> Result<SittingLifecycleState, SittingEvidenceError> {
+    let paths = sitting_paths(storage, sitting_id)?;
+    if path_present(&paths.durable.join(REHEARSAL_FILE))? {
+        return Err(SittingEvidenceError::Refused("the sitting is a rehearsal"));
+    }
+    if expected_encoder_sha256.is_empty() {
+        return Err(SittingEvidenceError::Refused(
+            "derived material requires an encoder identity",
+        ));
+    }
+    if path_present(&paths.durable.join(DERIVED_FILE))? {
+        return retry_sitting_cleanup(storage, sitting_id);
+    }
+    let capture: CaptureRecord =
+        read_canonical(&paths.durable.join(CAPTURE_FILE), RECORD_MAX_BYTES)
+            .map_err(|_| SittingEvidenceError::Refused("the capture is not finalized"))?;
+
+    let document_bytes = read_work_artifact(&paths.work.join(SEGMENTS_FILE), SEGMENTS_MAX_BYTES)?;
+    let document: WorkerDerivationDocument =
+        serde_json::from_slice(&document_bytes).map_err(|_| {
+            SittingEvidenceError::Refused("the worker derivation document is malformed")
+        })?;
+    let WorkerDerivationSchema::V1 = document.schema;
+    if document.sitting_id != sitting_id {
+        return Err(SittingEvidenceError::Refused(
+            "the worker derivation names another sitting",
+        ));
+    }
+    if document.raw_sha256 != capture.raw.sha256 {
+        return Err(SittingEvidenceError::Refused(
+            "the worker derivation names different raw bytes",
+        ));
+    }
+    if document.sample_rate != 16_000 || document.samples == 0 {
+        return Err(SittingEvidenceError::Refused(
+            "the worker derivation names a foreign sample format",
+        ));
+    }
+    if document.embedding.encoder_sha256 != expected_encoder_sha256 {
+        return Err(SittingEvidenceError::Refused(
+            "the worker derivation encoder disagrees with the runtime manifest",
+        ));
+    }
+    validate_segments(&document.segments)?;
+    let (scorable_count, _) = scorable_segments(&document.segments);
+    if document.embedding.count == 0
+        || document.embedding.dim == 0
+        || document.embedding.count != scorable_count
+    {
+        return Err(SittingEvidenceError::Refused(
+            "one embedding is required per scorable segment",
+        ));
+    }
+
+    let embeddings = read_work_artifact(&paths.work.join(EMBEDDINGS_FILE), EMBEDDINGS_MAX_BYTES)?;
+    if digest_bytes(&embeddings) != document.embedding.sha256 {
+        return Err(SittingEvidenceError::Refused(
+            "derived embeddings disagree with their claimed digest",
+        ));
+    }
+    let stride = document.embedding.dim as usize * 4;
+    if embeddings.len() != document.embedding.count as usize * stride {
+        return Err(SittingEvidenceError::Refused(
+            "the worker derivation embedding join is incoherent",
+        ));
+    }
+
+    // The cleanup walk rightly refuses to remove a work directory holding
+    // entries no receipt names, so the worker's artifacts are consumed here —
+    // deleted durably before the rows are written. A crash inside this window
+    // loses only the work copies: re-admission refuses on the missing
+    // artifacts and the worker's idempotent re-derivation restores them.
+    for name in [SEGMENTS_FILE, EMBEDDINGS_FILE] {
+        fs::remove_file(paths.work.join(name))?;
+    }
+    sync_directory(&paths.work)?;
+
+    record_segments(storage, sitting_id, &document.segments)?;
+    store_derived_material(
+        storage,
+        sitting_id,
+        &embeddings,
+        expected_encoder_sha256,
+        document.embedding.onnx_artifact_sha256.as_deref(),
+        document.embedding.dim,
+        derived_at_epoch_seconds,
+    )
+}
+
+/// A worker output in the work directory: bounded, regular, never a symlink.
+/// Absence is a refusal (the derivation has not run), not a quarantine — the
+/// durable rows carry no claim about work-directory contents.
+fn read_work_artifact(path: &Path, max_bytes: u64) -> Result<Vec<u8>, SittingEvidenceError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(SittingEvidenceError::Refused(
+                "the worker derivation artifacts are missing",
+            ));
+        }
+        Err(_) => return Err(SittingEvidenceError::Storage),
+    };
+    if !metadata.is_file() || metadata.len() > max_bytes {
+        return Err(SittingEvidenceError::Refused(
+            "a worker derivation artifact is not a bounded regular file",
+        ));
+    }
+    Ok(fs::read(path)?)
 }
 
 /// Retries a pending raw cleanup without touching the durable derivation.
@@ -1951,5 +2110,171 @@ mod tests {
                 .join(DERIVED_FILE)
                 .exists()
         );
+    }
+
+    const RAW_FIXTURE_AUDIO: &[u8] = b"synthetic fixture audio bytes";
+
+    fn record_through_finalize(fixture: &Fixture, id: &str) {
+        begin_sitting(
+            &fixture.storage,
+            id,
+            SittingKind::OperatorSitting,
+            None,
+            1_000,
+        )
+        .unwrap();
+        append_raw_audio(&fixture.storage, id, RAW_FIXTURE_AUDIO).unwrap();
+        finalize_capture(&fixture.storage, id, 1_100).unwrap();
+    }
+
+    fn plant_worker_derivation(
+        fixture: &Fixture,
+        id: &str,
+        mutate: impl FnOnce(&mut serde_json::Value),
+    ) {
+        let embeddings = embeddings_for(5);
+        let mut document = serde_json::json!({
+            "schema": "sitting-derivation/1",
+            "sitting_id": id,
+            "raw_sha256": digest_bytes(RAW_FIXTURE_AUDIO),
+            "sample_rate": 16_000,
+            "samples": 160_000,
+            "segments": spans(5),
+            "embedding": {
+                "count": 5,
+                "dim": 192,
+                "sha256": digest_bytes(&embeddings),
+                "encoder_sha256": ENCODER,
+                "onnx_artifact_sha256": null,
+            },
+        });
+        mutate(&mut document);
+        let work = work_dir(&fixture.storage, id).unwrap();
+        fs::write(
+            work.join(SEGMENTS_FILE),
+            serde_json::to_vec_pretty(&document).unwrap(),
+        )
+        .unwrap();
+        fs::write(work.join(EMBEDDINGS_FILE), &embeddings).unwrap();
+    }
+
+    fn assert_nothing_durable_was_written(fixture: &Fixture, id: &str) {
+        let durable = sitting_dir(&fixture.storage, id).unwrap();
+        assert!(!durable.join(SEGMENTS_FILE).exists());
+        assert!(!durable.join(DERIVED_FILE).exists());
+        assert!(!durable.join(EMBEDDINGS_FILE).exists());
+        assert_eq!(
+            sitting_state(fixture, id),
+            SittingLifecycleState::RawRetained
+        );
+    }
+
+    #[test]
+    fn worker_derivation_admits_through_the_full_join_and_saves() {
+        let fixture = fixture();
+        record_through_finalize(&fixture, SID);
+        plant_worker_derivation(&fixture, SID, |_| {});
+        let state = admit_worker_derivation(&fixture.storage, SID, ENCODER, 1_300).unwrap();
+        assert_eq!(state, SittingLifecycleState::Saved);
+        assert!(!work_dir(&fixture.storage, SID).unwrap().exists());
+        let (evidence, summaries) = read_sitting_evidence(&fixture.storage).unwrap();
+        assert_eq!(summaries[0].state, SittingLifecycleState::Saved);
+        let sitting = &evidence.sittings[0];
+        assert_eq!(sitting.scorable_segments, 5);
+        assert_eq!(sitting.derived.as_ref().unwrap().encoder_sha256, ENCODER);
+
+        // Re-admission routes to cleanup retry rather than re-deriving; the
+        // first admission's rows are the identity and stay untouched.
+        assert_eq!(
+            admit_worker_derivation(&fixture.storage, SID, ENCODER, 9_999).unwrap(),
+            SittingLifecycleState::Saved
+        );
+    }
+
+    #[test]
+    fn worker_derivation_naming_foreign_raw_bytes_writes_nothing() {
+        let fixture = fixture();
+        record_through_finalize(&fixture, SID);
+        plant_worker_derivation(&fixture, SID, |document| {
+            document["raw_sha256"] = serde_json::json!("a".repeat(64));
+        });
+        let outcome = admit_worker_derivation(&fixture.storage, SID, ENCODER, 1_300);
+        assert!(matches!(
+            outcome,
+            Err(SittingEvidenceError::Refused(
+                "the worker derivation names different raw bytes"
+            ))
+        ));
+        assert_nothing_durable_was_written(&fixture, SID);
+    }
+
+    #[test]
+    fn worker_derivation_with_a_foreign_encoder_identity_writes_nothing() {
+        let fixture = fixture();
+        record_through_finalize(&fixture, SID);
+        plant_worker_derivation(&fixture, SID, |document| {
+            document["embedding"]["encoder_sha256"] = serde_json::json!("f".repeat(64));
+        });
+        let outcome = admit_worker_derivation(&fixture.storage, SID, ENCODER, 1_300);
+        assert!(matches!(
+            outcome,
+            Err(SittingEvidenceError::Refused(
+                "the worker derivation encoder disagrees with the runtime manifest"
+            ))
+        ));
+        assert_nothing_durable_was_written(&fixture, SID);
+    }
+
+    #[test]
+    fn worker_derivation_embedding_defects_write_nothing() {
+        let fixture = fixture();
+        record_through_finalize(&fixture, SID);
+        plant_worker_derivation(&fixture, SID, |document| {
+            document["embedding"]["sha256"] = serde_json::json!("b".repeat(64));
+        });
+        assert!(matches!(
+            admit_worker_derivation(&fixture.storage, SID, ENCODER, 1_300),
+            Err(SittingEvidenceError::Refused(
+                "derived embeddings disagree with their claimed digest"
+            ))
+        ));
+        assert_nothing_durable_was_written(&fixture, SID);
+
+        // Count that disagrees with the store's own scorable rule.
+        plant_worker_derivation(&fixture, SID, |document| {
+            document["embedding"]["count"] = serde_json::json!(4);
+        });
+        assert!(matches!(
+            admit_worker_derivation(&fixture.storage, SID, ENCODER, 1_300),
+            Err(SittingEvidenceError::Refused(
+                "one embedding is required per scorable segment"
+            ))
+        ));
+        assert_nothing_durable_was_written(&fixture, SID);
+    }
+
+    #[test]
+    fn worker_derivation_documents_outside_the_closed_schema_write_nothing() {
+        let fixture = fixture();
+        record_through_finalize(&fixture, SID);
+        plant_worker_derivation(&fixture, SID, |document| {
+            document["transcript_text"] = serde_json::json!("words must never be here");
+        });
+        assert!(matches!(
+            admit_worker_derivation(&fixture.storage, SID, ENCODER, 1_300),
+            Err(SittingEvidenceError::Refused(
+                "the worker derivation document is malformed"
+            ))
+        ));
+        assert_nothing_durable_was_written(&fixture, SID);
+
+        let missing = fixture;
+        fs::remove_file(work_dir(&missing.storage, SID).unwrap().join(SEGMENTS_FILE)).unwrap();
+        assert!(matches!(
+            admit_worker_derivation(&missing.storage, SID, ENCODER, 1_300),
+            Err(SittingEvidenceError::Refused(
+                "the worker derivation artifacts are missing"
+            ))
+        ));
     }
 }
