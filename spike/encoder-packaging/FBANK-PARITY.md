@@ -272,17 +272,28 @@ off-boundary flips with margins around 3 × 10⁻⁴ against a measured score de
 5.5 × 10⁻⁷, and a single boundary flip at one point. Synthetic numbers; not
 admission evidence.
 
-**Operator: the measurement needs your two real sittings.** Record each with the
-existing capture CLI (a sitting is one continuous take; the two must be ≥ 1 h
-apart, different days ideal), plus negative material that is public/licensed
-playback or a knowingly consenting person:
+**Operator: the measurement needs your two real sittings.** Record them with the
+guided wrapper — it tells you before each take whether to speak or stay silent
+and what may be playing, records for a fixed duration, validates every take
+against `speaker_gate.py`'s own floors immediately, enforces the ≥ 1 h sitting
+gap before recording rather than after, and prints the two harness commands
+below with real paths once all three takes pass:
 
 ```sh
-# One capture per sitting, and one for the negative material:
-.venv/bin/python spike/dual_capture.py --no-transcribe --out ~/calib/sitting1
-.venv/bin/python spike/dual_capture.py --no-transcribe --out ~/calib/sitting2   # ≥1h later
-.venv/bin/python spike/dual_capture.py --no-transcribe --out ~/calib/negative   # not your voice
+# Run repeatedly until it says all three takes pass. It sequences the takes so
+# the negative material records during the mandatory wait between sittings:
+.venv/bin/python spike/calibrate_voice.py            # or --status, or --take <name>
+```
 
+An earlier revision of this section said to capture with `--no-transcribe`.
+That never worked: segments come FROM transcription, so that flag returns
+before `mic-segments.json` exists and `prepare` fails on a missing file. The
+corollary is that what you say during the takes IS transcribed into
+`mic-segments.json` beside each recording — local-only, timestamps are all the
+harness reads, and the wrapper's completion text says when the whole `~/calib`
+tree can be deleted.
+
+```sh
 # Torch arm (embeds + stores slices; work dir must be OUTSIDE the repo):
 .venv/bin/python spike/encoder-packaging/bench_gate_agreement.py prepare \
   --calibrate ~/calib/sitting1/mic-segments.json ~/calib/sitting1/mic.wav \
@@ -312,6 +323,7 @@ FIX=spike/encoder-packaging/fixtures-librispeech
 .venv/bin/python spike/encoder-packaging/export_onnx.py ~/.cache/speaker-gate $WORK/ecapa.onnx
 .venv/bin/python spike/encoder-packaging/bench_fbank_parity.py $WORK/ecapa.onnx $WORK $FIX
 python3 spike/encoder-packaging/bench_gate_agreement.py --self-test
+.venv/bin/python spike/calibrate_voice.py --self-test
 ```
 
 The first two commands import torch; the third asserts it has not been imported. Omit the
