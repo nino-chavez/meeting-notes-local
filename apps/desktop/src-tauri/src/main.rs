@@ -65,7 +65,7 @@ use local_meeting_notes_session_core::retention::{
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::retention::{
     ProfileEnrollmentWorker, ProfileEnrollmentWorkerError, ProfileLifecycleAdmissionError,
-    SittingEvidenceAdmissionError,
+    SittingEvidenceAdmissionError, SittingEvidenceAuthority,
 };
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::{
@@ -88,6 +88,12 @@ const ATTEMPT_MAX_BYTES: u64 = 256 * 1024;
 const TRANSCRIPT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const CAPTURE_ARM_TIMEOUT: Duration = Duration::from_secs(120);
 const CAPTURE_STOP_TIMEOUT: Duration = Duration::from_secs(20);
+/// One hour of the helper's 16 kHz mono s16le sitting stream. A dedicated
+/// enrolment sitting runs minutes, not hours; this stops a runaway stream
+/// long before the store's own 1 GiB raw bound would refuse the finalize
+/// digest.
+#[cfg(target_os = "macos")]
+const SITTING_STREAM_MAX_BYTES: u64 = 16_000 * 2 * 60 * 60;
 const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
@@ -108,9 +114,9 @@ struct ApplicationState {
     command_lock: Mutex<()>,
     app_data_writer_lock: Arc<Mutex<Option<AppDataWriterLock>>>,
     retention_started: AtomicBool,
-        preview_library: Mutex<Option<library_reader::LibraryReader>>,
-        preview_profile: Mutex<PreviewProfileSnapshot>,
-        preview_enrollment: Mutex<PreviewEnrollmentSurface>,
+    preview_library: Mutex<Option<library_reader::LibraryReader>>,
+    preview_profile: Mutex<PreviewProfileSnapshot>,
+    preview_enrollment: Mutex<PreviewEnrollmentSurface>,
 }
 
 impl Default for ApplicationState {
@@ -124,9 +130,9 @@ impl Default for ApplicationState {
             command_lock: Mutex::new(()),
             app_data_writer_lock: Arc::new(Mutex::new(None)),
             retention_started: AtomicBool::new(false),
-                        preview_library: Mutex::new(None),
-                        preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
-                        preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
+            preview_library: Mutex::new(None),
+            preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
+            preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
         }
     }
 }
@@ -462,7 +468,7 @@ impl ApplicationState {
             .ok_or_else(|| "the app-data writer lock is unavailable".to_string())
     }
 
-        fn with_preview_library<T>(
+    fn with_preview_library<T>(
         &self,
         unavailable: impl Fn() -> T,
         operation: impl FnOnce(&mut library_reader::LibraryReader, &HashSet<String>) -> T,
@@ -639,6 +645,13 @@ enum CaptureEvent {
         mic_samples: u64,
         system_samples: u64,
     },
+    /// The dedicated-sitting helper mode records the mic leg only, so its
+    /// finalized receipt carries exactly one leg. A meeting capture must
+    /// never accept this shape, and a sitting capture must never accept the
+    /// two-leg shape.
+    FinalizedMicOnly {
+        mic_samples: u64,
+    },
     Failed {
         code: String,
     },
@@ -671,18 +684,51 @@ impl CaptureProcess {
             return Err("capture helper is unavailable".into());
         }
         let capture_directory_file = File::open(capture_directory).map_err(error_text)?;
+        Self::spawn_with_mode(
+            executable,
+            "--capture-dir-fd",
+            capture_directory_file,
+            process_group_id,
+        )
+    }
+
+    /// Spawns the helper in dedicated-sitting mode and returns the read end
+    /// of its mic PCM stream alongside the process. The write end lives only
+    /// in the child after spawn, so end-of-stream arrives exactly when the
+    /// helper process exits — never earlier.
+    #[cfg(target_os = "macos")]
+    fn spawn_sitting(executable: &Path, process_group_id: i32) -> Result<(Self, File), String> {
+        let (audio_read, audio_write) = cloexec_pipe().map_err(error_text)?;
+        let process = Self::spawn_with_mode(
+            executable,
+            "--sitting-audio-fd",
+            audio_write,
+            process_group_id,
+        )?;
+        Ok((process, audio_read))
+    }
+
+    fn spawn_with_mode(
+        executable: &Path,
+        mode_flag: &'static str,
+        mode_file: File,
+        process_group_id: i32,
+    ) -> Result<Self, String> {
+        if !executable.is_file() || process_group_id <= 0 {
+            return Err("capture helper is unavailable".into());
+        }
         let (control_read, control_write) = cloexec_pipe().map_err(error_text)?;
         let (event_read, event_write) = cloexec_pipe().map_err(error_text)?;
         let (liveness_read, liveness_write) = cloexec_pipe().map_err(error_text)?;
         let inherited = [
-            capture_directory_file.as_raw_fd(),
+            mode_file.as_raw_fd(),
             control_read.as_raw_fd(),
             event_write.as_raw_fd(),
             liveness_read.as_raw_fd(),
         ];
         let mut command = Command::new(executable);
         command
-            .arg("--capture-dir-fd")
+            .arg(mode_flag)
             .arg(inherited[0].to_string())
             .arg("--control-fd")
             .arg(inherited[1].to_string())
@@ -705,7 +751,7 @@ impl CaptureProcess {
             });
         }
         let mut child = command.spawn().map_err(error_text)?;
-        drop(capture_directory_file);
+        drop(mode_file);
         drop(control_read);
         drop(event_write);
         drop(liveness_read);
@@ -845,6 +891,284 @@ impl Drop for CaptureProcess {
     fn drop(&mut self) {
         if !self.finished {
             self.cleanup();
+        }
+    }
+}
+
+/// A completed dedicated-sitting capture: the evidence store holds the
+/// finalized raw recording, and the helper's finalized receipt attested the
+/// same sample count the parent actually drained from the stream.
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq)]
+struct SittingCaptureReceipt {
+    mic_samples: u64,
+}
+
+/// Content-free sitting capture failure. `code` mirrors the meeting capture
+/// failure codes (or relays the helper's own code); `detail` never carries
+/// audio or transcript content.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+#[allow(dead_code)] // read by the withheld sitting-recorder registration; exercised by tests
+struct SittingCaptureFailure {
+    code: String,
+    detail: String,
+}
+
+#[cfg(target_os = "macos")]
+fn sitting_failure(code: &str, detail: impl std::fmt::Display) -> SittingCaptureFailure {
+    SittingCaptureFailure {
+        code: code.into(),
+        detail: detail.to_string(),
+    }
+}
+
+/// Records one dedicated enrolment sitting through the capture helper's
+/// mic-only mode and admits it into the sitting evidence store.
+///
+/// The store stays the only writer of durable sitting bytes: the helper
+/// streams PCM over a pipe and every drained chunk goes through
+/// `SittingEvidenceAuthority::append_raw_audio`. Admission authority is the
+/// helper's `finalized` receipt — the capture is finalized only when the
+/// receipt's sample count matches the bytes actually drained. End-of-stream
+/// and a clean helper exit are never treated as completion; every other
+/// outcome abandons the sitting, which the store labels a rehearsal.
+///
+/// Helper identity attestation and command registration stay with the future
+/// registration slice; this is the machinery underneath it.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)] // reached only by the withheld sitting-recorder registration; exercised by tests
+fn run_sitting_capture(
+    authority: &SittingEvidenceAuthority<'_>,
+    executable: &Path,
+    process_group_id: i32,
+    sitting_id: &str,
+    kind: local_meeting_notes_session_core::sitting_evidence::SittingKind,
+    source_class: Option<&str>,
+    stop: &mpsc::Receiver<()>,
+) -> Result<SittingCaptureReceipt, SittingCaptureFailure> {
+    authority
+        .begin_sitting(sitting_id, kind, source_class, now_epoch_seconds())
+        .map_err(|error| sitting_failure("sitting_begin_refused", error))?;
+    match drive_sitting_helper(authority, executable, process_group_id, sitting_id, stop) {
+        Ok(receipt) => match authority.finalize_capture(sitting_id, now_epoch_seconds()) {
+            Ok(()) => Ok(receipt),
+            Err(error) => {
+                let _ = authority.abandon_sitting(sitting_id, now_epoch_seconds());
+                Err(sitting_failure("sitting_finalize_refused", error))
+            }
+        },
+        Err(failure) => {
+            let _ = authority.abandon_sitting(sitting_id, now_epoch_seconds());
+            Err(failure)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn drive_sitting_helper(
+    authority: &SittingEvidenceAuthority<'_>,
+    executable: &Path,
+    process_group_id: i32,
+    sitting_id: &str,
+    stop: &mpsc::Receiver<()>,
+) -> Result<SittingCaptureReceipt, SittingCaptureFailure> {
+    let (mut helper, audio) = CaptureProcess::spawn_sitting(executable, process_group_id)
+        .map_err(|error| sitting_failure("sitting_helper_spawn_failed", error))?;
+    match helper.receive_until(Instant::now() + Duration::from_secs(10)) {
+        Ok(CaptureEvent::Paused) => {}
+        Ok(_) => {
+            return Err(sitting_failure(
+                "sitting_helper_bad_pause",
+                "capture helper did not begin in paused state",
+            ));
+        }
+        Err(error) => return Err(sitting_failure("sitting_helper_pause_failed", error)),
+    }
+    helper
+        .send(b'S')
+        .map_err(|error| sitting_failure("sitting_start_signal_failed", error))?;
+    match helper.receive_until(Instant::now() + Duration::from_secs(10)) {
+        Ok(CaptureEvent::Recording) => {}
+        Ok(CaptureEvent::Failed { code }) => {
+            return Err(sitting_failure(
+                &code,
+                "capture helper failed before recording",
+            ));
+        }
+        Ok(_) => {
+            return Err(sitting_failure(
+                "sitting_helper_bad_arm",
+                "capture helper skipped the recording event",
+            ));
+        }
+        Err(error) => return Err(sitting_failure("sitting_helper_arm_failed", error)),
+    }
+    set_nonblocking(audio.as_raw_fd())
+        .map_err(|error| sitting_failure("sitting_stream_setup_failed", error))?;
+
+    let mut drained: u64 = 0;
+    let mut receipt: Option<u64> = None;
+    let mut events_open = true;
+    let mut stream_open = true;
+    let mut stop_deadline: Option<Instant> = None;
+    let mut buffer = vec![0_u8; 64 * 1024];
+    while stream_open {
+        let mut readiness = libc::pollfd {
+            fd: audio.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut readiness, 1, 100) };
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EINTR) {
+                return Err(sitting_failure("sitting_stream_poll_failed", error));
+            }
+        } else if ready > 0 {
+            loop {
+                match (&audio).read(&mut buffer) {
+                    Ok(0) => {
+                        stream_open = false;
+                        break;
+                    }
+                    Ok(read) => {
+                        drained += read as u64;
+                        if drained > SITTING_STREAM_MAX_BYTES {
+                            return Err(sitting_failure(
+                                "sitting_stream_overlong",
+                                "the sitting stream exceeded the supported duration",
+                            ));
+                        }
+                        authority
+                            .append_raw_audio(sitting_id, &buffer[..read])
+                            .map_err(|error| {
+                                sitting_failure("sitting_store_append_refused", error)
+                            })?;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => {
+                        return Err(sitting_failure("sitting_stream_read_failed", error));
+                    }
+                }
+            }
+        }
+        while events_open && stream_open {
+            match helper.events.try_recv() {
+                Ok(CaptureStreamItem::Event(event)) => {
+                    handle_sitting_event(event, &mut receipt)?;
+                }
+                Ok(CaptureStreamItem::ProtocolFailure) => {
+                    return Err(sitting_failure(
+                        "sitting_event_invalid",
+                        "capture helper emitted an invalid event",
+                    ));
+                }
+                Ok(CaptureStreamItem::Closed) | Err(mpsc::TryRecvError::Disconnected) => {
+                    events_open = false;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+            }
+        }
+        if stream_open {
+            match stop_deadline {
+                None => {
+                    let requested = match stop.try_recv() {
+                        Ok(()) | Err(mpsc::TryRecvError::Disconnected) => true,
+                        Err(mpsc::TryRecvError::Empty) => false,
+                    };
+                    if requested {
+                        helper.send(b'X').map_err(|error| {
+                            sitting_failure("sitting_stop_signal_failed", error)
+                        })?;
+                        stop_deadline = Some(Instant::now() + CAPTURE_STOP_TIMEOUT);
+                    }
+                }
+                Some(deadline) if Instant::now() >= deadline => {
+                    return Err(sitting_failure(
+                        "sitting_stop_timeout",
+                        "capture helper did not close the stream after Stop",
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
+    // The stream is closed, but the finalized receipt may still be in flight
+    // on the event pipe.
+    let receipt_deadline = Instant::now() + Duration::from_secs(5);
+    while receipt.is_none() && events_open {
+        let remaining = receipt_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match helper.events.recv_timeout(remaining) {
+            Ok(CaptureStreamItem::Event(event)) => handle_sitting_event(event, &mut receipt)?,
+            Ok(CaptureStreamItem::ProtocolFailure) => {
+                return Err(sitting_failure(
+                    "sitting_event_invalid",
+                    "capture helper emitted an invalid event",
+                ));
+            }
+            Ok(CaptureStreamItem::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                events_open = false;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+        }
+    }
+    helper
+        .finish_cleanly(Instant::now() + Duration::from_secs(5))
+        .map_err(|error| sitting_failure("sitting_helper_exit_failed", error))?;
+    let Some(mic_samples) = receipt else {
+        return Err(sitting_failure(
+            "sitting_finalize_receipt_missing",
+            "the stream ended without a finalized receipt; end of stream is not completion authority",
+        ));
+    };
+    if mic_samples == 0 || Some(drained) != mic_samples.checked_mul(2) {
+        return Err(sitting_failure(
+            "sitting_sample_count_mismatch",
+            format!(
+                "the finalized receipt attests {mic_samples} samples but {drained} bytes were streamed"
+            ),
+        ));
+    }
+    Ok(SittingCaptureReceipt { mic_samples })
+}
+
+/// The only events a sitting helper may emit after recording begins: its own
+/// mic-only finalized receipt (once), or a fault. The meeting-shaped two-leg
+/// receipt and repeated lifecycle events are protocol violations.
+#[cfg(target_os = "macos")]
+fn handle_sitting_event(
+    event: CaptureEvent,
+    receipt: &mut Option<u64>,
+) -> Result<(), SittingCaptureFailure> {
+    match event {
+        CaptureEvent::FinalizedMicOnly { mic_samples } => {
+            if receipt.replace(mic_samples).is_some() {
+                return Err(sitting_failure(
+                    "sitting_helper_protocol_violation",
+                    "capture helper finalized twice",
+                ));
+            }
+            Ok(())
+        }
+        CaptureEvent::Failed { code } => Err(sitting_failure(
+            &code,
+            "capture helper reported a recording fault",
+        )),
+        CaptureEvent::Interrupted => Err(sitting_failure(
+            "sitting_capture_interrupted",
+            "capture helper reported interruption",
+        )),
+        CaptureEvent::Paused | CaptureEvent::Recording | CaptureEvent::Finalized { .. } => {
+            Err(sitting_failure(
+                "sitting_helper_protocol_violation",
+                "capture helper emitted an event outside the sitting protocol",
+            ))
         }
     }
 }
@@ -1765,7 +2089,7 @@ fn main() {
 
 fn initialize_application(app: AppHandle, retry: bool) {
     let state = app.state::<ApplicationState>();
-        if let Ok(mut profile) = state.preview_profile.lock() {
+    if let Ok(mut profile) = state.preview_profile.lock() {
         *profile = PreviewProfileSnapshot::unavailable();
     }
     {
@@ -3549,9 +3873,6 @@ fn parse_capture_event(frame: &[u8]) -> Result<CaptureEvent, String> {
             let legs = object["legs"]
                 .as_object()
                 .ok_or_else(|| "capture legs are invalid".to_string())?;
-            if !exact_object_keys(legs, &["mic", "system"]) {
-                return Err("capture legs are invalid".into());
-            }
             let samples = |name: &str| -> Result<u64, String> {
                 let leg = legs[name]
                     .as_object()
@@ -3563,10 +3884,18 @@ fn parse_capture_event(frame: &[u8]) -> Result<CaptureEvent, String> {
                     .as_u64()
                     .ok_or_else(|| "capture sample count is invalid".to_string())
             };
-            Ok(CaptureEvent::Finalized {
-                mic_samples: samples("mic")?,
-                system_samples: samples("system")?,
-            })
+            if exact_object_keys(legs, &["mic", "system"]) {
+                Ok(CaptureEvent::Finalized {
+                    mic_samples: samples("mic")?,
+                    system_samples: samples("system")?,
+                })
+            } else if exact_object_keys(legs, &["mic"]) {
+                Ok(CaptureEvent::FinalizedMicOnly {
+                    mic_samples: samples("mic")?,
+                })
+            } else {
+                Err("capture legs are invalid".into())
+            }
         }
         Some("failed") => {
             let valid_keys = exact_object_keys(object, &["schema", "event", "code", "detail"])
@@ -3629,6 +3958,18 @@ fn set_close_on_exec(descriptor: RawFd, enabled: bool) -> io::Result<()> {
         flags & !libc::FD_CLOEXEC
     };
     if unsafe { libc::fcntl(descriptor, libc::F_SETFD, updated) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn set_nonblocking(descriptor: RawFd) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
@@ -4689,6 +5030,244 @@ mod tests {
             )
             .is_err()
         );
+        assert_eq!(
+            parse_capture_event(
+                br#"{"schema":"capture-event/1","event":"finalized","legs":{"mic":{"samples":7}}}"#
+            )
+            .unwrap(),
+            CaptureEvent::FinalizedMicOnly { mic_samples: 7 }
+        );
+        assert!(
+            parse_capture_event(
+                br#"{"schema":"capture-event/1","event":"finalized","legs":{"system":{"samples":7}}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_capture_event(
+                br#"{"schema":"capture-event/1","event":"finalized","legs":{"mic":{"samples":7},"system":{"samples":7},"extra":{"samples":7}}}"#
+            )
+            .is_err()
+        );
+    }
+
+    /// Writes an executable /bin/sh stand-in for the capture helper's sitting
+    /// mode. The preamble binds AUDIO/CONTROL/EVENT to the fd numbers the
+    /// spawner passed and defines `emit` (one event line) and `await_control`
+    /// (block for one control byte); `body` scripts the scenario.
+    fn write_sitting_helper(directory: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = directory.join("fake-sitting-helper.sh");
+        let script = format!(
+            "#!/bin/sh\n\
+             while [ $# -gt 0 ]; do\n\
+               case \"$1\" in\n\
+                 --sitting-audio-fd) AUDIO=\"$2\"; shift 2 ;;\n\
+                 --control-fd) CONTROL=\"$2\"; shift 2 ;;\n\
+                 --event-fd) EVENT=\"$2\"; shift 2 ;;\n\
+                 *) shift ;;\n\
+               esac\n\
+             done\n\
+             emit() {{ printf '%s\\n' \"$1\" >&\"$EVENT\"; }}\n\
+             await_control() {{ dd bs=1 count=1 <&\"$CONTROL\" >/dev/null 2>&1; }}\n\
+             {body}\n"
+        );
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// A throwaway process group for the fake helper, so CaptureProcess
+    /// cleanup signals never reach the test runner's own group.
+    fn spawn_group_anchor() -> std::process::Child {
+        let mut command = Command::new("/bin/sleep");
+        command
+            .arg("60")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.spawn().unwrap()
+    }
+
+    struct SittingDriverHarness {
+        _temporary: TempDir,
+        _scripts: TempDir,
+        state: ApplicationState,
+        storage: StorageRoot,
+        helper: PathBuf,
+        anchor: std::process::Child,
+    }
+
+    impl SittingDriverHarness {
+        fn new(body: &str) -> Self {
+            let (_temporary, storage) = test_storage();
+            let state = ApplicationState::default();
+            ensure_app_data_writer_lock(&state, &storage).unwrap();
+            let scripts = TempDir::new().unwrap();
+            let helper = write_sitting_helper(scripts.path(), body);
+            let anchor = spawn_group_anchor();
+            Self {
+                _temporary,
+                _scripts: scripts,
+                state,
+                storage,
+                helper,
+                anchor,
+            }
+        }
+
+        fn run(
+            &self,
+            sitting_id: &str,
+            stop_requested: bool,
+        ) -> Result<SittingCaptureReceipt, SittingCaptureFailure> {
+            use local_meeting_notes_session_core::sitting_evidence::SittingKind;
+            let (stop_sender, stop) = mpsc::channel();
+            if stop_requested {
+                stop_sender.send(()).unwrap();
+            }
+            let held = self.state.app_data_writer_lock.lock().unwrap();
+            let authority = held.as_ref().unwrap().sitting_evidence_authority();
+            run_sitting_capture(
+                &authority,
+                &self.helper,
+                self.anchor.id() as i32,
+                sitting_id,
+                SittingKind::OperatorSitting,
+                None,
+                &stop,
+            )
+        }
+
+        /// Mechanical abandonment proof: an abandoned sitting is a rehearsal,
+        /// so the store refuses to finalize it ever after.
+        fn assert_abandoned(&self, sitting_id: &str) {
+            let held = self.state.app_data_writer_lock.lock().unwrap();
+            let authority = held.as_ref().unwrap().sitting_evidence_authority();
+            assert!(authority.finalize_capture(sitting_id, 9_999).is_err());
+        }
+    }
+
+    impl Drop for SittingDriverHarness {
+        fn drop(&mut self) {
+            let _ = self.anchor.kill();
+            let _ = self.anchor.wait();
+        }
+    }
+
+    const SITTING_EMIT_PAUSED: &str = r#"emit '{"schema":"capture-event/1","event":"paused"}'"#;
+    const SITTING_EMIT_RECORDING: &str = r#"emit '{"schema":"capture-event/1","event":"recording","format":{"encoding":"pcm_s16le","sample_rate":16000,"channels":1}}'"#;
+
+    #[test]
+    fn sitting_capture_streams_helper_bytes_into_the_evidence_store() {
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             dd if=/dev/zero bs=320 count=100 >&\"$AUDIO\" 2>/dev/null\n\
+             await_control\n\
+             emit '{{\"schema\":\"capture-event/1\",\"event\":\"finalized\",\"legs\":{{\"mic\":{{\"samples\":16000}}}}}}'\n\
+             exit 0"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b01";
+        let receipt = harness.run(sitting_id, true).unwrap();
+        assert_eq!(
+            receipt,
+            SittingCaptureReceipt {
+                mic_samples: 16_000
+            }
+        );
+        // The store holds exactly the streamed bytes, and the capture row is
+        // closed: further appends are refused.
+        let entries = storage_tree_bytes(harness.storage.path());
+        let raw: Vec<_> = entries
+            .iter()
+            .filter(|(name, _)| name.ends_with("audio.raw"))
+            .collect();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].1, vec![0_u8; 32_000]);
+        let held = harness.state.app_data_writer_lock.lock().unwrap();
+        let authority = held.as_ref().unwrap().sitting_evidence_authority();
+        assert!(authority.append_raw_audio(sitting_id, b"late").is_err());
+    }
+
+    #[test]
+    fn sitting_capture_refuses_end_of_stream_without_finalized_receipt() {
+        // The helper streams bytes and exits zero without ever finalizing.
+        // A clean exit plus end-of-stream must not admit the sitting.
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             dd if=/dev/zero bs=320 count=10 >&\"$AUDIO\" 2>/dev/null\n\
+             exit 0"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b02";
+        let failure = harness.run(sitting_id, false).unwrap_err();
+        assert_eq!(failure.code, "sitting_finalize_receipt_missing");
+        assert!(failure.detail.contains("not completion authority"));
+        harness.assert_abandoned(sitting_id);
+    }
+
+    #[test]
+    fn sitting_capture_refuses_sample_count_mismatch_and_abandons() {
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             dd if=/dev/zero bs=320 count=10 >&\"$AUDIO\" 2>/dev/null\n\
+             await_control\n\
+             emit '{{\"schema\":\"capture-event/1\",\"event\":\"finalized\",\"legs\":{{\"mic\":{{\"samples\":9999}}}}}}'\n\
+             exit 0"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b03";
+        let failure = harness.run(sitting_id, true).unwrap_err();
+        assert_eq!(failure.code, "sitting_sample_count_mismatch");
+        harness.assert_abandoned(sitting_id);
+    }
+
+    #[test]
+    fn sitting_capture_surfaces_helper_fault_and_abandons() {
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             emit '{{\"schema\":\"capture-event/1\",\"event\":\"failed\",\"code\":\"sitting_stream_write_failed\",\"detail\":\"\"}}'\n\
+             exit 1"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b04";
+        let failure = harness.run(sitting_id, false).unwrap_err();
+        assert_eq!(failure.code, "sitting_stream_write_failed");
+        harness.assert_abandoned(sitting_id);
+    }
+
+    #[test]
+    fn sitting_capture_refuses_meeting_shaped_finalized_receipt() {
+        let body = format!(
+            "{SITTING_EMIT_PAUSED}\n\
+             await_control\n\
+             {SITTING_EMIT_RECORDING}\n\
+             dd if=/dev/zero bs=320 count=1 >&\"$AUDIO\" 2>/dev/null\n\
+             emit '{{\"schema\":\"capture-event/1\",\"event\":\"finalized\",\"legs\":{{\"mic\":{{\"samples\":160}},\"system\":{{\"samples\":160}}}}}}'\n\
+             exit 0"
+        );
+        let harness = SittingDriverHarness::new(&body);
+        let sitting_id = "3f2c8f2a-64f0-4f05-9be6-0a3d1f6f8b05";
+        let failure = harness.run(sitting_id, false).unwrap_err();
+        assert_eq!(failure.code, "sitting_helper_protocol_violation");
+        harness.assert_abandoned(sitting_id);
     }
 
     #[test]
