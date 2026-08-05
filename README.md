@@ -717,6 +717,7 @@ silence, that is what happened.
 | [`spike/sweep.py`](./spike/sweep.py) | The same across playback levels, with the level measured from the recording rather than the volume slider. |
 | [`notes/EVAL.md`](./notes/EVAL.md) | Whether a local model invents things, measured against human-written summaries. |
 | [`notes/summarize.py`](./notes/summarize.py) | Transcript to notes, with four fabrication checks and controls for the checks. |
+| [`docs/product-definition.md`](./docs/product-definition.md) | The definition layer: what the product is, the ten north-star features with verified build status, and the non-goals. Read first when planning. |
 | [`docs/screens-and-states.md`](./docs/screens-and-states.md) | Eleven surfaces, their lifecycle states, and the five templates derived from them. |
 | [`docs/journeys.md`](./docs/journeys.md) | What the operator does across days. Six current journeys plus a governed evaluation-contribution candidate, why the unit is retrieval rather than the meeting, a market check including Gong, the registered colleague-survey analysis and two-response snapshot, and the gaps the state inventory could not show. |
 | [`docs/vertical-slice.md`](./docs/vertical-slice.md) | The post-approval application boundary: process ownership, worker protocol, private persistence, recovery, workstream split and fault evidence. |
