@@ -1,6 +1,21 @@
 # Local Meeting Notes distribution runbook
 
-Status: a signed and notarized internal transcript-alpha DMG now exists for
+Status, 2026-08-05: the current cohort DMG is **0.2.2**, the first built with
+`worker/build_runtime.sh build-alpha-encoder` under the encoder admission
+verdict — the packaged runtime carries the admitted ONNX speaker encoder, and
+the guided voice-setup surface (sitting recorder, measured operating-point
+review, profile build and publication) is registered end to end. Built at
+commit `f63d38a` on `codex/guided-voice-enrollment`; DMG SHA-256
+`eec3e611aceef12e932e870197fba26d612b02a9a8f94eb41f070a8f838c89f4`, signed,
+notarized, stapled, and `verify-signed-release.sh … internal-alpha` PASS. The
+DMG is uploaded to the `yawn-releases` R2 bucket and linked with its checksum
+from `yawn.ninochavez.com`. The first cohort download supplies the waived
+transferred-build Gatekeeper field receipt — record it in
+`spike/encoder-packaging/RESULTS.md` when it arrives. The 0.2.2 build has not
+yet had its one interactive operator run (the 0.2.0 lesson); do that before
+announcing the link.
+
+Earlier record: a signed and notarized internal transcript-alpha DMG exists for
 commit `5fe9aecd4f53204dc6e82573fd4b4dde37efd6d1`. Its SHA-256 is
 `f5f091811d337acae4c7dc25db5638e2675e30552ed1793af1dc82c7c734385a`.
 The frozen app and DMG pass independent signature, Gatekeeper, runtime, and DMG
