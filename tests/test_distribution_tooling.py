@@ -4,6 +4,7 @@ import hashlib
 import json
 import importlib.util
 import plistlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -373,17 +374,40 @@ class DistributionToolingTests(unittest.TestCase):
         self.assertIn("MIN_SCORABLE_SECONDS = 2.0", producer)
 
         # The packaged internal-alpha operation set is frozen on both sides of
-        # the process boundary; sitting.derive stays boundary-lane until the
-        # operator widens that admission.
+        # the process boundary. Pinned as an AGREEMENT rather than as a literal
+        # list. The earlier literal named three operations and asserted that
+        # sitting.derive stayed boundary-lane; the operator registered it on
+        # 2026-08-04 and the profile family on 2026-08-05, so the pin went red
+        # for being out of date rather than for catching the drift it exists to
+        # catch, and a red-for-staleness pin is how real drift gets ignored.
         worker_main = source("worker/main.py")
-        self.assertIn(
-            'ALPHA_OPERATIONS = frozenset(\n    {"capture.finalize", "capture.inspect", "transcript.create"}\n)',
-            worker_main,
-        )
         supervision = source("crates/session-core/src/supervision.rs")
-        self.assertNotIn("SittingDerive", supervision)
-        alpha_block = supervision.split("pub fn internal_alpha_operations")[1].split("}")[0]
-        self.assertNotIn("sitting", alpha_block.lower())
+        python_alpha = set(
+            re.findall(
+                r'"([a-z]+\.[a-z]+)"',
+                worker_main.split("ALPHA_OPERATIONS = frozenset(", 1)[1]
+                .split("{", 1)[1]
+                .split("}", 1)[0],
+            )
+        )
+        rust_alpha = set(
+            re.findall(
+                r"\b([A-Z][A-Za-z]+)\b",
+                supervision.split("pub fn internal_alpha_operations", 1)[1]
+                .split("[", 1)[1]
+                .split("]", 1)[0],
+            )
+        )
+        flat = lambda name: name.replace(".", "").lower()
+        self.assertTrue(python_alpha)
+        self.assertEqual(
+            {flat(name) for name in python_alpha},
+            {flat(name) for name in rust_alpha},
+        )
+        # Both stay out of the packaged set: publication is Rust's own path, and
+        # no note generator is admitted.
+        self.assertNotIn("profile.adopt", python_alpha)
+        self.assertNotIn("note.inspect", python_alpha)
 
     def test_manifest_encoder_argument_binds_the_named_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -437,7 +461,7 @@ class DistributionToolingTests(unittest.TestCase):
         runbook = source("docs/distribution-runbook.md")
         frozen = runbook.split("## Recheck a frozen artifact", 1)[1]
         self.assertIn(
-            '"target/release/bundle/macos/Local-Meeting-Notes-<version>-macos-arm64.dmg" \\\n  internal-alpha',
+            '"target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg" \\\n  internal-alpha',
             frozen,
         )
 

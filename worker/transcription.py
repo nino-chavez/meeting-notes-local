@@ -92,6 +92,11 @@ def create_transcript_revision(
         [list[dict], np.ndarray, np.ndarray, dict | None, str], list[dict]
     ]
     | None = None,
+    gate_filter: Callable[
+        [list[dict], np.ndarray, dict | None, str],
+        tuple[list[dict], dict | None],
+    ]
+    | None = None,
 ) -> tuple[str, Path]:
     """Create one immutable transcript revision without mutating capture bytes."""
     from verify_capture import verify_acquisition
@@ -126,6 +131,15 @@ def create_transcript_revision(
     filtered_mic_segments = bleed_filter(mic_segments, mic, system, acoustic, "mic")
     partial_bleed_detected = len(filtered_mic_segments) < len(mic_segments)
     mic_segments = filtered_mic_segments
+    # The third and last question asked of the microphone leg, and the only one
+    # asked of a person rather than of the audio: is this the operator at all.
+    # Mic leg only — the system leg is by definition not the operator, and a
+    # voiceprint has nothing to say about it. `gating` is what the artifact
+    # carries about whether the gate ran; None means no profile was installed,
+    # which is a different claim from a gate that was installed and declined.
+    gating = None
+    if gate_filter is not None:
+        mic_segments, gating = gate_filter(mic_segments, mic, acoustic, "mic")
     system_segments = voicing_filter(
         transcribe_audio(system, str(model_dir), "en"), system, "system"
     )
@@ -152,7 +166,7 @@ def create_transcript_revision(
             temporary,
             merged,
             acoustic,
-            gating=None,
+            gating=gating,
             capture_health=health,
             attribution_untrusted=partial_bleed_detected,
             quiet=True,

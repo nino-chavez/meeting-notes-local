@@ -450,6 +450,8 @@ def transcript_create(
     *,
     admission: str,
     model_dir: Path | None,
+    encoder_digest: str,
+    encoder_path: Path | None = None,
 ) -> dict[str, str]:
     values = _exact_arguments(arguments, {"meeting_id"})
     meeting_id = opaque_id(values["meeting_id"], "meeting_id")
@@ -486,6 +488,7 @@ def transcript_create(
         capture_dir,
         target_dir,
         model_dir,
+        gate_filter=_installed_voiceprint_gate(root, encoder_digest, encoder_path),
     )
     return {"transcript": transcript_digest}
 
@@ -533,6 +536,74 @@ def _onnx_sitting_embedder(encoder_path: Path):
         )
 
     return embed
+
+
+def _installed_voiceprint_gate(
+    root: Path, encoder_digest: str, encoder_path: Path | None
+):
+    """The operator's voice gate for this transcript, or nothing to apply.
+
+    Three states, and the third is the reason this returns rather than assumes.
+
+    *No profile installed* — no gate, unchanged behaviour. The operator has not
+    asked for isolation, so a transcript holding every audible voice is honest
+    and its `voiceprint` field is null, which is exactly what null means.
+
+    *Profile installed and this runtime can run it* — the gate is built and the
+    artifact records what it did.
+
+    *Profile installed and this runtime cannot run it* — refuse the transcript.
+    Producing one would write `voiceprint: null` beside words the operator
+    believes were checked, and null already means "no profile was supplied".
+    That is a different claim from "a profile was supplied and could not be
+    applied", and the artifact has no way to say the second one. Only the
+    encoder-carrying lane packages onnxruntime and the admitted ONNX model, so
+    on a placeholder build installing a profile stops transcription until the
+    profile is discarded. That cost is deliberate: an unchecked transcript that
+    reads as checked is the failure this product exists to avoid.
+    """
+    try:
+        installed = resolve_below(root, "profile", "voiceprint.json")
+    except (OSError, StorageRefused):
+        return None
+    if installed.is_symlink() or not installed.is_file():
+        return None
+    if encoder_path is None or encoder_path.is_symlink() or not encoder_path.is_file():
+        raise AdapterRefused("runtime has no admitted speaker encoder")
+    if sha256(encoder_path) != encoder_digest:
+        raise AdapterRefused("packaged encoder disagrees with its manifest")
+    embed = _onnx_sitting_embedder(encoder_path)
+
+    from speaker_gate import load_profile
+
+    try:
+        # The fingerprint argument is the packaged encoder's own verified digest,
+        # so this binds the profile to the exact bytes that will score it. The
+        # spike's separate dimension probe exists because there the fingerprint
+        # comes from a model directory that may not be the one loaded; here they
+        # are the same artifact, checked above.
+        profile, threshold, document = load_profile(
+            installed, expected_encoder_fingerprint=encoder_digest
+        )
+    except (
+        AttributeError,
+        KeyError,
+        OSError,
+        OverflowError,
+        SystemExit,
+        TypeError,
+        ValueError,
+    ):
+        raise AdapterRefused("installed voice profile cannot be loaded") from None
+
+    def gate(segments, mic, acoustic, label):
+        from dual_capture import Voiceprint, drop_offprint, voiceprint_provenance
+
+        voiceprint = Voiceprint(profile, threshold, document, embed)
+        marked, outcome = drop_offprint(segments, mic, voiceprint, acoustic, label)
+        return marked, voiceprint_provenance(voiceprint, outcome)
+
+    return gate
 
 
 def sitting_derive(
@@ -1402,6 +1473,8 @@ def dispatch(
             arguments,
             admission=admission,
             model_dir=model_dir,
+            encoder_digest=encoder_digest,
+            encoder_path=encoder_path,
         ),
         "sitting.derive": lambda: sitting_derive(
             root,

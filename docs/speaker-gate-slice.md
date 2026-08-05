@@ -1,148 +1,154 @@
-# Proposal — wire the speaker gate into transcription
+# The speaker gate, wired into transcription
 
-**Status: proposal. Nothing here is built.** Two questions in it are the
-operator's to answer, and the second one the code has already answered.
-
-Written 2026-08-05, against the tree at commit `9f0246e`.
+**Status: built, 2026-08-05.** This file was a proposal until that date. It is
+now the record of what was built, and of three things the proposal got wrong.
 
 ---
 
-## The recommendation, first
+## What changed
 
-Build the gate, but only on the encoder-carrying lane, and make a profile that
-cannot be applied **refuse the transcript** rather than quietly produce an
-ungated one. That is one new filter in an existing seam plus one refusal path.
-Everything else in this document is why.
+A transcript now runs the operator's voice profile over the microphone leg,
+marks the turns the profile says are not the operator, and records in the
+artifact what the gate did. Before this, the app promised operator voice
+isolation and performed none: `create_transcript_revision` ran two filters —
+`drop_unvoiced` for voicing, `drop_bled` for bleed — and no gate. Every
+transcript contained exactly the words it would have contained with no profile
+at all, and its `voiceprint` field said `null`, which means *no profile was
+supplied*.
 
----
+That last part is why this was a defect rather than an absence. A profile can
+be installed on the shipped build — Rust's `enroll_profile_candidate` publishes
+it — so `voiceprint: null` was an active misstatement on any transcript made
+after an operator finished enrolment.
 
-## What is actually true today
+## The three corrections
 
-The app promises operator voice isolation. It does not perform any.
+**The machinery already existed.** The proposal said the slice would "map
+segments to `spike/speaker_gate.py`'s inputs." It does not. `spike/dual_capture.py`
+already holds the complete filter (`drop_offprint`), the provenance builder
+(`voiceprint_provenance`), and the `Voiceprint` type — written, measured on the
+75-minute capture, and used by the research CLI. The packaged path was the only
+consumer that never called them. The slice is wiring, not implementation.
 
-`worker/transcription.py` builds a transcript by running two filters over each
-leg — `drop_unvoiced` for voicing, `drop_bled` for bleed — and then merging the
-surviving segments. **No profile is loaded and no gate is applied.** The merge
-reads `segment.get("gated")`, `segment.get("gate_score")` and
-`segment.get("gate_reason")` off every segment, and nothing anywhere sets them,
-so those three reads are vestigial: they carry a contract nobody fulfils.
+**Fork 2 was already answered in code, and more thoroughly than the proposal
+knew.** `drop_offprint` marks rather than removes, and says why at length: the
+gate's own failure mode is deleting a colleague from a record of a meeting that
+cannot be re-run, and only the operator can say whether a voice near the
+microphone was a participant. It also *keeps* the unscorable segments — 28% of
+the long capture's mic segments, carrying the "yes", "agreed", "I'll do that"
+that the tool exists to record.
 
-So the state of feature 2 is not "enrollment done, adoption pending." It is
-**enrollment done, isolation absent.** An operator can record sittings, review
-measured operating points, and build and publish a real voice profile, and every
-transcript afterwards will contain exactly the same words it would have
-contained with no profile at all.
+**Option B was cheaper than the proposal claimed.** The proposal said an
+explicitly-ungated transcript would need "a new transcript-level field, which is
+a storage contract change." False. `write_transcript` has taken a `gating`
+argument all along and the schema has carried a `voiceprint` field all along,
+documented as "computed by the caller, which is the only place that knows
+whether the gate actually executed." Option A was still chosen, but on its
+merits, not on a cost that did not exist.
 
-That matters beyond feature 2. `transcript.restore` — the whole of J4, and a
-registered command since 0.2.2 — exists to overrule a gate decision on a
-withheld turn. Nothing withholds turns, so restoration is currently a correct
-implementation of an operation that can never have an input.
+## Fork 1, settled: refuse
 
----
+*A profile is installed and the runtime cannot apply it — what then?*
 
-## The two forks
+**Refuse the transcript.** `_installed_voiceprint_gate` raises when a profile is
+installed and no admitted encoder can score it, and `transcript.create` fails
+with it.
 
-### Fork 1 — a profile is installed and the runtime cannot apply it. What then?
+The reason is the misstatement above. A transcript written without the gate
+records `voiceprint: null`, and null already means "no profile was supplied."
+There is no way for the artifact to say "a profile was supplied and this build
+could not run it," so writing one hands the operator words they believe were
+checked, in a file that says nothing was ever asked.
 
-This is the operator's decision and it is the reason this document exists.
+What it costs, stated exactly: on a **placeholder-encoder** build, installing a
+profile stops transcription until the profile is discarded. That is a real cost
+and it lands on nobody in the cohort — the distributed DMG is built with
+`worker/build_runtime.sh build-alpha-encoder` and carries the admitted ONNX
+encoder (runbook, "Encoder-candidate lane"; true since 0.2.2). It lands on
+developer builds of the transcript-only lane, which is the right place for it.
 
-The default build's runtime manifest records a **placeholder** encoder; only the
-`build-alpha-encoder` lane packages the admitted ONNX encoder and onnxruntime.
-Gating needs embeddings, so on a placeholder runtime the gate cannot run. The
-adapter helper `_onnx_sitting_embedder` already refuses on exactly that lane,
-with the comment that nothing there admits an encoder.
+## Where it runs
 
-**Option A — refuse the transcript.** If a profile is installed and the encoder
-is a placeholder, `transcript.create` fails closed. The operator gets an honest
-error instead of an artifact whose isolation silently did not happen.
-*Cost:* on a placeholder build, installing a profile disables transcription
-entirely. *Requires:* no schema change.
+One filter, in the seam the module already had. `create_transcript_revision`
+takes `gate_filter` alongside the injectable `voicing_filter` and `bleed_filter`,
+and applies it to the **microphone leg only** — the system leg is by definition
+not the operator, and a voiceprint has nothing to say about it. Unlike the other
+two it returns a report as well as segments, and that report becomes the
+transcript's `voiceprint` field.
 
-**Option B — produce an explicitly ungated transcript carrying a health signal.**
-The transcript is written, and something in it records that a profile was
-installed and not applied.
-*Cost:* **it does not fit the existing plumbing.** `_transcript_health` builds
-its dict through `spike/capture_health.build`, whose signature is keyword-only
-and closed — `mic_samples`, `system_samples`, `capture_elapsed_samples`,
-`dropouts`, `tap_errors`, `transcription_requested`, `transcript_written` — with
-no field for gate application. Its own docstring says these are "integrity
-floors, not product-quality thresholds," and whether a gate ran is not a
-capture-integrity fact, so widening that function fights its stated purpose.
-Option B therefore needs a **new transcript-level field**, which is a storage
-contract change, which is a human gate in `vertical-slice.md`.
+`_installed_voiceprint_gate` in `worker/adapters.py` decides which of three
+states the runtime is in:
 
-**Recommended: A.** It is the smaller change, it fails closed, and it matches
-the product's own non-negotiable — a surface must never imply an isolation that
-did not happen. Option B is defensible only if the answer to "should a
-placeholder build be able to transcribe at all while a profile exists" is yes,
-and that is a product call, not an implementation detail.
+| State | Behaviour | `voiceprint` field |
+|---|---|---|
+| No profile installed | No gate. Unchanged. | `null` — and that is what null means |
+| Profile installed, encoder admitted | Gate runs | The full report, including what it rejected |
+| Profile installed, no admitted encoder | **Refuse** | No transcript is written |
 
-### Fork 2 — withheld from the transcript, or marked in place?
+Two further refusals are honest rather than defensive: the packaged encoder must
+match its manifest digest, and `load_profile` must accept the installed profile
+against that exact digest. The spike's separate dimension probe is not repeated,
+because here the fingerprint argument *is* the verified packaged artifact's
+digest — the two checks are the same check.
 
-**The code already answers this: marked in place.** Not a preference.
+## What the gate itself decides, and does not
 
-`_base_gated_turn_indices` walks `document["turns"]` **by list index**, requires
-`turn["gated"]` to be a boolean when present, and collects the indices where it
-is `True`. `transcript.restore` then refuses any source turn index that is not
-in that set. So a withheld turn must remain a turn in the base document at a
-stable index, carrying `gated: true` — removing it would destroy both the index
-restore addresses and the record that anything was withheld at all.
+Three behaviours come from `drop_offprint` unchanged, and each is a measured
+decision rather than a default:
 
-This is also the honest shape. `journeys.md` J1 beat 4 says "not captured" and
-"never said" must never look identical; a turn deleted from the transcript is
-indistinguishable from a turn that never existed.
+- **It skips itself above the bleed cut.** Where the far end is coming back
+  through the room the transcript has already dropped every speaker label, and
+  that is the same audio where the gate is measured to reject the operator — 1
+  of 7 voiced windows admitted. It records `applied: false` with the reason.
+- **It keeps what it cannot score.** Short turns are commitments.
+- **It reports the co-located speaker.** When the dropped speech keeps coming
+  back as one voice, someone beside the operator is being removed from the
+  record, and that goes into the artifact rather than a terminal.
 
----
+## What this lit up downstream
 
-## What the slice would be, if approved
+Nothing else needed building, which is the sign the seam was right. Everything
+below was already written against `gated` and had never had an input:
 
-One filter, in the seam the module already has.
+- `notes/transcript.py` splits gated turns away from what the notes model may
+  see, and renders the co-located-speaker alert into the note's caveats.
+- `library_read.rs` projects gated turns as withheld, excludes them from search,
+  and addresses restoration by their index in the base document.
+- `transcript.restore` — the whole of J4 — overrules a gate decision. Until now
+  it was a correct implementation of an operation that could never have an input.
+- The transcript screen renders a withheld turn, and the copy formatter writes
+  it as `[mm:ss] (withheld — a voice check set this turn aside)`.
 
-`create_transcript_revision` takes `voicing_filter` and `bleed_filter` as
-injectable callables precisely so filters can be tested without audio. A
-`gate_filter` joins them on the **mic leg only** — the operator's leg is the one
-a voiceprint can speak to; the system leg is by definition not the operator.
-Unlike the other two, it **marks rather than drops**: it sets `gated`,
-`gate_score` and `gate_reason` on non-matching segments and returns every
-segment it was given.
-
-The math stays where it already lives. `spike/speaker_gate.py` is the canonical
-implementation and `adapters.py` already imports `load_profile` from it; the new
-code maps segments to its inputs and must not restate a threshold or a scoring
-rule.
-
-`transcript_create` loads the installed profile, and:
-
-- no profile installed → no gate filter, unchanged behaviour, which is honest
-  because the operator has not asked for isolation;
-- profile installed and encoder admitted → gate runs;
-- profile installed and encoder is a placeholder → refuse (Fork 1, option A).
-
----
+`worker/tests/test_transcription.py` now writes a real gated transcript and
+asserts the on-disk shape all four of those read.
 
 ## What would change this
 
+- **If the measured operating points do not transfer** from leave-one-sitting-out
+  enrolment evidence to live meeting audio, the threshold enrolment produced is
+  not the threshold that should gate a meeting. The gate does not invent one —
+  `drop_offprint` takes it from the profile file and there is no constant to fall
+  back to — but the profile's threshold carries an enrolment provenance, not a
+  live-audio one. The artifact records `threshold`, `target_frr`, `measured_frr`
+  and `n_sittings` so a later reader can see what it was calibrated on.
+- **If gating should apply to the system leg too** — to mark a second person on
+  the operator's own microphone — the mic-leg-only rule is wrong. Nothing in the
+  current inventory asks for that.
 - **If a placeholder build must keep transcribing with a profile present**,
-  Fork 1 flips to B and the slice grows a storage-contract change and a human
-  gate with it.
-- **If gating should apply to the system leg too** — for instance to mark a
-  second person on the operator's own microphone — the "mic leg only" rule is
-  wrong and the design needs a second look. Nothing in the current inventory
-  asks for that.
-- **If the measured operating points turn out not to transfer** from
-  leave-one-sitting-out evidence to live meeting audio, the threshold that
-  enrollment produced is not the threshold that should gate a meeting, and the
-  slice needs a calibration step before it is worth building.
-
----
+  Fork 1 flips to B: pass a `gating` dict recording that a profile was installed
+  and not applied. Cheap, now that the field is known to exist. It was not chosen
+  because a build that cannot check should not produce artifacts implying it did.
 
 ## Provenance
 
-Checked in the tree for this document, 2026-08-05: `worker/transcription.py`
-`create_transcript_revision` (no gate; the three vestigial `segment.get` reads),
-`worker/adapters.py` `transcript_create`, `_base_gated_turn_indices`,
-`transcript_restore`, `_onnx_sitting_embedder` and `profile_adopt`,
-`spike/capture_health.py` `build`, and `worker/main.py` `ALPHA_OPERATIONS`.
-No claim here rests on another document's summary. The 30.7%-recall and
-market-gap findings referenced by the honesty argument live in `journeys.md` and
-`teardown.md` with their own dated provenance and were not re-derived here.
+Read in the tree at commit `9c448d4`, 2026-08-05: `worker/transcription.py`
+`create_transcript_revision`; `worker/adapters.py` `transcript_create`,
+`_onnx_sitting_embedder`, `profile_adopt`, `dispatch`; `worker/main.py`
+`ALPHA_OPERATIONS` and `dispatch_without_protocol_output`;
+`spike/dual_capture.py` `drop_offprint`, `voiceprint_provenance`,
+`load_voiceprint`, `write_transcript`, `Voiceprint`; `spike/speaker_gate.py`
+`load_profile`; `notes/transcript.py`; `crates/session-core/src/retention.rs`
+`enroll_profile_candidate`; `crates/session-core/src/library_read.rs`;
+`docs/distribution-runbook.md` "Encoder-candidate lane". The lane question —
+does the distributed DMG carry the encoder — was answered from the runbook's own
+build-command record, not from a memory note that said the opposite.

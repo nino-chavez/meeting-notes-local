@@ -1,7 +1,18 @@
 # Yawn distribution runbook
 
-Status, 2026-08-05: the current cohort DMG is **0.3.0**, the first build whose
-installed name is **Yawn**. The display rename was the deliberate 0.3.0-class
+Status, 2026-08-05: the current cohort DMG is **0.3.1**. Built at commit
+`9f0246e` on `codex/guided-voice-enrollment`; DMG SHA-256
+`0797ea8df1b5a4fa9ca119463b36ed6d2b406c3e79d29cccc7a76e7df9058549`, signed,
+notarized, stapled, Gatekeeper-accepted for both the app and the image, and
+`verify-signed-release.sh … internal-alpha` PASS on a traced run. Uploaded to
+R2, page deployed and confirmed past the edge cache; the 0.3.0 object was
+deleted afterwards, not before — see the sequencing note in the site repo.
+0.3.1 carries one change over 0.3.0: the record control stays reachable from a
+finished transcript, the first defect a cohort operator reported. Its
+interactive operator run is still open, and it inherits that gate from 0.3.0.
+
+0.3.0 was the first build whose installed name is **Yawn**. The display rename
+was the deliberate 0.3.0-class
 change recorded in `docs/brand.md`: `productName`, the window title, the tray
 entry, and the two macOS permission prompts now read Yawn, while the bundle
 identifier stays `com.ninochavez.local-meeting-notes` so signing identity,
@@ -11,7 +22,8 @@ preview and library-dev lanes deliberately keep their old product names, since
 neither is distributed. The Cargo package — and therefore the signed main
 executable, `Contents/MacOS/local-meeting-notes-desktop` — is also unchanged.
 
-Built at commit `bad28f1` on `codex/guided-voice-enrollment`; DMG SHA-256
+Its own record stands: built at commit `bad28f1` on
+`codex/guided-voice-enrollment`; DMG SHA-256
 `38e5aa7d5bc8e1a86577f29cec660dd7e71e70912aad50d796c278be5eb83289`, signed,
 notarized, stapled, Gatekeeper-accepted for both the app and the image, and
 `verify-signed-release.sh … internal-alpha` PASS. Read the exit-16 note under
