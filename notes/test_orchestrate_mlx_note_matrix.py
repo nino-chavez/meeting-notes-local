@@ -316,8 +316,39 @@ class SpawnFailureTests(unittest.TestCase):
         self.assertEqual(row["failure"], "nonzero-exit")
         self.assertTrue(row["terminated_by_signal"])
 
+    def test_a_child_that_never_starts_becomes_a_row(self) -> None:
+        """posix_spawn raises EAGAIN/ENOMEM under memory pressure.
+
+        In-domain, not exotic: this module already treats a memory-pressure kill
+        as a first-class outcome, and the committed run recorded load averages
+        above 10 against a 1.18 GB resident model.
+        """
+        def cannot_fork(*args, **kwargs):
+            raise OSError(12, "Cannot allocate memory")
+
+        row = self.spawn(cannot_fork)
+        self.assertTrue(row["worker_failed"])
+        self.assertEqual(row["failure"], "spawn-failed")
+        self.assertEqual(row["errno"], 12)
+
+    def test_parsed_but_unusable_worker_output_becomes_a_row(self) -> None:
+        """Parsing is not the same as getting a worker record."""
+        for label, payload in (
+            ("non-dict", "[1, 2, 3]"),
+            ("missing-keys", '{"fixture": "x", "calls": []}'),
+        ):
+            with self.subTest(payload=label):
+                class Completed:
+                    returncode = 0
+                    stdout = payload
+                    stderr = ""
+
+                row = self.spawn(lambda *a, **k: Completed())
+                self.assertTrue(row["worker_failed"])
+                self.assertEqual(row["failure"], "worker-record-incomplete")
+
     def test_every_spawn_failure_shape_reaches_the_row_gate_as_incomplete(self) -> None:
-        for reason in ("timeout", "stdout-unparseable", "nonzero-exit"):
+        for reason in ("timeout", "stdout-unparseable", "nonzero-exit", "spawn-failed", "worker-record-incomplete"):
             with self.subTest(reason=reason):
                 workers = passing_workers()
                 workers[1] = matrix._failed_worker("x", reason, 1.0)
@@ -338,6 +369,23 @@ class CommittedMatrixReceiptTests(unittest.TestCase):
         self.assertEqual(len(self.receipt["fixtures"]), EXPECTED_FIXTURES)
         self.assertIs(self.receipt["admits"], False)
         self.assertEqual(self.receipt["decoding"], "structure-constrained")
+        # The shape changed once under an unchanged version string. It must not
+        # happen twice: /1 receipts with a different `load_average` shape are
+        # still in git history.
+        self.assertEqual(self.receipt["schema"], "mlx-note-matrix/2")
+        self.assertIsInstance(self.receipt["fixtures"][0]["load_average"][0], dict)
+
+    def test_the_receipt_names_the_instrument_that_produced_it(self) -> None:
+        """The harness block hashes mlx_note_admission.py and nothing else.
+
+        A receipt from the orchestrator that had the spawn defects and one from
+        the repaired orchestrator were byte-identical in that block, so the
+        artifact could not say which instrument ran.
+        """
+        from mlx_note_admission import _sha256
+
+        source = Path(__file__).resolve().parent / "orchestrate_mlx_note_matrix.py"
+        self.assertEqual(self.receipt["orchestrator_sha256"], _sha256(source.read_bytes()))
 
     def test_the_mechanical_envelope_passed_and_only_the_fixtures_failed(self) -> None:
         """The doc claims latency, memory, repeatability and coverage all held."""
@@ -354,7 +402,13 @@ class CommittedMatrixReceiptTests(unittest.TestCase):
             with self.subTest(fixture=row["fixture"]):
                 self.assertTrue(row["gates"]["repeatable"])
 
-    def test_nine_supported_fixtures_failed_and_the_three_passing_are_the_ones_run_before(self) -> None:
+    def test_nine_supported_fixtures_failed_and_one_unseen_abstention_passed(self) -> None:
+        """`abstain-plain` had never been run before this matrix, and passed.
+
+        The name matters: an earlier write-up called all three passing fixtures
+        "the ones run before", which is false, and a green test carrying that
+        sentence would be the most credible artifact still asserting it.
+        """
         passing = sorted(row["fixture"] for row in self.receipt["fixtures"] if all(row["gates"].values()))
         self.assertEqual(passing, ["abstain-chitchat", "abstain-plain", "ordinary-decision"])
         failing = [row for row in self.receipt["fixtures"] if not all(row["gates"].values())]

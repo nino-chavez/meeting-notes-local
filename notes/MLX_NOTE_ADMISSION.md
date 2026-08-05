@@ -490,8 +490,8 @@ the only supported evidence on this path that anything generalizes at all. Every
 | --- | --- |
 | Every fixture ran, tree unchanged | Pass |
 | Repeatability | Pass on all 12 — response, note, and receipt digests identical across the three cold runs |
-| Latency | Pass — 4.89 s cold median against a 30 s ceiling, 3.97 s warm against 15 s |
-| Memory | Pass — 1,183,842,304 bytes peak against 4,282,063,304 |
+| Latency | Pass — 4.60 s cold median against a 30 s ceiling, 3.72 s warm against 15 s |
+| Memory | Pass — 1,187,430,400 bytes peak against 4,282,063,304 |
 | Per-fixture checks | **Fail on 9 of 10 supported fixtures** |
 
 #### Eight of the nine failures are one mechanism, and it is not comprehension
@@ -511,10 +511,11 @@ depending on how many IDs were emitted.
 
 Calling this truncation, or a copy-fidelity failure, is wrong. **The model
 reproduces 64 opaque hex characters perfectly** — the fragment's own digest, not
-the candidate's — and stops at a boundary that is not arbitrary. `candidate_id`
+the candidate's — and stops at a length that is not arbitrary. `candidate_id`
 is `cf-` plus 64 hex, exactly 67 characters, and the string the model emits is
-`sf-` plus 64 hex, exactly 67 characters. It is producing a well-formed ID *in
-the other format the request carries*.
+`sf-` plus 64 hex, exactly 67 characters. It is producing a well-formed ID with
+the shape of the other format the request carries. Why it does so on nine
+fixtures and not the tenth is unexplained; see below.
 
 What the same responses got right, on all ten supported fixtures:
 
@@ -524,22 +525,34 @@ What the same responses got right, on all ten supported fixtures:
 | `label` | 10 / 10 | an `enum` of the four labels |
 | `source_fragment_ids` | 1 / 10 | `{"type": "array", "min_items": 1, "max_items": 3}` |
 
-Two hypotheses fit this equally well and the run does not separate them:
+**The mechanism is not established, and the one success is why.**
 
-1. **Enum absence.** The two enumerated fields are reproduced exactly; the one
-   field the model must copy free-hand is not.
-2. **Shape priming.** The request carries two identifier formats, one of which
-   terminates at the hash, and the model normalizes the longer to the shorter.
+`ordinary-decision` produced the full 90-character ID on all five of its calls.
+`ordinary-action` shortened it on all of its. The two requests are structurally
+identical: one candidate, one visible fragment, the same two identifier formats,
+the same 90-character target. Three candidate explanations were checked against
+that pair and all three fail on it:
 
-Both predict that enumerating the offered fragment IDs would fix it, so the
-repair direction is the same either way — but the causal claim is not
-established, and an earlier draft of this section asserted the first as fact.
-The falsifier that separates them: **if the model also shortens 90-character
-entries that appear in an enum, enum-presence was never the mechanism.**
+| Hypothesis | Refuted by |
+| --- | --- |
+| **Enum absence** — the model copies exactly only what the contract enumerates | a property of the request *format*, which is identical in both |
+| **Shape priming** — the model normalizes the long format to the short one also present | same: identical format, opposite outcomes |
+| **Token boundary** — the 67-character point falls mid-token for some digests | the 67-character boundary is token-aligned in *both*, including the success |
 
-The evidence that a 90-character exact copy is reachable at all is one fixture,
-`ordinary-decision`, which produced it on all five of its calls. One fixture,
-five times — not five fixtures.
+So: 9 of 10 supported fixtures end the identifier at exactly the length and
+shape of the other format in the request, 1 of 10 does not, and nothing measured
+here distinguishes them. **We cannot account for the one success.** This section
+has now asserted two different mechanisms as established and retracted both; it
+is not going to assert a third.
+
+What survives is narrower and still decisive for the next step: the field the
+contract enumerates is reproduced exactly 10 times out of 10, the field it does
+not is reproduced exactly 1 time out of 10, and that asymmetry is a property of
+the instrument rather than a measurement of the candidate. Enumerating the
+offered fragment IDs would remove the variable rather than explain it. The
+falsifier to carry into any such amendment: **if the model also shortens
+90-character entries that appear in an enum, enum-presence was never the
+mechanism** — and on this evidence that outcome is live, not remote.
 
 Citations, labels, and the negation cases were substantively right in the
 replies inspected — `"We decided not to cancel Project Atlas."` preserved its

@@ -173,6 +173,13 @@ def _failed_worker(fixture_id: str, reason: str, wall_s: float, **extra) -> dict
     }
 
 
+# Everything `_fixture_row` reads off a worker. A record missing any of these
+# would fail deep inside the projection instead of at the boundary.
+_WORKER_FIELDS = frozenset({
+    "fixture", "preflight_tree_sha256", "postflight_tree_sha256", "load", "peak_rss", "calls",
+})
+
+
 def _spawn(model_directory: Path, fixture_id: str, warm_repeats: int) -> dict:
     started = time.monotonic()
     try:
@@ -191,6 +198,16 @@ def _spawn(model_directory: Path, fixture_id: str, warm_repeats: int) -> dict:
         return _failed_worker(
             fixture_id, "timeout", round(time.monotonic() - started, 6),
             timeout_s=_worker_timeout_s(warm_repeats),
+        )
+    except OSError as error:
+        # The child may never exist: `posix_spawn` raises EAGAIN or ENOMEM under
+        # memory pressure. That is in-domain here — this code already models a
+        # memory-pressure kill as a first-class outcome, and the committed run
+        # recorded load averages above 10 against a 1.18 GB resident model.
+        return _failed_worker(
+            fixture_id, "spawn-failed", round(time.monotonic() - started, 6),
+            error_type=type(error).__name__,
+            errno=getattr(error, "errno", None),
         )
     wall_s = round(time.monotonic() - started, 6)
     if completed.returncode != 0:
@@ -216,6 +233,18 @@ def _spawn(model_directory: Path, fixture_id: str, warm_repeats: int) -> dict:
             error_type=type(error).__name__,
             stdout_bytes=len(completed.stdout),
             stderr_tail=completed.stderr.strip().splitlines()[-3:],
+        )
+    # Parsing is not the same as getting a worker record. A parsed non-dict, or
+    # a dict missing what the projection reads, would raise later — here, or
+    # deeper in `_fixture_row` — producing exactly the failure this boundary
+    # exists to prevent: a traceback out of the matrix after up to 36 model
+    # loads, with no receipt written and no fixture named.
+    missing = _WORKER_FIELDS - set(worker) if isinstance(worker, dict) else _WORKER_FIELDS
+    if missing:
+        return _failed_worker(
+            fixture_id, "worker-record-incomplete", wall_s,
+            missing=sorted(missing),
+            record_type=type(worker).__name__,
         )
     worker["process_wall_s"] = wall_s
     worker["worker_failed"] = False
@@ -353,9 +382,19 @@ def _matrix_receipt(model_directory: Path, preflight: str, started_at_load: list
         "tree_unchanged": preflight == postflight,
     }
     return {
-        "schema": "mlx-note-matrix/1",
+        # /2: `fixtures[].load_average` carries every call as
+        # {phase, before, after} rather than the cold calls' bare triples, and
+        # every row records `receipt_sha256`. A /1 receipt is still in git
+        # history, and a reader pinned to /1 would mis-parse one of the two.
+        "schema": "mlx-note-matrix/2",
         "decoding": "structure-constrained",
         "harness": _harness_identity(),
+        # `_harness_identity` hashes `mlx_note_admission.py` and nothing else,
+        # so a receipt produced by a defective orchestrator and one produced by
+        # the repaired orchestrator were byte-identical in that block. The
+        # protocol's own rule is that a receipt unable to say what produced it
+        # cannot be compared with another, and the instrument is half of that.
+        "orchestrator_sha256": _sha256(Path(__file__).resolve().read_bytes()),
         "registered_model": {
             "repository": MLX_RUNTIME["model"]["repository"],
             "revision": MLX_RUNTIME["model"]["revision"],
