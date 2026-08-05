@@ -113,7 +113,12 @@ struct ApplicationState {
     capture_task: Mutex<Option<CaptureTaskControl>>,
     sitting_task: Mutex<Option<SittingTaskControl>>,
     command_lock: Mutex<()>,
-    app_data_writer_lock: Arc<Mutex<Option<AppDataWriterLock>>>,
+    // The slot holds an Arc so a long-running owner (the sitting take)
+    // can hold the writer without holding this mutex guard: readers that
+    // only need the coordination handle stay unblocked for the take's
+    // whole duration. Single-writer authority is the AppDataWriterLock
+    // itself (the owner-only flock), not this mutex.
+    app_data_writer_lock: Arc<Mutex<Option<Arc<AppDataWriterLock>>>>,
     retention_started: AtomicBool,
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
     preview_profile: Mutex<PreviewProfileSnapshot>,
@@ -240,6 +245,11 @@ struct RestoredTranscriptProjection {
 struct PreviewLibraryTranscript {
     state: &'static str,
     meeting_id: Option<String>,
+    /// The digest the projection was verified against — the exact value the
+    /// frozen restore-withheld-turn shape requires back, so a restore request
+    /// can only name the transcript the operator was actually reading.
+    #[serde(rename = "currentTranscriptSha256")]
+    current_transcript_sha256: Option<String>,
     turns: Vec<TranscriptTurn>,
     warnings: Vec<String>,
     message: String,
@@ -341,6 +351,8 @@ const RECORDER_REASON_NO_ENCODER: &str = "This build does not yet include an app
 const RECORDER_REASON_STATUS_UNAVAILABLE: &str =
     "Voice profile status is unavailable, so a setup recording cannot start.";
 const RECORDER_REASON_SITTING_ACTIVE: &str = "A setup recording is already in progress.";
+const RECORDER_REASON_DERIVING: &str =
+    "The recording finished. The app is deriving voice material from it now.";
 
 /// Content-free completion sentences for the most recent setup recording.
 /// Each states only the evidence store's own lifecycle fact; none carries
@@ -353,6 +365,8 @@ const SITTING_OUTCOME_RAW_RETAINED: &str = "The recording finished. The app coul
      voice material yet; the temporary recording is kept until that completes.";
 const SITTING_OUTCOME_REHEARSAL: &str = "The recording did not finish and was set aside as a \
      rehearsal. It does not count toward setup.";
+const SITTING_OUTCOME_NOT_STARTED: &str =
+    "The setup recording could not start. Nothing was recorded.";
 
 /// One recorded sitting, content-free: an identifier, what kind of material
 /// it is, and where it sits in the evidence lifecycle. No audio digest,
@@ -378,6 +392,11 @@ struct PreviewEnrollmentSurface {
     recording_unavailable_reason: Option<&'static str>,
     sittings: Vec<PreviewSittingSummary>,
     last_outcome: Option<&'static str>,
+    /// True from the moment a take claims the task slot until its thread's
+    /// final refresh. It outlives the recording-in-progress row — capture
+    /// closes before derivation — so the surface can stay honest, and keep
+    /// polling, through the derive window.
+    attempt_active: bool,
 }
 
 impl PreviewEnrollmentSurface {
@@ -387,6 +406,7 @@ impl PreviewEnrollmentSurface {
             recording_unavailable_reason: Some(RECORDER_REASON_STATUS_UNAVAILABLE),
             sittings: Vec::new(),
             last_outcome: None,
+            attempt_active: false,
         }
     }
 }
@@ -394,10 +414,9 @@ impl PreviewEnrollmentSurface {
 /// Control handle for the dedicated-sitting capture thread. The sender is the
 /// operator's Stop; the driver treats a vanished stop channel as a
 /// control-plane fault, so the handle stays in place until the thread clears
-/// it on the way out. Stop deliberately avoids `command_lock`: profile
-/// commands hold `command_lock` while waiting on the app-data writer lock the
-/// sitting thread holds for the whole take, and Stop must stay reachable
-/// through that window.
+/// it on the way out. Stop deliberately avoids `command_lock`, so it never
+/// queues behind whatever command is in flight — the one signal an operator
+/// mid-take must always be able to land.
 struct SittingTaskControl {
     sitting_id: String,
     sender: mpsc::Sender<()>,
@@ -511,7 +530,7 @@ impl ApplicationState {
             .lock()
             .map_err(|_| "the app-data writer lock is unavailable".to_string())?
             .as_ref()
-            .map(AppDataWriterLock::coordination)
+            .map(|writer| writer.coordination())
             .ok_or_else(|| "the app-data writer lock is unavailable".to_string())
     }
 
@@ -1303,8 +1322,9 @@ fn start_meeting(
         if active.is_some() {
             return Err("Another capture attempt is already active.".into());
         }
-        // A dedicated sitting holds the app-data writer lock for its whole
-        // take; a meeting must refuse here rather than queue behind it.
+        // A meeting starting mid-take would make the take's remaining
+        // evidence operations refuse (the store excludes active meetings),
+        // so the meeting is what refuses here.
         if sitting_task_active(&state) {
             return Err("Finish the setup recording before starting a meeting.".into());
         }
@@ -1418,8 +1438,8 @@ fn prepare_startup_retry(model: &mut AppModel) -> Result<(), String> {
 fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
-    // The spawned startup task acquires the app-data writer lock the sitting
-    // thread may hold; a retry mid-sitting would stall behind the take.
+    // A startup retry re-runs reconciliation over the same stores the take
+    // is writing; it lands after the take, by refusal.
     if sitting_task_active(&state) {
         return Err("Finish the setup recording first.".into());
     }
@@ -1541,9 +1561,9 @@ fn preview_profile_preserve_legacy_for(
         .command_lock
         .lock()
         .map_err(|_| "the profile action is unavailable".to_string())?;
-    // The sitting thread holds the app-data writer lock for its whole take.
-    // Refusing here keeps this command from blocking on that lock while it
-    // holds command_lock, which would strand Stop.
+    // A dedicated sitting is one exclusive writer session over the profile
+    // and evidence stores; a profile action lands after the take, by
+    // refusal rather than by queueing.
     if sitting_task_active(state) {
         return Err("Finish the setup recording first.".into());
     }
@@ -1635,8 +1655,8 @@ fn preview_profile_reset_for(
         .command_lock
         .lock()
         .map_err(|_| "the profile action is unavailable".to_string())?;
-    // Same writer-lock refusal as preserve-legacy: never queue a profile
-    // action behind an active sitting while holding command_lock.
+    // Same exclusivity refusal as preserve-legacy: a profile reset must
+    // not interleave with an active take's evidence writes.
     if sitting_task_active(state) {
         return Err("Finish the setup recording first.".into());
     }
@@ -1754,7 +1774,7 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
                     let surface = enrollment_surface_from_summaries(
                         &summaries,
                         encoder_available,
-                        false,
+                        None,
                         None,
                     );
                     if let Ok(mut cached) = state.preview_enrollment.lock() {
@@ -1828,17 +1848,16 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
 fn enrollment_surface_from_summaries(
     summaries: &[local_meeting_notes_session_core::sitting_evidence::SittingRecordSummary],
     encoder_available: Option<bool>,
-    active_sitting: bool,
+    hold: Option<&'static str>,
     last_outcome: Option<&'static str>,
 ) -> PreviewEnrollmentSurface {
-    let (recording_available, recording_unavailable_reason) = if active_sitting {
-        (false, Some(RECORDER_REASON_SITTING_ACTIVE))
-    } else {
-        match encoder_available {
-            None => (false, Some(RECORDER_REASON_RUNTIME_UNKNOWN)),
-            Some(false) => (false, Some(RECORDER_REASON_NO_ENCODER)),
-            Some(true) => (true, None),
-        }
+    let (recording_available, recording_unavailable_reason, attempt_active) = match hold {
+        Some(reason) => (false, Some(reason), true),
+        None => match encoder_available {
+            None => (false, Some(RECORDER_REASON_RUNTIME_UNKNOWN), false),
+            Some(false) => (false, Some(RECORDER_REASON_NO_ENCODER), false),
+            Some(true) => (true, None, false),
+        },
     };
     PreviewEnrollmentSurface {
         recording_available,
@@ -1853,6 +1872,7 @@ fn enrollment_surface_from_summaries(
             })
             .collect(),
         last_outcome,
+        attempt_active,
     }
 }
 
@@ -1866,7 +1886,7 @@ fn enrollment_surface_from_summaries(
 fn refresh_preview_caches_with_writer(
     state: &ApplicationState,
     writer: &AppDataWriterLock,
-    active_sitting: bool,
+    hold: Option<&'static str>,
     last_outcome: Option<&'static str>,
 ) {
     let (expected_encoder, encoder_available) = match state.runtime.lock() {
@@ -1887,7 +1907,7 @@ fn refresh_preview_caches_with_writer(
             let surface = enrollment_surface_from_summaries(
                 &summaries,
                 encoder_available,
-                active_sitting,
+                hold,
                 last_outcome,
             );
             if let Ok(mut cached) = state.preview_enrollment.lock() {
@@ -1952,12 +1972,15 @@ fn parse_sitting_request(
 /// Everything the start command must refuse before spawning the sitting
 /// thread. Split from the command so refusal paths are testable without a
 /// Tauri runtime. Holds no lock on return; the caller re-checks nothing —
-/// the sitting-task slot is claimed here, inside the model lock, so two
-/// starts cannot race past each other.
+/// the sitting-task slot is claimed here, and the optimistic surface is
+/// written inside the same claim, before any thread exists, so the thread's
+/// own refreshes always come later and can never be overwritten by it.
 #[cfg(target_os = "macos")]
 fn claim_sitting_start(
     state: &ApplicationState,
     sitting_id: &str,
+    kind_label: &'static str,
+    source_class: Option<String>,
     sender: mpsc::Sender<()>,
 ) -> Result<(), String> {
     let model = state
@@ -2000,7 +2023,48 @@ fn claim_sitting_start(
         sitting_id: sitting_id.to_string(),
         sender,
     });
+    if let Ok(mut cached) = state.preview_enrollment.lock() {
+        cached.recording_available = false;
+        cached.recording_unavailable_reason = Some(RECORDER_REASON_SITTING_ACTIVE);
+        cached.attempt_active = true;
+        cached.last_outcome = None;
+        cached.sittings.push(PreviewSittingSummary {
+            sitting_id: sitting_id.to_string(),
+            kind: kind_label,
+            source_class,
+            state: "recording-in-progress",
+        });
+    }
     Ok(())
+}
+
+/// Clears the task slot on every exit from the sitting thread — including a
+/// panic, which would otherwise strand the slot and permanently refuse every
+/// command `sitting_task_active` gates. On the panic path it also strips the
+/// optimistic projection, since no refresh will ever arrive to correct it.
+#[cfg(target_os = "macos")]
+struct SittingTaskGuard<'a> {
+    state: &'a ApplicationState,
+    sitting_id: &'a str,
+    completed: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for SittingTaskGuard<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            if let Ok(mut cached) = self.state.preview_enrollment.lock() {
+                cached.recording_available = false;
+                cached.recording_unavailable_reason = Some(RECORDER_REASON_STATUS_UNAVAILABLE);
+                cached.attempt_active = false;
+                cached.last_outcome = Some(SITTING_OUTCOME_REHEARSAL);
+                cached
+                    .sittings
+                    .retain(|sitting| sitting.state != "recording-in-progress");
+            }
+        }
+        clear_sitting_task(self.state, self.sitting_id);
+    }
 }
 
 /// Worker derivation of one finalized sitting transcribes and embeds the
@@ -2008,11 +2072,38 @@ fn claim_sitting_start(
 #[cfg(target_os = "macos")]
 const SITTING_DERIVE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Terminal cache write for a finished (or never-started) attempt. Prefers a
+/// full store refresh through the writer; without a writer it still strips
+/// the optimistic projection, so a failed attempt can never leave the
+/// surface claiming a live take.
+#[cfg(target_os = "macos")]
+fn finish_sitting_attempt(state: &ApplicationState, outcome: &'static str) -> &'static str {
+    let writer = state
+        .app_data_writer_lock
+        .lock()
+        .ok()
+        .and_then(|held| held.clone());
+    match writer {
+        Some(writer) => refresh_preview_caches_with_writer(state, &writer, None, Some(outcome)),
+        None => {
+            if let Ok(mut cached) = state.preview_enrollment.lock() {
+                let mut surface = PreviewEnrollmentSurface::unavailable();
+                surface.last_outcome = Some(outcome);
+                *cached = surface;
+            }
+        }
+    }
+    outcome
+}
+
 /// One full sitting attempt: capture through the helper's mic-only mode,
-/// then worker derivation, then admission of the derived rows — all under
-/// the app-data writer lock, which is the store's whole-sitting exclusivity.
-/// Returns the content-free outcome sentence for the surface. Every path
-/// refreshes both Preview caches before the lock is released.
+/// then worker derivation, then admission of the derived rows. The take
+/// holds the writer by Arc — not the slot's mutex guard — so commands that
+/// only need the coordination handle stay unblocked for its whole duration;
+/// exclusivity against mutating commands is the `sitting_task_active`
+/// refusal set. Returns the content-free outcome sentence for the surface.
+/// Every path, including the ones that fail before any capture, ends in a
+/// terminal cache write.
 #[cfg(target_os = "macos")]
 fn run_sitting_attempt(
     state: &ApplicationState,
@@ -2027,17 +2118,18 @@ fn run_sitting_attempt(
         Err(_) => None,
     };
     let Some(runtime) = runtime else {
-        return SITTING_OUTCOME_REHEARSAL;
+        return finish_sitting_attempt(state, SITTING_OUTCOME_NOT_STARTED);
     };
     let process_group_id = match inspect_worker(state, &runtime) {
         Ok((process_group_id, _)) => process_group_id,
-        Err(_) => return SITTING_OUTCOME_REHEARSAL,
+        Err(_) => return finish_sitting_attempt(state, SITTING_OUTCOME_NOT_STARTED),
     };
-    let Ok(held) = state.app_data_writer_lock.lock() else {
-        return SITTING_OUTCOME_REHEARSAL;
+    let writer = match state.app_data_writer_lock.lock() {
+        Ok(held) => held.clone(),
+        Err(_) => None,
     };
-    let Some(writer) = held.as_ref() else {
-        return SITTING_OUTCOME_REHEARSAL;
+    let Some(writer) = writer else {
+        return finish_sitting_attempt(state, SITTING_OUTCOME_NOT_STARTED);
     };
     let outcome = {
         let authority = writer.sitting_evidence_authority();
@@ -2051,6 +2143,15 @@ fn run_sitting_attempt(
             stop,
         ) {
             Ok(_receipt) => {
+                // The capture is closed; the surface must stop claiming a
+                // live take while the worker derives, which can run to the
+                // full SITTING_DERIVE_TIMEOUT.
+                refresh_preview_caches_with_writer(
+                    state,
+                    &writer,
+                    Some(RECORDER_REASON_DERIVING),
+                    None,
+                );
                 let derived = request_worker(
                     state,
                     Operation::SittingDerive,
@@ -2075,7 +2176,7 @@ fn run_sitting_attempt(
             Err(_failure) => SITTING_OUTCOME_REHEARSAL,
         }
     };
-    refresh_preview_caches_with_writer(state, writer, false, Some(outcome));
+    refresh_preview_caches_with_writer(state, &writer, None, Some(outcome));
     outcome
 }
 
@@ -2088,8 +2189,13 @@ fn run_sitting_task(
     stop: mpsc::Receiver<()>,
 ) {
     let state = app.state::<ApplicationState>();
-    let _ = run_sitting_attempt(&state, &sitting_id, kind, source_class.as_deref(), &stop);
-    clear_sitting_task(&state, &sitting_id);
+    let mut guard = SittingTaskGuard {
+        state: &state,
+        sitting_id: &sitting_id,
+        completed: false,
+    };
+    let _ = run_sitting_attempt(guard.state, &sitting_id, kind, source_class.as_deref(), &stop);
+    guard.completed = true;
 }
 
 /// Starts one dedicated enrolment sitting. Registered 2026-08-04 by the
@@ -2110,7 +2216,13 @@ fn preview_enrollment_start_sitting(
         .map_err(|_| "the recording action is unavailable".to_string())?;
     let sitting_id = Uuid::new_v4().to_string();
     let (sender, receiver) = mpsc::channel();
-    claim_sitting_start(&state, &sitting_id, sender)?;
+    claim_sitting_start(
+        &state,
+        &sitting_id,
+        sitting_kind_label(parsed_kind),
+        parsed_class.clone(),
+        sender,
+    )?;
     let task_app = app.clone();
     let task_sitting_id = sitting_id.clone();
     let spawn = std::thread::Builder::new()
@@ -2120,25 +2232,13 @@ fn preview_enrollment_start_sitting(
         });
     if spawn.is_err() {
         clear_sitting_task(&state, &sitting_id);
+        finish_sitting_attempt(&state, SITTING_OUTCOME_NOT_STARTED);
         return Err("The setup recording could not start.".into());
     }
-    // The optimistic projection: the take is in progress from the operator's
-    // view the moment the thread exists. The thread's own refresh replaces
-    // this with the store's projection on every exit path.
-    let mut surface = preview_enrollment_surface_for(&state);
-    surface.recording_available = false;
-    surface.recording_unavailable_reason = Some(RECORDER_REASON_SITTING_ACTIVE);
-    surface.last_outcome = None;
-    surface.sittings.push(PreviewSittingSummary {
-        sitting_id,
-        kind: sitting_kind_label(parsed_kind),
-        source_class,
-        state: "recording-in-progress",
-    });
-    if let Ok(mut cached) = state.preview_enrollment.lock() {
-        *cached = surface.clone();
-    }
-    Ok(surface)
+    // The claim already wrote the optimistic projection; whatever is cached
+    // now — that projection, or a fast-failing thread's honest outcome — is
+    // the freshest truth to return.
+    Ok(preview_enrollment_surface_for(&state))
 }
 
 /// Requests Stop for the active sitting. Deliberately takes no
@@ -2282,9 +2382,9 @@ fn preview_delete_meeting_audio_for(
     let Ok(_command) = state.command_lock.lock() else {
         return unavailable_preview_audio_deletion();
     };
-    // Deletion runs through the manual-delete facade, which takes the
-    // app-data writer lock. An active sitting holds that lock for its whole
-    // take, so refuse here instead of blocking with command_lock held.
+    // Deletion mutates retained-audio state the take's evidence writes sit
+    // beside; like every mutating command it refuses during a take instead
+    // of interleaving with it.
     if sitting_task_active(state) {
         return PreviewAudioDeletionResponse {
             state: "capture-active",
@@ -2414,6 +2514,7 @@ fn preview_library_open_transcript(
         || PreviewLibraryTranscript {
             state: "unavailable",
             meeting_id: None,
+            current_transcript_sha256: None,
             turns: Vec::new(),
             warnings: Vec::new(),
             message: "The local Preview library is unavailable. Reopen the app and try again."
@@ -2425,20 +2526,25 @@ fn preview_library_open_transcript(
             |storage, meeting_id, artifact| {
                 (
                     meeting_id.to_owned(),
+                    artifact.sha256.clone(),
                     load_bound_preview_transcript_projection(storage, meeting_id, artifact),
                 )
             },
         ) {
-            Ok((meeting_id, Ok((turns, warnings)))) => PreviewLibraryTranscript {
-                state: "transcript",
-                meeting_id: Some(meeting_id),
-                turns,
-                warnings,
-                message: "Retained transcript from this Preview meeting.".into(),
-            },
-            Ok((_, Err(_))) => PreviewLibraryTranscript {
+            Ok((meeting_id, transcript_sha256, Ok((turns, warnings)))) => {
+                PreviewLibraryTranscript {
+                    state: "transcript",
+                    meeting_id: Some(meeting_id),
+                    current_transcript_sha256: Some(transcript_sha256),
+                    turns,
+                    warnings,
+                    message: "Retained transcript from this Preview meeting.".into(),
+                }
+            }
+            Ok((_, _, Err(_))) => PreviewLibraryTranscript {
                 state: "stale",
                 meeting_id: None,
+                current_transcript_sha256: None,
                 turns: Vec::new(),
                 warnings: Vec::new(),
                 message: "That transcript is no longer available. Reopen Library and try again."
@@ -2447,6 +2553,7 @@ fn preview_library_open_transcript(
             Err(opened) => PreviewLibraryTranscript {
                 state: opened.state,
                 meeting_id: None,
+                current_transcript_sha256: None,
                 turns: Vec::new(),
                 warnings: Vec::new(),
                 message: opened.message,
@@ -2528,7 +2635,8 @@ fn main() {
             preview_library_open_note,
             preview_library_open_evidence,
             preview_library_open_transcript,
-            preview_delete_meeting_audio
+            preview_delete_meeting_audio,
+            product_facade::restore_withheld_turn
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -2917,7 +3025,7 @@ fn ensure_app_data_writer_lock(
     if held.is_some() {
         return Ok(());
     }
-    *held = Some(acquire_app_data_writer_lock(storage)?);
+    *held = Some(Arc::new(acquire_app_data_writer_lock(storage)?));
     Ok(())
 }
 
@@ -4851,12 +4959,59 @@ mod tests {
             transition_startup(&mut model, StartupState::Checking).unwrap();
             transition_startup(&mut model, StartupState::Ready).unwrap();
         }
-        claim_sitting_start(&state, "11111111-1111-4111-8111-111111111111", sender).unwrap();
+        claim_sitting_start(
+            &state,
+            "11111111-1111-4111-8111-111111111111",
+            "operator-sitting",
+            None,
+            sender,
+        )
+        .unwrap();
+        // The claim itself writes the optimistic projection — before any
+        // thread exists — so a fast-failing thread can never be overwritten
+        // by a later command-side write.
+        let claimed = preview_enrollment_surface_for(&state);
+        assert!(claimed.attempt_active);
+        assert_eq!(
+            claimed.recording_unavailable_reason,
+            Some(RECORDER_REASON_SITTING_ACTIVE)
+        );
+        assert!(
+            claimed
+                .sittings
+                .iter()
+                .any(|sitting| sitting.state == "recording-in-progress")
+        );
         let (second, _second_receiver) = mpsc::channel();
         assert_eq!(
-            claim_sitting_start(&state, "22222222-2222-4222-8222-222222222222", second)
-                .unwrap_err(),
+            claim_sitting_start(
+                &state,
+                "22222222-2222-4222-8222-222222222222",
+                "operator-sitting",
+                None,
+                second,
+            )
+            .unwrap_err(),
             RECORDER_REASON_SITTING_ACTIVE
+        );
+
+        // A panicking thread's guard clears the slot and strips the
+        // optimistic projection, so the surface never claims a take that no
+        // longer exists and the gated commands are not refused forever.
+        drop(SittingTaskGuard {
+            state: &state,
+            sitting_id: "11111111-1111-4111-8111-111111111111",
+            completed: false,
+        });
+        assert!(!sitting_task_active(&state));
+        let sanitized = preview_enrollment_surface_for(&state);
+        assert!(!sanitized.attempt_active);
+        assert_eq!(sanitized.last_outcome, Some(SITTING_OUTCOME_REHEARSAL));
+        assert!(
+            sanitized
+                .sittings
+                .iter()
+                .all(|sitting| sitting.state != "recording-in-progress")
         );
     }
 
@@ -4902,8 +5057,14 @@ mod tests {
         // Startup not Ready.
         let (sender, _receiver) = mpsc::channel();
         assert!(
-            claim_sitting_start(&state, "11111111-1111-4111-8111-111111111111", sender)
-                .unwrap_err()
+            claim_sitting_start(
+                &state,
+                "11111111-1111-4111-8111-111111111111",
+                "operator-sitting",
+                None,
+                sender,
+            )
+            .unwrap_err()
                 .contains("installation check")
         );
         {
@@ -4915,8 +5076,14 @@ mod tests {
         // No verified runtime identity yet.
         let (sender, _receiver) = mpsc::channel();
         assert_eq!(
-            claim_sitting_start(&state, "11111111-1111-4111-8111-111111111111", sender)
-                .unwrap_err(),
+            claim_sitting_start(
+                &state,
+                "11111111-1111-4111-8111-111111111111",
+                "operator-sitting",
+                None,
+                sender,
+            )
+            .unwrap_err(),
             RECORDER_REASON_RUNTIME_UNKNOWN
         );
 
@@ -4933,8 +5100,14 @@ mod tests {
         });
         let (sender, _receiver) = mpsc::channel();
         assert_eq!(
-            claim_sitting_start(&state, "11111111-1111-4111-8111-111111111111", sender)
-                .unwrap_err(),
+            claim_sitting_start(
+                &state,
+                "11111111-1111-4111-8111-111111111111",
+                "operator-sitting",
+                None,
+                sender,
+            )
+            .unwrap_err(),
             RECORDER_REASON_NO_ENCODER
         );
 

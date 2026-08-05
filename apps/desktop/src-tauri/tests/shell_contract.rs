@@ -91,7 +91,8 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-preview-library-open-note",
             "allow-preview-library-open-evidence",
             "allow-preview-library-open-transcript",
-            "allow-preview-delete-meeting-audio"
+            "allow-preview-delete-meeting-audio",
+            "allow-restore-withheld-turn"
         ])
     );
     assert!(capability.get("remote").is_none());
@@ -260,7 +261,8 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-preview-library-open-note",
             "allow-preview-library-open-evidence",
             "allow-preview-library-open-transcript",
-            "allow-preview-delete-meeting-audio"
+            "allow-preview-delete-meeting-audio",
+            "allow-restore-withheld-turn"
         ])
     );
     let serialized = serde_json::to_string(&capability).unwrap();
@@ -273,7 +275,13 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
 }
 
 #[test]
-fn product_operation_facade_remains_unregistered() {
+fn product_operation_facade_registers_restoration_but_not_regeneration() {
+    // restore_withheld_turn joined the handler on 2026-08-04 by the
+    // operator's correction-surface (J4) decision, backed by the installed
+    // DesktopProductCoordinator. regenerate_note stays out: no note
+    // generator is admitted, so its coordinator can only refuse, and a
+    // rendered control that cannot work is the failure this file exists to
+    // prevent.
     let source = include_str!("../src/main.rs");
     let handler_start = source
         .find(".invoke_handler(tauri::generate_handler![")
@@ -285,7 +293,7 @@ fn product_operation_facade_remains_unregistered() {
     let handler = &source[handler_start..handler_end];
 
     assert!(source.contains("mod product_facade;"));
-    assert!(!handler.contains("restore_withheld_turn"));
+    assert!(handler.contains("product_facade::restore_withheld_turn"));
     assert!(!handler.contains("regenerate_note"));
 }
 
@@ -374,6 +382,9 @@ fn withheld_turns_render_positionally_without_meeting_text() {
     assert!(script.contains("A voice check withheld this turn's text."));
     // The withheld branch renders its fixed note and never the turn's text
     // field: the gate's decision is visible, the withheld words are not.
+    // The restore control (registered 2026-08-04, J4) lives in the same
+    // branch and passes the whole turn to its handler, still without ever
+    // reading the withheld text.
     let branch = script
         .split("if (turn.withheld) {")
         .nth(1)
@@ -381,6 +392,12 @@ fn withheld_turns_render_positionally_without_meeting_text() {
         .expect("withheld render branch exists");
     assert!(!branch.contains("turn.text"));
     assert!(!branch.contains("appendTurnText"));
+    assert!(branch.contains("Restore this turn"));
+    assert!(script.contains("invoke(\"restore_withheld_turn\""));
+    // The restore arguments are the view's own bound identity, never
+    // operator-typed values.
+    assert!(script.contains("sourceTranscriptSha256: context.currentTranscriptSha256"));
+    assert!(script.contains("sourceTurnIndex: turn.sourceTurnIndex"));
     assert!(styles.contains(".withheld-note"));
 }
 
@@ -592,6 +609,7 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
     assert!(script.contains("enrollmentRecorderPresentation"));
     assert!(navigation.contains("recordingUnavailableReason"));
     assert!(navigation.contains("lastOutcome"));
+    assert!(navigation.contains("attemptActive"));
     assert!(script.contains("Saved. The temporary recording has been deleted."));
     assert!(script.contains("does not count toward setup"));
     assert!(!script.contains("preview_enrollment_begin"));

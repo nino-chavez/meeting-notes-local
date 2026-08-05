@@ -1,8 +1,12 @@
 //! Internal command boundary for the frozen correction and note-regeneration shapes.
 //!
-//! This module is intentionally absent from `tauri::generate_handler!`. A later
-//! storage-backed coordinator must be installed and the product surface must opt
-//! into these commands only after its own contract and review are complete.
+//! `restore_withheld_turn` was registered on 2026-08-04 by the operator's
+//! correction-surface (J4) decision, with `DesktopProductCoordinator` as the
+//! storage-backed owner. `regenerate_note` remains intentionally absent from
+//! `tauri::generate_handler!`: no note generator is admitted — the bounded
+//! note generator was rejected on review — so its coordinator can only
+//! refuse, and a rendered control that cannot work is the exact failure the
+//! shell contract exists to prevent.
 
 use std::sync::{Arc, Mutex};
 
@@ -174,26 +178,39 @@ impl ProductOperationFacade {
     }
 }
 
-/// Unregistered Tauri command. Do not add it to `invoke_handler` until a
-/// storage-backed coordinator has joined the frozen operation receipts.
+/// Registered correction command. The storage-backed coordinator completes
+/// the restoration synchronously — worker round trip, re-verification,
+/// publication — before returning, so a successful operation is already
+/// terminal and releases the single-operation slot here rather than waiting
+/// on a coordinator callback that will never come.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn restore_withheld_turn(
     meeting_id: Uuid,
     source_transcript_sha256: String,
     source_turn_index: u32,
     facade: State<'_, ProductOperationFacade>,
+    app: State<'_, crate::ApplicationState>,
 ) -> Result<UiOperationAccepted, String> {
-    facade
+    // An active setup recording holds the app-data writer lock this
+    // restoration's coordination handle would queue behind; refuse in the
+    // recorder's own vocabulary instead of hanging the call.
+    if crate::sitting_task_active(&app) {
+        return Err("Finish the setup recording first.".into());
+    }
+    let accepted = facade
         .restore_withheld_turn(RestoreWithheldTurnUiArgs {
             meeting_id,
             source_transcript_sha256,
             source_turn_index,
         })
         .map_err(ProductOperationFacadeError::safe_copy)
-        .map_err(str::to_owned)
+        .map_err(str::to_owned)?;
+    facade.finish(accepted.operation_id);
+    Ok(accepted)
 }
 
-/// Unregistered Tauri command. See `restore_withheld_turn` above.
+/// Unregistered Tauri command — see the module header for why it stays out
+/// of `invoke_handler` while no note generator is admitted.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn regenerate_note(
     meeting_id: Uuid,

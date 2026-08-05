@@ -391,7 +391,7 @@ function appendTurnText(target, text, locator = null) {
   target.append(matched, document.createTextNode(characters.slice(locator.end).join("")));
 }
 
-function renderTurns(container, warning, turns, warnings, match = null) {
+function renderTurns(container, warning, turns, warnings, match = null, restore = null) {
   container.replaceChildren();
   const safeWarnings = Array.isArray(warnings) ? warnings : [];
   warning.hidden = safeWarnings.length === 0;
@@ -412,6 +412,14 @@ function renderTurns(container, warning, turns, warnings, match = null) {
       note.className = "withheld-note";
       note.textContent = "A voice check withheld this turn's text.";
       row.append(meta, note);
+      if (restore) {
+        const action = document.createElement("button");
+        action.type = "button";
+        action.className = "secondary restore-turn";
+        action.textContent = "Restore this turn";
+        action.addEventListener("click", () => restore(turn, action));
+        row.append(action);
+      }
       container.append(row);
       continue;
     }
@@ -852,7 +860,14 @@ function renderEnrollmentSittings(surface) {
     }),
   );
   syncGuidedSetupEntry();
-  if (presentation.mode === "recording") scheduleSittingPoll();
+  if (presentation.mode === "recording" || presentation.mode === "processing") {
+    scheduleSittingPoll();
+  }
+}
+
+function sittingAttemptRunning(surface) {
+  const mode = enrollmentRecorderPresentation(surface).mode;
+  return mode === "recording" || mode === "processing";
 }
 
 // While a take is active the recorder surface is the only live projection,
@@ -865,13 +880,11 @@ function scheduleSittingPoll() {
   sittingPollTimer = window.setTimeout(async () => {
     sittingPollTimer = null;
     if (!invoke || currentScreen !== "profile-screen") return;
-    const wasRecording =
-      enrollmentRecorderPresentation(latestEnrollmentSurface).mode === "recording";
+    const wasRunning = sittingAttemptRunning(latestEnrollmentSurface);
     const surface = await invoke("preview_enrollment_surface").catch(() => null);
     if (currentScreen !== "profile-screen") return;
     renderEnrollmentSittings(surface);
-    const isRecording = enrollmentRecorderPresentation(surface).mode === "recording";
-    if (wasRecording && !isRecording) {
+    if (wasRunning && !sittingAttemptRunning(surface)) {
       const snapshot = await invoke("preview_profile_snapshot").catch(() => null);
       if (currentScreen === "profile-screen" && snapshot) renderProfile(snapshot);
       renderEnrollmentSittings(surface);
@@ -943,7 +956,7 @@ async function stopSittingRecording() {
   const surface = await invoke("preview_enrollment_surface").catch(() => null);
   if (currentScreen !== "profile-screen") return;
   renderEnrollmentSittings(surface);
-  if (enrollmentRecorderPresentation(surface).mode === "recording") {
+  if (sittingAttemptRunning(surface)) {
     scheduleSittingPoll();
   } else {
     const snapshot = await invoke("preview_profile_snapshot").catch(() => null);
@@ -1168,6 +1181,11 @@ function reportLibraryOpenFailure(messageText) {
   setError(libraryNotice, messageText);
 }
 
+// The frozen restore shape needs back exactly what this view was verified
+// against: the meeting and the bound transcript digest of the open
+// projection. Both live here, never in the DOM.
+let libraryTranscriptRestore = null;
+
 async function openLibraryTranscript(
   handle,
   matchedSourceTurnIndex = null,
@@ -1187,12 +1205,23 @@ async function openLibraryTranscript(
       reportLibraryOpenFailure(result.message || "That transcript is no longer current. Return and try again.");
       return false;
     }
+    libraryTranscriptRestore =
+      result.meetingId && result.currentTranscriptSha256
+        ? {
+            meetingId: result.meetingId,
+            currentTranscriptSha256: result.currentTranscriptSha256,
+          }
+        : null;
+    const restoreError = document.querySelector("#library-restore-error");
+    restoreError.hidden = true;
+    restoreError.textContent = "";
     renderTurns(
       document.querySelector("#library-transcript-turns"),
       document.querySelector("#library-transcript-warning"),
       result.turns,
       result.warnings,
       matchedSourceTurnIndex,
+      libraryTranscriptRestore ? restoreWithheldTurnAction : null,
     );
     transcriptReturnContext = returnContext;
     showScreen("library-transcript-screen", { resetScroll: true });
@@ -1203,6 +1232,76 @@ async function openLibraryTranscript(
     return false;
   } finally {
     if (!nestedTransition) finishHandleTransition(transition);
+  }
+}
+
+async function restoreWithheldTurnAction(turn, control) {
+  if (!invoke || !libraryTranscriptRestore) return;
+  const context = libraryTranscriptRestore;
+  const restoreError = document.querySelector("#library-restore-error");
+  restoreError.hidden = true;
+  restoreError.textContent = "";
+  control.disabled = true;
+  control.textContent = "Restoring…";
+  try {
+    await invoke("restore_withheld_turn", {
+      meetingId: context.meetingId,
+      sourceTranscriptSha256: context.currentTranscriptSha256,
+      sourceTurnIndex: turn.sourceTurnIndex,
+    });
+  } catch (error) {
+    if (currentScreen !== "library-transcript-screen") return;
+    control.disabled = false;
+    control.textContent = "Restore this turn";
+    restoreError.textContent =
+      typeof error === "string" ? error : "The turn was not restored. Try again.";
+    restoreError.hidden = false;
+    return;
+  }
+  await reopenRestoredTranscript(context);
+}
+
+// A successful restoration publishes a new current transcript, so every
+// handle bound to the old digest is stale by construction. The refresh walks
+// the same path a cold open would: fresh snapshot, the meeting's current
+// row, its note projection, and the transcript handle that projection names.
+async function reopenRestoredTranscript(context) {
+  claimExplicitRoute();
+  const transition = beginHandleTransition("restore-turn-refresh", null);
+  if (!transition) return;
+  try {
+    invalidateLibraryHandles();
+    const snapshot = await initializeLibraryReader();
+    if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return;
+    const row = rowForMeetingId(snapshot, context.meetingId);
+    const detail = row?.handle
+      ? await invoke("preview_library_open_note", { handle: row.handle })
+      : null;
+    if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return;
+    if (!detail?.transcriptHandle) {
+      renderLibrary(snapshot);
+      productRootScreen = "meetings-screen";
+      showScreen("meetings-screen", { resetScroll: false });
+      document.querySelector("#library-copy").textContent =
+        "The turn was restored. Reopen the meeting to read the updated transcript.";
+      return;
+    }
+    await openLibraryTranscript(
+      detail.transcriptHandle,
+      null,
+      transcriptReturnContext,
+      transition,
+    );
+  } catch {
+    if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return;
+    const snapshot = await initializeLibraryReader().catch(() => null);
+    if (snapshot) renderLibrary(snapshot);
+    productRootScreen = "meetings-screen";
+    showScreen("meetings-screen", { resetScroll: false });
+    document.querySelector("#library-copy").textContent =
+      "The turn was restored. Reopen the meeting to read the updated transcript.";
+  } finally {
+    finishHandleTransition(transition);
   }
 }
 

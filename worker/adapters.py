@@ -1366,6 +1366,7 @@ def dispatch(
         ),
         "note.inspect": lambda: note_inspect(root, arguments),
         "capture.finalize": lambda: capture_finalize(root, arguments),
+        "transcript.restore": lambda: transcript_restore(root, arguments),
     }
     try:
         return adapters[operation]()

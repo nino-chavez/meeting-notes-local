@@ -267,6 +267,7 @@ legend { margin-bottom: var(--space-3); }
 .empty-transcript { padding: var(--space-6) 0; color: var(--muted); }
 .turn.withheld-turn .turn-meta strong { color: var(--muted); }
 .withheld-note { color: var(--muted); font-style: italic; }
+.restore-turn { margin-top: var(--space-2); }
 
 .library-search { margin-top: var(--space-8); }
 .library-search > label { display: block; margin-bottom: var(--space-2); color: var(--ink); font-weight: 720; }

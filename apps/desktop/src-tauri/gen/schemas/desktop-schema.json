@@ -267,6 +267,12 @@
           "markdownDescription": "Enables the preview_profile_snapshot command without any pre-configured scope."
         },
         {
+          "description": "Enables the restore_withheld_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restore-withheld-turn",
+          "markdownDescription": "Enables the restore_withheld_turn command without any pre-configured scope."
+        },
+        {
           "description": "Enables the retry_startup command without any pre-configured scope.",
           "type": "string",
           "const": "allow-retry-startup",
@@ -373,6 +379,12 @@
           "type": "string",
           "const": "deny-preview-profile-snapshot",
           "markdownDescription": "Denies the preview_profile_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restore_withheld_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restore-withheld-turn",
+          "markdownDescription": "Denies the restore_withheld_turn command without any pre-configured scope."
         },
         {
           "description": "Denies the retry_startup command without any pre-configured scope.",

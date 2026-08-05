@@ -722,6 +722,25 @@ test("the recorder surface alone decides the three recorder modes", () => {
         "The recording was saved: voice material is stored and the temporary recording was deleted.",
     },
   );
+  // A closed capture whose attempt is still finishing (derivation) is its
+  // own mode: no Stop control, the backend's progress sentence, and the
+  // caller keeps polling until the attempt ends.
+  assert.deepEqual(
+    enrollmentRecorderPresentation({
+      recordingAvailable: false,
+      recordingUnavailableReason:
+        "The recording finished. The app is deriving voice material from it now.",
+      sittings: [{ state: "raw-retained" }],
+      lastOutcome: null,
+      attemptActive: true,
+    }),
+    {
+      mode: "processing",
+      entryText:
+        "The recording finished. The app is deriving voice material from it now.",
+      outcomeText: "",
+    },
+  );
   // Unavailable renders the backend's own boundary sentence, and a missing
   // surface never renders as permission.
   assert.equal(

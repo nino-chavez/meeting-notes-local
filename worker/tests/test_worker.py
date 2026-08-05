@@ -258,6 +258,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 "capture.inspect",
                 "transcript.create",
                 "sitting.derive",
+                "transcript.restore",
             }
             if self.admission != "internal-alpha":
                 expected_operations |= {

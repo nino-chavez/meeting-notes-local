@@ -1225,12 +1225,19 @@ pub fn read_parent_liveness(fd: RawFd) -> io::Result<()> {
 
 pub fn internal_alpha_operations() -> HashSet<Operation> {
     use Operation::*;
-    // SittingDerive joined the packaged alpha set on 2026-08-04 with the
-    // operator's guided-enrollment registration decision; parse_ready pins
-    // exact equality, so this list moves only with worker/main.py's.
-    [CaptureFinalize, CaptureInspect, TranscriptCreate, SittingDerive]
-        .into_iter()
-        .collect()
+    // SittingDerive and TranscriptRestore joined the packaged alpha set on
+    // 2026-08-04 with the operator's guided-enrollment and correction-surface
+    // registration decisions; parse_ready pins exact equality, so this list
+    // moves only with worker/main.py's.
+    [
+        CaptureFinalize,
+        CaptureInspect,
+        TranscriptCreate,
+        SittingDerive,
+        TranscriptRestore,
+    ]
+    .into_iter()
+    .collect()
 }
 
 pub fn protocol_fixture_operations() -> HashSet<Operation> {

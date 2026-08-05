@@ -24,9 +24,12 @@ MAX_FRAME_BYTES = 64 * 1024
 # needs the derivation the sitting evidence store re-verifies. On the default
 # lane the adapter still refuses ("runtime has no admitted speaker encoder"),
 # so widening the set opens nothing a placeholder-encoder build can misuse.
+# transcript.restore joined with the same day's correction-surface (J4)
+# registration: the restoration coordinator re-verifies every artifact the
+# worker names before anything is published.
 ALPHA_OPERATIONS = frozenset(
     {"capture.finalize", "capture.inspect", "transcript.create",
-     "sitting.derive"}
+     "sitting.derive", "transcript.restore"}
 )
 # profile.* and note.inspect stay boundary-lane only: registering the profile
 # build remains its own operator decision, not a side effect of the recorder.

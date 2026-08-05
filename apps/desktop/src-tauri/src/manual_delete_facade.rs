@@ -6,7 +6,7 @@
 //! authority across the core's exact meeting lease, operation scan, and staged
 //! `audio-deletion/1` recovery path.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, ManualAudioDeletionError, ManualAudioDeletionOutcome,
@@ -65,11 +65,11 @@ pub(crate) enum ManualAudioDeletionFacadeError {
 /// the core call proves the process cannot drop that authority between review
 /// and the core's target lease/sequence acquisition.
 pub(crate) struct ManualAudioDeletionFacade<'a> {
-    writer_lock: &'a Mutex<Option<AppDataWriterLock>>,
+    writer_lock: &'a Mutex<Option<Arc<AppDataWriterLock>>>,
 }
 
 impl<'a> ManualAudioDeletionFacade<'a> {
-    pub(crate) fn new(writer_lock: &'a Mutex<Option<AppDataWriterLock>>) -> Self {
+    pub(crate) fn new(writer_lock: &'a Mutex<Option<Arc<AppDataWriterLock>>>) -> Self {
         Self { writer_lock }
     }
 

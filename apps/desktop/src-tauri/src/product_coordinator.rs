@@ -137,14 +137,14 @@ impl TranscriptRestoreWorker for WorkerProcessRestoreBridge {
 /// the current runtime state instead of a startup snapshot.
 pub(crate) struct DesktopProductCoordinator {
     storage: Arc<Mutex<Option<StorageContext>>>,
-    app_data_writer_lock: Arc<Mutex<Option<AppDataWriterLock>>>,
+    app_data_writer_lock: Arc<Mutex<Option<Arc<AppDataWriterLock>>>>,
     port: Arc<dyn WorkerPort>,
 }
 
 impl DesktopProductCoordinator {
     pub(crate) fn new(
         storage: Arc<Mutex<Option<StorageContext>>>,
-        app_data_writer_lock: Arc<Mutex<Option<AppDataWriterLock>>>,
+        app_data_writer_lock: Arc<Mutex<Option<Arc<AppDataWriterLock>>>>,
         port: Arc<dyn WorkerPort>,
     ) -> Self {
         Self {
@@ -168,7 +168,7 @@ impl DesktopProductCoordinator {
             .lock()
             .map_err(|_| CoordinatorError::Unavailable)?
             .as_ref()
-            .map(AppDataWriterLock::coordination)
+            .map(|writer| writer.coordination())
             .ok_or(CoordinatorError::Unavailable)
     }
 

@@ -89,6 +89,7 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
             "preview_library_open_evidence",
             "preview_library_open_transcript",
             "preview_delete_meeting_audio",
+            "restore_withheld_turn",
         ]
     );
 }
