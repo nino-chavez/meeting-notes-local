@@ -16,6 +16,7 @@ import {
   captureChannelPresentation,
   connectionUncertaintyStatus,
   headerActionPolicy,
+  transcriptPlainText,
   headerStatusPresentation,
   normalizedScrollPosition,
   prepareConsentTransition,
@@ -806,4 +807,25 @@ test("operating points order loosest to strictest with measured costs and no inv
   // One measured option is not a choice, and an empty response renders nothing.
   assert.deepEqual(operatingPointPresentation([{ targetFrr: 0.05, measuredFrr: 0, nOperator: 5, falseAdmitRate: 0, nOther: 20 }]), []);
   assert.deepEqual(operatingPointPresentation(null), []);
+});
+
+test("copied transcript text keeps withheld turns visible", () => {
+  const text = transcriptPlainText([
+    { start: 0, speaker: "Me", text: "we agreed to defer the migration" },
+    { start: 63, withheld: true },
+    { start: 125, speaker: "Them", text: "  send the numbers Friday  " },
+    { start: 130, speaker: "Them", text: "   " },
+    { start: 140, text: "no speaker recorded" },
+  ]);
+  assert.deepEqual(text.split("\n"), [
+    "[00:00] Me: we agreed to defer the migration",
+    "[01:03] (withheld — a voice check set this turn aside)",
+    "[02:05] Them: send the numbers Friday",
+    "[02:20] Unattributed: no speaker recorded",
+  ]);
+  // A transcript that hands over only the words it kept would read complete
+  // while the app knows it is not.
+  assert.ok(text.includes("withheld"));
+  assert.equal(transcriptPlainText([]), "");
+  assert.equal(transcriptPlainText(null), "");
 });

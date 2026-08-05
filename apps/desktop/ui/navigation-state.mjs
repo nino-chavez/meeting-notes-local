@@ -459,3 +459,28 @@ export function enrollmentRecorderPresentation(surface) {
     outcomeText,
   };
 }
+
+// Plain text for the operator's clipboard, so a transcript can be pasted into
+// whatever they already use. A withheld turn keeps a line of its own: dropping
+// it would hand over a transcript that reads complete while the app knows it is
+// not, which is the one thing this product exists not to do. The text carries no
+// path, digest or meeting identifier — the operator asked for the words.
+export function transcriptPlainText(turns) {
+  const rows = Array.isArray(turns) ? turns : [];
+  const lines = [];
+  for (const turn of rows) {
+    const seconds = Math.max(0, Math.floor(Number(turn?.start) || 0));
+    const stamp = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+    if (turn?.withheld) {
+      lines.push(`[${stamp}] (withheld — a voice check set this turn aside)`);
+      continue;
+    }
+    const speaker = typeof turn?.speaker === "string" && turn.speaker
+      ? turn.speaker
+      : "Unattributed";
+    const text = typeof turn?.text === "string" ? turn.text.trim() : "";
+    if (!text) continue;
+    lines.push(`[${stamp}] ${speaker}: ${text}`);
+  }
+  return lines.join("\n");
+}

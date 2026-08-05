@@ -9,6 +9,7 @@ import {
   createTransitionGate,
   changedStatusText,
   enrollmentRecorderPresentation,
+  transcriptPlainText,
   operatingPointPresentation,
   captureChannelPresentation,
   connectionUncertaintyStatus,
@@ -372,13 +373,34 @@ function endElapsed() {
   startedAt = null;
 }
 
+let renderedAttemptTurns = [];
+let renderedLibraryTurns = [];
+
 function renderTranscript(snapshot) {
+  renderedAttemptTurns = Array.isArray(snapshot.turns) ? snapshot.turns : [];
   renderTurns(
     document.querySelector("#transcript-turns"),
     document.querySelector("#transcript-warning"),
     snapshot.turns,
     snapshot.warnings,
   );
+}
+
+async function copyTranscript(turns, control, status) {
+  const text = transcriptPlainText(turns);
+  if (!text) {
+    status.textContent = "Nothing to copy.";
+    return;
+  }
+  control.disabled = true;
+  try {
+    await navigator.clipboard.writeText(text);
+    status.textContent = "Copied.";
+  } catch {
+    status.textContent = "Copy failed. Select the text instead.";
+  } finally {
+    control.disabled = false;
+  }
 }
 
 function appendTurnText(target, text, locator = null) {
@@ -1404,6 +1426,7 @@ async function openLibraryTranscript(
     const restoreError = document.querySelector("#library-restore-error");
     restoreError.hidden = true;
     restoreError.textContent = "";
+    renderedLibraryTurns = Array.isArray(result.turns) ? result.turns : [];
     renderTurns(
       document.querySelector("#library-transcript-turns"),
       document.querySelector("#library-transcript-warning"),
@@ -1927,6 +1950,20 @@ stopButton.addEventListener("click", async () => {
 });
 
 newMeetingButton.addEventListener("click", () => dismissAttemptAndReturnFind(newMeetingButton));
+document.querySelector("#transcript-copy").addEventListener("click", (event) => {
+  copyTranscript(
+    renderedAttemptTurns,
+    event.currentTarget,
+    document.querySelector("#transcript-copy-status"),
+  );
+});
+document.querySelector("#library-transcript-copy").addEventListener("click", (event) => {
+  copyTranscript(
+    renderedLibraryTurns,
+    event.currentTarget,
+    document.querySelector("#library-transcript-copy-status"),
+  );
+});
 recoverButton.addEventListener("click", () => dismissAttemptAndReturnFind(recoverButton));
 
 retryStartup.addEventListener("click", async () => {

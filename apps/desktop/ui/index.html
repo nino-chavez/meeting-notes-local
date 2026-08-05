@@ -215,6 +215,10 @@
         <h1 id="transcript-title">Transcript</h1>
         <p class="lede">Review the words captured from this meeting. This Preview has not generated notes, decisions, or action items.</p>
         <div class="notice" id="transcript-warning" hidden></div>
+        <div class="transcript-actions">
+          <button class="secondary" id="transcript-copy" type="button">Copy transcript</button>
+          <span class="transcript-copy-status" id="transcript-copy-status" role="status" aria-live="polite"></span>
+        </div>
         <article id="transcript-turns" aria-label="Meeting transcript"></article>
         <button class="primary" id="new-meeting" type="button">Return to Find</button>
       </section>
@@ -311,6 +315,10 @@
         <h1 id="library-transcript-title">Transcript</h1>
         <p class="lede">This retained transcript is available for review. It is not an automatic note.</p>
         <div class="notice" id="library-transcript-warning" hidden></div>
+        <div class="transcript-actions">
+          <button class="secondary" id="library-transcript-copy" type="button">Copy transcript</button>
+          <span class="transcript-copy-status" id="library-transcript-copy-status" role="status" aria-live="polite"></span>
+        </div>
         <article id="library-transcript-turns" aria-label="Retained meeting transcript"></article>
         <p class="form-error" id="library-restore-error" role="alert" hidden></p>
         <button class="secondary" id="library-transcript-back" type="button">Back</button>

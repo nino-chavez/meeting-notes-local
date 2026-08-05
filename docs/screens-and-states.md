@@ -308,6 +308,33 @@ runs — the Granola insight, and the reason this isn't just a transcript viewer
 `queued` inherits `local-dictation`'s existing principle: the pipeline degrades
 rather than hard-failing, and the operator is told which leg is down.
 
+### Amendment 2026-08-05 — the transcript can be copied, gaps included
+
+Second report from the same cohort tester, after a 90-minute Teams call the
+transcript made tractable: there was no way to get the words out. Reading a
+transcript in the window is not the job; the job is usually taking it somewhere
+else.
+
+Both transcript surfaces now carry **Copy transcript**, placed above the
+transcript for the same reason the record control is — an action below unbounded
+content is not discoverable.
+
+**A withheld turn keeps a line in the copied text.** This is the load-bearing
+part. Copying only the words the gate kept would hand the operator a transcript
+that reads complete while the app knows it is not, and that artifact would then
+travel — into a chat window, a document, someone else's inbox — carrying no sign
+that anything was set aside. The same honesty the app owes on screen it owes to
+the clipboard. `transcriptPlainText` is pure and pinned by test for exactly this.
+
+The copied text carries the words, speakers and timestamps, and no path, digest
+or meeting identifier. The tester also asked for a way to copy the transcript's
+file path. That is **not built and not yet decided**: the storage layer is
+deliberately descriptor-bound and hands out opaque handles rather than paths, so
+publishing a path is a boundary change rather than a convenience, and it belongs
+in a decision rather than a patch.
+
+---
+
 ### Amendment 2026-08-05 — a finished transcript is not a dead end
 
 Operator report from the first cohort install: after a recording, the only way

@@ -778,6 +778,14 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         "node --test ui/navigation-state.test.mjs"
     );
     assert!(html.contains("id=\"new-meeting\" type=\"button\">Return to Find"));
+    // Copy is offered above each transcript, never only after it, and the
+    // copied text keeps withheld turns rather than handing over a transcript
+    // that reads complete while the app knows it is not.
+    assert!(html.contains("id=\"transcript-copy\" type=\"button\">Copy transcript"));
+    assert!(html.contains("id=\"library-transcript-copy\" type=\"button\">Copy transcript"));
+    assert!(navigation.contains("export function transcriptPlainText"));
+    assert!(navigation.contains("(withheld — a voice check set this turn aside)"));
+    assert!(script.contains("navigator.clipboard.writeText(text)"));
     assert!(html.contains("id=\"recover-button\" type=\"button\">Return to Find"));
     assert!(!html.contains("Return to Start"));
     assert!(script.contains("let productRootScreen = \"find-screen\";"));
