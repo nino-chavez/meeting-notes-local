@@ -559,14 +559,29 @@ def _installed_voiceprint_gate(
     applied", and the artifact has no way to say the second one. Only the
     encoder-carrying lane packages onnxruntime and the admitted ONNX model, so
     on a placeholder build installing a profile stops transcription until the
-    profile is discarded. That cost is deliberate: an unchecked transcript that
-    reads as checked is the failure this product exists to avoid.
+    operator resets the profile. That cost is deliberate: an unchecked
+    transcript that reads as checked is the failure this product exists to
+    avoid.
+
+    **Absent is a size, not a missing path.** Rust owns this file's lifecycle
+    and never unlinks it: `initialize_or_open` creates it at zero bytes on every
+    macOS startup before any capture, and a reset swaps the live profile for a
+    zero-length file rather than removing it. `profile_present` in
+    `profile_lifecycle.rs` is `profile_size != 0`, and this must read the same
+    sentinel. Testing existence instead refuses transcription for every operator
+    who has never enrolled — the whole product, on a fresh install, on both
+    lanes. That is what the first version of this function did.
     """
     try:
         installed = resolve_below(root, "profile", "voiceprint.json")
     except (OSError, StorageRefused):
         return None
     if installed.is_symlink() or not installed.is_file():
+        return None
+    try:
+        if installed.stat().st_size == 0:
+            return None
+    except OSError:
         return None
     if encoder_path is None or encoder_path.is_symlink() or not encoder_path.is_file():
         raise AdapterRefused("runtime has no admitted speaker encoder")

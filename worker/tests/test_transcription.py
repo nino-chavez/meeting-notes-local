@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import wave
 from pathlib import Path
 
@@ -258,14 +259,56 @@ class InstalledVoiceprintGateTests(unittest.TestCase):
         )
 
     def test_an_empty_profile_directory_asks_for_no_gate(self) -> None:
-        # The state right after profile.discard, and the one a cohort operator
-        # actually reaches: the directory survives, the profile does not. It
-        # must read as "no profile installed" and not as a profile that failed
-        # to load, or discarding a profile would stop transcription.
         (self.root / "profile").mkdir(mode=0o700)
         self.assertIsNone(
             adapters._installed_voiceprint_gate(self.root, "e" * 64, None)
         )
+
+    def test_a_zero_byte_profile_is_absent_because_that_is_what_rust_writes(
+        self,
+    ) -> None:
+        """The state of every fresh install, and of every reset.
+
+        Rust never unlinks this file. `initialize_or_open` creates it at zero
+        bytes on every macOS startup before any capture, and a reset swaps the
+        live profile for a zero-length file rather than removing it;
+        `profile_present` is `profile_size != 0`. Reading existence instead of
+        size refused transcription for every operator who had never enrolled —
+        on both lanes, on a fresh install, for the whole product.
+        """
+        directory = self.root / "profile"
+        directory.mkdir(mode=0o700)
+        os.close(
+            os.open(
+                directory / "voiceprint.json",
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+        )
+        self.assertEqual((directory / "voiceprint.json").stat().st_size, 0)
+        self.assertIsNone(
+            adapters._installed_voiceprint_gate(self.root, "e" * 64, None)
+        )
+        # And the operation it guards reaches transcription asking for no gate,
+        # which is the part that actually broke.
+        asked: list[object] = []
+
+        def record(*_arguments, gate_filter=None, **_keywords):
+            asked.append(gate_filter)
+            return "digest", self.root / "unused.json"
+
+        with unittest.mock.patch(
+            "worker.transcription.create_transcript_revision", record
+        ):
+            adapters.transcript_create(
+                self.root,
+                {"meeting_id": self.meeting_id},
+                admission="internal-alpha",
+                model_dir=self.model,
+                encoder_digest="e" * 64,
+                encoder_path=None,
+            )
+        self.assertEqual(asked, [None])
 
     def test_installed_profile_without_an_admitted_encoder_refuses(self) -> None:
         # Fork 1, settled: on a placeholder-encoder build an installed profile

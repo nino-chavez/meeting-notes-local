@@ -61,11 +61,35 @@ could not run it," so writing one hands the operator words they believe were
 checked, in a file that says nothing was ever asked.
 
 What it costs, stated exactly: on a **placeholder-encoder** build, installing a
-profile stops transcription until the profile is discarded. That is a real cost
-and it lands on nobody in the cohort — the distributed DMG is built with
-`worker/build_runtime.sh build-alpha-encoder` and carries the admitted ONNX
+profile stops transcription until the operator resets the profile. That is a
+real cost and it lands on nobody in the cohort — the distributed DMG is built
+with `worker/build_runtime.sh build-alpha-encoder` and carries the admitted ONNX
 encoder (runbook, "Encoder-candidate lane"; true since 0.2.2). It lands on
 developer builds of the transcript-only lane, which is the right place for it.
+
+### "Installed" is a size, and the first version got that wrong
+
+`<root>/profile/voiceprint.json` **always exists**. Rust owns its lifecycle and
+never unlinks it: `initialize_or_open` creates it at zero bytes on every macOS
+startup before any capture, and a reset swaps the live profile for a zero-length
+file rather than removing it. `ProfileLifecycleBaseline::profile_present` is
+`profile_size != 0`.
+
+The first version of `_installed_voiceprint_gate` tested existence. That made
+every fresh install look enrolled, so `transcript.create` refused for every
+operator who had never recorded a sitting — on the placeholder lane at the
+encoder check, on the cohort lane when `load_profile` hit an empty file. The
+whole product, unavailable, on both lanes.
+
+Two things let it through, and both are worth naming. The tests used `{}\n` and
+an absent directory — plausible states, neither of them the one the app actually
+produces. And the proposal's provenance list named `retention.rs` and
+`profile_adopt` but not `profile_lifecycle.rs`, which is where "installed" is
+defined. Reading the code that *writes* a file is not the same as reading the
+code that decides whether it counts.
+
+It was caught in commit review before any build. The regression test asserts the
+zero-byte state directly and was confirmed to fail against the broken version.
 
 ## Where it runs
 
@@ -81,7 +105,7 @@ states the runtime is in:
 
 | State | Behaviour | `voiceprint` field |
 |---|---|---|
-| No profile installed | No gate. Unchanged. | `null` — and that is what null means |
+| No profile installed — the file absent **or zero bytes** | No gate. Unchanged. | `null` — and that is what null means |
 | Profile installed, encoder admitted | Gate runs | The full report, including what it rejected |
 | Profile installed, no admitted encoder | **Refuse** | No transcript is written |
 
@@ -148,7 +172,10 @@ Read in the tree at commit `9c448d4`, 2026-08-05: `worker/transcription.py`
 `spike/dual_capture.py` `drop_offprint`, `voiceprint_provenance`,
 `load_voiceprint`, `write_transcript`, `Voiceprint`; `spike/speaker_gate.py`
 `load_profile`; `notes/transcript.py`; `crates/session-core/src/retention.rs`
-`enroll_profile_candidate`; `crates/session-core/src/library_read.rs`;
+`enroll_profile_candidate`; `crates/session-core/src/profile_lifecycle.rs`
+`profile_present`, `initialize_or_open` and the reset swap (added 2026-08-05
+after the existence-versus-size defect above — it was the one file this list
+should have named from the start); `crates/session-core/src/library_read.rs`;
 `docs/distribution-runbook.md` "Encoder-candidate lane". The lane question —
 does the distributed DMG carry the encoder — was answered from the runbook's own
 build-command record, not from a memory note that said the opposite.
