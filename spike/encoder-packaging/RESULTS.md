@@ -184,6 +184,29 @@ Terms of the decision:
 Until both pass, every product surface says **preferred ONNX candidate**,
 never admitted encoder.
 
+## Admission verdict (2026-08-04)
+
+The operator reviewed the measured record above and **admitted the ONNX
+encoder for the internal-alpha lane**. Terms of the ruling:
+
+- Check 1 stands on its full measurement: near-perfect gate agreement on the
+  operator's real sittings (zero false admits, zero off-boundary flips, one
+  at-boundary flip at the loosest registered point).
+- The one unmeasured item — Gatekeeper acceptance of a transferred build on a
+  second Mac — is **waived by the operator** as marginal for an artifact
+  class that is Apple-notarized, stapled, and locally Gatekeeper-accepted.
+  The first cohort download of the encoder-carrying DMG supplies the field
+  transfer receipt this test would have simulated; that receipt should be
+  noted here when it arrives.
+- The never-distributed encoder-candidate DMG was deleted by the operator;
+  its measurements above stand as the record.
+
+From this verdict forward the internal-alpha runtime ships the admitted ONNX
+encoder (`build-alpha-encoder` lane becomes the cohort build), and surfaces
+may describe the encoder as present. The guided-enrolment recorder and
+profile operations remain unregistered — admission of the encoder is not
+admission of enrolment, which stays gated on its own operator decisions.
+
 ## Reproduce
 
 ```sh

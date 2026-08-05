@@ -123,12 +123,16 @@ This lane exists to produce the evidence admission check 2 requires
    scripts/measure-encoder-beside-mlx.py <Resources>` — peak RSS with the
    encoder session co-resident with MLX transcription of synthetic audio.
 
-A `build-alpha-encoder` bundle is admission evidence, never a distribution
-candidate: packaging the candidate changes no product surface's language —
-everything still says preferred ONNX candidate — and the encoder admission
-verdict, like both release gates, is the operator's alone. The
-transferred-build Gatekeeper check on another Mac remains the manual step
-described below.
+Until 2026-08-04 a `build-alpha-encoder` bundle was admission evidence only,
+never a distribution candidate. The operator's admission verdict
+(`spike/encoder-packaging/RESULTS.md` § "Admission verdict") changed that:
+**from 0.2.2 the cohort DMG is built with `build-alpha-encoder`**, shipping
+the admitted ONNX encoder in the runtime. The transferred-build Gatekeeper
+check was waived in that ruling; the first cohort download of an
+encoder-carrying DMG supplies the field receipt and should be noted in
+RESULTS.md when it arrives. Admission of the encoder is not admission of
+enrolment: the recorder and profile operations stay unregistered until their
+own operator decisions.
 
 ## Check Apple release access
 
