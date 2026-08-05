@@ -69,6 +69,8 @@ EXPECTED_FIXTURES = 12
 COLD_MEDIAN_CEILING_S = 30.0
 WARM_MEDIAN_CEILING_S = 15.0
 PEAK_RSS_CEILING = 4_282_063_304
+# Interpreter start, model load, and the ~1.9 s vocabulary decode, generously.
+WORKER_STARTUP_ALLOWANCE_S = 120.0
 
 # Timings and footprint are the only values a repeat may move, so they are
 # excluded from the digest that the repeatability gate compares.
@@ -150,32 +152,71 @@ def run_worker(model_directory: Path, fixture_id: str, warm_repeats: int) -> int
     return 0
 
 
+def _worker_timeout_s(warm_repeats: int) -> float:
+    """A bound taken from the protocol's own ceiling, not invented.
+
+    One cold call plus the warm repeats, each allowed the registered 30 s cold
+    ceiling, plus a fixed allowance for interpreter start, model load, and the
+    ~1.9 s vocabulary decode. A wedged worker must not hold the matrix open
+    indefinitely — there are 36 of them.
+    """
+    return (1 + warm_repeats) * COLD_MEDIAN_CEILING_S + WORKER_STARTUP_ALLOWANCE_S
+
+
+def _failed_worker(fixture_id: str, reason: str, wall_s: float, **extra) -> dict:
+    return {
+        "fixture": fixture_id,
+        "worker_failed": True,
+        "failure": reason,
+        "process_wall_s": wall_s,
+        **extra,
+    }
+
+
 def _spawn(model_directory: Path, fixture_id: str, warm_repeats: int) -> dict:
     started = time.monotonic()
-    completed = subprocess.run(
-        [
-            sys.executable, str(Path(__file__).resolve()),
-            "--model-directory", str(model_directory),
-            "--worker", fixture_id,
-            "--warm-repeats", str(warm_repeats),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable, str(Path(__file__).resolve()),
+                "--model-directory", str(model_directory),
+                "--worker", fixture_id,
+                "--warm-repeats", str(warm_repeats),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_worker_timeout_s(warm_repeats),
+        )
+    except subprocess.TimeoutExpired:
+        return _failed_worker(
+            fixture_id, "timeout", round(time.monotonic() - started, 6),
+            timeout_s=_worker_timeout_s(warm_repeats),
+        )
     wall_s = round(time.monotonic() - started, 6)
     if completed.returncode != 0:
-        return {
-            "fixture": fixture_id,
-            "worker_failed": True,
+        return _failed_worker(
+            fixture_id, "nonzero-exit", wall_s,
             # A negative return code is a signal, which is how a memory-pressure
             # termination arrives. The protocol rejects on that, not just on the
             # footprint number, so it must be distinguishable from an exception.
-            "returncode": completed.returncode,
-            "terminated_by_signal": completed.returncode < 0,
-            "stderr_tail": completed.stderr.strip().splitlines()[-3:],
-            "process_wall_s": wall_s,
-        }
-    worker = json.loads(completed.stdout)
+            returncode=completed.returncode,
+            terminated_by_signal=completed.returncode < 0,
+            stderr_tail=completed.stderr.strip().splitlines()[-3:],
+        )
+    try:
+        worker = json.loads(completed.stdout)
+    except ValueError as error:
+        # A worker can exit zero and still hand back something unusable. Left
+        # unguarded this raised out of the matrix after up to 36 model loads,
+        # writing no receipt and naming no fixture — the parent could not tell
+        # "worker succeeded" from "worker output unreadable", and only the
+        # second is fatal.
+        return _failed_worker(
+            fixture_id, "stdout-unparseable", wall_s,
+            error_type=type(error).__name__,
+            stdout_bytes=len(completed.stdout),
+            stderr_tail=completed.stderr.strip().splitlines()[-3:],
+        )
     worker["process_wall_s"] = wall_s
     worker["worker_failed"] = False
     return worker
@@ -257,12 +298,22 @@ def _fixture_row(fixture_id: str, control: dict, workers: list) -> dict:
         "codes": sorted({call["code"] or "" for call in every_call}),
         "response_sha256": sorted({call["response_sha256"] or "" for call in cold}),
         "note_sha256": sorted({call["note_sha256"] or "" for call in cold}),
+        # All three digests the gate is computed over are recorded, not two. If
+        # the receipt digest is the one that moved, a reader must be able to see
+        # which field diverged rather than only that `repeatable` went false.
+        "receipt_sha256": sorted({call["receipt_sha256"] or "" for call in cold}),
         "cold_elapsed_s": cold_elapsed,
         "warm_elapsed_s": warm_elapsed,
         "cold_median_s": round(statistics.median(cold_elapsed), 6) if timings_available and cold else None,
         "warm_median_s": round(statistics.median(warm_elapsed), 6) if timings_available and warm else None,
         "peak_rss": max(worker["peak_rss"] for worker in workers),
-        "load_average": [call["load_average_before"] for call in cold],
+        # Every call, not only the cold ones. Warm carries the tighter ceiling —
+        # 15 s against 30 s — so a `warm_latency: false` is the failure most
+        # likely to arrive with nothing to attribute it to.
+        "load_average": [
+            {"phase": call["phase"], "before": call["load_average_before"], "after": call["load_average_after"]}
+            for call in every_call
+        ],
         "gates": {
             "workers_completed": True,
             "control_expected": control["expected"],

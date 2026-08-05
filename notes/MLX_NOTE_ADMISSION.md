@@ -480,32 +480,41 @@ repeat matrix the single-process runner refuses: 12 fixtures, 3 cold calls each
 from a fresh process, 2 warm in the first worker's loaded process. 36 processes,
 60 calls. Receipt: `notes/mlx_note_matrix_receipt.json`.
 
-**Three fixtures of twelve pass, and they are the three that had been run
-before.** `ordinary-decision` and `abstain-chitchat` are the two corrective-probe
-fixtures; `abstain-plain` is the second abstention. Every fixture first exercised
-here failed.
+**Three fixtures of twelve pass.** Two are the corrective probe's own —
+`ordinary-decision` and `abstain-chitchat`. The third, `abstain-plain`, had never
+been run and passed: a previously unseen fixture generalized correctly, and it is
+the only supported evidence on this path that anything generalizes at all. Every
+*supported* fixture first exercised here failed.
 
 | Gate | Result |
 | --- | --- |
 | Every fixture ran, tree unchanged | Pass |
 | Repeatability | Pass on all 12 — response, note, and receipt digests identical across the three cold runs |
-| Latency | Pass — 5.03 s cold median against a 30 s ceiling, 4.24 s warm against 15 s |
-| Memory | Pass — 1,184,366,592 bytes peak against 4,282,063,304 |
+| Latency | Pass — 4.89 s cold median against a 30 s ceiling, 3.97 s warm against 15 s |
+| Memory | Pass — 1,183,842,304 bytes peak against 4,282,063,304 |
 | Per-fixture checks | **Fail on 9 of 10 supported fixtures** |
 
-#### The nine failures are one mechanism, and it is not comprehension
+#### Eight of the nine failures are one mechanism, and it is not comprehension
 
 Reported refusal classes look like three separate problems — six
 `response-contract`, two `citation-locator`, one
-`response-length-truncation`. Capturing the replies in-process shows one cause:
+`response-length-truncation`. Capturing the replies in-process shows the first
+eight are one cause:
 
-**The model truncates every 90-character `source_fragment_id` at exactly 67
-characters.** It reproduces `sf-` plus the 64-hex digest and drops the
-`-t000000-c000000-000040` positional tail, every time, deterministically. A
-truncated ID is not an offered ID, so the locator check refuses it; when the
-model then pads the list to three copies of the same truncated string, the
-uniqueness check refuses first and reports `response-contract` instead. Same
-defect, two refusal classes, depending on how many IDs were emitted.
+**The model ends every 90-character `source_fragment_id` after 67 characters.**
+It emits `sf-` plus the fragment's own correct 64-hex digest and stops, dropping
+the `-t000000-c000000-000040` positional tail, deterministically. A short ID is
+not an offered ID, so the locator check refuses it; when the model then pads the
+list to three copies of the same string, the uniqueness check refuses first and
+reports `response-contract` instead. One behaviour, two refusal classes,
+depending on how many IDs were emitted.
+
+Calling this truncation, or a copy-fidelity failure, is wrong. **The model
+reproduces 64 opaque hex characters perfectly** — the fragment's own digest, not
+the candidate's — and stops at a boundary that is not arbitrary. `candidate_id`
+is `cf-` plus 64 hex, exactly 67 characters, and the string the model emits is
+`sf-` plus 64 hex, exactly 67 characters. It is producing a well-formed ID *in
+the other format the request carries*.
 
 What the same responses got right, on all ten supported fixtures:
 
@@ -515,16 +524,45 @@ What the same responses got right, on all ten supported fixtures:
 | `label` | 10 / 10 | an `enum` of the four labels |
 | `source_fragment_ids` | 1 / 10 | `{"type": "array", "min_items": 1, "max_items": 3}` |
 
-`candidate_id` is `cf-` plus the same 64 hex characters — an opaque string of
-almost identical length and identical character class. The model reproduces it
-exactly ten times out of ten when it is offered as an enum, and truncates the
-fragment ID nine times out of ten when it is not. That is the control that
-isolates the mechanism: this is not a model that cannot copy an opaque
-identifier, it is a harness that enumerates two of three identifier fields.
+Two hypotheses fit this equally well and the run does not separate them:
+
+1. **Enum absence.** The two enumerated fields are reproduced exactly; the one
+   field the model must copy free-hand is not.
+2. **Shape priming.** The request carries two identifier formats, one of which
+   terminates at the hash, and the model normalizes the longer to the shorter.
+
+Both predict that enumerating the offered fragment IDs would fix it, so the
+repair direction is the same either way — but the causal claim is not
+established, and an earlier draft of this section asserted the first as fact.
+The falsifier that separates them: **if the model also shortens 90-character
+entries that appear in an enum, enum-presence was never the mechanism.**
+
+The evidence that a 90-character exact copy is reachable at all is one fixture,
+`ordinary-decision`, which produced it on all five of its calls. One fixture,
+five times — not five fixtures.
 
 Citations, labels, and the negation cases were substantively right in the
 replies inspected — `"We decided not to cancel Project Atlas."` preserved its
 negation, `"Case 481"` its number.
+
+#### The ninth failure is unrelated, and it is the model alone
+
+`locator-second-turn` is a different event: 512 generated tokens, finish
+`length`, an unterminated string, and a tail of `…123456789abcde123456789abc`
+repeating to the cap. The model degenerated into a repetition loop inside a
+free-text hole.
+
+The obvious suspicion is the mask. It forbids a raw quote, backslash, or control
+character inside a string value, so the only exit from a free-text hole is the
+closing quote — a model that has begun repeating cannot leave the string any
+other way. That reasoning is wrong, and running the same fixture through both
+decoders settles it: **the unconstrained arm produces byte-identical output** —
+512 tokens, 684 bytes, the same tail, also unparseable. The mask changes nothing
+here. This one is the model, and it is the only failure on this path that the
+harness cannot be blamed for.
+
+Recorded because the counterfactual was drafted as fact before it was run, and
+it was the opposite of true.
 
 #### A second harness defect, independent of the above
 
@@ -558,10 +596,20 @@ quarter — and that every result on all 12 fixtures is bit-for-bit repeatable
 across three cold processes. The matrix is a working instrument that has now
 found a defect in itself.
 
-**No admission. No amendment made here.** Making `source_fragment_ids` an enum,
-symmetric with `candidate_id`, would change the request the model sees and
-therefore every request digest on this path, so it is a preregistration decision
-and not a fix to apply quietly mid-run.
+**No admission. No amendment made here.** Two distinct interventions are
+available and they should not ride in together:
+
+- **(a) State the three rules the parser already enforces.** Grading a candidate
+  against unstated rules is invalid measurement regardless of any experiment
+  budget. This is a defect fix.
+- **(b) Enumerate the offered fragment IDs**, symmetric with `candidate_id`.
+  This removes identifier transcription from the test entirely, which is a
+  larger claim and needs its own justification — it must not arrive as a
+  side effect of (a).
+
+Either changes the request the model sees and therefore every request digest on
+this path, so both are preregistration decisions and not fixes to apply quietly
+mid-run. Whichever is registered carries the falsifier stated above.
 
 ## 2026-08-02 SmolLM2 measurement — inconclusive
 

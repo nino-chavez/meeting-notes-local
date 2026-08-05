@@ -149,6 +149,28 @@ class FixtureRowTests(unittest.TestCase):
         # protocol rejects on it — so it must stay distinguishable here.
         self.assertTrue(row["worker_failures"][0]["terminated_by_signal"])
 
+    def test_all_three_digests_the_gate_reads_are_recorded_not_two(self) -> None:
+        """A `repeatable: false` must say which of the three moved.
+
+        The gate is computed over the response, note and receipt digests; the
+        row recorded only the first two, so a run that diverged on the receipt
+        left a receipt showing one response digest, one note digest, and a
+        failed gate with nothing to point at.
+        """
+        workers = passing_workers()
+        workers[2]["calls"][0] = call("cold-call", 0, receipt="moved")
+        row = _fixture_row("x", CONTROL, workers)
+        self.assertFalse(row["gates"]["repeatable"])
+        self.assertEqual(row["receipt_sha256"], ["c1", "moved"])
+        self.assertEqual(row["response_sha256"], ["r1"])
+
+    def test_load_is_recorded_for_warm_calls_which_carry_the_tighter_ceiling(self) -> None:
+        row = _fixture_row("x", CONTROL, passing_workers())
+        phases = [entry["phase"] for entry in row["load_average"]]
+        self.assertEqual(phases.count("cold-call"), COLD_REPEATS)
+        self.assertEqual(phases.count("warm-call"), WARM_REPEATS)
+        self.assertIn("after", row["load_average"][0])
+
     def test_a_call_that_never_reached_generation_is_carried_not_crashed(self) -> None:
         """A MaskRefused or timeout produces a receipt with no generation block."""
         workers = passing_workers()
@@ -227,7 +249,7 @@ class MatrixReceiptTests(unittest.TestCase):
         receipt = self.receipt()
         self.assertEqual(receipt["latency"]["load_average_at_start"], [1.0, 1.0, 1.0])
         self.assertIn("load_average_at_end", receipt["latency"])
-        self.assertEqual(receipt["fixtures"][0]["load_average"], [[1.0, 1.0, 1.0]] * COLD_REPEATS)
+        self.assertEqual(len(receipt["fixtures"][0]["load_average"]), COLD_REPEATS + WARM_REPEATS)
 
     def test_the_memory_ceiling_binds_and_a_zero_reading_is_not_a_pass(self) -> None:
         over = [_fixture_row("f", CONTROL, [worker(w["calls"], peak_rss=PEAK_RSS_CEILING + 1) for w in passing_workers()])]
@@ -245,6 +267,61 @@ class MatrixReceiptTests(unittest.TestCase):
         receipt = self.receipt(rows=rows)
         self.assertFalse(receipt["gates"]["per_fixture_gates"])
         self.assertFalse(receipt["passed"])
+
+
+class SpawnFailureTests(unittest.TestCase):
+    """A bad worker must become a row, never an exception out of the matrix.
+
+    36 model loads are at stake. Anything that escapes `_spawn` discards the
+    entire run and names no fixture.
+    """
+
+    def spawn(self, fake_run):
+        original = matrix.subprocess.run
+        matrix.subprocess.run = fake_run
+        try:
+            return matrix._spawn(Path("/model"), "ordinary-decision", 2)
+        finally:
+            matrix.subprocess.run = original
+
+    def test_a_zero_exit_worker_with_unusable_stdout_becomes_a_row(self) -> None:
+        class Completed:
+            returncode = 0
+            stdout = "Traceback (most recent call last):"
+            stderr = "boom"
+
+        row = self.spawn(lambda *a, **k: Completed())
+        self.assertTrue(row["worker_failed"])
+        self.assertEqual(row["failure"], "stdout-unparseable")
+        self.assertEqual(row["fixture"], "ordinary-decision")
+
+    def test_a_wedged_worker_times_out_instead_of_holding_the_matrix_open(self) -> None:
+        def wedged(*args, **kwargs):
+            self.assertIn("timeout", kwargs)
+            raise matrix.subprocess.TimeoutExpired(cmd="worker", timeout=kwargs["timeout"])
+
+        row = self.spawn(wedged)
+        self.assertTrue(row["worker_failed"])
+        self.assertEqual(row["failure"], "timeout")
+        # The bound comes from the protocol's own cold ceiling, not a guess.
+        self.assertEqual(row["timeout_s"], 3 * 30.0 + matrix.WORKER_STARTUP_ALLOWANCE_S)
+
+    def test_a_signal_killed_worker_stays_distinguishable_from_an_exception(self) -> None:
+        class Killed:
+            returncode = -9
+            stdout = ""
+            stderr = "Killed"
+
+        row = self.spawn(lambda *a, **k: Killed())
+        self.assertEqual(row["failure"], "nonzero-exit")
+        self.assertTrue(row["terminated_by_signal"])
+
+    def test_every_spawn_failure_shape_reaches_the_row_gate_as_incomplete(self) -> None:
+        for reason in ("timeout", "stdout-unparseable", "nonzero-exit"):
+            with self.subTest(reason=reason):
+                workers = passing_workers()
+                workers[1] = matrix._failed_worker("x", reason, 1.0)
+                self.assertFalse(_fixture_row("x", CONTROL, workers)["gates"]["workers_completed"])
 
 
 class CommittedMatrixReceiptTests(unittest.TestCase):
