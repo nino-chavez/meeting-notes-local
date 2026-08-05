@@ -25,9 +25,13 @@ from mlx_note_admission import (
 from summarize import structured_artifact_citations
 
 
-def fixture_receipt(phase: str, identifier: str, transcript, expected_outcome: str, required_terms, provider) -> dict:
-    control = run_control_arm(transcript)
-    result = run_model_arm(transcript, provider)
+def model_call_checks(result, transcript, expected_outcome: str, required_terms) -> dict:
+    """The model-side gates for one call.
+
+    Extracted so the fresh-process matrix orchestrator applies exactly these and
+    not a second, drifting copy — a matrix that graded itself more leniently than
+    the probe would look like progress.
+    """
     citations = []
     if result.note is not None:
         # `items` is a count; the rows are under `cited`, and each carries the
@@ -36,13 +40,25 @@ def fixture_receipt(phase: str, identifier: str, transcript, expected_outcome: s
         # run, so iterating an integer and reading a missing key both survived.
         citations = [row["quote"] for row in structured_artifact_citations(result.note, transcript)["cited"]]
     joined = "\n".join(citations).casefold()
-    checks = {
-        "control_expected": control.outcome == (
-            "accepted-research-candidate" if expected_outcome == "accepted-research-candidate" else "transcript-only"
-        ),
+    return {
         "expected_outcome": result.outcome == expected_outcome,
         "required_citation_terms": all(term.casefold() in joined for term in required_terms),
         "strict_empty_abstention": expected_outcome != "transcript-only" or result.code == "no-model-candidates",
+    }
+
+
+def control_expected(control, expected_outcome: str) -> bool:
+    return control.outcome == (
+        "accepted-research-candidate" if expected_outcome == "accepted-research-candidate" else "transcript-only"
+    )
+
+
+def fixture_receipt(phase: str, identifier: str, transcript, expected_outcome: str, required_terms, provider) -> dict:
+    control = run_control_arm(transcript)
+    result = run_model_arm(transcript, provider)
+    checks = {
+        "control_expected": control_expected(control, expected_outcome),
+        **model_call_checks(result, transcript, expected_outcome, required_terms),
     }
     return {
         "phase": phase,
