@@ -338,8 +338,15 @@ def _runtime_receipt(observed: dict, expected_request_sha256: str) -> dict:
     required = {
         "model_tree_sha256", "runtime_identity", "request_sha256",
         "rendered_template_sha256", "generation",
+        # Which decoder produced the response. Closed-set, like the rest: a
+        # receipt that cannot say whether the sampler was masked cannot be
+        # compared with one from the other arm, and this experiment exists
+        # entirely to compare the two.
+        "decoder",
     }
     if not isinstance(observed, dict) or set(observed) != required:
+        raise AdmissionRefused("model-digest-mismatch")
+    if not isinstance(observed["decoder"], str) or not observed["decoder"]:
         raise AdmissionRefused("model-digest-mismatch")
     if observed["runtime_identity"] != MLX_RUNTIME["runtime_identity"]:
         raise AdmissionRefused("runtime-package-mismatch")
@@ -632,12 +639,28 @@ def run_model_arm(
             "runtime": runtime,
             "elapsed_s": round(time.monotonic() - started, 6),
             "records": len(rows),
+            # Every refusal path already carries these. Acceptance did not, so
+            # the one outcome worth reproducing was the only one whose response
+            # digest, byte length and streaming metadata went unrecorded — and
+            # the registered repeatability gate is stated in terms of "raw
+            # response SHA-256 ... identical across the three cold runs", which
+            # an accepted run could not evidence at all.
+            **response_receipt,
         },
     )
 
 
-def local_mlx_provider(model_directory: Path) -> ModelProvider:
-    """Create an optional private MLX-LM provider; no download or HTTP service."""
+def local_mlx_provider(
+    model_directory: Path, *, constrained: bool = False
+) -> ModelProvider:
+    """Create an optional private MLX-LM provider; no download or HTTP service.
+
+    `constrained` enables the structure-only mask registered in
+    `MLX_NOTE_ADMISSION.md` § "Preregistered amendment — 2026-08-05". It is
+    opt-in and off by default so the unconstrained arm stays exactly what the
+    2026-08-02 corrective probe ran; the two are different experiments and a
+    receipt has to say which one produced it.
+    """
     if not model_directory.is_dir():
         raise ValueError("model directory does not exist")
 
@@ -708,6 +731,20 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
     model, tokenizer = load(str(model_directory))
     load_elapsed_s = round(time.monotonic() - loaded_started, 6)
 
+    logits_processors = None
+    decoder_identity = "unconstrained"
+    if constrained:
+        from structured_decoding import make_contract_logits_processor
+
+        # Built once, outside every call's timing, because decoding the whole
+        # vocabulary is setup rather than generation and folding it into the
+        # per-call number is the mistake the 2026-08-02 measurement made with
+        # tree hashing.
+        logits_processors = [make_contract_logits_processor(tokenizer)]
+        decoder_identity = _sha256(
+            Path(__file__).with_name("structured_decoding.py").read_bytes()
+        )
+
     def provider(request: dict) -> tuple[str, dict]:
         mx.random.seed(MLX_RUNTIME["decoding"]["seed"])
         # The selected model's documented chat template receives the instruction separately;
@@ -733,6 +770,7 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
             max_tokens=MLX_RUNTIME["decoding"]["max_tokens"],
             max_kv_size=MLX_RUNTIME["decoding"]["max_kv_size"],
             sampler=make_sampler(temp=MLX_RUNTIME["decoding"]["temperature"]),
+            **({"logits_processors": logits_processors} if logits_processors else {}),
         ):
             chunks.append(response.text)
             response_prompt_tokens = getattr(response, "prompt_tokens", None)
@@ -749,6 +787,9 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
         return raw, {
             "model_tree_sha256": preflight_tree_sha256,
             "runtime_identity": runtime_identity,
+            # Which experiment this is. A receipt that does not say whether the
+            # decoder was masked cannot be compared with one that was.
+            "decoder": decoder_identity,
             "request_sha256": _sha256(_canonical_json({"system": request["system"], "user": user_request})),
             "rendered_template_sha256": rendered_template_sha256,
             "generation": {

@@ -30,7 +30,11 @@ def fixture_receipt(phase: str, identifier: str, transcript, expected_outcome: s
     result = run_model_arm(transcript, provider)
     citations = []
     if result.note is not None:
-        citations = [row["citation"] for row in structured_artifact_citations(result.note, transcript)["items"]]
+        # `items` is a count; the rows are under `cited`, and each carries the
+        # verbatim transcript span as `quote`. This line had never executed: no
+        # arm had produced an accepted note before the structure-constrained
+        # run, so iterating an integer and reading a missing key both survived.
+        citations = [row["quote"] for row in structured_artifact_citations(result.note, transcript)["cited"]]
     joined = "\n".join(citations).casefold()
     checks = {
         "control_expected": control.outcome == (
@@ -40,14 +44,6 @@ def fixture_receipt(phase: str, identifier: str, transcript, expected_outcome: s
         "required_citation_terms": all(term.casefold() in joined for term in required_terms),
         "strict_empty_abstention": expected_outcome != "transcript-only" or result.code == "no-model-candidates",
     }
-
-
-def fixtures_for_scope(scope: str):
-    if scope == "probe":
-        return synthetic_corrective_probe_fixtures()
-    raise ValueError(
-        "full-scope-not-implemented: use a fresh-process orchestrator for the registered cold/warm repeat matrix"
-    )
     return {
         "phase": phase,
         "id": identifier,
@@ -65,10 +61,21 @@ def fixtures_for_scope(scope: str):
     }
 
 
+def fixtures_for_scope(scope: str):
+    if scope == "probe":
+        return synthetic_corrective_probe_fixtures()
+    raise ValueError(
+        "full-scope-not-implemented: use a fresh-process orchestrator for the registered cold/warm repeat matrix"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-directory", required=True, type=Path)
     parser.add_argument("--scope", required=True, choices=("probe", "full"))
+    # Off by default: the unconstrained arm must stay exactly what the
+    # 2026-08-02 corrective probe ran, and the receipt records which was used.
+    parser.add_argument("--constrained", action="store_true")
     args = parser.parse_args()
     try:
         fixtures = fixtures_for_scope(args.scope)
@@ -78,7 +85,7 @@ def main() -> int:
     preflight_tree_sha256 = tree_sha256(args.model_directory)
     if preflight_tree_sha256 != MLX_RUNTIME["model"]["expected_tree_sha256"]:
         raise SystemExit("model tree does not match registered identity")
-    provider = local_mlx_provider(args.model_directory)
+    provider = local_mlx_provider(args.model_directory, constrained=args.constrained)
     load = getattr(provider, "load_receipt")
 
     cold = fixture_receipt("cold-call", *fixtures[0], provider)
@@ -89,6 +96,7 @@ def main() -> int:
     receipt = {
         "schema": "mlx-note-corrective-probe/1",
         "scope": args.scope,
+        "decoding": "structure-constrained" if args.constrained else "unconstrained",
         "harness": _harness_identity(),
         "registered_model": {
             "repository": MLX_RUNTIME["model"]["repository"],

@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from structured_decoding import (
     ITEM_FIELDS,
+    START,
     ContractMachine,
     MaskRefused,
     allowed_token_ids,
@@ -53,10 +54,25 @@ class ContractLanguageTests(unittest.TestCase):
                         f"prefix {text[:cut]!r} was rejected",
                     )
 
-    def test_a_complete_response_admits_nothing_further(self) -> None:
-        self.assertFalse(self.machine.viable(POPULATED + " "))
-        self.assertFalse(self.machine.viable(ABSTENTION + "\n"))
+    def test_a_complete_response_admits_only_trailing_whitespace(self) -> None:
+        # `_strict_json` calls json.loads on the raw string, which tolerates
+        # surrounding whitespace and nothing else. The mask matches that exactly.
+        self.assertTrue(self.machine.complete(POPULATED + " "))
+        self.assertTrue(self.machine.complete(ABSTENTION + "\n"))
         self.assertFalse(self.machine.viable(ABSTENTION + "{"))
+        self.assertFalse(self.machine.viable(ABSTENTION + "and here is why"))
+
+    def test_leading_whitespace_is_tolerated_because_the_parser_tolerates_it(self) -> None:
+        # Load-bearing rather than cosmetic: mlx-lm 0.30.4 samples the first
+        # token before any logits processor runs, and this model opens its turn
+        # with a newline. Rejecting it would refuse every generation.
+        self.assertTrue(self.machine.viable("\n"))
+        self.assertTrue(self.machine.complete("\n" + ABSTENTION))
+        self.assertTrue(self.machine.complete("  \n" + POPULATED + "\n"))
+        # Whitespace inside the skeleton is still not reachable, so the mask
+        # cannot drift into accepting a differently-formatted object.
+        self.assertFalse(self.machine.viable('{ "items"'))
+        self.assertFalse(self.machine.viable('{"items": ['))
 
     def test_two_items_and_a_single_fragment_id_are_reachable(self) -> None:
         item = (
@@ -147,8 +163,10 @@ class MaskTests(unittest.TestCase):
         self.vocabulary[len(pieces)] = "<eos>"
 
     def allowed(self, emitted: str) -> set[str]:
+        state = self.machine.state_after(emitted)
+        self.assertIsNotNone(state, f"{emitted!r} already left the contract")
         identifiers = allowed_token_ids(
-            self.machine, emitted, self.vocabulary, self.eos
+            self.machine, state, self.vocabulary, self.eos
         )
         return {self.vocabulary[identifier] for identifier in identifiers}
 
@@ -156,7 +174,10 @@ class MaskTests(unittest.TestCase):
         allowed = self.allowed("")
         self.assertIn("{", allowed)
         self.assertIn('{"items":[', allowed)
-        for rejected in ("Here", "```", "[", '"', "\n"):
+        # Whitespace survives, because the parser accepts it around the object.
+        self.assertIn("\n", allowed)
+        # Prose, fences, and any other opening do not.
+        for rejected in ("Here", "```", "[", '"', "\\"):
             self.assertNotIn(rejected, allowed)
 
     def test_after_the_root_only_abstain_or_open_an_item(self) -> None:
@@ -175,6 +196,24 @@ class MaskTests(unittest.TestCase):
         self.assertNotIn("<eos>", self.allowed('{"items":['))
         self.assertIn("<eos>", self.allowed(ABSTENTION))
 
+    def test_a_stop_token_outside_the_scanned_vocabulary_is_still_admitted(self) -> None:
+        """The bug that truncated every real generation.
+
+        A tokenizer's `vocab_size` counts the base vocabulary and excludes the
+        added special tokens, so the model's actual end-of-turn id sat above the
+        scanned range and never entered the allowed set. The model produced a
+        correct response and then could not stop, padding whitespace to the
+        token cap. Stop ids are therefore handled outside the scan.
+        """
+        outside = max(self.vocabulary) + 500
+        eos = frozenset({outside})
+        state = self.machine.state_after(ABSTENTION)
+        self.assertIn(outside, allowed_token_ids(self.machine, state, self.vocabulary, eos))
+        open_state = self.machine.state_after('{"items":[')
+        self.assertNotIn(
+            outside, allowed_token_ids(self.machine, open_state, self.vocabulary, eos)
+        )
+
     def test_free_text_admits_words_and_refuses_string_breakers(self) -> None:
         emitted = '{"items":[{"candidate_id":"c1","source_fragment_ids":["f1"],"citation":"'
         allowed = self.allowed(emitted)
@@ -187,7 +226,7 @@ class MaskTests(unittest.TestCase):
     def test_a_vocabulary_that_cannot_express_the_contract_refuses_loudly(self) -> None:
         """Silence here would look like a model failure in the receipt."""
         with self.assertRaises(MaskRefused):
-            allowed_token_ids(self.machine, "", {0: "Here", 1: "```"}, frozenset())
+            allowed_token_ids(self.machine, START, {0: "Here", 1: "```"}, frozenset())
 
     def walk_to(self, target: str) -> str:
         """Emit `target` one token at a time, taking only tokens the mask allows.
@@ -199,8 +238,10 @@ class MaskTests(unittest.TestCase):
         """
         emitted = ""
         while emitted != target:
+            state = self.machine.state_after(emitted)
+            self.assertIsNotNone(state)
             identifiers = allowed_token_ids(
-                self.machine, emitted, self.vocabulary, self.eos
+                self.machine, state, self.vocabulary, self.eos
             )
             candidates = [
                 self.vocabulary[identifier]

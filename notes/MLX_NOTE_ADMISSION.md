@@ -309,6 +309,87 @@ What this does **not** invalidate: the model pins. `model.safetensors` SHA-256
 `3aaeeac4…` all reproduced exactly on a fresh download of the pinned revision,
 so the corrective probe's model identity stands as recorded.
 
+### 2026-08-05 Qwen structure-constrained probe — both fixtures passed
+
+Run under the amendment registered above, against the same pinned model,
+runtime, prompt, parser, and two synthetic fixtures. Receipt:
+`notes/mlx_note_constrained_probe_receipt.json`.
+
+| Check | Supported fixture | Empty-candidate fixture |
+| --- | --- | --- |
+| Control | accepted | transcript-only, `no-deterministic-candidates` |
+| Strict result | **`accepted-research-candidate`** | **`transcript-only`, `no-model-candidates`** |
+| Response receipt | 344 bytes; SHA-256 `8a55ccac35514dc691d1…` | 12 bytes; SHA-256 `eef46741adfc3a9f7629…` |
+| MLX streaming metadata | 496 prompt tokens; 181 generated; finish `stop` | 267 prompt tokens; 6 generated; finish `stop` |
+| Call time | 2.64 s | 0.23 s |
+
+All four mechanical checks passed on both calls, including
+`required_citation_terms` — the accepted item's citation resolved to the exact
+canonical transcript span, and the locator gate stayed able to fail because no
+value was constrained. The empty-candidate fixture returned exactly
+`{"items":[]}` in six tokens. Model load 0.396 s, measured separately; peak
+process RSS 1,180,614,656 bytes against the 4,282,063,304-byte envelope; the
+model tree digest `3aaeeac4…` was identical before and after.
+
+**Repeatability held.** Three consecutive cold runs produced identical response
+digests on both fixtures and identical receipts once timings are excluded.
+
+#### What this answers
+
+Both prior failures were shape. The supported fixture now generates **181
+tokens** and finishes `stop` — the same token count the 2026-08-02 unconstrained
+probe recorded, at 344 bytes against its 345. The model was producing
+substantially this content all along, and one byte of it was invalid JSON. The
+2026-08-02 rejection measured a serializer, not a reader.
+
+So of the two outcomes registered in advance, this is the first:
+**schema-valid and correct.** The small-model path is alive, and the full
+12-fixture cold/warm matrix is now worth the fresh-process orchestrator it
+requires.
+
+#### What this does not answer
+
+Nothing here is an admission, and four gates remain untouched.
+
+- **Two fixtures is not twelve.** Names, numbers, negation, locator ordering,
+  and the remaining abstention case are unmeasured. One correct citation is
+  evidence that the path is worth continuing, not that it is reliable.
+- **The syntax and schema gate no longer discriminates**, exactly as the
+  amendment registered. It now measures the mask.
+- **No human has read the output for usefulness.** That gate is unchanged and
+  no mechanical result can stand in for it.
+- **The mask is a research decoder, not a product one.** It scans the
+  vocabulary per distinct machine state in Python. That is fine for two
+  fixtures; a product path needs a compiled index, and admitting one is its own
+  dependency decision.
+
+#### Four defects found by running it
+
+Recorded because each one had been silently true, and three of them would have
+made any result meaningless:
+
+1. **`runtime_identity` was unreproducible.** Described above — `RECORD` hashes
+   embedded the environment's absolute path.
+2. **`measure_mlx_note_candidate.py` had not run since 2026-08-02.** Commit
+   `636d24c` inserted `fixtures_for_scope` into the middle of `fixture_receipt`,
+   severing its `return`, so the runner returned `None` and crashed on every
+   invocation. The receipt recorded that day was produced before that commit.
+3. **The runner read `["items"]` for citation rows.**
+   `structured_artifact_citations` returns `items` as a *count* and the rows as
+   `cited`. That line had never executed, because no arm had ever produced an
+   accepted note.
+4. **The accepted path recorded no response digest.** Every refusal path spread
+   the response receipt; acceptance did not. The registered repeatability gate
+   is stated as "raw response SHA-256 … identical across the three cold runs",
+   which an accepted run could not evidence at all.
+
+Two mask defects were also found and fixed before the passing run, and both
+would have produced a confident wrong answer rather than an error: the stop
+token sat above `vocab_size` and so was never admitted, leaving a *correct*
+response unable to terminate and padding whitespace to the 512-token cap; and
+the decoder rendered that stop token into the text it walked, so a completed
+response was rejected for leaving a contract it had just satisfied.
+
 ## 2026-08-02 SmolLM2 measurement — inconclusive
 
 This measurement used no meeting recording, Preview data, or product record.

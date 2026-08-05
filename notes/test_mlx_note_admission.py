@@ -53,6 +53,10 @@ def observed_identity(request: dict) -> dict:
         "runtime_identity": deepcopy(MLX_RUNTIME["runtime_identity"]),
         "request_sha256": _sha256(json.dumps({"system": request["system"], "user": user_request}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
         "rendered_template_sha256": "a" * 64,
+        # The arm that produced the response. "unconstrained" is what the
+        # 2026-08-02 corrective probe ran; the masked arm records the mask's own
+        # source digest instead.
+        "decoder": "unconstrained",
         "generation": {
             "call_elapsed_s": 0.1,
             "prompt_tokens": "unavailable",
