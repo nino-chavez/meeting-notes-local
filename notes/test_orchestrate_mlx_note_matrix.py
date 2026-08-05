@@ -332,10 +332,26 @@ class SpawnFailureTests(unittest.TestCase):
         self.assertEqual(row["errno"], 12)
 
     def test_parsed_but_unusable_worker_output_becomes_a_row(self) -> None:
-        """Parsing is not the same as getting a worker record."""
+        """Parsing is not the same as getting a worker record.
+
+        The per-call cases are the ones an earlier guard let through: it checked
+        six top-level keys while claiming to cover everything the projection
+        reads, so `"calls": [{}]` cleared the boundary and raised KeyError on
+        `phase` inside `_fixture_row` — after up to 36 model loads, with no
+        receipt written and no fixture named.
+        """
+        complete = (
+            '"preflight_tree_sha256":"a","postflight_tree_sha256":"a","peak_rss":1'
+        )
         for label, payload in (
             ("non-dict", "[1, 2, 3]"),
-            ("missing-keys", '{"fixture": "x", "calls": []}'),
+            ("missing-top-level", '{"calls": [{}]}'),
+            ("calls-empty", "{%s,\"calls\":[]}" % complete),
+            ("calls-not-a-list", "{%s,\"calls\":{}}" % complete),
+            ("call-is-empty-object", "{%s,\"calls\":[{}]}" % complete),
+            ("call-missing-a-digest", "{%s,\"calls\":[{\"phase\":\"cold-call\",\"outcome\":\"x\",\"code\":null,"
+                                      "\"response_sha256\":\"r\",\"note_sha256\":null,\"checks\":{},"
+                                      "\"load_average_before\":[],\"load_average_after\":[]}]}" % complete),
         ):
             with self.subTest(payload=label):
                 class Completed:
@@ -417,6 +433,26 @@ class CommittedMatrixReceiptTests(unittest.TestCase):
         for row in failing:
             with self.subTest(fixture=row["fixture"]):
                 self.assertFalse(row["gates"]["checks_pass_on_every_call"])
+
+
+class IdAlignmentReceiptTests(unittest.TestCase):
+    """The one empirical claim in the hypothesis table has to be sourced."""
+
+    def test_the_token_alignment_refutation_rests_on_a_committed_measurement(self) -> None:
+        import json
+
+        path = Path(__file__).resolve().parent / "mlx_note_id_alignment_receipt.json"
+        receipt = json.loads(path.read_text())
+        self.assertEqual(receipt["schema"], "mlx-note-id-alignment/1")
+        self.assertEqual(receipt["short_form_length"], 67)
+        # The refutation only works if alignment holds everywhere — one
+        # misaligned fragment and the hypothesis is back in play.
+        self.assertTrue(receipt["every_boundary_is_token_aligned"])
+        self.assertEqual(receipt["counts"]["aligned"], receipt["counts"]["fragments"])
+        self.assertGreaterEqual(receipt["counts"]["fragments"], EXPECTED_FIXTURES)
+        covered = {row["fixture"] for row in receipt["rows"]}
+        self.assertIn("ordinary-decision", covered, "the one success must be measured")
+        self.assertIn("ordinary-action", covered, "the matched failure must be measured")
 
 
 class RegisteredShapeTests(unittest.TestCase):

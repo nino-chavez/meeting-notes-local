@@ -72,6 +72,15 @@ PEAK_RSS_CEILING = 4_282_063_304
 # Interpreter start, model load, and the ~1.9 s vocabulary decode, generously.
 WORKER_STARTUP_ALLOWANCE_S = 120.0
 
+# Bound at import, not when the receipt is written. The receipt is assembled
+# after all 36 spawns — minutes later — while the parent and every worker read
+# this file at their own start. Hashing it at the end would name whichever bytes
+# were on disk last, so editing the orchestrator mid-run would split the workers
+# across two instruments and the receipt would still be unable to say which one
+# ran, which is the defect this field exists to close. The file is edited by
+# hand between runs, so that is a live hazard rather than a theoretical one.
+ORCHESTRATOR_SHA256 = _sha256(Path(__file__).resolve().read_bytes())
+
 # Timings and footprint are the only values a repeat may move, so they are
 # excluded from the digest that the repeatability gate compares.
 _VOLATILE_KEYS = frozenset({"elapsed_s", "call_elapsed_s", "model_load_elapsed_s", "peak_rss"})
@@ -173,11 +182,35 @@ def _failed_worker(fixture_id: str, reason: str, wall_s: float, **extra) -> dict
     }
 
 
-# Everything `_fixture_row` reads off a worker. A record missing any of these
-# would fail deep inside the projection instead of at the boundary.
-_WORKER_FIELDS = frozenset({
-    "fixture", "preflight_tree_sha256", "postflight_tree_sha256", "load", "peak_rss", "calls",
+# Exactly what `_fixture_row` reads off a worker, top level and per call. An
+# earlier version listed only the top-level keys and claimed to cover
+# "everything the projection reads": a record whose `calls` held empty objects
+# cleared it and then raised KeyError on `phase` inside the projection — the
+# traceback-after-36-model-loads this boundary exists to prevent.
+_WORKER_FIELDS = frozenset({"preflight_tree_sha256", "postflight_tree_sha256", "peak_rss", "calls"})
+_CALL_FIELDS = frozenset({
+    "phase", "outcome", "code", "response_sha256", "note_sha256", "receipt_sha256",
+    "checks", "load_average_before", "load_average_after",
 })
+
+
+def _worker_record_problem(worker: object) -> str | None:
+    """Why this record cannot be projected, or None."""
+    if not isinstance(worker, dict):
+        return f"record is {type(worker).__name__}, not an object"
+    missing = _WORKER_FIELDS - set(worker)
+    if missing:
+        return f"missing {sorted(missing)}"
+    calls = worker["calls"]
+    if not isinstance(calls, list) or not calls:
+        return "calls is not a non-empty list"
+    for index, call in enumerate(calls):
+        if not isinstance(call, dict):
+            return f"call {index} is {type(call).__name__}, not an object"
+        call_missing = _CALL_FIELDS - set(call)
+        if call_missing:
+            return f"call {index} missing {sorted(call_missing)}"
+    return None
 
 
 def _spawn(model_directory: Path, fixture_id: str, warm_repeats: int) -> dict:
@@ -239,12 +272,10 @@ def _spawn(model_directory: Path, fixture_id: str, warm_repeats: int) -> dict:
     # deeper in `_fixture_row` — producing exactly the failure this boundary
     # exists to prevent: a traceback out of the matrix after up to 36 model
     # loads, with no receipt written and no fixture named.
-    missing = _WORKER_FIELDS - set(worker) if isinstance(worker, dict) else _WORKER_FIELDS
-    if missing:
+    problem = _worker_record_problem(worker)
+    if problem is not None:
         return _failed_worker(
-            fixture_id, "worker-record-incomplete", wall_s,
-            missing=sorted(missing),
-            record_type=type(worker).__name__,
+            fixture_id, "worker-record-incomplete", wall_s, problem=problem,
         )
     worker["process_wall_s"] = wall_s
     worker["worker_failed"] = False
@@ -394,7 +425,7 @@ def _matrix_receipt(model_directory: Path, preflight: str, started_at_load: list
         # the repaired orchestrator were byte-identical in that block. The
         # protocol's own rule is that a receipt unable to say what produced it
         # cannot be compared with another, and the instrument is half of that.
-        "orchestrator_sha256": _sha256(Path(__file__).resolve().read_bytes()),
+        "orchestrator_sha256": ORCHESTRATOR_SHA256,
         "registered_model": {
             "repository": MLX_RUNTIME["model"]["repository"],
             "revision": MLX_RUNTIME["model"]["revision"],
