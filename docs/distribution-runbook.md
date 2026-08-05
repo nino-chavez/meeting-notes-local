@@ -220,6 +220,22 @@ The output name is derived from the built app version:
 target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg
 ```
 
+### Two traps that cost a lane run on 2026-08-05
+
+**Never pipe this script into `tail`, `head`, or anything else.** A pipeline
+reports the *last* command's exit status, so `sign-notarize.sh … | tail -40`
+returns 0 even when the lane aborts. On 2026-08-05 the lane died at
+`verify-dmg-layout.sh` and reported success; the app was notarized and stapled
+but the DMG was never signed, notarized, or stapled, and only reading the log
+text revealed it. Redirect to a file and check `$?` instead.
+
+**`hdiutil: attach failed - Resource temporarily unavailable` means the image is
+already claimed, not that it is corrupt.** A previous failed or interrupted
+attach can leave the DMG half-attached with no mountpoint, and every later
+attach fails against it. It is invisible in `mount`; look in `hdiutil info` for
+the image path, then `hdiutil detach <device> -force`. Do not rebuild the DMG or
+re-sign anything to "fix" this — nothing is wrong with the artifact.
+
 ## Recheck a frozen artifact
 
 Anyone with the artifact and Apple command-line tools can run:
