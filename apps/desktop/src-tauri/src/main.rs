@@ -3155,7 +3155,7 @@ fn main() {
             let open = tauri::menu::MenuItem::with_id(
                 app,
                 "open-window",
-                "Open Local Meeting Notes",
+                "Open Yawn",
                 true,
                 None::<&str>,
             )?;

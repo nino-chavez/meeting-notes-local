@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VOLNAME="Local Meeting Notes"
+VOLNAME="Yawn"
 DEFAULT_APP="$ROOT/target/release/bundle/macos/$VOLNAME.app"
 
 die() { echo "verify-dmg-layout: $*" >&2; exit 1; }
@@ -13,7 +13,7 @@ if [[ -f "$DEFAULT_APP/Contents/Info.plist" ]]; then
 else
   VERSION="0.1.0"
 fi
-DMG="${1:-$ROOT/target/release/bundle/macos/Local-Meeting-Notes-${VERSION}-macos-arm64.dmg}"
+DMG="${1:-$ROOT/target/release/bundle/macos/Yawn-${VERSION}-macos-arm64.dmg}"
 [[ -f "$DMG" ]] || die "missing DMG: $DMG"
 command -v hdiutil >/dev/null || die "hdiutil is unavailable"
 

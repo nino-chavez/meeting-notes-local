@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify one built Local Meeting Notes app without printing private content."""
+"""Verify one built Yawn app without printing private content."""
 
 from __future__ import annotations
 

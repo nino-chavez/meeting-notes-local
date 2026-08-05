@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VOLNAME="Local Meeting Notes"
+VOLNAME="Yawn"
 APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
 
 die() { echo "build-dmg: $*" >&2; exit 1; }
@@ -14,7 +14,7 @@ PLIST="$APP/Contents/Info.plist"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] \
   || die "unsafe app version: $VERSION"
-DMG="${2:-$ROOT/target/release/bundle/macos/Local-Meeting-Notes-${VERSION}-macos-arm64.dmg}"
+DMG="${2:-$ROOT/target/release/bundle/macos/Yawn-${VERSION}-macos-arm64.dmg}"
 [[ "$DMG" == *.dmg ]] || die "output must end in .dmg: $DMG"
 [[ "$DMG" != "$APP" && "$DMG" != "$APP/"* ]] \
   || die "DMG output cannot be inside the app bundle"

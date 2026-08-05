@@ -25,7 +25,7 @@ build, you'll get a new link.
    message as your link):
 
    ```
-   shasum -a 256 ~/Downloads/Local-Meeting-Notes-*.dmg
+   shasum -a 256 ~/Downloads/Yawn-*.dmg
    ```
 
 3. Open the DMG, drag the app to Applications, launch it from Applications.

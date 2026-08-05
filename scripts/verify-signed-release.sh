@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VOLNAME="Local Meeting Notes"
+VOLNAME="Yawn"
 APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
 
 die() { echo "signed release verification: BLOCKED — $*" >&2; exit 1; }
@@ -11,7 +11,7 @@ die() { echo "signed release verification: BLOCKED — $*" >&2; exit 1; }
 [[ -d "$APP" ]] || die "missing app bundle: $APP"
 [[ -f "$APP/Contents/Info.plist" ]] || die "missing built Info.plist"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-DMG="${2:-$ROOT/target/release/bundle/macos/Local-Meeting-Notes-${VERSION}-macos-arm64.dmg}"
+DMG="${2:-$ROOT/target/release/bundle/macos/Yawn-${VERSION}-macos-arm64.dmg}"
 ADMISSION="${3:-product}"
 [[ "$ADMISSION" == "product" || "$ADMISSION" == "internal-alpha" ]] \
   || die "admission must be product or internal-alpha"

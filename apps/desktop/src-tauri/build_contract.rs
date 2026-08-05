@@ -139,7 +139,7 @@ fn is_preview_config(config: &Value) -> bool {
 }
 
 fn is_production_config(config: &Value) -> bool {
-    config.get("productName").and_then(Value::as_str) == Some("Local Meeting Notes")
+    config.get("productName").and_then(Value::as_str) == Some("Yawn")
         && config.get("identifier").and_then(Value::as_str) == Some(PRODUCTION_IDENTIFIER)
         && config
             .pointer("/build/frontendDist")
@@ -148,7 +148,7 @@ fn is_production_config(config: &Value) -> bool {
         && has_single_window(
             config.pointer("/app/windows"),
             PRODUCTION_WINDOW,
-            "Local Meeting Notes",
+            "Yawn",
         )
         && has_single_string(
             config.pointer("/app/security/capabilities"),

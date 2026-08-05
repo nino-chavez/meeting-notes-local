@@ -1,19 +1,28 @@
-# Local Meeting Notes distribution runbook
+# Yawn distribution runbook
 
-Status, 2026-08-05: the current cohort DMG is **0.2.2**, the first built with
-`worker/build_runtime.sh build-alpha-encoder` under the encoder admission
-verdict — the packaged runtime carries the admitted ONNX speaker encoder, and
-the guided voice-setup surface (sitting recorder, measured operating-point
-review, profile build and publication) is registered end to end. Built at
-commit `f63d38a` on `codex/guided-voice-enrollment`; DMG SHA-256
+Status, 2026-08-05: the current cohort DMG is **0.3.0**, the first build whose
+installed name is **Yawn**. The display rename was the deliberate 0.3.0-class
+change recorded in `docs/brand.md`: `productName`, the window title, the tray
+entry, and the two macOS permission prompts now read Yawn, while the bundle
+identifier stays `com.ninochavez.local-meeting-notes` so signing identity,
+verifier constants, TCC grants, and the app-data root are untouched. The
+`.app` is `Yawn.app` and the image is `Yawn-<version>-macos-arm64.dmg`; the
+preview and library-dev lanes deliberately keep their old product names, since
+neither is distributed. The Cargo package — and therefore the signed main
+executable, `Contents/MacOS/local-meeting-notes-desktop` — is also unchanged.
+
+**0.2.2's evidence does not transfer to 0.3.0.** 0.2.2 was the first build
+carrying the admitted ONNX speaker encoder with guided voice setup registered
+end to end, and its own record stands: commit `f63d38a`, DMG SHA-256
 `eec3e611aceef12e932e870197fba26d612b02a9a8f94eb41f070a8f838c89f4`, signed,
-notarized, stapled, and `verify-signed-release.sh … internal-alpha` PASS. The
-DMG is uploaded to the `yawn-releases` R2 bucket and linked with its checksum
-from `yawn.ninochavez.com`. The first cohort download supplies the waived
-transferred-build Gatekeeper field receipt — record it in
-`spike/encoder-packaging/RESULTS.md` when it arrives. The 0.2.2 build has not
-yet had its one interactive operator run (the 0.2.0 lesson); do that before
-announcing the link.
+notarized, stapled, `verify-signed-release.sh … internal-alpha` PASS. It never
+received its interactive operator run, so that gate is still open and is now
+0.3.0's to close, not a box 0.2.2 already ticked. Its R2 object was deleted
+when 0.3.0 replaced it, because a differently-named image would otherwise have
+kept serving an app called "Local Meeting Notes" from a live URL nothing linked.
+The first cohort download still supplies the waived transferred-build
+Gatekeeper field receipt — record it in `spike/encoder-packaging/RESULTS.md`
+when it arrives.
 
 Earlier record: a signed and notarized internal transcript-alpha DMG exists for
 commit `5fe9aecd4f53204dc6e82573fd4b4dde37efd6d1`. Its SHA-256 is
@@ -82,7 +91,7 @@ runtime and the `.app`, then run:
 
 ```bash
 scripts/verify-release-bundle.py \
-  "target/release/bundle/macos/Local Meeting Notes.app"
+  "target/release/bundle/macos/Yawn.app"
 ```
 
 That command must report `PASS`. It checks the built permission text, bundle
@@ -103,7 +112,7 @@ explicit alpha admission:
 worker/build_runtime.sh build-alpha
 scripts/verify-release-bundle.py \
   --admission internal-alpha \
-  "target/release/bundle/macos/Local Meeting Notes.app"
+  "target/release/bundle/macos/Yawn.app"
 ```
 
 `internal-alpha` is not an alias for `product`. The default verifier still
@@ -173,14 +182,14 @@ Run:
 
 ```bash
 scripts/sign-notarize.sh run \
-  "target/release/bundle/macos/Local Meeting Notes.app"
+  "target/release/bundle/macos/Yawn.app"
 ```
 
 For the transcript-only lane, use the explicit command:
 
 ```bash
 scripts/sign-notarize.sh run-alpha \
-  "target/release/bundle/macos/Local Meeting Notes.app"
+  "target/release/bundle/macos/Yawn.app"
 ```
 
 The script follows the same two-submission sequence used by Film Room:
@@ -208,7 +217,7 @@ exception.
 The output name is derived from the built app version:
 
 ```text
-target/release/bundle/macos/Local-Meeting-Notes-<version>-macos-arm64.dmg
+target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg
 ```
 
 ## Recheck a frozen artifact
@@ -217,8 +226,8 @@ Anyone with the artifact and Apple command-line tools can run:
 
 ```bash
 scripts/verify-signed-release.sh \
-  "target/release/bundle/macos/Local Meeting Notes.app" \
-  "target/release/bundle/macos/Local-Meeting-Notes-<version>-macos-arm64.dmg" \
+  "target/release/bundle/macos/Yawn.app" \
+  "target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg" \
   internal-alpha
 ```
 

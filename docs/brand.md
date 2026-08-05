@@ -15,14 +15,25 @@ What the name changes now:
   DMG itself in R2 — Pages caps served files at 25 MB and the DMG is 1.7 GB).
 - Site, copy, and hand-off materials use YAWN.
 
-What it deliberately does not change yet:
+What it deliberately does not change:
 
 - The bundle identifier stays `com.ninochavez.local-meeting-notes` — signing
   identifiers, the release verifier's pinned constants, and every installed
   app-data root hang off it, so renaming it orphans installs for zero gain.
-- The app's display name stays "Local Meeting Notes" for the 0.2.0 cohort
-  DMG — `productName` is pinned by the build contract, and renaming it means
-  a deliberate pin update plus a fresh release-lane run. Candidate change for
-  0.3.0, not a retrofit.
+- The Cargo package, and therefore the signed main executable
+  `Contents/MacOS/local-meeting-notes-desktop`, is unchanged for the same
+  reason: `verify-release-bundle.py` pins that exact path.
+- The preview and library-dev lanes keep their existing product names. Neither
+  is distributed, both are engineer-only surfaces, and renaming them would put
+  four more script literals and two contract pins at risk for no reader.
 - Standalone-domain availability (yawn.app etc.) is unverified — check at a
   registrar before GA. The subdomain needs no check.
+
+**Display rename executed 2026-08-05, at 0.3.0, as the deliberate change this
+file scheduled.** The installed app is now **Yawn**: `productName`, the window
+title, the tray entry, and both macOS permission prompts. The `.app` is
+`Yawn.app` and the image is `Yawn-<version>-macos-arm64.dmg`. It rode a fresh
+release-lane run rather than a retrofit — build contract pins updated first,
+mechanical suite green before signing. The timing was chosen because every
+install and app-data root on the operator's machine had just been removed, so
+no live installation depended on the old name.

@@ -18,8 +18,10 @@ re-verify it against `worker/main.py` (`ALPHA_OPERATIONS`),
 `apps/desktop/src-tauri/tests/shell_contract.rs` (registered-command pins), and the
 release runbook. This file's own claim of a status is a hypothesis, not evidence.
 
-The app is distributed as "Local Meeting Notes"; the public brand is YAWN
-(yawn.ninochavez.com). The repository name is the canonical one in docs.
+The app installs as **Yawn** as of 0.3.0 (2026-08-05); the brand is YAWN — Yet
+Another Whisper Notetaker — at yawn.ninochavez.com. The bundle identifier and
+the repository name both remain `local-meeting-notes`, so paths, signing
+identity, and doc filenames still carry the old name deliberately.
 
 ---
 
