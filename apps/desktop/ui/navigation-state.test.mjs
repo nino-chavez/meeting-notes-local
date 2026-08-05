@@ -63,6 +63,30 @@ test("header actions keep one recording control and offer a return to owned work
   assert.equal(transcript.workflowReturnLabel, "View transcript");
   assert.equal(transcript.workflowDestination, "transcript-screen");
 
+  // Reading a finished transcript must not be a dead end: the record control
+  // stays in the header there, so the way out never sits below the transcript.
+  const onTranscript = headerActionPolicy(
+    { startup: "ready", capture: "transcript-ready" },
+    { currentScreen: "transcript-screen" },
+  );
+  assert.equal(onTranscript.showStart, true);
+  // A transcript-ready capture still offers no record control anywhere else,
+  // and a mid-capture state offers none even on that screen.
+  assert.equal(
+    headerActionPolicy(
+      { startup: "ready", capture: "transcript-ready" },
+      { currentScreen: "meetings-screen" },
+    ).showStart,
+    false,
+  );
+  assert.equal(
+    headerActionPolicy(
+      { startup: "ready", capture: "recording" },
+      { currentScreen: "transcript-screen" },
+    ).showStart,
+    false,
+  );
+
   assert.deepEqual(
     workflowReturnPolicy({ startup: "ready", capture: "transcribing" }),
     { show: true, label: "View progress", destination: "processing-screen" },

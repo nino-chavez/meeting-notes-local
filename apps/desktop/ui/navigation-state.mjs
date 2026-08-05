@@ -59,16 +59,25 @@ export function headerActionPolicy(snapshot, {
   const workflow = workflowReturnPolicy(snapshot);
   return {
     showProductNavigation: actions.showProductNavigation && startup === "ready",
+    // The finished-transcript screen carries the record action too. Its only
+    // exit used to be a control below the whole transcript, so on a long
+    // meeting the way out was hundreds of turns down and read as a bug
+    // (operator report, 2026-08-05). `canStartMeeting` already admits
+    // transcript-ready, and openStartMeeting routes through
+    // prepareConsentTransition, which dismisses the finished attempt before
+    // consent — so this exposes an existing supported path rather than a new
+    // one. Every other screen still requires a genuinely idle capture.
     showStart: actions.canStartMeeting
-      && capture === "idle"
-      && [
-        "find-screen",
-        "meetings-screen",
-        "promises-screen",
-        "meeting-detail-screen",
-        "library-transcript-screen",
-        "profile-screen",
-      ].includes(currentScreen),
+      && ((capture === "idle"
+        && [
+          "find-screen",
+          "meetings-screen",
+          "promises-screen",
+          "meeting-detail-screen",
+          "library-transcript-screen",
+          "profile-screen",
+        ].includes(currentScreen))
+        || (capture === "transcript-ready" && currentScreen === "transcript-screen")),
     showStop: actions.showStop,
     stopDisabled: actions.stopDisabled,
     stopLabel: actions.stopLabel,

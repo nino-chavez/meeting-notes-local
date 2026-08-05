@@ -308,6 +308,27 @@ runs — the Granola insight, and the reason this isn't just a transcript viewer
 `queued` inherits `local-dictation`'s existing principle: the pipeline degrades
 rather than hard-failing, and the operator is told which leg is down.
 
+### Amendment 2026-08-05 — a finished transcript is not a dead end
+
+Operator report from the first cohort install: after a recording, the only way
+back to recording was a control **below the entire transcript**, so on a real
+meeting it sat hundreds of turns down. The reporter looked for it, did not find
+it, and reasonably concluded the app was broken.
+
+The rule this establishes: **a terminal screen must carry its own exit above the
+content, not after it.** Any surface whose body can grow without bound — a
+transcript, a note, a search result list — cannot put its only forward action at
+the end, because the length of the content then decides whether the action is
+discoverable.
+
+The fix exposed an existing path rather than inventing one. `canStartMeeting`
+already admitted the `transcript-ready` capture, and the record action already
+routed through the consent transition that dismisses a finished attempt first;
+only the header's visibility rule excluded that screen. So the record control
+now stays in the header while a finished transcript is open. Every other screen
+still requires a genuinely idle capture, and a mid-capture state still offers no
+record control anywhere.
+
 ---
 
 ## E. Note detail — post-meeting
