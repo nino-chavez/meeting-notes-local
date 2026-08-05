@@ -178,6 +178,103 @@ Qwen is **not admitted**. This corrective result is limited to this pinned
 model, exact template/contract, runtime, and two synthetic fixtures; it does
 not make a product-readiness claim.
 
+### Preregistered amendment — 2026-08-05 — structure-constrained decoding
+
+**Registered before any install, download, or inference call.** Nothing in this
+section reports a result. This is the single bounded decoding repair
+`docs/vertical-slice.md` wave D requires before any new model search, and it is
+registered rather than run first because the measurement protocol above states
+"no schema-constraining decoder" in as many words. That sentence is what is
+being amended, and amending it silently would make every later number
+unfalsifiable.
+
+#### What the amendment changes, and nothing else
+
+**Change:** the model arm gains a logits processor that masks the sampling
+distribution so the emitted token sequence can only be a prefix of a
+contract-shaped response. `mlx_lm.stream_generate` documents the hook —
+`logits_processors: Optional[List[Callable[[mx.array, mx.array], mx.array]]]` —
+and MLX-LM's own `setup.py` carries no grammar, regex, or JSON-schema decoding
+dependency, so the mask is written here rather than imported. A library would
+drag transitive licences and wheel hashes into a probe whose whole purpose is
+to be disposable.
+
+**Everything else stays pinned exactly as registered:** the model
+`mlx-community/Qwen2.5-1.5B-Instruct-4bit` at revision
+`8b403126fc14f14cfc99bb4cfa72ecbc129ea677`, `mlx-lm==0.30.4`, temperature 0.0,
+seed 0, one completion, no retries, no remote code, the 4,096-token rotating KV
+budget, the 512-token output cap, the unchanged `SYSTEM_PROMPT`, the unchanged
+parser, and the same two corrective-probe fixtures (one supported, one
+empty-candidate). The parser remains the enforcement boundary and is not
+relaxed; the mask must earn its result through the same `_decode_response`.
+
+#### Structure only — what is constrained and what is deliberately left free
+
+Constrained: JSON syntax, the single root field `items`, the five item field
+names in the registered order `candidate_id`, `source_fragment_ids`,
+`citation`, `label`, `claim`, and the exact abstention `{"items":[]}`.
+
+**Left free: every value.** The candidate ID, the source-fragment IDs, the
+citation text, the label, and the claim are all sampled without constraint,
+even though the offered IDs are known to the harness and the citation must
+equal a specific fragment.
+
+That restraint is the whole design, and the alternative was considered and
+rejected. Masking IDs to the offered set and forcing the citation to copy
+verbatim from source would make the protocol's locator gate — "one wrong
+locator, invented/changed name or number, or lost/reversed negation rejects the
+candidate" — structurally impossible to fail. That does not pass the gate; it
+deletes it. A verbatim-copy decoder is a legitimate design and belongs in its
+own registered experiment with its own gate table, not folded into this one.
+
+#### The question this answers, stated before the answer is known
+
+Both prior failures were shape: `response-json-syntax` on the supported fixture
+(181 generated tokens, finish `stop`) and `response-contract` on the
+empty-candidate fixture (2 generated tokens — an abstention of the wrong
+shape). Neither says whether the model understood the transcript. Removing
+shape as a confound separates two outcomes that are currently indistinguishable:
+
+- **Schema-valid and correct** — right candidate ID, right fragment IDs, exact
+  citation, right label. The small-model path is alive and the full 12-fixture
+  matrix becomes worth building.
+- **Schema-valid and wrong** — well-formed items citing the wrong fragments or
+  inventing claims. That is the finding that justifies closing the small-model
+  path, and nothing measured so far can distinguish it from a JSON bug.
+
+Either result is worth having. A third outcome — the mask itself is wrong —
+is guarded against below.
+
+#### Gates, and which one this change makes non-discriminating
+
+| Gate | Status under this amendment |
+| --- | --- |
+| Syntax and schema | **No longer discriminating for the model.** The mask makes malformed JSON and wrong field order unreachable by construction. It now measures the mask, not the candidate, and must not be reported as a model result. |
+| Locator / names / numbers / negation | **Fully discriminating and now reachable for the first time.** Values are unconstrained. |
+| Repeatability | Unchanged. Temperature 0.0 and seed 0; response SHA-256 must be identical across repeats. |
+| Latency | Reported, and expected to worsen: the mask runs in Python on every step. A latency failure here is not a candidate rejection under this amendment. |
+| Memory | Unchanged threshold, 4,282,063,304 bytes. |
+| Human semantic/usefulness review | Unchanged and still required for any admission. |
+
+#### The mask is tested before the model is downloaded
+
+A masker that is subtly wrong produces a confident, meaningless run. So the
+finite-state mask is exercised against a synthetic vocabulary first — asserting
+which continuations survive at each position, that the only reachable strings
+are contract-shaped, and that both a populated response and the exact
+abstention are reachable. Only then is the pinned revision fetched, and its
+`model.safetensors` SHA-256 must equal
+`0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717` against a
+full inventory of 880,172,064 bytes. A mismatch is transcript-only and the run
+stops.
+
+#### Scope
+
+Synthetic fixtures only. No meeting recording, Preview data, or product record.
+A disposable environment under `/private/tmp`, as the SmolLM2 measurement used.
+This changes no product runtime, adds no command, and admits nothing. Selection
+is not admission, and a decoding repair is not a usefulness claim.
+
 ## 2026-08-02 SmolLM2 measurement — inconclusive
 
 This measurement used no meeting recording, Preview data, or product record.
