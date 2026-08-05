@@ -227,10 +227,14 @@ These are open, and each is a reason this measurement is not admission check 1:
   two-sided control (identical chains report zero flips with nonzero off-boundary
   margins; a bounded perturbation is detected as flips), and the two-process
   pipeline is smoke-proven end to end on synthetic material against the registered
-  export. What remains is the only thing the harness cannot supply: the operator's
-  two real calibration sittings and attested negative material. Until that
-  measurement runs, the check is not passed and no number from the synthetic smoke
-  may be quoted as admission evidence.
+  export. The real measurement ran 2026-08-04 on the operator's two calibration
+  sittings and attested public-or-licensed negative material: at the three
+  registered operating points (target FRR 2% / 5% / 20%), zero false admits and
+  zero off-boundary classification flips, with one at-boundary flip at the
+  loosest point (margin ≈ 1.0 × 10⁻³) and a max per-score delta of 5.80 × 10⁻⁷ —
+  recorded in `RESULTS.md` check 1. The numbers are evidence, not a verdict;
+  admission remains the operator's call, and no synthetic-smoke number may be
+  quoted as admission evidence.
 - **Padded batching is untested.** Variable length is now exercised on real speech (400 to
   2023 frames, shape asserted per clip) and was separately checked by truncation down to 25 ms
   (frame counts 301, 171, 101, 78, 51, 26, 3; residual ≤ 2.37 × 10⁻⁴). What remains untested

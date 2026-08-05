@@ -127,20 +127,28 @@ Terms of the decision:
    feature shapes, feature values, final embeddings, pairwise cosine scores,
    and resulting gate classifications around registered margins. The
    score/classification comparison decides, not raw feature equality.
-   *Status: both fixture halves are measured — `FBANK-PARITY.md` records a
-   numpy front end (`worker/fbank.py`) whose score-matrix delta against the
-   torch reference is 9.68 × 10⁻⁷ on the seeded synthetic fixtures and
-   7.38 × 10⁻⁷ on twelve registered LibriSpeech speakers (operator-approved
-   corpus, CC BY 4.0, digest-registered in
-   `fixtures-librispeech/manifest.json`), with conversion-only controls at
-   4.24 × 10⁻⁷ and 3.74 × 10⁻⁷. The gate-classification comparison around
-   registered margins remains open — registered operating points do not exist
-   until real calibration material does — so the check is not passed. The
-   comparison harness itself is ready (`bench_gate_agreement.py`: two-process,
-   torch-free deployable arm, registered-export digest enforced, two-sided
-   self-test control, synthetic end-to-end smoke; `FBANK-PARITY.md` records the
-   operator commands), so the operator's two real sittings plus attested
-   negative material are the only remaining input.*
+   *Status: fully measured. `FBANK-PARITY.md` records a numpy front end
+   (`worker/fbank.py`) whose score-matrix delta against the torch reference
+   is 9.68 × 10⁻⁷ on the seeded synthetic fixtures and 7.38 × 10⁻⁷ on twelve
+   registered LibriSpeech speakers (operator-approved corpus, CC BY 4.0,
+   digest-registered in `fixtures-librispeech/manifest.json`), with
+   conversion-only controls at 4.24 × 10⁻⁷ and 3.74 × 10⁻⁷. The
+   gate-classification comparison ran 2026-08-04 on the operator's two real
+   sittings (93 leave-one-sitting-out operator scores) and attested
+   public-or-licensed negative material (41 segments, 208.7 s), via the
+   guided wrapper and `bench_gate_agreement.py` against the registered ONNX
+   export (`1d5e288b…9cd`, `onnx_is_registered_export: true`; torch
+   fingerprint `0575cb64…6a2`). At the three registered operating points
+   (target FRR 2% / 5% / 20%): measured FRR 2.15% / 5.38% / 20.43%, false
+   admits 0 / 0 / 0 across all 134 decisions per point, classification flips
+   0 / 0 / 1 — the single flip sits ON the registered boundary of the loosest
+   point (min margin ≈ 1.0 × 10⁻³, `flips_off_boundary: 0` everywhere).
+   Max per-score delta 5.80 × 10⁻⁷; max candidate-vs-reference threshold
+   delta 5.80 × 10⁻⁷; the candidate arm refused nothing. Full report:
+   the operator's local `~/calib/agreement.json` (content-free numbers only;
+   the calibration tree is the operator's to delete after the verdict).
+   These numbers are the check's evidence, not its verdict — the admission
+   call on what they permit remains the operator's.*
 2. **Release-lane packaging.** The actual signed app built with ONNX Runtime
    and the model must prove: every Mach-O signed, the bundle passes its closed
    verifier, hardened-runtime launch without unnecessary entitlements,
