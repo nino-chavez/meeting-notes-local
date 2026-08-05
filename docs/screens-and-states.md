@@ -308,6 +308,34 @@ runs — the Granola insight, and the reason this isn't just a transcript viewer
 `queued` inherits `local-dictation`'s existing principle: the pipeline degrades
 rather than hard-failing, and the operator is told which leg is down.
 
+### Amendment 2026-08-05 — the gate now fires, and two of its reports have no surface
+
+The speaker gate was wired into transcription on 2026-08-05
+(`docs/speaker-gate-slice.md`). Until then nothing set `gated`, so every
+withheld-turn surface in this document described a state that could not occur.
+They can occur now, and two obligations recorded here have no screen behind them:
+
+**The co-located-speaker alert.** `drop_offprint` raises it when the dropped
+speech keeps returning as one voice — someone beside the operator is being
+removed from the record of a meeting that cannot be re-run. It reaches
+`transcript.json` and `notes/transcript.py` renders it into a note's caveats,
+which is the only surface it has. There is no generator admitted, so today that
+alert can fire and reach no human. **Undecided**: whether the transcript screen
+must carry it directly rather than waiting for a note.
+
+**What the gate was calibrated on.** The artifact records `threshold`,
+`target_frr`, `measured_frr` and `n_sittings`, all derived from
+leave-one-sitting-out enrolment evidence and none of it measured on live meeting
+audio. Nothing shows the operator that distinction. **Undecided**: whether a
+gated transcript must say its threshold is uncalibrated for meetings, and where.
+
+Both are named here rather than left to be discovered, because the rule this
+document already holds — a surface must never imply a check it did not perform —
+has a mirror that is easier to miss: a check the app did perform, whose result
+no surface carries, is a check the operator cannot act on.
+
+---
+
 ### Amendment 2026-08-05 — the transcript can be copied, gaps included
 
 Second report from the same cohort tester, after a 90-minute Teams call the

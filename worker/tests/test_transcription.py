@@ -257,6 +257,16 @@ class InstalledVoiceprintGateTests(unittest.TestCase):
             adapters._installed_voiceprint_gate(self.root, "e" * 64, None)
         )
 
+    def test_an_empty_profile_directory_asks_for_no_gate(self) -> None:
+        # The state right after profile.discard, and the one a cohort operator
+        # actually reaches: the directory survives, the profile does not. It
+        # must read as "no profile installed" and not as a profile that failed
+        # to load, or discarding a profile would stop transcription.
+        (self.root / "profile").mkdir(mode=0o700)
+        self.assertIsNone(
+            adapters._installed_voiceprint_gate(self.root, "e" * 64, None)
+        )
+
     def test_installed_profile_without_an_admitted_encoder_refuses(self) -> None:
         # Fork 1, settled: on a placeholder-encoder build an installed profile
         # stops transcription rather than producing an artifact that would say
