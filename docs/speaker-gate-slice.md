@@ -151,9 +151,27 @@ asserts the on-disk shape all four of those read.
 `RealProfileGateTests` runs the gate for real: a profile built by `enroll`,
 written by the canonical `save_profile`, read back by `load_profile` with the
 fingerprint binding live, then scored over fixture audio in which one turn is
-the operator and one is somebody at the next desk. It rejects the second at 0.24
-against a threshold of 0.615, and rejects nothing when both turns are the
-operator. The bleed skip and the whole-chain artifact are covered too.
+the operator and one is somebody at the next desk. The tests assert that the
+other voice is marked and scores below the threshold, that the operator's turn
+was **scored and admitted** rather than merely left alone — `kept == 1`,
+`unscorable_kept == 0`, because an unjudged segment is also kept and also
+unmarked — and, as a control, that two operator turns produce no rejection at
+all. The bleed skip, both refusal branches, and the whole chain to a loaded
+document are covered too.
+
+**The numbers are fixture values, not measurements.** The threshold comes from
+the synthetic score arrays handed to `save_profile`, and the scores come from a
+fixture encoder that recovers a speaker from a clip's amplitude. They prove the
+wiring discriminates; they say nothing about how this gate performs on a voice.
+The only measured figures in this area are in `spike/encoder-packaging/RESULTS.md`
+and RESULTS' own leave-one-sitting-out evidence.
+
+Two invariants are pinned by mutation rather than by reading. Changing the mic
+leg to the system leg at the call site fails two tests — before that, it failed
+none, and in production it would have scored every operator turn against the far
+end, rejected all of them, and written them into `gated_turns` with no error
+anywhere. A stub that names the audio argument and discards it cannot see that;
+the stubs here assert identity on it first.
 
 Only the ONNX session is substituted, through an `embedder` argument that
 replaces nothing else — the encoder file, its digest against the manifest, and

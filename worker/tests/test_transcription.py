@@ -160,10 +160,18 @@ class TranscriptionTests(unittest.TestCase):
         self.assertEqual(document.gate["threshold"], 0.62)
 
     def test_gate_is_asked_only_about_the_microphone_leg(self) -> None:
-        seen: list[str] = []
+        """And is handed the microphone audio, which the label alone does not prove.
 
-        def gate(segments, _mic, _acoustic, label):
-            seen.append(label)
+        Both legs are in scope at the call site. A gate scored against the
+        system leg would reject every operator turn — each one compared to the
+        far end — and drop them all into `gated_turns` with no error anywhere.
+        Recording the label "mic" does not catch that; only the samples do. The
+        fixture WAVs differ in amplitude precisely so this is checkable.
+        """
+        seen: list[tuple[str, float]] = []
+
+        def gate(segments, audio, _acoustic, label):
+            seen.append((label, round(float(audio[0]), 5)))
             return segments, {"applied": False, "why": "fixture"}
 
         create_transcript_revision(
@@ -175,7 +183,8 @@ class TranscriptionTests(unittest.TestCase):
             bleed_filter=self.keep,
             gate_filter=gate,
         )
-        self.assertEqual(seen, ["mic"])
+        # mic.wav holds 500, system.wav holds 900, both as signed 16-bit.
+        self.assertEqual(seen, [("mic", round(500 / 32768.0, 5))])
 
     def test_no_profile_leaves_the_artifact_saying_none_was_supplied(self) -> None:
         # A null `voiceprint` is a claim, not an omission: it says no profile was
@@ -449,13 +458,63 @@ class RealProfileGateTests(unittest.TestCase):
             [(None, "the operator speaking"), (True, "somebody at the next desk")],
         )
         rejected = marked[1]
-        self.assertIsInstance(rejected["gate_score"], float)
         self.assertTrue(rejected["gate_reason"])
         self.assertTrue(gating["applied"])
         self.assertEqual(gating["rejected"], 1)
         self.assertEqual(gating["n_sittings"], 2)
         self.assertEqual(gating["encoder_fingerprint"], self.encoder_digest)
-        self.assertIsInstance(gating["threshold"], float)
+        # The operator's turn was SCORED and admitted, not merely left alone.
+        # An unscorable segment is also kept and also unmarked and also absent
+        # from `rejected`, so asserting only those three would stay green if
+        # index arithmetic dropped the first segment before it was ever judged —
+        # and that arithmetic is what decides whether the operator survives.
+        self.assertEqual(gating["kept"], 1)
+        self.assertEqual(gating["unscorable_kept"], 0)
+        self.assertLess(rejected["gate_score"], gating["threshold"])
+
+    def test_two_operator_turns_are_both_admitted(self) -> None:
+        """The control. Without it, a gate that rejects everything passes above.
+
+        `test_the_other_voice_is_marked_and_the_operator_is_not` asserts one
+        rejection out of two turns, which a broken gate can satisfy by chance
+        of ordering. This asserts the gate declines to reject when there is
+        nothing to reject.
+        """
+        import numpy as np
+
+        audio, segments = self.sg._fixture_audio(
+            [(1.0, 5.0, 0), (7.0, 11.0, 0)], np.random.default_rng(4)
+        )
+        segments[0]["text"] = "first operator turn"
+        segments[1]["text"] = "second operator turn"
+        marked, gating = self.build_gate()(segments, audio, None, "mic")
+        self.assertTrue(all("gated" not in segment for segment in marked))
+        self.assertEqual(gating["rejected"], 0)
+        self.assertEqual(gating["kept"], 2)
+        self.assertEqual(gating["unscorable_kept"], 0)
+
+    def test_a_mismatched_encoder_digest_refuses_before_anything_loads(self) -> None:
+        with self.assertRaisesRegex(
+            adapters.AdapterRefused, "disagrees with its manifest"
+        ):
+            adapters._installed_voiceprint_gate(
+                self.root, "e" * 64, self.encoder_path, embedder=self.embed
+            )
+
+    def test_an_unreadable_profile_refuses(self) -> None:
+        installed = self.root / "profile" / "voiceprint.json"
+        os.chmod(installed, 0o600)
+        with installed.open("wb") as handle:
+            handle.write(b"{not json")
+        with self.assertRaisesRegex(
+            adapters.AdapterRefused, "cannot be loaded"
+        ):
+            adapters._installed_voiceprint_gate(
+                self.root,
+                self.encoder_digest,
+                self.encoder_path,
+                embedder=self.embed,
+            )
 
     def test_high_bleed_skips_the_gate_and_says_so(self) -> None:
         # Where the far end is coming back through the room the labels are
@@ -502,8 +561,21 @@ class RealProfileGateTests(unittest.TestCase):
         # The capture WAVs are constant tones; the gate needs the fixture audio
         # whose amplitude encodes the speaker, so the transcriber hands back the
         # fixture segments and the gate scores against the fixture leg.
+        #
+        # The substitution asserts identity on what it was handed first. Both
+        # legs are in scope at the call site, and swapping mic for system there
+        # would score every operator turn against the far end, reject them all,
+        # and drop them into gated_turns with no error raised anywhere. A stub
+        # that silently discards the argument cannot see that; this one refuses
+        # to.
         gate = self.build_gate()
         fixture_audio = self.audio
+        mic_leg = 500 / 32768.0
+
+        def scored_against_the_mic_leg(segments, audio, acoustic, label):
+            self.assertAlmostEqual(float(audio[0]), mic_leg, places=5)
+            self.assertEqual(label, "mic")
+            return gate(segments, fixture_audio, acoustic, label)
 
         def transcribe(audio, _model, _language):
             if float(audio[0]) < 0.02:
@@ -517,9 +589,7 @@ class RealProfileGateTests(unittest.TestCase):
             transcribe_audio=transcribe,
             voicing_filter=lambda segments, *_rest: segments,
             bleed_filter=lambda segments, *_rest: segments,
-            gate_filter=lambda segments, _mic, acoustic, label: gate(
-                segments, fixture_audio, acoustic, label
-            ),
+            gate_filter=scored_against_the_mic_leg,
         )
 
         document = load(path)
