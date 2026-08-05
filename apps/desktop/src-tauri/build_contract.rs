@@ -34,6 +34,7 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "preview_profile_preserve_legacy",
     "preview_profile_reset",
     "preview_library_snapshot",
+    "preview_retention_overview",
     "preview_library_search",
     "preview_library_open_search_result",
     "preview_library_open_note",

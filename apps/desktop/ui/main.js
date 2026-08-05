@@ -723,6 +723,53 @@ function render(snapshot) {
   }
 }
 
+// The §K standing statement: what recording audio is held, how much, and
+// until when. Rows are facts, not navigation — the library list directly
+// below opens meetings — and every sentence comes from the store's own
+// state vocabulary.
+function renderRetentionOverview(overview) {
+  const heading = document.querySelector("#retention-overview-total");
+  const copy = document.querySelector("#retention-overview-copy");
+  const list = document.querySelector("#retention-overview-rows");
+  const state = overview?.state || "unavailable";
+  heading.textContent =
+    state === "holding" ? `${formatByteSize(overview.totalRetainedBytes)} held` : "";
+  copy.textContent =
+    overview?.message
+    || "Retention status is unavailable. Reopen Meetings and try again.";
+  const rows = (Array.isArray(overview?.rows) ? overview.rows : []).filter(
+    (row) => row?.audioState !== "never-created",
+  );
+  list.hidden = state !== "holding" || rows.length === 0;
+  list.replaceChildren(
+    ...rows.map((row) => {
+      const item = document.createElement("li");
+      const when = formatMeetingTime(row.createdAtEpochSeconds);
+      let detail;
+      if (row.audioState === "retained") {
+        const size = formatByteSize(row.retainedBytes ?? -1);
+        detail =
+          row.policy === "scheduled"
+            ? `${size} · ${retentionDeadlineMessage(row.deadlineEpochSeconds)}`
+            : `${size} · Kept until you delete the recording.`;
+      } else if (row.audioState === "deleting") {
+        detail = "Deletion is already in progress.";
+      } else {
+        detail = "Audio deleted. The transcript, note, and evidence remain.";
+      }
+      item.textContent = `${when} — ${detail}`;
+      return item;
+    }),
+  );
+}
+
+async function refreshRetentionOverview(revision) {
+  if (!invoke) return;
+  const overview = await invoke("preview_retention_overview").catch(() => null);
+  if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
+  renderRetentionOverview(overview);
+}
+
 async function rebuildMeetingsView() {
   if (!invoke) return;
   document.querySelector("#library-copy").textContent = "Opening retained meetings on this Mac.";
@@ -732,9 +779,11 @@ async function rebuildMeetingsView() {
     const snapshot = await initializeLibraryReader();
     if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
     renderLibrary(snapshot);
+    await refreshRetentionOverview(revision);
   } catch {
     if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
     renderLibrary({ state: "unavailable", rows: [], message: "Meetings are unavailable right now." });
+    renderRetentionOverview(null);
   }
 }
 

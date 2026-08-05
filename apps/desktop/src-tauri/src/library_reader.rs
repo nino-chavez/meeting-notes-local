@@ -212,6 +212,27 @@ impl LibraryReader {
         self.snapshot_current()
     }
 
+    /// Identity-only projection rows for the standing §K retention overview.
+    /// Deliberately mints no handle — `snapshot` clears the handle table on
+    /// every call, so an overview read must not invalidate the generation
+    /// the operator is already navigating. Rows join to the rendered library
+    /// list by meeting id instead.
+    pub(crate) fn retention_identities(
+        &mut self,
+        active_meeting_ids: &HashSet<String>,
+    ) -> Option<Vec<(String, u64)>> {
+        if !self.revalidate(active_meeting_ids) {
+            return None;
+        }
+        Some(
+            self.projection
+                .rows()
+                .iter()
+                .map(|row| (row.meeting_id.clone(), row.created_at_epoch_seconds))
+                .collect(),
+        )
+    }
+
     fn snapshot_current(&mut self) -> LibrarySnapshot {
         self.clear_handles();
         let unavailable_count = self.projection.quarantined_meetings();
@@ -1307,6 +1328,33 @@ mod tests {
         let reused = reader.authorize_audio_deletion(&deletion_handle, &HashSet::new());
         assert_eq!(reused.state, "stale");
         assert_eq!(reused.meeting_id, None);
+    }
+
+    #[test]
+    fn retention_identities_do_not_invalidate_the_navigated_generation() {
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
+        let snapshot = reader.snapshot(&HashSet::new());
+        let handle = snapshot.rows[0].handle.clone();
+
+        let identities = reader.retention_identities(&HashSet::new()).unwrap();
+        assert_eq!(identities.len(), 1);
+        assert_eq!(identities[0].0, MEETING_ID);
+
+        // The overview read minted no handle and cleared none: the snapshot
+        // generation the operator is navigating still opens.
+        let note = reader.open_note(&handle, &HashSet::new());
+        assert_ne!(note.state, "stale");
+
+        let retention = LibraryReader::read_audio_retention(&fixture.storage, MEETING_ID);
+        assert_eq!(retention.state, "retained");
+        assert_eq!(retention.retained_bytes, Some(19 + 23));
     }
 
     #[test]

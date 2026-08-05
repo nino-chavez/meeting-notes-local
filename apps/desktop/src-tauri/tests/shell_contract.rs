@@ -86,6 +86,7 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-preview-profile-preserve-legacy",
             "allow-preview-profile-reset",
             "allow-preview-library-snapshot",
+            "allow-preview-retention-overview",
             "allow-preview-library-search",
             "allow-preview-library-open-search-result",
             "allow-preview-library-open-note",
@@ -256,6 +257,7 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-preview-profile-preserve-legacy",
             "allow-preview-profile-reset",
             "allow-preview-library-snapshot",
+            "allow-preview-retention-overview",
             "allow-preview-library-search",
             "allow-preview-library-open-search-result",
             "allow-preview-library-open-note",
@@ -818,6 +820,35 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     let return_to_find = &script[return_start..return_end];
     assert!(return_to_find.contains("if (control) control.disabled = true;"));
     assert!(return_to_find.contains("if (control) control.disabled = false;"));
+}
+
+#[test]
+fn meetings_screen_carries_the_standing_retention_overview() {
+    // §K's standing statement: what recording audio is held, how much, and
+    // until when. Rows are facts, not navigation — the library list below
+    // opens meetings, and deletion stays behind each meeting's reviewed
+    // two-step path.
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+
+    assert!(html.contains("id=\"retention-overview\""));
+    assert!(html.contains("id=\"retention-overview-total\""));
+    assert!(html.contains("id=\"retention-overview-rows\""));
+    assert!(html.contains("Deleting a recording is reviewed inside its meeting."));
+    assert!(script.contains("invoke(\"preview_retention_overview\""));
+
+    let start = script
+        .find("function renderRetentionOverview")
+        .expect("retention overview renderer");
+    let end = script[start..]
+        .find("async function refreshRetentionOverview")
+        .expect("retention overview refresh")
+        + start;
+    let renderer = &script[start..end];
+    assert!(!renderer.contains("createElement(\"button\")"));
+    assert!(renderer.contains("retentionDeadlineMessage"));
+    assert!(renderer.contains("Kept until you delete the recording."));
+    assert!(renderer.contains("Audio deleted. The transcript, note, and evidence remain."));
 }
 
 #[test]

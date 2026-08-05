@@ -267,6 +267,12 @@
           "markdownDescription": "Enables the preview_profile_snapshot command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_retention_overview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-retention-overview",
+          "markdownDescription": "Enables the preview_retention_overview command without any pre-configured scope."
+        },
+        {
           "description": "Enables the restore_withheld_turn command without any pre-configured scope.",
           "type": "string",
           "const": "allow-restore-withheld-turn",
@@ -379,6 +385,12 @@
           "type": "string",
           "const": "deny-preview-profile-snapshot",
           "markdownDescription": "Denies the preview_profile_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_retention_overview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-retention-overview",
+          "markdownDescription": "Denies the preview_retention_overview command without any pre-configured scope."
         },
         {
           "description": "Denies the restore_withheld_turn command without any pre-configured scope.",
