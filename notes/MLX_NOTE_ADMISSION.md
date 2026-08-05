@@ -321,15 +321,23 @@ runtime, prompt, parser, and two synthetic fixtures. Receipt:
 | Strict result | **`accepted-research-candidate`** | **`transcript-only`, `no-model-candidates`** |
 | Response receipt | 344 bytes; SHA-256 `8a55ccac35514dc691d1…` | 12 bytes; SHA-256 `eef46741adfc3a9f7629…` |
 | MLX streaming metadata | 496 prompt tokens; 181 generated; finish `stop` | 267 prompt tokens; 6 generated; finish `stop` |
-| Call time | 2.64 s | 0.23 s |
+| Call time | 3.51–3.86 s | 0.40–0.46 s |
 
 All four mechanical checks passed on both calls, including
 `required_citation_terms` — the accepted item's citation resolved to the exact
 canonical transcript span, and the locator gate stayed able to fail because no
 value was constrained. The empty-candidate fixture returned exactly
-`{"items":[]}` in six tokens. Model load 0.396 s, measured separately; peak
-process RSS 1,180,614,656 bytes against the 4,282,063,304-byte envelope; the
-model tree digest `3aaeeac4…` was identical before and after.
+`{"items":[]}` in six tokens. Model load 0.479–0.575 s, measured separately;
+peak process RSS 1,171,210,240–1,174,487,040 bytes against the 4,282,063,304-byte
+envelope; the model tree digest `3aaeeac4…` was identical before and after.
+
+Call time is stated as the range across the three committed receipts rather than
+a single figure, because it is the one number here that moves with machine load
+and not with the candidate. An earlier set of three, taken while this machine was
+busy, recorded 20.6–43.0 s cold for byte-identical responses — a 12× spread on
+work that did not change. Under the amendment latency is reported and is not a
+rejection criterion, which is what makes quoting one clean figure misleading
+rather than merely imprecise.
 
 **Repeatability held.** Three consecutive cold runs produced identical response
 digests on both fixtures and identical receipts once timings are excluded. All
@@ -443,6 +451,24 @@ A third defect in the same review: `_runtime_receipt` made `decoder` mandatory
 and the receipt then dropped it, so no committed receipt named which sampler
 produced it. For the masked arm that digest is the only pin on *which* mask ran,
 and the mask has now been revised twice.
+
+Carrying it through the accepted and refused paths still missed the one that
+matters most. `MaskRefused` is raised inside the logits processor, inside
+`stream_generate`, inside the provider closure — so the provider *throws* and
+there is no observed dict to read an identity from. A mask refusal is by
+construction the mask's failure and not the model's, which made it the one
+receipt with no way to name the mask. The digest is known when the provider is
+built, so it is now attached to the provider itself and survives the throw.
+
+Two further gaps closed at the same time. `ITEM_FIELDS` and both ceilings were
+declared in `structured_decoding.py` and checked against nothing; if the
+contract's `ordered_fields` or its `max_items` moved, the mask would silently
+block valid responses or admit ones `_decode_response` rejects, and the receipt
+would still read `passed`. They are cross-pinned to `response_contract` now, the
+same way `ALPHA_OPERATIONS` is pinned to `internal_alpha_operations`. And the
+mask's own `MAX_ITEMS = 8` is an extra restriction the contract does not state,
+so a test holds it above the most items any fixture could legitimately produce —
+currently two.
 
 ## 2026-08-02 SmolLM2 measurement — inconclusive
 

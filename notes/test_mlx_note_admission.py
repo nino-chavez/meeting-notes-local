@@ -12,9 +12,11 @@ sys.path.insert(0, str(ROOT / "notes"))
 
 from mlx_note_admission import (
     MLX_RUNTIME,
+    _admission_candidates,
     _decode_response,
     _sha256,
     model_request,
+    response_contract,
     run_control_arm,
     run_model_arm,
     synthetic_corrective_probe_fixtures,
@@ -143,6 +145,42 @@ class MlxNoteAdmissionTests(unittest.TestCase):
         self.assertEqual(result.note["schema"], "note/2")
         self.assertEqual(structured_artifact_citations(result.note, synthetic_transcript())["items"], 1)
 
+    def test_the_mask_agrees_with_the_contract_it_claims_to_enforce(self) -> None:
+        """The mask declares the shape independently; nothing tied the two.
+
+        `ITEM_FIELDS` and the two ceilings live in `structured_decoding.py`, and
+        the contract the model is actually handed lives in `response_contract`.
+        If either moves the mask silently blocks valid responses or admits ones
+        `_decode_response` rejects, and the receipt still reads `passed`. Same
+        failure shape as `ALPHA_OPERATIONS` versus `internal_alpha_operations`,
+        so it gets the same cross-pin.
+        """
+        from structured_decoding import ITEM_FIELDS, MAX_FRAGMENT_IDS, MAX_ITEMS
+
+        transcript = synthetic_transcript()
+        contract = response_contract(generate_manifest(transcript, STRATEGY_CUE))
+        item = contract["root"]["properties"]["items"]["item"]
+        self.assertEqual(contract["root"]["ordered_fields"], ["items"])
+        self.assertEqual(list(ITEM_FIELDS), item["ordered_fields"])
+        self.assertEqual(contract["empty_response"], {"items": []})
+        ids = item["properties"]["source_fragment_ids"]
+        self.assertEqual(MAX_FRAGMENT_IDS, ids["max_items"])
+        self.assertEqual(ids["min_items"], 1)
+
+        # The contract states no item ceiling, so the mask's is an extra
+        # restriction. It is only safe while it stays above the most items any
+        # fixture could legitimately produce — one per offered candidate, since
+        # `_decode_response` requires unique candidate IDs in ascending order.
+        worst = max(
+            len(_admission_candidates(generate_manifest(fixture[1], STRATEGY_CUE)))
+            for fixture in (*synthetic_measurement_fixtures(), *fixtures_for_scope("probe"))
+        )
+        self.assertLessEqual(
+            worst,
+            MAX_ITEMS,
+            "the mask would block a response the contract permits",
+        )
+
     def test_the_committed_constrained_receipts_evidence_the_repeatability_gate(self) -> None:
         """The registered gate is three cold runs, and prose is not the artifact.
 
@@ -215,6 +253,28 @@ class MlxNoteAdmissionTests(unittest.TestCase):
         refused = run_model_arm(transcript, masked)
         self.assertEqual(refused.outcome, "transcript-only")
         self.assertEqual(refused.receipt["identity"]["decoder"], "d" * 64)
+
+        # The path that matters most, and the one the fix above does not reach:
+        # `MaskRefused` is raised inside the logits processor, so the provider
+        # throws and there is no `observed` dict to read an identity from. A
+        # mask refusal is by construction the mask's failure and not the
+        # model's, which made this the least useful receipt in the set.
+        def throws(_request: dict) -> tuple[str, dict]:
+            raise ValueError("no token continues the contract")
+
+        setattr(throws, "decoder_identity", "e" * 64)
+        thrown = run_model_arm(transcript, throws)
+        self.assertEqual(thrown.outcome, "transcript-only")
+        self.assertEqual(thrown.code, "provider-generation-failure")
+        self.assertEqual(thrown.receipt["decoder"], "e" * 64)
+
+        # A provider that names no decoder says so, rather than going silent.
+        def anonymous(_request: dict) -> tuple[str, dict]:
+            raise ValueError("boom")
+
+        self.assertEqual(
+            run_model_arm(transcript, anonymous).receipt["decoder"], "unavailable"
+        )
 
     def test_malformed_unknown_citation_timeout_and_digest_mismatch_are_transcript_only(self) -> None:
         transcript = synthetic_transcript()

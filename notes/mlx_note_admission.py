@@ -566,18 +566,25 @@ def run_model_arm(
     request = model_request(transcript, manifest)
     started = time.monotonic()
     response_receipt: dict[str, object] = {}
+    # Read before the call, so a provider that throws mid-generation still names
+    # its sampler. `MaskRefused` arrives on the path below, and a mask refusal is
+    # the one failure whose attribution is not in question — which made a receipt
+    # that could not identify the mask the least useful one in the set.
+    decoder = getattr(provider, "decoder_identity", "unavailable")
     try:
         raw, observed = provider(request)
     except TimeoutError:
         return transcript_only("mlx", "timeout", {
             "manifest_sha256": manifest["manifest_sha256"],
             "elapsed_s": round(time.monotonic() - started, 6),
+            "decoder": decoder,
         })
     except Exception as exc:
         return transcript_only("mlx", "provider-generation-failure", {
             "error_type": type(exc).__name__,
             "manifest_sha256": manifest["manifest_sha256"],
             "elapsed_s": round(time.monotonic() - started, 6),
+            "decoder": decoder,
         })
     try:
         response_receipt = {
@@ -811,6 +818,13 @@ def local_mlx_provider(
         "preflight_model_tree_sha256": preflight_tree_sha256,
         "runtime_identity": runtime_identity,
     })
+    # Exposed separately from any call because the provider can throw before it
+    # returns an `observed` dict at all: `MaskRefused` is raised inside the
+    # logits processor, inside `stream_generate`, inside this closure. That
+    # failure is by construction the *mask's* and not the model's, and it was
+    # the one receipt with no way to name which mask produced it. The value is
+    # known at construction, so it survives a throw.
+    setattr(provider, "decoder_identity", decoder_identity)
     return provider
 
 
