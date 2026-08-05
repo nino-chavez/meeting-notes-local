@@ -10,6 +10,8 @@ or a person planning work reads this file first, then descends:
 3. [`screens-and-states.md`](./screens-and-states.md) — the surface inventory (§A–§K).
 4. [`vertical-slice.md`](./vertical-slice.md) — the implementation contract: waves,
    build order, human gates. That file, not this one, decides what gets built next.
+   Open proposal awaiting an operator decision:
+   [`speaker-gate-slice.md`](./speaker-gate-slice.md).
 5. [`teardown.md`](./teardown.md) — the mechanism research underneath all of it.
 
 Written 2026-08-05. Statuses were verified against code on that date, not copied
