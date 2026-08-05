@@ -2091,6 +2091,43 @@ class ProfileBuildFromEvidenceTests(unittest.TestCase):
                 self.ENCODER,
             )
 
+    def test_a_corrupt_row_refuses_instead_of_killing_the_worker(self) -> None:
+        # An uncaught TypeError from one corrupt sitting row would crash-loop
+        # every worker operation, not just the build. Malformed numerics must
+        # surface as the adapter refusal every neighbor produces.
+        self._seed_evidence()
+        victim = next(
+            (self.root / "enrollment" / "sittings").iterdir()
+        )
+        capture_row = victim / "capture.json"
+        row = json.loads(capture_row.read_text())
+        row["captured_at_epoch_seconds"] = None
+        capture_row.write_text(json.dumps(row))
+        with self.assertRaisesRegex(AdapterRefused, "capture time"):
+            adapters.profile_choices(
+                self.root, {"operation_id": str(uuid.uuid4())}, self.ENCODER
+            )
+
+    def test_build_refuses_a_symlinked_candidate_quarantine(self) -> None:
+        # mkdir(exist_ok=True) passes through a symlinked directory; the
+        # voiceprint's score receipts must never be written outside the
+        # private root.
+        self._seed_evidence()
+        operation_id = str(uuid.uuid4())
+        adapters.profile_choices(self.root, {"operation_id": operation_id}, self.ENCODER)
+        relay = self.root / "enrollment-choices" / f"{operation_id}.json"
+        target = json.loads(relay.read_text())["choices"][0]["target_frr"]
+        outside = Path(self.temporary.name) / "outside"
+        outside.mkdir(mode=0o700)
+        (self.root / "profile-candidates").symlink_to(outside)
+        with self.assertRaisesRegex(AdapterRefused, "unsafe"):
+            adapters.profile_build(
+                self.root,
+                {"profile_id": str(uuid.uuid4()), "selected_target": target},
+                self.ENCODER,
+            )
+        self.assertFalse(any(outside.iterdir()))
+
     def test_choices_refuse_mixed_encoder_material_and_thin_evidence(self) -> None:
         self._seed_evidence()
         with self.assertRaisesRegex(AdapterRefused, "another encoder"):

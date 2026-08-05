@@ -38,3 +38,6 @@ spike/**/scores.json
 **/transcript.json
 **/transcript-*.json
 **/*-transcript.json
+
+# Local Cloudflare CLI cache
+.wrangler/

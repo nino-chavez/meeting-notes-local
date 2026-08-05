@@ -68,6 +68,19 @@ def _iso_utc(epoch_seconds: int) -> str:
     return dt.datetime.fromtimestamp(int(epoch_seconds), dt.timezone.utc).isoformat()
 
 
+def _require_count(value: object, what: str, floor: int = 0) -> int:
+    """A stored integer, at least `floor`, or a refusal naming the row.
+
+    Every malformed-row case in this module must surface as
+    `ProfileBuildRefused`: an uncaught `TypeError` from a corrupt row would
+    kill the worker process, and one bad sitting would crash-loop every
+    operation, not just the build.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < floor:
+        raise ProfileBuildRefused(f"sitting {what} is not a valid count")
+    return value
+
+
 def read_saved_evidence(root: Path, encoder_digest: str) -> tuple[list[dict], list[dict]]:
     """Every sitting whose derived voice material is durably stored.
 
@@ -110,9 +123,9 @@ def read_saved_evidence(root: Path, encoder_digest: str) -> tuple[list[dict], li
         embeddings_bytes = embeddings_path.read_bytes()
         if hashlib.sha256(embeddings_bytes).hexdigest() != derived.get("embeddings_sha256"):
             raise ProfileBuildRefused("sitting embeddings disagree with their derived row")
-        count = int(derived.get("embedding_count") or 0)
-        dim = int(derived.get("embedding_dim") or 0)
-        if count < 1 or dim < 1 or len(embeddings_bytes) != count * dim * 4:
+        count = _require_count(derived.get("embedding_count"), "embedding count", 1)
+        dim = _require_count(derived.get("embedding_dim"), "embedding dimension", 1)
+        if len(embeddings_bytes) != count * dim * 4:
             raise ProfileBuildRefused("sitting embeddings have an impossible shape")
         rows = np.frombuffer(embeddings_bytes, dtype="<f4").reshape(count, dim)
 
@@ -136,10 +149,14 @@ def read_saved_evidence(root: Path, encoder_digest: str) -> tuple[list[dict], li
             "sitting_id": sitting_id,
             "kind": identity.get("kind"),
             "source_class": identity.get("source_class"),
-            "captured_at_epoch_seconds": capture.get("captured_at_epoch_seconds"),
+            "captured_at_epoch_seconds": _require_count(
+                capture.get("captured_at_epoch_seconds"), "capture time"
+            ),
             "raw_relative_name": raw.get("relative_name"),
             "raw_sha256": raw_sha256,
-            "raw_byte_size": int(raw.get("byte_size") or 0),
+            # 16-bit mono PCM: two bytes per sample. A missing or zero byte
+            # size is a refusal, never an invented one-sample receipt.
+            "raw_byte_size": _require_count(raw.get("byte_size"), "raw byte size", 2),
             "segments_sha256": hashlib.sha256(
                 (directory / "segments.json").read_bytes()
             ).hexdigest(),
@@ -273,7 +290,7 @@ def build_candidate(
             "audio": f"enrollment/sittings/{entry['sitting_id']}/audio.raw",
             "segments": f"enrollment/sittings/{entry['sitting_id']}/segments.json",
             "audio_sha256": entry["raw_sha256"],
-            "audio_samples": max(1, entry["raw_byte_size"] // 2),
+            "audio_samples": entry["raw_byte_size"] // 2,
             "segments_sha256": entry["segments_sha256"],
             "segments_schema": "sitting-segments/1",
             "captured_at": _iso_utc(entry["captured_at_epoch_seconds"]),
@@ -285,7 +302,12 @@ def build_candidate(
 
     # The quarantine shape both `profile.inspect` and the Rust bridge pin:
     # one private directory per candidate holding exactly `voiceprint.json`.
+    # Every level is symlink-checked before writing — `mkdir(exist_ok=True)`
+    # passes through a symlinked directory, and the voiceprint's score
+    # receipts must never land outside the private root.
     candidates = root / CANDIDATES_DIR
+    if candidates.is_symlink():
+        raise ProfileBuildRefused("the candidate destination is unsafe")
     candidates.mkdir(mode=0o700, exist_ok=True)
     directory = candidates / profile_id
     if directory.is_symlink():
