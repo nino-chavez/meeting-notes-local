@@ -8,6 +8,7 @@ import {
   createRouteOwnershipGate,
   createTransitionGate,
   changedStatusText,
+  enrollmentRecorderPresentation,
   captureChannelPresentation,
   connectionUncertaintyStatus,
   headerActionPolicy,
@@ -61,6 +62,13 @@ const profileNextStep = document.querySelector("#profile-next-step");
 const profileEnrollmentGates = document.querySelector("#profile-enrollment-gates");
 const profileRecorderEntry = document.querySelector("#profile-recorder-entry");
 const profileSittings = document.querySelector("#profile-sittings");
+const sittingForm = document.querySelector("#sitting-form");
+const sittingSourceClass = document.querySelector("#sitting-source-class");
+const sittingStart = document.querySelector("#sitting-start");
+const sittingActive = document.querySelector("#sitting-active");
+const sittingStop = document.querySelector("#sitting-stop");
+const sittingError = document.querySelector("#sitting-error");
+const sittingOutcome = document.querySelector("#sitting-outcome");
 const profileResetConfirmation = document.querySelector("#profile-reset-confirmation");
 const profileResetConfirm = document.querySelector("#profile-reset-confirm");
 const profileResetCancel = document.querySelector("#profile-reset-cancel");
@@ -812,12 +820,25 @@ const SITTING_STATE_COPY = {
   rehearsal: "Rehearsal only. It does not count toward setup.",
 };
 
+let latestEnrollmentSurface = null;
+let sittingPollTimer = null;
+let sittingCommandPending = false;
+
 function renderEnrollmentSittings(surface) {
-  const reason = surface?.recordingAvailable
-    ? ""
-    : surface?.recordingUnavailableReason || "Voice profile status is unavailable, so a setup recording cannot start.";
-  profileRecorderEntry.hidden = !reason;
-  profileRecorderEntry.textContent = reason;
+  latestEnrollmentSurface = surface;
+  const presentation = enrollmentRecorderPresentation(surface);
+  profileRecorderEntry.hidden = !presentation.entryText;
+  profileRecorderEntry.textContent = presentation.entryText;
+  sittingForm.hidden = presentation.mode !== "ready";
+  sittingActive.hidden = presentation.mode !== "recording";
+  sittingOutcome.hidden = !presentation.outcomeText;
+  sittingOutcome.textContent = presentation.outcomeText;
+  if (presentation.mode !== "ready") {
+    sittingError.hidden = true;
+    sittingError.textContent = "";
+  }
+  sittingStart.disabled = sittingCommandPending;
+  sittingStop.disabled = sittingCommandPending;
   const sittings = Array.isArray(surface?.sittings) ? surface.sittings : [];
   profileSittings.hidden = sittings.length === 0;
   profileSittings.replaceChildren(
@@ -830,9 +851,132 @@ function renderEnrollmentSittings(surface) {
       return item;
     }),
   );
+  syncGuidedSetupEntry();
+  if (presentation.mode === "recording") scheduleSittingPoll();
+}
+
+// While a take is active the recorder surface is the only live projection,
+// so the profile screen re-reads it on a short cadence. The poll dies with
+// the route and re-arms itself only while a recording is still in progress;
+// when the take ends it refreshes the profile snapshot once, so the guided
+// next step reflects the new evidence without reopening the screen.
+function scheduleSittingPoll() {
+  if (sittingPollTimer) window.clearTimeout(sittingPollTimer);
+  sittingPollTimer = window.setTimeout(async () => {
+    sittingPollTimer = null;
+    if (!invoke || currentScreen !== "profile-screen") return;
+    const wasRecording =
+      enrollmentRecorderPresentation(latestEnrollmentSurface).mode === "recording";
+    const surface = await invoke("preview_enrollment_surface").catch(() => null);
+    if (currentScreen !== "profile-screen") return;
+    renderEnrollmentSittings(surface);
+    const isRecording = enrollmentRecorderPresentation(surface).mode === "recording";
+    if (wasRecording && !isRecording) {
+      const snapshot = await invoke("preview_profile_snapshot").catch(() => null);
+      if (currentScreen === "profile-screen" && snapshot) renderProfile(snapshot);
+      renderEnrollmentSittings(surface);
+    }
+  }, 1500);
+}
+
+function selectedSittingRequest() {
+  const kind =
+    sittingForm.querySelector("input[name=\"sitting-kind\"]:checked")?.value
+    || "operator-sitting";
+  if (kind !== "negative-source") return { kind, sourceClass: null };
+  const sourceClass =
+    sittingSourceClass.querySelector("input[name=\"sitting-source-class\"]:checked")?.value
+    || null;
+  return { kind, sourceClass };
+}
+
+function syncSittingSourceClass() {
+  const { kind } = selectedSittingRequest();
+  sittingSourceClass.hidden = kind !== "negative-source";
+}
+
+async function startSittingRecording(event) {
+  event.preventDefault();
+  if (!invoke || sittingCommandPending) return;
+  const { kind, sourceClass } = selectedSittingRequest();
+  if (kind === "negative-source" && !sourceClass) {
+    sittingError.textContent = "Choose where the comparison speech comes from first.";
+    sittingError.hidden = false;
+    return;
+  }
+  sittingCommandPending = true;
+  sittingStart.disabled = true;
+  sittingError.hidden = true;
+  sittingError.textContent = "";
+  try {
+    const surface = await invoke("preview_enrollment_start_sitting", {
+      kind,
+      sourceClass,
+    });
+    sittingCommandPending = false;
+    if (currentScreen !== "profile-screen") return;
+    renderEnrollmentSittings(surface);
+    sittingStop.focus();
+  } catch (error) {
+    sittingCommandPending = false;
+    if (currentScreen !== "profile-screen") return;
+    sittingStart.disabled = false;
+    sittingError.textContent =
+      typeof error === "string" ? error : "The setup recording could not start.";
+    sittingError.hidden = false;
+  }
+}
+
+async function stopSittingRecording() {
+  if (!invoke || sittingCommandPending) return;
+  sittingCommandPending = true;
+  sittingStop.disabled = true;
+  try {
+    await invoke("preview_enrollment_stop_sitting");
+  } catch {
+    // The refusal reaches the operator through the surface poll below: a
+    // vanished take renders its outcome sentence, not a second error path.
+  }
+  sittingCommandPending = false;
+  if (currentScreen !== "profile-screen") return;
+  sittingActive.hidden = true;
+  const surface = await invoke("preview_enrollment_surface").catch(() => null);
+  if (currentScreen !== "profile-screen") return;
+  renderEnrollmentSittings(surface);
+  if (enrollmentRecorderPresentation(surface).mode === "recording") {
+    scheduleSittingPoll();
+  } else {
+    const snapshot = await invoke("preview_profile_snapshot").catch(() => null);
+    if (currentScreen === "profile-screen" && snapshot) renderProfile(snapshot);
+    renderEnrollmentSittings(surface);
+  }
+}
+
+let latestProfileSnapshot = null;
+
+// "Set up voice profile" is live exactly when the recorder below it can act:
+// the no-profile state with a recorder the surface reports ready or already
+// recording. Both projections arrive separately, so this sync runs from
+// whichever lands last.
+function syncGuidedSetupEntry() {
+  if (profileSetup.dataset.action !== "setup") return;
+  if (
+    latestProfileSnapshot?.state !== "baseline-ready"
+    || latestProfileSnapshot?.profilePresent !== false
+    || latestProfileSnapshot?.profileActive === true
+  ) {
+    return;
+  }
+  const mode = enrollmentRecorderPresentation(latestEnrollmentSurface).mode;
+  profileSetup.disabled = mode === "unavailable";
+  profileStatusCopy.textContent =
+    mode === "unavailable"
+      ? "Private setup storage is ready. Guided setup is not part of this build."
+      : "Private setup storage is ready. Setup recordings below are where you begin.";
 }
 
 function renderProfile(snapshot) {
+  latestProfileSnapshot = snapshot;
   const state = snapshot?.state || "unavailable";
   profileResetConfirmation.hidden = true;
   profileResetStatus.hidden = true;
@@ -862,8 +1006,9 @@ function renderProfile(snapshot) {
   if (state === "baseline-ready" && snapshot?.profilePresent === false) {
     profileLede.textContent = "Voice isolation is off. You can record now — one speaker, wearing headphones. A profile will let the app set aside speech that is not yours.";
     profileStatusTitle.textContent = "No profile is set up";
-    profileStatusCopy.textContent = "Private setup storage is ready. Guided setup is not part of this build yet.";
+    profileStatusCopy.textContent = "Private setup storage is ready. Guided setup is not part of this build.";
     profileFootnote.textContent = "Opening this screen reads only the setup status. It never opens meetings or transcripts.";
+    syncGuidedSetupEntry();
     return;
   }
   if (state === "baseline-ready" && snapshot?.profilePresent === true) {
@@ -957,6 +1102,19 @@ async function preserveLegacyProfile() {
 }
 
 function runProfileAction() {
+  if (profileSetup.dataset.action === "setup") {
+    if (profileSetup.disabled) return;
+    document
+      .querySelector("#profile-recorder")
+      .scrollIntoView({ behavior: "smooth", block: "start" });
+    const focusTarget = !sittingForm.hidden
+      ? sittingForm.querySelector("input[name=\"sitting-kind\"]:checked")
+      : !sittingActive.hidden
+        ? sittingStop
+        : null;
+    focusTarget?.focus({ preventScroll: true });
+    return;
+  }
   if (profileSetup.dataset.action === "preserve") {
     preserveLegacyProfile();
     return;
@@ -1496,6 +1654,9 @@ profileLink.addEventListener("click", openProfile);
 profileSetup.addEventListener("click", runProfileAction);
 profileResetConfirm.addEventListener("click", resetStoredProfile);
 profileResetCancel.addEventListener("click", cancelProfileReset);
+sittingForm.addEventListener("submit", startSittingRecording);
+sittingForm.addEventListener("change", syncSittingSourceClass);
+sittingStop.addEventListener("click", stopSittingRecording);
 workflowReturn.addEventListener("click", returnToWorkflow);
 startMeetingAction.addEventListener("click", openStartMeeting);
 document.querySelector("#start-back").addEventListener("click", returnToProductHome);

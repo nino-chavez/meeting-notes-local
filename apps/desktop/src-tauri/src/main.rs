@@ -111,6 +111,7 @@ struct ApplicationState {
     runtime: Mutex<Option<RuntimeIdentity>>,
     worker: Arc<Mutex<Option<OwnedChild>>>,
     capture_task: Mutex<Option<CaptureTaskControl>>,
+    sitting_task: Mutex<Option<SittingTaskControl>>,
     command_lock: Mutex<()>,
     app_data_writer_lock: Arc<Mutex<Option<AppDataWriterLock>>>,
     retention_started: AtomicBool,
@@ -127,6 +128,7 @@ impl Default for ApplicationState {
             runtime: Mutex::new(None),
             worker: Arc::new(Mutex::new(None)),
             capture_task: Mutex::new(None),
+            sitting_task: Mutex::new(None),
             command_lock: Mutex::new(()),
             app_data_writer_lock: Arc::new(Mutex::new(None)),
             retention_started: AtomicBool::new(false),
@@ -336,10 +338,21 @@ const RECORDER_REASON_RUNTIME_UNKNOWN: &str =
 const RECORDER_REASON_NO_ENCODER: &str = "This build does not yet include an approved \
      voice-measurement model, so a setup recording cannot be saved. Recording opens in a \
      build where that model has passed its checks.";
-const RECORDER_REASON_RECORDER_UNBUILT: &str =
-    "The dedicated sitting recorder is not part of this Preview yet.";
 const RECORDER_REASON_STATUS_UNAVAILABLE: &str =
     "Voice profile status is unavailable, so a setup recording cannot start.";
+const RECORDER_REASON_SITTING_ACTIVE: &str = "A setup recording is already in progress.";
+
+/// Content-free completion sentences for the most recent setup recording.
+/// Each states only the evidence store's own lifecycle fact; none carries
+/// audio, timing, or transcript-derived content.
+const SITTING_OUTCOME_SAVED: &str =
+    "The recording was saved: voice material is stored and the temporary recording was deleted.";
+const SITTING_OUTCOME_CLEANUP_PENDING: &str =
+    "Voice material is stored. The app still has to delete the temporary recording.";
+const SITTING_OUTCOME_RAW_RETAINED: &str = "The recording finished. The app could not derive \
+     voice material yet; the temporary recording is kept until that completes.";
+const SITTING_OUTCOME_REHEARSAL: &str = "The recording did not finish and was set aside as a \
+     rehearsal. It does not count toward setup.";
 
 /// One recorded sitting, content-free: an identifier, what kind of material
 /// it is, and where it sits in the evidence lifecycle. No audio digest,
@@ -353,16 +366,18 @@ struct PreviewSittingSummary {
     state: &'static str,
 }
 
-/// The recorder half of the Voice profile screen. Recording stays
-/// unavailable — with the reason named — until the encoder is admitted and a
-/// real recorder exists; the sittings list is the durable evidence store's
-/// projection, so the surface can already show what the lifecycle holds.
+/// The recorder half of the Voice profile screen. Recording opens only in a
+/// build whose verified runtime carries the admitted encoder — the boundary
+/// sentence names the actual reason in every other lane — and the sittings
+/// list is the durable evidence store's projection. `last_outcome` is the
+/// content-free completion sentence for the most recent recording attempt.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewEnrollmentSurface {
     recording_available: bool,
     recording_unavailable_reason: Option<&'static str>,
     sittings: Vec<PreviewSittingSummary>,
+    last_outcome: Option<&'static str>,
 }
 
 impl PreviewEnrollmentSurface {
@@ -371,8 +386,40 @@ impl PreviewEnrollmentSurface {
             recording_available: false,
             recording_unavailable_reason: Some(RECORDER_REASON_STATUS_UNAVAILABLE),
             sittings: Vec::new(),
+            last_outcome: None,
         }
     }
+}
+
+/// Control handle for the dedicated-sitting capture thread. The sender is the
+/// operator's Stop; the driver treats a vanished stop channel as a
+/// control-plane fault, so the handle stays in place until the thread clears
+/// it on the way out. Stop deliberately avoids `command_lock`: profile
+/// commands hold `command_lock` while waiting on the app-data writer lock the
+/// sitting thread holds for the whole take, and Stop must stay reachable
+/// through that window.
+struct SittingTaskControl {
+    sitting_id: String,
+    sender: mpsc::Sender<()>,
+}
+
+fn clear_sitting_task(state: &ApplicationState, sitting_id: &str) {
+    if let Ok(mut active) = state.sitting_task.lock() {
+        if active
+            .as_ref()
+            .is_some_and(|control| control.sitting_id == sitting_id)
+        {
+            *active = None;
+        }
+    }
+}
+
+fn sitting_task_active(state: &ApplicationState) -> bool {
+    state
+        .sitting_task
+        .lock()
+        .map(|active| active.is_some())
+        .unwrap_or(true)
 }
 
 #[cfg(target_os = "macos")]
@@ -909,7 +956,7 @@ struct SittingCaptureReceipt {
 /// audio or transcript content.
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
-#[allow(dead_code)] // read by the withheld sitting-recorder registration; exercised by tests
+#[allow(dead_code)] // the registered surface stays content-free; fields feed tests and diagnostics
 struct SittingCaptureFailure {
     code: String,
     detail: String,
@@ -936,10 +983,10 @@ fn sitting_failure(code: &str, detail: impl std::fmt::Display) -> SittingCapture
 /// outcome other than a matching receipt after an explicit Stop abandons the
 /// sitting, which the store labels a rehearsal.
 ///
-/// Helper identity attestation and command registration stay with the future
-/// registration slice; this is the machinery underneath it.
+/// Registered behind `preview_enrollment_start_sitting` on 2026-08-04 by the
+/// operator's guided-enrollment registration decision; helper identity
+/// attestation beyond the meeting path's checks remains future work.
 #[cfg(target_os = "macos")]
-#[allow(dead_code)] // reached only by the withheld sitting-recorder registration; exercised by tests
 fn run_sitting_capture(
     authority: &SittingEvidenceAuthority<'_>,
     executable: &Path,
@@ -1256,6 +1303,11 @@ fn start_meeting(
         if active.is_some() {
             return Err("Another capture attempt is already active.".into());
         }
+        // A dedicated sitting holds the app-data writer lock for its whole
+        // take; a meeting must refuse here rather than queue behind it.
+        if sitting_task_active(&state) {
+            return Err("Finish the setup recording before starting a meeting.".into());
+        }
         transition_capture(&mut model, CaptureState::Arming)?;
         model.clear_meeting_projection();
         model.meeting_id = Some(meeting_id.clone());
@@ -1366,6 +1418,11 @@ fn prepare_startup_retry(model: &mut AppModel) -> Result<(), String> {
 fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
+    // The spawned startup task acquires the app-data writer lock the sitting
+    // thread may hold; a retry mid-sitting would stall behind the take.
+    if sitting_task_active(&state) {
+        return Err("Finish the setup recording first.".into());
+    }
     if state
         .capture_task
         .lock()
@@ -1484,6 +1541,12 @@ fn preview_profile_preserve_legacy_for(
         .command_lock
         .lock()
         .map_err(|_| "the profile action is unavailable".to_string())?;
+    // The sitting thread holds the app-data writer lock for its whole take.
+    // Refusing here keeps this command from blocking on that lock while it
+    // holds command_lock, which would strand Stop.
+    if sitting_task_active(state) {
+        return Err("Finish the setup recording first.".into());
+    }
     let current = preview_profile_snapshot_for(state);
     if current.state != "migration-review-required" {
         return Err("No legacy profile is awaiting review.".into());
@@ -1572,6 +1635,11 @@ fn preview_profile_reset_for(
         .command_lock
         .lock()
         .map_err(|_| "the profile action is unavailable".to_string())?;
+    // Same writer-lock refusal as preserve-legacy: never queue a profile
+    // action behind an active sitting while holding command_lock.
+    if sitting_task_active(state) {
+        return Err("Finish the setup recording first.".into());
+    }
     let current = preview_profile_snapshot_for(state);
     if current.state != "baseline-ready" || current.profile_present != Some(true) {
         return Err("No stored profile is available to reset.".into());
@@ -1683,23 +1751,12 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
                 .reconcile_and_read(now_epoch_seconds())
             {
                 Ok((evidence, summaries)) => {
-                    let surface = PreviewEnrollmentSurface {
-                        recording_available: false,
-                        recording_unavailable_reason: Some(match encoder_available {
-                            None => RECORDER_REASON_RUNTIME_UNKNOWN,
-                            Some(false) => RECORDER_REASON_NO_ENCODER,
-                            Some(true) => RECORDER_REASON_RECORDER_UNBUILT,
-                        }),
-                        sittings: summaries
-                            .iter()
-                            .map(|summary| PreviewSittingSummary {
-                                sitting_id: summary.sitting_id.clone(),
-                                kind: sitting_kind_label(summary.kind),
-                                source_class: summary.source_class.clone(),
-                                state: sitting_state_label(summary.state),
-                            })
-                            .collect(),
-                    };
+                    let surface = enrollment_surface_from_summaries(
+                        &summaries,
+                        encoder_available,
+                        false,
+                        None,
+                    );
                     if let Ok(mut cached) = state.preview_enrollment.lock() {
                         *cached = surface;
                     }
@@ -1761,6 +1818,349 @@ fn reconcile_preview_profile_lifecycle(state: &ApplicationState) -> Result<(), &
             Err(error)
         }
     }
+}
+
+/// Builds the recorder surface from the evidence store's projection. The
+/// availability ladder names the actual boundary: an active take, an unknown
+/// runtime, a build without the admitted encoder — and opens only when the
+/// verified manifest carries the encoder the store will bind evidence to.
+#[cfg(target_os = "macos")]
+fn enrollment_surface_from_summaries(
+    summaries: &[local_meeting_notes_session_core::sitting_evidence::SittingRecordSummary],
+    encoder_available: Option<bool>,
+    active_sitting: bool,
+    last_outcome: Option<&'static str>,
+) -> PreviewEnrollmentSurface {
+    let (recording_available, recording_unavailable_reason) = if active_sitting {
+        (false, Some(RECORDER_REASON_SITTING_ACTIVE))
+    } else {
+        match encoder_available {
+            None => (false, Some(RECORDER_REASON_RUNTIME_UNKNOWN)),
+            Some(false) => (false, Some(RECORDER_REASON_NO_ENCODER)),
+            Some(true) => (true, None),
+        }
+    };
+    PreviewEnrollmentSurface {
+        recording_available,
+        recording_unavailable_reason,
+        sittings: summaries
+            .iter()
+            .map(|summary| PreviewSittingSummary {
+                sitting_id: summary.sitting_id.clone(),
+                kind: sitting_kind_label(summary.kind),
+                source_class: summary.source_class.clone(),
+                state: sitting_state_label(summary.state),
+            })
+            .collect(),
+        last_outcome,
+    }
+}
+
+/// Recomputes both cached Preview projections while the caller already holds
+/// the app-data writer. The sitting thread holds that lock for the whole
+/// take, so it must not re-enter `reconcile_preview_profile_lifecycle`,
+/// which locks it itself. Mid-session the migration-review state cannot
+/// appear — startup already reconciled it — so lifecycle refusals collapse
+/// to the honest needs-attention projection.
+#[cfg(target_os = "macos")]
+fn refresh_preview_caches_with_writer(
+    state: &ApplicationState,
+    writer: &AppDataWriterLock,
+    active_sitting: bool,
+    last_outcome: Option<&'static str>,
+) {
+    let (expected_encoder, encoder_available) = match state.runtime.lock() {
+        Ok(runtime) => (
+            runtime
+                .as_ref()
+                .map(|runtime| runtime.encoder_sha256.clone()),
+            runtime.as_ref().map(|runtime| runtime.encoder_available),
+        ),
+        Err(_) => (None, None),
+    };
+    let baseline = writer.profile_lifecycle_authority().initialize_or_open();
+    let evidence = writer
+        .sitting_evidence_authority()
+        .reconcile_and_read(now_epoch_seconds());
+    match (baseline, evidence) {
+        (Ok(baseline), Ok((evidence, summaries))) => {
+            let surface = enrollment_surface_from_summaries(
+                &summaries,
+                encoder_available,
+                active_sitting,
+                last_outcome,
+            );
+            if let Ok(mut cached) = state.preview_enrollment.lock() {
+                *cached = surface;
+            }
+            let snapshot = PreviewProfileSnapshot::baseline_from_store(
+                baseline.profile_present(),
+                baseline.profile_active(),
+                evidence,
+                expected_encoder.as_deref(),
+            );
+            if let Ok(mut cached) = state.preview_profile.lock() {
+                *cached = snapshot;
+            }
+        }
+        _ => {
+            if let Ok(mut cached) = state.preview_enrollment.lock() {
+                *cached = PreviewEnrollmentSurface::unavailable();
+            }
+            if let Ok(mut cached) = state.preview_profile.lock() {
+                *cached = PreviewProfileSnapshot::lifecycle_unreadable("needs-attention");
+            }
+        }
+    }
+}
+
+/// Validates the operator's recording request against the closed kind and
+/// source-class vocabulary before anything is spawned or stored. Sentences
+/// stay content-free and name the boundary, not a retry.
+#[cfg(target_os = "macos")]
+fn parse_sitting_request(
+    kind: &str,
+    source_class: Option<&str>,
+) -> Result<
+    (
+        local_meeting_notes_session_core::sitting_evidence::SittingKind,
+        Option<String>,
+    ),
+    String,
+> {
+    use local_meeting_notes_session_core::enrollment_guidance::PERMITTED_NEGATIVE_SOURCE_CLASSES;
+    use local_meeting_notes_session_core::sitting_evidence::SittingKind;
+    match kind {
+        "operator-sitting" => {
+            if source_class.is_some() {
+                return Err("A voice session does not name a comparison source.".into());
+            }
+            Ok((SittingKind::OperatorSitting, None))
+        }
+        "negative-source" => {
+            let class = source_class
+                .ok_or_else(|| "A comparison recording needs its permitted source named.".to_string())?;
+            if !PERMITTED_NEGATIVE_SOURCE_CLASSES.contains(&class) {
+                return Err("That comparison source is not permitted.".into());
+            }
+            Ok((SittingKind::NegativeSource, Some(class.to_string())))
+        }
+        _ => Err("The setup recording kind is not recognized.".into()),
+    }
+}
+
+/// Everything the start command must refuse before spawning the sitting
+/// thread. Split from the command so refusal paths are testable without a
+/// Tauri runtime. Holds no lock on return; the caller re-checks nothing —
+/// the sitting-task slot is claimed here, inside the model lock, so two
+/// starts cannot race past each other.
+#[cfg(target_os = "macos")]
+fn claim_sitting_start(
+    state: &ApplicationState,
+    sitting_id: &str,
+    sender: mpsc::Sender<()>,
+) -> Result<(), String> {
+    let model = state
+        .model
+        .lock()
+        .map_err(|_| "the application state is unavailable".to_string())?;
+    if model.reducer.startup() != StartupState::Ready {
+        return Err("Finish the installation check before a setup recording.".into());
+    }
+    if model.reducer.capture() != CaptureState::Idle {
+        return Err("Finish the current meeting before a setup recording.".into());
+    }
+    if state
+        .capture_task
+        .lock()
+        .map_err(|_| "the application state is unavailable".to_string())?
+        .is_some()
+    {
+        return Err("Finish the current meeting before a setup recording.".into());
+    }
+    let encoder_available = state
+        .runtime
+        .lock()
+        .map_err(|_| "the application state is unavailable".to_string())?
+        .as_ref()
+        .map(|runtime| runtime.encoder_available);
+    match encoder_available {
+        None => return Err(RECORDER_REASON_RUNTIME_UNKNOWN.into()),
+        Some(false) => return Err(RECORDER_REASON_NO_ENCODER.into()),
+        Some(true) => {}
+    }
+    let mut active = state
+        .sitting_task
+        .lock()
+        .map_err(|_| "the application state is unavailable".to_string())?;
+    if active.is_some() {
+        return Err(RECORDER_REASON_SITTING_ACTIVE.into());
+    }
+    *active = Some(SittingTaskControl {
+        sitting_id: sitting_id.to_string(),
+        sender,
+    });
+    Ok(())
+}
+
+/// Worker derivation of one finalized sitting transcribes and embeds the
+/// take, so its budget is minutes, not the interactive request timeout.
+#[cfg(target_os = "macos")]
+const SITTING_DERIVE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// One full sitting attempt: capture through the helper's mic-only mode,
+/// then worker derivation, then admission of the derived rows — all under
+/// the app-data writer lock, which is the store's whole-sitting exclusivity.
+/// Returns the content-free outcome sentence for the surface. Every path
+/// refreshes both Preview caches before the lock is released.
+#[cfg(target_os = "macos")]
+fn run_sitting_attempt(
+    state: &ApplicationState,
+    sitting_id: &str,
+    kind: local_meeting_notes_session_core::sitting_evidence::SittingKind,
+    source_class: Option<&str>,
+    stop: &mpsc::Receiver<()>,
+) -> &'static str {
+    use local_meeting_notes_session_core::sitting_evidence::SittingLifecycleState;
+    let runtime = match state.runtime.lock() {
+        Ok(runtime) => runtime.clone(),
+        Err(_) => None,
+    };
+    let Some(runtime) = runtime else {
+        return SITTING_OUTCOME_REHEARSAL;
+    };
+    let process_group_id = match inspect_worker(state, &runtime) {
+        Ok((process_group_id, _)) => process_group_id,
+        Err(_) => return SITTING_OUTCOME_REHEARSAL,
+    };
+    let Ok(held) = state.app_data_writer_lock.lock() else {
+        return SITTING_OUTCOME_REHEARSAL;
+    };
+    let Some(writer) = held.as_ref() else {
+        return SITTING_OUTCOME_REHEARSAL;
+    };
+    let outcome = {
+        let authority = writer.sitting_evidence_authority();
+        match run_sitting_capture(
+            &authority,
+            &runtime.tap_path,
+            process_group_id,
+            sitting_id,
+            kind,
+            source_class,
+            stop,
+        ) {
+            Ok(_receipt) => {
+                let derived = request_worker(
+                    state,
+                    Operation::SittingDerive,
+                    json!({ "sitting_id": sitting_id }),
+                    SITTING_DERIVE_TIMEOUT,
+                )
+                .and_then(|_digests| {
+                    authority
+                        .admit_derived_material(
+                            sitting_id,
+                            &runtime.encoder_sha256,
+                            now_epoch_seconds(),
+                        )
+                        .map_err(|error| WorkerCallError::Supervisor(error.to_string()))
+                });
+                match derived {
+                    Ok(SittingLifecycleState::Saved) => SITTING_OUTCOME_SAVED,
+                    Ok(SittingLifecycleState::CleanupPending) => SITTING_OUTCOME_CLEANUP_PENDING,
+                    Ok(_) | Err(_) => SITTING_OUTCOME_RAW_RETAINED,
+                }
+            }
+            Err(_failure) => SITTING_OUTCOME_REHEARSAL,
+        }
+    };
+    refresh_preview_caches_with_writer(state, writer, false, Some(outcome));
+    outcome
+}
+
+#[cfg(target_os = "macos")]
+fn run_sitting_task(
+    app: AppHandle,
+    sitting_id: String,
+    kind: local_meeting_notes_session_core::sitting_evidence::SittingKind,
+    source_class: Option<String>,
+    stop: mpsc::Receiver<()>,
+) {
+    let state = app.state::<ApplicationState>();
+    let _ = run_sitting_attempt(&state, &sitting_id, kind, source_class.as_deref(), &stop);
+    clear_sitting_task(&state, &sitting_id);
+}
+
+/// Starts one dedicated enrolment sitting. Registered 2026-08-04 by the
+/// operator's guided-enrollment registration decision — the slice
+/// `run_sitting_capture`'s contract reserved for "the future registration
+/// slice". Profile build and activation stay unregistered.
+#[tauri::command]
+fn preview_enrollment_start_sitting(
+    app: AppHandle,
+    kind: String,
+    source_class: Option<String>,
+) -> Result<PreviewEnrollmentSurface, String> {
+    let (parsed_kind, parsed_class) = parse_sitting_request(&kind, source_class.as_deref())?;
+    let state = app.state::<ApplicationState>();
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| "the recording action is unavailable".to_string())?;
+    let sitting_id = Uuid::new_v4().to_string();
+    let (sender, receiver) = mpsc::channel();
+    claim_sitting_start(&state, &sitting_id, sender)?;
+    let task_app = app.clone();
+    let task_sitting_id = sitting_id.clone();
+    let spawn = std::thread::Builder::new()
+        .name("sitting-capture-attempt".into())
+        .spawn(move || {
+            run_sitting_task(task_app, task_sitting_id, parsed_kind, parsed_class, receiver)
+        });
+    if spawn.is_err() {
+        clear_sitting_task(&state, &sitting_id);
+        return Err("The setup recording could not start.".into());
+    }
+    // The optimistic projection: the take is in progress from the operator's
+    // view the moment the thread exists. The thread's own refresh replaces
+    // this with the store's projection on every exit path.
+    let mut surface = preview_enrollment_surface_for(&state);
+    surface.recording_available = false;
+    surface.recording_unavailable_reason = Some(RECORDER_REASON_SITTING_ACTIVE);
+    surface.last_outcome = None;
+    surface.sittings.push(PreviewSittingSummary {
+        sitting_id,
+        kind: sitting_kind_label(parsed_kind),
+        source_class,
+        state: "recording-in-progress",
+    });
+    if let Ok(mut cached) = state.preview_enrollment.lock() {
+        *cached = surface.clone();
+    }
+    Ok(surface)
+}
+
+/// Requests Stop for the active sitting. Deliberately takes no
+/// `command_lock` — see `SittingTaskControl` — and never blocks: it only
+/// reads the control slot and signals the thread that owns every refusal.
+#[tauri::command]
+fn preview_enrollment_stop_sitting(state: State<'_, ApplicationState>) -> Result<(), String> {
+    preview_enrollment_stop_sitting_for(&state)
+}
+
+fn preview_enrollment_stop_sitting_for(state: &ApplicationState) -> Result<(), String> {
+    let active = state
+        .sitting_task
+        .lock()
+        .map_err(|_| "the recording action is unavailable".to_string())?;
+    let control = active
+        .as_ref()
+        .ok_or_else(|| "No setup recording is in progress.".to_string())?;
+    control
+        .sender
+        .send(())
+        .map_err(|_| "The setup recording ended before Stop completed.".to_string())
 }
 
 #[tauri::command]
@@ -1882,6 +2282,16 @@ fn preview_delete_meeting_audio_for(
     let Ok(_command) = state.command_lock.lock() else {
         return unavailable_preview_audio_deletion();
     };
+    // Deletion runs through the manual-delete facade, which takes the
+    // app-data writer lock. An active sitting holds that lock for its whole
+    // take, so refuse here instead of blocking with command_lock held.
+    if sitting_task_active(state) {
+        return PreviewAudioDeletionResponse {
+            state: "capture-active",
+            audio_retention: None,
+            message: "Finish the setup recording before deleting a recording.".into(),
+        };
+    }
     let (startup, capture) = match state.model.lock() {
         Ok(model) => (model.reducer.startup(), model.reducer.capture()),
         Err(_) => return unavailable_preview_audio_deletion(),
@@ -2109,6 +2519,8 @@ fn main() {
             preview_library_snapshot,
             preview_profile_snapshot,
             preview_enrollment_surface,
+            preview_enrollment_start_sitting,
+            preview_enrollment_stop_sitting,
             preview_profile_preserve_legacy,
             preview_profile_reset,
             preview_library_search,
@@ -4403,6 +4815,194 @@ mod tests {
             surface.recording_unavailable_reason,
             Some(RECORDER_REASON_STATUS_UNAVAILABLE)
         );
+    }
+
+    /// The verified manifest carrying the admitted encoder is what opens the
+    /// recorder — the same signal that closes it on the placeholder lane —
+    /// and an active take closes it again with its own named reason.
+    #[test]
+    fn recording_opens_with_the_admitted_encoder_and_closes_during_a_take() {
+        let (_temporary, storage) = test_storage();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        *state.runtime.lock().unwrap() = Some(RuntimeIdentity {
+            admission: "internal-alpha".into(),
+            worker_build_sha256: "worker-build".into(),
+            worker_executable_sha256: "worker-executable".into(),
+            tap_build_sha256: "tap-build".into(),
+            tap_path: PathBuf::from("/nonexistent/tap"),
+            encoder_sha256: "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
+                .into(),
+            encoder_available: true,
+        });
+        reconcile_preview_profile_lifecycle(&state).unwrap();
+        let surface = preview_enrollment_surface_for(&state);
+        assert!(surface.recording_available);
+        assert_eq!(surface.recording_unavailable_reason, None);
+        let rendered = serde_json::to_value(&surface).unwrap();
+        assert_eq!(rendered["recordingAvailable"], serde_json::json!(true));
+        assert_eq!(rendered["lastOutcome"], serde_json::Value::Null);
+
+        // Claim the take: the surface refuses a second start with the
+        // in-progress reason, not the encoder ladder.
+        let (sender, _receiver) = mpsc::channel();
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+        }
+        claim_sitting_start(&state, "11111111-1111-4111-8111-111111111111", sender).unwrap();
+        let (second, _second_receiver) = mpsc::channel();
+        assert_eq!(
+            claim_sitting_start(&state, "22222222-2222-4222-8222-222222222222", second)
+                .unwrap_err(),
+            RECORDER_REASON_SITTING_ACTIVE
+        );
+    }
+
+    /// The start boundary is a closed vocabulary: unknown kinds, an unnamed
+    /// or impermissible comparison source, and a source on a voice session
+    /// are all refused before anything is spawned or stored.
+    #[test]
+    fn sitting_request_vocabulary_is_closed() {
+        use local_meeting_notes_session_core::sitting_evidence::SittingKind;
+        assert_eq!(
+            parse_sitting_request("operator-sitting", None).unwrap(),
+            (SittingKind::OperatorSitting, None)
+        );
+        assert_eq!(
+            parse_sitting_request("negative-source", Some("public-or-licensed")).unwrap(),
+            (
+                SittingKind::NegativeSource,
+                Some("public-or-licensed".to_string())
+            )
+        );
+        assert_eq!(
+            parse_sitting_request("negative-source", Some("consenting-person")).unwrap(),
+            (
+                SittingKind::NegativeSource,
+                Some("consenting-person".to_string())
+            )
+        );
+        assert!(parse_sitting_request("operator-sitting", Some("public-or-licensed")).is_err());
+        assert!(parse_sitting_request("negative-source", None).is_err());
+        assert!(parse_sitting_request("negative-source", Some("someone-nearby")).is_err());
+        assert!(parse_sitting_request("meeting", None).is_err());
+    }
+
+    /// Start refuses each boundary in the ladder's own terms, and Stop
+    /// refuses when no take is active — the operator is never left signaling
+    /// a thread that does not exist.
+    #[test]
+    fn sitting_start_and_stop_refuse_their_boundaries() {
+        let (_temporary, storage) = test_storage();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+
+        // Startup not Ready.
+        let (sender, _receiver) = mpsc::channel();
+        assert!(
+            claim_sitting_start(&state, "11111111-1111-4111-8111-111111111111", sender)
+                .unwrap_err()
+                .contains("installation check")
+        );
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+        }
+
+        // No verified runtime identity yet.
+        let (sender, _receiver) = mpsc::channel();
+        assert_eq!(
+            claim_sitting_start(&state, "11111111-1111-4111-8111-111111111111", sender)
+                .unwrap_err(),
+            RECORDER_REASON_RUNTIME_UNKNOWN
+        );
+
+        // Placeholder encoder.
+        *state.runtime.lock().unwrap() = Some(RuntimeIdentity {
+            admission: "internal-alpha".into(),
+            worker_build_sha256: "worker-build".into(),
+            worker_executable_sha256: "worker-executable".into(),
+            tap_build_sha256: "tap-build".into(),
+            tap_path: PathBuf::from("/nonexistent/tap"),
+            encoder_sha256: "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
+                .into(),
+            encoder_available: false,
+        });
+        let (sender, _receiver) = mpsc::channel();
+        assert_eq!(
+            claim_sitting_start(&state, "11111111-1111-4111-8111-111111111111", sender)
+                .unwrap_err(),
+            RECORDER_REASON_NO_ENCODER
+        );
+
+        // Stop with no active take.
+        assert!(
+            preview_enrollment_stop_sitting_for(&state)
+                .unwrap_err()
+                .contains("No setup recording is in progress")
+        );
+
+        // Stop after the thread vanished: the control survives until the
+        // thread clears it, so a dead receiver is named, not ignored.
+        let (sender, receiver) = mpsc::channel();
+        *state.sitting_task.lock().unwrap() = Some(SittingTaskControl {
+            sitting_id: "11111111-1111-4111-8111-111111111111".into(),
+            sender,
+        });
+        drop(receiver);
+        assert!(
+            preview_enrollment_stop_sitting_for(&state)
+                .unwrap_err()
+                .contains("ended before Stop completed")
+        );
+        clear_sitting_task(&state, "11111111-1111-4111-8111-111111111111");
+        assert!(!sitting_task_active(&state));
+
+        // A live receiver: Stop lands exactly one signal.
+        let (sender, receiver) = mpsc::channel();
+        *state.sitting_task.lock().unwrap() = Some(SittingTaskControl {
+            sitting_id: "33333333-3333-4333-8333-333333333333".into(),
+            sender,
+        });
+        preview_enrollment_stop_sitting_for(&state).unwrap();
+        assert!(receiver.try_recv().is_ok());
+    }
+
+    /// The writer-lock interlock: while a sitting is active, every command
+    /// that would queue behind the take's writer lock refuses in its own
+    /// vocabulary instead of blocking with command_lock held.
+    #[test]
+    fn sitting_interlock_refuses_writer_lock_commands() {
+        let (_temporary, storage) = test_storage();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+            model.retention_operational = true;
+        }
+        let (sender, _receiver) = mpsc::channel();
+        *state.sitting_task.lock().unwrap() = Some(SittingTaskControl {
+            sitting_id: "11111111-1111-4111-8111-111111111111".into(),
+            sender,
+        });
+        assert!(
+            preview_profile_preserve_legacy_for(&state)
+                .unwrap_err()
+                .contains("Finish the setup recording")
+        );
+        assert!(
+            preview_profile_reset_for(&state, true)
+                .unwrap_err()
+                .contains("Finish the setup recording")
+        );
+        let deletion = preview_delete_meeting_audio_for("handle".into(), &state);
+        assert_eq!(deletion.state, "capture-active");
+        assert!(deletion.message.contains("Finish the setup recording"));
     }
 
     #[test]

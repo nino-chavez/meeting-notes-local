@@ -526,6 +526,22 @@ Clearing every requirement named here is not admission: the canonical loader ref
 again, through `worker/adapters.py`'s `profile_inspect`, before any candidate reaches
 the lifecycle.
 
+**Amendment, 2026-08-04 — the recorder is registered; the profile build is not.**
+Following the same-day encoder admission verdict
+(`spike/encoder-packaging/RESULTS.md`), the operator directed the guided-enrolment
+registration slice. What changed: the sitting recorder is a working surface —
+`preview_enrollment_start_sitting` / `preview_enrollment_stop_sitting` are granted in
+both window capabilities, `sitting.derive` joined the packaged alpha worker set
+(`worker/main.py`), and a finalized take derives and admits evidence in the same
+attempt, so a real sitting can reach `saved` in an encoder-carrying build. Recording
+still opens only from the build's own manifest signal; the placeholder-encoder lane
+keeps refusing with the same sentence as before. What did not change: the profile
+build and activation. `profile.*` operations stay boundary-lane only,
+`StrictProfileEnrollmentWorker` stays unregistered, `choosing-operating-point` and
+`ready-to-build` still need the operator's own measured selection, and the canonical
+loader's refusal stands. The paragraphs above this amendment describe the
+pre-registration boundary and remain the record of why it was drawn that way.
+
 **A sitting is saved only when its derived voice material exists, and the deletion
 order is the reason.** `first-sitting-saved` promises the dedicated raw recording is
 already gone *because* the owner-only derived material is safely stored. That derived

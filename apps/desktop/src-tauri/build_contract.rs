@@ -29,6 +29,8 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "retry_startup",
     "preview_profile_snapshot",
     "preview_enrollment_surface",
+    "preview_enrollment_start_sitting",
+    "preview_enrollment_stop_sitting",
     "preview_profile_preserve_legacy",
     "preview_profile_reset",
     "preview_library_snapshot",

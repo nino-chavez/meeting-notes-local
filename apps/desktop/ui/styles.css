@@ -378,6 +378,14 @@ button.library-search-result:hover:not(:disabled), button.library-row:hover:not(
 .profile-recorder p { margin: var(--space-2) 0 0; color: var(--muted); line-height: 1.5; }
 #profile-sittings { margin: var(--space-2) 0 0; padding-left: 1.3em; line-height: 1.55; }
 #profile-sittings li { margin-top: var(--space-1); }
+#sitting-form { margin-top: var(--space-4); }
+#sitting-form fieldset + fieldset { margin-top: var(--space-4); }
+#sitting-form legend { margin-bottom: var(--space-1); }
+#sitting-form .check-row input { margin-top: 3px; }
+#sitting-form .footnote { margin-top: var(--space-2); }
+#sitting-active { margin-top: var(--space-4); }
+#sitting-active-copy { color: var(--ink); }
+#sitting-outcome { margin-top: var(--space-3); color: var(--ink); }
 .profile-reset-confirmation { max-width: 58ch; margin: var(--space-4) 0; padding: var(--space-4); border: 1px solid #b99b92; border-radius: var(--radius-control); background: #f5ece8; }
 .profile-reset-confirmation h2 { margin: var(--space-2) 0 var(--space-3); font-family: ui-serif, Georgia, serif; font-size: 1.65rem; font-weight: 500; letter-spacing: -0.02em; }
 .profile-reset-confirmation p { margin: var(--space-2) 0 0; color: var(--ink); line-height: 1.5; }

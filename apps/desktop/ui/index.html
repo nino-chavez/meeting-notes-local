@@ -112,6 +112,42 @@
         <section class="profile-recorder" id="profile-recorder">
           <p class="label">Setup recordings</p>
           <p id="profile-recorder-entry">Checking whether a setup recording can start.</p>
+          <form id="sitting-form" hidden>
+            <fieldset id="sitting-kind">
+              <legend>What this recording is</legend>
+              <label class="check-row">
+                <input type="radio" name="sitting-kind" value="operator-sitting" checked />
+                <span><strong>My voice.</strong><small>A short session of you talking naturally, wearing headphones, alone near the microphone.</small></span>
+              </label>
+              <label class="check-row">
+                <input type="radio" name="sitting-kind" value="negative-source" />
+                <span><strong>Speech that is not me.</strong><small>Comparison material the app measures against your voice. It never counts as your speech.</small></span>
+              </label>
+            </fieldset>
+            <fieldset id="sitting-source-class" hidden>
+              <legend>Where the comparison speech comes from</legend>
+              <label class="check-row">
+                <input type="radio" name="sitting-source-class" value="public-or-licensed" />
+                <span><strong>Public-domain or licensed audio, played aloud.</strong><small>A recording you are allowed to use for this measurement.</small></span>
+              </label>
+              <label class="check-row">
+                <input type="radio" name="sitting-source-class" value="consenting-person" />
+                <span><strong>A person who knowingly agreed.</strong><small>They agreed to make this calibration recording for this purpose.</small></span>
+              </label>
+              <p class="footnote">A comparison sample is never permission to record someone without their knowledge.</p>
+            </fieldset>
+            <p class="form-error" id="sitting-error" role="alert" hidden></p>
+            <div class="screen-actions">
+              <button class="primary" id="sitting-start" type="submit">Start setup recording</button>
+            </div>
+          </form>
+          <div id="sitting-active" hidden>
+            <p id="sitting-active-copy">Recording your setup session. Speak naturally, then stop when you are done.</p>
+            <div class="screen-actions">
+              <button class="primary" id="sitting-stop" type="button">Stop setup recording</button>
+            </div>
+          </div>
+          <p id="sitting-outcome" role="status" hidden></p>
           <ul id="profile-sittings" hidden></ul>
         </section>
         <div class="notice" id="profile-boundary">Recording requires headphones and only you near the microphone, with or without a profile. A profile sets aside speech that is not yours; it does not name speakers, and speaker playback stays unsupported.</div>

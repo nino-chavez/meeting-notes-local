@@ -10,6 +10,7 @@ import {
   createLatestRequestGate,
   createRouteOwnershipGate,
   displayedClaimIdentity,
+  enrollmentRecorderPresentation,
   changedStatusText,
   captureChannelPresentation,
   connectionUncertaintyStatus,
@@ -691,4 +692,51 @@ test("the release snapshot carries no lane flag and still reaches Start recordin
     mutableActionPolicy({ startup: "ready", capture: "idle" }).canStartMeeting,
     true,
   );
+});
+
+test("the recorder surface alone decides the three recorder modes", () => {
+  // An active take shows Stop regardless of availability flags: the backend
+  // reports availability false during a take, and the in-progress sitting in
+  // the store's projection is the authoritative signal.
+  assert.deepEqual(
+    enrollmentRecorderPresentation({
+      recordingAvailable: false,
+      recordingUnavailableReason: "A setup recording is already in progress.",
+      sittings: [{ state: "recording-in-progress" }],
+      lastOutcome: null,
+    }),
+    { mode: "recording", entryText: "", outcomeText: "" },
+  );
+  assert.deepEqual(
+    enrollmentRecorderPresentation({
+      recordingAvailable: true,
+      recordingUnavailableReason: null,
+      sittings: [{ state: "saved" }],
+      lastOutcome:
+        "The recording was saved: voice material is stored and the temporary recording was deleted.",
+    }),
+    {
+      mode: "ready",
+      entryText: "",
+      outcomeText:
+        "The recording was saved: voice material is stored and the temporary recording was deleted.",
+    },
+  );
+  // Unavailable renders the backend's own boundary sentence, and a missing
+  // surface never renders as permission.
+  assert.equal(
+    enrollmentRecorderPresentation({
+      recordingAvailable: false,
+      recordingUnavailableReason: "This build does not yet include an approved voice-measurement model.",
+      sittings: [],
+      lastOutcome: null,
+    }).entryText,
+    "This build does not yet include an approved voice-measurement model.",
+  );
+  assert.deepEqual(enrollmentRecorderPresentation(null), {
+    mode: "unavailable",
+    entryText:
+      "Voice profile status is unavailable, so a setup recording cannot start.",
+    outcomeText: "",
+  });
 });

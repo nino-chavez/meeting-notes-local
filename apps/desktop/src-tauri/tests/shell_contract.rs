@@ -68,7 +68,9 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
     // The shipped internal-alpha surface: the same reviewed command set the
     // Preview window carries, decided 2026-08-04 after the 0.2.0 cohort DMG
     // proved the narrower list left the shell without record or search.
-    // Enrollment mutation and profile activation remain absent from both.
+    // The guided sitting recorder (start/stop) joined the same day by the
+    // operator's enrollment-registration decision; profile build and
+    // activation remain absent from both windows.
     assert_eq!(
         capability["permissions"],
         serde_json::json!([
@@ -79,6 +81,8 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-retry-startup",
             "allow-preview-profile-snapshot",
             "allow-preview-enrollment-surface",
+            "allow-preview-enrollment-start-sitting",
+            "allow-preview-enrollment-stop-sitting",
             "allow-preview-profile-preserve-legacy",
             "allow-preview-profile-reset",
             "allow-preview-library-snapshot",
@@ -246,6 +250,8 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-retry-startup",
             "allow-preview-profile-snapshot",
             "allow-preview-enrollment-surface",
+            "allow-preview-enrollment-start-sitting",
+            "allow-preview-enrollment-stop-sitting",
             "allow-preview-profile-preserve-legacy",
             "allow-preview-profile-reset",
             "allow-preview-library-snapshot",
@@ -521,6 +527,7 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
 fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
+    let navigation = include_str!("../../ui/navigation-state.mjs");
 
     assert!(html.contains("id=\"profile-link\""));
     assert!(html.contains("id=\"profile-screen\""));
@@ -564,14 +571,27 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
     assert!(html.contains("It never opens meetings or transcripts"));
     assert!(!script.contains("preview_profile_enroll"));
 
-    // The recorder surface lists per-sitting evidence states and names the
-    // honest recording boundary. It is read-only: no mutating enrolment
-    // command may be invoked from the page, and "saved" copy must state the
-    // deletion that the store's terminal receipt guarantees.
+    // The recorder surface lists per-sitting evidence states and either the
+    // honest recording boundary or the working start/stop controls —
+    // registered 2026-08-04 by the operator's enrollment-registration
+    // decision. Its only mutations are the start/stop pair; "saved" copy
+    // must state the deletion that the store's terminal receipt guarantees,
+    // and a comparison recording requires a named permitted source whose
+    // copy carries the consent boundary.
     assert!(html.contains("id=\"profile-recorder-entry\""));
     assert!(html.contains("id=\"profile-sittings\""));
+    assert!(html.contains("id=\"sitting-form\""));
+    assert!(html.contains("id=\"sitting-start\""));
+    assert!(html.contains("id=\"sitting-stop\""));
+    assert!(html.contains("value=\"public-or-licensed\""));
+    assert!(html.contains("value=\"consenting-person\""));
+    assert!(html.contains("never permission to record someone"));
     assert!(script.contains("preview_enrollment_surface"));
-    assert!(script.contains("recordingUnavailableReason"));
+    assert!(script.contains("invoke(\"preview_enrollment_start_sitting\""));
+    assert!(script.contains("invoke(\"preview_enrollment_stop_sitting\""));
+    assert!(script.contains("enrollmentRecorderPresentation"));
+    assert!(navigation.contains("recordingUnavailableReason"));
+    assert!(navigation.contains("lastOutcome"));
     assert!(script.contains("Saved. The temporary recording has been deleted."));
     assert!(script.contains("does not count toward setup"));
     assert!(!script.contains("preview_enrollment_begin"));

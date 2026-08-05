@@ -24,6 +24,8 @@ pub enum Operation {
     CaptureFinalize,
     #[serde(rename = "capture.inspect")]
     CaptureInspect,
+    #[serde(rename = "sitting.derive")]
+    SittingDerive,
     #[serde(rename = "transcript.create")]
     TranscriptCreate,
     #[serde(rename = "transcript.restore")]

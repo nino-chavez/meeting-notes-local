@@ -195,6 +195,18 @@
           "markdownDescription": "Enables the preview_delete_meeting_audio command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_enrollment_start_sitting command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-enrollment-start-sitting",
+          "markdownDescription": "Enables the preview_enrollment_start_sitting command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_enrollment_stop_sitting command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-enrollment-stop-sitting",
+          "markdownDescription": "Enables the preview_enrollment_stop_sitting command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_enrollment_surface command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-enrollment-surface",
@@ -289,6 +301,18 @@
           "type": "string",
           "const": "deny-preview-delete-meeting-audio",
           "markdownDescription": "Denies the preview_delete_meeting_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_enrollment_start_sitting command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-enrollment-start-sitting",
+          "markdownDescription": "Denies the preview_enrollment_start_sitting command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_enrollment_stop_sitting command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-enrollment-stop-sitting",
+          "markdownDescription": "Denies the preview_enrollment_stop_sitting command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_enrollment_surface command without any pre-configured scope.",

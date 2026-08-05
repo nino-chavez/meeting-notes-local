@@ -257,6 +257,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 "capture.finalize",
                 "capture.inspect",
                 "transcript.create",
+                "sitting.derive",
             }
             if self.admission != "internal-alpha":
                 expected_operations |= {
@@ -264,7 +265,6 @@ class WorkerProtocolTests(unittest.TestCase):
                     "profile.adopt",
                     "profile.discard",
                     "note.inspect",
-                    "sitting.derive",
                 }
             self.assertEqual(set(worker.ready["operations"]), expected_operations)
             inspected = worker.request("capture.inspect", {"meeting_id": meeting_id})
@@ -1936,11 +1936,15 @@ class SittingDerivationTests(unittest.TestCase):
                 admission="boundary-test",
             )
 
-    def test_frozen_alpha_set_excludes_derivation(self) -> None:
+    def test_alpha_set_carries_derivation_but_not_profile_operations(self) -> None:
+        # Widened 2026-08-04 by the operator's guided-enrollment registration
+        # decision. The profile build stays its own gate.
         from worker.main import operations_for
 
-        self.assertNotIn("sitting.derive", operations_for("internal-alpha"))
+        self.assertIn("sitting.derive", operations_for("internal-alpha"))
         self.assertIn("sitting.derive", operations_for("boundary-test"))
+        self.assertNotIn("profile.adopt", operations_for("internal-alpha"))
+        self.assertNotIn("profile.inspect", operations_for("internal-alpha"))
 
 
 if __name__ == "__main__":

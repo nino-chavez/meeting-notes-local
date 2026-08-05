@@ -1,9 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "The bundled main window ships the internal-alpha product surface: transcript-alpha capture commands, retained-meeting Library, exact transcript/title search, content-free voice-profile status, the content-free enrolment evidence listing with its honest recording boundary, explicit preserve-first legacy-profile migration, separately confirmed profile reset, and the reviewed one-meeting audio-deletion boundary. It has no profile activation, enrollment mutation, note generation, generic filesystem, shell, process, dialog, or remote-origin permission.",
-  "windows": ["main"],
-  "platforms": ["macOS"],
+  "description": "The bundled main window ships the internal-alpha product surface: transcript-alpha capture commands, retained-meeting Library, exact transcript/title search, content-free voice-profile status, the enrolment evidence listing with the guided sitting recorder (start and stop, encoder-admitted builds only), explicit preserve-first legacy-profile migration, separately confirmed profile reset, and the reviewed one-meeting audio-deletion boundary. It has no profile activation, profile-build mutation, note generation, generic filesystem, shell, process, dialog, or remote-origin permission.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "macOS"
+  ],
   "permissions": [
     "allow-app-snapshot",
     "allow-start-meeting",
@@ -12,6 +16,8 @@
     "allow-retry-startup",
     "allow-preview-profile-snapshot",
     "allow-preview-enrollment-surface",
+    "allow-preview-enrollment-start-sitting",
+    "allow-preview-enrollment-stop-sitting",
     "allow-preview-profile-preserve-legacy",
     "allow-preview-profile-reset",
     "allow-preview-library-snapshot",

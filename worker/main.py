@@ -18,14 +18,20 @@ from worker.adapters import AdapterRefused, dispatch
 from worker.storage import StorageRefused, require_private_root
 
 MAX_FRAME_BYTES = 64 * 1024
+# sitting.derive joined the packaged alpha set on 2026-08-04 by the operator's
+# guided-enrollment registration decision, following the same-day encoder
+# admission verdict (spike/encoder-packaging/RESULTS.md): the shipped recorder
+# needs the derivation the sitting evidence store re-verifies. On the default
+# lane the adapter still refuses ("runtime has no admitted speaker encoder"),
+# so widening the set opens nothing a placeholder-encoder build can misuse.
 ALPHA_OPERATIONS = frozenset(
-    {"capture.finalize", "capture.inspect", "transcript.create"}
-)
-# sitting.derive is boundary-lane only: widening the packaged alpha set is the
-# operator's recorded admission decision, not a side effect of building the op.
-BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
-    {"profile.inspect", "profile.adopt", "profile.discard", "note.inspect",
+    {"capture.finalize", "capture.inspect", "transcript.create",
      "sitting.derive"}
+)
+# profile.* and note.inspect stay boundary-lane only: registering the profile
+# build remains its own operator decision, not a side effect of the recorder.
+BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
+    {"profile.inspect", "profile.adopt", "profile.discard", "note.inspect"}
 )
 
 

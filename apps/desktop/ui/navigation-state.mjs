@@ -381,3 +381,29 @@ export async function prepareConsentTransition(capture, actions) {
   const snapshot = await actions.dismiss();
   return settleDismissal(snapshot, actions);
 }
+
+// The recorder half of the Voice profile screen has exactly three modes, and
+// the surface alone decides them: an active take shows Stop, an available
+// recorder shows the start form, and everything else shows the backend's own
+// boundary sentence. The fallback sentence mirrors the backend's
+// status-unavailable reason so a missing surface never renders as permission.
+export function enrollmentRecorderPresentation(surface) {
+  const sittings = Array.isArray(surface?.sittings) ? surface.sittings : [];
+  const recordingActive = sittings.some(
+    (sitting) => sitting?.state === "recording-in-progress",
+  );
+  if (recordingActive) {
+    return { mode: "recording", entryText: "", outcomeText: "" };
+  }
+  const outcomeText = typeof surface?.lastOutcome === "string" ? surface.lastOutcome : "";
+  if (surface?.recordingAvailable === true) {
+    return { mode: "ready", entryText: "", outcomeText };
+  }
+  return {
+    mode: "unavailable",
+    entryText:
+      surface?.recordingUnavailableReason
+      || "Voice profile status is unavailable, so a setup recording cannot start.",
+    outcomeText,
+  };
+}

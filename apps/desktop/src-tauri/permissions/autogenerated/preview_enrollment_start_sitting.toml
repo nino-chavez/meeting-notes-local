@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-enrollment-start-sitting"
+description = "Enables the preview_enrollment_start_sitting command without any pre-configured scope."
+commands.allow = ["preview_enrollment_start_sitting"]
+
+[[permission]]
+identifier = "deny-preview-enrollment-start-sitting"
+description = "Denies the preview_enrollment_start_sitting command without any pre-configured scope."
+commands.deny = ["preview_enrollment_start_sitting"]
