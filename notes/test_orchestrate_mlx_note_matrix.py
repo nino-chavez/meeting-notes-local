@@ -247,6 +247,47 @@ class MatrixReceiptTests(unittest.TestCase):
         self.assertFalse(receipt["passed"])
 
 
+class CommittedMatrixReceiptTests(unittest.TestCase):
+    """Hold the committed run to what the write-up says about it."""
+
+    def setUp(self) -> None:
+        import json
+
+        path = Path(__file__).resolve().parent / "mlx_note_matrix_receipt.json"
+        self.receipt = json.loads(path.read_text())
+
+    def test_the_run_is_the_registered_shape_and_admits_nothing(self) -> None:
+        self.assertEqual(self.receipt["matrix"], {"fixtures": 12, "cold_repeats": 3, "warm_repeats": 2})
+        self.assertEqual(len(self.receipt["fixtures"]), EXPECTED_FIXTURES)
+        self.assertIs(self.receipt["admits"], False)
+        self.assertEqual(self.receipt["decoding"], "structure-constrained")
+
+    def test_the_mechanical_envelope_passed_and_only_the_fixtures_failed(self) -> None:
+        """The doc claims latency, memory, repeatability and coverage all held."""
+        gates = self.receipt["gates"]
+        for name in ("every_fixture_ran", "cold_latency", "warm_latency", "memory", "tree_unchanged"):
+            with self.subTest(gate=name):
+                self.assertTrue(gates[name])
+        self.assertFalse(gates["per_fixture_gates"])
+        self.assertFalse(self.receipt["passed"])
+
+    def test_every_fixture_was_repeatable_across_the_three_cold_runs(self) -> None:
+        """A failure that does not reproduce would be noise, not a finding."""
+        for row in self.receipt["fixtures"]:
+            with self.subTest(fixture=row["fixture"]):
+                self.assertTrue(row["gates"]["repeatable"])
+
+    def test_nine_supported_fixtures_failed_and_the_three_passing_are_the_ones_run_before(self) -> None:
+        passing = sorted(row["fixture"] for row in self.receipt["fixtures"] if all(row["gates"].values()))
+        self.assertEqual(passing, ["abstain-chitchat", "abstain-plain", "ordinary-decision"])
+        failing = [row for row in self.receipt["fixtures"] if not all(row["gates"].values())]
+        self.assertEqual(len(failing), 9)
+        # Every failure is the fixture checks, not the envelope.
+        for row in failing:
+            with self.subTest(fixture=row["fixture"]):
+                self.assertFalse(row["gates"]["checks_pass_on_every_call"])
+
+
 class RegisteredShapeTests(unittest.TestCase):
     def test_the_fixture_suite_is_the_twelve_the_protocol_registers(self) -> None:
         fixtures = matrix._fixtures()

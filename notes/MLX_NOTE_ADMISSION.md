@@ -473,6 +473,96 @@ mask's own `MAX_ITEMS = 8` is an extra restriction the contract does not state,
 so a test holds it above the most items any fixture could legitimately produce —
 currently two.
 
+### 2026-08-05 registered 12-fixture matrix — failed, and the cause is the harness
+
+Run by `notes/orchestrate_mlx_note_matrix.py`, which implements the registered
+repeat matrix the single-process runner refuses: 12 fixtures, 3 cold calls each
+from a fresh process, 2 warm in the first worker's loaded process. 36 processes,
+60 calls. Receipt: `notes/mlx_note_matrix_receipt.json`.
+
+**Three fixtures of twelve pass, and they are the three that had been run
+before.** `ordinary-decision` and `abstain-chitchat` are the two corrective-probe
+fixtures; `abstain-plain` is the second abstention. Every fixture first exercised
+here failed.
+
+| Gate | Result |
+| --- | --- |
+| Every fixture ran, tree unchanged | Pass |
+| Repeatability | Pass on all 12 — response, note, and receipt digests identical across the three cold runs |
+| Latency | Pass — 5.03 s cold median against a 30 s ceiling, 4.24 s warm against 15 s |
+| Memory | Pass — 1,184,366,592 bytes peak against 4,282,063,304 |
+| Per-fixture checks | **Fail on 9 of 10 supported fixtures** |
+
+#### The nine failures are one mechanism, and it is not comprehension
+
+Reported refusal classes look like three separate problems — six
+`response-contract`, two `citation-locator`, one
+`response-length-truncation`. Capturing the replies in-process shows one cause:
+
+**The model truncates every 90-character `source_fragment_id` at exactly 67
+characters.** It reproduces `sf-` plus the 64-hex digest and drops the
+`-t000000-c000000-000040` positional tail, every time, deterministically. A
+truncated ID is not an offered ID, so the locator check refuses it; when the
+model then pads the list to three copies of the same truncated string, the
+uniqueness check refuses first and reports `response-contract` instead. Same
+defect, two refusal classes, depending on how many IDs were emitted.
+
+What the same responses got right, on all ten supported fixtures:
+
+| Field | Correct | Advertised to the model as |
+| --- | --- | --- |
+| `candidate_id` | 10 / 10 | an `enum` of the offered candidate IDs |
+| `label` | 10 / 10 | an `enum` of the four labels |
+| `source_fragment_ids` | 1 / 10 | `{"type": "array", "min_items": 1, "max_items": 3}` |
+
+`candidate_id` is `cf-` plus the same 64 hex characters — an opaque string of
+almost identical length and identical character class. The model reproduces it
+exactly ten times out of ten when it is offered as an enum, and truncates the
+fragment ID nine times out of ten when it is not. That is the control that
+isolates the mechanism: this is not a model that cannot copy an opaque
+identifier, it is a harness that enumerates two of three identifier fields.
+
+Citations, labels, and the negation cases were substantively right in the
+replies inspected — `"We decided not to cancel Project Atlas."` preserved its
+negation, `"Case 481"` its number.
+
+#### A second harness defect, independent of the above
+
+`_decode_response` enforces three rules on `source_fragment_ids` that
+`response_contract` never states:
+
+1. the IDs must be unique,
+2. each must be one of that candidate's offered fragments,
+3. they must appear in canonical order.
+
+The contract handed to the model advertises only `min_items` and `max_items`. A
+candidate is being rejected for breaking rules it was never given, which is not
+a measurement of the candidate. This is a defect whether or not it changes any
+verdict, and it is the same shape as everything else found on this path: the
+harness graded something it never asked for.
+
+#### What this does and does not establish
+
+It does **not** establish that the small-model path is closed. The registered
+second outcome is "schema-valid and wrong — well-formed items citing the wrong
+fragments or inventing claims", and that is not what happened: the model cited
+the right fragment and mis-transcribed its name.
+
+It does **not** establish the path is good either. Ten fixtures ran once each
+under a measurement now known to be unfair on its decisive field, and no human
+has read any output for usefulness.
+
+What it does establish is that the orchestrator works, that the mechanical
+envelope is comfortable — latency at a sixth of its ceiling, memory at a
+quarter — and that every result on all 12 fixtures is bit-for-bit repeatable
+across three cold processes. The matrix is a working instrument that has now
+found a defect in itself.
+
+**No admission. No amendment made here.** Making `source_fragment_ids` an enum,
+symmetric with `candidate_id`, would change the request the model sees and
+therefore every request digest on this path, so it is a preregistration decision
+and not a fix to apply quietly mid-run.
+
 ## 2026-08-02 SmolLM2 measurement — inconclusive
 
 This measurement used no meeting recording, Preview data, or product record.
