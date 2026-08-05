@@ -535,6 +535,23 @@ Clearing every requirement named here is not admission: the canonical loader ref
 again, through `worker/adapters.py`'s `profile_inspect`, before any candidate reaches
 the lifecycle.
 
+**Amendment, 2026-08-05 — the profile build is registered.** The operator directed
+the profile-build slice the morning after the recorder registration. What changed:
+`profile.choices` and `profile.build` joined the packaged alpha worker set — the
+canonical math stays in `spike/speaker_gate.py`, fed from the evidence store's
+durable rows by `worker/profile_build.py` — together with `profile.inspect` and
+`profile.discard`, which serve the Rust lifecycle's strict-loader bridge
+(`enroll_profile_candidate`); `profile.adopt` stays boundary-lane only because the
+packaged publication path is Rust's. The `choosing-operating-point` surface exists
+as specified: two or three ordered named options, both measured costs on each, radios
+disabled until measurements load, no default, no number asked. The selection binds
+to the reviewed measurements by the deterministic digest of the choices document;
+building refuses when the recomputed digest differs. A successful build publishes
+through the lifecycle and enters the valid-profile condition. What did not change:
+the operator still records the sittings, supplies the permitted negative material,
+and makes the selection — no agent supplies any of those, and the canonical loader's
+final refusal stands between every candidate and the stored slot.
+
 **Amendment, 2026-08-04 — the recorder is registered; the profile build is not.**
 Following the same-day encoder admission verdict
 (`spike/encoder-packaging/RESULTS.md`), the operator directed the guided-enrolment

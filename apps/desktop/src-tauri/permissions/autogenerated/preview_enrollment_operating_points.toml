@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-enrollment-operating-points"
+description = "Enables the preview_enrollment_operating_points command without any pre-configured scope."
+commands.allow = ["preview_enrollment_operating_points"]
+
+[[permission]]
+identifier = "deny-preview-enrollment-operating-points"
+description = "Denies the preview_enrollment_operating_points command without any pre-configured scope."
+commands.deny = ["preview_enrollment_operating_points"]

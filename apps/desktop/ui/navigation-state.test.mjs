@@ -11,6 +11,7 @@ import {
   createRouteOwnershipGate,
   displayedClaimIdentity,
   enrollmentRecorderPresentation,
+  operatingPointPresentation,
   changedStatusText,
   captureChannelPresentation,
   connectionUncertaintyStatus,
@@ -758,4 +759,27 @@ test("the recorder surface alone decides the three recorder modes", () => {
       "Voice profile status is unavailable, so a setup recording cannot start.",
     outcomeText: "",
   });
+});
+
+test("operating points order loosest to strictest with measured costs and no invented rows", () => {
+  const rows = operatingPointPresentation([
+    { targetFrr: 0.1, measuredFrr: 0.083, nOperator: 12, falseAdmitRate: 0.0, nOther: 22, threshold: 0.31 },
+    { targetFrr: 0.02, measuredFrr: 0.0, nOperator: 12, falseAdmitRate: 0.045, nOther: 22, threshold: 0.18 },
+    { targetFrr: 0.05, measuredFrr: 0.041, nOperator: 12, falseAdmitRate: 0.0, nOther: 22, threshold: 0.24 },
+  ]);
+  assert.deepEqual(
+    rows.map((row) => [row.label, row.point.targetFrr]),
+    [
+      ["Preserve more of my speech", 0.02],
+      ["Measured middle point", 0.05],
+      ["Keep more other voices out", 0.1],
+    ],
+  );
+  assert.equal(
+    rows[0].costs,
+    "Sets aside about 0.0% of your held-out speech (12 segments) · admits about 4.5% of other voices (22 segments).",
+  );
+  // One measured option is not a choice, and an empty response renders nothing.
+  assert.deepEqual(operatingPointPresentation([{ targetFrr: 0.05, measuredFrr: 0, nOperator: 5, falseAdmitRate: 0, nOther: 20 }]), []);
+  assert.deepEqual(operatingPointPresentation(null), []);
 });

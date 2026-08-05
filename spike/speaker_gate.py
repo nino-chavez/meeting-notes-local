@@ -629,6 +629,11 @@ OPERATING_POINT_TARGETS = (0.01, 0.02, 0.05, 0.10, 0.20)
 OPERATING_POINT_CONTRACT_VERSION = "speaker-gate-operating-points/1"
 OPERATING_POINT_TARGET_SET_VERSION = "speaker-gate-targets/1"
 NEGATIVE_SOURCE_CLASSES = frozenset({"public-or-licensed", "consenting-person"})
+# The segments-receipt schemas a negative-source manifest may name: the
+# research CLI's own leg files, and the app's sitting evidence rows
+# (crates/session-core/src/sitting_evidence.rs). Both carry content-free
+# span facts; the manifest's digest binds the exact backing document.
+NEGATIVE_SEGMENT_SCHEMAS = frozenset({"mic-segments/1", "sitting-segments/1"})
 
 # Product judgement, registered here rather than hidden in prose. Sixty seconds
 # is the documented speech floor. Twenty segments separately prevents one long
@@ -935,9 +940,16 @@ def _canonical_negative_sources(path: Path, sources, n_scores: int) -> list[dict
                 "cannot inflate the evidence by appearing under two paths"
             )
         seen_audio.add(audio_digest)
-        if source.get("segments_schema") != "mic-segments/1":
+        # Two producers exist for the segments receipt: the research CLI's
+        # mic-segments/1 files and the app's sitting evidence store, whose
+        # sitting-segments/1 rows carry the same span facts under its own
+        # schema. The digest binds whichever document actually backed the
+        # scores; recording a schema the document does not have would make
+        # the receipt false, so the recorded value is the input's.
+        if source.get("segments_schema") not in NEGATIVE_SEGMENT_SCHEMAS:
             raise SystemExit(
-                f"{label}.segments_schema must be 'mic-segments/1', got "
+                f"{label}.segments_schema must be one of "
+                f"{sorted(NEGATIVE_SEGMENT_SCHEMAS)}, got "
                 f"{source.get('segments_schema')!r}"
             )
         captured_at = source.get("captured_at")
@@ -962,7 +974,7 @@ def _canonical_negative_sources(path: Path, sources, n_scores: int) -> list[dict
                 1,
             ),
             "segments_sha256": segments_digest,
-            "segments_schema": "mic-segments/1",
+            "segments_schema": source["segments_schema"],
             "captured_at": captured_at,
             "scorable_segments": _count(
                 f"{label}.scorable_segments",

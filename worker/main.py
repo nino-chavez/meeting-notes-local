@@ -27,14 +27,20 @@ MAX_FRAME_BYTES = 64 * 1024
 # transcript.restore joined with the same day's correction-surface (J4)
 # registration: the restoration coordinator re-verifies every artifact the
 # worker names before anything is published.
+# The profile family joined on 2026-08-05 with the operator's profile-build
+# decision: choices/build produce from stored evidence through the canonical
+# save_profile boundary, and inspect/discard serve the Rust lifecycle's
+# strict-loader bridge. profile.adopt stays boundary-lane only — the
+# packaged publication path is Rust's enroll_profile_candidate, which
+# publishes the re-verified bytes itself.
 ALPHA_OPERATIONS = frozenset(
     {"capture.finalize", "capture.inspect", "transcript.create",
-     "sitting.derive", "transcript.restore"}
+     "sitting.derive", "transcript.restore",
+     "profile.choices", "profile.build", "profile.inspect", "profile.discard"}
 )
-# profile.* and note.inspect stay boundary-lane only: registering the profile
-# build remains its own operator decision, not a side effect of the recorder.
+# note.inspect stays boundary-lane only: no note generator is admitted.
 BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
-    {"profile.inspect", "profile.adopt", "profile.discard", "note.inspect"}
+    {"profile.adopt", "note.inspect"}
 )
 
 

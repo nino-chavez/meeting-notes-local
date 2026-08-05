@@ -382,6 +382,38 @@ export async function prepareConsentTransition(capture, actions) {
   return settleDismissal(snapshot, actions);
 }
 
+// § I choosing-operating-point: two or three ordered named options, each
+// carrying both actual measured costs, and never a number to type. The
+// first (lowest target) preserves more of the operator's speech; the last
+// (highest target) keeps more other voices out; a surviving middle point is
+// exactly that. Fewer than two rows is not a choice and renders nothing.
+export function operatingPointPresentation(points) {
+  const rows = (Array.isArray(points) ? points : [])
+    .filter((point) => Number.isFinite(point?.targetFrr))
+    .sort((a, b) => a.targetFrr - b.targetFrr);
+  if (rows.length < 2) return [];
+  return rows.map((point, index) => ({
+    point,
+    label:
+      index === 0
+        ? "Preserve more of my speech"
+        : index === rows.length - 1
+          ? "Keep more other voices out"
+          : "Measured middle point",
+    costs: operatingPointCosts(point),
+  }));
+}
+
+export function operatingPointCosts(point) {
+  const rate = (value) => `${(value * 100).toFixed(1)}%`;
+  const own = `Sets aside about ${rate(point.measuredFrr)} of your held-out speech (${point.nOperator} segments)`;
+  const others =
+    point.falseAdmitRate === null || point.falseAdmitRate === undefined
+      ? "no measured other-voice cost"
+      : `admits about ${rate(point.falseAdmitRate)} of other voices (${point.nOther} segments)`;
+  return `${own} · ${others}.`;
+}
+
 // The recorder half of the Voice profile screen has exactly four modes, and
 // the surface alone decides them: an active take shows Stop; a take whose
 // capture closed but whose attempt is still finishing (derivation) shows the

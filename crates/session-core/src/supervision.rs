@@ -1227,14 +1227,20 @@ pub fn internal_alpha_operations() -> HashSet<Operation> {
     use Operation::*;
     // SittingDerive and TranscriptRestore joined the packaged alpha set on
     // 2026-08-04 with the operator's guided-enrollment and correction-surface
-    // registration decisions; parse_ready pins exact equality, so this list
-    // moves only with worker/main.py's.
+    // registration decisions; the profile family (choices/build/inspect/
+    // discard, never adopt) joined 2026-08-05 with the profile-build
+    // decision. parse_ready pins exact equality, so this list moves only
+    // with worker/main.py's.
     [
         CaptureFinalize,
         CaptureInspect,
         TranscriptCreate,
         SittingDerive,
         TranscriptRestore,
+        ProfileChoices,
+        ProfileBuild,
+        ProfileInspect,
+        ProfileDiscard,
     ]
     .into_iter()
     .collect()

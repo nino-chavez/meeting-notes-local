@@ -14,6 +14,10 @@ pub const MAX_PROGRESS_EVENTS_PER_SECOND: usize = 16;
 pub enum Operation {
     #[serde(rename = "profile.inspect")]
     ProfileInspect,
+    #[serde(rename = "profile.choices")]
+    ProfileChoices,
+    #[serde(rename = "profile.build")]
+    ProfileBuild,
     #[serde(rename = "profile.adopt")]
     ProfileAdopt,
     #[serde(rename = "profile.discard")]

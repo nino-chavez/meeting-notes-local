@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-enrollment-build-profile"
+description = "Enables the preview_enrollment_build_profile command without any pre-configured scope."
+commands.allow = ["preview_enrollment_build_profile"]
+
+[[permission]]
+identifier = "deny-preview-enrollment-build-profile"
+description = "Denies the preview_enrollment_build_profile command without any pre-configured scope."
+commands.deny = ["preview_enrollment_build_profile"]

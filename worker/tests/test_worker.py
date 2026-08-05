@@ -259,12 +259,14 @@ class WorkerProtocolTests(unittest.TestCase):
                 "transcript.create",
                 "sitting.derive",
                 "transcript.restore",
+                "profile.choices",
+                "profile.build",
+                "profile.inspect",
+                "profile.discard",
             }
             if self.admission != "internal-alpha":
                 expected_operations |= {
-                    "profile.inspect",
                     "profile.adopt",
-                    "profile.discard",
                     "note.inspect",
                 }
             self.assertEqual(set(worker.ready["operations"]), expected_operations)
@@ -1937,15 +1939,171 @@ class SittingDerivationTests(unittest.TestCase):
                 admission="boundary-test",
             )
 
-    def test_alpha_set_carries_derivation_but_not_profile_operations(self) -> None:
-        # Widened 2026-08-04 by the operator's guided-enrollment registration
-        # decision. The profile build stays its own gate.
+    def test_alpha_set_carries_enrollment_but_not_adopt_or_notes(self) -> None:
+        # Widened 2026-08-04 (sitting.derive, transcript.restore) and
+        # 2026-08-05 (profile choices/build/inspect/discard) by the
+        # operator's registration decisions. profile.adopt stays boundary
+        # lane — the packaged publication path is Rust's — and note.inspect
+        # waits on an admitted note generator.
         from worker.main import operations_for
 
         self.assertIn("sitting.derive", operations_for("internal-alpha"))
-        self.assertIn("sitting.derive", operations_for("boundary-test"))
+        self.assertIn("profile.choices", operations_for("internal-alpha"))
+        self.assertIn("profile.build", operations_for("internal-alpha"))
+        self.assertIn("profile.inspect", operations_for("internal-alpha"))
+        self.assertIn("profile.discard", operations_for("internal-alpha"))
         self.assertNotIn("profile.adopt", operations_for("internal-alpha"))
-        self.assertNotIn("profile.inspect", operations_for("internal-alpha"))
+        self.assertNotIn("note.inspect", operations_for("internal-alpha"))
+        self.assertIn("profile.adopt", operations_for("boundary-test"))
+
+
+class ProfileBuildFromEvidenceTests(unittest.TestCase):
+    """The stored-evidence path to a candidate profile, end to end.
+
+    Synthetic durable rows stand in for real sittings — the store schemas are
+    reproduced exactly — and the finish line is the real `profile_inspect`
+    validator: if the built candidate passes the canonical loader's own
+    provenance re-derivation, the whole receipt chain holds.
+    """
+
+    ENCODER = "ab" * 32
+    DIM = 192
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = (Path(self.temporary.name) / "app").resolve()
+        self.root.mkdir(mode=0o700)
+        self.rng = np.random.default_rng(7)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _write_sitting(
+        self,
+        kind: str,
+        segments: int,
+        *,
+        captured_at: int,
+        source_class: str | None = None,
+        jitter: float = 0.05,
+    ) -> str:
+        sitting_id = str(uuid.uuid4())
+        directory = self.root / "enrollment" / "sittings" / sitting_id
+        directory.mkdir(mode=0o700, parents=True)
+        base = self.rng.normal(size=self.DIM)
+        rows = []
+        for _ in range(segments):
+            vector = base + self.rng.normal(scale=jitter, size=self.DIM)
+            rows.append((vector / np.linalg.norm(vector)).astype("<f4"))
+        embeddings = np.stack(rows).tobytes()
+        raw = b"synthetic raw " + sitting_id.encode()
+        raw_sha = hashlib.sha256(raw).hexdigest()
+        spans = [
+            {"start_seconds": i * 5.0, "end_seconds": i * 5.0 + 3.5}
+            for i in range(segments)
+        ]
+        private_file(directory / "sitting.json", json.dumps({
+            "schema": "sitting-evidence/1",
+            "sitting_id": sitting_id,
+            "kind": kind,
+            "source_class": source_class,
+            "started_at_epoch_seconds": captured_at - 60,
+        }).encode())
+        private_file(directory / "capture.json", json.dumps({
+            "schema": "sitting-capture/1",
+            "sitting_id": sitting_id,
+            "raw": {
+                "relative_name": "audio.raw",
+                "byte_size": len(raw),
+                "sha256": raw_sha,
+            },
+            "captured_at_epoch_seconds": captured_at,
+        }).encode())
+        private_file(directory / "segments.json", json.dumps({
+            "schema": "sitting-segments/1",
+            "sitting_id": sitting_id,
+            "raw_sha256": raw_sha,
+            "segments": spans,
+        }).encode())
+        private_file(directory / "embeddings.bin", embeddings)
+        private_file(directory / "derived.json", json.dumps({
+            "schema": "sitting-derived/1",
+            "sitting_id": sitting_id,
+            "raw_sha256": raw_sha,
+            "encoder_sha256": self.ENCODER,
+            "onnx_artifact_sha256": self.ENCODER,
+            "embeddings_sha256": hashlib.sha256(embeddings).hexdigest(),
+            "embedding_count": segments,
+            "embedding_dim": self.DIM,
+            "derived_at_epoch_seconds": captured_at + 60,
+        }).encode())
+        return sitting_id
+
+    def _seed_evidence(self) -> None:
+        base = 1_700_000_000
+        self._write_sitting("operator-sitting", 6, captured_at=base)
+        self._write_sitting("operator-sitting", 6, captured_at=base + 2 * 3600)
+        self._write_sitting(
+            "negative-source",
+            22,
+            captured_at=base + 3 * 3600,
+            source_class="public-or-licensed",
+            jitter=2.5,
+        )
+
+    def test_choices_are_deterministic_and_the_build_passes_the_real_loader(self) -> None:
+        self._seed_evidence()
+        operation_id = str(uuid.uuid4())
+        first = adapters.profile_choices(
+            self.root, {"operation_id": operation_id}, self.ENCODER
+        )["choices"]
+        relay = self.root / "enrollment-choices" / f"{operation_id}.json"
+        body = json.loads(relay.read_text())
+        self.assertEqual(body["schema"], "profile-choices/1")
+        self.assertGreaterEqual(len(body["choices"]), 2)
+        # Identical evidence yields an identical digest under a fresh
+        # operation id — the stale-selection check depends on this.
+        second = adapters.profile_choices(
+            self.root, {"operation_id": str(uuid.uuid4())}, self.ENCODER
+        )["choices"]
+        self.assertEqual(first, second)
+
+        target = body["choices"][0]["target_frr"]
+        profile_id = str(uuid.uuid4())
+        built = adapters.profile_build(
+            self.root,
+            {"profile_id": profile_id, "selected_target": target},
+            self.ENCODER,
+        )["profile"]
+        candidate = self.root / "profile-candidates" / profile_id / "voiceprint.json"
+        self.assertEqual(hashlib.sha256(candidate.read_bytes()).hexdigest(), built)
+        inspected = adapters.profile_inspect(
+            self.root, {"profile_id": profile_id}, self.ENCODER
+        )
+        self.assertEqual(inspected["profile"], built)
+
+    def test_build_refuses_a_target_outside_the_measured_choices(self) -> None:
+        self._seed_evidence()
+        with self.assertRaisesRegex(AdapterRefused, "not one of the measured choices"):
+            adapters.profile_build(
+                self.root,
+                {"profile_id": str(uuid.uuid4()), "selected_target": 0.4242},
+                self.ENCODER,
+            )
+
+    def test_choices_refuse_mixed_encoder_material_and_thin_evidence(self) -> None:
+        self._seed_evidence()
+        with self.assertRaisesRegex(AdapterRefused, "another encoder"):
+            adapters.profile_choices(
+                self.root, {"operation_id": str(uuid.uuid4())}, "cd" * 32
+            )
+        empty = (Path(self.temporary.name) / "empty").resolve()
+        empty.mkdir(mode=0o700)
+        with self.assertRaisesRegex(AdapterRefused, "two saved voice sessions"):
+            adapters.profile_choices(
+                empty, {"operation_id": str(uuid.uuid4())}, self.ENCODER
+            )
+
 
 
 if __name__ == "__main__":

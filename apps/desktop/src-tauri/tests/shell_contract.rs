@@ -69,8 +69,10 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
     // Preview window carries, decided 2026-08-04 after the 0.2.0 cohort DMG
     // proved the narrower list left the shell without record or search.
     // The guided sitting recorder (start/stop) joined the same day by the
-    // operator's enrollment-registration decision; profile build and
-    // activation remain absent from both windows.
+    // operator's enrollment-registration decision, and the measured
+    // operating-point review with profile build/publication joined
+    // 2026-08-05 with the profile-build decision. Note generation remains
+    // absent from both windows.
     assert_eq!(
         capability["permissions"],
         serde_json::json!([
@@ -83,6 +85,8 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-preview-enrollment-surface",
             "allow-preview-enrollment-start-sitting",
             "allow-preview-enrollment-stop-sitting",
+            "allow-preview-enrollment-operating-points",
+            "allow-preview-enrollment-build-profile",
             "allow-preview-profile-preserve-legacy",
             "allow-preview-profile-reset",
             "allow-preview-library-snapshot",
@@ -254,6 +258,8 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-preview-enrollment-surface",
             "allow-preview-enrollment-start-sitting",
             "allow-preview-enrollment-stop-sitting",
+            "allow-preview-enrollment-operating-points",
+            "allow-preview-enrollment-build-profile",
             "allow-preview-profile-preserve-legacy",
             "allow-preview-profile-reset",
             "allow-preview-library-snapshot",
@@ -616,6 +622,26 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
     assert!(script.contains("does not count toward setup"));
     assert!(!script.contains("preview_enrollment_begin"));
     assert!(!script.contains("preview_enrollment_abandon"));
+
+    // § I choosing-operating-point (registered 2026-08-05): two or three
+    // ordered named options carrying both measured costs, radios shipped
+    // disabled until measurements load, no row checked in advance, and the
+    // build bound to the exact reviewed measurements by digest. The screen
+    // never asks for a number.
+    assert!(html.contains("id=\"profile-operating-points\""));
+    assert!(html.contains("id=\"operating-points-rows\" disabled"));
+    assert!(html.contains("id=\"operating-points-build\" type=\"submit\" disabled"));
+    assert!(html.contains("Nothing is chosen for you") || html.contains("nothing is chosen for you"));
+    assert!(script.contains("invoke(\"preview_enrollment_operating_points\""));
+    assert!(script.contains("invoke(\"preview_enrollment_build_profile\""));
+    assert!(script.contains("choicesSha256: selection.choicesSha256"));
+    assert!(!script.contains("input.checked = true"));
+    assert!(!html.contains("name=\"operating-point\""));
+    assert!(navigation.contains("Preserve more of my speech"));
+    assert!(navigation.contains("Keep more other voices out"));
+    assert!(navigation.contains("Measured middle point"));
+    assert!(!script.contains("type=\"number\""));
+    assert!(!html.contains("type=\"number\""));
 }
 
 #[test]

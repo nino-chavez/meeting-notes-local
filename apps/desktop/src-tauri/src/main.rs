@@ -64,8 +64,9 @@ use local_meeting_notes_session_core::retention::{
 };
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::retention::{
-    ProfileEnrollmentWorker, ProfileEnrollmentWorkerError, ProfileLifecycleAdmissionError,
-    SittingEvidenceAdmissionError, SittingEvidenceAuthority,
+    ProfileEnrollmentAdmissionError, ProfileEnrollmentCompletion, ProfileEnrollmentWorker,
+    ProfileEnrollmentWorkerError, ProfileLifecycleAdmissionError, SittingEvidenceAdmissionError,
+    SittingEvidenceAuthority,
 };
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::{
@@ -631,8 +632,11 @@ enum WorkerCallError {
     Supervisor(String),
 }
 
+/// The strict-loader bridge behind `preview_enrollment_build_profile`,
+/// registered 2026-08-05 with the operator's profile-build decision: the
+/// worker validates the canonical profile semantics and answers with
+/// digests; the lifecycle publishes only descriptor-reopened bytes.
 #[cfg(target_os = "macos")]
-#[allow(dead_code)] // registered only when guided enrollment owns a reviewed Preview command
 struct StrictProfileEnrollmentWorker<'a> {
     state: &'a ApplicationState,
 }
@@ -667,7 +671,6 @@ impl ProfileEnrollmentWorker for StrictProfileEnrollmentWorker<'_> {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(dead_code)] // reached only through StrictProfileEnrollmentWorker, same registration gate
 fn profile_worker_digest(
     state: &ApplicationState,
     operation: Operation,
@@ -2465,6 +2468,297 @@ fn preview_enrollment_stop_sitting_for(state: &ApplicationState) -> Result<(), S
         .map_err(|_| "The setup recording ended before Stop completed.".to_string())
 }
 
+/// One measured operating point, exactly as the canonical arithmetic
+/// produced it. Deserialized from the worker's relay document (snake_case)
+/// and serialized to the shell (camelCase); no field is invented or renamed
+/// in between, so the surface can only show what was measured.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+#[serde(deny_unknown_fields)]
+struct MeasuredOperatingPoint {
+    target_frr: f64,
+    threshold: f64,
+    measured_frr: f64,
+    n_operator: u32,
+    false_admit_rate: Option<f64>,
+    n_other: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChoicesEvidenceRef {
+    #[allow(dead_code)]
+    sitting_id: String,
+    #[allow(dead_code)]
+    audio_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChoicesEvidence {
+    #[allow(dead_code)]
+    sittings: Vec<ChoicesEvidenceRef>,
+    #[allow(dead_code)]
+    negative_sources: Vec<ChoicesEvidenceRef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChoicesDocument {
+    schema: String,
+    encoder_sha256: String,
+    #[allow(dead_code)]
+    evidence: ChoicesEvidence,
+    #[allow(dead_code)]
+    n_operator_scores: u64,
+    #[allow(dead_code)]
+    n_negative_scores: u64,
+    #[allow(dead_code)]
+    negative_scorable_seconds: f64,
+    choices: Vec<MeasuredOperatingPoint>,
+}
+
+/// The measured choices as the shell receives them. `choices_sha256` is the
+/// deterministic digest of the relay document — identical evidence yields an
+/// identical digest — and the build command refuses a selection whose digest
+/// no longer matches, so the operator can only build the row they reviewed.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewOperatingPointsResponse {
+    state: &'static str,
+    choices_sha256: Option<String>,
+    points: Vec<MeasuredOperatingPoint>,
+    message: String,
+}
+
+impl PreviewOperatingPointsResponse {
+    fn refused(message: &str) -> Self {
+        Self {
+            state: "refused",
+            choices_sha256: None,
+            points: Vec::new(),
+            message: message.into(),
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            state: "unavailable",
+            choices_sha256: None,
+            points: Vec::new(),
+            message: "The measured options are unavailable right now. Try again.".into(),
+        }
+    }
+}
+
+/// Runs one `profile.choices` exchange and returns the parsed, digest-bound
+/// document. The relay file is deleted after reading on every path — it is a
+/// transport, never a record.
+#[cfg(target_os = "macos")]
+fn request_measured_choices(
+    state: &ApplicationState,
+) -> Result<(String, ChoicesDocument), PreviewOperatingPointsResponse> {
+    let operation_id = Uuid::new_v4().to_string();
+    let digests = match request_worker(
+        state,
+        Operation::ProfileChoices,
+        json!({ "operation_id": operation_id }),
+        WORKER_REQUEST_TIMEOUT,
+    ) {
+        Ok(digests) => digests,
+        Err(WorkerCallError::Rejected) => {
+            return Err(PreviewOperatingPointsResponse::refused(
+                "The measured options are not ready. Finish the recording steps first.",
+            ));
+        }
+        Err(WorkerCallError::Supervisor(_)) => {
+            return Err(PreviewOperatingPointsResponse::unavailable());
+        }
+    };
+    let digests = exact_digests(&digests, &["choices"])
+        .map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
+    let expected = digests["choices"].clone();
+    let storage = preview_storage_clone(state)
+        .map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
+    let path = storage
+        .resolve(&Path::new("enrollment-choices").join(format!("{operation_id}.json")))
+        .map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
+    let bytes = fs::read(&path).map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
+    let _ = fs::remove_file(&path);
+    if format!("{:x}", Sha256::digest(&bytes)) != expected {
+        return Err(PreviewOperatingPointsResponse::unavailable());
+    }
+    let document: ChoicesDocument = serde_json::from_slice(&bytes)
+        .map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
+    if document.schema != "profile-choices/1" {
+        return Err(PreviewOperatingPointsResponse::unavailable());
+    }
+    let manifest_encoder = state
+        .runtime
+        .lock()
+        .ok()
+        .and_then(|runtime| runtime.as_ref().map(|runtime| runtime.encoder_sha256.clone()));
+    if manifest_encoder.as_deref() != Some(document.encoder_sha256.as_str()) {
+        return Err(PreviewOperatingPointsResponse::unavailable());
+    }
+    Ok((expected, document))
+}
+
+/// § I `choosing-operating-point`: the one screen that presents a trade-off
+/// rather than a reading. This command only reports — two or three measured
+/// rows, no default, nothing written — and the digest it returns is what the
+/// separate build command demands back.
+#[tauri::command]
+fn preview_enrollment_operating_points(
+    state: State<'_, ApplicationState>,
+) -> PreviewOperatingPointsResponse {
+    preview_enrollment_operating_points_for(&state)
+}
+
+#[cfg(target_os = "macos")]
+fn preview_enrollment_operating_points_for(
+    state: &ApplicationState,
+) -> PreviewOperatingPointsResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return PreviewOperatingPointsResponse::unavailable();
+    };
+    if sitting_task_active(state) {
+        return PreviewOperatingPointsResponse::refused("Finish the setup recording first.");
+    }
+    {
+        let Ok(model) = state.model.lock() else {
+            return PreviewOperatingPointsResponse::unavailable();
+        };
+        if model.reducer.startup() != StartupState::Ready
+            || model.reducer.capture() != CaptureState::Idle
+        {
+            return PreviewOperatingPointsResponse::refused(
+                "Finish the current app or recording operation first.",
+            );
+        }
+    }
+    match request_measured_choices(state) {
+        Ok((digest, document)) => PreviewOperatingPointsResponse {
+            state: "choices",
+            choices_sha256: Some(digest),
+            points: document.choices,
+            message: "Options measured from your own recordings. None is chosen for you."
+                .into(),
+        },
+        Err(response) => response,
+    }
+}
+
+/// Builds and publishes the profile for one explicitly selected measured
+/// row. The worker recomputes the choices and refuses a target the evidence
+/// no longer supports; this command additionally refuses when the recomputed
+/// document's digest differs from the one the operator reviewed, then runs
+/// the strict-loader bridge: worker-validated candidate, descriptor-reopened
+/// digest, lifecycle publication, candidate cleanup.
+#[tauri::command]
+fn preview_enrollment_build_profile(
+    selected_target: f64,
+    choices_sha256: String,
+    state: State<'_, ApplicationState>,
+) -> Result<PreviewProfileSnapshot, String> {
+    preview_enrollment_build_profile_for(&state, selected_target, &choices_sha256)
+}
+
+#[cfg(target_os = "macos")]
+fn preview_enrollment_build_profile_for(
+    state: &ApplicationState,
+    selected_target: f64,
+    choices_sha256: &str,
+) -> Result<PreviewProfileSnapshot, String> {
+    if !valid_sha256(choices_sha256) {
+        return Err("The reviewed options could not be identified. Review them again.".into());
+    }
+    if !(selected_target.is_finite() && 0.0 < selected_target && selected_target < 1.0) {
+        return Err("The selected option is not one of the measured choices.".into());
+    }
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| "the profile action is unavailable".to_string())?;
+    if sitting_task_active(state) {
+        return Err("Finish the setup recording first.".into());
+    }
+    {
+        let model = state
+            .model
+            .lock()
+            .map_err(|_| "the application state is unavailable".to_string())?;
+        if model.reducer.startup() != StartupState::Ready
+            || model.reducer.capture() != CaptureState::Idle
+        {
+            return Err("Finish the current app or recording operation first.".into());
+        }
+    }
+    // The selection binds to the reviewed measurements, not to hope: the
+    // choices are recomputed and must hash to exactly what the operator saw.
+    let (current_digest, _document) = request_measured_choices(state)
+        .map_err(|response| response.message)?;
+    if current_digest != choices_sha256 {
+        return Err("The measured options changed. Review them again.".into());
+    }
+    let profile_id = Uuid::new_v4().to_string();
+    let built = request_worker(
+        state,
+        Operation::ProfileBuild,
+        json!({ "profile_id": profile_id, "selected_target": selected_target }),
+        WORKER_REQUEST_TIMEOUT,
+    )
+    .map_err(|error| match error {
+        WorkerCallError::Rejected => {
+            "The profile could not be built from the current evidence.".to_string()
+        }
+        WorkerCallError::Supervisor(_) => "the local worker is unavailable".to_string(),
+    })?;
+    let built = exact_digests(&built, &["profile"])?;
+    let built_sha256 = built["profile"].clone();
+
+    let completion = {
+        let held = state
+            .app_data_writer_lock
+            .lock()
+            .map_err(|_| "the app-data writer lock is unavailable".to_string())?;
+        let writer = held
+            .as_ref()
+            .ok_or_else(|| "the app-data writer lock is unavailable".to_string())?;
+        let bridge = StrictProfileEnrollmentWorker { state };
+        let completion = writer
+            .profile_lifecycle_authority()
+            .enroll_profile_candidate(&bridge, &profile_id, now_epoch_seconds())
+            .map_err(|error| match error {
+                ProfileEnrollmentAdmissionError::ActiveMeeting => {
+                    "Finish the current recording before completing setup.".to_string()
+                }
+                ProfileEnrollmentAdmissionError::Worker(_) => {
+                    "The built profile did not pass its final check. Nothing was stored."
+                        .to_string()
+                }
+                ProfileEnrollmentAdmissionError::CandidateUnsafe => {
+                    "The built profile did not pass its final check. Nothing was stored."
+                        .to_string()
+                }
+                _ => "Profile storage needs attention. Nothing was stored.".to_string(),
+            })?;
+        refresh_preview_caches_with_writer(state, writer, None, None);
+        completion
+    };
+    let stored_sha256 = match &completion {
+        ProfileEnrollmentCompletion::Enrolled { profile_sha256, .. }
+        | ProfileEnrollmentCompletion::CleanupPending { profile_sha256, .. } => profile_sha256,
+    };
+    if stored_sha256 != &built_sha256 {
+        return Err(
+            "The stored profile disagrees with the built candidate. Review the profile status."
+                .into(),
+        );
+    }
+    Ok(preview_profile_snapshot_for(state))
+}
+
 #[tauri::command]
 fn preview_library_search(
     query: String,
@@ -2842,6 +3136,8 @@ fn main() {
             preview_enrollment_surface,
             preview_enrollment_start_sitting,
             preview_enrollment_stop_sitting,
+            preview_enrollment_operating_points,
+            preview_enrollment_build_profile,
             preview_profile_preserve_legacy,
             preview_profile_reset,
             preview_library_search,
@@ -5447,6 +5743,84 @@ mod tests {
         });
         preview_enrollment_stop_sitting_for(&state).unwrap();
         assert!(receiver.try_recv().is_ok());
+    }
+
+    /// The relay document is the worker's canonical arithmetic verbatim:
+    /// snake_case in, camelCase out, unknown fields refused, and the § I
+    /// vocabulary preserved so the surface can only show what was measured.
+    #[test]
+    fn measured_choices_round_trip_without_invention() {
+        let body = serde_json::json!({
+            "schema": "profile-choices/1",
+            "encoder_sha256": "ab".repeat(32),
+            "evidence": {
+                "sittings": [{"sitting_id": "s", "audio_sha256": "cd".repeat(32)}],
+                "negative_sources": [{"sitting_id": "n", "audio_sha256": "ef".repeat(32)}],
+            },
+            "n_operator_scores": 12,
+            "n_negative_scores": 22,
+            "negative_scorable_seconds": 77.0,
+            "choices": [{
+                "target_frr": 0.05,
+                "threshold": 0.24,
+                "measured_frr": 0.041,
+                "n_operator": 12,
+                "false_admit_rate": 0.0,
+                "n_other": 22,
+            }],
+        });
+        let document: ChoicesDocument = serde_json::from_value(body).unwrap();
+        assert_eq!(document.schema, "profile-choices/1");
+        assert_eq!(document.choices.len(), 1);
+        let rendered = serde_json::to_value(&document.choices[0]).unwrap();
+        assert_eq!(rendered["targetFrr"], serde_json::json!(0.05));
+        assert_eq!(rendered["falseAdmitRate"], serde_json::json!(0.0));
+        assert_eq!(rendered["nOperator"], serde_json::json!(12));
+
+        let unknown = serde_json::json!({
+            "target_frr": 0.05, "threshold": 0.2, "measured_frr": 0.0,
+            "n_operator": 5, "false_admit_rate": 0.0, "n_other": 20,
+            "invented": true,
+        });
+        assert!(serde_json::from_value::<MeasuredOperatingPoint>(unknown).is_err());
+    }
+
+    /// Both profile-build commands refuse their boundaries before any worker
+    /// exchange: an active take, a malformed digest, a target outside (0, 1).
+    #[test]
+    fn profile_build_commands_refuse_their_boundaries() {
+        let (_temporary, storage) = test_storage();
+        let state = ApplicationState::default();
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+        }
+        assert!(
+            preview_enrollment_build_profile_for(&state, 0.05, "not-a-digest")
+                .unwrap_err()
+                .contains("could not be identified")
+        );
+        assert!(
+            preview_enrollment_build_profile_for(&state, 1.5, &"ab".repeat(32))
+                .unwrap_err()
+                .contains("not one of the measured choices")
+        );
+        let (sender, _receiver) = mpsc::channel();
+        *state.sitting_task.lock().unwrap() = Some(SittingTaskControl {
+            sitting_id: "11111111-1111-4111-8111-111111111111".into(),
+            sender,
+        });
+        assert_eq!(
+            preview_enrollment_operating_points_for(&state).state,
+            "refused"
+        );
+        assert!(
+            preview_enrollment_build_profile_for(&state, 0.05, &"ab".repeat(32))
+                .unwrap_err()
+                .contains("Finish the setup recording")
+        );
     }
 
     /// The writer-lock interlock: while a sitting is active, every command

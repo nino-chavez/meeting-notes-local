@@ -150,6 +150,21 @@
           <p id="sitting-outcome" role="status" hidden></p>
           <ul id="profile-sittings" hidden></ul>
         </section>
+        <section class="profile-operating-points" id="profile-operating-points" hidden>
+          <p class="label">Choose how the profile behaves</p>
+          <p id="operating-points-copy">Your recordings hold enough measured evidence to review the options. Each option carries its own measured costs; nothing is chosen for you.</p>
+          <form id="operating-points-form">
+            <fieldset id="operating-points-rows" disabled>
+              <legend>Measured options</legend>
+            </fieldset>
+            <p class="form-error" id="operating-points-error" role="alert" hidden></p>
+            <div class="screen-actions">
+              <button class="secondary" id="operating-points-load" type="button">Review measured options</button>
+              <button class="primary" id="operating-points-build" type="submit" disabled>Build voice profile</button>
+            </div>
+          </form>
+          <p class="footnote">Building runs the app’s own final check again before anything is stored. The temporary setup recordings are already deleted; their derived voice material is what the profile is built from.</p>
+        </section>
         <div class="notice" id="profile-boundary">Recording requires headphones and only you near the microphone, with or without a profile. A profile sets aside speech that is not yours; it does not name speakers, and speaker playback stays unsupported.</div>
         <p class="footnote" id="profile-footnote">Opening this screen reads only the setup status. It never opens meetings or transcripts.</p>
         <section class="profile-reset-confirmation" id="profile-reset-confirmation" aria-labelledby="profile-reset-title" hidden>

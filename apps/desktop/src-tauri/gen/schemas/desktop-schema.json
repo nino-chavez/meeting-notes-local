@@ -195,6 +195,18 @@
           "markdownDescription": "Enables the preview_delete_meeting_audio command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_enrollment_build_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-enrollment-build-profile",
+          "markdownDescription": "Enables the preview_enrollment_build_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_enrollment_operating_points command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-enrollment-operating-points",
+          "markdownDescription": "Enables the preview_enrollment_operating_points command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_enrollment_start_sitting command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-enrollment-start-sitting",
@@ -313,6 +325,18 @@
           "type": "string",
           "const": "deny-preview-delete-meeting-audio",
           "markdownDescription": "Denies the preview_delete_meeting_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_enrollment_build_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-enrollment-build-profile",
+          "markdownDescription": "Denies the preview_enrollment_build_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_enrollment_operating_points command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-enrollment-operating-points",
+          "markdownDescription": "Denies the preview_enrollment_operating_points command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_enrollment_start_sitting command without any pre-configured scope.",

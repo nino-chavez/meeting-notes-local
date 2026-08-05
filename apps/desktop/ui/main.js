@@ -9,6 +9,7 @@ import {
   createTransitionGate,
   changedStatusText,
   enrollmentRecorderPresentation,
+  operatingPointPresentation,
   captureChannelPresentation,
   connectionUncertaintyStatus,
   headerActionPolicy,
@@ -69,6 +70,12 @@ const sittingActive = document.querySelector("#sitting-active");
 const sittingStop = document.querySelector("#sitting-stop");
 const sittingError = document.querySelector("#sitting-error");
 const sittingOutcome = document.querySelector("#sitting-outcome");
+const operatingPointsSection = document.querySelector("#profile-operating-points");
+const operatingPointsForm = document.querySelector("#operating-points-form");
+const operatingPointsRows = document.querySelector("#operating-points-rows");
+const operatingPointsError = document.querySelector("#operating-points-error");
+const operatingPointsLoad = document.querySelector("#operating-points-load");
+const operatingPointsBuild = document.querySelector("#operating-points-build");
 const profileResetConfirmation = document.querySelector("#profile-reset-confirmation");
 const profileResetConfirm = document.querySelector("#profile-reset-confirm");
 const profileResetCancel = document.querySelector("#profile-reset-cancel");
@@ -863,6 +870,139 @@ function renderEnrollmentGuidance(snapshot) {
   const gates = applies && Array.isArray(guidance?.gates) ? guidance.gates : [];
   profileEnrollmentGates.hidden = gates.length === 0;
   profileEnrollmentGates.textContent = gates.join(" ");
+  renderOperatingPointsSection(guidance);
+}
+
+// § I: the one screen in the product that presents a trade-off rather than a
+// reading. The section appears only in choosing-operating-point; its radios
+// stay disabled until measurements load, no row is checked in advance, and
+// Build stays disabled until the operator has explicitly selected one.
+let latestOperatingPoints = null;
+let operatingPointsBusy = false;
+
+function renderOperatingPointsSection(guidance) {
+  const applies = guidance?.state === "choosing-operating-point";
+  operatingPointsSection.hidden = !applies;
+  if (!applies) {
+    latestOperatingPoints = null;
+    operatingPointsRows.disabled = true;
+    operatingPointsBuild.disabled = true;
+    operatingPointsError.hidden = true;
+    operatingPointsError.textContent = "";
+    operatingPointsRows.replaceChildren(
+      Object.assign(document.createElement("legend"), {
+        textContent: "Measured options",
+      }),
+    );
+  }
+}
+
+function renderOperatingPointRows(response) {
+  const rows = operatingPointPresentation(response?.points);
+  if (response?.state !== "choices" || rows.length < 2 || !response?.choicesSha256) {
+    latestOperatingPoints = null;
+    operatingPointsRows.disabled = true;
+    operatingPointsBuild.disabled = true;
+    operatingPointsError.textContent =
+      response?.message
+      || "The measured options are unavailable right now. Try again.";
+    operatingPointsError.hidden = false;
+    return;
+  }
+  latestOperatingPoints = { choicesSha256: response.choicesSha256, rows };
+  operatingPointsError.hidden = true;
+  operatingPointsError.textContent = "";
+  operatingPointsRows.replaceChildren(
+    Object.assign(document.createElement("legend"), {
+      textContent: "Measured options",
+    }),
+    ...rows.map((row) => {
+      const label = document.createElement("label");
+      label.className = "check-row";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "operating-point";
+      input.value = String(row.point.targetFrr);
+      const text = document.createElement("span");
+      const title = document.createElement("strong");
+      title.textContent = `${row.label}.`;
+      const costs = document.createElement("small");
+      costs.textContent = row.costs;
+      text.append(title, costs);
+      label.append(input, text);
+      return label;
+    }),
+  );
+  operatingPointsRows.disabled = false;
+  operatingPointsBuild.disabled = true;
+  operatingPointsLoad.textContent = "Measure the options again";
+}
+
+async function loadOperatingPoints() {
+  if (!invoke || operatingPointsBusy) return;
+  operatingPointsBusy = true;
+  operatingPointsLoad.disabled = true;
+  try {
+    const response = await invoke("preview_enrollment_operating_points").catch(() => null);
+    if (currentScreen !== "profile-screen") return;
+    renderOperatingPointRows(response);
+  } finally {
+    operatingPointsBusy = false;
+    operatingPointsLoad.disabled = false;
+  }
+}
+
+function selectedOperatingPoint() {
+  const checked = operatingPointsRows.querySelector(
+    "input[name=\"operating-point\"]:checked",
+  );
+  if (!checked || !latestOperatingPoints) return null;
+  const target = Number(checked.value);
+  const row = latestOperatingPoints.rows.find(
+    (candidate) => candidate.point.targetFrr === target,
+  );
+  return row ? { target, choicesSha256: latestOperatingPoints.choicesSha256 } : null;
+}
+
+async function buildVoiceProfile(event) {
+  event.preventDefault();
+  if (!invoke || operatingPointsBusy) return;
+  const selection = selectedOperatingPoint();
+  if (!selection) {
+    operatingPointsError.textContent = "Choose one measured option first.";
+    operatingPointsError.hidden = false;
+    return;
+  }
+  operatingPointsBusy = true;
+  operatingPointsBuild.disabled = true;
+  operatingPointsLoad.disabled = true;
+  operatingPointsRows.disabled = true;
+  operatingPointsBuild.textContent = "Building…";
+  operatingPointsError.hidden = true;
+  try {
+    const snapshot = await invoke("preview_enrollment_build_profile", {
+      selectedTarget: selection.target,
+      choicesSha256: selection.choicesSha256,
+    });
+    if (currentScreen !== "profile-screen") return;
+    renderProfile(snapshot);
+    const surface = await invoke("preview_enrollment_surface").catch(() => null);
+    if (currentScreen === "profile-screen") renderEnrollmentSittings(surface);
+    profileStatusTitle.focus();
+  } catch (error) {
+    if (currentScreen !== "profile-screen") return;
+    operatingPointsRows.disabled = false;
+    operatingPointsBuild.disabled = false;
+    operatingPointsError.textContent =
+      typeof error === "string"
+        ? error
+        : "The profile was not built. Review the options and try again.";
+    operatingPointsError.hidden = false;
+  } finally {
+    operatingPointsBusy = false;
+    operatingPointsLoad.disabled = false;
+    operatingPointsBuild.textContent = "Build voice profile";
+  }
 }
 
 // Per-sitting lifecycle copy, content-free by construction: state labels come
@@ -1805,6 +1945,11 @@ profileResetCancel.addEventListener("click", cancelProfileReset);
 sittingForm.addEventListener("submit", startSittingRecording);
 sittingForm.addEventListener("change", syncSittingSourceClass);
 sittingStop.addEventListener("click", stopSittingRecording);
+operatingPointsLoad.addEventListener("click", loadOperatingPoints);
+operatingPointsForm.addEventListener("submit", buildVoiceProfile);
+operatingPointsForm.addEventListener("change", () => {
+  operatingPointsBuild.disabled = !selectedOperatingPoint();
+});
 workflowReturn.addEventListener("click", returnToWorkflow);
 startMeetingAction.addEventListener("click", openStartMeeting);
 document.querySelector("#start-back").addEventListener("click", returnToProductHome);

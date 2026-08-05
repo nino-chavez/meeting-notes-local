@@ -1161,6 +1161,51 @@ def profile_discard(root: Path, arguments: object) -> dict[str, str]:
     return {"profile": profile_sha256}
 
 
+def profile_choices(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
+    """Measured operating-point choices from stored evidence, as a relay file.
+
+    The document body is deterministic over the evidence, so its digest is
+    the identity the later build verifies a selection against. Registered in
+    the packaged alpha with the 2026-08-05 profile-build decision.
+    """
+    root = _private_profile_root(root)
+    values = _exact_arguments(arguments, {"operation_id"})
+    operation_id = opaque_id(values["operation_id"], "operation_id")
+    from .profile_build import ProfileBuildRefused, write_choices
+
+    try:
+        return {"choices": write_choices(root, operation_id, encoder_digest)}
+    except ProfileBuildRefused as error:
+        raise AdapterRefused(str(error)) from None
+
+
+def profile_build(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
+    """Build one candidate profile for an explicitly selected measured target.
+
+    The caller supplies a target, never a threshold or a rate; the canonical
+    `save_profile` boundary recomputes the deterministic choices and refuses
+    anything the evidence cannot support. The candidate lands in the profile
+    quarantine, where `profile.inspect` and the Rust lifecycle take over.
+    """
+    root = _private_profile_root(root)
+    values = _exact_arguments(arguments, {"profile_id", "selected_target"})
+    profile_id = opaque_id(values["profile_id"], "profile_id")
+    selected_target = values["selected_target"]
+    if isinstance(selected_target, bool) or not isinstance(selected_target, (int, float)):
+        raise AdapterRefused("selected_target must be a number")
+    selected_target = float(selected_target)
+    if not (0.0 < selected_target < 1.0):
+        raise AdapterRefused("selected_target must lie strictly between 0 and 1")
+    from .profile_build import ProfileBuildRefused, build_candidate
+
+    try:
+        return {
+            "profile": build_candidate(root, profile_id, selected_target, encoder_digest)
+        }
+    except ProfileBuildRefused as error:
+        raise AdapterRefused(str(error)) from None
+
+
 def profile_adopt(root: Path, arguments: object, encoder_digest: str) -> dict[str, str]:
     root = _private_profile_root(root)
     values = _exact_arguments(arguments, {"profile_id"})
@@ -1347,6 +1392,8 @@ def dispatch(
 ) -> dict[str, str]:
     adapters = {
         "profile.inspect": lambda: profile_inspect(root, arguments, encoder_digest),
+        "profile.choices": lambda: profile_choices(root, arguments, encoder_digest),
+        "profile.build": lambda: profile_build(root, arguments, encoder_digest),
         "profile.adopt": lambda: profile_adopt(root, arguments, encoder_digest),
         "profile.discard": lambda: profile_discard(root, arguments),
         "capture.inspect": lambda: capture_inspect(root, arguments),
