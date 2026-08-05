@@ -319,15 +319,38 @@ They can occur now, and two obligations recorded here have no screen behind them
 speech keeps returning as one voice — someone beside the operator is being
 removed from the record of a meeting that cannot be re-run. It reaches
 `transcript.json` and `notes/transcript.py` renders it into a note's caveats,
-which is the only surface it has. There is no generator admitted, so today that
-alert can fire and reach no human. **Undecided**: whether the transcript screen
-must carry it directly rather than waiting for a note.
+which was the only surface it had. There is no generator admitted, so that alert
+could fire and reach no human.
+
+**Decided 2026-08-05: the transcript screen carries it directly, first.** What
+settled it was evidence rather than taste. The registered 12-fixture note matrix
+ran that day and failed 9 of 12 (`notes/MLX_NOTE_ADMISSION.md`), so "waiting for
+a note" is not a delay with a date on it — the alert's only route to a human is
+one no candidate is close to opening. A warning that cannot arrive is not a
+warning. It leads the transcript's warning list, names roughly how many seconds
+went, and says the meeting cannot be re-run, because the operator's only
+remedy — restoring turns — is worth less the longer they wait.
 
 **What the gate was calibrated on.** The artifact records `threshold`,
 `target_frr`, `measured_frr` and `n_sittings`, all derived from
 leave-one-sitting-out enrolment evidence and none of it measured on live meeting
-audio. Nothing shows the operator that distinction. **Undecided**: whether a
-gated transcript must say its threshold is uncalibrated for meetings, and where.
+audio.
+
+**Decided 2026-08-05: a transcript whose gate ran says so, last in the same
+list.** Whenever the gate *applied*, not only when it withheld something — a
+transcript that lost nothing was still decided by that threshold, and an
+operator reading a clean one is entitled to know what cleared it. Where the
+enrolment measurement exists it is quoted concretely ("set from 3 enrolment
+sitting(s), where it withheld 5% of your own speech") and where it does not the
+clause is dropped rather than filled with a plausible number. A gate that did
+not run — the skipped-on-bleed case — says nothing about a threshold at all,
+because the rule this document already holds is that a surface must never imply
+a check it did not perform.
+
+Both required one further change: the warning banner joined every message into a
+single run of text. A sentence saying a colleague is being deleted from an
+unrepeatable record cannot arrive spliced to a retention notice, so warnings now
+render one paragraph each and the producer orders them, most serious first.
 
 Both are named here rather than left to be discovered, because the rule this
 document already holds — a surface must never imply a check it did not perform —

@@ -4564,6 +4564,38 @@ fn verified_artifact(
     Ok(reference)
 }
 
+/// What the microphone gate did, as the capture recorded it.
+///
+/// Read rather than discarded because two of these fields are obligations
+/// `docs/screens-and-states.md` places on this screen, and until 2026-08-05 the
+/// whole block was parsed into `_voiceprint` and dropped. The gate could
+/// therefore delete a colleague's speech from a meeting that cannot be re-run
+/// and tell nobody: the alert's only route to a human ran through a note, and no
+/// note generator is admitted.
+///
+/// Not `deny_unknown_fields`, unlike its parent. The capture side writes the
+/// full provenance block — encoder fingerprints, profile digests, versions — and
+/// this screen needs four values out of it. Pinning the whole shape here would
+/// make every future capture-side field a transcript that will not open.
+#[derive(Deserialize)]
+struct VoiceprintReport {
+    #[serde(default)]
+    applied: bool,
+    /// The dropped speech keeps returning as one voice: somebody sitting beside
+    /// the operator is being removed, rather than scattered noise.
+    #[serde(default)]
+    persistent_other: bool,
+    #[serde(default)]
+    rejected_seconds: Option<f64>,
+    /// Derived from leave-one-sitting-out enrolment evidence, never from live
+    /// meeting audio. The number is real; what it was measured on is not the
+    /// thing being gated.
+    #[serde(default)]
+    measured_frr: Option<f64>,
+    #[serde(default)]
+    n_sittings: Option<u32>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TranscriptDocument {
@@ -4573,8 +4605,7 @@ struct TranscriptDocument {
     attribution: String,
     #[serde(rename = "bleed")]
     _bleed: Option<Value>,
-    #[serde(rename = "voiceprint")]
-    _voiceprint: Option<Value>,
+    voiceprint: Option<VoiceprintReport>,
     #[serde(rename = "capture_health")]
     _capture_health: Value,
     turns: Vec<TranscriptInputTurn>,
@@ -4793,6 +4824,24 @@ fn parse_transcript_projection_with(
         });
     }
     let mut warnings = Vec::new();
+    let report = document.voiceprint.filter(|report| report.applied);
+    // First, and before the count, because it is the only one of these that says
+    // a person was removed rather than that some audio was.
+    if report.as_ref().is_some_and(|report| report.persistent_other) {
+        let seconds = report
+            .as_ref()
+            .and_then(|report| report.rejected_seconds)
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0);
+        let extent = match seconds {
+            Some(seconds) => format!(" About {} seconds of it were withheld.", seconds.round()),
+            None => String::new(),
+        };
+        warnings.push(format!(
+            "The withheld speech keeps returning as one voice, which is what it looks like when \
+             someone next to you is being removed from this record.{extent} Restore any turn that \
+             should be here — this meeting cannot be re-run."
+        ));
+    }
     if document.attribution == "none" {
         warnings.push(
             "Speaker labels are unavailable because the channel split could not be trusted.".into(),
@@ -4801,6 +4850,22 @@ fn parse_transcript_projection_with(
     if gated > 0 {
         warnings.push(format!(
             "The voice check withheld {gated} microphone segment(s); review the retained capture if words appear missing."
+        ));
+    }
+    // Stated whenever the gate ran, not only when it withheld something: a run
+    // that withheld nothing was still decided by this threshold, and an operator
+    // reading a clean transcript is entitled to know what cleared it.
+    if let Some(report) = report {
+        let basis = match (report.measured_frr, report.n_sittings) {
+            (Some(frr), Some(sittings)) if frr.is_finite() && sittings > 0 => format!(
+                " It was set from {sittings} enrolment sitting(s), where it withheld {:.0}% of your own speech.",
+                frr * 100.0
+            ),
+            _ => String::new(),
+        };
+        warnings.push(format!(
+            "The voice check's threshold was measured on your enrolment recordings, not on \
+             meeting audio.{basis}"
         ));
     }
     Ok((turns, warnings))
@@ -6931,6 +6996,97 @@ mod tests {
         assert!(!payload.contains("withheld\":false"));
         assert!(!payload.contains("gate_score"));
         assert_eq!(warnings.len(), 1);
+    }
+
+    fn gated_document_with_voiceprint(voiceprint: &str) -> Vec<u8> {
+        format!(
+            r#"{{
+          "schema":"capture-transcript/1",
+          "source":"fixture",
+          "attribution":"channel",
+          "bleed":null,
+          "voiceprint":{voiceprint},
+          "capture_health":{{}},
+          "turns":[
+            {{"start":0.0,"end":1.0,"speaker":"Me","text":"visible"}},
+            {{"start":1.0,"end":2.0,"speaker":"Me","text":"withheld","gated":true,"gate_score":0.1,"gate_reason":"fixture"}}
+          ]
+        }}"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_co_located_speaker_alert_reaches_the_transcript_screen_first() {
+        // The alert's only route to a human ran through a note, and no note
+        // generator is admitted — so before this it could fire and reach nobody
+        // while the gate deleted a colleague from a meeting that cannot be
+        // re-run.
+        let document = gated_document_with_voiceprint(
+            r#"{"applied":true,"persistent_other":true,"rejected_seconds":41.6,
+                "measured_frr":0.05,"n_sittings":3}"#,
+        );
+        let (_turns, warnings) =
+            parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
+        assert!(
+            warnings[0].contains("keeps returning as one voice"),
+            "the alert must lead, not sit among boilerplate: {warnings:?}"
+        );
+        assert!(warnings[0].contains("42 seconds"), "{warnings:?}");
+        assert!(warnings[0].contains("cannot be re-run"), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_gate_that_ran_always_says_what_its_threshold_was_measured_on() {
+        // Stated even when nothing was withheld: a clean transcript was still
+        // decided by this threshold.
+        let document = gated_document_with_voiceprint(
+            r#"{"applied":true,"persistent_other":false,"rejected_seconds":0.0,
+                "measured_frr":0.05,"n_sittings":3}"#,
+        );
+        let (_turns, warnings) =
+            parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
+        let disclosure = warnings.last().expect("a disclosure");
+        assert!(disclosure.contains("not on meeting audio"), "{warnings:?}");
+        assert!(disclosure.contains("3 enrolment sitting(s)"), "{warnings:?}");
+        assert!(disclosure.contains("5%"), "{warnings:?}");
+        // No alert, because the dropped speech was not one recurring voice.
+        assert!(!warnings.iter().any(|line| line.contains("one voice")), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_gate_that_did_not_run_claims_nothing_about_a_threshold() {
+        // `applied:false` is the skipped-on-bleed case. A disclosure here would
+        // imply a check the app did not perform, which is the rule this screen
+        // already holds.
+        let document = gated_document_with_voiceprint(
+            r#"{"applied":false,"why":"bleed above the attribution cut","persistent_other":true}"#,
+        );
+        let (_turns, warnings) =
+            parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
+        assert!(!warnings.iter().any(|line| line.contains("threshold")), "{warnings:?}");
+        assert!(!warnings.iter().any(|line| line.contains("one voice")), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_unknown_capture_side_voiceprint_field_still_opens_the_transcript() {
+        // The capture writes the full provenance block. Pinning its shape here
+        // would turn every future field into a transcript that will not open.
+        let document = gated_document_with_voiceprint(
+            r#"{"applied":true,"persistent_other":false,"encoder_fingerprint":"x",
+                "versions":{"anything":"1"},"a_field_added_next_year":7}"#,
+        );
+        assert!(parse_transcript_projection_with(&document, &BTreeSet::new()).is_ok());
+    }
+
+    #[test]
+    fn a_missing_measurement_drops_the_basis_rather_than_inventing_one() {
+        let document = gated_document_with_voiceprint(r#"{"applied":true}"#);
+        let (_turns, warnings) =
+            parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
+        let disclosure = warnings.last().expect("a disclosure");
+        assert!(disclosure.contains("not on meeting audio"), "{warnings:?}");
+        assert!(!disclosure.contains("sitting(s)"), "{warnings:?}");
     }
 
     #[test]

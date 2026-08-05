@@ -424,7 +424,19 @@ function renderTurns(container, warning, turns, warnings, match = null, restore 
   container.replaceChildren();
   const safeWarnings = Array.isArray(warnings) ? warnings : [];
   warning.hidden = safeWarnings.length === 0;
-  warning.textContent = safeWarnings.join(" ");
+  // One paragraph each rather than one joined string. The gate can now say that
+  // a person beside the operator is being removed from a record that cannot be
+  // re-made, and that sentence arrives alongside a retention notice and a
+  // segment count — joined into a single run of text it reads as boilerplate.
+  // The producer orders them, most serious first.
+  warning.replaceChildren(
+    ...safeWarnings.map((text) => {
+      const line = document.createElement("p");
+      line.className = "warning-line";
+      line.textContent = text;
+      return line;
+    }),
+  );
   for (const turn of turns || []) {
     const row = document.createElement("section");
     row.className = "turn";

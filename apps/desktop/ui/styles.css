@@ -258,6 +258,10 @@ legend { margin-bottom: var(--space-3); }
 
 .notice { margin: var(--space-6) 0; padding: var(--space-4); color: #3f4c46; font-size: 0.95rem; line-height: 1.5; }
 .notice.error { border-color: #d9aaa5; color: #75261f; background: #fff5f3; }
+/* Warnings are separate paragraphs so a serious one is not read as part of a
+   run of boilerplate. The first is the most serious; the producer orders them. */
+.notice .warning-line { margin: 0 0 var(--space-2); }
+.notice .warning-line:last-child { margin-bottom: 0; }
 .transcript-screen h1 { max-width: 18ch; }
 #transcript-turns, #library-transcript-turns { margin: var(--space-8) 0; border-top: 1px solid var(--line); }
 .turn { display: grid; grid-template-columns: 118px 1fr; gap: var(--space-6); padding: var(--space-4) 0; border-bottom: 1px solid var(--line); }
