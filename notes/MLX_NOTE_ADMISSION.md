@@ -345,7 +345,10 @@ three are committed — `mlx_note_constrained_probe_receipt.json` and its
 `_run2` / `_run3` siblings — and
 `test_the_committed_constrained_receipts_evidence_the_repeatability_gate`
 compares them against each other, so the gate rests on artifacts rather than on
-this sentence. Only `call_elapsed_s`, `elapsed_s` and `peak_rss` differ. The
+this sentence. Four fields differ and all four are timings or process
+footprint — `call_elapsed_s`, `elapsed_s`, `load.model_load_elapsed_s`, and
+`peak_rss`. Everything else in the `load` block, including the tree the model
+was loaded from and the runtime it was loaded into, is compared. The
 receipts were regenerated after the trailing-comma correction below; the
 response digests are unchanged by it, and the `decoder` digest they carry pins
 the corrected mask.

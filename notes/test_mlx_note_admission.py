@@ -207,6 +207,15 @@ class MlxNoteAdmissionTests(unittest.TestCase):
                 "decoding": receipt["decoding"],
                 "preflight_tree_sha256": receipt["preflight_tree_sha256"],
                 "postflight_tree_sha256": receipt["postflight_tree_sha256"],
+                # Dropping the whole `load` block would discard two fields that
+                # must not move between repeats — the tree the model was loaded
+                # from, and the runtime it was loaded into — to exclude the one
+                # that must, its load time. Only the timing is excluded.
+                "load": {
+                    key: value
+                    for key, value in receipt["load"].items()
+                    if key != "model_load_elapsed_s"
+                },
                 "calls": [
                     {
                         key: call[key]
