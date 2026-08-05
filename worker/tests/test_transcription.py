@@ -315,7 +315,9 @@ class InstalledVoiceprintGateTests(unittest.TestCase):
         # stops transcription rather than producing an artifact that would say
         # no profile was supplied. The cohort DMG ships the admitted encoder, so
         # this costs a real operator nothing; it costs a placeholder build the
-        # ability to transcribe until the profile is discarded.
+        # ability to transcribe until the operator resets the profile.
+        # Reset, not discard: profile.discard targets profile-candidates, and
+        # never touches the live file.
         self.install_profile()
         with self.assertRaisesRegex(
             adapters.AdapterRefused, "no admitted speaker encoder"
