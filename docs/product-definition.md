@@ -19,7 +19,7 @@ re-verify it against `worker/main.py` (`ALPHA_OPERATIONS`),
 release runbook. This file's own claim of a status is a hypothesis, not evidence.
 
 The app installs as **Yawn** as of 0.3.0 (2026-08-05); the brand is YAWN — Yet
-Another Whisper Notetaker — at yawn.ninochavez.com. The bundle identifier and
+Another Whisper Notetaker — delivered from `yawn-site.pages.dev`. The bundle identifier and
 the repository name both remain `local-meeting-notes`, so paths, signing
 identity, and doc filenames still carry the old name deliberately.
 

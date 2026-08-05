@@ -30,6 +30,17 @@ The first cohort download still supplies the waived transferred-build
 Gatekeeper field receipt — record it in `spike/encoder-packaging/RESULTS.md`
 when it arrives.
 
+**Publishing the page is a manual step, not a push.** The `yawn-site` Cloudflare
+Pages project has no git integration — verified against the Cloudflare API on
+2026-08-05, its `source` is null — so committing and pushing the delivery page
+publishes nothing. The 0.2.1 and 0.2.2 page updates were both pushed and never
+deployed for exactly this reason; the live page served 0.2.0-era copy until
+0.3.0. Run `npx wrangler pages deploy . --project-name=yawn-site --branch=main`
+from the site repo, then re-fetch with `Cache-Control: no-cache`, because the
+edge keeps serving the previous HTML for a while after a deploy. The project also
+has no custom domain: it is `yawn-site.pages.dev`, and `yawn.ninochavez.com`
+never resolved.
+
 Earlier record: a signed and notarized internal transcript-alpha DMG exists for
 commit `5fe9aecd4f53204dc6e82573fd4b4dde37efd6d1`. Its SHA-256 is
 `f5f091811d337acae4c7dc25db5638e2675e30552ed1793af1dc82c7c734385a`.

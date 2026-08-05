@@ -11,8 +11,17 @@ and confirmed the vein.
 
 What the name changes now:
 
-- The delivery site lives at `yawn.ninochavez.com` (Cloudflare Pages; the
-  DMG itself in R2 — Pages caps served files at 25 MB and the DMG is 1.7 GB).
+- The delivery site is the Cloudflare Pages project `yawn-site`, live at
+  **`https://yawn-site.pages.dev`** (the DMG itself in R2 — Pages caps served
+  files at 25 MB and the DMG is 1.7 GB).
+
+  **Corrected 2026-08-05.** This file previously said the site lives at
+  `yawn.ninochavez.com`. That hostname does not resolve, and neither does
+  `ninochavez.com`; the operator's domain is `ninochavez.co`. Verified against
+  the Cloudflare API, the project carries exactly one domain,
+  `yawn-site.pages.dev` — no custom domain is attached. Attaching
+  `yawn.ninochavez.co` is a real option and an unmade decision, not a thing that
+  already exists.
 - Site, copy, and hand-off materials use YAWN.
 
 What it deliberately does not change:
