@@ -143,6 +143,79 @@ class MlxNoteAdmissionTests(unittest.TestCase):
         self.assertEqual(result.note["schema"], "note/2")
         self.assertEqual(structured_artifact_citations(result.note, synthetic_transcript())["items"], 1)
 
+    def test_the_committed_constrained_receipts_evidence_the_repeatability_gate(self) -> None:
+        """The registered gate is three cold runs, and prose is not the artifact.
+
+        `MLX_NOTE_ADMISSION.md` claimed repeatability while one receipt was
+        committed, so a reader had to take the sentence on trust. All three are
+        committed now, and this checks them against each other rather than
+        restating the claim: everything but wall-clock timings and process RSS
+        must be identical, because those are the only values a repeat is allowed
+        to move.
+        """
+        directory = Path(__file__).resolve().parent
+        receipts = [
+            json.loads((directory / name).read_text())
+            for name in (
+                "mlx_note_constrained_probe_receipt.json",
+                "mlx_note_constrained_probe_receipt_run2.json",
+                "mlx_note_constrained_probe_receipt_run3.json",
+            )
+        ]
+
+        def invariant(receipt: dict) -> dict:
+            return {
+                "passed": receipt["passed"],
+                "decoding": receipt["decoding"],
+                "preflight_tree_sha256": receipt["preflight_tree_sha256"],
+                "postflight_tree_sha256": receipt["postflight_tree_sha256"],
+                "calls": [
+                    {
+                        key: call[key]
+                        for key in ("phase", "outcome", "code", "response_sha256", "response_bytes", "checks", "identity")
+                    }
+                    | {"generation": {k: v for k, v in call["generation"].items() if k != "call_elapsed_s"}}
+                    for call in receipt["calls"]
+                ],
+            }
+
+        first = invariant(receipts[0])
+        for index, receipt in enumerate(receipts[1:], start=2):
+            with self.subTest(run=index):
+                self.assertEqual(invariant(receipt), first)
+        self.assertTrue(first["passed"])
+        self.assertEqual(first["decoding"], "structure-constrained")
+        self.assertEqual(first["preflight_tree_sha256"], first["postflight_tree_sha256"])
+        # The mask that produced them is the one in the tree, so a later edit to
+        # the mask invalidates these receipts loudly instead of silently.
+        expected_decoder = _sha256((directory / "structured_decoding.py").read_bytes())
+        for call in first["calls"]:
+            self.assertEqual(call["identity"]["decoder"], expected_decoder)
+
+    def test_every_receipt_past_the_runtime_gate_names_the_decoder_that_produced_it(self) -> None:
+        """`_runtime_receipt` demands `decoder` and the receipt then dropped it.
+
+        Nothing failed, because the field was validated on the observed dict and
+        simply never copied out — so every committed receipt was silent about
+        which sampler ran, and for the masked arm that digest is the only thing
+        pinning *which* mask ran. Both the accepted and the refused path are
+        checked here: attribution matters most on a syntax refusal, where the
+        question is whether the model or the mask produced the bad string.
+        """
+        transcript = synthetic_transcript()
+        accepted = run_model_arm(transcript, accepted_provider)
+        self.assertEqual(accepted.outcome, "accepted-research-candidate")
+        self.assertEqual(accepted.receipt["identity"]["decoder"], "unconstrained")
+
+        def masked(request: dict) -> tuple[str, dict]:
+            observed = observed_identity(request)
+            observed["decoder"] = "d" * 64
+            return "{", observed
+
+        refused = run_model_arm(transcript, masked)
+        self.assertEqual(refused.outcome, "transcript-only")
+        self.assertEqual(refused.receipt["identity"]["decoder"], "d" * 64)
+
     def test_malformed_unknown_citation_timeout_and_digest_mismatch_are_transcript_only(self) -> None:
         transcript = synthetic_transcript()
         request_manifest = generate_manifest(transcript, STRATEGY_CUE)

@@ -249,7 +249,7 @@ is guarded against below.
 
 | Gate | Status under this amendment |
 | --- | --- |
-| Syntax and schema | **No longer discriminating for the model.** The mask makes malformed JSON and wrong field order unreachable by construction. It now measures the mask, not the candidate, and must not be reported as a model result. |
+| Syntax and schema | **No longer discriminating for the model.** The mask withholds every token that would leave the contract, so this gate now measures the mask, not the candidate, and must not be reported as a model result. Stated as written on 2026-08-05 — "unreachable by construction" — this was an overclaim: the mask as first committed also completed strings `json.loads` rejects. See the correction below. |
 | Locator / names / numbers / negation | **Fully discriminating and now reachable for the first time.** Values are unconstrained. |
 | Repeatability | Unchanged. Temperature 0.0 and seed 0; response SHA-256 must be identical across repeats. |
 | Latency | Reported, and expected to worsen: the mask runs in Python on every step. A latency failure here is not a candidate rejection under this amendment. |
@@ -260,9 +260,9 @@ is guarded against below.
 
 A masker that is subtly wrong produces a confident, meaningless run. So the
 finite-state mask is exercised against a synthetic vocabulary first — asserting
-which continuations survive at each position, that the only reachable strings
-are contract-shaped, and that both a populated response and the exact
-abstention are reachable. Only then is the pinned revision fetched, and its
+which continuations survive at each position, and that both a populated
+response and the exact abstention are reachable. Only then is the pinned
+revision fetched, and its
 `model.safetensors` SHA-256 must equal
 `0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717` against a
 full inventory of 880,172,064 bytes. A mismatch is transcript-only and the run
@@ -332,7 +332,15 @@ process RSS 1,180,614,656 bytes against the 4,282,063,304-byte envelope; the
 model tree digest `3aaeeac4…` was identical before and after.
 
 **Repeatability held.** Three consecutive cold runs produced identical response
-digests on both fixtures and identical receipts once timings are excluded.
+digests on both fixtures and identical receipts once timings are excluded. All
+three are committed — `mlx_note_constrained_probe_receipt.json` and its
+`_run2` / `_run3` siblings — and
+`test_the_committed_constrained_receipts_evidence_the_repeatability_gate`
+compares them against each other, so the gate rests on artifacts rather than on
+this sentence. Only `call_elapsed_s`, `elapsed_s` and `peak_rss` differ. The
+receipts were regenerated after the trailing-comma correction below; the
+response digests are unchanged by it, and the `decoder` digest they carry pins
+the corrected mask.
 
 #### What this answers
 
@@ -389,6 +397,52 @@ token sat above `vocab_size` and so was never admitted, leaving a *correct*
 response unable to terminate and padding whitespace to the 512-token cap; and
 the decoder rendered that stop token into the text it walked, so a completed
 response was rejected for leaving a contract it had just satisfied.
+
+#### Correction — the mask admitted invalid JSON, and the guarantee was overstated
+
+Found in review of `621e89c`, after the result above had already been reported.
+
+`("item_end", n)` on a comma returned `("items", n)`, which accepted `]`
+unconditionally, so `{"items":[{…},]}` walked to a complete response. The
+fragment-ID list had the same shape, so `["f1",]` did too. Both are invalid
+JSON. `_strict_json` calls `json.loads`, which rejects a trailing comma and
+raises `response-json-syntax` — the exact refusal class the mask exists to
+remove, and the class the 2026-08-02 probe attributed to the model.
+
+The scale was larger than the two example strings suggest. Enumerating the whole
+accepted language at a reduced ceiling (one item, two fragment IDs) gives **385
+completed strings under the shipped mask, 288 of them invalid JSON.** Under the
+corrected mask: 97 strings, none invalid.
+
+**What survives.** The measured result. The response parsed, all four mechanical
+checks passed, three cold runs agreed, and re-running against the corrected mask
+reproduces both digests byte-for-byte — the hole was permissiveness the model
+never exercised, and it could not have been, because no visited state's allowed
+set changed.
+
+**What does not.** The guarantee. The honest claim is *shape was not violated in
+these runs, and after this correction cannot be* — not "unreachable by
+construction", which is what was written while it was untrue.
+
+**Why the existing tests missed it.** Every case in
+`test_structured_decoding.py` passed against the broken mask. A case list tests
+the strings someone thought of. Two properties are now walked instead:
+
+- **Soundness** — enumerate every string the machine completes at a reduced
+  ceiling and `json.loads` each one, asserting the root and the field order.
+  This is the check that fails on the shipped mask.
+- **Non-blocking** — every reachable state can still reach a complete response.
+  This is *blind* to a trailing comma, because the offending state does reach
+  the end; that is the bug. It catches the opposite failure, and it caught one
+  introduced by the fix itself: removing `]` from `("ids", …)` stranded
+  `("ids", n, MAX_FRAGMENT_IDS)`, where a model that had emitted the maximum
+  number of IDs and then taken a comma could sample nothing at all. Both list
+  ceilings now guard the comma.
+
+A third defect in the same review: `_runtime_receipt` made `decoder` mandatory
+and the receipt then dropped it, so no committed receipt named which sampler
+produced it. For the masked arm that digest is the only pin on *which* mask ran,
+and the mask has now been revised twice.
 
 ## 2026-08-02 SmolLM2 measurement — inconclusive
 

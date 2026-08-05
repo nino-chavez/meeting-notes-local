@@ -10,6 +10,7 @@ and everything the contract permits is still reachable.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 import unittest
@@ -17,13 +18,47 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import structured_decoding
 from structured_decoding import (
     ITEM_FIELDS,
     START,
     ContractMachine,
     MaskRefused,
     allowed_token_ids,
+    step,
 )
+
+# Every character that can advance the skeleton. Literal and free-text states
+# are handled separately by `_outgoing`, so this list only has to cover the
+# junctions where the machine actually branches.
+STRUCTURAL_CHARS = ("{", "}", "[", "]", ",", '"', ":")
+
+
+def _outgoing(state: tuple) -> tuple:
+    """The characters worth trying from `state`.
+
+    A literal state admits exactly one character, and a free-text state admits
+    one representative body character plus the closing quote. Enumerating the
+    full alphabet at those positions would only multiply identical structure —
+    the branches that matter are all structural.
+    """
+    if state[0] == "lit":
+        return (state[1][state[2]],)
+    if state[0] == "free":
+        return ("x", '"')
+    return STRUCTURAL_CHARS
+
+
+@contextlib.contextmanager
+def bounded(items: int, ids: int):
+    """Shrink the ceilings so the language can be enumerated exhaustively."""
+    before = (structured_decoding.MAX_ITEMS, structured_decoding.MAX_FRAGMENT_IDS)
+    structured_decoding.MAX_ITEMS = items
+    structured_decoding.MAX_FRAGMENT_IDS = ids
+    try:
+        yield
+    finally:
+        structured_decoding.MAX_ITEMS, structured_decoding.MAX_FRAGMENT_IDS = before
 
 POPULATED = (
     '{"items":[{"candidate_id":"c1","source_fragment_ids":["f1","f2"],'
@@ -41,7 +76,10 @@ class ContractLanguageTests(unittest.TestCase):
         for text in (POPULATED, ABSTENTION):
             with self.subTest(text=text[:40]):
                 self.assertTrue(self.machine.complete(text))
-                self.assertEqual(json.loads(text)["items"], json.loads(text)["items"])
+                parsed = json.loads(text)
+                self.assertEqual(list(parsed), ["items"])
+                for row in parsed["items"]:
+                    self.assertEqual(tuple(row), ITEM_FIELDS)
 
     def test_every_prefix_of_a_valid_response_stays_viable(self) -> None:
         """The property the mask depends on. If any prefix were rejected the
@@ -118,6 +156,24 @@ class ContractLanguageTests(unittest.TestCase):
         )
         self.assertFalse(self.machine.viable(empty))
 
+    def test_a_trailing_comma_cannot_be_reached_in_either_list(self) -> None:
+        """The hole a review found after the probe had already been reported.
+
+        Both strings walked to a complete response and both are invalid JSON, so
+        `_strict_json` would raise `response-json-syntax` — the very refusal
+        class the mask exists to make unreachable, and the class the earlier
+        unconstrained probe attributed to the model. Had the model taken the
+        comma after an item and then hit `]` on the argmax, the run would have
+        recorded a syntax refusal that could no longer be attributed between
+        model and mask, which is the one distinction the experiment rests on.
+        """
+        after_item = POPULATED[:-2] + ",]}"
+        in_id_list = POPULATED.replace('["f1","f2"]', '["f1","f2",]')
+        for text in (after_item, in_id_list):
+            with self.subTest(text=text[-24:]):
+                self.assertRaises(json.JSONDecodeError, json.loads, text)
+                self.assertFalse(self.machine.viable(text))
+
     def test_the_fragment_id_ceiling_holds(self) -> None:
         ids = ",".join(f'"f{n}"' for n in range(1, 5))
         over = (
@@ -144,6 +200,122 @@ class ContractLanguageTests(unittest.TestCase):
             '"label":"NOT-A-LABEL","claim":"anything at all"}]}'
         )
         self.assertTrue(self.machine.complete(wrong))
+
+
+class StructuralPropertyTests(unittest.TestCase):
+    """Two properties of the state graph, walked rather than case-listed.
+
+    These exist because of what the hand-written cases above missed. Every one
+    of them passed while `{"items":[{…},]}` walked cleanly to a complete
+    response that `json.loads` rejects. A case list only tests the strings
+    somebody thought of; a mask has to hold for the ones nobody did.
+
+    The properties are independent and both are needed:
+
+    * **Soundness** — everything the machine completes is valid JSON in the
+      contract's shape. This is what catches a trailing comma, and the walk
+      below is the check that would have failed on the shipped code.
+    * **Non-blocking** — every reachable state can still reach a complete
+      response. Co-reachability is *blind* to the trailing-comma hole, because
+      the offending state does reach `("done",)` — that is the bug. What it
+      catches is the opposite failure: a state the model can enter and never
+      leave, which surfaces as `MaskRefused` on a run doing nothing wrong.
+    """
+
+    def setUp(self) -> None:
+        self.machine = ContractMachine()
+
+    def completed_strings(self, max_length: int = 400) -> list[str]:
+        """Every string reachable from START that lands on ("done",)."""
+        completed: list[str] = []
+        stack = [("", START, False)]
+        while stack:
+            text, state, looped = stack.pop()
+            if state == ("done",):
+                completed.append(text)
+                continue
+            self.assertLessEqual(len(text), max_length, "the walk did not terminate")
+            for character in _outgoing(state):
+                following = step(state, character)
+                if following is None:
+                    continue
+                # A free-text state loops on its body character; one is enough
+                # to cover the hole, and more would only multiply the language.
+                repeat = following == state
+                if repeat and looped:
+                    continue
+                stack.append((text + character, following, repeat))
+        return completed
+
+    def test_everything_the_machine_completes_is_valid_json_in_contract_shape(self) -> None:
+        with bounded(items=2, ids=2):
+            completed = self.completed_strings()
+        # Guards the walk itself: a machine that completed nothing would pass a
+        # bare for-loop over an empty list without asserting anything at all.
+        self.assertGreater(len(completed), 100)
+        self.assertIn(ABSTENTION, completed)
+        for text in completed:
+            with self.subTest(text=text[:60]):
+                parsed = json.loads(text)
+                self.assertEqual(list(parsed), ["items"])
+                self.assertLessEqual(len(parsed["items"]), 2)
+                for row in parsed["items"]:
+                    self.assertEqual(tuple(row), ITEM_FIELDS)
+                    self.assertTrue(1 <= len(row["source_fragment_ids"]) <= 2)
+
+    def transitions(self) -> dict[tuple, set[tuple]]:
+        edges: dict[tuple, set[tuple]] = {}
+        stack = [START]
+        seen = {START}
+        while stack:
+            state = stack.pop()
+            following = set()
+            for character in _outgoing(state):
+                nxt = step(state, character)
+                if nxt is None:
+                    continue
+                following.add(nxt)
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+            edges[state] = following
+        return edges
+
+    def test_no_reachable_state_can_strand_the_model(self) -> None:
+        """Run at the real ceilings, which is where the dead ends live."""
+        edges = self.transitions()
+        live = {("done",)}
+        changed = True
+        while changed:
+            changed = False
+            for state, following in edges.items():
+                if state not in live and following & live:
+                    live.add(state)
+                    changed = True
+        stranded = sorted(set(edges) - live, key=repr)
+        self.assertEqual(
+            stranded,
+            [],
+            "these states can be entered and never completed, so the mask would "
+            f"raise MaskRefused mid-response: {stranded[:4]}",
+        )
+
+    def test_the_ceilings_are_reachable_and_are_where_the_language_stops(self) -> None:
+        """The ceiling guards must bind at the ceiling, not before it."""
+        item = (
+            '{"candidate_id":"c","source_fragment_ids":["a","b","c"],'
+            '"citation":"x","label":"y","claim":"z"}'
+        )
+        full = '{"items":[' + ",".join([item] * structured_decoding.MAX_ITEMS) + "]}"
+        self.assertTrue(self.machine.complete(full))
+        self.assertEqual(len(json.loads(full)["items"]), structured_decoding.MAX_ITEMS)
+        # One past each ceiling is refused rather than stranded.
+        self.assertFalse(
+            self.machine.viable('{"items":[' + ",".join([item] * (structured_decoding.MAX_ITEMS + 1)))
+        )
+        self.assertFalse(
+            self.machine.viable('{"items":[{"candidate_id":"c","source_fragment_ids":["a","b","c",')
+        )
 
 
 class MaskTests(unittest.TestCase):

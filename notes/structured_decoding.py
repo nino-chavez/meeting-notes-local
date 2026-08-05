@@ -3,7 +3,14 @@
 Registered by `MLX_NOTE_ADMISSION.md` § "Preregistered amendment — 2026-08-05".
 It exists to remove one confound and no more: both prior model failures were
 response *shape*, so neither said anything about whether the model understood
-the transcript. This makes shape unreachable and leaves every value free.
+the transcript. This withholds every token that would leave the contract, and
+leaves every value free.
+
+The first version of this file did not hold that line — it completed strings
+`json.loads` rejects, a trailing comma in either list, which is the very refusal
+class it exists to remove. `test_structured_decoding.py` now walks the whole
+accepted language and parses each string rather than testing a list of cases, so
+the claim in the paragraph above is checked rather than asserted.
 
 **What it constrains:** JSON syntax, the single root field `items`, the five
 item field names in the registered order, and the exact abstention
@@ -58,10 +65,11 @@ MAX_FRAGMENT_IDS = 3
 #   ("pre",)                     before the object; whitespace or "{"
 #   ("lit", text, index, cont)   inside a fixed literal, resuming at `cont`
 #   ("free", cont)               inside a JSON string body, resuming at `cont`
-#   ("items", n)                 after "[" or ",": abstain/close, or open item n
+#   ("items", n)                 an item must open here; at n == 0 the list may
+#                                instead close, which is the abstention
 #   ("field", n, i)              at the start of item n's field i
-#   ("ids", n, count)            in the fragment-ID list, `count` already taken
-#   ("id_more", n, count)        after an ID: another, or close the list
+#   ("ids", n, count)            an ID must open here; `count` already taken
+#   ("id_more", n, count)        after an ID: a comma, or close the list
 #   ("item_end", n)              after an item's "}": another item, or close
 #   ("done",)                    the object is closed; whitespace only
 START = ("pre",)
@@ -108,7 +116,13 @@ def step(state: tuple, character: str) -> tuple | None:
 
     if kind == "items":
         _, taken = state
-        if character == "]":
+        # `]` closes only from the opening position, where it spells the
+        # registered abstention `{"items":[]}`. A comma re-enters this state with
+        # `taken > 0`, and accepting `]` there would admit `[{…},]` — invalid
+        # JSON, and precisely the `response-json-syntax` refusal this mask exists
+        # to make unreachable. The legitimate close after an item runs through
+        # ("item_end", n).
+        if character == "]" and taken == 0:
             return _literal("}", ("done",))
         if character == "{" and taken < MAX_ITEMS:
             # The brace is consumed here, so the item resumes at its first
@@ -118,15 +132,20 @@ def step(state: tuple, character: str) -> tuple | None:
 
     if kind == "ids":
         _, item, count = state
-        if character == "]" and count:
-            return _field_state(item, ITEM_FIELDS.index("source_fragment_ids") + 1)
+        # No `]` at all: this state is the position where an ID *must* appear,
+        # whether it is the first or one following a comma. The list closes from
+        # ("id_more", …), so both `[]` and `["f1",]` are unreachable.
         if character == '"' and count < MAX_FRAGMENT_IDS:
             return ("free", ("id_more", item, count + 1))
         return None
 
     if kind == "id_more":
         _, item, count = state
-        if character == ",":
+        # Guarded so a comma never leads somewhere with no continuation. At the
+        # ceiling, ("ids", item, MAX_FRAGMENT_IDS) can take neither a quote nor
+        # — since the branch above — a bracket, and the model would hit
+        # `MaskRefused` mid-response having done nothing wrong.
+        if character == "," and count < MAX_FRAGMENT_IDS:
             return ("ids", item, count)
         if character == "]":
             return _field_state(item, ITEM_FIELDS.index("source_fragment_ids") + 1)
@@ -134,7 +153,9 @@ def step(state: tuple, character: str) -> tuple | None:
 
     if kind == "item_end":
         _, item = state
-        if character == ",":
+        # Same guard, same reason: at MAX_ITEMS the comma would reach an
+        # ("items", MAX_ITEMS) that can open no item and can no longer close.
+        if character == "," and item < MAX_ITEMS:
             return ("items", item)
         if character == "]":
             return _literal("}", ("done",))
@@ -153,12 +174,16 @@ class MaskRefused(ValueError):
 class ContractMachine:
     """Which continuations of the emitted text can still reach a valid response.
 
-    The response language is small enough to walk directly:
+    The response language is small enough to walk directly, and the machine must
+    accept exactly this and nothing else — a trailing comma in either list is
+    valid here and invalid to `json.loads`, so it is written out rather than
+    left implied:
 
         {"items":[]}
-        {"items":[<item>(,<item>)*]}
-        <item> = {"candidate_id":"<free>","source_fragment_ids":[<free-list>],
+        {"items":[<item>(,<item>){0,7}]}
+        <item> = {"candidate_id":"<free>","source_fragment_ids":[<ids>],
                   "citation":"<free>","label":"<free>","claim":"<free>"}
+        <ids>  = "<free>"(,"<free>"){0,2}
     """
 
     def state_after(self, text: str, state: tuple = START) -> tuple | None:

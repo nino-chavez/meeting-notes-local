@@ -595,6 +595,12 @@ def run_model_arm(
             "request_sha256": observed["request_sha256"],
             "rendered_template_sha256": observed["rendered_template_sha256"],
             "runtime_identity": observed["runtime_identity"],
+            # `_runtime_receipt` makes this mandatory and then it was dropped
+            # here, so no receipt ever carried it. For the constrained arm it is
+            # the sha256 of `structured_decoding.py` — the only thing pinning
+            # *which* mask ran, and the mask has already been revised once. The
+            # top-level "decoding" key is the argparse flag, not an observation.
+            "decoder": observed["decoder"],
             "harness": runtime["harness"],
         }
         if observed["generation"].get("finish_reason") == "length":
