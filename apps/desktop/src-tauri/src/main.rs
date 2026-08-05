@@ -1440,7 +1440,10 @@ fn tray_presentation(
 ) -> (&'static str, &'static str) {
     match startup {
         StartupState::Ready => match capture {
-            CaptureState::Recording | CaptureState::Stopping | CaptureState::Captured => {
+            // Captured sits after Stopping: the take is committed and
+            // nothing is recording, so the filled glyph would be the exact
+            // inversion § A forbids. It renders as processing instead.
+            CaptureState::Recording | CaptureState::Stopping => {
                 if degraded {
                     ("●!", "Recording — one audio channel needs attention")
                 } else {
@@ -1448,12 +1451,15 @@ fn tray_presentation(
                 }
             }
             CaptureState::Arming => ("○", "Preparing to record. Nothing is recording yet"),
-            CaptureState::Transcribing | CaptureState::Summarizing => {
+            CaptureState::Captured | CaptureState::Transcribing | CaptureState::Summarizing => {
                 ("◐", "Transcribing the finished recording")
             }
-            CaptureState::TranscriptionFailed | CaptureState::RecoveredInterrupted => {
-                ("×", "The last recording needs attention")
-            }
+            // SummaryFailed persists until the operator acts — its only exit
+            // is an explicit retry — so it must carry the error mark, not
+            // the all-clear glyph.
+            CaptureState::TranscriptionFailed
+            | CaptureState::SummaryFailed
+            | CaptureState::RecoveredInterrupted => ("×", "The last recording needs attention"),
             _ => ("○", "Nothing is recording"),
         },
         StartupState::ShellRendered | StartupState::Checking | StartupState::Retrying => {
@@ -2808,9 +2814,20 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window(ACTIVE_WINDOW_LABEL) {
+                let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
+        // § A: the menubar item is the primary UI and must survive the most
+        // ordinary window action. Closing the window hides it instead of
+        // destroying it — a destroyed last window exits the process and
+        // takes the tray with it. Quit (⌘Q) still exits honestly.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .manage(state)
         .manage(product_operations)
         .invoke_handler(tauri::generate_handler![
@@ -5174,8 +5191,21 @@ mod tests {
             tray_presentation(Ready, CaptureState::Transcribing, false).0,
             "◐"
         );
+        // Captured is after Stopping: committed, not recording. The filled
+        // glyph there would be the exact inversion § A forbids.
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::Captured, false).0,
+            "◐"
+        );
         assert_eq!(
             tray_presentation(Ready, CaptureState::TranscriptionFailed, false).0,
+            "×"
+        );
+        // SummaryFailed persists until an explicit retry; an idle glyph
+        // would hide a standing failure in exactly the menubar-only
+        // sessions § A exists for.
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::SummaryFailed, false).0,
             "×"
         );
         assert_eq!(
