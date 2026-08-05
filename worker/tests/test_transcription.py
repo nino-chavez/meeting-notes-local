@@ -339,5 +339,201 @@ class InstalledVoiceprintGateTests(unittest.TestCase):
             )
 
 
+class RealProfileGateTests(unittest.TestCase):
+    """The gate closure, run for real, with a real profile file.
+
+    Everything else in this file injects a fake gate or stops at a refusal, so
+    the closure `_installed_voiceprint_gate` returns — `Voiceprint`,
+    `drop_offprint`, `voiceprint_provenance` — had no coverage whatever. Its
+    first execution would otherwise have been on a cohort machine, after a real
+    meeting, on audio that cannot be recaptured.
+
+    The profile here is genuine: built by `enroll`, written by the canonical
+    `save_profile`, and read back by the canonical `load_profile` with the
+    fingerprint binding live. Only the ONNX session is substituted, because no
+    development machine packages onnxruntime and the 20 MB encoder.
+    """
+
+    def setUp(self) -> None:
+        import numpy as np
+        import speaker_gate as sg
+
+        self.sg = sg
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        os.chmod(self.root, 0o700)
+
+        rng = np.random.default_rng(11)
+        directions = sg._speaker_directions(rng, 3)
+        self.embed = sg._fixture_encoder(directions, within=0.05)
+
+        # Speaker 0 is the operator. Twenty-four enrolment segments over two
+        # sittings, which is what save_profile's own contract requires.
+        audio, segments = sg._fixture_audio(
+            sg._spans(12, 0, 1.0) + sg._spans(12, 0, 70.0), rng
+        )
+        embeddings = sg.embed_segments(audio, segments, self.embed)
+        durations = [s["end"] - s["start"] for s in segments]
+        profile = sg.enroll(embeddings, durations)
+
+        # A stand-in for the packaged encoder artifact. Its digest is the
+        # manifest digest AND the profile's recorded fingerprint, so both
+        # bindings the adapter checks are real.
+        self.encoder_path = self.root / "encoder.onnx"
+        descriptor = os.open(
+            self.encoder_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(b"packaged encoder stand-in")
+        self.encoder_digest = adapters.sha256(self.encoder_path)
+
+        directory = self.root / "profile"
+        directory.mkdir(mode=0o700)
+        sg.save_profile(
+            directory / "voiceprint.json",
+            profile,
+            selected_target=0.05,
+            operator_scores=np.linspace(0.60, 0.90, 100).tolist(),
+            negative_scores=np.linspace(0.20, 0.50, 20).tolist(),
+            held_out="leave-one-sitting-out",
+            sittings=[
+                {"audio": "a.wav", "audio_sha256": "a" * 64,
+                 "captured_at": "2026-07-20T09:00:00+0000"},
+                {"audio": "b.wav", "audio_sha256": "b" * 64,
+                 "captured_at": "2026-07-22T14:00:00+0000"},
+            ],
+            negative_sources=[{
+                "source_class": "public-or-licensed",
+                "audio": "negative.wav",
+                "segments": "negative-segments.json",
+                "audio_sha256": "c" * 64,
+                "audio_samples": 1_280_000,
+                "segments_sha256": "d" * 64,
+                "segments_schema": "mic-segments/1",
+                "captured_at": "2026-07-22T15:00:00+0000",
+                "scorable_segments": 20,
+                "scorable_seconds": 80.0,
+            }],
+            encoder_fingerprint_value=self.encoder_digest,
+        )
+        os.chmod(directory / "voiceprint.json", 0o600)
+
+        # One turn from the operator, one from somebody else beside the
+        # microphone — the case the gate exists for, and the one drop_unvoiced
+        # and drop_bled are both blind to.
+        self.audio, self.segments = sg._fixture_audio(
+            [(1.0, 5.0, 0), (7.0, 11.0, 1)], rng
+        )
+        self.segments[0]["text"] = "the operator speaking"
+        self.segments[1]["text"] = "somebody at the next desk"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def build_gate(self):
+        gate = adapters._installed_voiceprint_gate(
+            self.root,
+            self.encoder_digest,
+            self.encoder_path,
+            embedder=self.embed,
+        )
+        self.assertIsNotNone(gate)
+        return gate
+
+    def test_the_other_voice_is_marked_and_the_operator_is_not(self) -> None:
+        marked, gating = self.build_gate()(
+            self.segments, self.audio, None, "mic"
+        )
+        self.assertEqual(
+            [(segment.get("gated"), segment["text"]) for segment in marked],
+            [(None, "the operator speaking"), (True, "somebody at the next desk")],
+        )
+        rejected = marked[1]
+        self.assertIsInstance(rejected["gate_score"], float)
+        self.assertTrue(rejected["gate_reason"])
+        self.assertTrue(gating["applied"])
+        self.assertEqual(gating["rejected"], 1)
+        self.assertEqual(gating["n_sittings"], 2)
+        self.assertEqual(gating["encoder_fingerprint"], self.encoder_digest)
+        self.assertIsInstance(gating["threshold"], float)
+
+    def test_high_bleed_skips_the_gate_and_says_so(self) -> None:
+        # Where the far end is coming back through the room the labels are
+        # already gone and the gate is measured to reject the operator too.
+        # Skipping is the measured choice; recording that it skipped is the
+        # part the artifact needs.
+        contaminated = {"peak_r": 0.99, "positive_r": 0.99, "analysed_s": 60.0}
+        marked, gating = self.build_gate()(
+            self.segments, self.audio, contaminated, "mic"
+        )
+        self.assertTrue(all("gated" not in segment for segment in marked))
+        self.assertFalse(gating["applied"])
+        self.assertEqual(gating["why"], "bleed above the attribution cut")
+
+    def test_the_whole_chain_writes_a_gated_artifact(self) -> None:
+        from transcript import load
+
+        capture = self.root / "capture"
+        capture.mkdir(mode=0o700)
+        write_wav(capture / "mic.wav", 500)
+        write_wav(capture / "system.wav", 900)
+        finalize_session(
+            capture,
+            "2000-01-01T00:00:00+0000",
+            build_capture_health(
+                mic_samples=3_200,
+                system_samples=3_200,
+                capture_elapsed_samples=3_200,
+                dropouts={"mic": [], "system": []},
+                tap_errors=[],
+                transcription_requested=False,
+                transcript_written=False,
+            ),
+        )
+        model = self.root / "model"
+        model.mkdir(mode=0o700)
+        for name in ("config.json", "weights.safetensors"):
+            descriptor = os.open(
+                model / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+            )
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(b"fixture")
+
+        # The capture WAVs are constant tones; the gate needs the fixture audio
+        # whose amplitude encodes the speaker, so the transcriber hands back the
+        # fixture segments and the gate scores against the fixture leg.
+        gate = self.build_gate()
+        fixture_audio = self.audio
+
+        def transcribe(audio, _model, _language):
+            if float(audio[0]) < 0.02:
+                return [dict(segment) for segment in self.segments]
+            return [{"start": 6.0, "end": 9.0, "text": "the far end"}]
+
+        _, path = create_transcript_revision(
+            capture,
+            self.root / "transcript",
+            model,
+            transcribe_audio=transcribe,
+            voicing_filter=lambda segments, *_rest: segments,
+            bleed_filter=lambda segments, *_rest: segments,
+            gate_filter=lambda segments, _mic, acoustic, label: gate(
+                segments, fixture_audio, acoustic, label
+            ),
+        )
+
+        document = load(path)
+        self.assertEqual(
+            [turn.text for turn in document.turns],
+            ["the operator speaking", "the far end"],
+        )
+        self.assertEqual(
+            [turn.text for turn in document.gated_turns],
+            ["somebody at the next desk"],
+        )
+        self.assertTrue(document.gate["applied"])
+        self.assertEqual(document.gate["encoder"], self.sg.ECAPA_SOURCE)
+
+
 if __name__ == "__main__":
     unittest.main()

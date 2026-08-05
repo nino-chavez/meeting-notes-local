@@ -539,7 +539,7 @@ def _onnx_sitting_embedder(encoder_path: Path):
 
 
 def _installed_voiceprint_gate(
-    root: Path, encoder_digest: str, encoder_path: Path | None
+    root: Path, encoder_digest: str, encoder_path: Path | None, *, embedder=None
 ):
     """The operator's voice gate for this transcript, or nothing to apply.
 
@@ -571,6 +571,16 @@ def _installed_voiceprint_gate(
     sentinel. Testing existence instead refuses transcription for every operator
     who has never enrolled — the whole product, on a fresh install, on both
     lanes. That is what the first version of this function did.
+
+    `embedder` replaces only the ONNX session, and only for tests. Every other
+    check — the encoder file, its digest against the manifest, and the profile's
+    fingerprint against that same digest — stays live, so the substituted
+    embedder does not weaken what this function refuses. It exists because the
+    real one needs onnxruntime and a 20 MB model that no development machine
+    packages, and `drop_offprint` already carries the argument for exactly this:
+    a test that needs the real model is a test that stops being run. Without it
+    the closure below has no coverage at all, and it would first execute on a
+    cohort machine after a real meeting.
     """
     try:
         installed = resolve_below(root, "profile", "voiceprint.json")
@@ -587,7 +597,7 @@ def _installed_voiceprint_gate(
         raise AdapterRefused("runtime has no admitted speaker encoder")
     if sha256(encoder_path) != encoder_digest:
         raise AdapterRefused("packaged encoder disagrees with its manifest")
-    embed = _onnx_sitting_embedder(encoder_path)
+    embed = embedder if embedder is not None else _onnx_sitting_embedder(encoder_path)
 
     from speaker_gate import load_profile
 

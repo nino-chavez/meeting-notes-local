@@ -146,6 +146,28 @@ below was already written against `gated` and had never had an input:
 `worker/tests/test_transcription.py` now writes a real gated transcript and
 asserts the on-disk shape all four of those read.
 
+## What is actually exercised, and what is not
+
+`RealProfileGateTests` runs the gate for real: a profile built by `enroll`,
+written by the canonical `save_profile`, read back by `load_profile` with the
+fingerprint binding live, then scored over fixture audio in which one turn is
+the operator and one is somebody at the next desk. It rejects the second at 0.24
+against a threshold of 0.615, and rejects nothing when both turns are the
+operator. The bleed skip and the whole-chain artifact are covered too.
+
+Only the ONNX session is substituted, through an `embedder` argument that
+replaces nothing else — the encoder file, its digest against the manifest, and
+the profile's fingerprint against that digest all stay live. Before it existed
+the closure had no coverage whatever, and its first execution would have been on
+a cohort machine after a real meeting.
+
+Still unexercised, and worth stating rather than discovering: **the real
+onnxruntime path**. `_onnx_sitting_embedder` and `fbank_features` are proven by
+`sitting.derive`'s own admission evidence, not by anything here, and the two
+consumers pass segments of different provenance. The first meeting transcribed
+on an encoder-carrying build with a profile installed is the first time this
+exact composition runs.
+
 ## What would change this
 
 - **If the measured operating points do not transfer** from leave-one-sitting-out
