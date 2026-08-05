@@ -1426,6 +1426,79 @@ fn dismiss_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
     Ok(model.snapshot())
 }
 
+/// § A menubar presentation: one glyph and one sentence per state, from the
+/// same reducer facts the window renders. The load-bearing rule is that
+/// `recording` and `degraded` are distinguishable at a glance — the filled
+/// glyph gains a persistent mark, never a silent "recording". `detected`
+/// and `armed` belong to the future microphone-use detection path and stay
+/// dormant; the accent-colored designed glyph waits on a template icon, so
+/// the internal alpha renders text glyphs.
+fn tray_presentation(
+    startup: StartupState,
+    capture: CaptureState,
+    degraded: bool,
+) -> (&'static str, &'static str) {
+    match startup {
+        StartupState::Ready => match capture {
+            CaptureState::Recording | CaptureState::Stopping | CaptureState::Captured => {
+                if degraded {
+                    ("●!", "Recording — one audio channel needs attention")
+                } else {
+                    ("●", "Recording")
+                }
+            }
+            CaptureState::Arming => ("○", "Preparing to record. Nothing is recording yet"),
+            CaptureState::Transcribing | CaptureState::Summarizing => {
+                ("◐", "Transcribing the finished recording")
+            }
+            CaptureState::TranscriptionFailed | CaptureState::RecoveredInterrupted => {
+                ("×", "The last recording needs attention")
+            }
+            _ => ("○", "Nothing is recording"),
+        },
+        StartupState::ShellRendered | StartupState::Checking | StartupState::Retrying => {
+            ("○", "Checking the local runtime. Nothing is recording")
+        }
+        _ => ("×", "The app needs attention. Nothing is recording"),
+    }
+}
+
+/// Keeps the always-present menubar item current from the reducer. A 1 s
+/// poll over the model is deliberate: every state change already lands in
+/// the model under its lock, and the menubar only needs to follow it, not
+/// participate in it. AppKit updates run on the main thread.
+fn spawn_tray_updater(app: AppHandle, tray: tauri::tray::TrayIcon) {
+    let _ = std::thread::Builder::new()
+        .name("menubar-state".into())
+        .spawn(move || {
+            let mut last: Option<(&'static str, &'static str)> = None;
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let state = app.state::<ApplicationState>();
+                let presentation = {
+                    let Ok(model) = state.model.lock() else {
+                        continue;
+                    };
+                    tray_presentation(
+                        model.reducer.startup(),
+                        model.reducer.capture(),
+                        model.degraded,
+                    )
+                };
+                if last == Some(presentation) {
+                    continue;
+                }
+                last = Some(presentation);
+                let tray = tray.clone();
+                let _ = app.run_on_main_thread(move || {
+                    let (glyph, words) = presentation;
+                    let _ = tray.set_title(Some(glyph));
+                    let _ = tray.set_tooltip(Some(words));
+                });
+            }
+        });
+}
+
 fn prepare_startup_retry(model: &mut AppModel) -> Result<(), String> {
     transition_startup(model, StartupState::Retrying)?;
     if model.reducer.capture() == CaptureState::Idle {
@@ -2763,6 +2836,31 @@ fn main() {
             product_facade::restore_withheld_turn
         ])
         .setup(|app| {
+            // § A: the menubar item is always present — most sessions never
+            // open a window. Built before the startup thread so the first
+            // rendered state is the honest hollow glyph, never a gap.
+            let open = tauri::menu::MenuItem::with_id(
+                app,
+                "open-window",
+                "Open Local Meeting Notes",
+                true,
+                None::<&str>,
+            )?;
+            let menu = tauri::menu::MenuBuilder::new(app).item(&open).build()?;
+            let tray = tauri::tray::TrayIconBuilder::with_id("menubar-item")
+                .title("○")
+                .tooltip("Nothing is recording")
+                .menu(&menu)
+                .on_menu_event(|app, event| {
+                    if event.id() == "open-window" {
+                        if let Some(window) = app.get_webview_window(ACTIVE_WINDOW_LABEL) {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+            spawn_tray_updater(app.handle().clone(), tray);
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("meeting-runtime-startup".into())
@@ -5047,6 +5145,59 @@ mod tests {
             surface.recording_unavailable_reason,
             Some(RECORDER_REASON_STATUS_UNAVAILABLE)
         );
+    }
+
+    /// § A's load-bearing rule: recording and degraded are distinguishable
+    /// at a glance — the filled glyph gains a persistent mark — and the
+    /// filled glyph appears only while capture is actually live. Failure
+    /// states never render the live glyph.
+    #[test]
+    fn tray_states_never_read_as_silently_recording() {
+        use StartupState::*;
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::Idle, false).0,
+            "○"
+        );
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::Recording, false).0,
+            "●"
+        );
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::Recording, true).0,
+            "●!"
+        );
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::Stopping, true).0,
+            "●!"
+        );
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::Transcribing, false).0,
+            "◐"
+        );
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::TranscriptionFailed, false).0,
+            "×"
+        );
+        assert_eq!(
+            tray_presentation(Ready, CaptureState::RecoveredInterrupted, false).0,
+            "×"
+        );
+        assert_eq!(tray_presentation(Checking, CaptureState::Idle, false).0, "○");
+        assert_eq!(
+            tray_presentation(RuntimeMissing, CaptureState::Idle, false).0,
+            "×"
+        );
+        // Arming is consent preparation, not capture: the glyph stays
+        // hollow and the words say nothing is recording yet.
+        let (glyph, words) = tray_presentation(Ready, CaptureState::Arming, false);
+        assert_eq!(glyph, "○");
+        assert!(words.contains("Nothing is recording yet"));
+        // Every non-live state says outright that nothing is recording, or
+        // names the attention it needs.
+        for capture in [CaptureState::Idle, CaptureState::TranscriptReady] {
+            let (glyph, _) = tray_presentation(Ready, capture, false);
+            assert_eq!(glyph, "○");
+        }
     }
 
     /// The verified manifest carrying the admitted encoder is what opens the

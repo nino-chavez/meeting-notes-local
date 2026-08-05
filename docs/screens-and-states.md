@@ -164,6 +164,15 @@ Always present. The primary UI — most sessions never open a window.
 glance without a click. A tool that may be listening and looks identical whether
 it is or isn't is the failure this product cannot ship with.
 
+**Amendment, 2026-08-04 — the item exists; two states stay dormant.** The menubar
+item now ships: hollow glyph idle, filled while capture is live, filled-with-mark
+for `degraded`, a half glyph for `transcribing`, a neutral mark for `error`, one
+sentence of tooltip per state, and an Open entry. `detected` and `armed` remain
+dormant with the microphone-use detection path they belong to. The internal alpha
+renders text glyphs; the accent-colored designed glyph and the in-glyph countdown
+wait on a template icon, so the accent rule is not yet exercised rather than
+violated.
+
 ---
 
 ## B. Detection notification — the consent moment
