@@ -68,15 +68,15 @@ MLX_RUNTIME = {
         "package_metadata_sha256": {
             "mlx-lm": {
                 "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b",
-                "record": "012d425bc9461f3226a3036ab2a890eb8f91f1dee1bf4e0088c1a466537d2084",
+                "record": "11151543cb4040b6ebf8c42e85d328257495acc56592dd4360e4bcee86ee58b4",
             },
             "mlx": {
                 "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8",
-                "record": "1d649a411e73e1518f0e8360f17ffe44442ff516ab88651f1b4f30e7f9ee4e43",
+                "record": "75a95fb45eae33118fcc1a21ee2a58b4d5796040de2d9dd7ccba07b0a07845a8",
             },
             "transformers": {
                 "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0",
-                "record": "ea5b7cabec85b39ec2eeacf92f4bd275e7969f3aeff57e8f39713a31d79c00b2",
+                "record": "2fbbba0ce625991e763b69b84eec96f2bb8c23f660b0ecadbd18f268e45f509f",
             },
         },
     },
@@ -654,6 +654,25 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
         raise AdmissionRefused("runtime-package-mismatch") from exc
 
     def package_sha256(name: str, filename: str) -> str:
+        """A wheel-identity digest that does not depend on where it was installed.
+
+        `RECORD` lists the installed package files with their hashes, and also
+        the generated console scripts under `../../../bin/`. Those scripts embed
+        the environment's absolute interpreter path in their shebang, so their
+        hashes — and therefore `RECORD`'s — change with the directory the
+        environment happens to live in.
+
+        The first version of this pin hashed `RECORD` whole. That made the
+        registered runtime identity reproducible only inside the exact
+        disposable directory the 2026-08-02 probe used, and no receipt recorded
+        that path. Three environments built from the identical wheels at three
+        paths produced three different digests and none matched the pin, so the
+        probe's runtime could not be re-derived by anyone, which is the opposite
+        of what pinning it was for. Excluding the `../`-relative script rows
+        leaves every package file's own hash covered and makes the digest
+        identical across environments — verified across those same three paths
+        on 2026-08-05.
+        """
         distribution = importlib.metadata.distribution(name)
         target = next(
             (item for item in distribution.files or () if item.name == filename),
@@ -661,7 +680,13 @@ def local_mlx_provider(model_directory: Path) -> ModelProvider:
         )
         if target is None:
             raise AdmissionRefused("runtime-package-mismatch")
-        return _sha256(distribution.locate_file(target).read_bytes())
+        payload = distribution.locate_file(target).read_bytes()
+        if filename == "RECORD":
+            rows = payload.decode("utf-8").splitlines()
+            payload = "\n".join(
+                row for row in rows if not row.startswith("../")
+            ).encode("utf-8")
+        return _sha256(payload)
 
     runtime_identity = {
         "python": platform.python_version(),

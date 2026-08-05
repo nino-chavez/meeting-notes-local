@@ -275,6 +275,40 @@ A disposable environment under `/private/tmp`, as the SmolLM2 measurement used.
 This changes no product runtime, adds no command, and admits nothing. Selection
 is not admission, and a decoding repair is not a usefulness claim.
 
+#### Protocol correction found while reproducing the pin — 2026-08-05
+
+Rebuilding the registered runtime to run this amendment surfaced a defect in the
+pin itself, and it is recorded here because it changes what earlier receipts
+prove.
+
+`runtime_identity` hashed each distribution's `RECORD` file whole. `RECORD`
+lists the installed package files with their hashes **and** the generated
+console scripts under `../../../bin/`, which embed the environment's absolute
+interpreter path in their shebang. The digest therefore depends on the directory
+the disposable environment happens to occupy — and no receipt records the
+directory the 2026-08-02 probe used.
+
+Measured: three environments built from identical wheels
+(`mlx-lm==0.30.4`, `mlx==0.32.0`, `transformers==5.0.0rc1`, CPython 3.14.6) at
+three paths produced three different `RECORD` digests, none equal to the pin,
+while every `METADATA` digest matched. Diffing two console scripts shows a
+one-line difference and that line is the shebang.
+
+So the registered runtime identity was **unreproducible by anyone**, including a
+later run on the same machine. A pin that cannot be re-derived does not verify a
+runtime; it only records that one existed.
+
+Corrected by excluding the `../`-relative rows before hashing. Every package
+file's own hash stays covered — the integrity the pin was for — and the digest is
+now identical across all three paths. The three `record` values in `MLX_RUNTIME`
+are re-pinned to the path-independent digests; `METADATA` values are unchanged,
+which is the evidence that the wheels themselves are the same ones.
+
+What this does **not** invalidate: the model pins. `model.safetensors` SHA-256
+`0979f33d…`, the 880,172,064-byte inventory, and `tree_sha256`
+`3aaeeac4…` all reproduced exactly on a fresh download of the pinned revision,
+so the corrective probe's model identity stands as recorded.
+
 ## 2026-08-02 SmolLM2 measurement — inconclusive
 
 This measurement used no meeting recording, Preview data, or product record.
