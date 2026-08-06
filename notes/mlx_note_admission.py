@@ -204,6 +204,22 @@ def response_contract(manifest: dict) -> dict:
                                 "unique_items": True,
                                 "members_of": "the source_fragment_id values the named candidate offers",
                                 "order": "ascending by the position the named candidate offers them in",
+                                # Preregistered intervention two, 2026-08-06. The
+                                # enumerated `candidate_id` is reproduced 10/10 and this
+                                # field 1/10; the exposure measurement says the difference
+                                # is that one has a complete instance beside the generation
+                                # point and the other does not. Enumerating removes the
+                                # transcription task rather than explaining it — recorded
+                                # in MLX_NOTE_ADMISSION.md, which registered the predicted
+                                # shift before this line existed.
+                                "item": {
+                                    "type": "string",
+                                    "enum": [
+                                        fragment["source_fragment_id"]
+                                        for row in _admission_candidates(manifest)
+                                        for fragment in [{"source_fragment_id": row["anchor_fragment_id"]}]
+                                    ],
+                                },
                             },
                             "citation": {
                                 "type": "string",

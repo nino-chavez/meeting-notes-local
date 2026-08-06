@@ -1007,3 +1007,62 @@ mean margin by at least +2.41 and flips all ten fixtures.** If it moves less tha
 incomplete. If it flips all ten while the margin moves less than +1.02, something
 other than this decision is carrying the result and it must be found before the
 fix is claimed.
+
+### Result — 2026-08-06 — intervention two: magnitude predicted correctly, count predicted wrongly
+
+Ran against the enumerated contract, same pinned runtime, same probe. Receipt:
+`notes/mlx_note_id_decision_margin_receipt_enumerated.json`.
+
+| fixture | baseline | + rules | + enum | shift | full 90 |
+|---|---|---|---|---|---|
+| `ordinary-decision` | +0.16 | −0.28 | **+2.47** | +2.75 | yes |
+| `ordinary-action` | −1.16 | −1.72 | **+0.92** | +2.64 | yes |
+| `ordinary-proposal` | −1.72 | −2.62 | **+0.73** | +3.36 | yes |
+| `ordinary-question` | −1.78 | −2.77 | −1.16 | +1.61 | no |
+| `locator-canonical-order` | −2.41 | −2.48 | **+2.16** | +4.64 | yes |
+| `locator-second-turn` | −0.88 | −1.25 | **+2.12** | +3.38 | yes |
+| `name-number-decision` | −0.48 | −1.92 | **+0.56** | +2.48 | yes |
+| `name-number-action` | −1.02 | −1.83 | −0.69 | +1.14 | no |
+| `negation-decision` | −0.31 | −0.77 | **+2.72** | +3.48 | yes |
+| `negation-proposal` | −0.67 | −2.27 | −0.36 | +1.91 | no |
+
+Mean margin −1.79 → **+0.95**, a shift of **+2.74**. Full-length reproductions
+**0 → 7 of 10**. Controls hold: `candidate_id` still correct, both abstain fixtures
+still emit exactly `{"items":[]}`, all 12 protocol tests pass.
+
+**Scoring the registered prediction honestly: one clause right, one wrong.**
+
+- *"moves the mean margin by at least +2.41"* — **correct.** +2.74.
+- *"flips all ten fixtures"* — **wrong.** Seven.
+
+**The failed clause failed for a nameable reason, and it is my error rather than
+the model's.** The "+2.41 flips every supported fixture" threshold was read off the
+table computed against the *original* contract, whose deepest margin was −2.41.
+Intervention one then moved the floor to −2.77, and I registered the second
+prediction without recomputing the threshold against the state it would actually
+be applied to. The three that did not flip are exactly the three whose required
+shift exceeded what they got: they needed +2.77, +1.83 and +2.27 and received
++1.61, +1.14 and +1.91. Predicting from a stale table is the same defect this file
+records elsewhere as quoting a status instead of re-deriving it.
+
+**The mechanism is now supported about as well as this path can support anything.**
+A manipulation that inverts instance proximity — the fragment ID goes from one
+occurrence 1,132–1,200 characters away to two occurrences with the nearest at 478,
+overtaking `candidate_id` at 898 — moved **all ten fixtures in the predicted
+direction**, by +1.14 to +4.64. Two manipulations now, in opposite directions, both
+matching prediction on every fixture: adding distance moved 10/10 negative, and
+restoring proximity moved 10/10 positive. That is no longer a correlation.
+
+**What it does not establish, and the distinction matters for admission.** Seven of
+ten reproducing the identifier is not evidence the model can transcribe a
+90-character string, because it no longer has to — the string is in the enum, and
+the mask can copy it. What the enumeration buys is that the harness now measures
+what it was built to measure. Identifier transcription was consuming the result and
+hiding whatever the candidate does or does not understand about citation and
+comprehension. Those gates are still unmeasured.
+
+**The next run is the registered 12-fixture matrix**, which is what actually
+produces per-fixture verdicts; the probe measures one token. Three fixtures are
+expected to fail on the identifier still, and `locator-second-turn`'s repetition
+loop is unrelated to any of this and expected to persist — it reproduced
+byte-identically with the mask off.
