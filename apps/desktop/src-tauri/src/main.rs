@@ -4587,6 +4587,14 @@ struct VoiceprintReport {
     persistent_other: bool,
     #[serde(default)]
     rejected_seconds: Option<f64>,
+    /// The share of dropped speech that was the one recurring voice.
+    /// `rejected_seconds` alone is everything the gate dropped, scattered noise
+    /// included, so quoting it beside "someone next to you is being removed"
+    /// overstates that person's loss — by up to 2x, since the flag fires at
+    /// `share > 0.5`. `notes/transcript.py` already multiplies these two; this
+    /// screen must not disagree with the note about the same capture.
+    #[serde(default)]
+    coherent_share: Option<f64>,
     /// Derived from leave-one-sitting-out enrolment evidence, never from live
     /// meeting audio. The number is real; what it was measured on is not the
     /// thing being gated.
@@ -4828,12 +4836,20 @@ fn parse_transcript_projection_with(
     // First, and before the count, because it is the only one of these that says
     // a person was removed rather than that some audio was.
     if report.as_ref().is_some_and(|report| report.persistent_other) {
-        let seconds = report
-            .as_ref()
-            .and_then(|report| report.rejected_seconds)
-            .filter(|seconds| seconds.is_finite() && *seconds > 0.0);
-        let extent = match seconds {
-            Some(seconds) => format!(" About {} seconds of it were withheld.", seconds.round()),
+        // The recurring voice's own seconds, not the gate's total. Dropped
+        // rather than approximated when either factor is missing, the same way
+        // the enrolment basis below is dropped rather than invented.
+        let extent = match report.as_ref().and_then(|report| {
+            let seconds = report.rejected_seconds?;
+            let share = report.coherent_share?;
+            (seconds.is_finite() && seconds > 0.0 && share.is_finite() && share > 0.0)
+                .then_some((seconds * share, share))
+        }) {
+            Some((seconds, share)) => format!(
+                " About {} seconds of it were withheld — {:.0}% of everything the check dropped.",
+                seconds.round(),
+                share * 100.0
+            ),
             None => String::new(),
         };
         warnings.push(format!(
@@ -7023,8 +7039,8 @@ mod tests {
         // while the gate deleted a colleague from a meeting that cannot be
         // re-run.
         let document = gated_document_with_voiceprint(
-            r#"{"applied":true,"persistent_other":true,"rejected_seconds":41.6,
-                "measured_frr":0.05,"n_sittings":3}"#,
+            r#"{"applied":true,"persistent_other":true,"rejected_seconds":100.0,
+                "coherent_share":0.51,"measured_frr":0.05,"n_sittings":3}"#,
         );
         let (_turns, warnings) =
             parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
@@ -7032,8 +7048,30 @@ mod tests {
             warnings[0].contains("keeps returning as one voice"),
             "the alert must lead, not sit among boilerplate: {warnings:?}"
         );
-        assert!(warnings[0].contains("42 seconds"), "{warnings:?}");
+        // 51 seconds, not 100. `rejected_seconds` is everything the gate
+        // dropped; only `coherent_share` of it was the one recurring voice, and
+        // quoting the total beside "someone next to you is being removed"
+        // overstates that person's loss on the one number an operator uses to
+        // decide whether to reconstruct their contribution.
+        assert!(warnings[0].contains("51 seconds"), "{warnings:?}");
+        assert!(!warnings[0].contains("100 seconds"), "{warnings:?}");
+        assert!(warnings[0].contains("51% of everything"), "{warnings:?}");
         assert!(warnings[0].contains("cannot be re-run"), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_alert_without_a_share_states_no_extent_rather_than_the_gate_total() {
+        // The producer always writes `coherent_share` beside the flag, so this
+        // is the malformed-artifact case — and the answer is silence, not the
+        // total, which would be the overstatement this fixes.
+        let document = gated_document_with_voiceprint(
+            r#"{"applied":true,"persistent_other":true,"rejected_seconds":100.0}"#,
+        );
+        let (_turns, warnings) =
+            parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
+        assert!(warnings[0].contains("keeps returning as one voice"), "{warnings:?}");
+        assert!(!warnings[0].contains("seconds"), "{warnings:?}");
+        assert!(!warnings[0].contains("100"), "{warnings:?}");
     }
 
     #[test]

@@ -201,6 +201,12 @@ def _worker_record_problem(worker: object) -> str | None:
     missing = _WORKER_FIELDS - set(worker)
     if missing:
         return f"missing {sorted(missing)}"
+    # Presence is not enough: `_matrix_receipt` compares `peak_rss` numerically
+    # and `_fixture_row` calls `.values()` on `checks`, so a well-keyed record
+    # carrying the wrong leaf types still raises inside the projection — the
+    # same failure one level down.
+    if not isinstance(worker["peak_rss"], (int, float)) or isinstance(worker["peak_rss"], bool):
+        return f"peak_rss is {type(worker['peak_rss']).__name__}, not a number"
     calls = worker["calls"]
     if not isinstance(calls, list) or not calls:
         return "calls is not a non-empty list"
@@ -210,6 +216,10 @@ def _worker_record_problem(worker: object) -> str | None:
         call_missing = _CALL_FIELDS - set(call)
         if call_missing:
             return f"call {index} missing {sorted(call_missing)}"
+        if not isinstance(call["checks"], dict):
+            return f"call {index} checks is {type(call['checks']).__name__}, not an object"
+        if not isinstance(call["phase"], str):
+            return f"call {index} phase is {type(call['phase']).__name__}, not a string"
     return None
 
 

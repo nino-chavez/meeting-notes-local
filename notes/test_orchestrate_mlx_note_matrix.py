@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import orchestrate_mlx_note_matrix as matrix
+from mlx_note_admission import MLX_RUNTIME
 from orchestrate_mlx_note_matrix import (
     COLD_REPEATS,
     EXPECTED_FIXTURES,
@@ -349,6 +350,10 @@ class SpawnFailureTests(unittest.TestCase):
             ("calls-empty", "{%s,\"calls\":[]}" % complete),
             ("calls-not-a-list", "{%s,\"calls\":{}}" % complete),
             ("call-is-empty-object", "{%s,\"calls\":[{}]}" % complete),
+            ("peak-rss-not-a-number", '{"preflight_tree_sha256":"a","postflight_tree_sha256":"a","peak_rss":"1","calls":[{}]}'),
+            ("checks-not-an-object", "{%s,\"calls\":[{\"phase\":\"cold-call\",\"outcome\":\"x\",\"code\":null,"
+                                     "\"response_sha256\":\"r\",\"note_sha256\":null,\"receipt_sha256\":\"c\",\"checks\":[],"
+                                     "\"load_average_before\":[],\"load_average_after\":[]}]}" % complete),
             ("call-missing-a-digest", "{%s,\"calls\":[{\"phase\":\"cold-call\",\"outcome\":\"x\",\"code\":null,"
                                       "\"response_sha256\":\"r\",\"note_sha256\":null,\"checks\":{},"
                                       "\"load_average_before\":[],\"load_average_after\":[]}]}" % complete),
@@ -443,13 +448,19 @@ class IdAlignmentReceiptTests(unittest.TestCase):
 
         path = Path(__file__).resolve().parent / "mlx_note_id_alignment_receipt.json"
         receipt = json.loads(path.read_text())
-        self.assertEqual(receipt["schema"], "mlx-note-id-alignment/1")
+        self.assertEqual(receipt["schema"], "mlx-note-id-alignment/2")
         self.assertEqual(receipt["short_form_length"], 67)
-        # The refutation only works if alignment holds everywhere — one
-        # misaligned fragment and the hypothesis is back in play.
-        self.assertTrue(receipt["every_boundary_is_token_aligned"])
-        self.assertEqual(receipt["counts"]["aligned"], receipt["counts"]["fragments"])
-        self.assertGreaterEqual(receipt["counts"]["fragments"], EXPECTED_FIXTURES)
+        # Re-derived from `rows`, not read off the summary the probe wrote about
+        # itself: a receipt carrying a false row would otherwise satisfy every
+        # assertion here while the doc cites it as the refutation.
+        self.assertTrue(receipt["rows"])
+        self.assertTrue(all(row["boundary_is_token_aligned"] for row in receipt["rows"]))
+        self.assertTrue(all(row["fragment_id_length"] > 67 for row in receipt["rows"]))
+        self.assertEqual(receipt["counts"]["fragments"], len(receipt["rows"]))
+        self.assertGreaterEqual(len(receipt["rows"]), EXPECTED_FIXTURES - 2)
+        # Measured with the pinned tokenizer, since alignment is a property of
+        # one tokenizer and of no other.
+        self.assertEqual(receipt["model"]["tree_sha256"], MLX_RUNTIME["model"]["expected_tree_sha256"])
         covered = {row["fixture"] for row in receipt["rows"]}
         self.assertIn("ordinary-decision", covered, "the one success must be measured")
         self.assertIn("ordinary-action", covered, "the matched failure must be measured")

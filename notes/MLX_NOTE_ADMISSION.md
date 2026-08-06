@@ -490,8 +490,8 @@ the only supported evidence on this path that anything generalizes at all. Every
 | --- | --- |
 | Every fixture ran, tree unchanged | Pass |
 | Repeatability | Pass on all 12 — response, note, and receipt digests identical across the three cold runs |
-| Latency | Pass — 4.59 s cold median against a 30 s ceiling, 3.62 s warm against 15 s |
-| Memory | Pass — 1,184,907,264 bytes peak against 4,282,063,304 |
+| Latency | Pass — 5.03 s cold median against a 30 s ceiling, 4.24 s warm against 15 s |
+| Memory | Pass — 1,189,576,704 bytes peak against 4,282,063,304 |
 | Per-fixture checks | **Fail on 9 of 10 supported fixtures** |
 
 #### Eight of the nine failures are one mechanism, and it is not comprehension
@@ -537,14 +537,14 @@ that pair and all three fail on it:
 | --- | --- |
 | **Enum absence** — the model copies exactly only what the contract enumerates | a property of the request *format*, which is identical in both |
 | **Shape priming** — the model normalizes the long format to the short one also present | same: identical format, opposite outcomes |
-| **Token boundary** — the 67-character point falls mid-token for some digests | measured: token-aligned for all 14 offered fragments, the success included |
+| **Token boundary** — the 67-character point falls mid-token for some digests | measured: token-aligned for all 11 offered anchors, the success included |
 
 The first two are refuted by argument, which is self-contained. The third is an
 empirical claim and therefore has a probe and a receipt rather than a sentence:
 `notes/measure_id_token_alignment.py` and
-`notes/mlx_note_id_alignment_receipt.json` report every offered fragment ID
-across all 12 fixtures — 14 of them, all 90 characters, and the 67-character
-point is a clean token edge on every single one. It was first written here from
+`notes/mlx_note_id_alignment_receipt.json` report every fragment ID a request
+actually offers — the anchor, one per candidate, 11 across the 12 fixtures —
+all 90 characters, with the 67-character point a clean token edge on every one. It was first written here from
 a terminal measurement that was never landed, which is precisely the defect the
 rest of this section exists to record.
 
