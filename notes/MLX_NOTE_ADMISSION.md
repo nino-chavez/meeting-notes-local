@@ -931,3 +931,79 @@ It would authorize running the second intervention against a harness that no lon
 grades unstated rules. It would **not** admit a note generator, wire anything into
 Preview, or satisfy the human semantic gate in `vertical-slice.md` wave D. Those are
 unchanged and unaffected by anything in this amendment.
+
+### Result — 2026-08-06 — the defect is closed and the measurement got worse
+
+Ran against the amended contract, same pinned runtime, same probe.
+
+| | before | after | delta |
+|---|---|---|---|
+| Mean decision margin | −1.03 | **−1.79** | **−0.76** |
+| Fixtures reproducing the full 90-character ID | 1 of 10 | **0 of 10** | −1 |
+| `candidate_id` correct | yes | yes | unchanged |
+| Abstain fixtures emit exactly `{"items":[]}` | yes | yes | unchanged |
+
+Per fixture, every one moved the same way:
+
+| fixture | before | after | delta |
+|---|---|---|---|
+| `ordinary-decision` | +0.1562 | −0.2812 | −0.44 |
+| `negation-decision` | −0.3125 | −0.7656 | −0.45 |
+| `name-number-decision` | −0.4844 | −1.9219 | −1.44 |
+| `negation-proposal` | −0.6719 | −2.2656 | −1.59 |
+| `locator-second-turn` | −0.8750 | −1.2500 | −0.38 |
+| `name-number-action` | −1.0156 | −1.8281 | −0.81 |
+| `ordinary-action` | −1.1562 | −1.7188 | −0.56 |
+| `ordinary-proposal` | −1.7188 | −2.6250 | −0.91 |
+| `ordinary-question` | −1.7812 | −2.7656 | −0.98 |
+| `locator-canonical-order` | −2.4062 | −2.4844 | −0.08 |
+
+**The registered prediction was satisfied and it was badly framed.** It said the
+mean would move "less than +0.50" and at most two fixtures would flip. The mean
+moved −0.76 and none flipped, so both clauses hold — but a one-sided bound is
+satisfied by any harmful result, which is not a test. The prediction should have
+been two-sided: a magnitude and a direction. Recorded as a defect in the
+preregistration rather than as a hit, because scoring this as a successful
+prediction is exactly the charitable reading this file exists to refuse.
+
+**The substantive result is that stating the rules made the thing it was supposed
+to help measurably worse**, and cost the only full-length reproduction on the path.
+
+**The direction was predicted by the exposure model, and this is the first
+manipulation on this path that behaves like a mechanism.** Writing seven rules into
+the contract added roughly 400 characters between the fragment identifier and the
+generation point:
+
+| | before | after |
+|---|---|---|
+| `candidate_id` distance from generation | 365 | **771** |
+| `source_fragment_id` distance | 726–794 | **1132–1200** |
+| Request size | 981–1353 bytes | 1387–1759 |
+
+The earlier section argued that what correlates with the truncation point is the
+nearest complete identifier *instance*, not the rule. Pushing every instance ~406
+characters further away moved the margin against continuation on **10 of 10**
+fixtures. That is a manipulation with a predicted direction and a measured effect
+matching it everywhere, which is stronger than the correlation it came from — and
+still not proof, because distance and added token count moved together.
+
+**The amendment stays.** Closing the defect is a validity requirement, not an
+optimisation: a candidate refused for a rule it was never given is unmeasured
+whatever the margin does. What this result changes is that the fix has a known
+cost, and the cost is in the implementation rather than the idea. A compact
+statement of the same seven rules, or one placed before the candidates instead of
+after them, would test that directly and is the obvious follow-up.
+
+### What this predicts for the second intervention, registered now
+
+If instance proximity is the mechanism, enumerating the offered fragment IDs is not
+a small change — it places a complete 90-character `sf-` instance inside the
+contract, adjacent to the generation point, in the same position the `cf-` enum
+occupies today.
+
+**Registered prediction, two-sided this time: enumerating the fragment IDs moves the
+mean margin by at least +2.41 and flips all ten fixtures.** If it moves less than
++1.02, instance proximity is not sufficient and the exposure model is wrong or
+incomplete. If it flips all ten while the margin moves less than +1.02, something
+other than this decision is carrying the result and it must be found before the
+fix is claimed.

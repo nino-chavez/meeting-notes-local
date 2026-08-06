@@ -164,7 +164,18 @@ def _object(value: object, names: tuple[str, ...]) -> dict:
 
 
 def response_contract(manifest: dict) -> dict:
-    """Exact strict root and item ordering accepted by ``_decode_response``."""
+    """Exact strict root, item ordering, and every rule ``_decode_response`` enforces.
+
+    Preregistered amendment 2026-08-06. Before it, this advertised `min_items` and
+    `max_items` for `source_fragment_ids` and nothing else, while the parser
+    enforced seven rules — five stated nowhere and two only in `SYSTEM_PROMPT`
+    prose. A candidate refused for breaking a rule it was never given is not
+    measured, whatever the verdict, so the rules are written down here.
+
+    **No rule is added or relaxed.** Every entry below already had a matching
+    refusal in `_decode_response`; keep them in step, because a rule advertised
+    and not enforced is the same defect facing the other way.
+    """
     return {
         "schema": MODEL_RESPONSE_SCHEMA,
         "root": {
@@ -173,6 +184,12 @@ def response_contract(manifest: dict) -> dict:
             "properties": {
                 "items": {
                     "type": "array",
+                    # One item per candidate at most, and items follow the order the
+                    # request offers its candidates in.
+                    "unique_by": ["candidate_id"],
+                    "order": "ascending by the position of candidate_id in candidates",
+                    # A source fragment may be the first, citing entry of one item only.
+                    "unique_by_first_source_fragment_id": True,
                     "item": {
                         "type": "object",
                         "ordered_fields": [
@@ -180,10 +197,25 @@ def response_contract(manifest: dict) -> dict:
                         ],
                         "properties": {
                             "candidate_id": {"type": "string", "enum": [row["candidate_id"] for row in _admission_candidates(manifest)]},
-                            "source_fragment_ids": {"type": "array", "min_items": 1, "max_items": 3},
-                            "citation": {"type": "string"},
+                            "source_fragment_ids": {
+                                "type": "array",
+                                "min_items": 1,
+                                "max_items": 3,
+                                "unique_items": True,
+                                "members_of": "the source_fragment_id values the named candidate offers",
+                                "order": "ascending by the position the named candidate offers them in",
+                            },
+                            "citation": {
+                                "type": "string",
+                                "equals": "the exact text of the fragment named first in source_fragment_ids",
+                            },
                             "label": {"type": "string", "enum": ["DECISION", "ACTION", "PROPOSAL", "QUESTION"]},
-                            "claim": {"type": "string", "min_length": 1, "max_length": 160},
+                            "claim": {
+                                "type": "string",
+                                "min_length": 1,
+                                "max_length": 160,
+                                "no_control_characters": True,
+                            },
                         },
                     },
                 },
