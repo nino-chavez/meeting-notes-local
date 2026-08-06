@@ -203,6 +203,57 @@ itself by existing; the bot-free products leave it to the operator. The default
 here is a decision, not an oversight, and it belongs in this inventory rather
 than in an implementation detail.
 
+### Proposed answer, drafted 2026-08-06 — awaiting the Wave C human gate
+
+**This product cannot tell the far end, and that is architectural rather than
+unbuilt.** It captures the system output; it does not join the call, does not
+appear in the participant list, and has no channel that reaches anyone else.
+Building one would mean routing the far end through our own output — the standing
+option `teardown.md` records from the +34.6 dB voice-processing measurement — which
+is a different product, not a copy change.
+
+So the real choice is between saying nothing and requiring the operator to say it.
+The market says nothing. Otter's disclaimer email is Business-tier, Granola's
+org-wide notice is an enterprise pilot, and Wispr Flow — the newest and
+best-funded entrant, disassembled 2026-08-06 — ships no participant-facing surface
+at all, only an FAQ sentence: "You are responsible for informing everyone before
+you begin."
+
+**Proposed: require the attestation, at the consent moment, in the operator's own
+words.** Wispr's sentence is not wrong; it is invisible, sitting in a support page
+nobody reads while recording. The same duty stated as a required checkbox on the
+surface that starts the capture is a materially stronger position and costs one
+control. The attestation already exists in the receipt schema
+(`participant_attestation_recorded`) and is already cleared by every new Start;
+what is missing is the words and the requirement.
+
+Proposed copy for `prompt` and `manual`, blocking Continue until ticked:
+
+> **Before you start**
+>
+> ☐ The other people on this call know they are being recorded.
+>
+> Yawn records from your Mac. It does not join the call, so no one else is told —
+> no bot appears, no notification is sent. Telling them is yours to do.
+>
+> In some places recording without everyone's agreement is illegal.
+
+Three rules this copy is built to hold, and any revision must hold them too:
+
+1. **It never claims the app did anything.** "No one else is told" is the load-bearing
+   sentence. A reader who ticks this box must not come away thinking a notice went out.
+2. **It gives no legal advice and names no jurisdiction.** This surface "can require
+   that choice; it cannot provide legal advice or infer that the room agreed." "In some
+   places" is deliberately vague because precision here would be advice.
+3. **It is per attempt, never remembered.** A "don't ask again" option would convert a
+   statement about *this* call's participants into a standing claim about all future
+   ones, which is the one thing the attestation cannot mean.
+
+Survey support is thin and points this way: one of six selected a per-meeting consent
+reminder as a privacy requirement, and none of the six asked for less. Per the
+registered analysis plan, that is the whole of what the survey may be quoted as
+saying here — no respondent detail, and one selection out of six is not a mandate.
+
 ---
 
 ## C. Recording HUD
@@ -947,6 +998,59 @@ to be applied retroactively to material the operator has forgotten exists.
 pick.** The same reasoning as the voiceprint threshold: a plausible constant would be
 indistinguishable from a considered one to every later reader. First run asks, and the
 answer is stated here rather than assumed.
+
+### Proposed wording, drafted 2026-08-06 — awaiting the Wave C human gate
+
+**The survey settled the shape of this question without settling the answer, which is
+the useful result.** Six colleagues gave three answers: keep until I delete it (3), ask
+me for each meeting (2), keep for a short period (1). No option reaches a majority of
+six. That is independent support for the no-default rule above, arrived at from
+operations rather than ethics — any constant this document picked would be wrong for at
+least half the people who answered.
+
+Proposed first-run question, nothing preselected, Continue disabled until one is chosen:
+
+> **How long should Yawn keep the recordings?**
+>
+> The written transcript is kept either way. This is only about the audio.
+>
+> ○ Until I delete them
+> ○ 7 days
+> ○ 30 days
+> ○ Ask me after each meeting
+>
+> You can change this in Settings later.
+
+Why these four and not a slider or a single duration:
+
+- **"Until I delete them" and "Ask me after each meeting" are both real answers**, chosen
+  by 5 of the 6 between them, and neither is a duration. A duration-only control would
+  have forced both groups into a number they did not want.
+- **Two durations, not five.** The one respondent who wanted a short period gave no
+  length, and nothing in the evidence distinguishes 7 from 14. Offering a granularity
+  the evidence cannot support is the same failure as picking a default.
+- **The first line exists because the distinction is the product.** Every competitor
+  blurs audio retention into note retention; `audio-released` is the state that makes
+  this surface honest, and the question should teach it before the operator meets it.
+
+**Settings uses the category's term, the question does not.** In Settings this is the
+*auto-deletion period*, because Granola's enterprise tier already taught the operator
+that phrase. In the first-run question it is "how long should Yawn keep the
+recordings," because a first-run screen is a front-door surface and the reader has not
+met the term yet.
+
+**One decision this proposal does not make, and a reader should not assume:** whether
+changing the period later applies to audio already on disk. `journeys.md` argues a
+policy adopted after a year "has to be applied retroactively to material the operator
+has forgotten exists," which points at yes — but retroactive deletion triggered by a
+Settings change is a destructive action taken on the operator's behalf, and it needs its
+own confirmation and its own state in the table above. Flagged, not decided.
+
+**What this proposal deliberately does not copy.** Wispr Flow offers a duration plus
+"Never delete", and gates the whole control behind cloud sync — "Turn on Private Cloud
+Sync to set transcript retention," with its notetaker requiring that sync to run at all.
+Retention there is a property of the vendor's copy. Here the control exists because the
+material never left, which is the reason it can be offered at first run instead of sold.
 
 This period governs source meetings, including any retained meeting later used to
 rebuild a voice profile. It does not govern dedicated enrolment recordings: dedicated
