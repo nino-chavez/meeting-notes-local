@@ -640,6 +640,72 @@ digest and burns nothing. It is preregistration-free for the same reason
 `measure_id_token_alignment.py` was, and it should run before either intervention
 is spent.
 
+#### Result — it ran, and there is nothing to explain about the one success
+
+*2026-08-06. `notes/measure_id_decision_margin.py`, receipt
+`notes/mlx_note_id_decision_margin_receipt.json`. Runtime identity verified equal
+to `MLX_RUNTIME` on all four pinned fields — Python 3.14.6, CPython, mlx 0.32.0,
+transformers 5.0.0rc1, `mlx-lm==0.30.4`. The probe wraps the harness's own
+`make_contract_logits_processor`, so it observes the real decoding path. No mask
+edit, no contract change, no request digest changed.*
+
+At the step where the model has emitted `sf-` plus the fragment's 64 hex
+characters, the margin between continuing the identifier and closing the string:
+
+| fixture | margin (continue − close) | produced |
+|---|---|---|
+| `ordinary-decision` | **+0.1562** | **90 chars** |
+| `negation-decision` | −0.3125 | 67 |
+| `name-number-decision` | −0.4844 | 67 |
+| `negation-proposal` | −0.6719 | 67 |
+| `locator-second-turn` | −0.8750 | 67 |
+| `name-number-action` | −1.0156 | 67 |
+| `ordinary-action` | −1.1562 | 67 |
+| `ordinary-proposal` | −1.7188 | 67 |
+| `ordinary-question` | −1.7812 | 67 |
+| `locator-canonical-order` | −2.4062 | 67 |
+
+Mean −1.03, median −0.88, full range 2.56 logits. **All ten lean the same way, and
+the one success is the least-negative case rather than a different one.** It clears
+zero by 0.16 logits — on a 4-bit quantised 1.5 B model that is indistinguishable
+from a tie.
+
+**So the question "why does one fixture escape" was ill-posed, and this section can
+stop asking it.** There is no second mechanism. There is one preference, present on
+every fixture, and one fixture sits 0.16 logits on the other side of the threshold.
+Nothing distinguishes `ordinary-decision` because nothing needs to.
+
+Two consequences worth stating plainly:
+
+1. **`ordinary-decision`'s full-length identifier is not evidence that the model can
+   copy a 90-character non-enumerated ID.** It is a coin flip that landed. Any
+   perturbation — a different quantisation, a one-token change upstream — is larger
+   than 0.16 logits. The matrix's 1-of-10 should be read as *zero demonstrated
+   capability with one near-miss*, not as one success.
+2. **The bias is systematic, which is what the exposure measurement predicted.** Ten
+   of ten lean toward closing at exactly the length of the enumerated format. That
+   is consistent with the asymmetry recorded above and remains short of proving it
+   causal — the probe measures the preference, not its origin.
+
+**A preregisterable prediction, which is what this buys.** Both registered
+interventions are now falsifiable in logits rather than in vibes. Any intervention
+claiming to fix identifier transcription must move this margin, and the table says
+exactly how far:
+
+| Claim | Required average shift |
+|---|---|
+| Flips the median fixture | **+1.02** |
+| Flips every supported fixture | **+2.41** |
+| Flips the easiest one only | +0.31 |
+
+Register the predicted shift before running either intervention, then read this same
+probe after. An intervention that fixes the outcome without moving the margin by at
+least +1.02 changed something other than what it claimed to.
+
+**Python was the one pin that did not match at first,** and re-running under 3.13
+against 3.14.6 produced byte-identical margins. Recorded because it is a robustness
+result rather than a formality: these numbers do not depend on the interpreter.
+
 Citations, labels, and the negation cases were substantively right in the
 replies inspected — `"We decided not to cancel Project Atlas."` preserved its
 negation, `"Case 481"` its number.
