@@ -18,7 +18,13 @@ cohort tester who never opens voice setup gets a transcript identical to
 0.3.1's, and `voiceprint: null` keeps meaning exactly what it has always meant.
 The gate reaches a transcript only after that tester deliberately enrols.
 
-The release record for 0.4.0 is below once the lane completes.
+**0.4.0's record.** Built at commit `331c9e9` on `codex/guided-voice-enrollment`;
+DMG SHA-256
+`3634049ed5f8eb80f773db6b8a970a515a091640102ede628b9c6f1bf459b22d`,
+1,857,662,331 bytes; signed, notarized, stapled, and Gatekeeper-accepted for both
+the app and the image, with `verify-signed-release.sh … internal-alpha` PASS at
+exit 0. Its interactive operator run is open, and it inherits the chain from
+0.2.2, 0.3.0 and 0.3.1 rather than clearing it.
 
 Status, 2026-08-05: the current cohort DMG is **0.3.1**. Built at commit
 `9f0246e` on `codex/guided-voice-enrollment`; DMG SHA-256
@@ -272,7 +278,7 @@ The output name is derived from the built app version:
 target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg
 ```
 
-### Two traps that cost a lane run on 2026-08-05
+### Traps that have cost a lane run
 
 **Never pipe this script into `tail`, `head`, or anything else.** A pipeline
 reports the *last* command's exit status, so `sign-notarize.sh … | tail -40`
@@ -300,6 +306,35 @@ Gatekeeper mount) were tested and both were wrong. What settles the artifact is
 a full PASS from a traced run plus Apple's own `Accepted` for the app and the
 DMG, not the exit status of a redirected one. Never publish on a bare non-zero
 exit either — find out which it is.
+
+**Give the verifier a pty and keep the log — the two are not in conflict.** The
+trap above reads as a choice between a record and a pass. It is not. `script`
+allocates a real terminal for the child and writes everything to a file:
+
+```bash
+script -q verify.log scripts/verify-signed-release.sh \
+  "target/release/bundle/macos/Yawn.app" \
+  "target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg" \
+  internal-alpha
+```
+
+On 0.4.0 that returned exit 0 with the full `signed release verification: PASS`.
+Prefer this to a bare interactive run; there is no reason to publish off a
+verdict nobody wrote down.
+
+**A lane killed after stapling leaves complete artifacts and no checksum.** The
+0.4.0 run was killed by an agent harness's own ten-minute background timeout
+while `verify-signed-release.sh` was running as step 9 — `Terminated: 15`, not a
+failure of anything the lane did. Both notarizations were Accepted, both staples
+applied, both Gatekeeper checks passed, and the DMG layout verified before the
+kill. What was missing was `$DMG.sha256`, because `shasum -a 256 "$DMG" | tee
+"$DMG.sha256"` is the script's *last* line and sits after the verifier.
+
+So: a lane that dies at step 9 needs the verifier and that one `shasum` line
+re-run, and nothing else. Do not rebuild, do not re-sign, and do not re-notarize
+— that would replace an Apple-accepted artifact with an unverified one to fix a
+missing text file. Set the timeout past the lane's real length instead; this one
+took roughly eighteen minutes.
 
 ## Recheck a frozen artifact
 
