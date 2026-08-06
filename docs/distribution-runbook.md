@@ -1,32 +1,24 @@
 # Yawn distribution runbook
 
-**Unshipped work, 2026-08-05.** Two user-visible changes sit in the repo and in
-no image: the copy-transcript control (`f0302aa`) and the whole speaker gate,
-including the two warnings the transcript screen now carries — that a recurring
-voice is being removed, and that the gate's threshold was measured on enrolment
-recordings rather than meeting audio. A release-lane build of that tree was made
-and verified on this machine:
+**0.4.0 is being cut, 2026-08-05 — the operator made the call.** The two
+user-visible changes that sat in the repo and in no image ship in it: the
+copy-transcript control (`f0302aa`) and the whole speaker gate, including the
+two warnings the transcript screen now carries — that a recurring voice is being
+removed, and that the gate's threshold was measured on enrolment recordings
+rather than meeting audio.
 
-```
-worker/build_runtime.sh build-alpha-encoder
-scripts/verify-release-bundle.py --admission internal-alpha \
-  target/release/bundle/macos/Yawn.app
-release bundle verification: PASS (unsigned, version 0.3.1,
-  169 arm64-compatible Mach-O files, internal-alpha)
-```
+The decision was made against a stated cost, which does not disappear because
+the call went the other way. 0.2.2, 0.3.0 and 0.3.1 each still have an open
+interactive operator run, and 0.4.0 inherits that chain rather than clearing it.
+It adds a gate whose threshold has never been measured on live meeting audio and
+which can mark a colleague's speech as non-operator. What bounds the risk is the
+gate's entry condition, not its accuracy: `_installed_voiceprint_gate` in
+`worker/adapters.py` runs no gate at all when no profile is installed, so a
+cohort tester who never opens voice setup gets a transcript identical to
+0.3.1's, and `voiceprint: null` keeps meaning exactly what it has always meant.
+The gate reaches a transcript only after that tester deliberately enrols.
 
-The manifest binds the admitted encoder at
-`models/speaker-encoder/ecapa-tdnn.onnx`, sha256 `1d5e288b…`, and both new
-warning strings are present in the signed-executable-to-be. That is a build
-check and **nothing more**: unsigned, not notarized, still carrying `0.3.1` in
-`tauri.conf.json`, and no DMG was produced. It is deliberately not a release
-candidate.
-
-**Shipping it is a decision, not a build step**, because 0.2.2, 0.3.0 and 0.3.1
-each still have an open interactive operator run. A fourth image on that chain
-adds a speaker gate whose threshold has never been measured on live meeting
-audio and which can now mark a colleague's speech as non-operator. The version
-bump, signing, notarization, upload and page deploy all wait on that call.
+The release record for 0.4.0 is below once the lane completes.
 
 Status, 2026-08-05: the current cohort DMG is **0.3.1**. Built at commit
 `9f0246e` on `codex/guided-voice-enrollment`; DMG SHA-256
