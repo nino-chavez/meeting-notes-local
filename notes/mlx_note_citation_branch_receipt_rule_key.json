@@ -1,6 +1,7 @@
 [
   {
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "ordinary-decision",
     "offered_candidate_ids": [
@@ -18,6 +19,7 @@
         "candidate_id": "cf-4f97007f5910b83731d4eff3974dbd8ab6672459c81df99373e69c05ca4e73d0",
         "candidate_id_known": true,
         "canonical_repr": "'Dana decided that Battery 7 ships on Tuesday.'",
+        "canonical_resolved_via": "source_fragment_ids[0]",
         "citation_matches": true,
         "citation_repr": "'Dana decided that Battery 7 ships on Tuesday.'",
         "claim": "Dana decided to ship Battery 7 on Tuesday.",
@@ -37,6 +39,7 @@
   },
   {
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "ordinary-action",
     "offered_candidate_ids": [
@@ -54,6 +57,7 @@
         "candidate_id": "cf-3944a8751d26cf4504d25e60c44aea3e53a92166a5c2de99b5e891b34461a942",
         "candidate_id_known": true,
         "canonical_repr": "'Marco will send invoice 2048 by June 14.'",
+        "canonical_resolved_via": "source_fragment_ids[0]",
         "citation_matches": true,
         "citation_repr": "'Marco will send invoice 2048 by June 14.'",
         "claim": "Marco will send invoice 2048 by June 14.",
@@ -73,6 +77,7 @@
   },
   {
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "ordinary-proposal",
     "offered_candidate_ids": [
@@ -90,6 +95,7 @@
         "candidate_id": "cf-0651a2a86d6a9c9a11b7955edbd2247cb2157838fe9a5b1d3c94f8f28e316de0",
         "candidate_id_known": true,
         "canonical_repr": "'Priya proposed moving the renewal to Q4.'",
+        "canonical_resolved_via": "source_fragment_ids[0]",
         "citation_matches": true,
         "citation_repr": "'Priya proposed moving the renewal to Q4.'",
         "claim": "moving the renewal to Q4.",
@@ -111,6 +117,7 @@
     "branch": "source-id-not-offered",
     "branch_line": 338,
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "ordinary-question",
     "offered_candidate_ids": [
@@ -126,12 +133,17 @@
       {
         "candidate_id": "cf-582da7367a25508e1040f6d718b608353d6072ae92b815e12faaea388402b73b",
         "candidate_id_known": true,
-        "canonical_repr": null,
-        "citation_matches": false,
+        "canonical_repr": "'Could Aisha confirm whether the North room is available?'",
+        "canonical_resolved_via": "candidate_id",
+        "citation_matches": true,
         "citation_repr": "'Could Aisha confirm whether the North room is available?'",
         "claim": "confirm availability of North room",
+        "common_prefix": 56,
         "index": 0,
+        "is_prefix_of_canonical": true,
         "label": "ACTION",
+        "len_canonical": 56,
+        "len_citation": 56,
         "source_fragment_ids": [
           "sf-f49b5221e6409dfb7b68be5ec2374ed38924125b922b6cbdfe1aa9c3b981715e"
         ],
@@ -142,6 +154,7 @@
   },
   {
     "candidates_offered": 2,
+    "covers_every_candidate": false,
     "finish_reason": "stop",
     "fixture": "locator-canonical-order",
     "offered_candidate_ids": [
@@ -161,6 +174,7 @@
         "candidate_id": "cf-a74edd5962326f50191008c22c4e8f07ed37d952c4948ea5d613ebc612d8d719",
         "candidate_id_known": true,
         "canonical_repr": "'We decided that the Harbor release uses build 17.'",
+        "canonical_resolved_via": "source_fragment_ids[0]",
         "citation_matches": true,
         "citation_repr": "'We decided that the Harbor release uses build 17.'",
         "claim": "the Harbor release uses build 17.",
@@ -180,6 +194,7 @@
   },
   {
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "locator-second-turn",
     "offered_candidate_ids": [
@@ -197,6 +212,7 @@
         "candidate_id": "cf-b27fd791656c9e17db3bef0cd0fdefbcb9806198ce90962bab8ada888723b118",
         "candidate_id_known": true,
         "canonical_repr": "'Leah decided that the South launch moves to Friday.'",
+        "canonical_resolved_via": "source_fragment_ids[0]",
         "citation_matches": true,
         "citation_repr": "'Leah decided that the South launch moves to Friday.'",
         "claim": "Leah decided on the South launch move to Friday.",
@@ -216,6 +232,7 @@
   },
   {
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "name-number-decision",
     "offered_candidate_ids": [
@@ -233,6 +250,7 @@
         "candidate_id": "cf-1d882039131a6d1d22d4b15f4aa8a6d111f5ecc61382b9ad52847bf4a7b3428b",
         "candidate_id_known": true,
         "canonical_repr": "'Nora decided that Case 481 is not ready for closure.'",
+        "canonical_resolved_via": "source_fragment_ids[0]",
         "citation_matches": true,
         "citation_repr": "'Nora decided that Case 481 is not ready for closure.'",
         "claim": "Nora decided that Case 481 is not ready for closure.",
@@ -254,6 +272,7 @@
     "branch": "source-id-not-offered",
     "branch_line": 338,
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "name-number-action",
     "offered_candidate_ids": [
@@ -269,12 +288,17 @@
       {
         "candidate_id": "cf-e3ea8be8d222c2308244053f4eccd6bd27d2b4ebac826e718b5bfc5c1a14fea2",
         "candidate_id_known": true,
-        "canonical_repr": null,
-        "citation_matches": false,
+        "canonical_repr": "'Dev will send version 3.14 to Mei on July 9.'",
+        "canonical_resolved_via": "candidate_id",
+        "citation_matches": true,
         "citation_repr": "'Dev will send version 3.14 to Mei on July 9.'",
         "claim": "Dev will send version 3.14 to Mei on July 9.",
+        "common_prefix": 44,
         "index": 0,
+        "is_prefix_of_canonical": true,
         "label": "ACTION",
+        "len_canonical": 44,
+        "len_citation": 44,
         "source_fragment_ids": [
           "sf-463a8654903fbe493f004afab2ccb5e8657a7ba69f8704a09918cf021dd159e7"
         ],
@@ -285,6 +309,7 @@
   },
   {
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "negation-decision",
     "offered_candidate_ids": [
@@ -302,6 +327,7 @@
         "candidate_id": "cf-b60b8d0211ab517a8764de480e931da8dc2ddcbd6b0a401f3c645685b93f35ef",
         "candidate_id_known": true,
         "canonical_repr": "'We decided not to cancel Project Atlas.'",
+        "canonical_resolved_via": "source_fragment_ids[0]",
         "citation_matches": true,
         "citation_repr": "'We decided not to cancel Project Atlas.'",
         "claim": "We decided not to cancel Project Atlas.",
@@ -323,6 +349,7 @@
     "branch": "source-id-not-offered",
     "branch_line": 338,
     "candidates_offered": 1,
+    "covers_every_candidate": true,
     "finish_reason": "stop",
     "fixture": "negation-proposal",
     "offered_candidate_ids": [
@@ -338,12 +365,17 @@
       {
         "candidate_id": "cf-1de8b77307c5e08c587cecdd94c8fa4455d3e851429d8500dcd6169893249ce2",
         "candidate_id_known": true,
-        "canonical_repr": null,
-        "citation_matches": false,
+        "canonical_repr": "'I propose that we do not merge the red branch.'",
+        "canonical_resolved_via": "candidate_id",
+        "citation_matches": true,
         "citation_repr": "'I propose that we do not merge the red branch.'",
         "claim": "merge the red branch",
+        "common_prefix": 46,
         "index": 0,
+        "is_prefix_of_canonical": true,
         "label": "ACTION",
+        "len_canonical": 46,
+        "len_citation": 46,
         "source_fragment_ids": [
           "sf-b6e8e3e9940b8f0ae6155d3d579f14ecee4aae8b527f979b29cfdf38682b44e9"
         ],

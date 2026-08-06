@@ -1264,6 +1264,12 @@ the decision-margin probe measures, on the same three fixtures whose margin is s
 negative. One mechanism now, on three fixtures, and it is the one this file has been
 measuring since 2026-08-02.
 
+Three fixtures sharing a truncation point would be consistent with three independent
+coincidences landing on the same tokenizer boundary, so the claim rests on the margin
+receipt rather than on the shared length: all three refuse at the same decision step
+with the same runner-up token, `-t`, at −1.11, −0.52 and −0.31. That is one decision
+losing three times, not three decisions.
+
 **Nothing else moved, which the registration required checking.** Identifier decision
 margins under the renamed key differ from the enumerated run by at most 0.17 logits,
 no fixture changes sign, and full-length reproduction stays at 7 of 10. Cold median
@@ -1278,3 +1284,26 @@ gates, which remain unmeasured. `admits` is false.
 at 67 characters. The two alternatives registered above — enumerating the citation,
 deleting the citation field — are no longer needed for this failure and should not be
 run to chase it; they addressed a mechanism that no longer fires.
+
+#### Amendment — two things the first pass of this section did not check
+
+**The citation count was read off the first row of each fixture, and the receipt
+could not score it where it mattered.** `citation_matches` was computed by resolving
+the canonical slice through the identifier the row emits, so on the three fixtures
+that truncate the identifier it resolved to nothing and recorded `false` — reporting
+the citation wrong on exactly the rows whose citation is right. The probe now falls
+back to the candidate the row names, which keeps identifier transcription and
+citation fidelity independently measurable. Regenerated receipt: 10 rows across 10
+fixtures, **10 citing the exact canonical slice**, and the three that resolve via
+`candidate_id` are the three that truncate. The table above is unchanged; it is now
+derivable from the receipt instead of from the printed strings.
+
+**`locator-canonical-order` is offered two candidates and returns one, and passes
+every registered gate.** Nothing in `_decode_response` requires a row per candidate —
+it refuses only on an empty list. So the fixture whose name says it tests canonical
+ordering has never had two items to order, and the contract's `order` and
+`unique_by_first_source_fragment_id` rules are not exercised anywhere in the matrix.
+This predates all three interventions; the `equals`-era receipt shows the same one
+row against two offered candidates. Recorded, not fixed: a completeness rule is a
+rule added, which the amendment discipline says must be registered on its own rather
+than folded into a change measuring something else.

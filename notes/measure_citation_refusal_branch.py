@@ -136,11 +136,23 @@ def probe(fixture_id: str, transcript, provider) -> dict:
         record["parse"] = "response is not JSON"
         return record
     record["rows_emitted"] = len(emitted)
+    # A row per offered candidate is what the contract's ordering rule exists to
+    # constrain; nothing in `_decode_response` requires it, so record the ratio.
+    record["covers_every_candidate"] = len(emitted) == len(request["candidates"])
     offered_ids = {
         fragment["source_fragment_id"]
         for candidate in request["candidates"]
         for fragment in candidate["source_fragments"]
     }
+    by_candidate_id = {
+        candidate["candidate_id"]: candidate for candidate in request["candidates"]
+    }
+
+    def slice_of(fragment: dict) -> str:
+        return transcript.turns[fragment["turn"]].text[
+            fragment["char_start"]:fragment["char_end"]
+        ]
+
     detail = []
     for index, row in enumerate(emitted):
         if not isinstance(row, dict):
@@ -150,11 +162,22 @@ def probe(fixture_id: str, transcript, provider) -> dict:
         source_ids = row.get("source_fragment_ids")
         primary = source_ids[0] if isinstance(source_ids, list) and source_ids else None
         canonical = None
+        resolved_via = None
         if isinstance(primary, str) and primary in fragments:
-            fragment = fragments[primary]
-            canonical = transcript.turns[fragment["turn"]].text[
-                fragment["char_start"]:fragment["char_end"]
-            ]
+            canonical = slice_of(fragments[primary])
+            resolved_via = "source_fragment_ids[0]"
+        else:
+            # A truncated identifier resolves to no fragment, which would leave
+            # citation correctness unscored on exactly the fixtures that
+            # truncate — the receipt would call the citation wrong when the text
+            # is right. Fall back to the candidate the row names, so identifier
+            # transcription and citation fidelity stay independently measurable.
+            named = by_candidate_id.get(row.get("candidate_id"))
+            if named is not None:
+                canonical = slice_of(
+                    fragments[named["source_fragments"][0]["source_fragment_id"]]
+                )
+                resolved_via = "candidate_id"
         entry = {
             "index": index,
             "candidate_id": row.get("candidate_id"),
@@ -167,6 +190,7 @@ def probe(fixture_id: str, transcript, provider) -> dict:
             "claim": row.get("claim"),
             "citation_repr": repr(citation),
         }
+        entry["canonical_resolved_via"] = resolved_via
         if canonical is not None and isinstance(citation, str):
             entry["canonical_repr"] = repr(canonical)
             entry["citation_matches"] = citation == canonical
