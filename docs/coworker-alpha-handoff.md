@@ -27,6 +27,12 @@ When there's a new build, you'll get a new link.
 This is the new thing in this build, and it's the part we most want you to be
 skeptical about.
 
+**Nobody has run it end to end on a real meeting.** Everything below is what the
+code does, checked line by line, on a build that has passed its packaging checks.
+It has not been through a meeting on an installed copy. You are the first, and
+that is exactly why we want your report — including "the button you described
+isn't there."
+
 **It does nothing until you switch it on.** Until you finish voice setup, your
 transcripts are exactly what they were before: every audible voice, nothing
 marked, nothing hidden. There is no profile, so there is no check.
