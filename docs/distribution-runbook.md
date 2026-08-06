@@ -1,5 +1,33 @@
 # Yawn distribution runbook
 
+**Unshipped work, 2026-08-05.** Two user-visible changes sit in the repo and in
+no image: the copy-transcript control (`f0302aa`) and the whole speaker gate,
+including the two warnings the transcript screen now carries — that a recurring
+voice is being removed, and that the gate's threshold was measured on enrolment
+recordings rather than meeting audio. A release-lane build of that tree was made
+and verified on this machine:
+
+```
+worker/build_runtime.sh build-alpha-encoder
+scripts/verify-release-bundle.py --admission internal-alpha \
+  target/release/bundle/macos/Yawn.app
+release bundle verification: PASS (unsigned, version 0.3.1,
+  169 arm64-compatible Mach-O files, internal-alpha)
+```
+
+The manifest binds the admitted encoder at
+`models/speaker-encoder/ecapa-tdnn.onnx`, sha256 `1d5e288b…`, and both new
+warning strings are present in the signed-executable-to-be. That is a build
+check and **nothing more**: unsigned, not notarized, still carrying `0.3.1` in
+`tauri.conf.json`, and no DMG was produced. It is deliberately not a release
+candidate.
+
+**Shipping it is a decision, not a build step**, because 0.2.2, 0.3.0 and 0.3.1
+each still have an open interactive operator run. A fourth image on that chain
+adds a speaker gate whose threshold has never been measured on live meeting
+audio and which can now mark a colleague's speech as non-operator. The version
+bump, signing, notarization, upload and page deploy all wait on that call.
+
 Status, 2026-08-05: the current cohort DMG is **0.3.1**. Built at commit
 `9f0246e` on `codex/guided-voice-enrollment`; DMG SHA-256
 `0797ea8df1b5a4fa9ca119463b36ed6d2b406c3e79d29cccc7a76e7df9058549`, signed,

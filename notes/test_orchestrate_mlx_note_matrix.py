@@ -479,8 +479,13 @@ class IdAlignmentReceiptTests(unittest.TestCase):
             receipt["scope"],
             "anchor fragment ids as offered by model_request, one per candidate",
         )
-        # One row per candidate, and a fixture never offers more than it has.
-        self.assertLessEqual(len(receipt["rows"]), EXPECTED_FIXTURES + 2)
+        # Pinned exactly, at the number the doc cites. `probe_sha256` is
+        # self-referential — the probe hashes its own bytes into its own output,
+        # so it proves receipt-and-file agree, never that the file is the fixed
+        # version — and `scope` is a hardcoded literal that a changed loop does
+        # not move. A range of [10, 14] left the 14-row window shape admissible,
+        # which is the regression this block claims to make unreachable.
+        self.assertEqual(len(receipt["rows"]), 11)
         covered = {row["fixture"] for row in receipt["rows"]}
         self.assertIn("ordinary-decision", covered, "the one success must be measured")
         self.assertIn("ordinary-action", covered, "the matched failure must be measured")
