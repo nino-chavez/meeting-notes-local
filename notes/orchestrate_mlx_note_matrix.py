@@ -187,39 +187,65 @@ def _failed_worker(fixture_id: str, reason: str, wall_s: float, **extra) -> dict
 # "everything the projection reads": a record whose `calls` held empty objects
 # cleared it and then raised KeyError on `phase` inside the projection — the
 # traceback-after-36-model-loads this boundary exists to prevent.
-_WORKER_FIELDS = frozenset({"preflight_tree_sha256", "postflight_tree_sha256", "peak_rss", "calls"})
-_CALL_FIELDS = frozenset({
-    "phase", "outcome", "code", "response_sha256", "note_sha256", "receipt_sha256",
-    "checks", "load_average_before", "load_average_after",
-})
+# Field -> the types the projection can actually handle, so presence and type
+# are declared together. Two earlier versions of this boundary listed names
+# only and each claimed to cover everything the projection reads: the first let
+# `"calls": [{}]` through to a KeyError, the second let `"checks": []` and an
+# unhashable `"response_sha256": []` through to an AttributeError and a
+# TypeError. Both landed after 36 model loads with no receipt and no fixture
+# named — the failure this boundary exists to prevent.
+_NUMBER = (int, float)
+_TEXT_OR_NULL = (str, type(None))
+_WORKER_FIELDS = {
+    "preflight_tree_sha256": (str,),
+    "postflight_tree_sha256": (str,),
+    "peak_rss": _NUMBER,
+    "calls": (list,),
+}
+_CALL_FIELDS = {
+    "phase": (str,),
+    "outcome": (str,),
+    # Refusal codes are absent on an accepted call.
+    "code": _TEXT_OR_NULL,
+    # Digests are null where the call produced no note; every one of these is
+    # dropped into a set, so an unhashable value raises inside the projection.
+    "response_sha256": _TEXT_OR_NULL,
+    "note_sha256": _TEXT_OR_NULL,
+    "receipt_sha256": _TEXT_OR_NULL,
+    "checks": (dict,),
+    "load_average_before": (list,),
+    "load_average_after": (list,),
+}
+
+
+def _type_problem(where: str, record: dict, expected: dict) -> str | None:
+    missing = set(expected) - set(record)
+    if missing:
+        return f"{where} missing {sorted(missing)}"
+    for field, types in expected.items():
+        value = record[field]
+        # `bool` is an `int` in Python, and a boolean peak_rss is not a size.
+        if not isinstance(value, types) or (types is _NUMBER and isinstance(value, bool)):
+            return f"{where} {field} is {type(value).__name__}"
+    return None
 
 
 def _worker_record_problem(worker: object) -> str | None:
     """Why this record cannot be projected, or None."""
     if not isinstance(worker, dict):
         return f"record is {type(worker).__name__}, not an object"
-    missing = _WORKER_FIELDS - set(worker)
-    if missing:
-        return f"missing {sorted(missing)}"
-    # Presence is not enough: `_matrix_receipt` compares `peak_rss` numerically
-    # and `_fixture_row` calls `.values()` on `checks`, so a well-keyed record
-    # carrying the wrong leaf types still raises inside the projection — the
-    # same failure one level down.
-    if not isinstance(worker["peak_rss"], (int, float)) or isinstance(worker["peak_rss"], bool):
-        return f"peak_rss is {type(worker['peak_rss']).__name__}, not a number"
+    problem = _type_problem("record", worker, _WORKER_FIELDS)
+    if problem is not None:
+        return problem
     calls = worker["calls"]
-    if not isinstance(calls, list) or not calls:
-        return "calls is not a non-empty list"
+    if not calls:
+        return "calls is empty"
     for index, call in enumerate(calls):
         if not isinstance(call, dict):
             return f"call {index} is {type(call).__name__}, not an object"
-        call_missing = _CALL_FIELDS - set(call)
-        if call_missing:
-            return f"call {index} missing {sorted(call_missing)}"
-        if not isinstance(call["checks"], dict):
-            return f"call {index} checks is {type(call['checks']).__name__}, not an object"
-        if not isinstance(call["phase"], str):
-            return f"call {index} phase is {type(call['phase']).__name__}, not a string"
+        problem = _type_problem(f"call {index}", call, _CALL_FIELDS)
+        if problem is not None:
+            return problem
     return None
 
 

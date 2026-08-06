@@ -490,8 +490,8 @@ the only supported evidence on this path that anything generalizes at all. Every
 | --- | --- |
 | Every fixture ran, tree unchanged | Pass |
 | Repeatability | Pass on all 12 — response, note, and receipt digests identical across the three cold runs |
-| Latency | Pass — 5.03 s cold median against a 30 s ceiling, 4.24 s warm against 15 s |
-| Memory | Pass — 1,189,576,704 bytes peak against 4,282,063,304 |
+| Latency | Pass — 5.79 s cold median against a 30 s ceiling, 4.39 s warm against 15 s |
+| Memory | Pass — 1,183,694,848 bytes peak against 4,282,063,304 |
 | Per-fixture checks | **Fail on 9 of 10 supported fixtures** |
 
 #### Eight of the nine failures are one mechanism, and it is not comprehension

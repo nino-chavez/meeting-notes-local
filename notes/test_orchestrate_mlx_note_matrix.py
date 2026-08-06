@@ -351,6 +351,12 @@ class SpawnFailureTests(unittest.TestCase):
             ("calls-not-a-list", "{%s,\"calls\":{}}" % complete),
             ("call-is-empty-object", "{%s,\"calls\":[{}]}" % complete),
             ("peak-rss-not-a-number", '{"preflight_tree_sha256":"a","postflight_tree_sha256":"a","peak_rss":"1","calls":[{}]}'),
+            ("digest-is-unhashable", "{%s,\"calls\":[{\"phase\":\"c\",\"outcome\":\"x\",\"code\":null,"
+                                     "\"response_sha256\":[],\"note_sha256\":null,\"receipt_sha256\":\"c\",\"checks\":{},"
+                                     "\"load_average_before\":[],\"load_average_after\":[]}]}" % complete),
+            ("code-is-a-number", "{%s,\"calls\":[{\"phase\":\"c\",\"outcome\":\"x\",\"code\":5,"
+                                 "\"response_sha256\":\"r\",\"note_sha256\":null,\"receipt_sha256\":\"c\",\"checks\":{},"
+                                 "\"load_average_before\":[],\"load_average_after\":[]}]}" % complete),
             ("checks-not-an-object", "{%s,\"calls\":[{\"phase\":\"cold-call\",\"outcome\":\"x\",\"code\":null,"
                                      "\"response_sha256\":\"r\",\"note_sha256\":null,\"receipt_sha256\":\"c\",\"checks\":[],"
                                      "\"load_average_before\":[],\"load_average_after\":[]}]}" % complete),
@@ -461,6 +467,20 @@ class IdAlignmentReceiptTests(unittest.TestCase):
         # Measured with the pinned tokenizer, since alignment is a property of
         # one tokenizer and of no other.
         self.assertEqual(receipt["model"]["tree_sha256"], MLX_RUNTIME["model"]["expected_tree_sha256"])
+        # Pin the probe and its scope, not only the alignment property. Without
+        # this the pre-fix probe's 14-row window receipt satisfies every
+        # assertion above while the doc cites it as 11 anchors — the defect this
+        # test was written to prevent, silently restored.
+        from mlx_note_admission import _sha256
+
+        probe = Path(__file__).resolve().parent / "measure_id_token_alignment.py"
+        self.assertEqual(receipt["probe_sha256"], _sha256(probe.read_bytes()))
+        self.assertEqual(
+            receipt["scope"],
+            "anchor fragment ids as offered by model_request, one per candidate",
+        )
+        # One row per candidate, and a fixture never offers more than it has.
+        self.assertLessEqual(len(receipt["rows"]), EXPECTED_FIXTURES + 2)
         covered = {row["fixture"] for row in receipt["rows"]}
         self.assertIn("ordinary-decision", covered, "the one success must be measured")
         self.assertIn("ordinary-action", covered, "the matched failure must be measured")
