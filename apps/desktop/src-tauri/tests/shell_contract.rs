@@ -410,6 +410,34 @@ fn withheld_turns_render_positionally_without_meeting_text() {
 }
 
 #[test]
+fn transcript_warnings_render_one_per_paragraph_and_keep_producer_order() {
+    // The producer orders these most serious first, and the first one can say
+    // that somebody sitting beside the operator is being removed from a record
+    // that cannot be re-made. Joined into a single run of text — which is how
+    // this rendered until 2026-08-05 — that sentence arrives spliced to a
+    // retention notice and a segment count, and reads as boilerplate.
+    let script = include_str!("../../ui/main.js");
+    let styles = include_str!("../../ui/styles.css");
+    let render = script
+        .split("function renderTurns(")
+        .nth(1)
+        .and_then(|rest| rest.split("for (const turn of").next())
+        .expect("the warning render preamble exists");
+    assert!(render.contains("warning.replaceChildren("));
+    assert!(render.contains("safeWarnings.map("));
+    assert!(render.contains("warning-line"));
+    // The regression this pins: collapsing the list back into one node.
+    assert!(!render.contains("safeWarnings.join("));
+    assert!(!render.contains("warning.textContent ="));
+    // Order is the producer's, so the view must not sort or filter them.
+    assert!(!render.contains("safeWarnings.sort("));
+    assert!(!render.contains("safeWarnings.filter("));
+    // Still hidden when there is nothing to say.
+    assert!(render.contains("warning.hidden = safeWarnings.length === 0"));
+    assert!(styles.contains(".warning-line"));
+}
+
+#[test]
 fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     let html = include_str!("../../ui/index.html");
     let script = include_str!("../../ui/main.js");
