@@ -1066,3 +1066,64 @@ produces per-fixture verdicts; the probe measures one token. Three fixtures are
 expected to fail on the identifier still, and `locator-second-turn`'s repetition
 loop is unrelated to any of this and expected to persist — it reproduced
 byte-identically with the mask off.
+
+### Registered 12-fixture matrix on the enumerated contract — 2026-08-06 — 8 of 12
+
+Receipt: `notes/mlx_note_matrix_receipt_enumerated.json`. Run on the registered
+runtime; the harness's own guard admitted the environment rather than my say-so.
+
+| Gate | Before (2026-08-05) | After |
+|---|---|---|
+| Fixtures passing every gate | **3 of 12** | **8 of 12** |
+| Cold median latency | 5.79 s | **2.50 s** (ceiling 30 s) |
+| Peak RSS | 1.184 GB | 1.190 GB (ceiling 4.28 GB) |
+| Tree unchanged, every fixture ran | pass | pass |
+| `admits` | false | **false** |
+
+Every remaining failure is the same code — `citation-locator` on `ordinary-action`,
+`ordinary-question`, `name-number-action` and `negation-proposal`. The six refusal
+classes that used to be spread across `response-contract`,
+`response-length-truncation` and `citation-locator` have collapsed to one.
+
+**`locator-second-turn` now passes, and that falsifies a claim this file made.**
+It was recorded as "the ninth failure is unrelated, and it is the model alone" — a
+512-token repetition loop inside a free-text hole, reproduced byte-identically with
+the mask off, and therefore "the only failure on this path that the harness cannot
+be blamed for." A harness change fixed it. The mask-off counterfactual was sound and
+its conclusion did not follow: showing the *mask* was not responsible is not showing
+the *harness* was not responsible, and enumeration — a different harness change —
+removed the loop. The margin probe shows the same thing from the other side: this
+fixture produced a 494-character string before and a clean 90 after.
+
+**Three of the four remaining failures are the three fixtures whose decision margin
+stayed negative**, which is the predicted result and not new information.
+
+**The fourth is the interesting one.** `ordinary-action` reproduces the full
+90-character identifier — margin +0.92, full length confirmed — and still refuses on
+`citation-locator`. That is the first failure on this path that is about citation
+rather than about transcribing an identifier, which is what the harness was built to
+measure and what identifier truncation has been hiding since 2026-08-02. It is
+unexplained and is the next thing to look at.
+
+**This does not admit the candidate.** `admits` is false, the semantic and usefulness
+gates are untouched, and no generator is wired into Preview. What changed is that
+the instrument now measures what it was built for.
+
+#### Provenance note — the registered runtime is installer-sensitive
+
+The first matrix attempt refused all 36 workers with `runtime-package-mismatch`, on
+an environment whose Python, CPython, mlx, mlx-lm and transformers versions were all
+identical to the pin. The cause is `package_metadata_sha256`: an environment built
+with `uv` produces different `RECORD` digests from one built with `pip`, even at
+identical versions, and only the `pip`-built one satisfies the guard.
+
+The pin's docstring records that it was already narrowed once, to stop `RECORD`
+depending on the directory the environment lives in. This is the same class of
+problem one level up: it now depends on the installer. Worth recording rather than
+fixing here — the guard is doing its job, and a pin that is too strict fails closed.
+
+**The margins are unaffected.** Every fixture's decision margin is byte-identical
+between the `uv` and `pip` environments, so the wheel-identity difference does not
+reach the computation. The numbers in the two sections above stand; they were
+produced on an environment the guard would have refused, and re-running them on the
+environment it admits changed nothing.
