@@ -749,6 +749,38 @@ a measurement of the candidate. This is a defect whether or not it changes any
 verdict, and it is the same shape as everything else found on this path: the
 harness graded something it never asked for.
 
+##### Correction 2026-08-06 — the count is wrong in both directions
+
+Two of the three are stated, and four more are not. `SYSTEM_PROMPT` reads: *"Every
+item must name the offered candidate_id and one to three offered source fragment
+IDs in canonical order."* That is rule 2 and rule 3, in prose, in the message the
+model receives. The sentence above is precisely true — `response_contract` does not
+state them — and misleading as used, because "rules it was never given" is false for
+two of the three. **Only uniqueness is genuinely unstated anywhere.**
+
+Reading `_decode_response` against `SYSTEM_PROMPT` line by line also finds four
+enforced rules this section never counted, none of them stated in either place:
+
+| Rule `_decode_response` enforces | Stated in the system prompt? | Stated in the contract? |
+|---|---|---|
+| `source_fragment_ids` must be offered | **yes** | no |
+| `source_fragment_ids` in canonical order | **yes** | no |
+| `source_fragment_ids` must be unique | no | no |
+| a `candidate_id` may appear in only one item | no | no |
+| items must appear in increasing candidate order | no | no |
+| a fragment may be the primary citation for only one item | no | no |
+| `claim` may contain no control characters | no | no |
+
+So the defect is real and larger than recorded — seven enforced rules, five of them
+unstated anywhere — while the specific argument built on it is weaker than recorded.
+Four of the five bite only on multi-item or multi-fragment responses, which most
+fixtures cannot produce; `locator-canonical-order` is the one that can.
+
+**This matters for the intervention, not just the bookkeeping.** The reason to expect
+"state the rules" to fix the truncation was that the model had never been told to use
+the offered IDs. It has been told, in prose, on every call, and it truncates anyway.
+The preregistration below is written against that corrected premise.
+
 #### What this does and does not establish
 
 It does **not** establish that the small-model path is closed. The registered
@@ -819,3 +851,83 @@ historical prompt advertised the strict parser shape, the recorded output
 digest is not valid syntax-gate evidence. SmolLM2 remains **unadmitted**;
 locator, semantic usefulness, human review, and fair latency classification
 remain unmeasured. No runtime replacement is justified by this result.
+
+---
+
+## Preregistered amendment — 2026-08-06 — state every enforced rule in the contract
+
+**Registered before the run. The prediction below is the point of the exercise; a
+result recorded after the fact is not evidence about what was expected.**
+
+### What this changes, and nothing else
+
+`response_contract` gains a machine-readable statement of every rule
+`_decode_response` enforces, so the harness stops grading behaviour it never asked
+for. Seven rules, five of which appear nowhere today and two of which appear only
+in `SYSTEM_PROMPT` prose — the corrected table under "A second harness defect"
+is the authority on which is which.
+
+Nothing else moves. Same pinned model and revision, same mask, same decoding
+parameters, same fixtures, same gates, same `_decode_response` behaviour. This
+amendment adds no rule and relaxes none; it writes down the rules already enforced.
+
+**It does change every request digest on this path.** The committed 12-fixture
+matrix receipt describes the old contract and is not comparable call-for-call after
+this lands. That cost is the reason the amendment is registered rather than
+attempted.
+
+### Why this one first, and why alone
+
+It is the smaller of the two registered interventions and the only one that is a
+defect fix regardless of outcome. A candidate refused for breaking rules it was
+never given is not measured, whatever the verdict — so this has to happen before
+any admission decision, independently of whether it improves anything.
+
+It runs alone because the second intervention — enumerating the offered fragment
+IDs — lands in the same digest. Bundled, a pass could not be attributed.
+
+### The prediction, stated before the answer is known
+
+The decision-margin probe gives this a numeric form rather than a hope.
+`notes/mlx_note_id_decision_margin_receipt.json` records the margin between
+continuing and closing the identifier on all ten supported fixtures: mean −1.03,
+range −2.41 to +0.16. A shift of **+1.02** flips five of ten; **+2.41** flips all
+ten.
+
+**Registered prediction: this amendment moves the mean margin by less than +0.50,
+and flips at most two of the ten fixtures.**
+
+The reasoning, so the prediction is falsifiable rather than hedged. The model is
+already told in prose, on every call, to use "one to three *offered* source fragment
+IDs in canonical order," and it truncates anyway on 9 of 10. The exposure
+measurement says what actually correlates with the truncation point: the nearest
+complete identifier *instance* in the context ends at 67 characters. A rule is not
+an instance. Restating a rule the model already receives, in a different part of the
+same message, should not move a token-level copy preference much.
+
+**Two controls, registered with it:**
+
+1. `candidate_id` is already reproduced 10/10. If this amendment degrades that, the
+   change did something other than what it claims.
+2. `abstain-chitchat` and `abstain-plain` already pass. They must still pass; an
+   amendment that buys supported fixtures by breaking abstention is a regression.
+
+### Falsifiers
+
+- **If the mean margin moves +1.02 or more**, the prediction is wrong and the
+  finding is large: where a rule is stated — prose versus machine-readable schema —
+  changes token-level copying in this model. That would deserve its own follow-up
+  and would change how every contract on this path is written.
+- **If per-fixture outcomes improve while the margin does not move by at least
+  +1.02**, the improvement came from somewhere other than the identifier decision,
+  and the causal story in this section is wrong. Find it before claiming the fix.
+- **If nothing changes at all**, the defect is closed and the measurement is
+  unchanged, which is the expected and still-worthwhile outcome. It does not admit
+  the candidate, and it makes the next intervention interpretable.
+
+### What a pass would and would not authorize
+
+It would authorize running the second intervention against a harness that no longer
+grades unstated rules. It would **not** admit a note generator, wire anything into
+Preview, or satisfy the human semantic gate in `vertical-slice.md` wave D. Those are
+unchanged and unaffected by anything in this amendment.
