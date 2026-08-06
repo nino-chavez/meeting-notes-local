@@ -1,0 +1,356 @@
+[
+  {
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "ordinary-decision",
+    "offered_candidate_ids": [
+      "cf-4f97007f5910b83731d4eff3974dbd8ab6672459c81df99373e69c05ca4e73d0"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-dff86605f07278bd6eaf834b69972bd0bac0755646ec17e0eb27ab5dfe983382-t000000-c000000-000045"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-4f97007f5910b83731d4eff3974dbd8ab6672459c81df99373e69c05ca4e73d0\",\"source_fragment_ids\":[\"sf-dff86605f07278bd6eaf834b69972bd0bac0755646ec17e0eb27ab5dfe983382-t000000-c000000-000045\"],\"citation\":\"Dana decided that Battery 7 ships on Tuesday.\",\"label\":\"ACTION\",\"claim\":\"Dana decided to ship Battery 7 on Tuesday.\"}]}",
+    "records": 1,
+    "refused": null,
+    "response_bytes": 344,
+    "rows": [
+      {
+        "candidate_id": "cf-4f97007f5910b83731d4eff3974dbd8ab6672459c81df99373e69c05ca4e73d0",
+        "candidate_id_known": true,
+        "canonical_repr": "'Dana decided that Battery 7 ships on Tuesday.'",
+        "citation_matches": true,
+        "citation_repr": "'Dana decided that Battery 7 ships on Tuesday.'",
+        "claim": "Dana decided to ship Battery 7 on Tuesday.",
+        "common_prefix": 45,
+        "index": 0,
+        "is_prefix_of_canonical": true,
+        "label": "ACTION",
+        "len_canonical": 45,
+        "len_citation": 45,
+        "source_fragment_ids": [
+          "sf-dff86605f07278bd6eaf834b69972bd0bac0755646ec17e0eb27ab5dfe983382-t000000-c000000-000045"
+        ],
+        "source_ids_offered": true
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "branch": "citation-text-mismatch",
+    "branch_line": 346,
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "ordinary-action",
+    "offered_candidate_ids": [
+      "cf-3944a8751d26cf4504d25e60c44aea3e53a92166a5c2de99b5e891b34461a942"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-6d93856ba198dcbdc5f4edd4db49cc546b21fb791f4a97750ee84347279896ee-t000000-c000000-000040"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-3944a8751d26cf4504d25e60c44aea3e53a92166a5c2de99b5e891b34461a942\",\"source_fragment_ids\":[\"sf-6d93856ba198dcbdc5f4edd4db49cc546b21fb791f4a97750ee84347279896ee-t000000-c000000-000040\"],\"citation\":\"the exact text of the fragment named first in source_fragment_ids\",\"label\":\"ACTION\",\"claim\":\"Marco will send invoice 2048 by June 14.\"}]}",
+    "refused": "citation-locator",
+    "response_bytes": 362,
+    "rows": [
+      {
+        "candidate_id": "cf-3944a8751d26cf4504d25e60c44aea3e53a92166a5c2de99b5e891b34461a942",
+        "candidate_id_known": true,
+        "canonical_repr": "'Marco will send invoice 2048 by June 14.'",
+        "citation_matches": false,
+        "citation_repr": "'the exact text of the fragment named first in source_fragment_ids'",
+        "claim": "Marco will send invoice 2048 by June 14.",
+        "common_prefix": 0,
+        "index": 0,
+        "is_prefix_of_canonical": false,
+        "label": "ACTION",
+        "len_canonical": 40,
+        "len_citation": 65,
+        "source_fragment_ids": [
+          "sf-6d93856ba198dcbdc5f4edd4db49cc546b21fb791f4a97750ee84347279896ee-t000000-c000000-000040"
+        ],
+        "source_ids_offered": true
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "ordinary-proposal",
+    "offered_candidate_ids": [
+      "cf-0651a2a86d6a9c9a11b7955edbd2247cb2157838fe9a5b1d3c94f8f28e316de0"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-4b81f2b18ba9572b608e96a4b0ffd1ed88c25efef760f21d87fbbb7e801531a7-t000000-c000000-000040"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-0651a2a86d6a9c9a11b7955edbd2247cb2157838fe9a5b1d3c94f8f28e316de0\",\"source_fragment_ids\":[\"sf-4b81f2b18ba9572b608e96a4b0ffd1ed88c25efef760f21d87fbbb7e801531a7-t000000-c000000-000040\"],\"citation\":\"Priya proposed moving the renewal to Q4.\",\"label\":\"ACTION\",\"claim\":\"moving the renewal to Q4.\"}]}",
+    "records": 1,
+    "refused": null,
+    "response_bytes": 322,
+    "rows": [
+      {
+        "candidate_id": "cf-0651a2a86d6a9c9a11b7955edbd2247cb2157838fe9a5b1d3c94f8f28e316de0",
+        "candidate_id_known": true,
+        "canonical_repr": "'Priya proposed moving the renewal to Q4.'",
+        "citation_matches": true,
+        "citation_repr": "'Priya proposed moving the renewal to Q4.'",
+        "claim": "moving the renewal to Q4.",
+        "common_prefix": 40,
+        "index": 0,
+        "is_prefix_of_canonical": true,
+        "label": "ACTION",
+        "len_canonical": 40,
+        "len_citation": 40,
+        "source_fragment_ids": [
+          "sf-4b81f2b18ba9572b608e96a4b0ffd1ed88c25efef760f21d87fbbb7e801531a7-t000000-c000000-000040"
+        ],
+        "source_ids_offered": true
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "branch": "source-id-not-offered",
+    "branch_line": 331,
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "ordinary-question",
+    "offered_candidate_ids": [
+      "cf-582da7367a25508e1040f6d718b608353d6072ae92b815e12faaea388402b73b"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-f49b5221e6409dfb7b68be5ec2374ed38924125b922b6cbdfe1aa9c3b981715e-t000000-c000000-000056"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-582da7367a25508e1040f6d718b608353d6072ae92b815e12faaea388402b73b\",\"source_fragment_ids\":[\"sf-f49b5221e6409dfb7b68be5ec2374ed38924125b922b6cbdfe1aa9c3b981715e\"],\"citation\":\"the exact text of the fragment named first in source_fragment_ids\",\"label\":\"ACTION\",\"claim\":\"confirm whether the North room is available\"}]}",
+    "refused": "citation-locator",
+    "response_bytes": 342,
+    "rows": [
+      {
+        "candidate_id": "cf-582da7367a25508e1040f6d718b608353d6072ae92b815e12faaea388402b73b",
+        "candidate_id_known": true,
+        "canonical_repr": null,
+        "citation_matches": false,
+        "citation_repr": "'the exact text of the fragment named first in source_fragment_ids'",
+        "claim": "confirm whether the North room is available",
+        "index": 0,
+        "label": "ACTION",
+        "source_fragment_ids": [
+          "sf-f49b5221e6409dfb7b68be5ec2374ed38924125b922b6cbdfe1aa9c3b981715e"
+        ],
+        "source_ids_offered": false
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "candidates_offered": 2,
+    "finish_reason": "stop",
+    "fixture": "locator-canonical-order",
+    "offered_candidate_ids": [
+      "cf-a74edd5962326f50191008c22c4e8f07ed37d952c4948ea5d613ebc612d8d719",
+      "cf-f75de8461ff455c5d8eeeafe7ad3bf71d72a265c895926d81eb78755134d3dfe"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-8246bce15b07be25db299c7d9755cf83270c14ccf048e11e8de364c65c0408ed-t000000-c000000-000049",
+      "sf-8246bce15b07be25db299c7d9755cf83270c14ccf048e11e8de364c65c0408ed-t000001-c000000-000037"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-a74edd5962326f50191008c22c4e8f07ed37d952c4948ea5d613ebc612d8d719\",\"source_fragment_ids\":[\"sf-8246bce15b07be25db299c7d9755cf83270c14ccf048e11e8de364c65c0408ed-t000000-c000000-000049\"],\"citation\":\"We decided that the Harbor release uses build 17.\",\"label\":\"DECISION\",\"claim\":\"the Harbor release uses build 17.\"}]}",
+    "records": 1,
+    "refused": null,
+    "response_bytes": 341,
+    "rows": [
+      {
+        "candidate_id": "cf-a74edd5962326f50191008c22c4e8f07ed37d952c4948ea5d613ebc612d8d719",
+        "candidate_id_known": true,
+        "canonical_repr": "'We decided that the Harbor release uses build 17.'",
+        "citation_matches": true,
+        "citation_repr": "'We decided that the Harbor release uses build 17.'",
+        "claim": "the Harbor release uses build 17.",
+        "common_prefix": 49,
+        "index": 0,
+        "is_prefix_of_canonical": true,
+        "label": "DECISION",
+        "len_canonical": 49,
+        "len_citation": 49,
+        "source_fragment_ids": [
+          "sf-8246bce15b07be25db299c7d9755cf83270c14ccf048e11e8de364c65c0408ed-t000000-c000000-000049"
+        ],
+        "source_ids_offered": true
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "locator-second-turn",
+    "offered_candidate_ids": [
+      "cf-b27fd791656c9e17db3bef0cd0fdefbcb9806198ce90962bab8ada888723b118"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-a2d246fc70b3f29c551ad8f8bab41f886123e04e507904e7380bf0758020e884-t000001-c000000-000051"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-b27fd791656c9e17db3bef0cd0fdefbcb9806198ce90962bab8ada888723b118\",\"source_fragment_ids\":[\"sf-a2d246fc70b3f29c551ad8f8bab41f886123e04e507904e7380bf0758020e884-t000001-c000000-000051\"],\"citation\":\"Leah decided that the South launch moves to Friday.\",\"label\":\"DECISION\",\"claim\":\"Leah decided on the South launch move to Friday.\"}]}",
+    "records": 1,
+    "refused": null,
+    "response_bytes": 358,
+    "rows": [
+      {
+        "candidate_id": "cf-b27fd791656c9e17db3bef0cd0fdefbcb9806198ce90962bab8ada888723b118",
+        "candidate_id_known": true,
+        "canonical_repr": "'Leah decided that the South launch moves to Friday.'",
+        "citation_matches": true,
+        "citation_repr": "'Leah decided that the South launch moves to Friday.'",
+        "claim": "Leah decided on the South launch move to Friday.",
+        "common_prefix": 51,
+        "index": 0,
+        "is_prefix_of_canonical": true,
+        "label": "DECISION",
+        "len_canonical": 51,
+        "len_citation": 51,
+        "source_fragment_ids": [
+          "sf-a2d246fc70b3f29c551ad8f8bab41f886123e04e507904e7380bf0758020e884-t000001-c000000-000051"
+        ],
+        "source_ids_offered": true
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "name-number-decision",
+    "offered_candidate_ids": [
+      "cf-1d882039131a6d1d22d4b15f4aa8a6d111f5ecc61382b9ad52847bf4a7b3428b"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-0da5b58459284a8542eb7404c26ae3c7e23860aae5a395c1afaa45ccca318f36-t000000-c000000-000052"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-1d882039131a6d1d22d4b15f4aa8a6d111f5ecc61382b9ad52847bf4a7b3428b\",\"source_fragment_ids\":[\"sf-0da5b58459284a8542eb7404c26ae3c7e23860aae5a395c1afaa45ccca318f36-t000000-c000000-000052\"],\"citation\":\"Nora decided that Case 481 is not ready for closure.\",\"label\":\"DECISION\",\"claim\":\"Nora decided that Case 481 is not ready for closure.\"}]}",
+    "records": 1,
+    "refused": null,
+    "response_bytes": 363,
+    "rows": [
+      {
+        "candidate_id": "cf-1d882039131a6d1d22d4b15f4aa8a6d111f5ecc61382b9ad52847bf4a7b3428b",
+        "candidate_id_known": true,
+        "canonical_repr": "'Nora decided that Case 481 is not ready for closure.'",
+        "citation_matches": true,
+        "citation_repr": "'Nora decided that Case 481 is not ready for closure.'",
+        "claim": "Nora decided that Case 481 is not ready for closure.",
+        "common_prefix": 52,
+        "index": 0,
+        "is_prefix_of_canonical": true,
+        "label": "DECISION",
+        "len_canonical": 52,
+        "len_citation": 52,
+        "source_fragment_ids": [
+          "sf-0da5b58459284a8542eb7404c26ae3c7e23860aae5a395c1afaa45ccca318f36-t000000-c000000-000052"
+        ],
+        "source_ids_offered": true
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "branch": "source-id-not-offered",
+    "branch_line": 331,
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "name-number-action",
+    "offered_candidate_ids": [
+      "cf-e3ea8be8d222c2308244053f4eccd6bd27d2b4ebac826e718b5bfc5c1a14fea2"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-463a8654903fbe493f004afab2ccb5e8657a7ba69f8704a09918cf021dd159e7-t000000-c000000-000044"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-e3ea8be8d222c2308244053f4eccd6bd27d2b4ebac826e718b5bfc5c1a14fea2\",\"source_fragment_ids\":[\"sf-463a8654903fbe493f004afab2ccb5e8657a7ba69f8704a09918cf021dd159e7\"],\"citation\":\"the exact text of the fragment named first in source_fragment_ids\",\"label\":\"ACTION\",\"claim\":\"Dev will send version 3.14 to Mei on July 9.\"}]}",
+    "refused": "citation-locator",
+    "response_bytes": 343,
+    "rows": [
+      {
+        "candidate_id": "cf-e3ea8be8d222c2308244053f4eccd6bd27d2b4ebac826e718b5bfc5c1a14fea2",
+        "candidate_id_known": true,
+        "canonical_repr": null,
+        "citation_matches": false,
+        "citation_repr": "'the exact text of the fragment named first in source_fragment_ids'",
+        "claim": "Dev will send version 3.14 to Mei on July 9.",
+        "index": 0,
+        "label": "ACTION",
+        "source_fragment_ids": [
+          "sf-463a8654903fbe493f004afab2ccb5e8657a7ba69f8704a09918cf021dd159e7"
+        ],
+        "source_ids_offered": false
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "negation-decision",
+    "offered_candidate_ids": [
+      "cf-b60b8d0211ab517a8764de480e931da8dc2ddcbd6b0a401f3c645685b93f35ef"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-8d44c028bba80acbc5692745064c2e8618d4cd3b0d0d2b6a103dd1ca80a8b4c3-t000000-c000000-000039"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-b60b8d0211ab517a8764de480e931da8dc2ddcbd6b0a401f3c645685b93f35ef\",\"source_fragment_ids\":[\"sf-8d44c028bba80acbc5692745064c2e8618d4cd3b0d0d2b6a103dd1ca80a8b4c3-t000000-c000000-000039\"],\"citation\":\"We decided not to cancel Project Atlas.\",\"label\":\"ACTION\",\"claim\":\"We decided not to cancel Project Atlas.\"}]}",
+    "records": 1,
+    "refused": null,
+    "response_bytes": 335,
+    "rows": [
+      {
+        "candidate_id": "cf-b60b8d0211ab517a8764de480e931da8dc2ddcbd6b0a401f3c645685b93f35ef",
+        "candidate_id_known": true,
+        "canonical_repr": "'We decided not to cancel Project Atlas.'",
+        "citation_matches": true,
+        "citation_repr": "'We decided not to cancel Project Atlas.'",
+        "claim": "We decided not to cancel Project Atlas.",
+        "common_prefix": 39,
+        "index": 0,
+        "is_prefix_of_canonical": true,
+        "label": "ACTION",
+        "len_canonical": 39,
+        "len_citation": 39,
+        "source_fragment_ids": [
+          "sf-8d44c028bba80acbc5692745064c2e8618d4cd3b0d0d2b6a103dd1ca80a8b4c3-t000000-c000000-000039"
+        ],
+        "source_ids_offered": true
+      }
+    ],
+    "rows_emitted": 1
+  },
+  {
+    "branch": "source-id-not-offered",
+    "branch_line": 331,
+    "candidates_offered": 1,
+    "finish_reason": "stop",
+    "fixture": "negation-proposal",
+    "offered_candidate_ids": [
+      "cf-1de8b77307c5e08c587cecdd94c8fa4455d3e851429d8500dcd6169893249ce2"
+    ],
+    "offered_source_fragment_ids": [
+      "sf-b6e8e3e9940b8f0ae6155d3d579f14ecee4aae8b527f979b29cfdf38682b44e9-t000000-c000000-000046"
+    ],
+    "raw": "{\"items\":[{\"candidate_id\":\"cf-1de8b77307c5e08c587cecdd94c8fa4455d3e851429d8500dcd6169893249ce2\",\"source_fragment_ids\":[\"sf-b6e8e3e9940b8f0ae6155d3d579f14ecee4aae8b527f979b29cfdf38682b44e9\"],\"citation\":\"I propose that we do not merge the red branch.\",\"label\":\"ACTION\",\"claim\":\"merge the red branch\"}]}",
+    "refused": "citation-locator",
+    "response_bytes": 300,
+    "rows": [
+      {
+        "candidate_id": "cf-1de8b77307c5e08c587cecdd94c8fa4455d3e851429d8500dcd6169893249ce2",
+        "candidate_id_known": true,
+        "canonical_repr": null,
+        "citation_matches": false,
+        "citation_repr": "'I propose that we do not merge the red branch.'",
+        "claim": "merge the red branch",
+        "index": 0,
+        "label": "ACTION",
+        "source_fragment_ids": [
+          "sf-b6e8e3e9940b8f0ae6155d3d579f14ecee4aae8b527f979b29cfdf38682b44e9"
+        ],
+        "source_ids_offered": false
+      }
+    ],
+    "rows_emitted": 1
+  }
+]

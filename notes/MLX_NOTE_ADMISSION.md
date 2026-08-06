@@ -1127,3 +1127,110 @@ between the `uv` and `pip` environments, so the wheel-identity difference does n
 reach the computation. The numbers in the two sections above stand; they were
 produced on an environment the guard would have refused, and re-running them on the
 environment it admits changed nothing.
+
+### Which `citation-locator` branch — 2026-08-06
+
+Receipt: `notes/mlx_note_citation_branch_receipt.json`. Probe:
+`notes/measure_citation_refusal_branch.py`. Registered runtime, constrained arm, the
+same provider the matrix worker builds. Reproduced identically on three runs.
+
+`_decode_response` raises `AdmissionRefused("citation-locator")` from five distinct
+places and the receipt records only the string, so "every remaining failure is the
+same code" above is a statement about the label that I let read as a statement about
+the cause. The probe catches the refusal and walks the traceback to the raising line.
+That localizes the branch without editing the harness, which matters because
+`_harness_identity()` hashes the harness source and an edit would invalidate
+comparison against the receipts committed at `c07e1a6`.
+
+| Fixture | Identifier | Citation | Branch |
+|---|---|---|---|
+| `ordinary-action` | 90 chars, correct | **wrong** | citation is not the canonical slice |
+| `ordinary-question` | **67 chars** | wrong | source id was not offered |
+| `name-number-action` | **67 chars** | wrong | source id was not offered |
+| `negation-proposal` | **67 chars** | correct | source id was not offered |
+
+Two branches. Two mechanisms.
+
+**Correction: identifier truncation did not go away, and it has never had a code of
+its own.** Three of the four failures emit `sf-` followed by 64 hex and stop — 67
+characters, the exact truncation point the decision-margin probe measures, on exactly
+the three fixtures whose margin stayed negative (−1.16, −0.69, −0.36). The section
+above attributes those three correctly and then says the refusal classes "collapsed
+to one", which conflates two different things called truncation.
+`response-length-truncation` means the generator hit its token ceiling;
+`finish_reason` is `stop` on all ten fixtures here, so nothing hit a ceiling. A
+truncated identifier fails the membership check and reports `citation-locator`, which
+is what it has always done. Fewer codes is not fewer causes.
+
+**The fourth is explained, and the explanation is a defect I introduced.**
+`ordinary-action` puts the canonical text in `claim` and puts this in `citation`:
+
+```
+the exact text of the fragment named first in source_fragment_ids
+```
+
+That is `response_contract`'s own rule text, copied verbatim out of the value of the
+`citation.equals` key. `git log -S` puts that string in `e773809` — intervention one,
+the amendment that wrote the unstated rules down. Before it the key did not exist and
+the model could not have copied it.
+
+The model's reading is consistent, not careless. Every other value-shaped key in that
+contract carries a literal it is meant to emit: `candidate_id.enum`, `label.enum`,
+and since intervention two `source_fragment_ids.item.enum`. Only `citation.equals`
+carries an English sentence in the position where its neighbours carry values. A
+model that treats `equals` the way JSON Schema's `const` behaves produces exactly
+this response.
+
+Three of ten fixtures do it — `ordinary-action`, `ordinary-question`,
+`name-number-action`. Two of those refuse on the truncated identifier first, so the
+substitution never reaches their verdict. `negation-proposal` cites correctly and
+fails on the identifier alone. That fixture is what keeps the two mechanisms
+separable instead of confounded.
+
+**What this costs the earlier claim.** Intervention one was recorded as closing a
+documented defect and making the measurement worse, with the harm attributed to
+distance — 406 added characters pushing the identifier away from the generation
+point. That attribution stands; the margins moved as predicted and moved back under
+the opposite manipulation. What was missed is that the same amendment introduced a
+second failure in a different field, and the identifier failure then hid it. Writing
+a rule down in a slot that reads like a value is not a neutral act of documentation.
+
+### Preregistration — intervention three, 2026-08-06
+
+Registered before the change is written and before it is run.
+
+**Hypothesis.** The substitution is caused by the *key name*, not by the presence of
+prose. `equals` asserts equality, so the value beside it reads as the thing to equal.
+A key that describes rather than asserts should not attract the copy.
+
+**The change is one variable.** Rename `citation.equals` to `citation.rule`. The
+prose is unchanged, character for character. Nothing else in the contract, the
+system prompt, the mask, or `_decode_response` moves. No rule is added or relaxed.
+
+**Prediction.** The three fixtures that currently emit the rule text —
+`ordinary-action`, `ordinary-question`, `name-number-action` — stop emitting it, and
+none of the seven that currently cite correctly starts.
+
+**Not predicted.** Whether `ordinary-action` then passes. It would still have to
+transcribe a 40-character slice exactly, which is a separate question this
+intervention does not address, and predicting a pass would let a lucky
+transcription score a hit the mechanism did not earn.
+
+**Falsifier.** If the fixtures still emit the rule text under the new key, the key
+name is not doing the work — the model is copying the nearest available literal
+regardless of what the key asserts — and the two remaining candidates are the ones
+below, neither of which is a test.
+
+**Two alternatives considered and deliberately not run first.** Both would make the
+failure disappear without establishing what caused it.
+
+- *Enumerate the citation*, as intervention two did for the identifier. Consistent
+  with the contract's own idiom and near-certain to work. It converts transcription
+  into selection, and with one candidate per fixture there is exactly one option, so
+  citation would stop being measured at all.
+- *Delete `citation` from the response.* `_decode_response` already computes the
+  canonical value at line 342 and requires exact equality, so the field carries no
+  information the harness lacks; provenance comes from `source_fragment_ids[0]`,
+  which is validated separately. This is defensible as a contract correction and it
+  relaxes a rule, which the amendment discipline above forbids doing silently. It
+  belongs in its own registered change, after the mechanism is known.
