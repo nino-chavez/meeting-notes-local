@@ -1,4 +1,4 @@
-# Local Meeting Notes — coworker alpha hand-off
+# Yawn — coworker alpha hand-off
 
 Operator-owned draft. This is the note that accompanies the DMG link for the
 internal coworker cohort. Plain language on purpose; edit freely.
@@ -9,14 +9,60 @@ A local meeting notetaker for Apple-silicon Macs (macOS 14.4+). Everything —
 audio, transcripts, search — stays on your machine. Nothing is uploaded
 anywhere, ever. There is no account, no server, and no telemetry.
 
-What works today: manual record (your mic plus the meeting audio your Mac
-plays), local transcription after the meeting ends, transcript search, and
-reviewed deletion of audio you don't want kept. If the app quits or crashes
-mid-meeting, it recovers the recording on next launch.
+The app installs as **Yawn**. If you have an older link that installed "Local
+Meeting Notes", this replaces it and keeps the meetings you already have.
 
-What does not exist yet, on purpose: automatic meeting notes, voice
-isolation (separating who said what), and auto-updates. When there's a new
-build, you'll get a new link.
+What works today: manual record (your mic plus the meeting audio your Mac
+plays), local transcription after the meeting ends, transcript search, copying a
+transcript out, reviewed deletion of audio you don't want kept, and — new in
+this build — an optional voice check that marks speech on your microphone that
+doesn't sound like you. If the app quits or crashes mid-meeting, it recovers the
+recording on next launch.
+
+What does not exist yet, on purpose: automatic meeting notes and auto-updates.
+When there's a new build, you'll get a new link.
+
+## The voice check — read this before you switch it on
+
+This is the new thing in this build, and it's the part we most want you to be
+skeptical about.
+
+**It does nothing until you switch it on.** Until you finish voice setup, your
+transcripts are exactly what they were before: every audible voice, nothing
+marked, nothing hidden. There is no profile, so there is no check.
+
+**What it does once you do.** You record a few short samples of yourself
+talking. The app measures what you sound like and, from then on, on your
+microphone leg only, marks the turns that don't match. A marked turn is **not
+deleted.** It stays in the transcript in its place, its text hidden behind the
+label "Withheld", and you can put it back.
+
+**Restoring is in Meetings, not on the screen you see right after recording.**
+Open the meeting from Meetings and the withheld turns each carry a "Restore this
+turn" button. The screen right after a recording shows you the withheld turns
+and the warnings but has no restore control.
+
+**Where it can be wrong, and why that matters more than a mangled word.** The
+threshold that decides "not you" was measured on your own setup recordings and
+never on a real meeting, so we do not know its real-world error rate. The
+failure we care about isn't a garbled name. It's a colleague sitting near your
+laptop whose speech gets marked as not-you, in a record of a meeting nobody can
+hold again. The app states the first point on the transcript screen every time
+the check runs, and raises a separate alert when the speech it withholds keeps
+coming back as one voice — which is what that colleague looks like from the
+inside.
+
+**If you see that alert, go read what was withheld and restore anything that
+belongs.** That is a judgment about who was in the room, and the app cannot make
+it for you.
+
+**Headphones change whether it runs at all.** If your microphone is picking up
+enough of the meeting's own audio, the app stops claiming who said what — the
+split isn't reliable at that point — and the voice check doesn't run. Use
+headphones if you want the check to apply.
+
+**To switch it off**, delete the stored voice profile in voice setup. The check
+stops; transcripts you already have are untouched.
 
 ## Install
 
@@ -45,7 +91,7 @@ itself a release check we want the receipt from.)
   norms — the app doesn't make that call for you, and some places/people
   require everyone's consent. When in doubt, ask the room.
 - Use headphones for anything with remote participants; it keeps the two
-  audio legs clean.
+  audio legs clean, and it's also what lets the voice check run.
 
 ## Reporting back
 
@@ -58,12 +104,19 @@ Useful reports, roughly in order of value:
 1. Install or first-launch friction, verbatim messages, screenshots of
    dialogs (not of transcript content).
 2. Permission prompts that didn't appear, appeared twice, or didn't stick.
-3. A meeting that recorded silence, one leg only, or garbled audio — say
+3. **The voice check marking a real person as not-you** — roughly how many turns,
+   whether it was one person or scattered, and whether the "keeps returning as
+   one voice" alert appeared. This is the one we have no measurement for.
+4. The voice check withholding *your own* speech, and roughly how much.
+5. A meeting that recorded silence, one leg only, or garbled audio — say
    which mic/headphones/meeting app you used.
-4. Recovery: if the app or Mac died mid-meeting, did the recording survive?
-5. Transcript quality as an impression ("names mangled", "crosstalk lost"),
+6. Recovery: if the app or Mac died mid-meeting, did the recording survive?
+7. Transcript quality as an impression ("names mangled", "crosstalk lost"),
    not as excerpts.
-6. Anything the app claimed that turned out not to be true.
+8. Anything the app claimed that turned out not to be true.
+
+For 3 and 4 we want counts and impressions, not the text — "about eight turns,
+all the same colleague" is exactly the right amount of detail.
 
 ## Expectations
 

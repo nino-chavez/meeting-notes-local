@@ -114,10 +114,13 @@ headphones, one operator at the microphone, and nobody else in the room. It is
 not a beta and does not satisfy the automatic-note gate.
 
 The alpha lane's main window carries the reviewed internal-alpha surface
-command set — capture, Library and exact search, content-free voice status,
-preserve-first migration, confirmed reset, and the one-meeting audio-deletion
-boundary — the same list the Preview window grants, with enrollment mutation
-and profile activation absent from both. This was decided 2026-08-04 after the
+command set — capture, Library and exact search, voice status, guided
+enrollment through building and publishing a profile, preserve-first migration,
+confirmed reset, the one-meeting audio-deletion boundary, and restoring a
+withheld turn — the same list the Preview window grants. Only `profile.adopt`
+stays outside both; enrollment mutation was inside the boundary as of the
+2026-08-05 gate work, which is what makes a profile installable on a shipped
+DMG and therefore makes the gate reachable at all. This was decided 2026-08-04 after the
 0.2.0 coworker-cohort DMG shipped with the shell's record entry and search
 gated on the dev-only preview lane flag, so neither was reachable on any
 machine while the mechanical release suite stayed green. Two pins now hold the
