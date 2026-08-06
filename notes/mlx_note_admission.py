@@ -223,7 +223,14 @@ def response_contract(manifest: dict) -> dict:
                             },
                             "citation": {
                                 "type": "string",
-                                "equals": "the exact text of the fragment named first in source_fragment_ids",
+                                # Preregistered intervention three, 2026-08-06. This
+                                # key was `equals`, and three of ten fixtures emitted
+                                # its value verbatim as the citation — the only
+                                # value-shaped key in this contract whose value is
+                                # prose rather than a literal the model should emit.
+                                # `rule` describes instead of asserting equality. The
+                                # prose is unchanged; the key name is the variable.
+                                "rule": "the exact text of the fragment named first in source_fragment_ids",
                             },
                             "label": {"type": "string", "enum": ["DECISION", "ACTION", "PROPOSAL", "QUESTION"]},
                             "claim": {

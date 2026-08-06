@@ -1234,3 +1234,47 @@ failure disappear without establishing what caused it.
   which is validated separately. This is defensible as a contract correction and it
   relaxes a rule, which the amendment discipline above forbids doing silently. It
   belongs in its own registered change, after the mechanism is known.
+
+### Result — intervention three, 2026-08-06 — the prediction holds, 9 of 12
+
+Receipts: `notes/mlx_note_citation_branch_receipt_rule_key.json`,
+`notes/mlx_note_matrix_receipt_rule_key.json`,
+`notes/mlx_note_id_decision_margin_receipt_rule_key.json`. Registered runtime,
+admitted by the harness's own guard. 12 protocol tests and 25 mask tests pass.
+
+**The registered prediction was that three fixtures stop emitting the rule text and
+none of the seven correct citers starts. That is what happened.**
+
+| | `equals` | `rule` |
+|---|---|---|
+| Fixtures emitting the rule text as the citation | 3 of 10 | **0 of 10** |
+| Fixtures citing the exact canonical slice | 7 of 10 | **10 of 10** |
+| Fixtures passing every registered gate | 8 of 12 | **9 of 12** |
+| `admits` | false | **false** |
+
+Renaming one key removed the failure. The prose beside it is unchanged, character for
+character, so the model was not confused by the sentence — it was reading the key.
+`equals` names a relation between the slot and its value, and the model resolved that
+relation the way JSON Schema's `const` does.
+
+**The citation gate is now clean on every fixture.** That was not predicted and is the
+part worth keeping. The three fixtures that still refuse cite the exact canonical text
+and fail only on a 67-character identifier — `sf-` plus 64 hex, the same truncation
+the decision-margin probe measures, on the same three fixtures whose margin is still
+negative. One mechanism now, on three fixtures, and it is the one this file has been
+measuring since 2026-08-02.
+
+**Nothing else moved, which the registration required checking.** Identifier decision
+margins under the renamed key differ from the enumerated run by at most 0.17 logits,
+no fixture changes sign, and full-length reproduction stays at 7 of 10. Cold median
+latency 2.54 s against a 30 s ceiling; peak RSS 1.190 GB against 4.28 GB.
+
+**What this does not establish.** `ordinary-action` passing is not evidence the model
+transcribes a 40-character slice reliably; it is one fixture, and the intervention was
+registered as not predicting it. And nothing here touches the semantic or usefulness
+gates, which remain unmeasured. `admits` is false.
+
+**The remaining work is the one thing left.** Three fixtures truncate the identifier
+at 67 characters. The two alternatives registered above — enumerating the citation,
+deleting the citation field — are no longer needed for this failure and should not be
+run to chase it; they addressed a mechanism that no longer fires.
