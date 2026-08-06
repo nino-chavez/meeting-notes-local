@@ -665,7 +665,7 @@ characters, the margin between continuing the identifier and closing the string:
 | `ordinary-question` | −1.7812 | 67 |
 | `locator-canonical-order` | −2.4062 | 67 |
 
-Mean −1.03, median −0.88, full range 2.56 logits. **All ten lean the same way, and
+Mean −1.03, median −0.95, full range 2.56 logits. **All ten lean the same way, and
 the one success is the least-negative case rather than a different one.** It clears
 zero by 0.16 logits — on a 4-bit quantised 1.5 B model that is indistinguishable
 from a tie.
@@ -694,9 +694,14 @@ exactly how far:
 
 | Claim | Required average shift |
 |---|---|
-| Flips the median fixture | **+1.02** |
+| Flips five of the ten | **+1.02** |
 | Flips every supported fixture | **+2.41** |
 | Flips the easiest one only | +0.31 |
+
+*(Each figure is the shift that clears that fixture's own margin, read off the
+table above — not a statistic. An earlier draft of this row called +1.02 "the
+median"; the median is −0.95 and the +1.02 threshold belongs to
+`name-number-action`, the fifth-hardest.)*
 
 Register the predicted shift before running either intervention, then read this same
 probe after. An intervention that fixes the outcome without moving the margin by at
