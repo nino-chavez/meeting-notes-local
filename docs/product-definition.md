@@ -95,7 +95,7 @@ has answered it yet. **Research candidate** = deliberately outside the beta.
 | 6 | Correction that changes the note: restore a withheld turn, note goes stale, regeneration required | J4 | §E | **Registered (0.2.2)** for restoration, and reachable on a shipped image from 0.4.0 — until the gate was wired in, nothing withheld a turn, so restoration was a correct implementation of an operation that could never have an input. It is reachable from Meetings only; the screen shown right after a recording renders withheld turns with no restore control. Regeneration stays deliberately unregistered until a generator passes admission |
 | 7 | Retrieval that enters with a question and lands on a claim | J1 | §F | **Registered** — library snapshot, search over transcripts and metadata, open-to-evidence/transcript/note; claim-level landing waits on feature 4 |
 | 8 | Commitment view that hands off instead of managing tasks | J2 | §F | **Decided** — a `filtered` state on F, terminal action is export, never a checkbox; unbuilt |
-| 9 | Preparation brief before the meeting | J0 | none yet | **Decided** — local read-only calendar via EventKit (`DESIGN.md § Context inputs`); unbuilt. The counterparty half — who spoke vs who was invited — is **Open, possibly unbridgeable**, and the market has not bridged it either |
+| 9 | Preparation brief before the meeting | J0 | none yet | **Decided** — local read-only calendar via EventKit (`DESIGN.md § Context inputs`); unbuilt. The counterparty half — who spoke vs who was invited — stays **Open, possibly unbridgeable** *for local audio*. The clause "and the market has not bridged it either" was **falsified 2026-08-06** and is corrected here: Wispr Flow ships named speakers by combining a calendar roster, an OAuth grant reaching the org's full Workspace directory, accessibility-tree polling of Zoom and Teams for the active-speaker indicator, LLM inference over address terms, and a one-click human correction applied across the transcript. Nobody bridged it from sound; one vendor made the failure cheap to repair. See `teardown.md § Wispr Flow, disassembled` |
 | 10 | A shell that never lies at menubar size: degradation is a beat, not an error | J3 | §A §C §J | **Shipped (0.2.2)** — tray truth table, close-to-tray, startup-failure honesty |
 
 The dependency to keep in view: features 4, 5, 6, and 7 converge on the same
@@ -114,13 +114,32 @@ research; violating one needs an amendment here first, not a quiet exception.
 
 - **Not a task manager.** The moment a commitment view offers a checkbox, the tool
   owns follow-through and the operator has two task systems (`journeys.md` J2).
-  Export and hand off, always.
+  Export and hand off, always. *Counterevidence recorded 2026-08-06, and the non-goal
+  stands.* Wispr Flow shipped the checkbox — a `Todos` table with an open/closed
+  status, a tasks tab, a `meetingId` key — and "tracking action items" is one of the
+  four frustrations its own onboarding offers. Three of six colleagues surveyed named
+  capturing actions and owners as a job, and all six wanted action items in the note.
+  None of that reaches the reason for the non-goal, which is about *owning
+  follow-through*, not about extracting commitments.
 - **Not a named-speaker product.** Names would require a bot, UI scraping, or an
   extension — every path the teardown rejected. Me/Them plus operator isolation is
-  the honest ceiling of local audio.
+  the honest ceiling of local audio. *Confirmed 2026-08-06 by disassembling the
+  newest entrant:* Wispr Flow's speaker naming runs through a helper bundle
+  identified as `…accessibility-mac-app`, carrying `AXUIElementCopyAttributeValue`
+  and per-platform `ZoomSpeakerStrategy` / `TeamsSpeakerStrategy` classes that poll
+  the meeting window's active-speaker indicator. That is UI scraping, exactly as the
+  teardown predicted. The enumeration above is incomplete — it omits the cloud
+  directory grant and the LLM address-term inference Wispr also uses — and its
+  conclusion is unchanged and better supported.
 - **Nothing leaves the Mac.** No cloud ASR, no telemetry, no built-in upload. J6
   (evaluation contribution) stays a research candidate, export-first, with consent
-  machinery specified before any transfer path exists.
+  machinery specified before any transfer path exists. *Note for messaging, not for
+  the boundary (2026-08-06):* six of six colleagues surveyed refused unprompted
+  sharing and one named local-only processing. What they asked for is control of
+  egress; locality is the mechanism that guarantees it. The boundary does not move —
+  the way it is described should lead with the guarantee. For contrast, Wispr Flow's
+  own copy states its notetaker "requires" cloud sync to process transcriptions, and
+  gates the retention control behind it.
 - **No invented content on judged surfaces.** Prototypes populate from the real
   corpus or labelled specimens carrying published measurements — never fabricated
   meetings (`journeys.md § What to prototype`).

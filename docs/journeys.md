@@ -99,20 +99,41 @@ the vocabulary is the transferable part.
 ### Where the whole category is weak, which is where this product can be strong
 
 These are the findings worth the fetch. Two gaps listed below as this project's
-problems turn out to be nobody's solved problem:
+problems turn out to be nobody's solved problem.
+
+**All three were re-tested on 2026-08-06 against a shipped binary rather than a
+marketing page** — Wispr Flow 1.6.399, installed and disassembled; mechanism in
+[`teardown.md § Wispr Flow, disassembled`](./teardown.md#wispr-flow-disassembled).
+Two held and one got worse.
 
 - **No product observed links a claim in a summary back to the words behind it.**
   Otter has "editable time codes" and a "Takeaways panel", and no mechanism connecting
   a takeaway to its transcript position. J1's trust beat is therefore a differentiator
   rather than table stakes — and it matters more here than for a cloud competitor,
   because this transcript is measurably partial where theirs is not.
+  **Held.** Wispr's meeting detail is six sibling tabs — preread, summary, notes,
+  transcript, tasks, docs — plus a searchable transcript drawer. Adjacency is not
+  citation: a transcript in the next tab still leaves the reader to find the sentence.
+  The check is an enumeration of its 411 `hub_*` interface keys, which contain
+  navigation and search and no key naming a jump from a claim to its source turn; do
+  not re-run it as a keyword count, because `cite` returns 4,200 hits of library noise.
 - **Correction is undescribed everywhere.** Nothing on Granola's marketing describes
   editing or correcting the AI output. J4 is a category gap, not a catch-up item.
+  **Partly closed, and not in a way that transfers.** Wispr ships a full speaker
+  correction surface — assign, rename, merge, apply once across the whole transcript.
+  It corrects *named* speakers, which is a non-goal here and which their build reaches
+  by scraping the meeting window. The borrowable shape is the one-action repair
+  applied across the artifact, which feature 6 already owns for the gate's Me/Not-me
+  call. Correction of the *note's claims* remains undescribed by anyone.
 - **Telling the far end is immature across the board.** Otter's "Recording disclaimer
   email" is Business-tier; Granola's equivalent is an enterprise "Org-wide notification
   that Granola is being used", marked pilot. Surface B's open decision is open in the
   market too, which means there is no convention to inherit and the legal constraint is
   the only guide.
+  **Worse than immature.** Wispr's entire answer is one FAQ sentence — "You are
+  responsible for informing everyone before you begin" — and the bundle carries no
+  participant-facing disclosure surface of any kind. The phrases that would name one
+  return zero; ignore `consent` at 653 hits, which is TLS and framework internals.
 
 ### The one thing the market has that this project had not thought of
 
@@ -128,6 +149,16 @@ a meeting from microphone use, which is why its own inventory has a detection su
 and no notion of a counterparty. That is a real architectural consequence of a
 positioning difference, and it is not a small one — "what did we discuss last time"
 requires knowing who "we" are, which no amount of audio supplies.
+
+**What that capability costs elsewhere, measured 2026-08-06.** Wispr Flow ships the
+brief — its schema carries `prereadTitle`, `prereadContent`, `prereadSummary` and a
+`preread` tab per meeting — and its calendar leg is a Google OAuth grant requesting
+four scopes: contacts, "other contacts", events on all calendars, and the
+organisation's full Workspace directory. The directory scope is what makes their
+name-matching work, and it is the clearest statement of the fork: their J0 requires the
+roster to leave the machine before a word is transcribed. Feature 9's EventKit decision
+is the same journey bought at a different price, and the price is the reason the
+counterparty half stays open here.
 
 ### Colleague survey — analysis registered before reading responses
 
@@ -145,23 +176,74 @@ checkbox counts as selections, not as mutually exclusive preferences. Keep free-
 answers as qualitative evidence; do not turn the number of similar phrases into a false
 vote.
 
-#### Observed snapshot — n=2
+#### Observed snapshot — n=6, closed 2026-08-03
 
-Two responses exist. That sample is too small to choose a default or support a demand
-claim, and the public repository deliberately does not retain respondent-level rows,
-free text, timestamps, or answer combinations. The source responses remain in the Form.
+Six responses exist. Still a convenience sample of colleagues, still too small to
+choose a default or support a demand claim, and the public repository continues to
+retain no respondent-level rows, free text, timestamps, or answer combinations. The
+source responses remain in the Form. Every figure below is a count of selections out
+of six; `notes/verify_survey.py` re-derives all of them from the export and exits
+non-zero on any mismatch.
 
-At the decision level, the snapshot reinforces transcript fidelity, speaker context,
-operator-controlled sharing, useful summaries, and actions with owners. It does not
-resolve the during-meeting surface, retention duration, retrieval entry point, or
-whether customer feedback should remain in the note or become a separately reviewed
-product signal.
+**Two selections were unanimous.** All six put *share or upload without my action* on
+the never-do list — the only unanimous item in the survey — and all six chose *action
+items and owners* as a wanted output.
 
-This changes no release gate or supported capture mode. It preserves two later
-comparison tests: simple note versus live transcript during capture, and filters versus
-natural-language retrieval after the corpus contains enough reviewed meetings to make
-either test real. The product already retains the transcript as a first-class artifact;
-the snapshot sharpens that priority without expanding beta scope.
+**The privacy result is not the one this project has been assuming.** Alongside that
+unanimous refusal, *nothing is shared without my action* was selected by 5, and
+*local-only processing* by **1**. Adjacent refusals run the same way: *keep audio
+without showing me* 4, *present an inference as a quote* 3, *invite a bot
+automatically* 3, *change a roadmap or backlog automatically* 3, *hide uncertain or
+missing evidence* 2, *infer commitments* 2.
+
+Read as a group, what these six asked for is **control of egress**, and local
+processing is one mechanism for guaranteeing it. That is a finding about *language and
+emphasis*, not about architecture: "nothing leaves the Mac" remains a non-goal-backed
+boundary in `product-definition.md` and this snapshot has no authority to weaken it.
+What it does say is that the boundary is not self-evidently the headline — one
+respondent named the mechanism, six named the guarantee.
+
+**Wanted outputs**, in order: action items and owners 6, concise summary 5, open
+questions 5, decisions 4, then risks and blockers 3, customer goals and needs 3,
+follow-up draft 3, exact quotes 3, full transcript 3. The note's existing four
+sections are the top four, in order — the first external evidence for a structure
+`journeys.md` records as never having been chosen by any document. It is a survived
+test, not a vindication; the sections still were not argued for.
+
+**Trust controls were selected by every respondent** — at least one each, with
+*stated versus inferred label* 4 and *quote and timestamp* 4 ahead of *speaker* 3,
+*accept/reject/defer* 3, *edit or correct* 2, and *change history and undo* 1. This
+supports features 4, 5 and 6 at claim level rather than note level, and it adds a
+verb set the inventory does not have: the prototype renders claim state and performs
+none of these operations.
+
+**What the snapshot still does not resolve.** The during-meeting surface remains open
+— *simple note surface* 3, *live transcript and evidence* 2, *Start/Stop only* 1 — so
+the comparison test stands rather than being decided by a plurality of six. Retention
+duration is likewise unresolved and now demonstrably has no majority answer: *keep
+locally until I delete it* 3, *ask me for each meeting* 2, *keep locally for a short
+period* 1. That absence is itself the operational argument for J5's no-default
+choice. The product-signal question split evenly, 3 for a separately reviewed
+proposal carrying its quote and 3 for keeping it inside the note.
+
+**The strongest counterexample, recorded because the plan requires it.** *Support
+in-person conversations* was selected by 3 of 6 as a needed capture capability, and
+*in-person conversations* by 3 of 6 as a meeting type — against a product whose Me/Them
+split exists only because the microphone and the system tap are different streams. In
+a room there is one stream. Two further findings in `spike/RESULTS.md` say the
+voiceprint route does not currently cover that case either: *"an open microphone
+records the room, not the operator"* is Open, and *"overlapping speech defeats the
+voiceprint, and no threshold fixes it"* measured 0% operator retention once a second
+voice sits at equal level. **This snapshot cannot expand the supported capture
+envelope, and does not.** It is recorded as a research question with measurements
+already against it, not as scope.
+
+This changes no release gate or supported capture mode. It preserves the two later
+comparison tests — simple note versus live transcript during capture, and filters
+versus natural-language retrieval — and adds nothing to the beta. The product already
+retains the transcript as a first-class artifact; three respondents wanting the full
+transcript sharpens that priority, and at the 30.7% recall this project has measured,
+sharpens the obligation to ship the recall figure with it.
 
 The questions may change these product decisions:
 
@@ -682,9 +764,13 @@ error — it made an undecided item read as scheduled.
 | F has no commitment-organised view | J2 | **Decided** — a `filtered` state on F, not a new surface |
 | A note that is present but inadequate | J1, J4 | **Decided** — a passing note's checkable proportion is shown on E and on F's rows, so a thin note is visible before it is opened. Output that fails the run's acceptance checks takes `summary-failed`; a `passed: false` research diagnostic is never rendered as a ready note |
 | Export and share have no redaction step | J2 | **Open** — gated turns and room speech would travel with the note |
-| The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight. No convention to inherit — immature across the category |
+| The far end's experience | J3 | **Open**, already flagged in the inventory, and the one with legal weight. No convention to inherit, and the 2026-08-06 teardown found the newest entrant shipped no participant-facing surface at all — only an FAQ line transferring the duty to the operator. One of six surveyed asked for a per-meeting consent reminder |
 | No preparation journey | J0 | **Decided** — local read-only calendar via EventKit, `DESIGN.md § Context inputs`. The surface for a brief is still unspecified |
-| Who spoke, as opposed to who was invited | J0, J1 | **Open, and possibly unbridgeable.** A calendar gives invitees; the audio gives channels. Nothing in the market bridges it either |
+| Who spoke, as opposed to who was invited | J0, J1 | **Open, and possibly unbridgeable for local audio** — *corrected 2026-08-06; this row read "Nothing in the market bridges it either", which the Wispr teardown falsified.* A calendar gives invitees; the audio gives channels. Nobody bridges it from sound: the one shipping product that names speakers does it with accessibility-tree scraping, a cloud directory grant and a one-click human repair — the first two are non-goals here, and the third is what feature 6 already owns for the gate's decision |
+| No capture mode for a room | — | **Open, and measured against rather than merely unbuilt.** Three of six surveyed need in-person capture, where the mic-versus-system split that gives Me/Them for free does not exist. `spike/RESULTS.md` measures 0% operator retention once a second voice sits at equal level, and the embedding weakest on the mic leg. A research question outside the supported envelope; the survey cannot and does not authorize expanding it |
+| Nowhere to type during the meeting | J3 | **Open, and a direction question before it is a feature.** "Give me a simple note surface" was the most-chosen in-meeting answer at 3 of 6, against `DIRECTION.md`'s thesis that the window is only where the listening indicator lands. The during-meeting comparison test the registered plan preserves is the right instrument; a plurality of six is not |
+| A claim can be read but not acted on | J1, J4 | **Open.** Every respondent chose at least one per-claim control, and accept, reject, defer, edit and undo were each chosen by someone. Restoration is Registered for the gate; none of the other verbs exist on any surface |
+| An exported transcript carries no recall figure | J1 | **Open, and newly urgent.** Three of six want the full transcript. At the 30.7% recall measured on the level-45 sweep, an export without its recall figure hands a reader a confident third of a meeting with nothing marking the gaps |
 | The note's own section structure was never designed | J1, J2 | **Decided** — sections are a rendering, not the model's output. See below |
 | A claim's subject is not extracted | J1 | **Open** — the one thing needed to group a note by what it was about, and no measurement supports asking an 8B model for it yet |
 | No governed route for transcript evaluations or consented research material | J6 | **Research candidate, deliberately outside the beta** — local evaluation, packet preparation, transfer consent, and contribution administration are separated above; no network service or upload is authorized |

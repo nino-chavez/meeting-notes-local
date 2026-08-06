@@ -1,11 +1,20 @@
 # Meeting notetakers: how they actually work, and what it takes to build one
 
-Teardown of Circleback (desktop), Fireflies, and Granola — followed by a build
-assessment against the `local-dictation` stack.
+Teardown of Circleback (desktop), Fireflies, Granola and Wispr Flow — followed by
+a build assessment against the `local-dictation` stack.
 
-Research date: 2026-07-28. Provenance is marked per claim: **[primary]** = the
-vendor's own product/API documentation or an OS/API reference; **[vendor]** =
-marketing copy from a company selling the thing being described.
+Research dates: 2026-07-28 for Circleback, Fireflies and Granola; **2026-08-06 for
+Wispr Flow**, whose section is a different kind of evidence and is marked as such.
+Provenance is marked per claim: **[primary]** = the vendor's own product/API
+documentation or an OS/API reference; **[vendor]** = marketing copy from a company
+selling the thing being described; **[binary]** = read out of the shipped
+application on this machine — Info.plist keys, code-signing entitlements, linked
+frameworks, undefined symbols, process arguments, or its own SQLite schema.
+
+`[binary]` outranks the other two on questions of mechanism, and that is the reason
+the Wispr section exists at all. Every other vendor here is described from what it
+says about itself. Wispr Flow 1.6.399 was installed and disassembled, so where its
+marketing and its bundle disagree, the bundle is quoted.
 
 **Scope: this file compares mechanism, not product.** It answers how competitors get
 audio, where speaker names come from, and what it takes to build the same thing. It
@@ -14,7 +23,9 @@ pricing, or segment — a word-count check found zero mentions of most of those.
 this and concluding the comparables are covered is the mistake it is worth one sentence
 to prevent. The product-side comparison lives in
 [`journeys.md`](./journeys.md#what-the-market-says-and-what-it-is-worth), fetched
-2026-07-29, and it found one journey this project had not thought of.
+2026-07-29, and it found one journey this project had not thought of. Its second
+check — Wispr Flow, 2026-08-06 — is the product half of the disassembly below, and
+found four of this project's six journeys already shipped.
 
 ---
 
@@ -79,6 +90,12 @@ afterward is a retention policy, not a locality guarantee.
 **Fireflies also ships this mode** and its docs are the most honest description
 of the tradeoff in the whole category — see the speaker-name section below.
 
+**Wispr Flow** takes the same path and says so plainly: "If your Mac can play it,
+Notetaker can capture it. Zoom, Google Meet, Teams, Slack huddles, Discord, or a
+call in your browser, with no integrations to set up and no bot to invite."
+**[vendor]** Its capture is disassembled below; the short version is that it is
+Core Audio taps, and its transcription is not local.
+
 ### 3. First-party platform APIs — the newest path
 
 - **Zoom RTMS** (Realtime Media Streams): WebSocket API giving live audio,
@@ -126,6 +143,169 @@ So the taxonomy of speaker attribution is:
 
 Nobody in this category is doing (3) alone and calling it a feature. That is the
 gap between a dictation tool and a notetaker.
+
+---
+
+## Wispr Flow, disassembled
+
+Wispr Flow shipped a Granola-shaped notetaker on top of its dictation product.
+Version 1.6.399, installed 2026-08-04, inspected 2026-08-06. It is the only vendor
+in this file read as a binary rather than as prose, which is why it settles
+questions the other three leave open.
+
+### It is an Electron app with no speech model in it
+
+575 MB, `CFBundleIdentifier = com.electron.wispr-flow`. The two largest objects are
+the Electron framework (173 MB) and `app.asar` (194 MB). A search of the bundle for
+CoreML, ONNX, GGUF, TFLite or safetensors weights returns **nothing**; the 1,431
+occurrences of "whisper" are all interface strings about *whispering* into the
+microphone, not the model. **[binary]**
+
+So the transcription is remote, and the vendor's own retention copy confirms where
+the text lands: "Transcripts older than this are deleted from your devices **and
+Wispr's servers**." **[binary — application copy]** The marketing sentence that
+covers this is worth reading slowly, because it is engineered to be read as a
+locality guarantee and is not one: "Meeting audio is encrypted and stored only
+temporarily on your device and, **in some cases, in secure cloud storage** …
+After that limited period, audio is automatically deleted." **[vendor]**
+
+This is the same *not retained ≠ not transmitted* distinction drawn above for
+Granola, and the local `Meetings` schema removes any doubt: `audioUploadedAt`,
+`liveTranscriptUploadedAt`, `speakerArtifactUploadedAt`, `serverRefinedUploadedAt`,
+`uploadDeferred`, `encodeRetries`. Those are the columns of a client that uploads
+audio and waits for a server to hand back a better transcript. **[binary]**
+
+### Capture is Core Audio taps, with a watchdog
+
+`NSAudioCaptureUsageDescription` is declared and `NSScreenCaptureUsageDescription`
+is not, which rules out the ScreenCaptureKit path. The renderer is launched with
+Chromium's `--enable-features=MacCatapSystemAudioLoopbackCapture` — "Catap" being
+Core Audio TAP — and the bundled Swift helper carries `kTCCServiceAudioCapture`,
+`SystemAudioPermission`, `TapState`, `TapWatchdog`, `TapRecoveryEvent` and
+`TapStormPolicy`. **[binary]**
+
+That last cluster is the finding, not the first. A shipped competitor found it
+necessary to build a watchdog, a recovery event and a storm policy around the tap —
+which is independent evidence that **the tap dies in the field and has to be
+noticed and restarted.** This project already treats `degraded` as a design
+constraint rather than an error-handling detail (`DIRECTION.md § Degraded is never
+silent`). Wispr's binary says that constraint is real.
+
+Version floor is muddy the same way it is above: `LSMinimumSystemVersion` is 12.0,
+below the 14.2/14.4 floor the tap API needs, so either the notetaker is gated
+separately from the app or the floor is aspirational. Not resolvable from the
+bundle.
+
+### It reads the meeting UI, and the permission does not say so
+
+The nested helper at `Contents/Resources/swift-helper-app-dist/` has the bundle
+identifier **`com.electron.wispr-flow.accessibility-mac-app`** and undefined symbols
+for the whole Accessibility client API: `AXIsProcessTrustedWithOptions`,
+`AXObserverCreate`, `AXObserverAddNotification`, `AXUIElementCreateApplication`,
+`AXUIElementCopyAttributeValue`, `AXUIElementPerformAction`. Alongside them sit
+Swift type names that state the purpose outright: `MeetingSpeakerPoller`,
+`MeetingSpeakerPollingPolicy`, `MeetingSpeakerZoom`, `MeetingSpeakerTeams`,
+`ZoomSpeakerStrategy`, `TeamsSpeakerStrategy`, `activeSpeakerMarker`. **[binary]**
+
+**This is the third independent confirmation of the load-bearing fact above** —
+after Recall's permission list and Granola's platform matrix — and it is the most
+direct. Wispr Flow polls Zoom's and Teams' accessibility trees for the active-speaker
+indicator, with a per-platform strategy class for each.
+
+The permission is not described that way to the user. The onboarding row reads
+"**Allow Wispr to recognize meetings** — Helps you start the Notetaker at the right
+moment", and clicking Allow opens System Settings → Privacy & Security →
+Accessibility, whose own subtitle is "Allow the applications below to control your
+computer." **[binary — onboarding, captured 2026-08-06]** The other two rows are
+framed the same way, by outcome rather than by scope: "Allow Wispr to use your
+microphone" and "Allow Wispr to hear others during a call."
+
+Record this as a design observation and not as an accusation. Naming a permission
+by what it buys the user is better copy than naming it by the API, and the OS prompt
+behind it is unmodified. But the gap between "recognize meetings" and "control your
+computer" is the widest in the flow, and it sits on the permission with the largest
+blast radius. Any consent surface this project builds inherits the same temptation.
+
+### Speaker names come from three weak signals plus a human
+
+Wispr's own FAQ describes the pipeline precisely enough to quote:
+
+> "Notetaker identifies speakers using your calendar invite, personal dictionary,
+> and conversational context, like when someone says 'thanks, Priya.'"
+>
+> "During the meeting, the live transcript separates you from other speakers. After
+> the meeting ends, the polished transcript adds full name labels."
+>
+> "Speaker labels are most accurate on video calls where each person joins from
+> their own device. In shared conference rooms, Notetaker uses conversation context
+> to identify people when they're mentioned." **[vendor]**
+
+Decoded against the binary: live capture is the free Me/Them split from capture
+topology — the interface strings are `hub_meeting_drawer_speaker_you` and
+`hub_meeting_drawer_speaker_others` — and naming happens **after** the meeting, on
+a server, from the calendar roster plus the AX-scraped active speaker plus an LLM
+reading address terms out of the text. The `Meetings` row carries `speakerMap`,
+`speakerMapPendingPush` and `speakerArtifactUploadedAt` to match. **[binary]**
+
+Where the calendar and the UI tree both fail — a conference room with one shared
+microphone — the vendor says it falls back to inference on who gets addressed by
+name. That is the honest boundary, and it is the same boundary this project has.
+
+The part with no equivalent here is the fourth signal: **a person.** The bundle
+carries a complete correction surface — `hub_transcript_assign_speakers`,
+`hub_transcript_rename_speakers`, `hub_assign_speakers_merge_tag`,
+`hub_assign_speakers_candidates_aria` — and the FAQ's promise is "assign the name
+once and apply it across the entire transcript." **[binary + vendor]**
+
+So the taxonomy above needs a fourth entry, and it is the one that actually ships:
+
+4. **Named, via a human correcting a machine guess** — three unreliable signals
+   produce a candidate map, and one click repairs it across the whole transcript.
+   Nobody solved attribution; they made the failure cheap to fix.
+
+### Its calendar leg is an OAuth grant, not a local read
+
+"Connect your calendar — We'll make sure you never miss a meeting" leads to a Google
+consent screen headed **"Wispr Flow Notetaker wants access to your Google Account"**
+requesting four scopes: see and download contact info from "Other contacts"; see
+and download your contacts; **view events on all your calendars**; and see and
+download your organization's Google Workspace directory. **[binary — captured
+2026-08-06; the grant was declined on this machine]**
+
+The org-directory scope is the tell. A calendar alone gives you invitees for one
+meeting; the directory gives you every name in the company to match against. That
+is how the "calendar invite" signal above gets strong enough to be worth shipping.
+
+It is also the exact fork this project already took the other way. `DESIGN.md
+§ Context inputs` chose EventKit — local, read-only in intent, no network call — and
+`journeys.md` J0 justified it on the grounds that an inbound read does not move
+anything off the machine. Wispr's version moves the roster, the contacts and the
+directory off the machine before a single word is transcribed.
+
+### Storage is a local SQLite mirror of a cloud-authoritative store
+
+`~/Library/Application Support/Wispr Flow/flow.sqlite`, 24 tables, 138 applied
+migrations, Supabase auth token in `session.json`. The shape is not local-first: all
+of `Notes`, `Meetings`, `Todos`, `NotetakerChats` and `RemoteNotifications` carry a
+`synced` or `uploadState` column. The application says the rest itself, in two
+strings: "Turn on Private Cloud Sync to set transcript retention," and — the one
+that settles the architecture — "turn on Private Cloud Sync, **which allows us to
+process and store your transcriptions. Wispr Notetaker requires this.**"
+**[binary]**
+
+That gate is worth stating as a sentence rather than leaving as an observation:
+**the notetaker does not run at all without cloud processing, and you cannot set a
+retention policy without first agreeing to send the material there.** Retention
+here is a property of their copy, not of yours.
+
+Two more rows worth carrying forward. `GranolaImportRun` and
+`GranolaTranscriptQueue` implement a one-click migration off Granola by connecting
+to **Granola's own MCP server** — the log strings are `[granolaImport] connected to
+Granola MCP` and `Granola MCP rate limit must be positive`. **[binary]** And
+`History` — the dictation side, not the notetaker — stores `axText`, `axHTML`,
+`screenshot` and `textboxContents` per dictation, with a `needsUploading` flag.
+That is a far larger exhaust surface than the notetaker's, and it is the product
+the notetaker was bolted onto.
 
 ---
 
@@ -307,6 +487,24 @@ rather than always-on, and why Fireflies' bot is deliberately visible and
 announces itself. Any build should treat "the other party knows" as a product
 requirement, not a compliance afterthought.
 
+**Wispr Flow's answer, added 2026-08-06, is a sentence in an FAQ.** Quoted whole,
+because the second half is the entire policy:
+
+> "Notetaker captures audio locally on your device rather than joining calls as a
+> visible bot, so participants may not receive an automatic notification that
+> transcription is taking place. **You are responsible for informing everyone
+> before you begin.**" **[vendor]**
+
+A search of the shipped bundle for any participant-facing disclosure surface — a
+notification, a disclaimer, a spoken announcement, anything naming a two-party
+rule — returns nothing. **[binary]** The newest and best-funded entrant in the
+category converted the constraint into a liability transfer and shipped no product
+surface for it at all.
+
+Read that as market data, not as permission. It confirms the finding in
+`journeys.md` that there is no convention to inherit here, and it removes the
+argument that someone else has already worked out the right shape.
+
 ---
 
 ## Recommendation
@@ -320,17 +518,39 @@ Swift helper and the storage layer already exists in the repo.
 
 That version is fully local, which is a real differentiator against the
 *commercial* products — Granola and Circleback both ship audio to a cloud
-transcription provider, and Fireflies' bot-free mode still uploads. It is not a
+transcription provider, Fireflies' bot-free mode still uploads, and Wispr Flow
+ships no speech model in its 575 MB bundle at all. It is not a
 differentiator against anarlog, which got to local-first transcription and local
 SQLite storage first and is MIT-licensed. The honest argument for building
 rather than adopting is stack fit, not novelty: we already run MLX Whisper,
 Ollama, and the launchd+menubar daemon shape, so this is an extension of
 something maintained rather than a new Tauri/Rust surface to own.
 
+**Wispr Flow strengthened this paragraph rather than weakening it, which was not
+the expected result.** A well-funded 2026 entrant with a dictation product, a
+personal dictionary, calendar context and multi-pass server refinement still put
+zero inference on the device. Every commercial notetaker examined here now needs
+the network to produce a word of text, and one of them cannot set a retention
+policy without cloud sync. The gap this project sits in is not closing.
+
 Named speaker attribution is where the effort curve turns vertical, and it is
 the one thing you cannot solve locally without either UI scraping or voice
 enrollment. Accept Me/Them, or fork anarlog, which has already paid the
 Swift/Tauri plumbing cost.
+
+**The transferable part of Wispr's fourth path is the repair, not the names.** Their
+correction surface exists to fix *named* speakers, which `product-definition.md` rules
+out as a non-goal and which their own implementation reaches only through UI scraping
+and a cloud directory grant — so the feature does not transfer and is not proposed
+here.
+
+What transfers is the shape underneath it: a machine decision the operator can
+overrule in one action, applied across the whole artifact rather than one turn at a
+time. This product has exactly one such decision — the voiceprint gate's Me/Not-me
+call — and it already keeps every gated turn with its score in `transcript.json`
+precisely so that call can be overruled (J4, feature 6). Restoration is Registered and
+reachable from 0.4.0; *apply this correction everywhere* is not. That is the borrowable
+idea, and it costs no model and no new permission.
 
 ---
 
@@ -463,3 +683,9 @@ machinery is built for.
 - https://github.com/FluidInference/FluidAudio
 - https://github.com/fastrepl/anarlog
 - https://meetily.ai/
+- https://wisprflow.ai/notetaker — fetched 2026-08-06
+- Wispr Flow 1.6.399 application bundle, `/Applications/Wispr Flow.app`, installed
+  via `brew install --cask wispr-flow` — inspected 2026-08-06. Reproduce with:
+  `plutil -p "$A/Contents/Info.plist"`, `codesign -d --entitlements - "$A"`,
+  `nm -u "$A/Contents/Resources/swift-helper-app-dist/Wispr Flow.app/Contents/MacOS/Wispr Flow"`,
+  and `sqlite3 ~/Library/Application\ Support/Wispr\ Flow/flow.sqlite ".tables"`.

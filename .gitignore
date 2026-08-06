@@ -23,6 +23,14 @@ spike/out/
 notes/corpus/
 notes/out/
 
+# Colleague survey responses. The registered analysis plan in docs/journeys.md
+# states that this public repository retains no respondent-level rows, free text,
+# timestamps, or answer combinations — and in a three-person cohort at a named
+# employer, a role plus an answer set names a person. Only aggregates ship.
+# The export stays local; notes/verify_survey.py re-derives every published
+# figure from it, the same way fetch_corpus.py stands in for notes/corpus/.
+docs/survey/
+
 # Built C++ binary; the library it links is not vendored (see spike/aec3/README.md).
 spike/aec3/aec3_offline
 
