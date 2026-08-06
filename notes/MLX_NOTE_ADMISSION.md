@@ -563,6 +563,83 @@ falsifier to carry into any such amendment: **if the model also shortens
 90-character entries that appear in an enum, enum-presence was never the
 mechanism** — and on this evidence that outcome is live, not remote.
 
+#### Correction — two of the three hypotheses were not refuted, and the variable they assumed symmetric is not
+
+*Added 2026-08-06. Receipt: `notes/measure_request_id_exposure.py`, which reads
+only the built requests — no model, no network, and no request digest changes.*
+
+The table above refutes **enum absence** and **shape priming** with the same
+sentence: the request *format* is identical in `ordinary-decision` and
+`ordinary-action`, so neither can explain why one succeeds. That is true, and it
+is not a refutation. Both hypotheses were offered as explanations of the
+**aggregate** — why 9 of 10 shorten the identifier at all. Testing them against
+the anomaly pair, which holds format constant by construction, can show a
+variable does not explain the *difference* between two cases. It cannot show the
+variable is not a cause of what they *share*. A constant explains no variance and
+is not thereby falsified.
+
+So the section retracted the right conclusion about the anomaly and the wrong one
+about the baseline. Enum-presence has been carried since as a variable to be
+removed rather than a mechanism to be tested, and that framing is what makes
+"enumerate the fragment IDs" read as evasion.
+
+**Measured, because both hypotheses rest on a symmetry nobody checked.** The two
+fields are not exposed to the model on equal terms:
+
+| | `candidate_id` | `source_fragment_ids` |
+|---|---|---|
+| Literal occurrences in the payload | **2** on all 10 supported fixtures | **1** |
+| Characters from last occurrence to the generation point | **365**, on every fixture | 726–794 |
+| The field's own schema entry, which sits nearest the generation point | `{"enum":["cf-<64 hex>"],"type":"string"}` | `{"max_items":3,"min_items":1,"type":"array"}` |
+| Reproduced exactly | 10 / 10 | 1 / 10 |
+
+`_canonical_json` sorts keys, so `candidates` precedes `response_contract` and the
+ordering is fixed for every request. The consequence is structural rather than
+incidental: the enumerated ID is written twice, and its second occurrence is the
+**last complete identifier the model sees before it generates** — 67 characters
+ending in a quote. The fragment ID is written once, roughly twice as far back, and
+the schema entry the model reads immediately before generating shows *no instance
+of it at all*, only a bare array type.
+
+That is not proof of causation, and this section is not going to assert a third
+mechanism. It is the removal of an assumption: the claim "the format is identical
+in both" is true of the format and false of the exposure, and every argument in
+the table above depends on the second reading.
+
+**What it changes about the two interventions.** They are not interchangeable and
+only one of them is a defect fix:
+
+- **Stating the three unstated parser rules is required regardless of what it
+  does to the verdict.** A candidate refused for breaking rules it was never given
+  is not measured, whatever the outcome. It is also the smaller claim, and it has
+  a live chance of moving the result on its own — rule 2, "each must be one of that
+  candidate's offered fragments," is precisely the instruction the model is
+  failing, and it has never been told it.
+- **Enumerating the fragment IDs removes the transcription task.** On the measurement
+  above it is also the intervention that equalizes exposure, so it is a mechanism
+  test rather than an evasion — but it can no longer be read as measuring whether
+  the model can copy a long identifier, because it will not have to.
+
+**Run them separately, in that order.** Bundled, a pass is uninterpretable: the
+defect fix and the exposure change would land in the same digest and neither could
+be credited. The doc's existing falsifier still applies to the second and is
+unchanged.
+
+**What remains unexplained, and the cheapest thing that would explain it.** The one
+success. Nothing above touches it, and the structural asymmetry is constant across
+all ten, so it cannot. The measurement that would settle whether there is anything
+to explain is the **logit margin at the decision point** — the token where the model
+has emitted `sf-` plus 64 hex and chooses between `-` and `"`. If that margin is
+near zero across all ten, there is no mechanism behind the one success, only an
+unstable argmax, and the honest statement becomes *the model copies a
+non-enumerated 90-character identifier unreliably*. If the margin is decisive and
+inverts on the success, the trace names the cause.
+
+That probe loads the pinned model and reads the same requests, so it changes no
+digest and burns nothing. It is preregistration-free for the same reason
+`measure_id_token_alignment.py` was, and it should run before either intervention
+is spent.
+
 Citations, labels, and the negation cases were substantively right in the
 replies inspected — `"We decided not to cancel Project Atlas."` preserved its
 negation, `"Case 481"` its number.
