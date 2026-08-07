@@ -484,3 +484,55 @@ export function transcriptPlainText(turns) {
   }
   return lines.join("\n");
 }
+
+// § H. The one place a permission measurement becomes a first-run step.
+//
+// Kept here rather than in main.js because it is a routing decision, and routing
+// decisions in this shell are pure functions with tests. It was written inline in
+// main.js first and a review found a route it got wrong; nothing could have failed,
+// because nothing was calling it.
+//
+// `unmeasured` is the load-bearing value. A request answers about the permission it
+// asked for and says `unmeasured` about the other one, which is not the same as
+// `unknown` — `unknown` means the measurement failed and the operator has nowhere
+// to go, while `unmeasured` means carry on with what the previous step established.
+// Reading a system-audio request's `unmeasured` microphone as `unknown` sent a
+// successful grant to the panel that says nothing could be measured.
+export function firstRunStepFor(result) {
+  if (!result || result.probeUnavailable) return "unavailable";
+  const microphone = result.microphone;
+  if (microphone === "not-determined") return "request-microphone";
+  // restricted is grouped with denied because the operator's next action is the
+  // same — it cannot be resolved from inside this app either way.
+  if (microphone === "denied" || microphone === "restricted") return "denied-recovery";
+  // Only these two continue, and the list is stated rather than left as a fall-
+  // through: anything else — `unknown`, or a value a future build sends that this
+  // one does not know — must stop here rather than be read as progress. `unmeasured`
+  // continues because it is only produced by the system-audio request, which is
+  // reachable only from a step that already measured the microphone as authorized.
+  if (microphone !== "authorized" && microphone !== "unmeasured") return "unavailable";
+  switch (result.systemAudio) {
+    case "authorized":
+      return "enrol-voice";
+    case "unavailable":
+      return "denied-recovery";
+    case "unsupported":
+    case "unknown":
+      return "unavailable";
+    default:
+      // `unmeasured` is the ordinary case: there is no status API for taps, so the
+      // only way to learn this is to ask, and asking is the step.
+      return "request-audio-capture";
+  }
+}
+
+// Which System Settings row to name on the recovery panel.
+//
+// The microphone is checked first, so a refusal there is the reason unless the
+// microphone is fine. Named exactly, because "grant the permission in System
+// Settings" sends an operator to a list of fourteen rows.
+export function firstRunDeniedPermissionName(result) {
+  return result?.microphone === "denied" || result?.microphone === "restricted"
+    ? "Microphone"
+    : "System Audio Recording";
+}

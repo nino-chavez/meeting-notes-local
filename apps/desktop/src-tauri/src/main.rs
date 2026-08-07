@@ -1657,19 +1657,28 @@ fn first_run_manifest_path(state: &ApplicationState) -> Option<std::path::PathBu
 // commands are reachable from the startup-failure screen. The empty path it
 // resolves to fails verification, so every one of these reports
 // `probe_unavailable` — which is the state § H renders — instead of raising.
-#[tauri::command]
+//
+// All three carry `(async)`, which on a synchronous function moves the body to
+// Tauri's threadpool (`tauri-macros`'s `ExecutionContext::Async` arm; the default
+// is `Blocking`, which runs inline in the IPC handler). Every one of them waits on
+// a child process, and the microphone request waits on the operator answering a
+// system dialog — up to the probe's own 120 s ceiling. Left blocking, walking away
+// from that dialog freezes the window. Reported by review on 5f54376; these are the
+// first blocking children on a UI path in this crate, which is why the rest of the
+// file has no precedent for the attribute.
+#[tauri::command(async)]
 fn first_run_permissions(state: State<'_, ApplicationState>) -> first_run::FirstRunPermissions {
     first_run::permissions_status(&first_run_manifest_path(&state).unwrap_or_default())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn first_run_request_microphone(
     state: State<'_, ApplicationState>,
 ) -> first_run::FirstRunPermissions {
     first_run::request_microphone(&first_run_manifest_path(&state).unwrap_or_default())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn first_run_request_system_audio(
     state: State<'_, ApplicationState>,
 ) -> first_run::FirstRunPermissions {

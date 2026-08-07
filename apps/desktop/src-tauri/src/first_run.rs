@@ -32,6 +32,12 @@ use serde_json::Value;
 /// denied state does nothing visible, and a surface that offered it would appear
 /// broken. `Unknown` covers both the platform's own `@unknown default` and any
 /// value this build does not recognise.
+///
+/// `Unmeasured` means this response did not ask. It exists because `Unknown` and
+/// "we did not look" are different facts that a surface acts on differently, and
+/// collapsing them once already broke a route: a system-audio request reported the
+/// microphone as `Unknown`, and the mapping — correctly, for what it was told —
+/// sent a successful grant to the panel that says nothing could be measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MicrophonePermission {
@@ -39,6 +45,7 @@ pub enum MicrophonePermission {
     Denied,
     Restricted,
     NotDetermined,
+    Unmeasured,
     Unknown,
 }
 
@@ -49,6 +56,11 @@ impl MicrophonePermission {
             Some("denied") => Self::Denied,
             Some("restricted") => Self::Restricted,
             Some("not-determined") => Self::NotDetermined,
+            // `Unmeasured` is deliberately not parseable. It is this module's own
+            // statement that a response did not ask, never a claim the probe is
+            // allowed to make: the platform gives a status API for the microphone,
+            // so a probe answering "unmeasured" is a probe that malfunctioned, and
+            // `Unknown` is the right reading of that.
             _ => Self::Unknown,
         }
     }
@@ -175,7 +187,7 @@ pub fn request_system_audio(manifest_path: &PathBuf) -> FirstRunPermissions {
     };
     FirstRunPermissions {
         // Symmetric to the above: creating a tap says nothing about the microphone.
-        microphone: MicrophonePermission::Unknown,
+        microphone: MicrophonePermission::Unmeasured,
         system_audio: SystemAudioPermission::parse(read(&parsed, "system_audio").as_deref()),
         probe_unavailable: false,
         // The platform gives no way to know whether the tap create raised a dialog
@@ -236,6 +248,30 @@ mod tests {
         // The state values are compared as literals in main.js, so their casing is
         // part of the contract too.
         assert!(encoded.contains("\"microphone\":\"not-determined\""), "{encoded}");
+    }
+
+    #[test]
+    fn a_request_says_unmeasured_about_the_permission_it_did_not_ask_about() {
+        // Each request mode measures one permission. What it reports about the other
+        // has to say "did not ask" and not "unrecognised", because the surface routes
+        // on the difference: `unknown` means nothing could be measured and sends the
+        // operator to a dead end, while `unmeasured` means carry on with what the
+        // previous step established. Reported by review on 5f54376, where a granted
+        // system-audio permission routed to the unavailable panel.
+        let encoded = serde_json::to_string(&FirstRunPermissions {
+            microphone: MicrophonePermission::Unmeasured,
+            system_audio: SystemAudioPermission::Authorized,
+            probe_unavailable: false,
+            prompted: false,
+        })
+        .unwrap();
+        assert!(encoded.contains("\"microphone\":\"unmeasured\""), "{encoded}");
+        // And the probe cannot claim it: a microphone status is always available on
+        // the platform, so this value is only ever this module's own.
+        assert_eq!(
+            MicrophonePermission::parse(Some("unmeasured")),
+            MicrophonePermission::Unknown
+        );
     }
 
     #[test]

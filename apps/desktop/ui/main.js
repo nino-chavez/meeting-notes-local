@@ -8,6 +8,8 @@ import {
   createRouteOwnershipGate,
   createTransitionGate,
   changedStatusText,
+  firstRunDeniedPermissionName,
+  firstRunStepFor,
   enrollmentRecorderPresentation,
   transcriptPlainText,
   operatingPointPresentation,
@@ -2073,42 +2075,12 @@ function showFirstRunStep(step) {
   for (const [name, panel] of firstRunPanels) panel.hidden = name !== step;
 }
 
-// The one place a permission result becomes a step. Kept as a pure function of the
-// response so the mapping can be read in one screenful and argued with.
-function firstRunStepFor(result) {
-  if (!result || result.probeUnavailable) return "unavailable";
-  const microphone = result.microphone;
-  if (microphone === "not-determined") return "request-microphone";
-  // restricted is grouped with denied because the operator's next action is the
-  // same — it cannot be resolved from inside this app either way.
-  if (microphone === "denied" || microphone === "restricted") return "denied-recovery";
-  if (microphone === "unknown") return "unavailable";
-  switch (result.systemAudio) {
-    case "authorized":
-      return "enrol-voice";
-    case "unavailable":
-      return "denied-recovery";
-    case "unsupported":
-    case "unknown":
-      return "unavailable";
-    default:
-      // `unmeasured` is the ordinary case: there is no status API for taps, so the
-      // only way to learn this is to ask, and asking is the step.
-      return "request-audio-capture";
-  }
-}
-
 function renderFirstRun(result, { origin = "" } = {}) {
+  // The mapping itself lives in navigation-state.mjs with the shell's other routing
+  // decisions, where it is tested.
   const step = firstRunStepFor(result);
   if (step === "denied-recovery") {
-    // Name the exact System Settings row, which differs by which permission was
-    // refused. The microphone is checked first, so a denial there is the reason
-    // unless the microphone is fine.
-    const microphoneRefused =
-      result.microphone === "denied" || result.microphone === "restricted";
-    firstRunDeniedPane.textContent = microphoneRefused
-      ? "Microphone"
-      : "System Audio Recording";
+    firstRunDeniedPane.textContent = firstRunDeniedPermissionName(result);
   }
   if (origin === "microphone" && step === "request-audio-capture") {
     message(

@@ -13,6 +13,8 @@ import {
   enrollmentRecorderPresentation,
   operatingPointPresentation,
   changedStatusText,
+  firstRunDeniedPermissionName,
+  firstRunStepFor,
   captureChannelPresentation,
   connectionUncertaintyStatus,
   headerActionPolicy,
@@ -828,4 +830,56 @@ test("copied transcript text keeps withheld turns visible", () => {
   assert.ok(text.includes("withheld"));
   assert.equal(transcriptPlainText([]), "");
   assert.equal(transcriptPlainText(null), "");
+});
+
+test("first run routes on what was measured, and never on what was not", () => {
+  const probe = (over) => ({
+    microphone: "authorized",
+    systemAudio: "unmeasured",
+    probeUnavailable: false,
+    prompted: false,
+    ...over,
+  });
+
+  // The ordinary opening hand: nothing asked yet.
+  assert.equal(firstRunStepFor(probe({ microphone: "not-determined" })), "request-microphone");
+  // A microphone that is settled and fine leaves system audio as the next question,
+  // because a status read cannot measure a tap and says so.
+  assert.equal(firstRunStepFor(probe({})), "request-audio-capture");
+
+  // The route a review found broken. `first_run_request_system_audio` answers about
+  // the tap and reports the microphone as `unmeasured`; reading that as `unknown`
+  // sent a granted permission to the panel that says nothing could be measured.
+  assert.equal(
+    firstRunStepFor(probe({ microphone: "unmeasured", systemAudio: "authorized" })),
+    "enrol-voice",
+  );
+  assert.equal(
+    firstRunStepFor(probe({ microphone: "unmeasured", systemAudio: "unavailable" })),
+    "denied-recovery",
+  );
+
+  // "You said no" and "we could not ask" stay apart, in both directions.
+  assert.equal(firstRunStepFor(probe({ microphone: "denied" })), "denied-recovery");
+  assert.equal(firstRunStepFor(probe({ microphone: "restricted" })), "denied-recovery");
+  assert.equal(firstRunStepFor(probe({ microphone: "unknown" })), "unavailable");
+  assert.equal(firstRunStepFor(probe({ probeUnavailable: true })), "unavailable");
+  assert.equal(firstRunStepFor(null), "unavailable");
+  assert.equal(firstRunStepFor(probe({ systemAudio: "unsupported" })), "unavailable");
+
+  // A value neither side knows about must not be read as progress. The Rust enum
+  // is closed, so this is unreachable today; it is pinned because the way it goes
+  // wrong later is a build that adds a state and a shell that treats it as fine.
+  assert.equal(firstRunStepFor(probe({ microphone: "granted" })), "unavailable");
+  assert.equal(firstRunStepFor(probe({ microphone: undefined })), "unavailable");
+  // System audio is the opposite default on purpose: not knowing means ask.
+  assert.equal(firstRunStepFor(probe({ systemAudio: "yes" })), "request-audio-capture");
+
+  // The recovery panel names one System Settings row, and which one depends on
+  // which permission was refused — the microphone is checked first.
+  assert.equal(firstRunDeniedPermissionName(probe({ microphone: "denied" })), "Microphone");
+  assert.equal(
+    firstRunDeniedPermissionName(probe({ microphone: "unmeasured", systemAudio: "unavailable" })),
+    "System Audio Recording",
+  );
 });
