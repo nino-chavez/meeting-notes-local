@@ -392,6 +392,24 @@ def _fixture_row(fixture_id: str, control: dict, workers: list) -> dict:
         "warm_repeats": len(warm),
         "outcomes": sorted({call["outcome"] for call in every_call}),
         "codes": sorted({call["code"] or "" for call in every_call}),
+        # Promoted out of each call's `identity` block on 2026-08-07, because
+        # two consecutive preregistrations made claims about the request digest
+        # that no committed receipt could check. One said "this changes no
+        # request" while moving it; the other guarded against moving it using a
+        # value nothing recorded. Neither could be settled from an artifact.
+        #
+        # `response_sha256` cannot stand in: it conflates a changed request with
+        # changed model behaviour. `receipt_sha256` cannot either: it covers the
+        # runtime identity too, so it moved on all twelve fixtures when `RECORD`
+        # left the pin, a change that provably touches no request. Only this
+        # field isolates what the model was asked.
+        #
+        # Sorted set over the cold calls, exactly like the digests above, so a
+        # request that moved mid-run reads as a multi-element list rather than
+        # silently taking one call's value.
+        "request_sha256": sorted({
+            (call.get("identity") or {}).get("request_sha256") or "" for call in cold
+        }),
         "response_sha256": sorted({call["response_sha256"] or "" for call in cold}),
         "note_sha256": sorted({call["note_sha256"] or "" for call in cold}),
         # All three digests the gate is computed over are recorded, not two. If
@@ -453,7 +471,13 @@ def _matrix_receipt(model_directory: Path, preflight: str, started_at_load: list
         # {phase, before, after} rather than the cold calls' bare triples, and
         # every row records `receipt_sha256`. A /1 receipt is still in git
         # history, and a reader pinned to /1 would mis-parse one of the two.
-        "schema": "mlx-note-matrix/2",
+        #
+        # /3: every row also records `request_sha256`. Bumped rather than added
+        # quietly because the /1-to-/2 comment exists for that exact reason —
+        # the shape moved once under an unchanged version string, and a reader
+        # pinned to /2 would find the field absent on every earlier receipt.
+        # Four /2 receipts are in git and stay valid as /2.
+        "schema": "mlx-note-matrix/3",
         "decoding": "structure-constrained",
         "harness": _harness_identity(),
         # `_harness_identity` hashes `mlx_note_admission.py` and nothing else,

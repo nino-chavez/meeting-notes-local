@@ -11,6 +11,7 @@ reachable without inference.
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -382,12 +383,22 @@ class SpawnFailureTests(unittest.TestCase):
                 self.assertFalse(_fixture_row("x", CONTROL, workers)["gates"]["workers_completed"])
 
 
+def _matrix_receipt_paths() -> list[Path]:
+    """Every committed matrix receipt, found rather than listed.
+
+    A hand-maintained list would silently stop covering the next receipt
+    somebody adds, which is the failure mode these checks exist to catch.
+    """
+    directory = Path(__file__).resolve().parent
+    paths = sorted(directory.glob("mlx_note_matrix_receipt*.json"))
+    assert paths, "no committed matrix receipts found"
+    return paths
+
+
 class CommittedMatrixReceiptTests(unittest.TestCase):
     """Hold the committed run to what the write-up says about it."""
 
     def setUp(self) -> None:
-        import json
-
         path = Path(__file__).resolve().parent / "mlx_note_matrix_receipt.json"
         self.receipt = json.loads(path.read_text())
 
@@ -396,23 +407,69 @@ class CommittedMatrixReceiptTests(unittest.TestCase):
         self.assertEqual(len(self.receipt["fixtures"]), EXPECTED_FIXTURES)
         self.assertIs(self.receipt["admits"], False)
         self.assertEqual(self.receipt["decoding"], "structure-constrained")
-        # The shape changed once under an unchanged version string. It must not
-        # happen twice: /1 receipts with a different `load_average` shape are
-        # still in git history.
-        self.assertEqual(self.receipt["schema"], "mlx-note-matrix/2")
+        # Schema version has exactly one owner:
+        # `test_the_frozen_baseline_keeps_its_own_schema_and_results`.
         self.assertIsInstance(self.receipt["fixtures"][0]["load_average"][0], dict)
 
-    def test_the_receipt_names_the_instrument_that_produced_it(self) -> None:
-        """The harness block hashes mlx_note_admission.py and nothing else.
+    def test_every_committed_receipt_names_some_instrument(self) -> None:
+        """Every matrix receipt carries a 64-hex orchestrator digest.
 
-        A receipt from the orchestrator that had the spawn defects and one from
-        the repaired orchestrator were byte-identical in that block, so the
-        artifact could not say which instrument ran.
+        The harness block hashes `mlx_note_admission.py` and nothing else, so a
+        receipt from the orchestrator that had the spawn defects and one from the
+        repaired orchestrator were byte-identical in that block. The artifact
+        could not say which instrument ran. This is the shape half of that fix;
+        the freshness half is the next test.
+        """
+        for path in sorted(_matrix_receipt_paths()):
+            with self.subTest(receipt=path.name):
+                receipt = json.loads(path.read_text())
+                self.assertRegex(receipt["orchestrator_sha256"], r"\A[0-9a-f]{64}\Z")
+
+    def test_the_current_instrument_has_produced_committed_evidence(self) -> None:
+        """At least one committed receipt was produced by the orchestrator as it
+        stands right now.
+
+        **Relocated 2026-08-07, and the relocation is a strengthening.** This
+        check previously read `mlx_note_matrix_receipt.json` — the frozen
+        2026-08-05 baseline — and asserted that *it* named the current
+        orchestrator. Three later receipts were not checked at all, so the
+        property enforced was "the oldest receipt names the current instrument",
+        which is the strangest possible target for a staleness guard.
+
+        The property that matters is that the instrument has not moved past all
+        of its evidence. A historical receipt naming a superseded instrument is
+        not a defect; it is what makes it history. An orchestrator that has
+        produced no committed receipt at all is the defect, because then every
+        artifact in the tree describes a program that no longer exists.
+
+        The cost is unchanged and deliberate: editing the orchestrator still
+        requires re-running the matrix before this passes. That is the ratchet,
+        and it caught a genuinely stale artifact once.
         """
         from mlx_note_admission import _sha256
 
         source = Path(__file__).resolve().parent / "orchestrate_mlx_note_matrix.py"
-        self.assertEqual(self.receipt["orchestrator_sha256"], _sha256(source.read_bytes()))
+        current = _sha256(source.read_bytes())
+        named = {
+            json.loads(path.read_text())["orchestrator_sha256"]
+            for path in _matrix_receipt_paths()
+        }
+        self.assertIn(
+            current,
+            named,
+            "the orchestrator changed and no committed receipt was produced by it; re-run the matrix",
+        )
+
+    def test_the_frozen_baseline_keeps_its_own_schema_and_results(self) -> None:
+        """`mlx_note_matrix_receipt.json` is history and does not move.
+
+        It is a /2 receipt and stays one. /3 added `request_sha256` to every
+        fixture row, and back-filling that field here would mean inventing a
+        digest for a run nobody can re-do — the exact failure this whole line of
+        work exists to stop.
+        """
+        self.assertEqual(self.receipt["schema"], "mlx-note-matrix/2")
+        self.assertNotIn("request_sha256", self.receipt["fixtures"][0])
 
     def test_the_mechanical_envelope_passed_and_only_the_fixtures_failed(self) -> None:
         """The doc claims latency, memory, repeatability and coverage all held."""
