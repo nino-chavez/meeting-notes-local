@@ -6770,7 +6770,27 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(storage_tree_bytes(storage.path()), before_storage);
+        // Amended 2026-08-07, when the derived corpus index landed on this path.
+        // The contract was "no byte in the storage root changes"; it is now
+        // "no canonical byte changes, and the derived cache is the only thing
+        // that moved". That is narrower where it has to be and stricter
+        // everywhere else — a read path writing anything but the index still
+        // fails here.
+        let after_storage = storage_tree_bytes(storage.path());
+        let canonical = |entries: &[(String, Vec<u8>)]| -> Vec<(String, Vec<u8>)> {
+            entries
+                .iter()
+                .filter(|(path, _)| !path.starts_with("library/corpus.sqlite3"))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(canonical(&after_storage), canonical(&before_storage));
+        let moved: Vec<_> = after_storage
+            .iter()
+            .filter(|entry| !before_storage.contains(entry))
+            .map(|(path, _)| path.as_str())
+            .collect();
+        assert_eq!(moved, vec!["library/corpus.sqlite3"]);
         assert_eq!(
             serde_json::to_value(state.model.lock().unwrap().snapshot()).unwrap(),
             before_snapshot

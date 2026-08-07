@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
+use local_meeting_notes_session_core::corpus_index::CorpusIndex;
 use local_meeting_notes_session_core::library_read::{
     ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, OpenedLibraryHit,
     ReadLimits,
@@ -23,6 +24,25 @@ use uuid::Uuid;
 
 const STALE_MESSAGE: &str = "That view is no longer current. Reopen it and try again.";
 const UNAVAILABLE_MESSAGE: &str = "The local library is unavailable. Reopen the app and try again.";
+
+/// Brings the derived corpus index up to date beside the projection that just
+/// validated the files, and **never lets its failure reach the operator**.
+///
+/// The index is a cache. If it cannot be opened or written — a widened mode, a
+/// schema from a newer build, a full disk — the library must still work exactly
+/// as it did before the index existed, so every error is dropped here. The
+/// return value is discarded deliberately; a failed sync is not a degraded
+/// library, and no diagnostic is emitted because the only content that
+/// distinguishes these failures is private.
+///
+/// `sync_if_changed` makes this affordable on a path the app walks whenever the
+/// library is opened or invalidated: an unchanged corpus costs one hash over the
+/// projection's row identities and one `SELECT`, and writes nothing.
+fn sync_corpus_index(storage: &StorageRoot, projection: &LibraryProjection) {
+    if let Ok(mut index) = CorpusIndex::open(storage) {
+        let _ = index.sync_if_changed(projection);
+    }
+}
 
 /// Owns only opaque handles into one immutable `LibraryProjection` snapshot.
 pub(crate) struct LibraryReader {
@@ -195,6 +215,7 @@ impl LibraryReader {
             excluded_meeting_ids,
         )
         .map_err(|_| ())?;
+        sync_corpus_index(&storage, &projection);
         Ok(Self::new_excluding(
             storage,
             projection,

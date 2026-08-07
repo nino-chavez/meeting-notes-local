@@ -162,6 +162,13 @@ impl CorpusIndex {
         connection.pragma_update(None, "journal_mode", "DELETE")?;
         connection.pragma_update(None, "secure_delete", "ON")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        // `journal_mode` is the pragma where a set can silently not take, and a
+        // clean close removes `-wal`/`-shm`, so no after-the-fact file listing
+        // would notice WAL. Read it back and refuse.
+        let journal: String = connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        if !journal.eq_ignore_ascii_case("delete") {
+            return Err(CorpusIndexError::NotPrivate);
+        }
 
         let index = Self {
             connection,
@@ -281,6 +288,14 @@ impl CorpusIndex {
                 }
             }
         }
+        // The recorded corpus digest describes contents this call just
+        // replaced, so it stops being true here. `sync_if_changed` rewrites it
+        // afterwards; a direct caller leaves it null and pays a full sync next
+        // time, which is the safe direction to fail.
+        transaction.execute(
+            "UPDATE index_identity SET corpus_digest = NULL WHERE id = 0",
+            [],
+        )?;
         transaction.commit()?;
         Ok(SyncOutcome { meetings, turns })
     }
@@ -383,46 +398,110 @@ impl CorpusIndex {
     /// than an assertion: derive it twice, from a live index and from a fresh
     /// one built out of the files, and the digests match or a column is holding
     /// something no file produced.
+    ///
+    /// **`SELECT *`, and the column loop is driven by `column_count()`.** The
+    /// first version named its columns and counted to eleven, which meant a
+    /// column added by a later migration would not reach the digest — and a
+    /// write-only column is exactly what the rebuild test exists to catch, so
+    /// naming the columns quietly defeated it. Never reintroduce a column list
+    /// here.
     pub fn fingerprint(&self) -> Result<String, CorpusIndexError> {
         let mut hasher = Sha256::new();
         hasher.update(CORPUS_INDEX_SCHEMA.as_bytes());
-        let mut meetings = self.connection.prepare(
-            "SELECT meeting_id, created_at_epoch_seconds, lifecycle, meeting_record_sha256,
-                    attempt_sha256, transcript_sha256, transcript_relative_path,
-                    note_json_sha256, note_markdown_sha256, title, folder
-             FROM meeting ORDER BY meeting_id ASC",
-        )?;
-        let mut rows = meetings.query([])?;
-        while let Some(row) = rows.next()? {
-            for column in 0..11 {
-                hasher.update(b"\x1f");
-                match row.get_ref(column)? {
-                    rusqlite::types::ValueRef::Null => hasher.update(b"\x00"),
-                    rusqlite::types::ValueRef::Integer(value) => hasher.update(value.to_be_bytes()),
-                    rusqlite::types::ValueRef::Text(value) => hasher.update(value),
-                    _ => return Err(CorpusIndexError::UnderivableRow),
-                }
+        for statement in [
+            "SELECT * FROM meeting ORDER BY meeting_id ASC",
+            "SELECT * FROM turn ORDER BY meeting_id ASC, turn_index ASC",
+        ] {
+            let mut prepared = self.connection.prepare(statement)?;
+            // Column names are hashed too, so renaming a column is a change.
+            for name in prepared.column_names() {
+                hasher.update(b"\x1d");
+                hasher.update(name.as_bytes());
             }
-            hasher.update(b"\x1e");
-        }
-        let mut turns = self.connection.prepare(
-            "SELECT meeting_id, turn_index, visible_index, gated, text
-             FROM turn ORDER BY meeting_id ASC, turn_index ASC",
-        )?;
-        let mut rows = turns.query([])?;
-        while let Some(row) = rows.next()? {
-            for column in 0..5 {
-                hasher.update(b"\x1f");
-                match row.get_ref(column)? {
-                    rusqlite::types::ValueRef::Null => hasher.update(b"\x00"),
-                    rusqlite::types::ValueRef::Integer(value) => hasher.update(value.to_be_bytes()),
-                    rusqlite::types::ValueRef::Text(value) => hasher.update(value),
-                    _ => return Err(CorpusIndexError::UnderivableRow),
+            let columns = prepared.column_count();
+            let mut rows = prepared.query([])?;
+            while let Some(row) = rows.next()? {
+                for column in 0..columns {
+                    hasher.update(b"\x1f");
+                    match row.get_ref(column)? {
+                        rusqlite::types::ValueRef::Null => hasher.update(b"\x00"),
+                        rusqlite::types::ValueRef::Integer(value) => {
+                            hasher.update(value.to_be_bytes())
+                        }
+                        rusqlite::types::ValueRef::Real(value) => {
+                            hasher.update(value.to_be_bytes())
+                        }
+                        rusqlite::types::ValueRef::Text(value) => hasher.update(value),
+                        rusqlite::types::ValueRef::Blob(value) => hasher.update(value),
+                    }
                 }
+                hasher.update(b"\x1e");
             }
-            hasher.update(b"\x1e");
+            hasher.update(b"\x1c");
         }
         Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    /// The digest of the canonical inputs the current contents were built from.
+    ///
+    /// Every column this index stores is a function of these values — turn text
+    /// included, because a transcript digest determines its turns. So an equal
+    /// corpus digest means an equal index, and a sync can be skipped without
+    /// reading a single row.
+    fn corpus_digest(projection: &LibraryProjection) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(CORPUS_INDEX_SCHEMA.as_bytes());
+        for row in projection.rows() {
+            let derived = row.derived();
+            for part in [
+                Some(derived.meeting_id),
+                Some(derived.meeting_record_sha256),
+                Some(derived.attempt_sha256),
+                derived.transcript_sha256,
+                derived.note_json_sha256,
+                derived.note_markdown_sha256,
+                derived.title,
+                derived.folder,
+            ] {
+                hasher.update(b"\x1f");
+                hasher.update(part.unwrap_or("\x00").as_bytes());
+            }
+            hasher.update(b"\x1e");
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Syncs only when the canonical inputs moved.
+    ///
+    /// This is what makes the index affordable on a path the app already walks:
+    /// an unchanged corpus costs one hash over the projection's row identities
+    /// and one `SELECT`, with no write. It is not incremental sync — a single
+    /// changed meeting still replaces the whole index. US-13.6 carries that.
+    pub fn sync_if_changed(
+        &mut self,
+        projection: &LibraryProjection,
+    ) -> Result<Option<SyncOutcome>, CorpusIndexError> {
+        let digest = Self::corpus_digest(projection);
+        // The column is nullable, so it must be read as an `Option` — reading a
+        // NULL into `String` is a type error, not an absence.
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT corpus_digest FROM index_identity WHERE id = 0",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        if stored.as_deref() == Some(digest.as_str()) {
+            return Ok(None);
+        }
+        let outcome = self.replace_from_projection(projection)?;
+        self.connection.execute(
+            "UPDATE index_identity SET corpus_digest = ?1 WHERE id = 0",
+            params![digest],
+        )?;
+        Ok(Some(outcome))
     }
 }
 
@@ -431,7 +510,8 @@ CREATE TABLE IF NOT EXISTS index_identity (
     id INTEGER PRIMARY KEY CHECK (id = 0),
     schema TEXT NOT NULL,
     sqlite_version TEXT NOT NULL,
-    applied_migration INTEGER NOT NULL
+    applied_migration INTEGER NOT NULL,
+    corpus_digest TEXT
 );
 
 CREATE TABLE IF NOT EXISTS meeting (
@@ -799,6 +879,191 @@ mod tests {
         assert_eq!(schema, CORPUS_INDEX_SCHEMA);
         assert_eq!(sqlite_version, rusqlite::version());
         assert!(!sqlite_version.is_empty());
+    }
+
+    /// The rebuild pin is only as wide as the fingerprint. A column the digest
+    /// does not read is a column that can hold anything, so add one and require
+    /// the equality to break.
+    #[test]
+    fn a_column_no_file_produced_breaks_the_rebuild_digest() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha"]);
+        let index = synced(&fixture);
+        let before = index.fingerprint().unwrap();
+
+        index
+            .connection
+            .execute("ALTER TABLE meeting ADD COLUMN invented TEXT", [])
+            .unwrap();
+        index
+            .connection
+            .execute("UPDATE meeting SET invented = 'not from any file'", [])
+            .unwrap();
+        let after = index.fingerprint().unwrap();
+
+        assert_ne!(
+            before, after,
+            "fingerprint ignored a column, so the rebuild test cannot catch a write-only field"
+        );
+    }
+
+    /// The WAL rejection is the reason US-13.4 gives for a design choice, and a
+    /// file listing cannot check it: SQLite removes `-wal` and `-shm` on a
+    /// clean close, so the one-file assertion passes under WAL too.
+    #[test]
+    fn the_journal_mode_is_read_back_rather_than_assumed() {
+        let fixture = Fixture::new();
+        let index = CorpusIndex::open(&fixture.storage).unwrap();
+        let journal: String = index
+            .connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal.to_ascii_lowercase(), "delete");
+    }
+
+    /// `secure_delete` is claimed to keep a removed meeting from staying
+    /// legible in free space. Read the raw file and require the words gone.
+    #[test]
+    fn a_deleted_meetings_words_do_not_survive_in_the_database_file() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["quarkbeetle luminance"]);
+        fixture.meeting("meeting-b", 200, &["ordinary text"]);
+        let mut index = synced(&fixture);
+        let path = index.path().to_path_buf();
+
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            find_bytes(&raw, b"quarkbeetle").is_some(),
+            "fixture is not proving anything if the word was never written"
+        );
+
+        std::fs::remove_dir_all(fixture.storage.path().join("meetings").join("meeting-a")).unwrap();
+        index
+            .replace_from_projection(&fixture.projection())
+            .unwrap();
+        drop(index);
+
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            find_bytes(&raw, b"quarkbeetle").is_none(),
+            "a removed meeting's words are still legible in the database file"
+        );
+    }
+
+    fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    /// US-13.3 claims the store's order matches the scan's. Assert it against
+    /// the scan itself rather than against a hand-written expectation.
+    #[test]
+    fn list_order_matches_the_scans_order() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-c", 100, &["alpha"]);
+        fixture.meeting("meeting-a", 300, &["beta"]);
+        fixture.meeting("meeting-b", 100, &["gamma"]);
+        let projection = fixture.projection();
+        let scanned: Vec<_> = projection
+            .rows()
+            .iter()
+            .map(|row| row.derived().meeting_id.to_owned())
+            .collect();
+
+        let index = synced(&fixture);
+        let listed: Vec<_> = index
+            .list(&ListRequest::default())
+            .unwrap()
+            .rows
+            .into_iter()
+            .map(|row| row.meeting_id)
+            .collect();
+
+        assert_eq!(scanned, listed);
+        // Same-timestamp rows are what make this a real check rather than a
+        // restatement of "newest first".
+        assert_eq!(listed, vec!["meeting-a", "meeting-b", "meeting-c"]);
+    }
+
+    #[test]
+    fn an_unchanged_corpus_syncs_once_and_then_skips() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha"]);
+        let mut index = CorpusIndex::open(&fixture.storage).unwrap();
+
+        let first = index.sync_if_changed(&fixture.projection()).unwrap();
+        assert_eq!(
+            first,
+            Some(SyncOutcome {
+                meetings: 1,
+                turns: 1
+            })
+        );
+        assert_eq!(index.sync_if_changed(&fixture.projection()).unwrap(), None);
+
+        fixture.meeting("meeting-b", 200, &["beta"]);
+        let third = index.sync_if_changed(&fixture.projection()).unwrap();
+        assert_eq!(
+            third,
+            Some(SyncOutcome {
+                meetings: 2,
+                turns: 2
+            })
+        );
+        assert_eq!(index.meeting_count().unwrap(), 2);
+    }
+
+    /// A direct replace must not leave a digest describing contents it just
+    /// overwrote, or the next sync would skip a corpus that actually moved.
+    #[test]
+    fn a_direct_replace_clears_the_recorded_corpus_digest() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha"]);
+        let mut index = CorpusIndex::open(&fixture.storage).unwrap();
+        index.sync_if_changed(&fixture.projection()).unwrap();
+
+        index
+            .replace_from_projection(&fixture.projection())
+            .unwrap();
+        let stored: Option<String> = index
+            .connection
+            .query_row(
+                "SELECT corpus_digest FROM index_identity WHERE id = 0",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap();
+        assert_eq!(stored, None);
+        assert!(
+            index
+                .sync_if_changed(&fixture.projection())
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// The downgrade path: a file from a schema this build does not have a
+    /// migration for is dropped and re-derived, because the files are the
+    /// authority and nothing is lost by rebuilding.
+    #[test]
+    fn an_older_schema_is_dropped_and_re_derived_rather_than_read() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha"]);
+        let index = synced(&fixture);
+        assert_eq!(index.meeting_count().unwrap(), 1);
+        index
+            .connection
+            .execute(
+                "UPDATE index_identity SET applied_migration = 0 WHERE id = 0",
+                [],
+            )
+            .unwrap();
+        drop(index);
+
+        let reopened = CorpusIndex::open(&fixture.storage).unwrap();
+        assert_eq!(reopened.meeting_count().unwrap(), 0);
+        assert_eq!(reopened.identity().unwrap().0, CORPUS_INDEX_SCHEMA);
     }
 
     #[test]

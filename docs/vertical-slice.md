@@ -59,7 +59,7 @@ largest surface-area addition and says it has nothing to do with audio.
 
 | Order | Build | Feature | Why here |
 |---|---|---|---|
-| 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`. What remains is US-13.6: the launch scan still runs in full, because incremental sync needs a per-meeting entry point into an audited module | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and, measured, refuses a common word at one meeting |
+| 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. What remains is US-13.6: the full scan still runs first, because skipping unchanged meetings needs a per-meeting entry point into an audited module | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and, measured, refuses a common word at one meeting |
 | 2 | Auto-titling | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | Folders, and the meeting object's sibling views | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | Filters — people, date range, keywords, titles | D3 | Gong documents all four. Free once the store exists |
@@ -845,11 +845,20 @@ The first slice uses the filesystem already required by the audio artifacts.
 Canonical data is files and stays files.
 
 **Amended 2026-08-07.** The sentence here used to read "It does not add SQLite,"
-and that is no longer true: `library/corpus.sqlite3` exists. It holds no
-canonical data. Every row in it is derived from a file this codebase already
-validated, deleting it loses nothing, and a registered test rebuilds it from the
-files and requires the same content digest. The measurement that authorized it
-is under [Corpus scale, measured](#corpus-scale-measured).
+and that is no longer true: `library/corpus.sqlite3` exists, and is written
+whenever the library is read. It holds no canonical data. Every row in it is
+derived from a file this codebase already validated, deleting it loses nothing,
+and a registered test rebuilds it from the files and requires the same content
+digest. The measurement that authorized it is under
+[Corpus scale, measured](#corpus-scale-measured).
+
+**One read-path contract moved with it**, and it is worth stating rather than
+leaving in a test file. Reading the library used to change no byte in the storage
+root at all. It now writes exactly one path — the derived index — and the pin
+says so in those terms: no canonical byte changes, and `library/corpus.sqlite3`
+is the only thing that moved. A read path writing anything else still fails.
+Sync failure is dropped at the call site: the index is a cache, and a cache that
+cannot be written must leave the library exactly as it was.
 
 ```text
 $APP_DATA/                         0700
