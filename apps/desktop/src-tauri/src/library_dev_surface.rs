@@ -92,19 +92,32 @@ fn library_dev_snapshot(state: State<'_, DevSurfaceState>) -> LibrarySnapshot {
     snapshot_response(&state)
 }
 
+/// Replaces every row's label, in every snapshot state.
+///
+/// This ran only when the state was `populated` until 2026-08-08, and that was
+/// safe for one reason that has since stopped being true: the label the other
+/// states let through was the constant `Untitled meeting`. Since auto-titling a
+/// label can be a span of a transcript turn, so the old arrangement made
+/// "this surface never shows meeting text" rest on a fact about a different
+/// module — that this reader is only ever pointed at the synthetic fixture
+/// below. Unconditional, it rests on nothing.
+///
+/// `label_source` becomes `operator` rather than the row's real source: the
+/// sanitized string is not derived from anything, and inheriting `derived`
+/// would put an "opening line" marker on text no meeting ever contained.
+fn sanitize_snapshot(response: &mut LibrarySnapshot) {
+    for row in &mut response.rows {
+        row.label = Some("Sanitized library sample".into());
+        row.label_source = "operator";
+    }
+}
+
 fn snapshot_response(state: &DevSurfaceState) -> LibrarySnapshot {
     let mut guard = state.library.lock().expect("development library lock");
     if let Some(library) = guard.as_mut() {
         let mut response = library.reader.snapshot(&library.active_meeting_ids);
+        sanitize_snapshot(&mut response);
         if response.state == "populated" {
-            for row in &mut response.rows {
-                // `operator`, not the row's real source: the sanitized string
-                // is not derived from anything, and letting it inherit a
-                // `derived` source would put an "opening line" marker on text
-                // no meeting ever contained.
-                row.label = Some("Sanitized library sample".into());
-                row.label_source = "operator";
-            }
             response.message =
                 "Synthetic, sanitized development data only. This does not open production data."
                     .into();
@@ -1010,5 +1023,40 @@ mod tests {
                 .unwrap()
                 .contains("private meeting label")
         );
+    }
+
+    /// Every snapshot state, because the fixture's own first turn is eight
+    /// words and therefore derives a label. Before this ran unconditionally,
+    /// `populated-incomplete` would have carried that span to the surface.
+    #[test]
+    fn development_wrapper_redacts_snapshot_labels_in_every_state() {
+        for state in ["populated", "populated-incomplete", "incomplete", "empty"] {
+            let mut response = LibrarySnapshot {
+                state,
+                rows: vec![crate::library_reader::LibrarySnapshotRow {
+                    handle: "opaque-handle".into(),
+                    meeting_id: FIXTURE_MEETING_ID.into(),
+                    label: Some("Use Thursday in the café sample launch date".into()),
+                    label_source: "derived",
+                    created_at_epoch_seconds: 1_728_000_000,
+                    transcript_available: true,
+                }],
+                unavailable_count: 0,
+                message: "untrusted test response".into(),
+            };
+            sanitize_snapshot(&mut response);
+            assert_eq!(
+                response.rows[0].label.as_deref(),
+                Some("Sanitized library sample"),
+                "{state}"
+            );
+            assert_eq!(response.rows[0].label_source, "operator", "{state}");
+            assert!(
+                !serde_json::to_string(&response)
+                    .unwrap()
+                    .contains("Thursday"),
+                "{state}"
+            );
+        }
     }
 }
