@@ -1181,8 +1181,20 @@ fn verify_authority_slots(
             reset_zero,
             enrollment_zero,
             ..
+        } => {
+            exact_slot(
+                &root.join("profile/lifecycle/enrollment.staged"),
+                enrollment_zero,
+            )?;
+            let l = inspect_slot(&root.join("profile/voiceprint.json"), true)?;
+            let r = inspect_slot(&root.join("profile/lifecycle/reset.tombstone"), true)?;
+            if !((l == *profile && r == *reset_zero)
+                || (l == *reset_zero && (r == *profile || is_zero_of(&r, profile))))
+            {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
         }
-        | Payload::ResetStaged {
+        Payload::ResetStaged {
             profile,
             reset_zero,
             enrollment_zero,
@@ -1194,9 +1206,7 @@ fn verify_authority_slots(
             )?;
             let l = inspect_slot(&root.join("profile/voiceprint.json"), true)?;
             let r = inspect_slot(&root.join("profile/lifecycle/reset.tombstone"), true)?;
-            if !((l == *profile && r == *reset_zero)
-                || (l == *reset_zero && (r == *profile || is_zero_of(&r, profile))))
-            {
+            if !(l == *reset_zero && (r == *profile || is_zero_of(&r, profile))) {
                 return Err(ProfileLifecycleError::Quarantined);
             }
         }
@@ -1212,6 +1222,12 @@ fn verify_authority_slots(
                 &root.join("profile/lifecycle/enrollment.staged"),
                 enrollment_zero,
             )?;
+            if !is_zero(live_zero)
+                || !is_zero(reset_zero)
+                || live_zero.identity == reset_zero.identity
+            {
+                return Err(ProfileLifecycleError::Quarantined);
+            }
         }
         Payload::EnrollmentWriting {
             live_zero,
