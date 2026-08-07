@@ -158,7 +158,7 @@ next build.
 **Evidence:** real receipt, 2026-08-02.
 
 #### US-3.2: Whole-meeting deletion
-**Feature 3 · J5 · §G · P0 · M · Core built 2026-08-07; shell wiring open**
+**Feature 3 · J5 · §G · P0 · M · Built 2026-08-07, core and shell**
 
 As the Operator, I want to delete a meeting entirely — audio, transcript, note and
 record — so that a conversation that should not have been captured can be removed.
@@ -168,7 +168,7 @@ record — so that a conversation that should not have been captured can be remo
 - Given deletion is interrupted mid-way, When the app restarts, Then reconciliation completes it, and never leaves a meeting that reads as intact but is not. *(Built.)*
 - Given a meeting is active, When whole-meeting deletion is requested, Then it is refused before any mutation. *(Built — the lease is taken before storage is read at all.)*
 - Given deletion completes, When the library is opened, Then the meeting is absent, not tombstoned as an empty row. *(Built at the core; the library surface is part of the open shell slice.)*
-- Given the Operator has not confirmed twice, When deletion is requested, Then it does not proceed. **Open** — the confirmation is a §G surface concern and the core layer deliberately enforces authority and ordering, not consent.
+- Given the Operator has not confirmed twice, When deletion is requested, Then it does not proceed. *(Built.)* The §G control reveals a confirmation panel first, and the command turns that second click into a closed in-process `MeetingDeletionReview` the webview cannot construct — so an unconfirmed call is refused before the writer lock is taken, let alone before any removal.
 
 **Refusals:** must not run against real meetings during development. "Exercise real
 destructive actions only as Operator actions before beta admission."
@@ -197,11 +197,26 @@ startup reconciliation, and a retention skip so a meeting between `staged` and
 `load_meeting`, so after that transition no partially removed directory can be read as
 intact.
 
-**Next slice:** the shell command. It needs a `LibraryMeetingDeletionAccess`
-authorization path beside the existing audio one in `library_reader`, a
-`preview_delete_meeting` command, its capability TOML, entries in `build_contract.rs`,
-`build_matrix.rs` and the `shell_contract.rs` exact-set pins, and the §G two-step
-confirmation in the shell.
+**Shell slice, landed the same day.** `preview_delete_meeting` over a
+`LibraryMeetingDeletionAccess` path, `WholeMeetingDeletionFacade`, the capability in
+both windows, and the §G control.
+
+Three separations were kept deliberately rather than collapsed, because each one is a
+place where reuse would have silently widened authority:
+
+1. **A separate handle map.** Reusing the audio-deletion handle would let a handle the
+   operator obtained to free disk space destroy the retained transcript instead.
+2. **A separate review token.** `MeetingDeletionReview` is a distinct type from
+   `AudioDeletionReview`, so a confirmation given for the smaller act cannot satisfy
+   the larger one — and the compiler enforces it.
+3. **A separate capability.** `allow-preview-delete-meeting` is granted beside, not
+   instead of, `allow-preview-delete-meeting-audio`.
+
+On success the shell leaves the detail view, because a detail screen rendering a
+meeting that no longer exists is the tombstone this story forbids.
+
+**Next slice:** none for this story. Feature 3's remaining item is the policy
+wording, which is the operator's.
 
 #### Placeholders standing in for real data
 

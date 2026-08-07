@@ -425,6 +425,19 @@
               <p class="notice error" id="recording-delete-status" role="status" aria-live="polite" hidden></p>
             </div>
           </div>
+          <div class="recording-delete-action" id="meeting-delete-action" hidden>
+            <button class="secondary danger-outline" id="meeting-delete-review" type="button">Delete this meeting</button>
+            <div class="recording-delete-confirmation" id="meeting-delete-confirmation" hidden>
+              <p><strong>Permanently delete this whole meeting?</strong></p>
+              <p>This removes the transcript, the note, your own note, and any audio still held. The transcript is the retained record of what was said, and it cannot be recreated from anything else on this Mac.</p>
+              <p>Other meetings and your voice profile are unaffected.</p>
+              <div class="recording-delete-buttons">
+                <button class="secondary" id="meeting-delete-cancel" type="button">Cancel</button>
+                <button class="danger" id="meeting-delete-confirm" type="button">Permanently delete meeting</button>
+              </div>
+              <p class="notice error" id="meeting-delete-status" role="status" aria-live="polite" hidden></p>
+            </div>
+          </div>
         </section>
         <section id="meeting-claim-list" class="meeting-claim-list" aria-live="polite"></section>
         <section class="meeting-no-note" id="meeting-no-note" hidden aria-labelledby="meeting-no-note-title">

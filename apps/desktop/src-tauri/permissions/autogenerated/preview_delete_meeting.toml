@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-delete-meeting"
+description = "Enables the preview_delete_meeting command without any pre-configured scope."
+commands.allow = ["preview_delete_meeting"]
+
+[[permission]]
+identifier = "deny-preview-delete-meeting"
+description = "Denies the preview_delete_meeting command without any pre-configured scope."
+commands.deny = ["preview_delete_meeting"]

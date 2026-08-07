@@ -8,6 +8,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use local_meeting_notes_session_core::meeting_deletion::{
+    MeetingDeletionError, MeetingDeletionOutcome,
+};
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, ManualAudioDeletionError, ManualAudioDeletionOutcome,
 };
@@ -109,6 +112,103 @@ fn map_core_error(error: ManualAudioDeletionError) -> ManualAudioDeletionFacadeE
             ManualAudioDeletionFacadeError::MeetingActionInProgress
         }
         _ => ManualAudioDeletionFacadeError::StorageUnavailable,
+    }
+}
+
+
+/// The reviewed confirmation for removing a whole meeting.
+///
+/// Deliberately a distinct type from [`AudioDeletionReview`] rather than a reuse
+/// of it. The two authorize different acts: one frees disk space, the other
+/// destroys the transcript that is this product's retained evidence. Sharing a
+/// token would let a confirmation the operator gave for the smaller act satisfy
+/// the larger one, and the compiler would never object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeetingDeletionReview {
+    Reviewed,
+    NotReviewed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WholeMeetingDeletionUiArgs {
+    pub(crate) meeting_id: String,
+    pub(crate) review: MeetingDeletionReview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WholeMeetingDeletionFacadeOutcome {
+    DeferredActive,
+    MeetingRemoved,
+    RecoveredRemoval,
+    AlreadyRemoved,
+}
+
+impl From<MeetingDeletionOutcome> for WholeMeetingDeletionFacadeOutcome {
+    fn from(outcome: MeetingDeletionOutcome) -> Self {
+        match outcome {
+            MeetingDeletionOutcome::DeferredActive => Self::DeferredActive,
+            MeetingDeletionOutcome::MeetingRemoved => Self::MeetingRemoved,
+            MeetingDeletionOutcome::RecoveredRemoval => Self::RecoveredRemoval,
+            MeetingDeletionOutcome::AlreadyRemoved => Self::AlreadyRemoved,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WholeMeetingDeletionFacadeError {
+    ConfirmationRequired,
+    WriterLockUnavailable,
+    MeetingActionInProgress,
+    NoSuchMeeting,
+    StorageUnavailable,
+}
+
+/// Desktop owner for whole-meeting removal.
+pub(crate) struct WholeMeetingDeletionFacade<'a> {
+    writer_lock: &'a Mutex<Option<Arc<AppDataWriterLock>>>,
+}
+
+impl<'a> WholeMeetingDeletionFacade<'a> {
+    pub(crate) fn new(writer_lock: &'a Mutex<Option<Arc<AppDataWriterLock>>>) -> Self {
+        Self { writer_lock }
+    }
+
+    /// Runs the `meeting-deletion/1` state machine only after a closed reviewed
+    /// confirmation and while the process writer lock is held. The core keeps
+    /// responsibility for identity validation, active-lease refusal, the
+    /// operation scan, removal ordering, and receipt reconciliation.
+    pub(crate) fn delete_meeting(
+        &self,
+        args: WholeMeetingDeletionUiArgs,
+    ) -> Result<WholeMeetingDeletionFacadeOutcome, WholeMeetingDeletionFacadeError> {
+        if args.review != MeetingDeletionReview::Reviewed {
+            return Err(WholeMeetingDeletionFacadeError::ConfirmationRequired);
+        }
+
+        let held = self
+            .writer_lock
+            .lock()
+            .map_err(|_| WholeMeetingDeletionFacadeError::WriterLockUnavailable)?;
+        if held.is_none() {
+            return Err(WholeMeetingDeletionFacadeError::WriterLockUnavailable);
+        }
+
+        held.as_ref()
+            .expect("checked app-data writer lock")
+            .whole_meeting_deletion_authority()
+            .delete_meeting(&args.meeting_id)
+            .map(Into::into)
+            .map_err(map_meeting_deletion_error)
+    }
+}
+
+fn map_meeting_deletion_error(error: MeetingDeletionError) -> WholeMeetingDeletionFacadeError {
+    match error {
+        MeetingDeletionError::NonterminalProductOperation => {
+            WholeMeetingDeletionFacadeError::MeetingActionInProgress
+        }
+        MeetingDeletionError::NoSuchMeeting => WholeMeetingDeletionFacadeError::NoSuchMeeting,
+        _ => WholeMeetingDeletionFacadeError::StorageUnavailable,
     }
 }
 
@@ -246,6 +346,47 @@ mod tests {
         assert!(directory.join("capture/mic.wav").exists());
         assert!(directory.join("capture/system.wav").exists());
         assert!(!directory.join("deletion").exists());
+    }
+
+    #[test]
+    fn unreviewed_whole_meeting_deletion_refuses_before_lock_or_any_removal() {
+        let (_temporary, storage) = storage();
+        let directory = write_fixture(&storage, false);
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+        let state = ApplicationState::default();
+        let unreviewed = WholeMeetingDeletionUiArgs {
+            meeting_id: MEETING_ID.into(),
+            review: MeetingDeletionReview::NotReviewed,
+        };
+
+        assert_eq!(
+            state
+                .whole_meeting_deletion_facade()
+                .delete_meeting(unreviewed),
+            Err(WholeMeetingDeletionFacadeError::ConfirmationRequired)
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(directory.exists());
+        assert!(!storage.path().join("deletions").exists());
+    }
+
+    /// The two review tokens are distinct types, so a reviewed decision about
+    /// releasing audio cannot be passed where one about destroying the meeting
+    /// is required. This is the compile-level half of that separation; the
+    /// runtime half is that each facade only reads its own token.
+    #[test]
+    fn an_audio_review_token_does_not_satisfy_whole_meeting_deletion() {
+        let reviewed_audio = AudioDeletionReview::Reviewed;
+        let reviewed_meeting = MeetingDeletionReview::Reviewed;
+        // Deliberately compared through their debug forms: they are different
+        // types, so no direct comparison compiles, which is the point.
+        assert_eq!(format!("{reviewed_audio:?}"), "Reviewed");
+        assert_eq!(format!("{reviewed_meeting:?}"), "Reviewed");
+        let args = WholeMeetingDeletionUiArgs {
+            meeting_id: MEETING_ID.into(),
+            review: MeetingDeletionReview::NotReviewed,
+        };
+        assert_ne!(args.review, MeetingDeletionReview::Reviewed);
     }
 
     #[test]

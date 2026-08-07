@@ -113,6 +113,12 @@ const recordingDeleteConfirmation = document.querySelector("#recording-delete-co
 const recordingDeleteCancel = document.querySelector("#recording-delete-cancel");
 const recordingDeleteConfirm = document.querySelector("#recording-delete-confirm");
 const recordingDeleteStatus = document.querySelector("#recording-delete-status");
+const meetingDeleteAction = document.querySelector("#meeting-delete-action");
+const meetingDeleteReview = document.querySelector("#meeting-delete-review");
+const meetingDeleteConfirmation = document.querySelector("#meeting-delete-confirmation");
+const meetingDeleteCancel = document.querySelector("#meeting-delete-cancel");
+const meetingDeleteConfirm = document.querySelector("#meeting-delete-confirm");
+const meetingDeleteStatus = document.querySelector("#meeting-delete-status");
 const retention = document.querySelector("#retention-days");
 const checks = [
   document.querySelector("#consent-check"),
@@ -125,6 +131,7 @@ let pollTimer = null;
 let startedAt = null;
 let elapsedTimer = null;
 let meetingAudioDeletionHandle = "";
+let meetingDeletionHandle = "";
 let currentScreen = "startup-screen";
 let productRootScreen = "find-screen";
 let transcriptReturnContext = null;
@@ -326,8 +333,11 @@ function invalidateLibraryHandles() {
   meetingNoNote.hidden = true;
   document.querySelector("#meeting-detail-transcript-handle").value = "";
   meetingAudioDeletionHandle = "";
+  meetingDeletionHandle = "";
   recordingDeleteAction.hidden = true;
+  meetingDeleteAction.hidden = true;
   closeRecordingDeleteReview();
+  closeMeetingDeleteReview();
 }
 
 function setError(element, message) {
@@ -592,6 +602,14 @@ function closeRecordingDeleteReview() {
   recordingDeleteStatus.textContent = "";
   recordingDeleteConfirm.disabled = false;
   recordingDeleteConfirm.textContent = "Permanently delete recording";
+}
+
+function closeMeetingDeleteReview() {
+  meetingDeleteConfirmation.hidden = true;
+  meetingDeleteStatus.hidden = true;
+  meetingDeleteStatus.textContent = "";
+  meetingDeleteConfirm.disabled = false;
+  meetingDeleteConfirm.textContent = "Permanently delete meeting";
 }
 
 function renderAudioRetention(retention, deletionHandle = "") {
@@ -1647,6 +1665,10 @@ function renderMeetingDetail(response) {
   meetingOpenTranscript.hidden = !presentation.canOpenTranscript;
   meetingDetailState.dataset.meetingId = response.meetingId || "";
   renderAudioRetention(response.audioRetention, response.audioDeletionHandle);
+  // Offered for any meeting the reader could open, including one whose audio
+  // was already released: the transcript, the note and the record are still there.
+  meetingDeletionHandle = response.meetingDeletionHandle || "";
+  meetingDeleteAction.hidden = !meetingDeletionHandle;
   const statusCopy = presentation.kind === "transcript-only"
     ? "Transcript available. Automatic notes are not available yet."
     : presentation.kind === "metadata-only"
@@ -2149,6 +2171,45 @@ recordingDeleteConfirm.addEventListener("click", async () => {
   } catch {
     recordingDeleteStatus.textContent = "Recording deletion could not complete. Return to Meetings and try again.";
     recordingDeleteConfirm.disabled = true;
+  }
+});
+meetingDeleteReview.addEventListener("click", () => {
+  if (!meetingDeletionHandle) return;
+  meetingDeleteConfirmation.hidden = false;
+  meetingDeleteConfirm.focus();
+});
+meetingDeleteCancel.addEventListener("click", () => {
+  closeMeetingDeleteReview();
+  meetingDeleteReview.focus();
+});
+meetingDeleteConfirm.addEventListener("click", async () => {
+  if (!invoke || !meetingDeletionHandle) return;
+  const handle = meetingDeletionHandle;
+  invalidateLibraryHandles();
+  meetingDeleteAction.hidden = false;
+  meetingDeleteConfirmation.hidden = false;
+  meetingDeleteConfirm.disabled = true;
+  meetingDeleteConfirm.textContent = "Deleting meeting…";
+  meetingDeleteStatus.hidden = false;
+  meetingDeleteStatus.textContent = "Permanently deleting this meeting and everything recorded with it…";
+  try {
+    // `confirmed` is this click, and this shell is what asked. The panel above
+    // is the operator-facing confirmation; sending `true` asserts it happened.
+    // The Rust side does not and cannot re-derive that, so this is a report,
+    // not a proof.
+    const response = await invoke("preview_delete_meeting", { handle, confirmed: true });
+    if (response.state === "removed" || response.state === "already-removed") {
+      // The meeting no longer exists, so its detail view must not remain open.
+      // Staying here would render a meeting that is gone, which is the
+      // tombstone this action exists to avoid.
+      returnToProductHome();
+      return;
+    }
+    meetingDeleteStatus.textContent = response.message || "Meeting deletion could not complete. Return to Meetings and try again.";
+    meetingDeleteConfirm.disabled = true;
+  } catch {
+    meetingDeleteStatus.textContent = "Meeting deletion could not complete. Return to Meetings and try again.";
+    meetingDeleteConfirm.disabled = true;
   }
 });
 meetingOpenTranscript.addEventListener("click", () => {
