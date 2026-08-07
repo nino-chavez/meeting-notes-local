@@ -65,18 +65,22 @@ MLX_RUNTIME = {
         "implementation": "CPython",
         "mlx": "0.32.0",
         "transformers": "5.0.0rc1",
+        # `METADATA` only. `RECORD` was pinned here until 2026-08-07 and is
+        # dropped rather than repaired: it is written by the installer, not
+        # shipped by the wheel, so it varies with the installer and with
+        # byte-compilation. Measured across three environments on one machine
+        # with matching Python and matching package versions, `METADATA` matched
+        # 9 of 9 and `RECORD` 1 of 9. See MLX_NOTE_ADMISSION.md, "the registered
+        # runtime cannot be rebuilt".
         "package_metadata_sha256": {
             "mlx-lm": {
                 "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b",
-                "record": "11151543cb4040b6ebf8c42e85d328257495acc56592dd4360e4bcee86ee58b4",
             },
             "mlx": {
                 "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8",
-                "record": "75a95fb45eae33118fcc1a21ee2a58b4d5796040de2d9dd7ccba07b0a07845a8",
             },
             "transformers": {
                 "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0",
-                "record": "2fbbba0ce625991e763b69b84eec96f2bb8c23f660b0ecadbd18f268e45f509f",
             },
         },
     },
@@ -791,24 +795,36 @@ def local_mlx_provider(
         raise AdmissionRefused("runtime-package-mismatch") from exc
 
     def package_sha256(name: str, filename: str) -> str:
-        """A wheel-identity digest that does not depend on where it was installed.
+        """Hash one file the wheel itself ships, so the digest is the wheel's.
 
-        `RECORD` lists the installed package files with their hashes, and also
-        the generated console scripts under `../../../bin/`. Those scripts embed
-        the environment's absolute interpreter path in their shebang, so their
-        hashes — and therefore `RECORD`'s — change with the directory the
-        environment happens to live in.
+        Only `METADATA` is pinned. It travels inside the wheel, so every
+        installer writes the same bytes and the digest identifies the artifact
+        rather than the act of installing it.
 
-        The first version of this pin hashed `RECORD` whole. That made the
-        registered runtime identity reproducible only inside the exact
-        disposable directory the 2026-08-02 probe used, and no receipt recorded
-        that path. Three environments built from the identical wheels at three
-        paths produced three different digests and none matched the pin, so the
-        probe's runtime could not be re-derived by anyone, which is the opposite
-        of what pinning it was for. Excluding the `../`-relative script rows
-        leaves every package file's own hash covered and makes the digest
-        identical across environments — verified across those same three paths
-        on 2026-08-05.
+        `RECORD` was pinned alongside it until 2026-08-07, and is gone rather
+        than narrowed. It is written by the installer at install time, and it
+        varies with things that say nothing about package identity: the
+        installer (uv reproduced none of three, pip one), byte-compilation
+        (`mlx`'s carries 31 `.pyc` rows generated on install), and at least one
+        further cause never identified. Three environments on one machine with
+        matching Python and matching package versions produced `METADATA` 9 of 9
+        and `RECORD` 1 of 9, which stranded the whole 12-fixture matrix on the
+        one environment that made it.
+
+        Two earlier narrowings of `RECORD` were each believed to have fixed it.
+        The 2026-08-02 pin hashed it whole and was reproducible only inside one
+        disposable directory. The 2026-08-05 fix excluded the `../`-relative
+        console-script rows, whose shebangs embed an absolute interpreter path,
+        and was "verified across those same three paths" — a check that varied
+        the directory while holding the installer and the install method fixed,
+        so it could not have caught either. **A check that varies one dimension
+        does not establish independence from the others.** That is the reason
+        this is a removal and not a third narrowing.
+
+        `filename` is still a parameter because the pin should grow to carry the
+        wheel's own distribution hash once a lockfile supplies one; that value is
+        not derivable from an installed environment, which is why `METADATA` is
+        the strongest wheel-shipped identity available here.
         """
         distribution = importlib.metadata.distribution(name)
         target = next(
@@ -817,13 +833,7 @@ def local_mlx_provider(
         )
         if target is None:
             raise AdmissionRefused("runtime-package-mismatch")
-        payload = distribution.locate_file(target).read_bytes()
-        if filename == "RECORD":
-            rows = payload.decode("utf-8").splitlines()
-            payload = "\n".join(
-                row for row in rows if not row.startswith("../")
-            ).encode("utf-8")
-        return _sha256(payload)
+        return _sha256(distribution.locate_file(target).read_bytes())
 
     runtime_identity = {
         "python": platform.python_version(),
@@ -833,7 +843,6 @@ def local_mlx_provider(
         "package_metadata_sha256": {
             name: {
                 "metadata": package_sha256(name, "METADATA"),
-                "record": package_sha256(name, "RECORD"),
             }
             for name in ("mlx-lm", "mlx", "transformers")
         },

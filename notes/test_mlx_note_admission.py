@@ -351,6 +351,73 @@ class MlxNoteAdmissionTests(unittest.TestCase):
                 self.assertEqual(result.code, code)
                 self.assertIsNone(result.note)
 
+    def test_the_registered_runtime_pins_only_wheel_shipped_files(self) -> None:
+        """The 2026-08-07 finding, pinned so a third narrowing cannot reappear.
+
+        `RECORD` is written by the installer, not shipped by the wheel. Measured
+        across three environments on one machine with matching Python and
+        matching package versions, `METADATA` matched 9 of 9 and `RECORD` 1 of 9,
+        which stranded the 12-fixture matrix on the single environment that
+        produced it. Two earlier attempts narrowed `RECORD` rather than dropping
+        it, and each was believed complete.
+
+        This asserts the shape rather than the digests: a future change that
+        re-adds any installer-written file under a different key still fails.
+        """
+        pins = MLX_RUNTIME["runtime_identity"]["package_metadata_sha256"]
+        self.assertEqual(set(pins), {"mlx-lm", "mlx", "transformers"})
+        for name, entry in pins.items():
+            with self.subTest(package=name):
+                self.assertEqual(
+                    set(entry),
+                    {"metadata"},
+                    "only wheel-shipped files may be pinned; RECORD is written at install time",
+                )
+                self.assertRegex(entry["metadata"], r"\A[0-9a-f]{64}\Z")
+
+    def test_dropping_record_moves_no_request_digest(self) -> None:
+        """The registered runtime is not an input to any request digest.
+
+        MLX_NOTE_ADMISSION.md called this change one that moves "every request
+        digest downstream of it". It does not. `request_sha256` is the digest of
+        the system prompt and the rest of the request dict only, so the committed
+        receipts' request digests survive this change and the recorded responses
+        stay comparable. What does move is the receipt's `runtime_identity`
+        block, which is the point of the change.
+        """
+        transcript = synthetic_transcript()
+        request = model_request(transcript, generate_manifest(transcript, STRATEGY_CUE))
+        user_request = {key: value for key, value in request.items() if key != "system"}
+        digest = _sha256(json.dumps(
+            {"system": request["system"], "user": user_request},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ))
+        self.assertNotIn("runtime_identity", json.dumps(request))
+        self.assertNotIn(
+            MLX_RUNTIME["runtime_identity"]["package_metadata_sha256"]["mlx-lm"]["metadata"],
+            json.dumps(request),
+        )
+        self.assertEqual(observed_identity(request)["request_sha256"], digest)
+
+    def test_a_runtime_carrying_a_record_digest_is_refused(self) -> None:
+        """An environment offering the old two-key shape must not be accepted.
+
+        The comparison is whole-dict equality, so this is already true; it is
+        pinned because the failure it prevents is silent. A provider that still
+        reports `record` would otherwise have to be caught by reading a digest.
+        """
+        transcript = synthetic_transcript()
+
+        def legacy_shape(request: dict) -> tuple[str, dict]:
+            observed = observed_identity(request)
+            observed["runtime_identity"]["package_metadata_sha256"]["mlx"]["record"] = "d" * 64
+            return advertised_response(request), observed
+
+        result = run_model_arm(transcript, legacy_shape)
+        self.assertEqual(result.outcome, "transcript-only")
+        self.assertEqual(result.code, "runtime-package-mismatch")
+        self.assertIsNone(result.note)
+
     def test_a_claim_that_drops_its_evidence_polarity_is_refused(self) -> None:
         """The 2026-08-07 finding, pinned.
 
