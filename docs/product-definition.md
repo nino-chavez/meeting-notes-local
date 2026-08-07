@@ -9,10 +9,13 @@ or a person planning work reads this file first, then descends:
 2. [`journeys.md`](./journeys.md) — the reader, the market check, journeys J0–J6.
 3. [`screens-and-states.md`](./screens-and-states.md) — the surface inventory (§A–§K).
 4. [`vertical-slice.md`](./vertical-slice.md) — the implementation contract: waves,
-   build order, human gates. That file, not this one, decides what gets built next.
-   Open proposal awaiting an operator decision:
-   [`speaker-gate-slice.md`](./speaker-gate-slice.md).
-5. [`teardown.md`](./teardown.md) — the mechanism research underneath all of it.
+   build order, human gates. That file, not this one, decides what gets built next;
+   its **Build queue** section is the order and the status. Open proposal awaiting an
+   operator decision: [`speaker-gate-slice.md`](./speaker-gate-slice.md).
+5. [`backlog.md`](./backlog.md) — the decomposition layer: the ten features broken
+   into twelve epics and into stories with Given/When/Then criteria. It owns neither
+   order nor status; it answers what a piece of work *is*, not when it happens.
+6. [`teardown.md`](./teardown.md) — the mechanism research underneath all of it.
 
 Written 2026-08-05. Statuses were verified against code on that date, not copied
 from prose — and they go stale fastest of anything here. Before repeating a status,
