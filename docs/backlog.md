@@ -158,25 +158,59 @@ next build.
 **Evidence:** real receipt, 2026-08-02.
 
 #### US-3.2: Whole-meeting deletion
-**Feature 3 · J5 · §G · P0 · M · **Buildable now***
+**Feature 3 · J5 · §G · P0 · M · Core built 2026-08-07; shell wiring open**
 
 As the Operator, I want to delete a meeting entirely — audio, transcript, note and
 record — so that a conversation that should not have been captured can be removed.
 
 **Acceptance criteria:**
-- Given a meeting exists, When the Operator confirms whole-meeting deletion through a two-step confirmation, Then every artifact bound to that meeting is removed and a receipt in the `audio-deletion/1` shape records what was removed.
-- Given deletion is interrupted mid-way, When the app restarts, Then reconciliation completes or quarantines it, and never leaves a meeting that reads as intact but is not.
-- Given a meeting is active, When whole-meeting deletion is requested, Then it is refused before any mutation.
-- Given deletion completes, When the library is opened, Then the meeting is absent, not tombstoned as an empty row.
+- ~~a receipt in the `audio-deletion/1` shape~~ — **corrected 2026-08-07, see Risks.** Given a meeting exists, When whole-meeting deletion is authorized, Then every artifact bound to it is removed and a `meeting-deletion/1` receipt records what was removed. *(Built.)*
+- Given deletion is interrupted mid-way, When the app restarts, Then reconciliation completes it, and never leaves a meeting that reads as intact but is not. *(Built.)*
+- Given a meeting is active, When whole-meeting deletion is requested, Then it is refused before any mutation. *(Built — the lease is taken before storage is read at all.)*
+- Given deletion completes, When the library is opened, Then the meeting is absent, not tombstoned as an empty row. *(Built at the core; the library surface is part of the open shell slice.)*
+- Given the Operator has not confirmed twice, When deletion is requested, Then it does not proceed. **Open** — the confirmation is a §G surface concern and the core layer deliberately enforces authority and ordering, not consent.
 
 **Refusals:** must not run against real meetings during development. "Exercise real
 destructive actions only as Operator actions before beta admission."
 
-**Dependencies:** the audited staged deletion facade and writer-lock authority from
-wave C already exist and this must borrow them, not re-implement.
+**Dependencies:** borrows the wave C writer-lock authority and coordination lease
+rather than re-implementing them.
 
-**Risks:** the receipt shape was designed for audio. Confirm it can express
-"transcript and note also removed" without a schema change, or register the change.
+**Risks — answered 2026-08-07, and the answer was no.** The `audio-deletion/1` shape
+**cannot** carry this, for two independent reasons. Its receipt lives at
+`meeting_dir/deletion/audio-deletion.json`, *inside* the directory whole-meeting
+deletion removes, so it would destroy its own evidence and leave crash recovery
+nothing to reconcile against. And a receipt listing a transcript and an operator note
+under a schema named `audio-deletion/1` misdescribes what happened, which this
+codebase refuses everywhere else. So `meeting-deletion/1` is a registered new schema
+whose receipt lives at `<root>/deletions/<meeting_id>.json`.
+
+`StorageRoot::create` seeds a fixed list of root children but does not enforce it as
+an exact set, so the new `deletions/` child is additive: an older build reading a root
+that has it is unaffected, and a newer build creates it on demand.
+
+**What was built** (`crates/session-core/src/meeting_deletion.rs`, 11 tests): the
+receipt, the three-state machine, `WholeMeetingDeletionAuthority` off the writer lock,
+startup reconciliation, and a retention skip so a meeting between `staged` and
+`removed` is not reported as quarantined. The ordering is the safety property —
+`meeting.json` is removed **first**, because every reader reaches a meeting through
+`load_meeting`, so after that transition no partially removed directory can be read as
+intact.
+
+**Next slice:** the shell command. It needs a `LibraryMeetingDeletionAccess`
+authorization path beside the existing audio one in `library_reader`, a
+`preview_delete_meeting` command, its capability TOML, entries in `build_contract.rs`,
+`build_matrix.rs` and the `shell_contract.rs` exact-set pins, and the §G two-step
+confirmation in the shell.
+
+#### Placeholders standing in for real data
+
+Recorded here because they are invisible in the code and will otherwise be forgotten.
+
+| Placeholder | Where | Replace with |
+|---|---|---|
+| Synthetic meeting fixtures only | `meeting_deletion.rs` tests | A real `meeting-deletion/1` receipt. **None has ever been produced.** Passing tests are bounded evidence and do not advance the wave C human gate, so this stays unproven until an Operator runs a real deletion. |
+| Placeholder staged runtime | `apps/desktop/runtime/` (gitignored, local only) | A real staged runtime via `worker/build_manifest.py`. A fresh worktree has no `apps/desktop/runtime`, so the desktop crate's `build.rs` fails on a missing resource path; a stub tree of the eight declared resources lets it compile. Any manifest-dependent assertion measured against that stub is measuring the stub. |
 
 #### US-3.3: Retention policy wording
 **Feature 3 · J5 · §B §G · P0 · S · Blocked on Operator**

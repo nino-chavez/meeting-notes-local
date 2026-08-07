@@ -4,6 +4,7 @@ pub(crate) mod library_metadata;
 pub mod library_read;
 pub mod meeting;
 pub mod meeting_coordination;
+pub mod meeting_deletion;
 pub mod note_generation;
 pub mod note_projection;
 #[cfg(target_os = "macos")]

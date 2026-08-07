@@ -578,6 +578,21 @@ impl AppDataWriterLock {
         ManualAudioDeletionAuthority { lock: self }
     }
 
+    /// Authority for `meeting-deletion/1`, the whole-meeting removal.
+    ///
+    /// Deliberately separate from [`Self::deletion_authority`], which releases
+    /// audio only and keeps the meeting. Holding one does not imply the other,
+    /// because a caller that may free disk space is not thereby a caller that
+    /// may destroy the retained evidence.
+    pub fn whole_meeting_deletion_authority(
+        &self,
+    ) -> crate::meeting_deletion::WholeMeetingDeletionAuthority<'_> {
+        crate::meeting_deletion::WholeMeetingDeletionAuthority {
+            storage: &self.storage,
+            coordination: self.coordination.as_ref(),
+        }
+    }
+
     #[cfg(target_os = "macos")]
     pub fn profile_lifecycle_authority(&self) -> ProfileLifecycleAuthority<'_> {
         ProfileLifecycleAuthority { lock: self }
@@ -872,10 +887,25 @@ pub fn execute_due_retention_excluding(
     let meetings = storage
         .resolve(Path::new("meetings"))
         .map_err(|error| io::Error::other(error.to_string()))?;
+    // A meeting between the `staged` and `removed` transitions of
+    // `meeting-deletion/1` exists as a directory without a `meeting.json`, so
+    // loading it fails and it would be reported as quarantined. That would show
+    // the operator a damaged meeting where they asked for an absent one, so
+    // these are skipped and left to `reconcile_pending_meeting_deletions`.
+    // Propagated rather than defaulted: if we cannot tell which meetings are
+    // mid-deletion, we do not know that none are. Swallowing the error here
+    // would fail open, and would produce exactly the quarantine report this
+    // skip exists to prevent.
+    let deleting = crate::meeting_deletion::pending_deletion_ids(storage)
+        .map(|ids| ids.into_iter().collect::<HashSet<_>>())
+        .map_err(|error| io::Error::other(error.to_string()))?;
     let mut outcomes = Vec::new();
     for entry in fs::read_dir(meetings)? {
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
+        if deleting.contains(&id) {
+            continue;
+        }
         if active_meeting_ids.contains(&id) {
             outcomes.push(RetentionOutcome::DeferredActive(id));
             continue;
