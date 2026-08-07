@@ -1,0 +1,1407 @@
+{
+  "admits": false,
+  "decoding": "structure-constrained",
+  "fixtures": [
+    {
+      "codes": [
+        ""
+      ],
+      "cold_elapsed_s": [
+        2.58272,
+        2.612702,
+        2.588883
+      ],
+      "cold_median_s": 2.588883,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "ordinary-decision",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            2.55,
+            2.72,
+            4.09
+          ],
+          "before": [
+            2.25,
+            2.66,
+            4.08
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            2.7,
+            2.74,
+            4.09
+          ],
+          "before": [
+            2.67,
+            2.74,
+            4.09
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            2.64,
+            2.73,
+            4.07
+          ],
+          "before": [
+            2.7,
+            2.74,
+            4.09
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            2.55,
+            2.72,
+            4.09
+          ],
+          "before": [
+            2.55,
+            2.72,
+            4.09
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            2.67,
+            2.74,
+            4.09
+          ],
+          "before": [
+            2.55,
+            2.72,
+            4.09
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        "b04a0ad410ac682e2d44cdefb5304ba22698ad4f86bbf351db5f6e72a0ddae6b"
+      ],
+      "outcomes": [
+        "accepted-research-candidate"
+      ],
+      "peak_rss": 1186332672,
+      "receipt_sha256": [
+        "eb37323f235d6992b3507c1def5bfc7aafc9368c99a3bd1e68226102e1e72351"
+      ],
+      "response_sha256": [
+        "436590ff1c384f3194711a9f6fd0e74649266763676716e65bb0693739c59dc5"
+      ],
+      "warm_elapsed_s": [
+        1.81833,
+        1.80674
+      ],
+      "warm_median_s": 1.812535,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        ""
+      ],
+      "cold_elapsed_s": [
+        2.655642,
+        2.644664,
+        2.696051
+      ],
+      "cold_median_s": 2.655642,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "ordinary-action",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            3.47,
+            2.9,
+            4.12
+          ],
+          "before": [
+            2.64,
+            2.73,
+            4.07
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.43,
+            2.9,
+            4.12
+          ],
+          "before": [
+            3.43,
+            2.9,
+            4.12
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.29,
+            2.89,
+            4.1
+          ],
+          "before": [
+            3.32,
+            2.89,
+            4.11
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.47,
+            2.9,
+            4.12
+          ],
+          "before": [
+            3.47,
+            2.9,
+            4.12
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            3.47,
+            2.9,
+            4.12
+          ],
+          "before": [
+            3.47,
+            2.9,
+            4.12
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        "9f226eae03aa3e55c2f61ef3e1af4c936496fdb0d55fff4d100c2c727269686e"
+      ],
+      "outcomes": [
+        "accepted-research-candidate"
+      ],
+      "peak_rss": 1186463744,
+      "receipt_sha256": [
+        "a745bdb0cd4e9726fa506ca73fb8e202ec588b0edb2089b67b0c708ad0d3ec78"
+      ],
+      "response_sha256": [
+        "68b16fcc74421951175a70bd3f228ec77b5257f0ad593b1c9a1368afc257d360"
+      ],
+      "warm_elapsed_s": [
+        1.950241,
+        1.914371
+      ],
+      "warm_median_s": 1.932306,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        ""
+      ],
+      "cold_elapsed_s": [
+        2.51237,
+        2.543189,
+        2.533739
+      ],
+      "cold_median_s": 2.533739,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "ordinary-proposal",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            3.29,
+            2.89,
+            4.1
+          ],
+          "before": [
+            3.29,
+            2.89,
+            4.1
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.38,
+            2.92,
+            4.1
+          ],
+          "before": [
+            3.38,
+            2.92,
+            4.1
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.51,
+            2.96,
+            4.1
+          ],
+          "before": [
+            3.51,
+            2.96,
+            4.1
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.59,
+            2.96,
+            4.12
+          ],
+          "before": [
+            3.29,
+            2.89,
+            4.1
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            3.59,
+            2.96,
+            4.12
+          ],
+          "before": [
+            3.59,
+            2.96,
+            4.12
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        "c21cfd3f15afd92ea7e5ef5a9a0927a4a30c33b0fb9cd488da381731ad98e6e1"
+      ],
+      "outcomes": [
+        "accepted-research-candidate"
+      ],
+      "peak_rss": 1185054720,
+      "receipt_sha256": [
+        "7000f2bb554a70bd8a11def596c84257a498cdecbeda67b46efad7dc656750e1"
+      ],
+      "response_sha256": [
+        "9ae8c36af1c586e7003ac02fc22d16cd92cdaef11d7e4298b7119b7a33c86ce3"
+      ],
+      "warm_elapsed_s": [
+        1.769936,
+        1.775039
+      ],
+      "warm_median_s": 1.772487,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        "citation-locator"
+      ],
+      "cold_elapsed_s": [
+        2.254596,
+        2.24943,
+        2.274968
+      ],
+      "cold_median_s": 2.254596,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "ordinary-question",
+      "gates": {
+        "checks_pass_on_every_call": false,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            3.31,
+            2.92,
+            4.08
+          ],
+          "before": [
+            3.31,
+            2.92,
+            4.08
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.18,
+            2.91,
+            4.06
+          ],
+          "before": [
+            3.28,
+            2.93,
+            4.08
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.09,
+            2.89,
+            4.05
+          ],
+          "before": [
+            3.18,
+            2.91,
+            4.06
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.31,
+            2.92,
+            4.08
+          ],
+          "before": [
+            3.31,
+            2.92,
+            4.08
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            3.28,
+            2.93,
+            4.08
+          ],
+          "before": [
+            3.31,
+            2.92,
+            4.08
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        ""
+      ],
+      "outcomes": [
+        "transcript-only"
+      ],
+      "peak_rss": 1185284096,
+      "receipt_sha256": [
+        "d16568c32ec4b3e3d03a46c23dea752f1a48be838460383db1203a0d4796978f"
+      ],
+      "response_sha256": [
+        "dd87b7c51da0df364dd3191936a207c06c262fc09b9d2430ce832d80fbe45f15"
+      ],
+      "warm_elapsed_s": [
+        1.53515,
+        1.532002
+      ],
+      "warm_median_s": 1.533576,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        ""
+      ],
+      "cold_elapsed_s": [
+        2.654813,
+        2.692511,
+        2.695335
+      ],
+      "cold_median_s": 2.692511,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "locator-canonical-order",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            3.32,
+            2.95,
+            4.06
+          ],
+          "before": [
+            3.09,
+            2.89,
+            4.05
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.13,
+            2.91,
+            4.05
+          ],
+          "before": [
+            3.13,
+            2.91,
+            4.05
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.76,
+            3.05,
+            4.09
+          ],
+          "before": [
+            3.76,
+            3.05,
+            4.09
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.32,
+            2.95,
+            4.06
+          ],
+          "before": [
+            3.32,
+            2.95,
+            4.06
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            3.32,
+            2.95,
+            4.06
+          ],
+          "before": [
+            3.32,
+            2.95,
+            4.06
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        "5f62452344ac1eea11e08ac24854f10fb5010544109ab579f62a2b3871a1b214"
+      ],
+      "outcomes": [
+        "accepted-research-candidate"
+      ],
+      "peak_rss": 1182793728,
+      "receipt_sha256": [
+        "e0920b2ce13f86c9c23633fa7c9c7d361f5312ad3a6ea9ea4fd3c5ae55590633"
+      ],
+      "response_sha256": [
+        "a44a8a1dd2f6a9844194f1f2d39c38321d1a2d8f7fc52ed43cbbf3b42233288d"
+      ],
+      "warm_elapsed_s": [
+        1.947631,
+        1.931531
+      ],
+      "warm_median_s": 1.939581,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        ""
+      ],
+      "cold_elapsed_s": [
+        2.490679,
+        2.55,
+        2.55939
+      ],
+      "cold_median_s": 2.55,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "locator-second-turn",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            4.18,
+            3.15,
+            4.11
+          ],
+          "before": [
+            4.18,
+            3.15,
+            4.11
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.93,
+            3.12,
+            4.09
+          ],
+          "before": [
+            3.93,
+            3.12,
+            4.09
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            4.17,
+            3.19,
+            4.11
+          ],
+          "before": [
+            4.17,
+            3.19,
+            4.11
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            4.01,
+            3.13,
+            4.1
+          ],
+          "before": [
+            4.18,
+            3.15,
+            4.11
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            4.01,
+            3.13,
+            4.1
+          ],
+          "before": [
+            4.01,
+            3.13,
+            4.1
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        "f62f4d98f5bac02b7a9cee1d29ff0650dd58e42742876840ccd1db063c2853ed"
+      ],
+      "outcomes": [
+        "accepted-research-candidate"
+      ],
+      "peak_rss": 1188249600,
+      "receipt_sha256": [
+        "ccda2be60e609972c52e1df33408b59b63c326ef3ae7b84ed2abb9ad5ac52839"
+      ],
+      "response_sha256": [
+        "be89da0943c86e67c54818b8cb30fd459b79d27156699d6efc98ff043a038fd1"
+      ],
+      "warm_elapsed_s": [
+        1.756241,
+        1.758045
+      ],
+      "warm_median_s": 1.757143,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        ""
+      ],
+      "cold_elapsed_s": [
+        2.651727,
+        2.677169,
+        2.677077
+      ],
+      "cold_median_s": 2.677077,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "name-number-decision",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            4.48,
+            3.27,
+            4.13
+          ],
+          "before": [
+            4.48,
+            3.27,
+            4.13
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            4.18,
+            3.24,
+            4.11
+          ],
+          "before": [
+            4.28,
+            3.25,
+            4.12
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.92,
+            3.2,
+            4.1
+          ],
+          "before": [
+            4.18,
+            3.24,
+            4.11
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            4.28,
+            3.25,
+            4.12
+          ],
+          "before": [
+            4.48,
+            3.27,
+            4.13
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            4.28,
+            3.25,
+            4.12
+          ],
+          "before": [
+            4.28,
+            3.25,
+            4.12
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        "2c34cc419ba043adecbf11febd4dab7aa9b43c4ad584101f2873dd5a94161be2"
+      ],
+      "outcomes": [
+        "accepted-research-candidate"
+      ],
+      "peak_rss": 1185644544,
+      "receipt_sha256": [
+        "1156bb2b912a8bc44c461e62a5af2288564e3128347e8a00932d60e1ba1d63b4"
+      ],
+      "response_sha256": [
+        "85acd5ba92471b2f741e8d7761799eaf8e6f77e7efd351507771ff03facf8e3f"
+      ],
+      "warm_elapsed_s": [
+        1.936314,
+        1.914705
+      ],
+      "warm_median_s": 1.925509,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        "citation-locator"
+      ],
+      "cold_elapsed_s": [
+        2.40364,
+        2.360438,
+        2.341923
+      ],
+      "cold_median_s": 2.360438,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "name-number-action",
+      "gates": {
+        "checks_pass_on_every_call": false,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            3.69,
+            3.17,
+            4.08
+          ],
+          "before": [
+            3.92,
+            3.2,
+            4.1
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.67,
+            3.18,
+            4.07
+          ],
+          "before": [
+            3.55,
+            3.15,
+            4.06
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.67,
+            3.18,
+            4.07
+          ],
+          "before": [
+            3.67,
+            3.18,
+            4.07
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.69,
+            3.17,
+            4.08
+          ],
+          "before": [
+            3.69,
+            3.17,
+            4.08
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            3.55,
+            3.15,
+            4.06
+          ],
+          "before": [
+            3.69,
+            3.17,
+            4.08
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        ""
+      ],
+      "outcomes": [
+        "transcript-only"
+      ],
+      "peak_rss": 1185546240,
+      "receipt_sha256": [
+        "c20431e9269b6ddd48bd6727e544c5e930cd168aaa38bd551b57d13a769279ff"
+      ],
+      "response_sha256": [
+        "2a44975c2e405e2ae519bfbf28fcbcc5a5929c3c56c5e5a66db20de92ddfa4df"
+      ],
+      "warm_elapsed_s": [
+        1.639769,
+        1.65955
+      ],
+      "warm_median_s": 1.64966,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        ""
+      ],
+      "cold_elapsed_s": [
+        2.457332,
+        2.50744,
+        2.491677
+      ],
+      "cold_median_s": 2.491677,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "negation-decision",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            3.45,
+            3.14,
+            4.05
+          ],
+          "before": [
+            3.45,
+            3.14,
+            4.05
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.59,
+            3.19,
+            4.06
+          ],
+          "before": [
+            3.59,
+            3.19,
+            4.06
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.38,
+            3.15,
+            4.04
+          ],
+          "before": [
+            3.38,
+            3.15,
+            4.04
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.82,
+            3.22,
+            4.08
+          ],
+          "before": [
+            3.45,
+            3.14,
+            4.05
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            3.82,
+            3.22,
+            4.08
+          ],
+          "before": [
+            3.82,
+            3.22,
+            4.08
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        "fe0e058364ff7bfc1c5d038461fd0f686c694e90914a26ccfc1c1fe684257880"
+      ],
+      "outcomes": [
+        "accepted-research-candidate"
+      ],
+      "peak_rss": 1185120256,
+      "receipt_sha256": [
+        "e55993332907c6f6f75bf704e3b7a0f3bbff2cf4f64b872cabe2af004afa8a12"
+      ],
+      "response_sha256": [
+        "615a69ce07d09715814bd140ad44c8112e9a4492284d6b787b197cc3bdb642a1"
+      ],
+      "warm_elapsed_s": [
+        1.733761,
+        1.711802
+      ],
+      "warm_median_s": 1.722781,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        ""
+      ],
+      "cold_elapsed_s": [
+        2.490392,
+        2.526235,
+        2.557067
+      ],
+      "cold_median_s": 2.526235,
+      "cold_repeats": 3,
+      "control": {
+        "code": null,
+        "expected": true,
+        "outcome": "accepted-research-candidate"
+      },
+      "fixture": "negation-proposal",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            3.35,
+            3.15,
+            4.03
+          ],
+          "before": [
+            3.35,
+            3.15,
+            4.03
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.29,
+            3.14,
+            4.02
+          ],
+          "before": [
+            3.48,
+            3.18,
+            4.04
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.1,
+            3.1,
+            4.0
+          ],
+          "before": [
+            3.29,
+            3.14,
+            4.02
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.35,
+            3.15,
+            4.03
+          ],
+          "before": [
+            3.35,
+            3.15,
+            4.03
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            3.48,
+            3.18,
+            4.04
+          ],
+          "before": [
+            3.35,
+            3.15,
+            4.03
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        "3525c20ca25e4b3ff24d05944effa0f845e9b133d29924bf4369c5ea97196ac5"
+      ],
+      "outcomes": [
+        "accepted-research-candidate"
+      ],
+      "peak_rss": 1184448512,
+      "receipt_sha256": [
+        "d80e9b26d95f5e99d67a758bb0f05f70fdc5f44d0ad4d1c28e86b10bfe1be9e9"
+      ],
+      "response_sha256": [
+        "743f53eca88b21c703af6cfa5e95d094d749115198c886bae5da65d6d7164d3d"
+      ],
+      "warm_elapsed_s": [
+        1.760585,
+        1.796
+      ],
+      "warm_median_s": 1.778293,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        "no-model-candidates"
+      ],
+      "cold_elapsed_s": [
+        0.374356,
+        0.375267,
+        0.369852
+      ],
+      "cold_median_s": 0.374356,
+      "cold_repeats": 3,
+      "control": {
+        "code": "no-deterministic-candidates",
+        "expected": true,
+        "outcome": "transcript-only"
+      },
+      "fixture": "abstain-chitchat",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            3.1,
+            3.1,
+            4.0
+          ],
+          "before": [
+            3.1,
+            3.1,
+            4.0
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            2.93,
+            3.07,
+            3.98
+          ],
+          "before": [
+            2.93,
+            3.07,
+            3.98
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            2.7,
+            3.02,
+            3.96
+          ],
+          "before": [
+            2.93,
+            3.07,
+            3.98
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            3.1,
+            3.1,
+            4.0
+          ],
+          "before": [
+            3.1,
+            3.1,
+            4.0
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            3.1,
+            3.1,
+            4.0
+          ],
+          "before": [
+            3.1,
+            3.1,
+            4.0
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        ""
+      ],
+      "outcomes": [
+        "transcript-only"
+      ],
+      "peak_rss": 1180532736,
+      "receipt_sha256": [
+        "5aa2a041bea0275005c96658fbe8d1ed3044c5010da76b86e189c72a2b718534"
+      ],
+      "response_sha256": [
+        "eef46741adfc3a9f76294d3b78f37a45f113092ac9d44ee77c7a038a88ff09a1"
+      ],
+      "warm_elapsed_s": [
+        0.220951,
+        0.222839
+      ],
+      "warm_median_s": 0.221895,
+      "warm_repeats": 2
+    },
+    {
+      "codes": [
+        "no-model-candidates"
+      ],
+      "cold_elapsed_s": [
+        0.375342,
+        0.371222,
+        0.37343
+      ],
+      "cold_median_s": 0.37343,
+      "cold_repeats": 3,
+      "control": {
+        "code": "no-deterministic-candidates",
+        "expected": true,
+        "outcome": "transcript-only"
+      },
+      "fixture": "abstain-plain",
+      "gates": {
+        "checks_pass_on_every_call": true,
+        "control_expected": true,
+        "repeatable": true,
+        "repeats_as_registered": true,
+        "timings_available": true,
+        "tree_stable": true,
+        "workers_completed": true
+      },
+      "load_average": [
+        {
+          "after": [
+            2.7,
+            3.02,
+            3.96
+          ],
+          "before": [
+            2.7,
+            3.02,
+            3.96
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            2.56,
+            2.98,
+            3.94
+          ],
+          "before": [
+            2.56,
+            2.98,
+            3.94
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            2.56,
+            2.98,
+            3.94
+          ],
+          "before": [
+            2.56,
+            2.98,
+            3.94
+          ],
+          "phase": "cold-call"
+        },
+        {
+          "after": [
+            2.7,
+            3.02,
+            3.96
+          ],
+          "before": [
+            2.7,
+            3.02,
+            3.96
+          ],
+          "phase": "warm-call"
+        },
+        {
+          "after": [
+            2.7,
+            3.02,
+            3.96
+          ],
+          "before": [
+            2.7,
+            3.02,
+            3.96
+          ],
+          "phase": "warm-call"
+        }
+      ],
+      "note_sha256": [
+        ""
+      ],
+      "outcomes": [
+        "transcript-only"
+      ],
+      "peak_rss": 1181728768,
+      "receipt_sha256": [
+        "7d8b2344337138c7c832c7cfeaf7c811d22947e1c143d1ffd800c69857bab1ca"
+      ],
+      "response_sha256": [
+        "eef46741adfc3a9f76294d3b78f37a45f113092ac9d44ee77c7a038a88ff09a1"
+      ],
+      "warm_elapsed_s": [
+        0.222199,
+        0.222595
+      ],
+      "warm_median_s": 0.222397,
+      "warm_repeats": 2
+    }
+  ],
+  "gates": {
+    "cold_latency": true,
+    "every_fixture_ran": true,
+    "memory": true,
+    "per_fixture_gates": false,
+    "tree_unchanged": true,
+    "warm_latency": true
+  },
+  "harness": {
+    "base_revision": "bf95c063000eb4e6829c13f1383f188ee9445774",
+    "source_sha256": "6b34b7b7c51122dfa742ad55eb13b1d96b538eb79a16572308ddac272d47c603"
+  },
+  "latency": {
+    "cold_ceiling_s": 30.0,
+    "cold_median_s": 2.529987,
+    "load_average_at_end": [
+      2.56,
+      2.98,
+      3.94
+    ],
+    "load_average_at_start": [
+      2.25,
+      2.66,
+      4.08
+    ],
+    "warm_ceiling_s": 15.0,
+    "warm_median_s": 1.764815
+  },
+  "matrix": {
+    "cold_repeats": 3,
+    "fixtures": 12,
+    "warm_repeats": 2
+  },
+  "orchestrator_sha256": "5cbece37c55ee953122d8c69c4b21a89d066ee466e452781ad9be6e81c33a360",
+  "passed": false,
+  "peak_rss": 1188249600,
+  "peak_rss_ceiling": 4282063304,
+  "postflight_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+  "preflight_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+  "registered_model": {
+    "repository": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+    "revision": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
+    "tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95"
+  },
+  "schema": "mlx-note-matrix/2"
+}
