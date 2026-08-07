@@ -825,10 +825,10 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     let navigation = include_str!("../../ui/navigation-state.mjs");
     let package: Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
 
-    assert_eq!(
-        package["scripts"]["test:ui"],
-        "node --test ui/navigation-state.test.mjs"
-    );
+    // Globbed rather than named, so a new shell test file runs by existing.
+    // Widened 2026-08-07 when the reference check was added: a suite that lists
+    // one file by name silently stops covering everything written after it.
+    assert_eq!(package["scripts"]["test:ui"], "node --test ui/*.test.mjs");
     assert!(html.contains("id=\"new-meeting\" type=\"button\">Return to Find"));
     // Copy is offered above each transcript, never only after it, and the
     // copied text keeps withheld turns rather than handing over a transcript
@@ -1314,9 +1314,38 @@ fn the_live_note_is_the_operators_alone_and_says_what_it_cannot_do() {
     assert!(script.contains("A note was saved for this meeting and could not be read back."));
     assert!(!script.contains("innerHTML"));
 
-    // Third: losing the last thing typed. The debounce is flushed before the
-    // meeting moves on, which is when the closing thought gets written.
-    assert!(script.contains("await flushLiveNote();"));
+    // Third: losing the last thing typed. Review on 128283a found this pin
+    // asserted the flush was CALLED, which it was, while the guarantee it names
+    // did not hold — so the shape that makes it true is what is pinned now.
+    //
+    // The saves serialize instead of dropping. `createSingleFlight` coalesces,
+    // which is right for a read and silently discards a write; a save arriving
+    // during another was dropped, so pressing Stop mid-autosave flushed nothing.
+    assert!(script.contains("createWriteQueue("));
+    assert!(!script.contains("liveNoteSaving || liveNoteUnreadable"));
+    // And the re-entrancy flag closes before the first await, not after it. Set
+    // afterwards, a second Stop click passed the guard during the flush and won
+    // the race, so the first click's stop failed and painted a red error over a
+    // stop that had worked.
+    let stop_handler = script
+        .split_once("stopButton.addEventListener")
+        .expect("stop handler")
+        .1;
+    let pending_at = stop_handler
+        .find("stopCommandPending = true;")
+        .expect("re-entrancy flag");
+    let flush_at = stop_handler
+        .find("await flushLiveNote();")
+        .expect("flush before stop");
+    assert!(
+        pending_at < flush_at,
+        "the stop guard must close before the flush awaits, or a second click races it"
+    );
+
+    // And what the finished screen shows is what storage confirmed, not what is
+    // in the box. Rendering the box meant a dropped save displayed unsaved words
+    // as the saved note, and nothing looked wrong until the next launch.
+    assert!(script.contains("const text = liveNoteSavedText;"));
 
     // The note is not evidence and is not stored as evidence: no meeting-record
     // field, a fixed path, replaced atomically. The frozen `meeting/2` contract

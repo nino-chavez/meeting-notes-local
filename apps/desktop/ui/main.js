@@ -1,5 +1,6 @@
 import {
   createSingleFlight,
+  createWriteQueue,
   acceptAuthoritativeSnapshot,
   isDismissalReadySnapshot,
   settleDismissal,
@@ -2042,14 +2043,21 @@ startForm.addEventListener("submit", async (event) => {
 
 stopButton.addEventListener("click", async () => {
   if (stopCommandPending || lastSnapshot?.capture !== "recording") return;
-  // Whatever was typed since the last autosave is flushed before the meeting
-  // moves on. Without this the final thought — usually the one written as the
-  // call is wrapping up — is the one the debounce loses.
-  await flushLiveNote();
-  clearError(stopError);
+  // The flag closes the re-entrancy window BEFORE the first await, and the
+  // re-render disables the button. Setting it after the flush left the guard
+  // open for the whole of it: a second click would pass, find nothing dirty,
+  // and reach `stop_meeting` first, so the first click's stop returned "no
+  // recording is ready to stop" and painted a red failure over a stop that
+  // worked. That the flush is exactly what an operator typing up to the last
+  // second triggers is what made it reachable rather than theoretical.
   stopCommandFailed = false;
   stopCommandPending = true;
   renderCaptureAction(lastSnapshot);
+  clearError(stopError);
+  // Whatever was typed since the last autosave is written before the meeting
+  // moves on. Without this the final thought — usually the one written as the
+  // call is wrapping up — is the one the debounce loses.
+  await flushLiveNote();
   try {
     const snapshot = await invoke("stop_meeting");
     acceptCommandSnapshot(snapshot);
@@ -2172,6 +2180,10 @@ let liveNoteSaving = false;
 let liveNoteFailure = "";
 let liveNoteSavedRecently = false;
 let liveNoteUnreadable = false;
+// What storage last confirmed, which is not the same as what is in the box. The
+// transcript screen rendered the box, so a dropped save showed the operator
+// their unsaved words as their saved note — nothing looked wrong until relaunch.
+let liveNoteSavedText = "";
 
 function renderLiveNote() {
   const status = liveNoteStatus({
@@ -2198,18 +2210,27 @@ async function loadLiveNoteFor(meetingId) {
     // wrong meeting would put one meeting's thinking under another's heading.
     if (liveNoteMeetingId !== meetingId) return;
     liveNoteUnreadable = Boolean(note?.unreadable);
-    liveNoteText.value = typeof note?.text === "string" ? note.text : "";
+    liveNoteSavedText = typeof note?.text === "string" ? note.text : "";
+    liveNoteText.value = liveNoteSavedText;
   } catch {
     if (liveNoteMeetingId !== meetingId) return;
     liveNoteUnreadable = false;
+    liveNoteSavedText = "";
     liveNoteText.value = "";
     liveNoteFailure = "This meeting's note could not be opened.";
   }
   renderLiveNote();
 }
 
-async function saveLiveNote() {
-  if (!invoke || liveNoteSaving || liveNoteUnreadable) return;
+// Saves are serialized on one chain rather than dropped when one is in flight.
+//
+// The first version early-returned on `liveNoteSaving`, which made the flush on
+// Stop a no-op whenever the debounce had just fired — precisely the closing
+// thought the flush exists to keep. It also stranded the debounce: a timer that
+// fired mid-save dropped its write and rescheduled nothing, leaving "Saving…" on
+// screen with no save pending. Queueing fixes both, because a link appended to
+// the chain runs after the in-flight one and reads the text as it is then.
+async function writeLiveNote() {
   const meetingId = liveNoteMeetingId;
   const text = liveNoteText.value;
   liveNoteSaving = true;
@@ -2220,6 +2241,9 @@ async function saveLiveNote() {
     if (liveNoteMeetingId !== meetingId) return;
     liveNoteFailure = "";
     liveNoteUnreadable = Boolean(note?.unreadable);
+    // What storage now holds, from storage's own answer rather than from the
+    // box. Every later reader uses this.
+    liveNoteSavedText = typeof note?.text === "string" ? note.text : "";
     liveNoteSavedRecently = !liveNoteDirty;
   } catch (error) {
     if (liveNoteMeetingId !== meetingId) return;
@@ -2236,6 +2260,13 @@ async function saveLiveNote() {
   }
 }
 
+const liveNoteWrites = createWriteQueue(() =>
+  invoke && !liveNoteUnreadable && liveNoteDirty ? writeLiveNote() : undefined);
+
+function saveLiveNote() {
+  return liveNoteWrites.push();
+}
+
 function resetLiveNote() {
   if (liveNoteMeetingId === null) return;
   if (liveNoteTimer) {
@@ -2247,6 +2278,7 @@ function resetLiveNote() {
   liveNoteFailure = "";
   liveNoteSavedRecently = false;
   liveNoteUnreadable = false;
+  liveNoteSavedText = "";
   liveNoteText.value = "";
   renderLiveNote();
 }
@@ -2256,7 +2288,9 @@ async function flushLiveNote() {
     window.clearTimeout(liveNoteTimer);
     liveNoteTimer = null;
   }
-  if (liveNoteDirty) await saveLiveNote();
+  // One appended link is enough: it runs after anything in flight, and reads the
+  // text at that moment, so it captures keystrokes that landed during the wait.
+  await saveLiveNote();
 }
 
 // Shown back on the finished-transcript screen, read-only. Without this the
@@ -2277,12 +2311,11 @@ function renderTranscriptNote() {
     return;
   }
   transcriptNoteSection.dataset.state = "typing";
-  const text = liveNoteText.value;
+  // What storage confirmed, never the box. Rendering the box meant a dropped
+  // save displayed unsaved words as the saved note, and nothing looked wrong
+  // until the next launch. Found by review on 128283a.
+  const text = liveNoteSavedText;
   transcriptNoteSection.hidden = !text;
-  // Assigned as text, never parsed as markup — the rule that governs rendered
-  // transcript text governs operator-authored text too. The shell-wide ban on
-  // markup insertion is pinned in shell_contract.rs and caught this comment
-  // naming the forbidden property, which is the pin working exactly as built.
   transcriptNoteText.textContent = text;
 }
 

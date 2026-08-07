@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.2.0",
   "scripts": {
-    "test:ui": "node --test ui/navigation-state.test.mjs",
+    "test:ui": "node --test ui/*.test.mjs",
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",

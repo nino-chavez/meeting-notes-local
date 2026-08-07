@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createTransitionGate,
   createSingleFlight,
+  createWriteQueue,
   acceptAuthoritativeSnapshot,
   isDismissalReadySnapshot,
   settleDismissal,
@@ -909,4 +910,50 @@ test("the live note reports only states this build can actually reach", () => {
 
   // Unreadable outranks everything, including a pending save.
   assert.equal(liveNoteStatus({ unreadable: true, pending: true, failed: "x" }).editable, false);
+});
+
+test("a write queue runs every push, unlike single flight which drops them", async () => {
+  // The contrast is the reason this exists. Both are given the same three calls
+  // while the first is still running.
+  const singleFlightRuns = [];
+  let release;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  const flight = createSingleFlight(() => { singleFlightRuns.push(1); return blocked; });
+  flight.run(); flight.run(); flight.run();
+  // The loader is deferred a microtask, so let it start before counting.
+  await Promise.resolve();
+  assert.equal(singleFlightRuns.length, 1, "single flight coalesces, by design");
+  release();
+
+  // The queue runs all three, in order, each reading state as of when it runs.
+  const observed = [];
+  let value = "a";
+  const queue = createWriteQueue(async () => { observed.push(value); });
+  const first = queue.push();
+  value = "b";
+  const second = queue.push();
+  value = "c";
+  const third = queue.push();
+  await Promise.all([first, second, third]);
+  {
+    // Three runs, not one. And each saw the value current when its turn came,
+    // which is what lets one appended save capture typing that landed during the
+    // save ahead of it — the guarantee the flush on Stop depends on.
+    assert.equal(observed.length, 3);
+    assert.deepEqual(observed, ["c", "c", "c"]);
+  }
+});
+
+test("a rejected write does not poison the queue behind it", async () => {
+  const ran = [];
+  let fail = true;
+  const queue = createWriteQueue(async () => {
+    ran.push(fail);
+    if (fail) { fail = false; throw new Error("save failed"); }
+  });
+  // The first rejects. Awaiting it must not throw at the caller, and the second
+  // must still run — a failed autosave cannot stop the flush that follows it.
+  await queue.push();
+  await queue.push();
+  assert.deepEqual(ran, [true, false]);
 });

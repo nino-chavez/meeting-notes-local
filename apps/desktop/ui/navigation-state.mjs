@@ -573,3 +573,27 @@ export function liveNoteStatus(note = {}) {
   }
   return { state: "typing", editable: true, message: "" };
 }
+
+// Serialize writes without dropping any of them.
+//
+// The distinction from `createSingleFlight` is the whole point and it is easy to
+// get backwards. Single-flight *coalesces*: a call arriving during a run gets the
+// running promise back and its own work never happens. That is right for a read,
+// where a fresh answer is a fresh answer. It is wrong for a write, and a live
+// note is where the difference is worth someone's words: a save arriving while
+// another is in flight was dropped, so pressing Stop mid-autosave flushed
+// nothing, and the closing thought the flush exists to keep was the one lost.
+//
+// Each push appends a link that runs after everything ahead of it, so the work
+// reads its inputs when it runs rather than when it was queued. That is what lets
+// one appended write capture keystrokes that landed during the previous one.
+// A rejected link cannot poison the chain: the queue continues.
+export function createWriteQueue(write) {
+  let tail = Promise.resolve();
+  return {
+    push() {
+      tail = tail.then(write).catch(() => {});
+      return tail;
+    },
+  };
+}
