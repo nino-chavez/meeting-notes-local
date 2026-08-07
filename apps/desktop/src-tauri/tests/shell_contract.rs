@@ -641,7 +641,13 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     let open_library = &script[start..end];
     assert!(open_library.contains("await rebuildMeetingsView();"));
     assert!(!open_library.contains("preview_library_open_"));
-    assert!(script.contains("() => invoke(\"preview_library_snapshot\")"));
+    // The snapshot request now carries the filter the controls show, so Rust
+    // applies it and reports both counts. The shell never trims a list itself
+    // and then reports how many it trimmed.
+    assert!(script.contains("() => invoke(\"preview_library_snapshot\", { filter: libraryFilter })"));
+    assert!(script.contains("filterClear.hidden = !snapshot.filterActive;"));
+    assert!(script.contains("invoke(\"library_assign_meeting_folder\", {"));
+    assert!(script.contains("invoke(\"library_create_folder\", {"));
 }
 
 #[test]

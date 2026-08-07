@@ -110,6 +110,16 @@ and folder you had set, all at once.
 Folders themselves are half-built and said so rather than implied: the app knows how
 to make, rename, delete and fill them, and there is no screen for it yet.
 
+**Folders and filters landed 2026-08-08.** You can make a folder, drop a meeting
+into it, and narrow the list to one folder, a stretch of dates, or part of a name.
+When the list is narrowed it says so — "showing 3 of 40" — because a list quietly
+hiding most of itself is the kind of quiet lie this product is built against.
+
+**Filtering by person is not there, and the reason is worth stating.** The app can
+tell your microphone from the other side of the call and no more than that; it does
+not know who anyone is. Naming speakers is real work scheduled later, so rather than
+leave a gap where that control would sit, the screen says what is missing and why.
+
 ## What shipped
 
 **Version 0.4.0, cut 2026-08-05**, signed and notarized, built at commit `331c9e9`.

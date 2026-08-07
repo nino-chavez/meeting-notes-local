@@ -41,24 +41,27 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is Wave 1 item 4, filters — people, date range, keywords, titles.**
-Items 1 through 3 are finished, and item 3 finished with one part deliberately left:
+**The next build is Wave 1 item 5, semantic search over the corpus.** Items 1
+through 4 are finished, and item 4 finished three-quarters of what its row names.
 
-`library/metadata.json` had no writer from the day it was written, which is why every
-row read `Untitled meeting` and why auto-titling's operator branch could never fire.
-It has one now: five named commands behind the process writer lock, each carrying
-`expected_revision` and refusing on mismatch. Whole-meeting deletion removes a
-meeting's organization row before its record, which the contract had required in
-advance and which had nothing to bind until there was a row to leave behind.
+Filters landed on 2026-08-08: folder, capture-date range and meeting-name, applied
+to the meetings list and to search from one `LibraryFilter`. The folder surface
+landed with them — create a folder, file a meeting into one, unfile it — which
+closes what item 3 deferred.
 
-**One end-to-end path is wired and four commands have no surface yet.** Naming a
-meeting works from the meetings list. Creating a folder, renaming one, deleting one
-and filing a meeting into one are registered, granted in both capability files, and
-have no UI — `backlog.md` US-14.4 carries that, and `screens-and-states.md` does not
-cover a folder list, a filter, or a move affordance. Building those badly to close
-the row faster is the trade this repo does not make; item 4's filters are the
-natural place to design them, because a folder filter and a date filter are the
-same surface.
+**The people filter is blocked and is not a matter of effort.** Attribution is
+`channel` (Me/Them) or `none`, and the contract records in as many words that named
+participants, inferred counterparties, tags and generated subjects are absent.
+Filtering by person needs A3, named speakers, which is Wave 3 item 11. The row is
+struck through because three of its four legs are done and the fourth has a named
+dependency rather than an owner.
+
+**Two things worth carrying into item 5.** Filters are applied in memory over the
+validated projection, not in SQL: the app builds the full projection before anything
+else happens, so the corpus index would be a second walk over rows already in hand.
+**The index is still written on every library open and read by nothing** — it earns
+a reader when US-13.6 stops the scan from being the entry point, and that inversion,
+not a filter, is what makes it pay.
 
 A struck-through row is finished; the first row that is not struck through is the
 work. That rule is the whole resume protocol, and it holds whether the session
@@ -105,7 +108,7 @@ largest surface-area addition and says it has nothing to do with audio.
 | 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. What remains is US-13.6: the full scan still runs first, because skipping unchanged meetings needs a per-meeting entry point into an audited module | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and, measured, refuses a common word at one meeting |
 | 2 | ~~Auto-titling~~ **Landed 2026-08-07** as `meeting_title.rs` — the first non-gated turn's opening sentence, behind an operator title and above the capture time. The local-model half was **measured and refused** on 2026-08-08 at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`); the seam was not built, and re-running the committed harness against another candidate is a decision, not a pending task | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | ~~Folders, and the meeting object's sibling views~~ **Writer landed 2026-08-08** — `library-metadata/1` gained the five named commands, whole-meeting deletion now takes the organization row first, and naming a meeting is wired end to end. The folder surface is `backlog.md` US-14.4 and is deliberately unbuilt | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
-| 4 | Filters — people, date range, keywords, titles | D3 | Gong documents all four. Free once the store exists |
+| 4 | ~~Filters — people, date range, keywords, titles~~ **Three of four landed 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search, plus the folder surface item 3 deferred. **People is blocked on A3** (Wave 3 item 11), because attribution is Me/Them and named participants are absent by contract | D3 | Gong documents all four. Free once the store exists |
 | 5 | Semantic search over the corpus, beside exact | D2 | Exact is Registered; semantic is what a question needs |
 | 6 | **Ask across every meeting, answer with citations** | D1 | The category headline. Depends on 1–5 and on B5's citation machinery |
 

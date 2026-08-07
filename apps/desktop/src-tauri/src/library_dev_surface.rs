@@ -119,6 +119,11 @@ fn sanitize_snapshot(response: &mut LibrarySnapshot) {
     // is a fact about another file, and this module's guarantee should not rest
     // on one.
     response.metadata_revision = None;
+    // Same argument, same reason: this surface registers no organization
+    // command, so offering folders would advertise a move that cannot happen.
+    // Its fixture has none either way, and the guarantee should not rest on
+    // that.
+    response.folders = Vec::new();
 }
 
 fn snapshot_response(state: &DevSurfaceState) -> LibrarySnapshot {
@@ -1044,10 +1049,21 @@ mod tests {
             rows: Vec::new(),
             unavailable_count: 0,
             metadata_revision: Some(7),
+            folders: vec![crate::library_reader::LibraryFolder {
+                id: "11111111-1111-4111-8111-111111111111".into(),
+                name: "Clients".into(),
+            }],
+            total: 0,
+            shown: 0,
+            filter_active: false,
             message: "untrusted test response".into(),
         };
         sanitize_snapshot(&mut response);
         assert_eq!(response.metadata_revision, None);
+        assert!(
+            response.folders.is_empty(),
+            "a surface with no organization command offered a folder to move into"
+        );
     }
 
     /// Every snapshot state, because the fixture's own first turn is eight
@@ -1063,11 +1079,16 @@ mod tests {
                     meeting_id: FIXTURE_MEETING_ID.into(),
                     label: Some("Use Thursday in the café sample launch date".into()),
                     label_source: "derived",
+                    folder_id: None,
                     created_at_epoch_seconds: 1_728_000_000,
                     transcript_available: true,
                 }],
                 unavailable_count: 0,
                 metadata_revision: Some(3),
+                folders: Vec::new(),
+                total: 1,
+                shown: 1,
+                filter_active: false,
                 message: "untrusted test response".into(),
             };
             sanitize_snapshot(&mut response);

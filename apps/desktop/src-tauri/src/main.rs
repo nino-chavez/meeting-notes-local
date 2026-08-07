@@ -1706,11 +1706,21 @@ fn library_set_meeting_title(
 }
 
 #[tauri::command]
-fn preview_library_snapshot(state: State<'_, ApplicationState>) -> library_reader::LibrarySnapshot {
-    preview_library_snapshot_for(&state)
+fn preview_library_snapshot(
+    filter: Option<library_reader::LibraryFilterArgs>,
+    state: State<'_, ApplicationState>,
+) -> library_reader::LibrarySnapshot {
+    preview_library_snapshot_with(filter.unwrap_or_default(), &state)
 }
 
 fn preview_library_snapshot_for(state: &ApplicationState) -> library_reader::LibrarySnapshot {
+    preview_library_snapshot_with(library_reader::LibraryFilterArgs::default(), state)
+}
+
+fn preview_library_snapshot_with(
+    filter: library_reader::LibraryFilterArgs,
+    state: &ApplicationState,
+) -> library_reader::LibrarySnapshot {
     let Ok(storage) = preview_storage_clone(state) else {
         return library_reader::LibraryReader::unavailable_snapshot();
     };
@@ -1723,7 +1733,7 @@ fn preview_library_snapshot_for(state: &ApplicationState) -> library_reader::Lib
             Ok(reader) => reader,
             Err(_) => return library_reader::LibraryReader::unavailable_snapshot(),
         };
-        let snapshot = reader.snapshot(active_meeting_ids);
+        let snapshot = reader.snapshot_filtered(active_meeting_ids, &filter.to_filter());
         let Ok(mut library) = state.preview_library.lock() else {
             return library_reader::LibraryReader::unavailable_snapshot();
         };
