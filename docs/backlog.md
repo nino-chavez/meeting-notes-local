@@ -86,9 +86,12 @@ be unproven as a product capability, because what is pinned is the code's behavi
 on fixtures, not the claim that a real meeting was captured, deleted, or usefully
 summarised. Those need **Receipted**, and receipts live outside Git by design.
 
-Check inventory as of 2026-08-07, verified by counting the sources rather than by
-repeating a prior claim: 247 session-core, 115 desktop lib, 33 shell-contract,
-9 build-matrix, 107 Python, 42 shell JS.
+Check inventory as of 2026-08-07, verified by counting `#[test]` in the sources
+rather than by repeating a prior claim: 269 session-core lib, 16 session-core
+integration, 115 desktop lib, 33 shell-contract, 9 build-matrix, 107 Python,
+42 shell JS. The session-core figure was recorded as 247 earlier the same day and
+was already stale; it matches what the runner reports, which is the check worth
+using.
 
 ## 5. Epic catalog
 
@@ -118,7 +121,7 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6** | — | **Wave 1 item 1 — next** |
+| **E13** | **The corpus store** | **E6 D3** | 6 | **Landed 2026-08-07**, except US-13.6 |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | — | Wave 1 item 3 |
 | **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | — | Wave 1 items 4–6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | — | Wave 1 item 2, Wave 2 items 7–8 |
@@ -1060,6 +1063,106 @@ Someone who has not seen the app uses it, before beta admission.
 **Refusals:** audio, transcripts, note text and profile material stay out by design. Their absence from the repository proves nothing about whether a run happened.
 
 **Validation:** **Pinned** — `.gitignore` plus the redacted-sibling convention. `spike/aec-bound-results.json` is the worked example: gitignored, with `aec-bound-results-redacted.json` shipping in its place.
+
+---
+
+### E13 — The corpus store
+
+A place the corpus can be asked questions, without any file stopping being the
+answer.
+
+**Decomposed 2026-08-07, when the queue reached it.** The catalog's rule is that new
+epics carry no stories until they are about to be built; this is the first one to
+arrive. Six stories, of which four landed the same day.
+
+#### US-13.1: Measure the scan before replacing it
+**Feature E6 · — · — · P0 · S · Landed 2026-08-07**
+
+As the Builder, I want the file-scan library measured at corpus scale, so that
+replacing it is a response to a number rather than to a preference.
+
+**Acceptance criteria:**
+- Given a synthetic corpus of N meetings, When the scan is timed, Then cold rebuild and warm query latency are recorded for several N.
+- Given the benchmark runs, When it writes its corpus, Then every byte is generated from a counter and no real meeting is read.
+
+**Data contract:** `corpus-scan-bench/1`.
+
+**Refusals:** the benchmark must not be pointed at a live storage root. It creates the corpus it measures and deletes the previous one.
+
+**Validation:** **Receipted** — `docs/corpus-scan-measurement.json`, six runs on an M3 Max, checked in because it contains no private material.
+
+**Evidence:** `vertical-slice.md` deferred any index "until a measured corpus exceeds the bounded scan envelope" and named a synthetic no-private-text benchmark as what would settle it. Nobody had run one. The number that actually decided it was not a latency at all — a common word is refused at one meeting.
+
+#### US-13.2: A derived index that cannot become an authority
+**Feature E6 · J1 · §F · P0 · L · Landed 2026-08-07**
+
+As the Operator, I want a queryable store over my meetings, so that the library
+answers questions the scan cannot, without a database becoming the place my
+meetings live.
+
+**Acceptance criteria:**
+- Given a validated projection, When the index syncs, Then one row exists per accepted meeting and one row per retained turn.
+- Given a populated index, When the database file is deleted, Then rebuilding from the files alone produces the same content digest.
+- Given a sync fails partway, When it aborts, Then the previous contents remain intact.
+
+**Data contract:** `corpus-index/1`.
+
+**Refusals:** no column may hold anything the canonical files did not produce. The index reaches its data only through `LibraryRow::derived`, so it cannot become a second parser of private bytes, and claims are deliberately excluded because they come from an out-of-process projector rather than from a file.
+
+**Validation:** **Pinned** — `corpus_index::tests::rebuild_from_files_equals_the_live_index` deletes the database and requires digest equality; `a_synced_index_holds_one_row_per_validated_meeting`; `a_removed_meeting_leaves_no_turn_behind`.
+
+#### US-13.3: The store answers where the scan refuses
+**Feature D3 · J1 · §F · P0 · M · Landed 2026-08-07**
+
+As the Operator, I want to filter my meetings by folder, date and state, so that a
+corpus stays navigable once it is larger than a screen.
+
+**Acceptance criteria:**
+- Given a filter, When it is applied, Then results come back ordered newest-first and matching the scan's order.
+- Given more matches than a page, When a page is returned, Then the total and the returned count are separate numbers.
+- Given a query the scan refuses with `library-capacity-exceeded`, When the same corpus is filtered, Then a count comes back.
+
+**Refusals:** a page must never be presentable as the whole answer. The scan's rule — never expose a prefix as a library — survives as two fields rather than as a refusal.
+
+**Validation:** **Pinned** — `corpus_index::tests::a_filter_answers_where_the_scan_refuses` asserts the scan refuses and the filter answers on the same corpus; `lifecycle_round_trips_through_its_canonical_name`.
+
+#### US-13.4: The database is as private as the files
+**Feature E6 · — · — · P0 · M · Landed 2026-08-07**
+
+**Acceptance criteria:**
+- Given the index is opened, When SQLite creates the file, Then its mode is narrowed to 0600 before anything is written into it.
+- Given a database whose mode has widened, When it is opened, Then the open is refused.
+- Given a completed write, When the library directory is listed, Then every file in it is 0600 and no journal sidecar remains.
+
+**Refusals:** SQLite opens a path, so none of `storage.rs`'s descriptor-bound guards apply to it. Those checks are re-implemented at the boundary rather than assumed. Error values are content-free: a SQLite error string can carry a column value, and the column values here are transcript text.
+
+**Validation:** **Pinned** — `corpus_index::tests::every_file_the_index_leaves_behind_is_private`, `a_group_readable_database_is_refused_rather_than_opened`.
+
+**Evidence:** WAL was rejected for this reason. Its `-wal` and `-shm` sidecars would hold transcript bytes under permissions SQLite chooses; rollback journalling leaves one file at rest. `secure_delete` is on so a deleted meeting's pages are overwritten rather than left legible in free space, which is how audio is already treated here.
+
+#### US-13.5: An index carries its own provenance and refuses a future it cannot read
+**Feature E6 · — · — · P1 · S · Landed 2026-08-07**
+
+**Acceptance criteria:**
+- Given a fresh index, When it is created, Then the schema name and the SQLite build that wrote it are recorded in the file.
+- Given a file written by a newer schema, When an older build opens it, Then the open is refused rather than reading columns whose meaning changed.
+
+**Validation:** **Pinned** — `corpus_index::tests::the_index_records_the_sqlite_build_that_wrote_it`, `a_newer_schema_refuses_instead_of_reading_columns_it_does_not_know`.
+
+#### US-13.6: The launch scan stops being paid twice
+**Feature E6 · J1 · §F · P0 · M · Next**
+
+As the Operator, I want the library to open without re-reading every meeting, so
+that launch does not get slower every month I use the product.
+
+**Acceptance criteria:**
+- Given an index whose rows match the files, When the app launches, Then unchanged meetings are not re-validated.
+- Given a meeting whose canonical record changed, When sync runs, Then that meeting alone is re-derived.
+- Given the files and the index disagree, When they are reconciled, Then the files win and the index row is discarded.
+
+**Refusals:** incremental sync must not skip a meeting on any signal weaker than its canonical digest. A directory mtime is not a change signal.
+
+**Validation:** **Unproven** — not built. It needs a per-meeting entry point into `library_read`, which is an audited module; doing that in the same change that introduced a C dependency and a new storage surface would make the audit result unattributable. The store landed first deliberately, and the launch scan still runs in full.
 
 ---
 

@@ -109,6 +109,64 @@ impl LibraryRow {
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
+
+    /// Everything a derived index is permitted to persist, and nothing else.
+    ///
+    /// A cache downstream of this method cannot hold a field this module did
+    /// not first validate against canonical files, which is what keeps
+    /// `corpus_index` a rebuildable cache rather than a second authority. Claims
+    /// are deliberately absent: they come from an out-of-process projector, not
+    /// from a file, so they are recomputed rather than cached.
+    pub fn derived(&self) -> DerivedRow<'_> {
+        DerivedRow {
+            meeting_id: &self.meeting_id,
+            created_at_epoch_seconds: self.created_at_epoch_seconds,
+            lifecycle: self.lifecycle,
+            meeting_record_sha256: &self.meeting_record_sha256,
+            attempt_sha256: &self.attempt_sha256,
+            transcript_sha256: self.transcript_sha256.as_deref(),
+            transcript_relative_path: self.transcript_relative_path.as_deref(),
+            note_json_sha256: self.note_json_sha256.as_deref(),
+            note_markdown_sha256: self.note_markdown_sha256.as_deref(),
+            title: self.title.as_deref(),
+            folder: self.folder.as_deref(),
+            turns: self
+                .turns
+                .iter()
+                .map(|turn| DerivedTurn {
+                    index: turn.index,
+                    visible_index: turn.visible_index,
+                    text: &turn.text,
+                    gated: turn.gated,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// One validated meeting, in the exact shape a derived index may store.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DerivedRow<'a> {
+    pub meeting_id: &'a str,
+    pub created_at_epoch_seconds: u64,
+    pub lifecycle: MeetingLifecycle,
+    pub meeting_record_sha256: &'a str,
+    pub attempt_sha256: &'a str,
+    pub transcript_sha256: Option<&'a str>,
+    pub transcript_relative_path: Option<&'a str>,
+    pub note_json_sha256: Option<&'a str>,
+    pub note_markdown_sha256: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub folder: Option<&'a str>,
+    pub turns: Vec<DerivedTurn<'a>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct DerivedTurn<'a> {
+    pub index: u32,
+    pub visible_index: Option<u64>,
+    pub text: &'a str,
+    pub gated: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]

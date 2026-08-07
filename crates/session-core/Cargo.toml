@@ -9,6 +9,7 @@ description = "Rust-owned safety, storage, protocol, and process boundary"
 libc.workspace = true
 icu_normalizer.workspace = true
 serde.workspace = true
+rusqlite.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true

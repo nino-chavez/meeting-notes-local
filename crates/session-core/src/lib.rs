@@ -1,3 +1,4 @@
+pub mod corpus_index;
 pub mod diagnostic;
 pub mod enrollment_guidance;
 pub(crate) mod library_metadata;
