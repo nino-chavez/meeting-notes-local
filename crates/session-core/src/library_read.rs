@@ -466,6 +466,36 @@ impl LibraryProjection {
         self.quarantined_meetings
     }
 
+    /// The organization revision this snapshot was built against, or `None`
+    /// when the record is unreadable.
+    ///
+    /// Every mutation carries an `expected_revision` and refuses on mismatch,
+    /// so a surface needs the number it is editing from. `None` is not zero: a
+    /// missing record *is* revision zero and can be written, while an
+    /// unreadable one refuses every mutation, and collapsing the two would
+    /// invite a caller to write over a record it could not read.
+    pub fn metadata_revision(&self) -> Option<u64> {
+        match &self.metadata {
+            MetadataState::Missing { .. } => Some(0),
+            MetadataState::Valid(document) => Some(document.revision),
+            MetadataState::Unavailable { .. } => None,
+        }
+    }
+
+    /// Folders as the operator named them, ordered as the record stores them.
+    pub fn folders(&self) -> Vec<(&str, &str)> {
+        self.metadata
+            .document()
+            .map(|document| {
+                document
+                    .folders
+                    .iter()
+                    .map(|folder| (folder.id.as_str(), folder.name.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn search(&self, query: &str) -> Result<Vec<LibraryHit>, LibraryReadError> {
         let normalized = normalize_search_query(query)?;
         let mut hits = Vec::new();

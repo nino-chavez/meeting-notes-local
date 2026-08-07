@@ -176,7 +176,7 @@ four stories of exact search plus one unproven story for the actual headline.
 
 | # | Feature | Parity source | Status |
 |---|---|---|---|
-| E1 | Folders, and channels or workspaces | Granola and Otter both ship folders; Otter adds channels | **Unbuilt** |
+| E1 | Folders, and channels or workspaces | Granola and Otter both ship folders; Otter adds channels | **Partly shipped 2026-08-08** — the record has a writer and five registered commands; naming a meeting is wired, the folder surface is not, channels are unbuilt |
 | E2 | One meeting object with sibling views: transcript, summary, notes, tasks, docs | Gong's call page; Wispr's six tabs | **Partial** |
 | E3 | Preparation brief before the meeting | Wispr's preread tab | **Unbuilt** |
 | E4 | A shell that never lies at menubar size | own | **Shipped** |

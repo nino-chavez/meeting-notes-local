@@ -123,7 +123,7 @@ inference is what went wrong before.
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
 | **E13** | **The corpus store** | **E6 D3** | 7 | **Landed 2026-08-07**, except US-13.6 |
-| **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | — | Wave 1 item 3 |
+| **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.3 landed 2026-08-08**; US-14.4 (folder surface) next; channels and E2's sibling views undecomposed |
 | **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | — | Wave 1 items 4–6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
 | **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
@@ -1281,6 +1281,119 @@ model already in the local cache, and answered the question before anything was
 added to the product. `MLX_NOTE_ADMISSION.md`'s gate table ends at "no admission
 without a recorded human decision" — a builder can register, measure and pin this,
 and cannot admit it. That gate was never reached.
+
+---
+
+### E14 — Organisation: folders, channels, the meeting object
+
+Somewhere to put a meeting, and a name the operator chose.
+
+**Partly decomposed 2026-08-08, when the queue reached folders.** Three stories
+landed; the folder surface is written and not built. Channels (Otter's) and E2's
+sibling views stay undecomposed until the queue reaches them.
+
+#### US-14.1: The organization record gains a writer
+**Feature E1 · J1 · §F · P0 · L · Landed 2026-08-08**
+
+As the Operator, I want to name a meeting and put it in a folder, so that a corpus
+is something I organise rather than something I scroll.
+
+**Acceptance criteria:**
+- Given a record at revision N, When a mutation carries `expected_revision` N, Then it applies and the revision becomes N+1.
+- Given a mutation carrying any other revision, When it is submitted, Then it is refused and the current revision is reported.
+- Given a mutation that changes nothing, When it is submitted, Then nothing is written and the revision does not move.
+- Given a folder is deleted, When the record is replaced, Then every meeting naming it is unfiled in that same replacement.
+- Given a malformed record, When any mutation is submitted, Then it is refused and the bytes are left exactly as they were.
+- Given a name with a control character, slash or line separator, When it is submitted, Then it is refused rather than stripped.
+- Given a name with surrounding whitespace or a decomposed character, When it is submitted, Then it is trimmed and composed rather than refused.
+
+**Data contract:** `library-metadata/1`, unchanged. The writer produces the shape
+the reader already enforced; it does not extend it.
+
+**Refusals:** the writer refuses a row for a meeting it cannot see. `library_read`
+grants the whole record authority only while every row targets a safely projected
+meeting, so one row for a meeting that is not there does not lose one title — it
+makes every title and folder unavailable at once.
+
+**Validation:** **Pinned** — 20 tests in `library_metadata::tests`, including
+`a_semantic_no_op_writes_nothing_and_keeps_the_revision`,
+`a_malformed_record_is_refused_and_left_exactly_as_it_was`,
+`the_writer_refuses_a_row_the_reader_would_quarantine`, and
+`every_mutation_is_parsed_back_through_the_readers_own_validator`.
+
+**Evidence:** the module opened with "this module deliberately has no writer" from
+the day it was written, and that sentence was load-bearing — it is why every row
+read `Untitled meeting`. Auto-titling covered the symptom on 2026-08-07 with a
+derived label and shipped a three-way precedence whose top branch could never fire.
+
+**The writer proves it agrees with the reader on every call.** Each mutation is
+serialized, parsed back through this module's own deserializer, and run through the
+same `validate` the reader uses, before a byte is replaced. A draft the reader would
+quarantine is an internal error, refused without writing.
+
+#### US-14.2: Deleting a meeting takes its organization row with it
+**Feature E1 · J1 · §F · P0 · S · Landed 2026-08-08**
+
+As the Operator, I want deleting one meeting to leave the rest of my library alone,
+so that removing a recording does not cost me every folder and title I set.
+
+**Acceptance criteria:**
+- Given a meeting with a title and a folder, When it is deleted, Then its row is removed before its `meeting.json` is.
+- Given other meetings with titles, When one meeting is deleted, Then their titles and folders remain readable.
+- Given a crash between the row removal and the staged transition, When reconciliation runs, Then the deletion completes and the record stays valid.
+
+**Refusals:** a row that cannot be removed is fatal to the deletion rather than
+skipped. Continuing would quarantine the whole record — every other meeting's title
+— rather than losing this one's.
+
+**Validation:** **Pinned** —
+`meeting_deletion::tests::deleting_a_meeting_takes_its_organization_row_and_leaves_the_rest_intact`
+and `a_deletion_interrupted_after_the_row_is_removed_completes_on_reconcile`.
+
+**Evidence:** `vertical-slice.md` stated this in advance — "leaving title or folder
+text behind is not successful whole-meeting deletion" — and until the writer existed
+there was no row to leave behind, so the clause had nothing to bind. It became live
+and load-bearing on the same day the writer did.
+
+#### US-14.3: Naming a meeting from the shell
+**Feature E1 · J1 · §F · P0 · M · Landed 2026-08-08**
+
+As the Operator, I want to type a name for a meeting in the app, so that the title I
+chose is the one I see.
+
+**Acceptance criteria:**
+- Given a meeting row, When the operator names it, Then the row shows that name and no longer marks it as an opening line.
+- Given an empty answer, When it is submitted, Then the operator's title is cleared and the derived one returns.
+- Given the record could not be read, When rows are shown, Then renaming is withheld rather than attempted against an unknown revision.
+- Given the record moved since the snapshot, When a rename is submitted, Then it is refused, the operator is told, and the rows reload.
+
+**Validation:** **Pinned** for the boundary and the wiring —
+`library_organization::tests` on the response shape, and the shell-contract greps on
+the revision guard, the command name, and the empty-answer clause. **Unproven** as a
+product capability: nobody has renamed a meeting in the running app.
+
+**Evidence:** this closes the branch `label_for` opened on 2026-08-07. Until now
+`labelSource === "operator"` was a case the shell handled and could never receive.
+
+#### US-14.4: A folder surface
+**Feature E1 · J1 · §F · P1 · M · Next**
+
+As the Operator, I want to make folders and file meetings into them, so that a
+hundred meetings are navigable.
+
+**Acceptance criteria:**
+- Given folders exist, When the library is shown, Then meetings can be filtered to one folder.
+- Given a meeting row, When the operator files it, Then it moves without opening the meeting.
+- Given a folder is deleted, When it is confirmed, Then its meetings become unfiled and no meeting is removed.
+
+**Validation:** **Unproven** — not built. The five commands exist, are registered,
+and are granted in both capability files; four of them have no surface yet.
+
+**Evidence:** deliberately deferred rather than rushed. The writer, its authority,
+the deletion ordering and one end-to-end path landed together; a folder list, a
+filter and a move affordance are a surface design, and `screens-and-states.md` does
+not cover them. Building them badly to close the row faster is the trade this repo
+does not make.
 
 ---
 

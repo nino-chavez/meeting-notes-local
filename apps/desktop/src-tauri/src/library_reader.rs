@@ -60,6 +60,15 @@ pub(crate) struct LibrarySnapshot {
     pub(crate) state: &'static str,
     pub(crate) rows: Vec<LibrarySnapshotRow>,
     pub(crate) unavailable_count: usize,
+    /// The organization revision these rows were read at, or null when the
+    /// record is unreadable.
+    ///
+    /// Every mutation carries it back as `expected_revision` and refuses on
+    /// mismatch, so a surface that cannot state which revision it is editing
+    /// cannot edit. Null therefore disables renaming rather than defaulting to
+    /// zero — writing over a record you could not read is the one outcome the
+    /// conflict check exists to prevent.
+    pub(crate) metadata_revision: Option<u64>,
     pub(crate) message: String,
 }
 
@@ -321,6 +330,7 @@ impl LibraryReader {
                 },
                 rows: Vec::new(),
                 unavailable_count,
+                metadata_revision: self.projection.metadata_revision(),
                 message: if unavailable_count == 0 {
                     "No retained meetings are available.".into()
                 } else {
@@ -367,6 +377,7 @@ impl LibraryReader {
             },
             rows,
             unavailable_count,
+            metadata_revision: self.projection.metadata_revision(),
             message: if unavailable_count == 0 {
                 "Retained meetings are available.".into()
             } else {
@@ -811,6 +822,7 @@ impl LibraryReader {
             state: "unavailable",
             rows: Vec::new(),
             unavailable_count: 0,
+            metadata_revision: None,
             message: UNAVAILABLE_MESSAGE.into(),
         }
     }
@@ -1131,6 +1143,7 @@ impl LibraryReader {
             state: "stale",
             rows: Vec::new(),
             unavailable_count: 0,
+            metadata_revision: None,
             message: STALE_MESSAGE.into(),
         }
     }

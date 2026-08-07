@@ -1,9 +1,33 @@
 //! Descriptor-bound, optional organization metadata for the private library.
 //!
-//! This module deliberately has no writer.  A bad record is not repaired or
-//! interpreted: callers receive an unavailable state and retain no label
-//! authority.  Its identity is private and content-free, but changes whenever
-//! absence, safety, bytes, or validity change.
+//! A bad record is not repaired or interpreted: callers receive an unavailable
+//! state and retain no label authority.  Its identity is private and
+//! content-free, but changes whenever absence, safety, bytes, or validity
+//! change.
+//!
+//! # It had no writer until 2026-08-08, and that was load-bearing
+//!
+//! This file opened with "this module deliberately has no writer" from the day
+//! it was written.  The reader was built first on purpose — a record that can
+//! only be read cannot be corrupted by this program — and the consequence was
+//! that every meeting in the library read `Untitled meeting`, because the only
+//! title source was a field nothing could set.  Auto-titling covered that on
+//! 2026-08-07 with a derived label, and in doing so shipped a three-way
+//! precedence whose top branch, the operator's own title, was still unreachable.
+//!
+//! The writer below is the reachable branch.  It is not a relaxation of the
+//! reader: **every mutation is serialized, parsed back through this module's own
+//! `MetadataWire` deserializer, and run through the same `validate` the reader
+//! uses, before a byte is replaced.**  A draft that this file's reader would
+//! refuse is an internal error here, refused without writing, rather than a
+//! record the next read quarantines.  One module owns the record's shape, and
+//! the writer proves it agrees with the reader on every call instead of being
+//! reviewed for agreeing with it.
+//!
+//! Mutation requires the process writer lock, through
+//! [`crate::retention::AppDataWriterLock::library_organization_authority`].
+//! The raw entry points are crate-private for the same reason every other
+//! destructive path here is.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
@@ -12,7 +36,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use serde::de::{self, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -569,6 +593,403 @@ fn validate(wire: MetadataWire) -> Result<MetadataWire, &'static str> {
     }
     Ok(wire)
 }
+// ---------------------------------------------------------------------------
+// Writer
+// ---------------------------------------------------------------------------
+
+/// What one mutation did. The exact four values the runtime contract names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrganizationOutcome {
+    pub revision: u64,
+    /// False for a semantic no-op, which writes nothing and leaves the revision
+    /// where it was. Renaming a folder to the name it already has is not an
+    /// event, and spending a revision on it would invalidate every outstanding
+    /// snapshot handle for no change.
+    pub changed: bool,
+    /// The affected folder, or `None` for a title-only mutation. A changed
+    /// `create_folder` returns the ID it generated.
+    pub folder_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OrganizationError {
+    #[error("library organization request is invalid")]
+    InvalidRequest,
+    #[error("library organization metadata is unavailable")]
+    MetadataUnavailable,
+    #[error("library organization metadata revision conflict")]
+    RevisionConflict { current_revision: u64 },
+    #[error("library organization internal error")]
+    Internal,
+}
+
+/// A folder or title name as this record stores it, or nothing.
+///
+/// **NFC normalization and trimming are applied; everything else is refused.**
+/// The split is deliberate. Canonical composition and surrounding whitespace
+/// are invisible to the person typing — the glyphs are identical either way, and
+/// a trailing space is not a decision they made — so silently fixing them costs
+/// nothing they can perceive. A control character, a slash or a line separator
+/// *is* something they typed, and quietly deleting it would hand back a name
+/// that is not the one on screen. That is refused instead.
+fn normalized_label(value: &str) -> Option<String> {
+    let candidate = unicode_normalization(value)
+        .trim_matches(char::is_whitespace)
+        .to_owned();
+    valid_label(&candidate).then_some(candidate)
+}
+
+#[derive(Serialize)]
+struct FolderOut<'a> {
+    id: &'a str,
+    name: &'a str,
+}
+
+#[derive(Serialize)]
+struct MeetingOut<'a> {
+    meeting_id: &'a str,
+    title: Option<&'a str>,
+    folder_id: Option<&'a str>,
+}
+
+/// Field order is declaration order in `serde_json`, and this record's reader
+/// refuses any other order. That coupling is why these types exist rather than
+/// a `serde_json::Value`, whose map does not preserve insertion order without a
+/// feature flag this crate does not enable.
+#[derive(Serialize)]
+struct DocumentOut<'a> {
+    schema: &'a str,
+    revision: u64,
+    folders: Vec<FolderOut<'a>>,
+    meetings: Vec<MeetingOut<'a>>,
+}
+
+/// The mutable working copy one edit sees.
+struct Draft {
+    folders: Vec<Folder>,
+    meetings: Vec<MeetingMetadata>,
+}
+
+impl Draft {
+    /// Drops rows carrying neither a title nor a folder.
+    ///
+    /// Such a row is legal and means nothing: the reader treats an absent row
+    /// and a row of two nulls identically. Keeping them would grow the record
+    /// with every unfiled meeting and, because the reader refuses the whole
+    /// document when any row names a meeting that is not safely projected, would
+    /// widen the surface on which a later deletion can quarantine everything.
+    fn prune(&mut self) {
+        self.meetings
+            .retain(|row| row.title.is_some() || row.folder_id.is_some());
+    }
+
+    fn row_mut(&mut self, meeting_id: &str) -> Option<&mut MeetingMetadata> {
+        self.meetings
+            .iter_mut()
+            .find(|row| row.meeting_id == meeting_id)
+    }
+
+    fn insert_row(&mut self, row: MeetingMetadata) {
+        let at = self
+            .meetings
+            .partition_point(|existing| existing.meeting_id < row.meeting_id);
+        self.meetings.insert(at, row);
+    }
+}
+
+/// Reads, edits, validates and replaces — or returns without writing.
+///
+/// The edit closure returns the affected folder ID. It never decides whether
+/// anything changed: that is compared structurally against the record as read,
+/// so an edit that believes it changed something and did not cannot spend a
+/// revision.
+fn mutate(
+    storage: &StorageRoot,
+    expected_revision: u64,
+    edit: impl FnOnce(&mut Draft) -> Result<Option<String>, OrganizationError>,
+) -> Result<OrganizationOutcome, OrganizationError> {
+    let state = read_library_metadata(storage);
+    let (current_revision, folders, meetings) = match &state {
+        MetadataState::Missing { .. } => (0, Vec::new(), Vec::new()),
+        MetadataState::Valid(document) => (
+            document.revision,
+            document.folders.clone(),
+            document.meetings.clone(),
+        ),
+        // A malformed record is left exactly as it is. Rewriting it would
+        // destroy whatever a person might still recover from it by hand, and
+        // this program cannot tell a corrupted record from one written by
+        // something it does not know about.
+        MetadataState::Unavailable { .. } => return Err(OrganizationError::MetadataUnavailable),
+    };
+    if expected_revision != current_revision {
+        return Err(OrganizationError::RevisionConflict { current_revision });
+    }
+
+    let mut draft = Draft {
+        folders: folders.clone(),
+        meetings: meetings.clone(),
+    };
+    let folder_id = edit(&mut draft)?;
+    draft.prune();
+
+    if draft.folders == folders && draft.meetings == meetings {
+        return Ok(OrganizationOutcome {
+            revision: current_revision,
+            changed: false,
+            folder_id,
+        });
+    }
+
+    let revision = current_revision
+        .checked_add(1)
+        .ok_or(OrganizationError::InvalidRequest)?;
+    let bytes = serialize(revision, &draft)?;
+    write_document(storage, &bytes)?;
+    Ok(OrganizationOutcome {
+        revision,
+        changed: true,
+        folder_id,
+    })
+}
+
+/// Canonical bytes, then this module's own reader run over them.
+///
+/// The round trip is the point. Field order, sort order, the folder a meeting
+/// names, label validity and the size ceiling are all enforced by `validate`
+/// and the `MetadataWire` visitor, and re-running them here means the writer
+/// cannot emit a document the reader would quarantine — not because the two
+/// were reviewed against each other, but because the same code ran.
+fn serialize(revision: u64, draft: &Draft) -> Result<Vec<u8>, OrganizationError> {
+    let document = DocumentOut {
+        schema: "library-metadata/1",
+        revision,
+        folders: draft
+            .folders
+            .iter()
+            .map(|folder| FolderOut {
+                id: &folder.id,
+                name: &folder.name,
+            })
+            .collect(),
+        meetings: draft
+            .meetings
+            .iter()
+            .map(|row| MeetingOut {
+                meeting_id: &row.meeting_id,
+                title: row.title.as_deref(),
+                folder_id: row.folder_id.as_deref(),
+            })
+            .collect(),
+    };
+    let bytes = serde_json::to_vec(&document).map_err(|_| OrganizationError::Internal)?;
+    if bytes.len() as u64 > MAX_METADATA_BYTES {
+        return Err(OrganizationError::InvalidRequest);
+    }
+    serde_json::from_slice::<MetadataWire>(&bytes)
+        .map_err(|_| OrganizationError::Internal)
+        .and_then(|wire| validate(wire).map_err(|_| OrganizationError::Internal))?;
+    Ok(bytes)
+}
+
+/// Creates `library/` at 0700 if it is absent, then replaces the record.
+///
+/// The directory can legitimately not exist: a missing record is revision zero
+/// with no rows, which is the state every storage root starts in.
+fn write_document(storage: &StorageRoot, bytes: &[u8]) -> Result<(), OrganizationError> {
+    let library = storage
+        .resolve(Path::new("library"))
+        .map_err(|_| OrganizationError::Internal)?;
+    if !library.exists() {
+        crate::storage::create_private_dir(&library).map_err(|_| OrganizationError::Internal)?;
+    }
+    crate::storage::durable_replace(&library.join("metadata.json"), bytes)
+        .map_err(|_| OrganizationError::Internal)
+}
+
+/// True when this meeting has a record the library projection can reach.
+///
+/// The writer refuses to create a row for anything else, because
+/// `library_read` grants the whole document authority only while **every** row
+/// targets a safely projected meeting. One row for a meeting that is not there
+/// does not lose one title; it makes every title and folder in the record
+/// disappear at once. Refusing at the writer is the cheap end of that.
+fn meeting_is_present(storage: &StorageRoot, meeting_id: &str) -> bool {
+    valid_opaque_id(meeting_id)
+        && storage
+            .resolve(&Path::new("meetings").join(meeting_id).join("meeting.json"))
+            .map(|path| path.is_file())
+            .unwrap_or(false)
+}
+
+pub(crate) fn create_folder(
+    storage: &StorageRoot,
+    expected_revision: u64,
+    name: &str,
+) -> Result<OrganizationOutcome, OrganizationError> {
+    let name = normalized_label(name).ok_or(OrganizationError::InvalidRequest)?;
+    let id = Uuid::new_v4().to_string();
+    let created = id.clone();
+    mutate(storage, expected_revision, move |draft| {
+        // Duplicate names are allowed. Two folders called "Clients" are the
+        // operator's business, and the ID is what anything here binds to.
+        let at = draft.folders.partition_point(|folder| folder.id < id);
+        draft.folders.insert(
+            at,
+            Folder {
+                id: id.clone(),
+                name,
+            },
+        );
+        Ok(Some(id))
+    })
+    .map(|mut outcome| {
+        // A create that changed nothing is impossible — a fresh v4 is never
+        // already present — so this only guards against a future edit making it
+        // possible without noticing.
+        if !outcome.changed {
+            outcome.folder_id = None;
+        }
+        let _ = &created;
+        outcome
+    })
+}
+
+pub(crate) fn rename_folder(
+    storage: &StorageRoot,
+    expected_revision: u64,
+    folder_id: &str,
+    name: &str,
+) -> Result<OrganizationOutcome, OrganizationError> {
+    if !canonical_uuid(folder_id) {
+        return Err(OrganizationError::InvalidRequest);
+    }
+    let name = normalized_label(name).ok_or(OrganizationError::InvalidRequest)?;
+    mutate(storage, expected_revision, |draft| {
+        let folder = draft
+            .folders
+            .iter_mut()
+            .find(|folder| folder.id == folder_id)
+            .ok_or(OrganizationError::InvalidRequest)?;
+        folder.name = name;
+        Ok(Some(folder_id.to_owned()))
+    })
+}
+
+pub(crate) fn delete_folder(
+    storage: &StorageRoot,
+    expected_revision: u64,
+    folder_id: &str,
+) -> Result<OrganizationOutcome, OrganizationError> {
+    if !canonical_uuid(folder_id) {
+        return Err(OrganizationError::InvalidRequest);
+    }
+    mutate(storage, expected_revision, |draft| {
+        if !draft.folders.iter().any(|folder| folder.id == folder_id) {
+            return Err(OrganizationError::InvalidRequest);
+        }
+        draft.folders.retain(|folder| folder.id != folder_id);
+        // Atomically, in the same replacement: a row still naming a folder that
+        // is gone fails `validate`, so this is not tidying, it is the only way
+        // the deletion can be written at all.
+        for row in &mut draft.meetings {
+            if row.folder_id.as_deref() == Some(folder_id) {
+                row.folder_id = None;
+            }
+        }
+        Ok(Some(folder_id.to_owned()))
+    })
+}
+
+pub(crate) fn assign_meeting_folder(
+    storage: &StorageRoot,
+    expected_revision: u64,
+    meeting_id: &str,
+    folder_id: Option<&str>,
+) -> Result<OrganizationOutcome, OrganizationError> {
+    if !meeting_is_present(storage, meeting_id) {
+        return Err(OrganizationError::InvalidRequest);
+    }
+    if folder_id.is_some_and(|id| !canonical_uuid(id)) {
+        return Err(OrganizationError::InvalidRequest);
+    }
+    mutate(storage, expected_revision, |draft| {
+        if let Some(id) = folder_id
+            && !draft.folders.iter().any(|folder| folder.id == id)
+        {
+            return Err(OrganizationError::InvalidRequest);
+        }
+        match draft.row_mut(meeting_id) {
+            Some(row) => row.folder_id = folder_id.map(str::to_owned),
+            None => draft.insert_row(MeetingMetadata {
+                meeting_id: meeting_id.to_owned(),
+                title: None,
+                folder_id: folder_id.map(str::to_owned),
+            }),
+        }
+        Ok(folder_id.map(str::to_owned))
+    })
+}
+
+pub(crate) fn set_meeting_title(
+    storage: &StorageRoot,
+    expected_revision: u64,
+    meeting_id: &str,
+    title: Option<&str>,
+) -> Result<OrganizationOutcome, OrganizationError> {
+    if !meeting_is_present(storage, meeting_id) {
+        return Err(OrganizationError::InvalidRequest);
+    }
+    let title = match title {
+        Some(value) => Some(normalized_label(value).ok_or(OrganizationError::InvalidRequest)?),
+        None => None,
+    };
+    mutate(storage, expected_revision, |draft| {
+        match draft.row_mut(meeting_id) {
+            Some(row) => row.title = title,
+            None => draft.insert_row(MeetingMetadata {
+                meeting_id: meeting_id.to_owned(),
+                title,
+                folder_id: None,
+            }),
+        }
+        // Null for a title-only mutation, per the contract, even when the row
+        // happens to sit in a folder.
+        Ok(None)
+    })
+}
+
+/// Removes one meeting's row, for the staged whole-meeting deletion.
+///
+/// **Ordered before `meeting.json` is removed, and that ordering is the whole
+/// point.** `library_read` grants the record authority only while every row
+/// targets a safely projected meeting, so a row outliving its meeting does not
+/// leave one stale title behind — it makes every title and folder in the library
+/// unavailable at once, and disables organization mutation with them.
+///
+/// It carries no `expected_revision`. The caller already holds the process
+/// writer lock and the meeting's lease, and a conflict here would strand a
+/// deletion mid-sequence with no one to resolve it.
+///
+/// Idempotent by construction: no row is a no-op that writes nothing, so a crash
+/// between this and the `staged` transition resumes cleanly. A malformed record
+/// is left untouched and reported as removed, because it was already refused by
+/// every reader before this deletion began and rewriting it would destroy what a
+/// person might still recover by hand.
+pub(crate) fn forget_meeting(storage: &StorageRoot, meeting_id: &str) -> Result<(), ()> {
+    let current = match read_library_metadata(storage) {
+        MetadataState::Valid(document) => document.revision,
+        MetadataState::Missing { .. } | MetadataState::Unavailable { .. } => return Ok(()),
+    };
+    match mutate(storage, current, |draft| {
+        draft.meetings.retain(|row| row.meeting_id != meeting_id);
+        Ok(None)
+    }) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(()),
+    }
+}
+
 fn canonical_uuid(value: &str) -> bool {
     Uuid::parse_str(value)
         .map(|id| {
@@ -845,5 +1266,370 @@ mod tests {
         fs::set_permissions(&library, fs::Permissions::from_mode(0o700)).unwrap();
         assert!(!same_path_fd(&library, &fd));
         assert!(metadata_child_is_missing(&fd).unwrap());
+    }
+
+    // ------------------------------------------------------------------
+    // Writer
+    // ------------------------------------------------------------------
+
+    use crate::storage::{create_private_dir, durable_create_new};
+    use tempfile::TempDir;
+
+    struct WriteFixture {
+        _temporary: TempDir,
+        storage: StorageRoot,
+    }
+
+    impl WriteFixture {
+        fn new() -> Self {
+            let temporary = TempDir::new().unwrap();
+            let protected = temporary.path().join("protected");
+            create_private_dir(&protected).unwrap();
+            let storage =
+                StorageRoot::create(&temporary.path().join("app-data"), &protected).unwrap();
+            Self {
+                _temporary: temporary,
+                storage,
+            }
+        }
+
+        /// The writer refuses a row for a meeting it cannot see, so a test that
+        /// sets a title has to put one there. Only `meeting.json` matters to
+        /// that check; nothing here loads it.
+        fn meeting(&self, id: &str) -> &Self {
+            let directory = self.storage.path().join("meetings").join(id);
+            create_private_dir(&directory).unwrap();
+            durable_create_new(&directory.join("meeting.json"), b"{}\n").unwrap();
+            self
+        }
+
+        fn record_bytes(&self) -> Option<Vec<u8>> {
+            fs::read(self.storage.path().join("library/metadata.json")).ok()
+        }
+
+        fn document(&self) -> MetadataDocument {
+            match read_library_metadata(&self.storage) {
+                MetadataState::Valid(document) => document,
+                _ => panic!("record is not valid"),
+            }
+        }
+    }
+
+    const FOLDER_NAME: &str = "Clients";
+
+    #[test]
+    fn a_created_folder_is_readable_by_this_modules_own_reader() {
+        let fixture = WriteFixture::new();
+        let outcome = create_folder(&fixture.storage, 0, FOLDER_NAME).unwrap();
+        assert!(outcome.changed);
+        assert_eq!(outcome.revision, 1);
+        let id = outcome.folder_id.clone().unwrap();
+        assert!(canonical_uuid(&id));
+
+        let document = fixture.document();
+        assert_eq!(document.revision, 1);
+        assert_eq!(document.folders.len(), 1);
+        assert_eq!(document.folders[0].name, FOLDER_NAME);
+        assert_eq!(document.folders[0].id, id);
+    }
+
+    #[test]
+    fn the_first_write_creates_the_library_directory_that_did_not_exist() {
+        let fixture = WriteFixture::new();
+        assert!(fixture.record_bytes().is_none());
+        create_folder(&fixture.storage, 0, FOLDER_NAME).unwrap();
+        let library = fixture.storage.path().join("library");
+        let mode = fs::metadata(&library).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o700, "library directory is not owner-only");
+        let file = fs::metadata(library.join("metadata.json")).unwrap();
+        assert_eq!(file.mode() & 0o777, 0o600);
+        assert_eq!(file.nlink(), 1);
+    }
+
+    #[test]
+    fn a_stale_expected_revision_is_refused_and_reports_the_current_one() {
+        let fixture = WriteFixture::new();
+        create_folder(&fixture.storage, 0, FOLDER_NAME).unwrap();
+        let before = fixture.record_bytes().unwrap();
+        assert_eq!(
+            create_folder(&fixture.storage, 0, "Other"),
+            Err(OrganizationError::RevisionConflict {
+                current_revision: 1
+            })
+        );
+        assert_eq!(
+            fixture.record_bytes().unwrap(),
+            before,
+            "a refused mutation wrote bytes"
+        );
+    }
+
+    #[test]
+    fn a_semantic_no_op_writes_nothing_and_keeps_the_revision() {
+        let fixture = WriteFixture::new();
+        let id = create_folder(&fixture.storage, 0, FOLDER_NAME)
+            .unwrap()
+            .folder_id
+            .unwrap();
+        let before = fixture.record_bytes().unwrap();
+
+        let outcome = rename_folder(&fixture.storage, 1, &id, FOLDER_NAME).unwrap();
+        assert!(!outcome.changed);
+        assert_eq!(outcome.revision, 1, "a no-op spent a revision");
+        assert_eq!(
+            fixture.record_bytes().unwrap(),
+            before,
+            "a no-op replaced the record"
+        );
+
+        // And an unfile of a meeting that was never filed.
+        fixture.meeting("meeting-a");
+        let outcome = assign_meeting_folder(&fixture.storage, 1, "meeting-a", None).unwrap();
+        assert!(!outcome.changed);
+        assert_eq!(fixture.record_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn an_operator_title_survives_the_round_trip_and_clears_back_to_nothing() {
+        let fixture = WriteFixture::new();
+        fixture.meeting("meeting-a");
+
+        let outcome =
+            set_meeting_title(&fixture.storage, 0, "meeting-a", Some("Renewal call")).unwrap();
+        assert!(outcome.changed);
+        assert_eq!(
+            outcome.folder_id, None,
+            "a title-only mutation reports no folder"
+        );
+        let document = fixture.document();
+        assert_eq!(document.meetings[0].title.as_deref(), Some("Renewal call"));
+
+        let outcome = set_meeting_title(&fixture.storage, 1, "meeting-a", None).unwrap();
+        assert!(outcome.changed);
+        assert!(
+            fixture.document().meetings.is_empty(),
+            "a row carrying neither title nor folder was kept"
+        );
+    }
+
+    #[test]
+    fn names_are_trimmed_and_composed_but_never_stripped_of_what_was_typed() {
+        let fixture = WriteFixture::new();
+        // Decomposed e-acute plus surrounding whitespace: both invisible to the
+        // person typing, so both are fixed rather than refused.
+        let id = create_folder(&fixture.storage, 0, "  Cafe\u{0301} notes  ")
+            .unwrap()
+            .folder_id
+            .unwrap();
+        assert_eq!(fixture.document().folders[0].name, "Caf\u{00e9} notes");
+        let _ = id;
+
+        // Everything below is something the operator can see on screen, so it
+        // is refused rather than silently removed.
+        for hostile in [
+            "with/slash",
+            "with\\backslash",
+            "with\u{2028}separator",
+            "with\u{7}control",
+            "",
+            "   ",
+        ] {
+            assert_eq!(
+                create_folder(&fixture.storage, 1, hostile),
+                Err(OrganizationError::InvalidRequest),
+                "{hostile:?} was accepted"
+            );
+        }
+        let too_long = "a".repeat(121);
+        assert_eq!(
+            create_folder(&fixture.storage, 1, &too_long),
+            Err(OrganizationError::InvalidRequest)
+        );
+        assert!(create_folder(&fixture.storage, 1, &"a".repeat(120)).is_ok());
+    }
+
+    #[test]
+    fn deleting_a_folder_unfiles_every_meeting_in_it_in_the_same_replacement() {
+        let fixture = WriteFixture::new();
+        fixture.meeting("meeting-a").meeting("meeting-b");
+        let id = create_folder(&fixture.storage, 0, FOLDER_NAME)
+            .unwrap()
+            .folder_id
+            .unwrap();
+        assign_meeting_folder(&fixture.storage, 1, "meeting-a", Some(&id)).unwrap();
+        assign_meeting_folder(&fixture.storage, 2, "meeting-b", Some(&id)).unwrap();
+        set_meeting_title(&fixture.storage, 3, "meeting-a", Some("Kept")).unwrap();
+
+        let outcome = delete_folder(&fixture.storage, 4, &id).unwrap();
+        assert!(outcome.changed);
+        assert_eq!(outcome.folder_id.as_deref(), Some(id.as_str()));
+
+        let document = fixture.document();
+        assert!(document.folders.is_empty());
+        // meeting-b held nothing but the folder, so its row goes with it;
+        // meeting-a keeps its title and loses only the folder.
+        assert_eq!(document.meetings.len(), 1);
+        assert_eq!(document.meetings[0].meeting_id, "meeting-a");
+        assert_eq!(document.meetings[0].title.as_deref(), Some("Kept"));
+        assert_eq!(document.meetings[0].folder_id, None);
+    }
+
+    #[test]
+    fn the_writer_refuses_a_row_the_reader_would_quarantine() {
+        let fixture = WriteFixture::new();
+        // No meeting directory exists, so a row naming it would make the whole
+        // record unavailable on the next read.
+        assert_eq!(
+            set_meeting_title(&fixture.storage, 0, "meeting-a", Some("Ghost")),
+            Err(OrganizationError::InvalidRequest)
+        );
+        assert!(fixture.record_bytes().is_none());
+
+        fixture.meeting("meeting-a");
+        assert_eq!(
+            assign_meeting_folder(
+                &fixture.storage,
+                0,
+                "meeting-a",
+                Some("11111111-1111-4111-8111-111111111111")
+            ),
+            Err(OrganizationError::InvalidRequest),
+            "a meeting was filed into a folder that does not exist"
+        );
+    }
+
+    #[test]
+    fn rows_and_folders_are_written_in_the_canonical_order_the_reader_demands() {
+        let fixture = WriteFixture::new();
+        for id in ["meeting-c", "meeting-a", "meeting-b"] {
+            fixture.meeting(id);
+        }
+        let mut revision = 0;
+        for id in ["meeting-c", "meeting-a", "meeting-b"] {
+            revision = set_meeting_title(&fixture.storage, revision, id, Some("Title"))
+                .unwrap()
+                .revision;
+        }
+        for _ in 0..3 {
+            revision = create_folder(&fixture.storage, revision, FOLDER_NAME)
+                .unwrap()
+                .revision;
+        }
+        let document = fixture.document();
+        let meetings: Vec<_> = document
+            .meetings
+            .iter()
+            .map(|row| row.meeting_id.as_str())
+            .collect();
+        assert_eq!(meetings, ["meeting-a", "meeting-b", "meeting-c"]);
+        let mut folders: Vec<_> = document.folders.iter().map(|f| f.id.clone()).collect();
+        let sorted = {
+            let mut copy = folders.clone();
+            copy.sort();
+            copy
+        };
+        assert_eq!(folders, sorted, "folders are not sorted by id");
+        folders.dedup();
+        assert_eq!(folders.len(), 3);
+    }
+
+    #[test]
+    fn a_malformed_record_is_refused_and_left_exactly_as_it_was() {
+        let fixture = WriteFixture::new();
+        fixture.meeting("meeting-a");
+        let library = fixture.storage.path().join("library");
+        create_private_dir(&library).unwrap();
+        let corrupt =
+            br#"{"schema":"library-metadata/1","revision":0,"folders":[],"meetings":[],"x":1}"#;
+        durable_create_new(&library.join("metadata.json"), corrupt).unwrap();
+
+        assert_eq!(
+            set_meeting_title(&fixture.storage, 0, "meeting-a", Some("Anything")),
+            Err(OrganizationError::MetadataUnavailable)
+        );
+        assert_eq!(
+            fixture.record_bytes().unwrap(),
+            corrupt,
+            "a malformed record was rewritten"
+        );
+    }
+
+    #[test]
+    fn forgetting_a_meeting_removes_only_its_row_and_tolerates_every_other_state() {
+        let fixture = WriteFixture::new();
+        fixture.meeting("meeting-a").meeting("meeting-b");
+
+        // No record at all: nothing to do, and nothing created.
+        forget_meeting(&fixture.storage, "meeting-a").unwrap();
+        assert!(fixture.record_bytes().is_none());
+
+        set_meeting_title(&fixture.storage, 0, "meeting-a", Some("Going")).unwrap();
+        set_meeting_title(&fixture.storage, 1, "meeting-b", Some("Staying")).unwrap();
+
+        forget_meeting(&fixture.storage, "meeting-a").unwrap();
+        let document = fixture.document();
+        assert_eq!(document.meetings.len(), 1);
+        assert_eq!(document.meetings[0].title.as_deref(), Some("Staying"));
+        assert_eq!(document.revision, 3);
+
+        // Idempotent: a crash between this and the staged transition replays it.
+        let before = fixture.record_bytes().unwrap();
+        forget_meeting(&fixture.storage, "meeting-a").unwrap();
+        assert_eq!(fixture.record_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn every_mutation_is_parsed_back_through_the_readers_own_validator() {
+        // `serialize` is the only path to a byte on disk, so proving it refuses
+        // an invalid draft proves the writer cannot publish one. The draft below
+        // names a folder that is not in the document, which `validate` rejects.
+        let draft = Draft {
+            folders: Vec::new(),
+            meetings: vec![MeetingMetadata {
+                meeting_id: "meeting-a".into(),
+                title: None,
+                folder_id: Some("11111111-1111-4111-8111-111111111111".into()),
+            }],
+        };
+        assert_eq!(serialize(1, &draft), Err(OrganizationError::Internal));
+
+        let draft = Draft {
+            folders: Vec::new(),
+            meetings: vec![
+                MeetingMetadata {
+                    meeting_id: "meeting-b".into(),
+                    title: Some("B".into()),
+                    folder_id: None,
+                },
+                MeetingMetadata {
+                    meeting_id: "meeting-a".into(),
+                    title: Some("A".into()),
+                    folder_id: None,
+                },
+            ],
+        };
+        assert_eq!(
+            serialize(1, &draft),
+            Err(OrganizationError::Internal),
+            "an out-of-order draft serialized"
+        );
+    }
+
+    #[test]
+    fn a_revision_at_the_ceiling_refuses_rather_than_wrapping_to_zero() {
+        let fixture = WriteFixture::new();
+        fixture.meeting("meeting-a");
+        let library = fixture.storage.path().join("library");
+        create_private_dir(&library).unwrap();
+        let at_ceiling = format!(
+            r#"{{"schema":"library-metadata/1","revision":{},"folders":[],"meetings":[]}}"#,
+            u64::MAX
+        );
+        durable_create_new(&library.join("metadata.json"), at_ceiling.as_bytes()).unwrap();
+        assert_eq!(
+            set_meeting_title(&fixture.storage, u64::MAX, "meeting-a", Some("Overflow")),
+            Err(OrganizationError::InvalidRequest)
+        );
+        assert_eq!(fixture.record_bytes().unwrap(), at_ceiling.as_bytes());
     }
 }

@@ -1,7 +1,7 @@
 pub mod corpus_index;
 pub mod diagnostic;
 pub mod enrollment_guidance;
-pub(crate) mod library_metadata;
+pub mod library_metadata;
 pub mod library_read;
 pub mod meeting;
 pub mod meeting_coordination;

@@ -44,6 +44,11 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "preview_library_open_transcript",
     "preview_delete_meeting_audio",
     "preview_delete_meeting",
+    "library_create_folder",
+    "library_rename_folder",
+    "library_delete_folder",
+    "library_assign_meeting_folder",
+    "library_set_meeting_title",
     "restore_withheld_turn",
     "refresh_current_transcript",
     // § D, 2026-08-06. The operator's own note: read and replace, for the open
@@ -151,11 +156,7 @@ fn is_production_config(config: &Value) -> bool {
             .pointer("/build/frontendDist")
             .and_then(Value::as_str)
             == Some(PRODUCTION_FRONTEND)
-        && has_single_window(
-            config.pointer("/app/windows"),
-            PRODUCTION_WINDOW,
-            "Yawn",
-        )
+        && has_single_window(config.pointer("/app/windows"), PRODUCTION_WINDOW, "Yawn")
         && has_single_string(
             config.pointer("/app/security/capabilities"),
             PRODUCTION_CAPABILITY,

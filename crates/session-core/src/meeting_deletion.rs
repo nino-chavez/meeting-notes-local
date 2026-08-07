@@ -17,11 +17,20 @@
 //! happened. This codebase refuses that everywhere else, so it refuses it here.
 //!
 //! The ordering inside the state machine is the safety property, not an
-//! implementation detail. `meeting.json` is removed *first*, because every
-//! reader in this crate reaches a meeting through `load_meeting`, and without
-//! that file the load fails. After the `staged` transition there is no window in
-//! which a partially removed directory can be read as an intact meeting — which
-//! is the specific failure this operation must never produce.
+//! implementation detail. `meeting.json` is removed before the rest of the
+//! directory, because every reader in this crate reaches a meeting through
+//! `load_meeting`, and without that file the load fails. After the `staged`
+//! transition there is no window in which a partially removed directory can be
+//! read as an intact meeting — which is the specific failure this operation must
+//! never produce.
+//!
+//! **Ahead of even that, since 2026-08-08, the meeting's organization row is
+//! removed.** `library/metadata.json` gained a writer that day, so a meeting can
+//! now carry a title and a folder, and `library_read` grants that record
+//! authority only while every row targets a safely projected meeting. A row
+//! outliving its meeting therefore does not strand one title — it makes every
+//! title and folder in the library unavailable at once. Removing it first is
+//! what keeps each intermediate state readable.
 
 use std::fs;
 use std::io::{self, Read};
@@ -122,6 +131,14 @@ pub enum MeetingDeletionError {
     InventoryTooLarge,
     #[error("no such meeting")]
     NoSuchMeeting,
+    /// The organization row could not be removed, so nothing was.
+    ///
+    /// Deliberately fatal rather than skipped. Continuing would leave a row
+    /// naming a meeting that is about to stop existing, which quarantines the
+    /// whole record — every other meeting's title and folder — rather than
+    /// losing this one's.
+    #[error("meeting organization row could not be removed")]
+    OrganizationRowRetained,
 }
 
 /// The sole capability that may remove a whole meeting.
@@ -249,12 +266,36 @@ fn take_inventory(meeting_dir: &Path) -> Result<Vec<DeletedArtifact>, MeetingDel
 /// Every transition is written before the mutation it authorizes, so a crash
 /// resumes from a state that is never ahead of the filesystem.
 fn finish_removal(
+    storage: &StorageRoot,
     meeting_dir: &Path,
     receipt_path: &Path,
     mut receipt: MeetingDeletionReceipt,
 ) -> Result<(), MeetingDeletionError> {
     if receipt.state == MeetingDeletionState::Deleting {
-        // `meeting.json` first. After this the directory cannot load as a
+        // **The organization row goes before the meeting record, and the order
+        // is the safety property.** `library_read` grants
+        // `library/metadata.json` authority only while every row targets a
+        // safely projected meeting, so a row that outlives its meeting does not
+        // strand one title — it makes every title and folder in the library
+        // unavailable at once and disables organization mutation with them.
+        //
+        // Removing it first leaves every intermediate state readable: row and
+        // meeting both present, then meeting present with no row (an ordinary
+        // unorganized meeting), then neither. There is no window in which the
+        // record describes a meeting that is gone.
+        //
+        // It sits inside the `Deleting` branch rather than before the receipt is
+        // written so that a crash resumes here: the row removal is a no-op when
+        // there is no row, so repeating it costs nothing.
+        //
+        // `vertical-slice.md`: "Whole-meeting deletion is not admitted until its
+        // staged operation removes the metadata row in the same recoverable
+        // sequence as the meeting bytes; leaving title or folder text behind is
+        // not successful whole-meeting deletion."
+        crate::library_metadata::forget_meeting(storage, &receipt.meeting_id)
+            .map_err(|()| MeetingDeletionError::OrganizationRowRetained)?;
+
+        // `meeting.json` next. After this the directory cannot load as a
         // meeting, which is the property that makes a half-deleted meeting
         // impossible to mistake for an intact one.
         let record = meeting_dir.join("meeting.json");
@@ -311,7 +352,7 @@ pub(crate) fn delete_meeting_wholly(
         if receipt.state == MeetingDeletionState::Removed && !meeting_dir.exists() {
             return Ok(MeetingDeletionOutcome::AlreadyRemoved);
         }
-        finish_removal(&meeting_dir, &receipt_path, receipt)?;
+        finish_removal(storage, &meeting_dir, &receipt_path, receipt)?;
         return Ok(MeetingDeletionOutcome::RecoveredRemoval);
     }
 
@@ -357,7 +398,7 @@ pub(crate) fn delete_meeting_wholly(
     // The receipt exists on disk before the first byte is removed. That
     // ordering is what makes an interrupted deletion recoverable at all.
     write_receipt(&receipt_path, &receipt, true)?;
-    finish_removal(&meeting_dir, &receipt_path, receipt)?;
+    finish_removal(storage, &meeting_dir, &receipt_path, receipt)?;
     Ok(MeetingDeletionOutcome::MeetingRemoved)
 }
 
@@ -440,9 +481,7 @@ mod tests {
     /// audio, the transcript that is the retained evidence, a note, and the
     /// operator's own note, which is interpretation rather than evidence.
     fn fixture(storage: &StorageRoot, id: &str) -> PathBuf {
-        let directory = storage
-            .resolve(&Path::new("meetings").join(id))
-            .unwrap();
+        let directory = storage.resolve(&Path::new("meetings").join(id)).unwrap();
         create_private_dir(&directory).unwrap();
         create_private_dir(&directory.join("capture")).unwrap();
         for (relative, bytes) in [
@@ -455,7 +494,10 @@ mod tests {
             // substring with its own filename, so a leak test can tell the two
             // apart.
             ("transcript.json", b"we agreed to ship on friday".as_slice()),
-            ("operator-note.json", b"{\"text\":\"chase legal\"}".as_slice()),
+            (
+                "operator-note.json",
+                b"{\"text\":\"chase legal\"}".as_slice(),
+            ),
         ] {
             durable_create_new(&directory.join(relative), bytes).unwrap();
         }
@@ -733,7 +775,9 @@ mod tests {
         // fixture file is a few bytes.
         let (_temp, storage) = storage();
         let directory = fixture(&storage, "large");
-        let payload: Vec<u8> = (0..(64 * 1024 * 2 + 517)).map(|i| (i % 251) as u8).collect();
+        let payload: Vec<u8> = (0..(64 * 1024 * 2 + 517))
+            .map(|i| (i % 251) as u8)
+            .collect();
         fs::write(directory.join("capture/mic.wav"), &payload).unwrap();
 
         let expected = format!("{:x}", Sha256::digest(&payload));
@@ -744,5 +788,96 @@ mod tests {
             .unwrap();
         assert_eq!(recorded.sha256, expected);
         assert_eq!(recorded.byte_size, payload.len() as u64);
+    }
+
+    /// The clause `vertical-slice.md` sets: "leaving title or folder text behind
+    /// is not successful whole-meeting deletion."
+    ///
+    /// Written because the failure is not the obvious one. A row outliving its
+    /// meeting does not strand that meeting's title — `library_read` grants the
+    /// whole record authority only while every row targets a safely projected
+    /// meeting, so **every other meeting's title and folder disappear at once**,
+    /// and organization mutation is disabled with them. This test would have
+    /// failed on the day the writer landed if the row removal had not landed
+    /// with it.
+    #[test]
+    fn deleting_a_meeting_takes_its_organization_row_and_leaves_the_rest_intact() {
+        let temporary = TempDir::new().unwrap();
+        let protected = temporary.path().join("protected");
+        create_private_dir(&protected).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("app-data"), &protected).unwrap();
+        fixture(&storage, "meeting-going");
+        fixture(&storage, "meeting-staying");
+
+        let folder = crate::library_metadata::create_folder(&storage, 0, "Clients")
+            .unwrap()
+            .folder_id
+            .unwrap();
+        crate::library_metadata::set_meeting_title(&storage, 1, "meeting-going", Some("Going"))
+            .unwrap();
+        crate::library_metadata::assign_meeting_folder(&storage, 2, "meeting-going", Some(&folder))
+            .unwrap();
+        crate::library_metadata::set_meeting_title(&storage, 3, "meeting-staying", Some("Staying"))
+            .unwrap();
+
+        let coordination = MeetingStorageCoordination::default();
+        assert_eq!(
+            delete_meeting_wholly(&storage, &coordination, "meeting-going").unwrap(),
+            MeetingDeletionOutcome::MeetingRemoved
+        );
+
+        let document = match crate::library_metadata::read_library_metadata(&storage) {
+            crate::library_metadata::MetadataState::Valid(document) => document,
+            _ => panic!(
+                "the record is no longer readable, which is the failure this test exists for"
+            ),
+        };
+        assert_eq!(document.meetings.len(), 1);
+        assert_eq!(document.meetings[0].meeting_id, "meeting-staying");
+        assert_eq!(document.meetings[0].title.as_deref(), Some("Staying"));
+        assert_eq!(
+            document.folders.len(),
+            1,
+            "the folder itself is organization, not the deleted meeting's"
+        );
+    }
+
+    /// A crash between the row removal and the `staged` transition resumes.
+    #[test]
+    fn a_deletion_interrupted_after_the_row_is_removed_completes_on_reconcile() {
+        let temporary = TempDir::new().unwrap();
+        let protected = temporary.path().join("protected");
+        create_private_dir(&protected).unwrap();
+        let storage = StorageRoot::create(&temporary.path().join("app-data"), &protected).unwrap();
+        let directory = fixture(&storage, "meeting-a");
+        crate::library_metadata::set_meeting_title(&storage, 0, "meeting-a", Some("Going"))
+            .unwrap();
+
+        // A receipt in `deleting` with the row already gone is exactly the state
+        // a crash between the two writes leaves behind.
+        crate::library_metadata::forget_meeting(&storage, "meeting-a").unwrap();
+        let receipt = MeetingDeletionReceipt {
+            schema: MeetingDeletionSchema::V1,
+            meeting_id: "meeting-a".into(),
+            state: MeetingDeletionState::Deleting,
+            artifacts: Vec::new(),
+        };
+        write_receipt(
+            &receipt_path(&storage, "meeting-a").unwrap(),
+            &receipt,
+            true,
+        )
+        .unwrap();
+
+        let coordination = MeetingStorageCoordination::default();
+        assert_eq!(
+            reconcile_pending_meeting_deletions(&storage, &coordination).unwrap(),
+            vec!["meeting-a".to_string()]
+        );
+        assert!(!directory.exists());
+        assert!(matches!(
+            crate::library_metadata::read_library_metadata(&storage),
+            crate::library_metadata::MetadataState::Valid(_)
+        ));
     }
 }

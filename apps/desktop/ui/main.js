@@ -89,6 +89,9 @@ const micChannel = document.querySelector("#mic-channel");
 const systemChannel = document.querySelector("#system-channel");
 const libraryList = document.querySelector("#library-list");
 const libraryNotice = document.querySelector("#library-notice");
+// The meetings screen's own status line. `library-notice` belongs to Find,
+// and a rename refusal shown there is a refusal the operator never sees.
+const libraryOrganizationNotice = document.querySelector("#library-organization-notice");
 const librarySearch = document.querySelector("#library-search");
 const librarySearchQuery = document.querySelector("#library-search-query");
 const librarySearchSubmit = librarySearch.querySelector("button[type=\"submit\"]");
@@ -709,6 +712,20 @@ function renderLibrary(snapshot) {
     action.textContent = row.transcriptAvailable ? "Open meeting" : "Open details";
     button.append(summary, action);
     libraryList.append(button);
+
+    // Rename sits outside the row button rather than inside it: a button in a
+    // button does not nest, and the whole row already means "open this".
+    // A null revision means the record could not be read, and renaming is
+    // withheld rather than attempted against a revision nobody knows.
+    if (Number.isInteger(snapshot.metadataRevision)) {
+      const rename = document.createElement("button");
+      rename.type = "button";
+      rename.className = "library-rename";
+      rename.dataset.meetingId = row.meetingId || "";
+      rename.textContent = labelSource === "operator" ? "Rename" : "Name this meeting";
+      rename.addEventListener("click", () => renameMeeting(row, snapshot.metadataRevision));
+      libraryList.append(rename);
+    }
   }
 }
 
@@ -916,6 +933,50 @@ async function refreshRetentionOverview(revision) {
   const overview = await invoke("preview_retention_overview").catch(() => null);
   if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
   renderRetentionOverview(overview);
+}
+
+// The operator's own title, which outranks the meeting's opening line and the
+// capture time beneath it. Until this existed the top branch of that precedence
+// could never fire, because nothing in the product wrote the record it reads.
+//
+// `prompt` rather than an inline field: this is one string with no formatting,
+// the shell has no modal of its own, and building one to type a title into is
+// the kind of surface that should follow a person actually wanting it. An empty
+// answer clears the title and restores the derived one, which is the contract's
+// nullable title and is stated in the prompt rather than left to be discovered.
+async function renameMeeting(row, expectedRevision) {
+  if (!invoke) return;
+  const current = row.labelSource === "operator" ? row.label : "";
+  const answer = window.prompt(
+    "Name this meeting. Leave it empty to go back to its opening line.",
+    current || "",
+  );
+  if (answer === null) return;
+  clearError(libraryOrganizationNotice);
+  const title = answer.trim() === "" ? null : answer;
+  let response;
+  try {
+    response = await invoke("library_set_meeting_title", {
+      expectedRevision,
+      meetingId: row.meetingId,
+      title,
+    });
+  } catch {
+    setError(libraryOrganizationNotice, "That change could not be saved. Nothing was written.");
+    return;
+  }
+  if (response.state !== "ok") {
+    setError(libraryOrganizationNotice, response.message);
+    // A conflict means somebody else's change is already in the record, so the
+    // rows on screen are stale. Reload rather than leaving them looking current.
+    if (response.state === "revision-conflict") await rebuildMeetingsView();
+    return;
+  }
+  if (!response.changed) {
+    setError(libraryOrganizationNotice, response.message);
+    return;
+  }
+  await rebuildMeetingsView();
 }
 
 async function rebuildMeetingsView() {

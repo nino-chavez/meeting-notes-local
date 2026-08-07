@@ -93,6 +93,13 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
             "preview_library_open_transcript",
             "preview_delete_meeting_audio",
             "preview_delete_meeting",
+            // Five named commands, not one "organize". A window allowed to
+            // rename a meeting is not thereby allowed to delete a folder.
+            "library_create_folder",
+            "library_rename_folder",
+            "library_delete_folder",
+            "library_assign_meeting_folder",
+            "library_set_meeting_title",
             "restore_withheld_turn",
             // Restoring publishes a new current transcript, so the screen shown
             // right after a recording needs its projection rebuilt in place —

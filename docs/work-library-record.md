@@ -94,6 +94,22 @@ said "no sentence here names this meeting" — not on any of thirty tries, inclu
 the test built entirely of small talk, where it confidently picked "Yes I can hear you
 perfectly well." A tool that cannot say *I don't know* is a tool you have to check.
 
+**And on 2026-08-08 you can name one yourself.** The file holding folder names and
+the titles you type could be read but never written — that was the original reason
+every meeting said `Untitled meeting`, and it survived the automatic naming above,
+because a title you chose is supposed to outrank one taken from the transcript and
+there was no way to choose one. Now there is: name a meeting from the list, or leave
+the box empty to go back to its opening line.
+
+Deleting a meeting now also takes its name and folder with it, in that order, before
+the recording itself goes. That sounds like tidying and is not. The app refuses to
+trust the whole file if it mentions a meeting that no longer exists, so one leftover
+name would not have cost you that meeting's title — it would have hidden every title
+and folder you had set, all at once.
+
+Folders themselves are half-built and said so rather than implied: the app knows how
+to make, rename, delete and fill them, and there is no screen for it yet.
+
 ## What shipped
 
 **Version 0.4.0, cut 2026-08-05**, signed and notarized, built at commit `331c9e9`.
