@@ -177,6 +177,85 @@ scripts/verify-release-bundle.py \
 requires `product`, so an alpha can enter the signing path only through the
 explicit alpha command.
 
+## Preview-bundle lane (local, not a release)
+
+**Written 2026-08-07, after building it three times to find out what it wanted.**
+`scripts/prepare-preview-bundle.sh` and `apps/desktop`'s `preview-build` script are
+real code that appeared in no document, so which runtime feeds them had to be
+recovered from the script's own header.
+
+This lane produces a locally signed `Local Meeting Notes Preview.app`. It is **not
+notarized, not stapled, and not a release.** Its purpose is narrow: §H's two
+first-run permission paths cannot execute at all outside a signed bundle, because
+running the probe's request modes from an unsigned binary mutates the calling
+application's TCC state and answers about the wrong binary.
+
+```bash
+worker/build_runtime.sh build-alpha
+cd apps/desktop && npm run preview-build     # tauri build + prepare-preview-bundle.sh sign
+npm run preview-verify
+```
+
+**It needs `build-alpha`, not `build`, and the reason is a real boundary rather than
+an oversight.** `prepare-preview-bundle.sh` hard-requires
+`Contents/Resources/bin/meeting-capture`, and only `build-alpha*` stages it. The
+default `build` lane is deliberately a *boundary* runtime: it stages
+`permission-probe` in every mode — "a boundary build that cannot answer 'is the
+microphone allowed' has the same lying surface the internal-alpha one would" — but
+no recorder and no Whisper model. A Preview built on it fails the sign step with
+`Preview meeting-capture helper is missing`.
+
+### Two tracked files the build rewrites, and neither may be committed
+
+**`apps/desktop/src-tauri/gen/schemas/capabilities.json` flips wholesale.** Building
+the preview lane replaces the `main-window` capability with `preview-window`. It is a
+one-line file, so the diff looks trivial and is not: committing it would put the
+Preview capability on trunk in place of the shipped main window's. Revert it.
+
+`npm install` also rewrites `apps/desktop/package-lock.json`. Incidental; revert it too.
+
+    git checkout -- apps/desktop/src-tauri/gen/schemas/capabilities.json \
+                    apps/desktop/package-lock.json
+
+`git status` must read clean before committing anything from a session that built
+this lane.
+
+### Verify independently; the script's success is silent
+
+`prepare-preview-bundle.sh verify` exits 0 and prints nothing, so a passing run and
+a run that did nothing look identical. Check the properties directly:
+
+```bash
+APP="target/release/bundle/macos/Local Meeting Notes Preview.app"
+codesign -dvv "$APP" 2>&1 | grep -E '^Authority=Developer ID|^TeamIdentifier='
+codesign -d --entitlements :- "$APP/Contents/Resources/bin/permission-probe" \
+  | plutil -extract 'com\.apple\.security\.device\.audio-input' raw -o - -
+```
+
+Tauri ad-hoc signs during bundling — `Signing with identity "-"` plus a notarization
+skip warning — and `prepare-preview-bundle.sh sign` re-signs afterwards with the real
+identity and the capture entitlements. **The bundle Tauri leaves behind is not the
+signed bundle**, and the two are indistinguishable without asking `codesign`.
+
+### The 2026-08-07 build
+
+First signed Preview bundle. Verified independently rather than by the script's exit
+code:
+
+| target | authority | audio-input |
+|---|---|---|
+| `Local Meeting Notes Preview.app` | Developer ID Application: Abelino Chavez (34VZ63G58M) | — |
+| `local-meeting-notes-desktop` | same | true |
+| `meeting-capture` | same | true |
+| `permission-probe` | same | true |
+
+`admission: internal-alpha`, 2.1 GB. The capability grants
+`allow-first-run-request-microphone` and `allow-first-run-request-system-audio`.
+
+**Those two paths remain unrun.** They are macOS permission prompts; a person has to
+be at the machine to grant or deny them, and no build advances that. Producing the
+bundle was the builder-owned half and it is done.
+
 ## Encoder-candidate lane (admission evidence, not a release)
 
 `worker/build_runtime.sh build-alpha-encoder` builds the alpha runtime plus
