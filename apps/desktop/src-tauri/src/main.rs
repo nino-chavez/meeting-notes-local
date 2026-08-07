@@ -25,6 +25,11 @@ mod first_run;
 // evidence: a fixed path in the meeting directory, replaced atomically, with the
 // frozen `meeting/2` contract untouched. See the module for why.
 mod operator_note;
+// § E1. Folders and the operator's own meeting titles — the five named
+// commands and their closed response shape. Registered, unlike the facades
+// above: `library/metadata.json` gained a writer on 2026-08-08 and the surface
+// that reaches it is the point of having one.
+mod library_organization;
 // The storage-backed coordinator and worker bridge behind product_facade.
 // Managed as state so the facade commands can be registered in one move once
 // the operator widens the packaged admission; the commands stay unregistered.
@@ -1588,6 +1593,116 @@ fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
         return Err("The installation retry could not start.".into());
     }
     Ok(snapshot)
+}
+
+/// Runs one organization mutation under the held process writer lock.
+///
+/// Every command below is this function with a different closure, which is the
+/// point: the lock acquisition, the capture refusal and the snapshot
+/// invalidation are written once. A command that forgot the invalidation would
+/// leave the operator looking at their old title with no error to explain it.
+fn with_library_organization(
+    state: &ApplicationState,
+    action: impl FnOnce(
+        &local_meeting_notes_session_core::retention::LibraryOrganizationAuthority<'_>,
+    ) -> Result<
+        local_meeting_notes_session_core::library_metadata::OrganizationOutcome,
+        local_meeting_notes_session_core::library_metadata::OrganizationError,
+    >,
+) -> library_organization::OrganizationResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return library_organization::OrganizationResponse::unavailable(
+            "Renaming is unavailable. Reopen the app and try again.",
+        );
+    };
+    // Organization writes to the same storage root a take's evidence writes
+    // sit beside, so like every mutating command it refuses during a take
+    // rather than interleaving with it.
+    if sitting_task_active(state) {
+        return library_organization::OrganizationResponse::unavailable(
+            "Finish the setup recording before changing folders or titles.",
+        );
+    }
+    let writer = match state.app_data_writer_lock.lock() {
+        Ok(held) => held.clone(),
+        Err(_) => None,
+    };
+    let Some(writer) = writer else {
+        return library_organization::OrganizationResponse::unavailable(
+            "Renaming is unavailable. Reopen the app and try again.",
+        );
+    };
+    let response =
+        library_organization::from_result(action(&writer.library_organization_authority()));
+    if response.changed {
+        // The snapshot the operator is looking at was built against the old
+        // revision, and every handle in it binds that revision. Dropping it
+        // here means the next read rebuilds rather than serving a title that
+        // is no longer what the record says.
+        if let Ok(mut library) = state.preview_library.lock() {
+            *library = None;
+        }
+    }
+    response
+}
+
+#[tauri::command]
+fn library_create_folder(
+    expected_revision: u64,
+    name: String,
+    state: State<'_, ApplicationState>,
+) -> library_organization::OrganizationResponse {
+    with_library_organization(&state, |authority| {
+        authority.create_folder(expected_revision, &name)
+    })
+}
+
+#[tauri::command]
+fn library_rename_folder(
+    expected_revision: u64,
+    folder_id: String,
+    name: String,
+    state: State<'_, ApplicationState>,
+) -> library_organization::OrganizationResponse {
+    with_library_organization(&state, |authority| {
+        authority.rename_folder(expected_revision, &folder_id, &name)
+    })
+}
+
+#[tauri::command]
+fn library_delete_folder(
+    expected_revision: u64,
+    folder_id: String,
+    state: State<'_, ApplicationState>,
+) -> library_organization::OrganizationResponse {
+    with_library_organization(&state, |authority| {
+        authority.delete_folder(expected_revision, &folder_id)
+    })
+}
+
+#[tauri::command]
+fn library_assign_meeting_folder(
+    expected_revision: u64,
+    meeting_id: String,
+    folder_id: Option<String>,
+    state: State<'_, ApplicationState>,
+) -> library_organization::OrganizationResponse {
+    with_library_organization(&state, |authority| {
+        authority.assign_meeting_folder(expected_revision, &meeting_id, folder_id.as_deref())
+    })
+}
+
+/// Null clears the operator's title and restores the derived one.
+#[tauri::command]
+fn library_set_meeting_title(
+    expected_revision: u64,
+    meeting_id: String,
+    title: Option<String>,
+    state: State<'_, ApplicationState>,
+) -> library_organization::OrganizationResponse {
+    with_library_organization(&state, |authority| {
+        authority.set_meeting_title(expected_revision, &meeting_id, title.as_deref())
+    })
 }
 
 #[tauri::command]
@@ -3506,6 +3621,11 @@ fn main() {
             preview_library_open_transcript,
             preview_delete_meeting_audio,
             preview_delete_meeting,
+            library_create_folder,
+            library_rename_folder,
+            library_delete_folder,
+            library_assign_meeting_folder,
+            library_set_meeting_title,
             product_facade::restore_withheld_turn
         ])
         .setup(|app| {

@@ -207,6 +207,36 @@
           "markdownDescription": "Enables the first_run_request_system_audio command without any pre-configured scope."
         },
         {
+          "description": "Enables the library_assign_meeting_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-assign-meeting-folder",
+          "markdownDescription": "Enables the library_assign_meeting_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_create_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-create-folder",
+          "markdownDescription": "Enables the library_create_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_delete_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-delete-folder",
+          "markdownDescription": "Enables the library_delete_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_rename_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-rename-folder",
+          "markdownDescription": "Enables the library_rename_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_set_meeting_title command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-set-meeting-title",
+          "markdownDescription": "Enables the library_set_meeting_title command without any pre-configured scope."
+        },
+        {
           "description": "Enables the operator_note command without any pre-configured scope.",
           "type": "string",
           "const": "allow-operator-note",
@@ -379,6 +409,36 @@
           "type": "string",
           "const": "deny-first-run-request-system-audio",
           "markdownDescription": "Denies the first_run_request_system_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_assign_meeting_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-assign-meeting-folder",
+          "markdownDescription": "Denies the library_assign_meeting_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_create_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-create-folder",
+          "markdownDescription": "Denies the library_create_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_delete_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-delete-folder",
+          "markdownDescription": "Denies the library_delete_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_rename_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-rename-folder",
+          "markdownDescription": "Denies the library_rename_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_set_meeting_title command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-set-meeting-title",
+          "markdownDescription": "Denies the library_set_meeting_title command without any pre-configured scope."
         },
         {
           "description": "Denies the operator_note command without any pre-configured scope.",

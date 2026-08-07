@@ -39,6 +39,16 @@ fn generated_preview_library_buttons_bind_their_own_activation() {
     );
     assert!(!shell.contains("Transcript unavailable"));
     assert!(!shell.contains("libraryList.addEventListener(\"click\""));
+    // Renaming is offered only when the record's revision is known. A null
+    // revision means it could not be read, and writing over a record you could
+    // not read is what the conflict check exists to prevent.
+    assert!(shell.contains("if (Number.isInteger(snapshot.metadataRevision)) {"));
+    assert!(shell.contains("invoke(\"library_set_meeting_title\", {"));
+    // An empty answer clears the operator's title rather than storing one, and
+    // the prompt says so rather than leaving it to be discovered.
+    assert!(shell.contains("answer.trim() === \"\" ? null : answer"));
+    assert!(shell.contains("Leave it empty to go back to its opening line."));
+
     assert!(!shell.contains("librarySearchResults.addEventListener(\"click\""));
 }
 
@@ -120,6 +130,14 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             // meeting destroys the retained transcript rather than freeing
             // disk space, and one grant must not imply the other.
             "allow-preview-delete-meeting",
+            // Five separate grants, not one. A window allowed to rename a
+            // meeting is not thereby allowed to delete a folder, and the
+            // capability list is where that distinction is visible.
+            "allow-library-create-folder",
+            "allow-library-rename-folder",
+            "allow-library-delete-folder",
+            "allow-library-assign-meeting-folder",
+            "allow-library-set-meeting-title",
             "allow-restore-withheld-turn",
             "allow-refresh-current-transcript",
             "allow-operator-note",
@@ -309,6 +327,14 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             // meeting destroys the retained transcript rather than freeing
             // disk space, and one grant must not imply the other.
             "allow-preview-delete-meeting",
+            // Five separate grants, not one. A window allowed to rename a
+            // meeting is not thereby allowed to delete a folder, and the
+            // capability list is where that distinction is visible.
+            "allow-library-create-folder",
+            "allow-library-rename-folder",
+            "allow-library-delete-folder",
+            "allow-library-assign-meeting-folder",
+            "allow-library-set-meeting-title",
             "allow-restore-withheld-turn",
             "allow-refresh-current-transcript",
             "allow-operator-note",

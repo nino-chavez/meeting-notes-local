@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::library_metadata::{OrganizationError, OrganizationOutcome};
 use crate::meeting::{
     AUDIO_ARTIFACT_PATHS, ArtifactRef, AudioState, MAX_RECEIPT_BYTES, MeetingError,
     MeetingLifecycle, MeetingRecord, PendingStorageOperation, artifact_ref, load_meeting,
@@ -513,6 +514,86 @@ impl ManualAudioDeletionAuthority<'_> {
     }
 }
 
+/// The sole capability that may write `library/metadata.json`.
+///
+/// It carries the operator's own organization — folder names and the titles
+/// they typed — and nothing derived. Every method takes an `expected_revision`
+/// and refuses on mismatch rather than merging, because two windows editing the
+/// same record silently is how one of them loses a rename without being told.
+///
+/// ```compile_fail
+/// use local_meeting_notes_session_core::library_metadata::set_meeting_title;
+/// // The raw entry points are crate-private. A dependent crate must acquire
+/// // AppDataWriterLock and borrow its library_organization_authority instead.
+/// # let _ = set_meeting_title;
+/// ```
+///
+/// ```compile_fail
+/// use local_meeting_notes_session_core::retention::LibraryOrganizationAuthority;
+/// use local_meeting_notes_session_core::storage::StorageRoot;
+/// fn redirect_root(authority: &LibraryOrganizationAuthority, other: &StorageRoot) {
+///     let _ = authority.set_meeting_title(other, 0, "meeting", None);
+/// }
+/// ```
+pub struct LibraryOrganizationAuthority<'a> {
+    storage: &'a StorageRoot,
+}
+
+impl LibraryOrganizationAuthority<'_> {
+    pub fn create_folder(
+        &self,
+        expected_revision: u64,
+        name: &str,
+    ) -> Result<OrganizationOutcome, OrganizationError> {
+        crate::library_metadata::create_folder(self.storage, expected_revision, name)
+    }
+
+    pub fn rename_folder(
+        &self,
+        expected_revision: u64,
+        folder_id: &str,
+        name: &str,
+    ) -> Result<OrganizationOutcome, OrganizationError> {
+        crate::library_metadata::rename_folder(self.storage, expected_revision, folder_id, name)
+    }
+
+    pub fn delete_folder(
+        &self,
+        expected_revision: u64,
+        folder_id: &str,
+    ) -> Result<OrganizationOutcome, OrganizationError> {
+        crate::library_metadata::delete_folder(self.storage, expected_revision, folder_id)
+    }
+
+    pub fn assign_meeting_folder(
+        &self,
+        expected_revision: u64,
+        meeting_id: &str,
+        folder_id: Option<&str>,
+    ) -> Result<OrganizationOutcome, OrganizationError> {
+        crate::library_metadata::assign_meeting_folder(
+            self.storage,
+            expected_revision,
+            meeting_id,
+            folder_id,
+        )
+    }
+
+    pub fn set_meeting_title(
+        &self,
+        expected_revision: u64,
+        meeting_id: &str,
+        title: Option<&str>,
+    ) -> Result<OrganizationOutcome, OrganizationError> {
+        crate::library_metadata::set_meeting_title(
+            self.storage,
+            expected_revision,
+            meeting_id,
+            title,
+        )
+    }
+}
+
 /// Process-lifetime owner-only lock for one app-data storage root.
 ///
 /// The file descriptor is private and non-cloneable. Successful construction
@@ -576,6 +657,17 @@ impl AppDataWriterLock {
 
     pub fn deletion_authority(&self) -> ManualAudioDeletionAuthority<'_> {
         ManualAudioDeletionAuthority { lock: self }
+    }
+
+    /// Authority for `library-metadata/1` — folders and operator titles.
+    ///
+    /// Separate from every deletion authority above it, and deliberately so:
+    /// naming a meeting is not the same permission as destroying one, and a
+    /// caller that may rename should not thereby be able to remove.
+    pub fn library_organization_authority(&self) -> LibraryOrganizationAuthority<'_> {
+        LibraryOrganizationAuthority {
+            storage: &self.storage,
+        }
     }
 
     /// Authority for `meeting-deletion/1`, the whole-meeting removal.

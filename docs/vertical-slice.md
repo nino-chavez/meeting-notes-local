@@ -41,26 +41,24 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is Wave 1 item 3, folders and the meeting object's sibling views.**
-Items 1 and 2 are both finished, and item 2 finished in two different ways that are
-worth keeping straight.
+**The next build is Wave 1 item 4, filters — people, date range, keywords, titles.**
+Items 1 through 3 are finished, and item 3 finished with one part deliberately left:
 
-Its first half shipped 2026-08-07: a meeting is named by its own opening line,
-extracted deterministically, with the operator's title above it and its capture time
-below.
+`library/metadata.json` had no writer from the day it was written, which is why every
+row read `Untitled meeting` and why auto-titling's operator branch could never fire.
+It has one now: five named commands behind the process writer lock, each carrying
+`expected_revision` and refusing on mismatch. Whole-meeting deletion removes a
+meeting's organization row before its record, which the contract had required in
+advance and which had nothing to bind until there was a row to leave behind.
 
-Its second half — the local model the queue wanted wired end to end — was
-**measured and refused, not built.** `notes/MLX_TITLE_SELECTION.md` registered a
-two-sided prediction of 6–9 of 10 before running anything; three cold runs returned
-5 of 10, byte-identical, and the registered consequence closes the path for
-`Qwen2.5-1.5B-Instruct-4bit`. No Rust seam was written, because the probe existed to
-answer that before the seam was spent. A separate finding worth carrying: the model
-**never abstained**, on any of 30 calls, including the fixture where nothing said
-identifies a meeting.
-
-The harness, mask, fixtures and receipts are committed and re-runnable against a
-different candidate with one flag. Doing that is a real option and it is not the
-next build; picking it up again should be a decision about candidates, not a default.
+**One end-to-end path is wired and four commands have no surface yet.** Naming a
+meeting works from the meetings list. Creating a folder, renaming one, deleting one
+and filing a meeting into one are registered, granted in both capability files, and
+have no UI — `backlog.md` US-14.4 carries that, and `screens-and-states.md` does not
+cover a folder list, a filter, or a move affordance. Building those badly to close
+the row faster is the trade this repo does not make; item 4's filters are the
+natural place to design them, because a folder filter and a date filter are the
+same surface.
 
 A struck-through row is finished; the first row that is not struck through is the
 work. That rule is the whole resume protocol, and it holds whether the session
@@ -106,7 +104,7 @@ largest surface-area addition and says it has nothing to do with audio.
 |---|---|---|---|
 | 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. What remains is US-13.6: the full scan still runs first, because skipping unchanged meetings needs a per-meeting entry point into an audited module | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and, measured, refuses a common word at one meeting |
 | 2 | ~~Auto-titling~~ **Landed 2026-08-07** as `meeting_title.rs` — the first non-gated turn's opening sentence, behind an operator title and above the capture time. The local-model half was **measured and refused** on 2026-08-08 at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`); the seam was not built, and re-running the committed harness against another candidate is a decision, not a pending task | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
-| 3 | Folders, and the meeting object's sibling views | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
+| 3 | ~~Folders, and the meeting object's sibling views~~ **Writer landed 2026-08-08** — `library-metadata/1` gained the five named commands, whole-meeting deletion now takes the organization row first, and naming a meeting is wired end to end. The folder surface is `backlog.md` US-14.4 and is deliberately unbuilt | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | Filters — people, date range, keywords, titles | D3 | Gong documents all four. Free once the store exists |
 | 5 | Semantic search over the corpus, beside exact | D2 | Exact is Registered; semantic is what a question needs |
 | 6 | **Ask across every meeting, answer with citations** | D1 | The category headline. Depends on 1–5 and on B5's citation machinery |

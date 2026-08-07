@@ -1090,4 +1090,56 @@ mod tests {
             .unwrap();
         assert_eq!(turns, 1);
     }
+
+    /// A rename must resync the cache, or the index serves a title the files no
+    /// longer carry.
+    ///
+    /// `corpus_digest` already covers `title` and `folder`, so this passes today
+    /// — which is exactly why it is worth pinning. `sync_if_changed` skips when
+    /// the digest is unchanged, and a later narrowing of that digest to the
+    /// meeting/transcript/attempt hashes would look like a harmless
+    /// optimisation and would silently strand every rename.
+    /// `rebuild_from_files_equals_the_live_index` would not catch it: both sides
+    /// of that comparison are rebuilt, so both would agree on the stale value.
+    #[test]
+    fn renaming_a_meeting_moves_the_corpus_digest_and_resyncs_the_index() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 10, &["one two three"]);
+        crate::library_metadata::set_meeting_title(
+            &fixture.storage,
+            0,
+            "meeting-a",
+            Some("Before"),
+        )
+        .unwrap();
+
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let mut index = CorpusIndex::open(&fixture.storage).unwrap();
+        assert!(index.sync_if_changed(&projection).unwrap().is_some());
+        assert!(
+            index.sync_if_changed(&projection).unwrap().is_none(),
+            "an unchanged corpus wrote twice"
+        );
+        assert_eq!(
+            index.list(&ListRequest::default()).unwrap().rows[0]
+                .title
+                .as_deref(),
+            Some("Before")
+        );
+
+        crate::library_metadata::set_meeting_title(&fixture.storage, 1, "meeting-a", Some("After"))
+            .unwrap();
+        let renamed = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert!(
+            index.sync_if_changed(&renamed).unwrap().is_some(),
+            "a rename did not move the digest, so the index still serves the old title"
+        );
+        assert_eq!(
+            index.list(&ListRequest::default()).unwrap().rows[0]
+                .title
+                .as_deref(),
+            Some("After")
+        );
+    }
 }
