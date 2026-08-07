@@ -73,6 +73,15 @@ your meetings do not live in it — every row is derived from files that remain 
 authority, and a test deletes the database, rebuilds it from those files alone, and
 demands an identical content digest.
 
+**Meetings got names the same day.** Until then every row in the library read
+`Untitled meeting`, because the only place a title could come from was a file nothing
+in the product could write. A meeting is now named by the first thing said in it that
+is long enough to identify it — a quotation from the transcript, not a phrase written
+about it, so the words can be read back where they were said. A title you type
+outranks it. Competing products let a model compose the phrase; that half is not
+built here yet, and when it is, the model will choose which words to quote rather
+than supply words of its own.
+
 ## What shipped
 
 **Version 0.4.0, cut 2026-08-05**, signed and notarized, built at commit `331c9e9`.

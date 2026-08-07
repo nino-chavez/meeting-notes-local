@@ -125,7 +125,7 @@ inference is what went wrong before.
 | **E13** | **The corpus store** | **E6 D3** | 7 | **Landed 2026-08-07**, except US-13.6 |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | — | Wave 1 item 3 |
 | **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | — | Wave 1 items 4–6 |
-| **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | — | Wave 1 item 2, Wave 2 items 7–8 |
+| **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 next; B2 B3 undecomposed until Wave 2 |
 | **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
 | **E18** | **Named speakers** | **A3** | — | Wave 3 items 11–12 |
 | **E19** | **Long-form ASR at meeting length** | **A4 A5** | — | Wave 3 item 13 |
@@ -1188,6 +1188,84 @@ that launch does not get slower every month I use the product.
 **Refusals:** incremental sync must not skip a meeting on any signal weaker than its canonical digest. A directory mtime is not a change signal.
 
 **Validation:** **Unproven** — not built. It needs a per-meeting entry point into `library_read`, which is an audited module; doing that in the same change that introduced a C dependency and a new storage surface would make the audit result unattributable. The store landed first deliberately, and the launch scan still runs in full.
+
+---
+
+### E16 — Note shape: auto-titling, templates, enhanced summary
+
+What a meeting is called, and what its note looks like.
+
+**Partly decomposed 2026-08-07, when the queue reached auto-titling.** Only the
+titling stories are written. B2 and B3 — templates and the enhanced summary — stay
+undecomposed until the queue reaches Wave 2, per the catalog's rule.
+
+#### US-16.1: A meeting is named by what was said in it
+**Feature B4 · J1 · §F · P0 · M · Landed 2026-08-07**
+
+As the Operator, I want each meeting in my library to carry a name I can tell apart
+from the others, so that a corpus is something I can navigate rather than a column
+of identical rows.
+
+**Acceptance criteria:**
+- Given a meeting with a transcript and no operator title, When the library is read, Then the row is named by the first thing said in it that is at least six words.
+- Given a meeting with an operator title, When the library is read, Then the operator's title is used and the derived one is not.
+- Given a meeting with neither, When the library is read, Then the row sends no label and is named by its capture time.
+- Given a derived name, When it is displayed, Then it is marked as something said in the meeting rather than a title somebody wrote.
+- Given a withheld microphone turn, When a name is derived, Then that turn is never its source, whether or not any other turn qualifies.
+
+**Data contract:** none — nothing is stored. A derived title is recomputed from the
+validated turns on every read.
+
+**Refusals:** a derived title must be a contiguous span of a canonical transcript
+turn. It is not composed, paraphrased, or summarised, and no model writes it. It is
+also not a search field: every span it can return is already indexed as part of the
+turn it came from, so indexing it again would return the same words twice under two
+hit kinds.
+
+**Validation:** **Pinned** — `meeting_title::tests` (11 cases, including
+`a_title_is_always_a_contiguous_span_of_the_turn_it_came_from` and
+`a_withheld_turn_is_never_a_title_even_when_it_is_the_only_candidate`);
+`library_read::tests::a_derived_title_is_the_first_long_enough_visible_turn_and_is_never_a_search_field`;
+`library_reader::tests::a_row_is_named_by_the_operator_then_by_its_own_first_words_then_by_nothing`.
+
+**Evidence:** every row read `Untitled meeting` — all of them, at once. The operator
+title is read from `library/metadata.json`, and `library_metadata.rs` states in its
+first line that it "deliberately has no writer", so the fallback was the only
+reachable branch. `vertical-slice.md` had already specified generated labels twice
+and neither sentence had an implementation behind it.
+
+**Two things it is not.** It is not the category's auto-titling: Granola, Otter and
+Circleback print a phrase a model composed, and no rule here will ever produce
+"Q3 pricing". And the six-word threshold is a guess at a distribution nobody has
+measured — it is the arbitrary number in the module, it changes no contract, and the
+operator is its falsifier.
+
+#### US-16.2: A local model chooses the span
+**Feature B4 · J1 · §F · P1 · L · Next**
+
+As the Operator, I want the phrase that names a meeting to be the one that actually
+identifies it, so that a title is worth reading rather than merely present.
+
+**Acceptance criteria:**
+- Given a transcript, When the model runs, Then it returns the index and character span of one turn, and no free text.
+- Given a returned span, When it is validated, Then it resolves verbatim in the canonical transcript or the deterministic rule is used instead.
+- Given a gated turn, When the model is offered candidates, Then that turn is not among them.
+- Given the model is unavailable, refuses, or exceeds its budget, When a name is needed, Then US-16.1's rule produces it and nothing reports a failure to the operator.
+
+**Refusals:** the model's output is untrusted and it is not the title. It selects
+among words the transcript already contains; it never supplies them. A title that
+cannot be resolved back to a span is discarded, not displayed with a caveat.
+
+**Validation:** **Unproven** — not built. It is registered here as the next build so
+that the deterministic rule is not mistaken for the finished feature.
+
+**Evidence:** the build queue names auto-titling "the cheapest possible test that the
+store and a local model are wired together end to end", and this half is the local
+model. MLX already ships in the internal-alpha lane for ASR, so `mlx-lm` and a pinned
+small model are an incremental dependency rather than a new framework — but
+`MLX_NOTE_ADMISSION.md`'s gate table ends at "no admission without a recorded human
+decision", and that gate belongs to the operator. A builder can register, measure,
+and pin this; a builder cannot admit it.
 
 ---
 
