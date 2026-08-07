@@ -705,6 +705,9 @@ function render(snapshot) {
   if (startup !== "ready") {
     setHeaderState("Nothing is recording");
     endElapsed();
+    // A startup failure outranks first run, so hand the route back rather than let
+    // a permission screen sit on top of a diagnostic that knows more.
+    if (currentScreen === "first-run-screen") beginWorkflowRoute();
     renderStartup(startup);
     return;
   }
@@ -713,6 +716,9 @@ function render(snapshot) {
     case "idle":
       setHeaderState("Ready");
       endElapsed();
+      // The one call site: a started app at rest is the only moment first run may
+      // take the screen, and it takes it at most once per launch.
+      void considerFirstRun();
       if (workflowOwnsRoute && currentScreen !== "idle-screen") {
         showWorkflowScreen(snapshot, { resetScroll: true });
         initializeFindInBackground();
@@ -2154,18 +2160,44 @@ document.querySelector("#first-run-skip-enrol").addEventListener("click", () => 
 document.querySelector("#first-run-done").addEventListener("click", () => {
   selectProductScreen("idle-screen", { resetScroll: true });
 });
+// The two dead ends get an exit. Neither panel's primary control can succeed from
+// inside this window — one needs System Settings, the other needs a reinstall — so
+// without this the first thing a new operator meets is a screen they cannot leave.
+for (const id of ["#first-run-leave-denied", "#first-run-leave-unavailable"]) {
+  document.querySelector(id).addEventListener("click", () => {
+    selectProductScreen("idle-screen", { resetScroll: true });
+  });
+}
 
-// Entry. Runs once at load; routes into first run only when a measurement says a
-// permission is missing, so an already-set-up Mac never sees it.
-async function enterFirstRunIfIncomplete() {
+// Entry. Considered once per launch, and only from a resting, started app.
+//
+// The first version ran at load and lost the screen immediately: `workflowOwnsRoute`
+// starts true, so the next poll tick resolved a workflow destination and navigated
+// away — every 1500 ms, forever. First run was unreachable in practice and every
+// test still passed, because route ownership is shell state that no unit test holds.
+// So this waits for a snapshot, claims the route explicitly the way every other
+// non-workflow screen does, and is driven from `render` rather than from load.
+//
+// Two conditions outrank it, both checked against the snapshot rather than assumed:
+// a startup that is not ready, because the diagnostic knows more than a permission
+// check that cannot even resolve its probe without storage; and a capture that is
+// not idle, because a meeting in progress is not a moment to ask about setup.
+let firstRunConsidered = false;
+
+async function considerFirstRun() {
+  if (firstRunConsidered) return;
+  firstRunConsidered = true;
   const result = await readFirstRunPermissions();
   if (!result) return;
   const step = firstRunStepFor(result);
   if (step === "enrol-voice" || step === "ready") return;
+  // Re-read the snapshot rather than trusting the one that got us here: the probe
+  // ran across an await, and a startup failure in that window outranks this screen.
+  if ((lastSnapshot?.startup || "") !== "ready" || (lastSnapshot?.capture || "") !== "idle") return;
   renderFirstRun(result);
+  claimExplicitRoute();
   showScreen("first-run-screen", { resetScroll: true });
 }
 
 renderStartup("shell-rendered");
 refreshCurrent();
-enterFirstRunIfIncomplete();

@@ -70,7 +70,6 @@
           <p class="first-run-state" id="first-run-microphone-state" role="status"></p>
           <div class="screen-actions">
             <button class="primary" id="first-run-ask-microphone" type="button">Allow microphone</button>
-            <button class="secondary" id="first-run-microphone-next" type="button" hidden>Continue</button>
           </div>
         </div>
 
@@ -81,7 +80,6 @@
           <p class="first-run-state" id="first-run-system-audio-state" role="status"></p>
           <div class="screen-actions">
             <button class="primary" id="first-run-ask-system-audio" type="button">Allow system audio</button>
-            <button class="secondary" id="first-run-system-audio-next" type="button" hidden>Continue</button>
           </div>
         </div>
 
@@ -93,7 +91,12 @@
           <p class="first-run-state" id="first-run-denied-state" role="status"></p>
           <div class="screen-actions">
             <button class="primary" id="first-run-recheck" type="button">Check again</button>
+            <!-- An exit is not optional. A setup screen whose only control retries a
+                 thing the operator cannot fix from here is a lockout, and this one is
+                 reachable on a first launch where nothing else has been seen yet. -->
+            <button class="secondary" id="first-run-leave-denied" type="button">Continue without recording</button>
           </div>
+          <p class="footnote">Leaving opens the rest of the app. Recording will not work until the permission is granted, and it will say so when a meeting is started.</p>
         </div>
 
         <div class="first-run-step" data-step-panel="enrol-voice" hidden>
@@ -128,7 +131,9 @@
           <p class="first-run-state" id="first-run-unavailable-state" role="status"></p>
           <div class="screen-actions">
             <button class="primary" id="first-run-retry-probe" type="button">Try again</button>
+            <button class="secondary" id="first-run-leave-unavailable" type="button">Continue without recording</button>
           </div>
+          <p class="footnote">Leaving opens the rest of the app. Nothing here can repair an incomplete installation; reinstalling is what fixes it.</p>
         </div>
       </section>
 

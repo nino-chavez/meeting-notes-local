@@ -1136,3 +1136,84 @@ fn macos_bundle_declares_capture_purposes_and_common_resources() {
     assert_eq!(boundary["bundle"]["macOS"]["signingIdentity"], "-");
     assert!(boundary["bundle"].get("resources").is_none());
 }
+
+/// Three things about § H that only fail at runtime, and did.
+///
+/// The screen was shipped on 35753f5 without claiming the route. `workflowOwnsRoute`
+/// starts true and the snapshot poll resolves a workflow destination on every tick,
+/// so first run was navigated away from within 1500 ms of appearing — unreachable in
+/// practice, with every unit test green, because route ownership is shell state that
+/// no unit test holds. The same commit shipped two buttons with no listener and two
+/// panels whose only control cannot succeed from inside the window.
+#[test]
+fn first_run_claims_its_route_and_every_panel_can_be_left() {
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+
+    // Taking the screen and giving it back are both explicit.
+    assert!(
+        script.contains("claimExplicitRoute();\n  showScreen(\"first-run-screen\""),
+        "first run must claim the route before showing, or the poller takes it back"
+    );
+    assert!(
+        script.contains("if (currentScreen === \"first-run-screen\") beginWorkflowRoute();"),
+        "a startup failure must reclaim the route from first run"
+    );
+    // And it is considered from a resting, started app rather than from page load.
+    assert!(script.contains("void considerFirstRun();"));
+    assert!(!script.contains("enterFirstRunIfIncomplete"));
+
+    let section = html
+        .split_once("id=\"first-run-screen\"")
+        .expect("first run screen")
+        .1
+        .split_once("</section>")
+        .expect("first run screen end")
+        .0;
+
+    // Every control on the screen is reachable from the shell.
+    for element in section.split("<button").skip(1) {
+        let id = element
+            .split_once("id=\"")
+            .expect("every first run button is identified")
+            .1
+            .split_once('"')
+            .expect("terminated id")
+            .0;
+        assert!(
+            script.contains(&format!("\"#{id}\"")),
+            "{id} is markup no listener refers to"
+        );
+    }
+
+    // And every step the operator can land on offers a way onward. A panel whose
+    // only control retries something it cannot fix is a lockout, and the two that
+    // need System Settings or a reinstall are exactly the ones a new operator hits.
+    for panel in section.split("data-step-panel=\"").skip(1) {
+        let (name, body) = panel.split_once('"').expect("named panel");
+        let body = body.split("data-step-panel").next().unwrap_or(body);
+        assert!(
+            body.contains("<button"),
+            "the {name} panel offers the operator nothing to press"
+        );
+    }
+    for (panel, exit) in [
+        ("denied-recovery", "first-run-leave-denied"),
+        ("unavailable", "first-run-leave-unavailable"),
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{exit}\"")),
+            "{panel} must offer an exit that does not depend on the thing that failed"
+        );
+    }
+
+    // Every id the shell queries exists. Cheap, and it is how the dead buttons
+    // would have been caught at the moment they were written.
+    for reference in script.split("querySelector(\"#").skip(1) {
+        let id = reference.split_once('"').expect("terminated selector").0;
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "main.js queries #{id}, which no element carries"
+        );
+    }
+}
