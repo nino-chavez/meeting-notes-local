@@ -181,7 +181,7 @@ four stories of exact search plus one unproven story for the actual headline.
 | E3 | Preparation brief before the meeting | Wispr's preread tab | **Unbuilt** |
 | E4 | A shell that never lies at menubar size | own | **Shipped** |
 | E5 | Retention with named auto-deletion periods | Granola enterprise vocabulary | **Shipped** automatic; periods **Unbuilt** |
-| E6 | Local store and retrieval at corpus scale | `teardown.md` names SQLite | **Research** |
+| E6 | Local store and retrieval at corpus scale | `teardown.md` names SQLite | **Partial** — derived SQLite index landed 2026-08-07; launch still rescans |
 
 ---
 

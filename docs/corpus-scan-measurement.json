@@ -1,0 +1,113 @@
+{
+  "schema": "corpus-scan-measurement/1",
+  "measured_on": "2026-08-07",
+  "what": "Cold rebuild and warm query latency of the file-scan library projection against a synthetic corpus. Fires the deferral clause in vertical-slice.md that permitted a SQLite index once a measured corpus exceeded the bounded scan envelope.",
+  "producer": "crates/session-core/src/bin/corpus-scan-bench.rs",
+  "private_material": "none - every transcript byte is generated from a counter",
+  "machine": {
+    "model": "Apple M3 Max",
+    "arch": "arm64",
+    "os": "macOS 26.5.2",
+    "profile": "cargo build --release",
+    "rustc": "1.94.0"
+  },
+  "note": "The 2000-meeting run was timed in a separate invocation from the other five; all six used the same binary and machine.",
+  "runs": [
+    {
+      "cold_rebuild_milliseconds": 1.06,
+      "corpus": {
+        "meetings": 1,
+        "transcript_bytes": 37164,
+        "turns_per_meeting": 200
+      },
+      "rows_projected": 1,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 0.94,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 0.89,
+      "write_seconds": 0.076
+    },
+    {
+      "cold_rebuild_milliseconds": 14.85,
+      "corpus": {
+        "meetings": 10,
+        "transcript_bytes": 371640,
+        "turns_per_meeting": 200
+      },
+      "rows_projected": 10,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 11.79,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 11.65,
+      "write_seconds": 0.761
+    },
+    {
+      "cold_rebuild_milliseconds": 88.38,
+      "corpus": {
+        "meetings": 100,
+        "transcript_bytes": 3716400,
+        "turns_per_meeting": 200
+      },
+      "rows_projected": 100,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 90.72,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 81.8,
+      "write_seconds": 8.478
+    },
+    {
+      "cold_rebuild_milliseconds": 424.54,
+      "corpus": {
+        "meetings": 500,
+        "transcript_bytes": 18582000,
+        "turns_per_meeting": 200
+      },
+      "rows_projected": 500,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 431.61,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 374.35,
+      "write_seconds": 42.332
+    },
+    {
+      "cold_rebuild_milliseconds": 916.53,
+      "corpus": {
+        "meetings": 1000,
+        "transcript_bytes": 37164000,
+        "turns_per_meeting": 200
+      },
+      "rows_projected": 1000,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 904.74,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 786.9,
+      "write_seconds": 88.322
+    },
+    {
+      "cold_rebuild_milliseconds": 3117.27,
+      "corpus": {
+        "meetings": 2000,
+        "transcript_bytes": 74328000,
+        "turns_per_meeting": 200
+      },
+      "rows_projected": 2000,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 1693.98,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 1599.43,
+      "write_seconds": 179.256
+    }
+  ]
+}

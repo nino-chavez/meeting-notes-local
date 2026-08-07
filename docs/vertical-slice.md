@@ -59,7 +59,7 @@ largest surface-area addition and says it has nothing to do with audio.
 
 | Order | Build | Feature | Why here |
 |---|---|---|---|
-| 1 | A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs | E6 | Every D-group feature reads it. Currently Registered search walks files, which does not survive a real corpus |
+| 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`. What remains is US-13.6: the launch scan still runs in full, because incremental sync needs a per-meeting entry point into an audited module | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and, measured, refuses a common word at one meeting |
 | 2 | Auto-titling | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | Folders, and the meeting object's sibling views | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | Filters — people, date range, keywords, titles | D3 | Gong documents all four. Free once the store exists |
@@ -841,14 +841,22 @@ resources produce `runtime-missing` before Start.
 
 ## Storage contract
 
-The first slice uses the filesystem already required by the audio artifacts. It
-does not add SQLite.
+The first slice uses the filesystem already required by the audio artifacts.
+Canonical data is files and stays files.
+
+**Amended 2026-08-07.** The sentence here used to read "It does not add SQLite,"
+and that is no longer true: `library/corpus.sqlite3` exists. It holds no
+canonical data. Every row in it is derived from a file this codebase already
+validated, deleting it loses nothing, and a registered test rebuilds it from the
+files and requires the same content digest. The measurement that authorized it
+is under [Corpus scale, measured](#corpus-scale-measured).
 
 ```text
 $APP_DATA/                         0700
   diagnostics/                    0700
   library/                        0700
     metadata.json                 0600, optional organization record
+    corpus.sqlite3                0600, derived index, rebuildable, never canonical
   profile/                        0700
     voiceprint.json               0600, profile bytes or zero-byte absence marker
     lifecycle/                    0700
@@ -1039,9 +1047,17 @@ this exact publication contract.
 
 The library is rebuilt by scanning and validating meeting records at startup.
 That is adequate for the bounded, single-user beta and avoids a transaction
-split between a database and immutable files. A future SQLite index may be
-added only as a rebuildable cache after measured library size makes the scan a
-problem. It cannot become the sole copy of transcript, note, or evidence data.
+split between a database and immutable files. A SQLite index may be added only
+as a rebuildable cache after measured library size makes the scan a problem. It
+cannot become the sole copy of transcript, note, or evidence data.
+
+**The condition fired on 2026-08-07 and the index exists** —
+`crates/session-core/src/corpus_index.rs`, schema `corpus-index/1`. The second
+sentence of that rule is untouched and enforced by a test rather than by
+intention: `rebuild_from_files_equals_the_live_index` deletes the database,
+rebuilds it from the files alone, and requires an identical content digest, so a
+column holding anything a file did not produce fails the suite. Numbers under
+[Corpus scale, measured](#corpus-scale-measured).
 
 ### Exact library retrieval
 
@@ -1073,10 +1089,51 @@ a beta requirement behind an excluded research capability.
 
 Rust rebuilds one in-memory `library-projection/1` after every fresh launch from
 canonical meeting records and their current validated artifacts. The projection
-is never persisted. SQLite, full-text indexes, embeddings, and per-meeting
-search sidecars are deferred until a measured corpus exceeds the bounded scan
-envelope. No derived index may become the sole copy of a meeting, transcript,
-note, locator, or library label.
+is never persisted. Full-text indexes, embeddings, and per-meeting search
+sidecars remain deferred. **SQLite no longer is** — the bounded scan envelope
+was measured on 2026-08-07 and the corpus store landed the same day. No derived
+index may become the sole copy of a meeting, transcript, note, locator, or
+library label, and that clause is now checked mechanically rather than
+respected.
+
+### Corpus scale, measured
+
+`crates/session-core/src/bin/corpus-scan-bench.rs` builds a synthetic corpus —
+every byte generated from a counter, no private material — and times the scan.
+Receipts are in `docs/corpus-scan-measurement.json`. Apple M3 Max, macOS 26.5.2,
+release build, 200 turns per meeting.
+
+| Meetings | Transcript bytes | Cold rebuild | One rare-word query | One common-word query |
+|---|---|---|---|---|
+| 1 | 37 KB | 1.06 ms | 0.89 ms | refused |
+| 10 | 372 KB | 14.85 ms | 11.65 ms | refused |
+| 100 | 3.7 MB | 88.38 ms | 81.80 ms | refused |
+| 500 | 18.6 MB | 424.54 ms | 374.35 ms | refused |
+| 1000 | 37.2 MB | 916.53 ms | 786.90 ms | refused |
+| 2000 | 74.3 MB | 3117.27 ms | 1599.43 ms | refused |
+
+Three findings, in order of how much they matter.
+
+**A common word is refused at one meeting.** Not slow — refused.
+`MAX_SEARCH_RESULTS` is 100 spans and a single 200-turn meeting crosses it, so
+the query returns `library-capacity-exceeded`. The bound is doing exactly what it
+was written to do: never show a prefix and call it the library. But it means
+exact search cannot answer for any word a person would actually type, at any
+corpus size, and no amount of scan speed changes that. This is the finding that
+justifies the store on its own.
+
+**Every query costs a full scan.** The rare-word query at 1000 meetings takes
+787 ms — essentially the rebuild. Selectivity buys nothing, because there is no
+structure to be selective against.
+
+**The default byte bound is reached before the time bound is.**
+`ReadLimits::max_total_bytes` is 64 MB; 2000 meetings of 200 turns is 74 MB of
+transcript, so the default configuration refuses at roughly 1700 meetings
+regardless of how fast the scan is. At three meetings a working day that is about
+two years and four months.
+
+The scan is not slow. It is the wrong shape, and it was going to stay the wrong
+shape at any speed.
 
 Library organization has one separate canonical record at
 `library/metadata.json`. Its `library-metadata/1` fields are exactly `schema`,
