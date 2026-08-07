@@ -81,6 +81,15 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-stop-meeting",
             "allow-dismiss-meeting",
             "allow-retry-startup",
+            // First run (§ H), registered 2026-08-06. These three read and request
+            // the two capture permissions through the manifest-verified probe.
+            // They hold no storage authority and read no operator content, and
+            // they are granted in both windows because first run is not a Preview
+            // feature — a shipped build that cannot report its own permissions has
+            // the same lying surface a Preview one would.
+            "allow-first-run-permissions",
+            "allow-first-run-request-microphone",
+            "allow-first-run-request-system-audio",
             "allow-preview-profile-snapshot",
             "allow-preview-enrollment-surface",
             "allow-preview-enrollment-start-sitting",
@@ -254,6 +263,15 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-stop-meeting",
             "allow-dismiss-meeting",
             "allow-retry-startup",
+            // First run (§ H), registered 2026-08-06. These three read and request
+            // the two capture permissions through the manifest-verified probe.
+            // They hold no storage authority and read no operator content, and
+            // they are granted in both windows because first run is not a Preview
+            // feature — a shipped build that cannot report its own permissions has
+            // the same lying surface a Preview one would.
+            "allow-first-run-permissions",
+            "allow-first-run-request-microphone",
+            "allow-first-run-request-system-audio",
             "allow-preview-profile-snapshot",
             "allow-preview-enrollment-surface",
             "allow-preview-enrollment-start-sitting",

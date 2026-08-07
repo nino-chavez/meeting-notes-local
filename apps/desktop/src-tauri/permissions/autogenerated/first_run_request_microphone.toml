@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-first-run-request-microphone"
+description = "Enables the first_run_request_microphone command without any pre-configured scope."
+commands.allow = ["first_run_request_microphone"]
+
+[[permission]]
+identifier = "deny-first-run-request-microphone"
+description = "Denies the first_run_request_microphone command without any pre-configured scope."
+commands.deny = ["first_run_request_microphone"]

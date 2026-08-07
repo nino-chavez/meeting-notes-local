@@ -189,6 +189,24 @@
           "markdownDescription": "Enables the dismiss_meeting command without any pre-configured scope."
         },
         {
+          "description": "Enables the first_run_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-first-run-permissions",
+          "markdownDescription": "Enables the first_run_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the first_run_request_microphone command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-first-run-request-microphone",
+          "markdownDescription": "Enables the first_run_request_microphone command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the first_run_request_system_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-first-run-request-system-audio",
+          "markdownDescription": "Enables the first_run_request_system_audio command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_delete_meeting_audio command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-delete-meeting-audio",
@@ -319,6 +337,24 @@
           "type": "string",
           "const": "deny-dismiss-meeting",
           "markdownDescription": "Denies the dismiss_meeting command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the first_run_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-first-run-permissions",
+          "markdownDescription": "Denies the first_run_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the first_run_request_microphone command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-first-run-request-microphone",
+          "markdownDescription": "Denies the first_run_request_microphone command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the first_run_request_system_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-first-run-request-system-audio",
+          "markdownDescription": "Denies the first_run_request_system_audio command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_delete_meeting_audio command without any pre-configured scope.",

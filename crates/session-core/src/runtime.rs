@@ -135,6 +135,33 @@ impl RuntimeManifest {
         })
     }
 
+    /// The verified absolute path of the permission probe, or an error.
+    ///
+    /// First run asks about permissions interactively, so this resolves on a UI
+    /// command rather than once during startup. `load_and_verify` is the right
+    /// thing at startup and the wrong thing on a button press: it hashes every
+    /// model, which is over a gigabyte of Whisper weights. This parses the
+    /// manifest and verifies exactly the one binary that is about to be executed,
+    /// which keeps the property that matters — no unverified child is ever
+    /// spawned — at a cost proportional to the child rather than to the bundle.
+    ///
+    /// It deliberately does not check `admission`. A boundary build has first run
+    /// too, and refusing to report permissions there would make the surface lie in
+    /// exactly the builds most likely to be inspected.
+    pub fn verified_permission_probe(manifest_path: &Path) -> Result<PathBuf, RuntimeError> {
+        if manifest_path.is_symlink() || !manifest_path.is_file() {
+            return Err(RuntimeError::Malformed);
+        }
+        let manifest: Self = serde_json::from_slice(&fs::read(manifest_path)?)
+            .map_err(|_| RuntimeError::Malformed)?;
+        let root = manifest_path
+            .parent()
+            .ok_or(RuntimeError::UnsafePath)?
+            .canonicalize()?;
+        verify_resource(&root, &manifest.permission_probe)?;
+        Ok(root.join(&manifest.permission_probe.path))
+    }
+
     pub fn permits_application_start(&self) -> bool {
         matches!(
             self.admission,
@@ -239,6 +266,18 @@ mod tests {
         )
         .unwrap();
         let loaded = RuntimeManifest::load_and_verify(&manifest).unwrap();
+
+        // The probe resolves and verifies on its own, without hashing the models.
+        let probe_path = RuntimeManifest::verified_permission_probe(&manifest).unwrap();
+        assert!(probe_path.ends_with("permission-probe"));
+        // And a tampered probe is refused, which is the whole reason it is in the
+        // manifest rather than merely staged into the bundle.
+        fs::write(temp.path().join("permission-probe"), b"swapped").unwrap();
+        assert!(matches!(
+            RuntimeManifest::verified_permission_probe(&manifest),
+            Err(RuntimeError::ResourceMismatch)
+        ));
+        fs::write(temp.path().join("permission-probe"), b"probe").unwrap();
         let ready_frame = serde_json::json!({
             "schema": "worker-event/2",
             "event": "worker.ready",

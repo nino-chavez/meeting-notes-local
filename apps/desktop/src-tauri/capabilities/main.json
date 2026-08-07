@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "The bundled main window ships the internal-alpha product surface: transcript-alpha capture commands, retained-meeting Library with its standing retention overview, exact transcript/title search, content-free voice-profile status, the guided enrolment surface (sitting recorder, measured operating-point review, and profile build/publication, encoder-admitted builds only), explicit preserve-first legacy-profile migration, separately confirmed profile reset, the reviewed one-meeting audio-deletion boundary, and the frozen withheld-turn restoration. It has no note generation, generic filesystem, shell, process, dialog, or remote-origin permission.",
+  "description": "The bundled main window ships the internal-alpha product surface: transcript-alpha capture commands, retained-meeting Library with its standing retention overview, exact transcript/title search, content-free voice-profile status, the guided enrolment surface (sitting recorder, measured operating-point review, and profile build/publication, encoder-admitted builds only), explicit preserve-first legacy-profile migration, separately confirmed profile reset, the reviewed one-meeting audio-deletion boundary, and the frozen withheld-turn restoration. It can report and request the two capture permissions for first run through the manifest-verified permission probe, which holds no storage authority and reads no operator content. It has no note generation, generic filesystem, shell, process, dialog, or remote-origin permission.",
   "windows": [
     "main"
   ],
@@ -14,6 +14,9 @@
     "allow-stop-meeting",
     "allow-dismiss-meeting",
     "allow-retry-startup",
+    "allow-first-run-permissions",
+    "allow-first-run-request-microphone",
+    "allow-first-run-request-system-audio",
     "allow-preview-profile-snapshot",
     "allow-preview-enrollment-surface",
     "allow-preview-enrollment-start-sitting",

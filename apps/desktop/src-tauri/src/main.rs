@@ -17,6 +17,10 @@ mod product_facade;
 // into the current internal-alpha command set.
 #[allow(dead_code)]
 mod manual_delete_facade;
+// First run's permission surface (§ H). Runs the manifest-verified permission
+// probe and parses its output as untrusted input; holds no storage authority and
+// reads no operator content.
+mod first_run;
 // The storage-backed coordinator and worker bridge behind product_facade.
 // Managed as state so the facade commands can be registered in one move once
 // the operator widens the packaged admission; the commands stay unregistered.
@@ -1634,6 +1638,49 @@ impl PreviewRetentionOverview {
     }
 }
 
+/// The manifest path, or `None` before storage exists.
+///
+/// First run's commands are reachable from the startup-failure screen, where
+/// storage may legitimately be absent. They report `probe_unavailable` in that
+/// case rather than erroring, because "we could not ask" is a state § H has to
+/// render and not a fault to surface as an exception.
+fn first_run_manifest_path(state: &ApplicationState) -> Option<std::path::PathBuf> {
+    state
+        .storage
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|context| context.manifest_path.clone())
+}
+
+#[tauri::command]
+fn first_run_permissions(state: State<'_, ApplicationState>) -> first_run::FirstRunPermissions {
+    match first_run_manifest_path(&state) {
+        Some(manifest) => first_run::permissions_status(&manifest),
+        None => first_run::permissions_status(&std::path::PathBuf::new()),
+    }
+}
+
+#[tauri::command]
+fn first_run_request_microphone(
+    state: State<'_, ApplicationState>,
+) -> first_run::FirstRunPermissions {
+    match first_run_manifest_path(&state) {
+        Some(manifest) => first_run::request_microphone(&manifest),
+        None => first_run::request_microphone(&std::path::PathBuf::new()),
+    }
+}
+
+#[tauri::command]
+fn first_run_request_system_audio(
+    state: State<'_, ApplicationState>,
+) -> first_run::FirstRunPermissions {
+    match first_run_manifest_path(&state) {
+        Some(manifest) => first_run::request_system_audio(&manifest),
+        None => first_run::request_system_audio(&std::path::PathBuf::new()),
+    }
+}
+
 #[tauri::command]
 fn preview_retention_overview(state: State<'_, ApplicationState>) -> PreviewRetentionOverview {
     preview_retention_overview_for(&state)
@@ -3130,6 +3177,9 @@ fn main() {
             stop_meeting,
             dismiss_meeting,
             retry_startup,
+            first_run_permissions,
+            first_run_request_microphone,
+            first_run_request_system_audio,
             preview_library_snapshot,
             preview_retention_overview,
             preview_profile_snapshot,
