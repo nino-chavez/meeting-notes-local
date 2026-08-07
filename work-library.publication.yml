@@ -62,7 +62,7 @@ projections:
     output: beta-boundary
     artifact: docs/work-library-record.md
     render_as: executive-decision
-    label: Supported beta boundary
+    label: The decision, and where the build stands
     route: /
 
   - id: product-definition
@@ -137,6 +137,11 @@ projections:
     render_as: evidence-register
     label: Note-generation evaluation
     route: /evidence/notes
+
+# The output id `beta-boundary` and `canonical_output` above are deliberately
+# unchanged. They are structural keys the portal resolves by name, so renaming
+# them is a registry migration rather than a wording fix. Only the reader-facing
+# label moved when the north star did.
 
 # Meeting content never enters this repository, so nothing below is a redaction
 # step — it keeps machine-generated and fixture material out of the reader's way.
