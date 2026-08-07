@@ -213,6 +213,12 @@
           "markdownDescription": "Enables the operator_note command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_delete_meeting command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-delete-meeting",
+          "markdownDescription": "Enables the preview_delete_meeting command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_delete_meeting_audio command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-delete-meeting-audio",
@@ -379,6 +385,12 @@
           "type": "string",
           "const": "deny-operator-note",
           "markdownDescription": "Denies the operator_note command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_delete_meeting command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-delete-meeting",
+          "markdownDescription": "Denies the preview_delete_meeting command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_delete_meeting_audio command without any pre-configured scope.",

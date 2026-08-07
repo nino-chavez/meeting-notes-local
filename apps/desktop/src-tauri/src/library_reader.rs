@@ -31,6 +31,7 @@ pub(crate) struct LibraryReader {
     excluded_meeting_ids: HashSet<String>,
     handles: HashMap<String, LibraryHit>,
     audio_deletion_handles: HashMap<String, LibraryHit>,
+    meeting_deletion_handles: HashMap<String, LibraryHit>,
 }
 
 #[derive(Debug, Serialize)]
@@ -95,6 +96,10 @@ pub(crate) struct LibraryNoteResponse {
     pub(crate) state: &'static str,
     pub(crate) transcript_handle: Option<String>,
     pub(crate) audio_deletion_handle: Option<String>,
+    /// Separate from `audio_deletion_handle`, and issued for every readable
+    /// meeting rather than only for one holding retained audio: a meeting whose
+    /// audio has already been released can still be removed in full.
+    pub(crate) meeting_deletion_handle: Option<String>,
     pub(crate) meeting_id: String,
     pub(crate) claims: Vec<LibraryClaim>,
     pub(crate) audio_retention: LibraryAudioRetention,
@@ -125,6 +130,20 @@ pub(crate) struct LibraryAudioRetention {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LibraryAudioDeletionAccess {
+    pub(crate) state: &'static str,
+    pub(crate) meeting_id: Option<String>,
+    pub(crate) message: String,
+}
+
+/// Authorization to remove a whole meeting, which is a strictly larger act than
+/// releasing its audio.
+///
+/// It is a separate type over a separate handle map on purpose. Reusing the
+/// audio-deletion handle would mean a handle the operator obtained to free disk
+/// space could destroy the retained evidence instead, and the transcript is the
+/// one artifact this product promises to keep.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LibraryMeetingDeletionAccess {
     pub(crate) state: &'static str,
     pub(crate) meeting_id: Option<String>,
     pub(crate) message: String,
@@ -194,6 +213,7 @@ impl LibraryReader {
             excluded_meeting_ids,
             handles: HashMap::new(),
             audio_deletion_handles: HashMap::new(),
+            meeting_deletion_handles: HashMap::new(),
         }
     }
 
@@ -544,12 +564,14 @@ impl LibraryReader {
         let operator_note = self.operator_note(&meeting_id);
         let audio_deletion_handle =
             self.retain_audio_deletion_handle(&meeting_id, audio_retention.state == "retained");
+        let meeting_deletion_handle = self.retain_meeting_deletion_handle(&meeting_id);
         match lifecycle {
             MeetingLifecycle::SummaryFailed => {
                 return LibraryNoteResponse {
                     state: "summary-failed",
                     transcript_handle: self.retain_transcript_handle(&meeting_id),
                     audio_deletion_handle,
+                    meeting_deletion_handle,
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
                     audio_retention,
@@ -565,6 +587,7 @@ impl LibraryReader {
                     state: "transcript-only",
                     transcript_handle: transcript_handle.clone(),
                     audio_deletion_handle,
+                    meeting_deletion_handle,
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
                     audio_retention,
@@ -608,6 +631,7 @@ impl LibraryReader {
             state: "note",
             transcript_handle: self.retain_transcript_handle(&meeting_id),
             audio_deletion_handle,
+            meeting_deletion_handle,
             meeting_id: meeting_id.into(),
             claims,
             audio_retention,
@@ -753,6 +777,7 @@ impl LibraryReader {
             state: "unavailable",
             transcript_handle: None,
             audio_deletion_handle: None,
+            meeting_deletion_handle: None,
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
             audio_retention: Self::unavailable_audio_retention(),
@@ -788,6 +813,50 @@ impl LibraryReader {
         let handle = Uuid::new_v4().to_string();
         self.audio_deletion_handles.insert(handle.clone(), hit);
         Some(handle)
+    }
+
+    /// Issued for any meeting the projection can resolve, unlike the audio
+    /// handle which requires retained audio. A meeting whose audio was already
+    /// released still has a transcript, a note, and a record to remove.
+    fn retain_meeting_deletion_handle(&mut self, meeting_id: &str) -> Option<String> {
+        let hit = self.projection.meeting_handle(meeting_id).ok()?;
+        let handle = Uuid::new_v4().to_string();
+        self.meeting_deletion_handles.insert(handle.clone(), hit);
+        Some(handle)
+    }
+
+    pub(crate) fn authorize_meeting_deletion(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+    ) -> LibraryMeetingDeletionAccess {
+        if !self.revalidate(active_meeting_ids) {
+            return Self::stale_meeting_deletion();
+        }
+        let hit = self.meeting_deletion_handles.get(handle).cloned();
+        // Handles are cleared whether or not this one resolved, so a stale
+        // handle cannot be retried against a projection that has since moved.
+        self.clear_handles();
+        let Some(hit) = hit else {
+            return Self::stale_meeting_deletion();
+        };
+        let meeting_id = match self.projection.open_snapshot(&hit) {
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
+            Ok(_) | Err(_) => return Self::stale_meeting_deletion(),
+        };
+        LibraryMeetingDeletionAccess {
+            state: "authorized",
+            meeting_id: Some(meeting_id),
+            message: "The reviewed meeting may be deleted in full.".into(),
+        }
+    }
+
+    fn stale_meeting_deletion() -> LibraryMeetingDeletionAccess {
+        LibraryMeetingDeletionAccess {
+            state: "stale",
+            meeting_id: None,
+            message: STALE_MESSAGE.into(),
+        }
     }
 
     pub(crate) fn authorize_audio_deletion(
@@ -843,6 +912,7 @@ impl LibraryReader {
     fn clear_handles(&mut self) {
         self.handles.clear();
         self.audio_deletion_handles.clear();
+        self.meeting_deletion_handles.clear();
     }
 
     fn retain_transcript_handle(&mut self, meeting_id: &str) -> Option<String> {
@@ -1042,6 +1112,7 @@ impl LibraryReader {
             state: "stale",
             transcript_handle: None,
             audio_deletion_handle: None,
+            meeting_deletion_handle: None,
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
             audio_retention: Self::unavailable_audio_retention(),

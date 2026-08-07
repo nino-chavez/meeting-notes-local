@@ -43,6 +43,7 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "preview_library_open_evidence",
     "preview_library_open_transcript",
     "preview_delete_meeting_audio",
+    "preview_delete_meeting",
     "restore_withheld_turn",
     "refresh_current_transcript",
     // § D, 2026-08-06. The operator's own note: read and replace, for the open

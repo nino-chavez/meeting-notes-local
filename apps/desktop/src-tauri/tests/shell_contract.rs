@@ -106,6 +106,10 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-preview-library-open-evidence",
             "allow-preview-library-open-transcript",
             "allow-preview-delete-meeting-audio",
+            // Separate grant from the audio one, because removing a whole
+            // meeting destroys the retained transcript rather than freeing
+            // disk space, and one grant must not imply the other.
+            "allow-preview-delete-meeting",
             "allow-restore-withheld-turn",
             "allow-refresh-current-transcript",
             "allow-operator-note",
@@ -291,6 +295,10 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-preview-library-open-evidence",
             "allow-preview-library-open-transcript",
             "allow-preview-delete-meeting-audio",
+            // Separate grant from the audio one, because removing a whole
+            // meeting destroys the retained transcript rather than freeing
+            // disk space, and one grant must not imply the other.
+            "allow-preview-delete-meeting",
             "allow-restore-withheld-turn",
             "allow-refresh-current-transcript",
             "allow-operator-note",
@@ -969,6 +977,43 @@ fn preview_meeting_detail_requires_two_explicit_steps_for_audio_deletion() {
     assert!(script.contains("await invoke(\"preview_delete_meeting_audio\", { handle })"));
     assert!(!script.contains("window.confirm("));
     assert!(!script.contains("confirm("));
+}
+
+/// § G whole-meeting deletion. Pinned separately from audio release because the
+/// two must never collapse into one control: releasing audio keeps the retained
+/// transcript, and this destroys it.
+#[test]
+fn whole_meeting_deletion_is_a_separate_twice_confirmed_control() {
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+
+    // Two distinct controls with two distinct handles.
+    assert!(html.contains("id=\"meeting-delete-review\""));
+    assert!(html.contains("id=\"meeting-delete-confirm\""));
+    assert!(html.contains("Delete this meeting"));
+    assert!(html.contains("Permanently delete meeting"));
+    assert!(script.contains("meetingDeletionHandle"));
+    assert!(script.contains("meetingAudioDeletionHandle"));
+
+    // The copy must say what is destroyed. "Deletes this meeting" alone would
+    // let an operator believe the transcript survives, as it does for audio.
+    assert!(html.contains("removes the transcript, the note, your own note, and any audio still held"));
+    assert!(html.contains("cannot be recreated"));
+
+    // Reveal, then confirm. The first click must not delete anything.
+    assert!(script.contains("meetingDeleteReview.addEventListener(\"click\""));
+    assert!(script.contains("meetingDeleteConfirm.addEventListener(\"click\", async () =>"));
+    assert!(script.contains("await invoke(\"preview_delete_meeting\", { handle, confirmed: true })"));
+
+    // A removed meeting must not leave its detail view open, which would render
+    // a meeting that no longer exists.
+    let confirm_handler = script
+        .find("meetingDeleteConfirm.addEventListener(\"click\", async () =>")
+        .expect("meeting deletion confirm handler");
+    let handler_body = &script[confirm_handler..];
+    let removed = handler_body.find("already-removed").expect("removed branch");
+    let navigate = handler_body.find("returnToProductHome()").expect("must leave the detail view");
+    assert!(removed < navigate);
 }
 
 #[test]

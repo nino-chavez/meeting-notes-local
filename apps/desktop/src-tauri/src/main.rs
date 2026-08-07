@@ -547,6 +547,12 @@ impl ApplicationState {
         manual_delete_facade::ManualAudioDeletionFacade::new(&self.app_data_writer_lock)
     }
 
+    fn whole_meeting_deletion_facade(
+        &self,
+    ) -> manual_delete_facade::WholeMeetingDeletionFacade<'_> {
+        manual_delete_facade::WholeMeetingDeletionFacade::new(&self.app_data_writer_lock)
+    }
+
     fn meeting_storage_coordination(&self) -> Result<Arc<MeetingStorageCoordination>, String> {
         self.app_data_writer_lock
             .lock()
@@ -3172,6 +3178,163 @@ fn preview_delete_meeting_audio_for(
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewMeetingDeletionResponse {
+    state: &'static str,
+    message: String,
+}
+
+fn unavailable_preview_meeting_deletion() -> PreviewMeetingDeletionResponse {
+    PreviewMeetingDeletionResponse {
+        state: "unavailable",
+        message: "Meeting deletion is unavailable. Reopen Library and try again.".into(),
+    }
+}
+
+/// The same startup and capture conditions as audio release, worded for the
+/// larger act. The wording is not cosmetic: a refusal that says "recording"
+/// when the operator asked to delete a whole meeting leaves them unsure which
+/// of the two did not happen.
+fn with_preview_meeting_deletion_gate<T>(
+    startup: StartupState,
+    capture: CaptureState,
+    operation: impl FnOnce() -> T,
+) -> Result<T, PreviewAudioDeletionGateRefusal> {
+    if startup != StartupState::Ready {
+        return Err(PreviewAudioDeletionGateRefusal {
+            state: "not-ready",
+            message: "Meeting deletion is available after the installation check is ready.",
+        });
+    }
+    if !matches!(capture, CaptureState::Idle | CaptureState::TranscriptReady) {
+        return Err(PreviewAudioDeletionGateRefusal {
+            state: "capture-active",
+            message: "Meeting deletion is unavailable while a meeting is active or recovering.",
+        });
+    }
+    Ok(operation())
+}
+
+/// Removes one whole meeting after the operator confirmed it twice.
+///
+/// `confirmed` carries the shell's second confirmation. It is turned into the
+/// closed `MeetingDeletionReview` immediately and never travels further as a
+/// bare boolean, so the only value that reaches storage authority is one this
+/// process constructed.
+#[tauri::command(async)]
+fn preview_delete_meeting(
+    handle: String,
+    confirmed: bool,
+    state: State<'_, ApplicationState>,
+) -> PreviewMeetingDeletionResponse {
+    preview_delete_meeting_for(handle, confirmed, &state)
+}
+
+fn preview_delete_meeting_for(
+    handle: String,
+    confirmed: bool,
+    state: &ApplicationState,
+) -> PreviewMeetingDeletionResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return unavailable_preview_meeting_deletion();
+    };
+    if sitting_task_active(state) {
+        return PreviewMeetingDeletionResponse {
+            state: "capture-active",
+            message: "Finish the setup recording before deleting a meeting.".into(),
+        };
+    }
+    let (startup, capture) = match state.model.lock() {
+        Ok(model) => (model.reducer.startup(), model.reducer.capture()),
+        Err(_) => return unavailable_preview_meeting_deletion(),
+    };
+    let prepared = match with_preview_meeting_deletion_gate(startup, capture, || {
+        state.with_preview_library(
+            || library_reader::LibraryMeetingDeletionAccess {
+                state: "unavailable",
+                meeting_id: None,
+                message: "Meeting deletion is unavailable. Reopen Library and try again.".into(),
+            },
+            |reader, active| reader.authorize_meeting_deletion(&handle, active),
+        )
+    }) {
+        Ok(prepared) => prepared,
+        Err(refusal) => {
+            return PreviewMeetingDeletionResponse {
+                state: refusal.state,
+                message: refusal.message.into(),
+            };
+        }
+    };
+
+    // Any attempted mutation boundary invalidates every retained reader handle.
+    if with_preview_library_invalidated(state, || ()).is_err() {
+        return unavailable_preview_meeting_deletion();
+    }
+
+    let Some(meeting_id) = prepared.meeting_id else {
+        return PreviewMeetingDeletionResponse {
+            state: prepared.state,
+            message: prepared.message,
+        };
+    };
+    if prepared.state != "authorized" {
+        return PreviewMeetingDeletionResponse {
+            state: prepared.state,
+            message: prepared.message,
+        };
+    }
+
+    let review = if confirmed {
+        manual_delete_facade::MeetingDeletionReview::Reviewed
+    } else {
+        manual_delete_facade::MeetingDeletionReview::NotReviewed
+    };
+    let result = state.whole_meeting_deletion_facade().delete_meeting(
+        manual_delete_facade::WholeMeetingDeletionUiArgs { meeting_id, review },
+    );
+    let (response_state, message) = match result {
+        Ok(manual_delete_facade::WholeMeetingDeletionFacadeOutcome::MeetingRemoved) => (
+            "removed",
+            "The meeting and everything recorded with it were permanently deleted from this Mac.",
+        ),
+        Ok(manual_delete_facade::WholeMeetingDeletionFacadeOutcome::RecoveredRemoval) => (
+            "removed",
+            "The interrupted meeting deletion was recovered and completed.",
+        ),
+        Ok(manual_delete_facade::WholeMeetingDeletionFacadeOutcome::AlreadyRemoved) => {
+            ("already-removed", "This meeting was already deleted.")
+        }
+        Ok(manual_delete_facade::WholeMeetingDeletionFacadeOutcome::DeferredActive) => (
+            "deferred-active",
+            "Meeting deletion was deferred because this meeting is still active.",
+        ),
+        Err(manual_delete_facade::WholeMeetingDeletionFacadeError::ConfirmationRequired) => (
+            "confirmation-required",
+            "Deleting a meeting removes its transcript permanently. Confirm to continue.",
+        ),
+        Err(manual_delete_facade::WholeMeetingDeletionFacadeError::MeetingActionInProgress) => (
+            "action-in-progress",
+            "Another action for this meeting is in progress. Reopen Library and try again.",
+        ),
+        Err(manual_delete_facade::WholeMeetingDeletionFacadeError::NoSuchMeeting) => {
+            ("already-removed", "This meeting was already deleted.")
+        }
+        Err(
+            manual_delete_facade::WholeMeetingDeletionFacadeError::WriterLockUnavailable
+            | manual_delete_facade::WholeMeetingDeletionFacadeError::StorageUnavailable,
+        ) => (
+            "unavailable",
+            "Meeting deletion could not complete. Reopen Library and try again.",
+        ),
+    };
+    PreviewMeetingDeletionResponse {
+        state: response_state,
+        message: message.into(),
+    }
+}
+
 #[tauri::command]
 fn preview_library_open_evidence(
     handle: String,
@@ -3335,6 +3498,7 @@ fn main() {
             preview_library_open_evidence,
             preview_library_open_transcript,
             preview_delete_meeting_audio,
+            preview_delete_meeting,
             product_facade::restore_withheld_turn
         ])
         .setup(|app| {
