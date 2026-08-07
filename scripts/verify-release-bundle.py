@@ -129,6 +129,12 @@ def verify_runtime(resources: Path, admission: str) -> None:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise VerificationError(f"runtime manifest is unreadable ({exc})") from None
     require(manifest.get("schema") == "app-runtime/1", "runtime schema is not current")
+    # Bound in every admission, unlike the capture helper: first run exists in every
+    # build, so a build that cannot report its own permissions is wrong everywhere.
+    require(
+        (manifest.get("permission_probe") or {}).get("path") == "bin/permission-probe",
+        "runtime is not bound to the first-run permission probe",
+    )
     verify_forbidden_note_runtime_resources_absent(resources)
     require(
         manifest.get("admission") == admission,

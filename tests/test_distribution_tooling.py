@@ -112,6 +112,18 @@ class DistributionToolingTests(unittest.TestCase):
         runtime_build = source("worker/build_runtime.sh")
         self.assertIn('[[ -x "$STAGE/bin/permission-probe" ]]', runtime_build)
         self.assertIn("--product permission-probe", runtime_build)
+        # The probe is a manifest resource, so it is digest-verified before the app
+        # spawns it, the same as every other child. Bound in every admission rather
+        # than only internal-alpha, because first run exists in every build.
+        self.assertIn(
+            '(manifest.get("permission_probe") or {}).get("path") == "bin/permission-probe"',
+            verifier,
+        )
+        self.assertIn(
+            '"permission_probe": Path("bin/permission-probe")',
+            source("worker/build_manifest.py"),
+        )
+        self.assertIn('"permission_probe",', source("worker/main.py"))
 
         entitlements = plistlib.loads(
             (ROOT / "apps/desktop/src-tauri/python-entitlements.plist").read_bytes()
@@ -181,6 +193,7 @@ class DistributionToolingTests(unittest.TestCase):
                 "python-runtime/bin/python3.12": b"runtime",
                 "worker/main.py": b"worker",
                 "bin/audiotee": b"tap",
+                "bin/permission-probe": b"probe",
                 "encoder-unavailable.identity": b"encoder",
                 "note-bridge.py": source("worker/note_bridge.py").encode(),
             }
@@ -243,6 +256,7 @@ class DistributionToolingTests(unittest.TestCase):
                 "python-runtime/bin/python3.12": b"runtime",
                 "worker/main.py": b"worker",
                 "bin/meeting-capture": b"tap",
+                "bin/permission-probe": b"probe",
                 "encoder-unavailable.identity": b"encoder",
                 "models/whisper-large-v3-turbo/config.json": b"config",
                 "models/whisper-large-v3-turbo/weights.safetensors": b"weights",
@@ -442,6 +456,7 @@ class DistributionToolingTests(unittest.TestCase):
                 "python-runtime/bin/python3.12": b"runtime",
                 "worker/main.py": b"worker",
                 "bin/meeting-capture": b"tap",
+                "bin/permission-probe": b"probe",
                 "encoder-unavailable.identity": b"encoder",
                 "models/whisper-large-v3-turbo/config.json": b"config",
                 "models/whisper-large-v3-turbo/weights.safetensors": b"weights",

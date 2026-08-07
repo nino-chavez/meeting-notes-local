@@ -194,7 +194,7 @@ class WorkerProtocolTests(unittest.TestCase):
         resources = self.base / "resources"
         resources.mkdir(mode=0o700)
         self.resources = resources
-        for name in ("runtime", "worker", "tap", "encoder"):
+        for name in ("runtime", "worker", "tap", "encoder", "permission-probe"):
             private_file(resources / name, name.encode())
         manifest = {
             "schema": "app-runtime/1",
@@ -203,6 +203,10 @@ class WorkerProtocolTests(unittest.TestCase):
             "worker": {"path": "worker", "sha256": digest(resources / "worker")},
             "tap": {"path": "tap", "sha256": digest(resources / "tap")},
             "encoder": {"path": "encoder", "sha256": digest(resources / "encoder")},
+            "permission_probe": {
+                "path": "permission-probe",
+                "sha256": digest(resources / "permission-probe"),
+            },
             "models": [],
         }
         self.base_manifest = manifest

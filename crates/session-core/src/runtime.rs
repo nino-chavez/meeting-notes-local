@@ -18,6 +18,21 @@ pub struct RuntimeManifest {
     pub worker: RuntimeResource,
     pub tap: RuntimeResource,
     pub encoder: RuntimeResource,
+    /// The first-run permission probe (`capture/permission-probe`).
+    ///
+    /// Added to `app-runtime/1` on 2026-08-06 rather than left out, because the
+    /// app executes it. Every other child this application runs is digest-verified
+    /// through this manifest before it is spawned, and there is no precedent here
+    /// for running an unverified one. Shipping the binary needs only staging —
+    /// `production_resources()` copies `bin` wholesale — but *running* it to the
+    /// same standard as the tap needs this entry.
+    ///
+    /// Widening the required set is a lockstep change: `worker/main.py` compares
+    /// `set(document) != required` and this struct is `deny_unknown_fields`, so a
+    /// manifest written by one version and read by the other fails closed rather
+    /// than silently skipping a check. That is the intended behaviour and the
+    /// reason both sides move in the same commit.
+    pub permission_probe: RuntimeResource,
     pub models: Vec<ModelResource>,
 }
 
@@ -79,6 +94,7 @@ impl RuntimeManifest {
         verify_resource(&root, &manifest.worker)?;
         verify_resource(&root, &manifest.tap)?;
         verify_resource(&root, &manifest.encoder)?;
+        verify_resource(&root, &manifest.permission_probe)?;
         let mut model_ids = HashSet::new();
         for model in &manifest.models {
             if model.id.is_empty()
@@ -205,6 +221,7 @@ mod tests {
         let worker = write(&temp.path().join("main.py"), b"worker source");
         let tap = write(&temp.path().join("tap"), b"tap");
         let encoder = write(&temp.path().join("encoder"), b"encoder");
+        let probe = write(&temp.path().join("permission-probe"), b"probe");
         let manifest = temp.path().join("manifest.json");
         fs::write(
             &manifest,
@@ -215,6 +232,7 @@ mod tests {
                 "worker": {"path": "main.py", "sha256": worker},
                 "tap": {"path": "tap", "sha256": tap},
                 "encoder": {"path": "encoder", "sha256": encoder},
+                "permission_probe": {"path": "permission-probe", "sha256": probe},
                 "models": []
             })
             .to_string(),

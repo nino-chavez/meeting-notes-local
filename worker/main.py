@@ -93,6 +93,7 @@ def load_manifest(path: Path) -> dict:
         "worker",
         "tap",
         "encoder",
+        "permission_probe",
         "models",
     }
     if not isinstance(document, dict) or set(document) != required:
@@ -101,7 +102,7 @@ def load_manifest(path: Path) -> dict:
         raise ValueError("runtime manifest schema is not current")
     if document["admission"] not in {"boundary-test", "internal-alpha", "product"}:
         raise ValueError("runtime manifest admission is not current")
-    for name in ("runtime", "worker", "tap", "encoder"):
+    for name in ("runtime", "worker", "tap", "encoder", "permission_probe"):
         entry = document[name]
         if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
             raise ValueError(f"runtime manifest {name} entry is malformed")

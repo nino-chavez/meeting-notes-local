@@ -157,6 +157,10 @@ def main() -> int:
             else "bin/audiotee"
         ),
         "encoder": arguments.encoder,
+        # Executed by first run to report the two capture permissions. Carried
+        # here because the app runs it, and every child this app runs is
+        # digest-verified from this manifest before it is spawned.
+        "permission_probe": Path("bin/permission-probe"),
     }
     models = []
     if arguments.admission == "internal-alpha":
