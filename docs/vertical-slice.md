@@ -48,18 +48,34 @@ why work kept arriving in an order nobody chose.
 The order here is: everything buildable without a human decision, first. Evidence is
 an attribute of an item, not the spine.
 
-Statuses are derived from `product-definition.md § North-star features and
-functions` (verified there 2026-08-06) and are hypotheses until re-checked against
-code.
+Every row below was checked against **both** `product-definition.md § North-star
+features and functions` (status column, verified there 2026-08-06) **and** this
+file's own scope and gate text, with line references given. The two disagree, and
+this file wins: "Decided" in the definition layer means the *design question* is
+answered, not that the work is in scope. Statuses remain hypotheses until re-checked
+against code.
 
 ### Buildable now, no human input required
 
 | # | Feature | The next build | Why it is unblocked |
 |---|---|---|---|
-| 8 | Commitment view | The `filtered` state on §F, terminal action export | **Decided**, unbuilt. No gate names it. |
-| 9 | Preparation brief | Local read-only calendar through EventKit (`DESIGN.md § Context inputs`) | **Decided**, unbuilt. The counterparty half stays Open and is deliberately not in this item. |
-| 10 | Shell that never lies | A signed preview bundle, so §H's two request paths can execute at all | Both are Registered and neither has run anywhere. Running one outside the signed bundle mutates the calling application's TCC state and answers about the wrong binary. The bundle is the entire blocker, and it is a build. |
-| 3 | Audio has a stated lifetime | Whole-meeting deletion | The build is unblocked. The policy wording is a separate item below; the two were being carried as one, which made a buildable thing look gated. |
+| 10 | Shell that never lies | A signed preview bundle, so §H's two request paths can execute at all | Both are Registered and neither has run anywhere. Running one outside the signed bundle mutates the calling application's TCC state and answers about the wrong binary, so the bundle is the entire blocker — and producing it is a packaging build, not a decision. Wave E's gate is cold operator review of working surfaces, which does not gate building the bundle. |
+| 3 | Audio has a stated lifetime | Whole-meeting deletion, the implementation | Wave C lists whole-meeting deletion as remaining work, and the build is not gated. **Exercising it is:** "exercise real destructive actions only as operator actions before beta admission", and wave C's gate names real deletion decisions. So it can be built and tested synthetically now, and must not be run for real without the operator. The policy wording is a separate item below; carrying the two as one row is what made a buildable thing look wholly gated. |
+
+This list is short, and that is the honest finding rather than a gap in it. Most
+remaining features are behind an operator decision because the slice boundary put
+them there deliberately, not because sequencing drifted.
+
+### Blocked on a scope decision, not on evidence or build effort
+
+Both were previously listed here as buildable-now on the strength of the definition
+layer's "Decided" status. That was wrong in both cases, and the corrections are the
+reason this section now cites line numbers.
+
+| # | Feature | What actually gates it |
+|---|---|---|
+| 8 | Commitment view | The terminal action is export, and **"copy/export remains disabled until the separate redaction and export decision closes"** (this file, § Exact library retrieval). The commitment-organized library is already specified as `view: recorded-actions` rather than a separate surface, so the view is not the open part — the export is. |
+| 9 | Preparation brief | **Wave H, "Outside v1: optional EventKit brief"**, gate "separate scope and release decisions". The slice's own conditions list excludes "calendar preparation" outright, and §H first run deliberately omits `offer-calendar` because it crosses the envelope. Moving this into v1 needs the same kind of dated operator decision that moved the §D live note on 2026-08-06. |
 
 ### Blocked on evidence, not on a person
 
@@ -83,8 +99,9 @@ code.
 
 **Feature 4 is the load-bearing item.** Features 5, 6, and 7 all converge on the
 admitted note generator, and its unblocking is entirely a human call. No amount of
-autonomous work closes it. That is the argument for spending autonomous time on 8,
-9, 10, and 3 rather than waiting on it.
+autonomous work closes it. That is the argument for spending autonomous time on 10
+and 3 rather than waiting on it — and, once those are done, for asking the operator
+for the two scope decisions above rather than for more evidence.
 
 Features 1 and 2 are Shipped. The §D operator-authored live note entered scope by
 amendment on 2026-08-06 and shipped the same day.
