@@ -39,6 +39,32 @@ to prove a real meeting path.
 
 ## Build queue
 
+### Start here
+
+**The next build is Wave 1 item 2, auto-titling.** Item 1 landed on 2026-08-07.
+
+A struck-through row is finished; the first row that is not struck through is the
+work. That rule is the whole resume protocol, and it holds whether the session
+that reads it is a continuation or a stranger.
+
+**Two things were deferred on purpose. Neither blocks item 2.**
+
+| Deferred | Why it was left | Where it lives |
+|---|---|---|
+| Incremental corpus sync — the full scan still runs before the index is consulted | Skipping unchanged meetings needs a per-meeting entry point into `library_read`, which passed an independent adversarial audit. Changing it in the same breath as a new C dependency would have made that audit result unattributable | `backlog.md` US-13.6 |
+| `screens-and-states.md` does not cover the unbuilt parity surfaces | Drawing screens for features nobody has designed produces a document that has to be thrown away. It documents the surfaces that exist | Stated in that file's own header |
+
+**Ending a session cleanly** means the same thing every time: branch, PR, merge,
+strike the row, remove the worktree. Trunk is the handoff — not the conversation,
+not a scratch file, and not a session ID. A session that ends at "pushed" has
+moved the work somewhere the next session has to go looking for it.
+
+**Resuming does not require the same session.** Read `CLAUDE.md`, then this
+section, then the wave tables below. That path reaches the same next action from
+a cold start as from a continuation, which is the property worth having — the
+Claude Code `--continue` and `--resume` flags are a convenience on top of it, not
+the mechanism. If the two ever disagree, trunk wins.
+
 **Rewritten 2026-08-07 after the north star expanded to category parity.** The
 previous queue sequenced ten features and reported itself empty of builder-owned
 work. That was true of those ten and false of the product: parity is 26 Phase 1

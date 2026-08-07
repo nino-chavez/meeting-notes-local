@@ -14,6 +14,16 @@ across time are invisible here by construction. `journeys.md` is the counterpart
 walking it against this file is what produced surfaces I, J and K — each of which read
 as complete until a journey crossed it. Read the two together or neither is finished.
 
+**This file covers the surfaces that exist, and it lags the parity feature set on
+purpose.** As of 2026-08-07 `product-definition.md` names twenty-six Phase 1
+capabilities and twelve of them are unbuilt — cross-corpus question answering,
+meeting-type templates, action items with owners, named speakers. There is no
+surface here for any of them, and their absence is a fact rather than an oversight.
+Drawing screens for a feature nobody has designed produces a document that gets
+thrown away, and a stale surface inventory is worse than a short one, because a
+builder trusts it. Each surface arrives with the wave that builds it; the build queue
+in `vertical-slice.md` decides when.
+
 ---
 
 ## The product model, and the two IA rules that do not transfer

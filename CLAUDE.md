@@ -24,9 +24,14 @@ Do not treat verification discipline as scope gating. Checking a claim against s
 before asserting it is orthogonal to how ambitious the roadmap is, and it stays.
 
 Sequencing authority stays with [`docs/vertical-slice.md`](./docs/vertical-slice.md).
-Read its **Build queue** section first: that decides what gets built next, ordered by
-feature, with everything buildable-without-a-human-decision at the top. The wave
-table under it is the evidence history, not a work order. Surface detail lives in
+Read its **Build queue** section first, and inside it **Start here** — that names the
+next build in one sentence, the work deferred on purpose, and what ending a session
+cleanly means. The **Wave 1–4** tables directly under it are the work order, ordered
+by feature; a struck-through row is finished, so the first row that is not struck
+through is the next build. Everything further down that file — **Current milestone
+plan** and below — is evidence history and contract, not a work order; read it to
+learn why something is the way it is, never to learn what to do next. Surface
+detail lives in
 [`docs/screens-and-states.md`](./docs/screens-and-states.md), and
 [`docs/backlog.md`](./docs/backlog.md) decomposes the parity feature set into epics
 and stories — read it to learn what a piece of work *is*, never to learn when it
