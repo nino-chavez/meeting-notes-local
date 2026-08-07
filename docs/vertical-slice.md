@@ -59,17 +59,31 @@ this file wins: "Decided" in the definition layer means the *design question* is
 answered, not that the work is in scope. Statuses remain hypotheses until re-checked
 against code.
 
-### Buildable now, no human input required
+### Buildable now, no human input required — empty as of 2026-08-07
 
-| # | Feature | The next build | Why it is unblocked |
+**This section is empty, and that is a finding rather than a gap.** It held three
+features this morning. Each was built out to the point where the next step needs a
+person, and the rows below record where that boundary fell rather than being deleted:
+a queue that silently loses its history cannot be checked.
+
+Nothing here means the builder is blocked on nothing. It means every remaining step
+on these features is a decision, a permission prompt, or a real destructive action —
+the four things this repo reserves for the operator — and the list of those is under
+"Blocked on the operator" below.
+
+| # | Feature | Where the builder-owned work ended | What proved it |
 |---|---|---|---|
-| 10 | Shell that never lies | A signed preview bundle, so §H's two request paths can execute at all | Both are Registered and neither has run anywhere. Running one outside the signed bundle mutates the calling application's TCC state and answers about the wrong binary, so the bundle is the entire blocker — and producing it is a packaging build, not a decision. Wave E's gate is cold operator review of working surfaces, which does not gate building the bundle. |
 | 4 | Evidence-linked notes | **Nothing buildable remains that does not need a decision.** The harness ratchet landed 2026-08-07, closing the last builder-owned gap on this path | Every receipt's `harness` block hashes `mlx_note_admission.py`, and until now nothing checked it — so the orchestrator could not change without a matrix re-run while the harness could change freely and silently orphan every committed receipt. It did twice in one day and no test failed either time. Now pinned by `test_the_current_harness_has_produced_committed_evidence`, and demonstrated to fail on a one-comment change. **Affordable only because the runtime pin was fixed the same morning** — before that, the ratchet would have been unsatisfiable by anyone lacking the single environment that produced the receipts. |
 | 3 | Audio has a stated lifetime | Whole-meeting deletion — **landed 2026-08-07, core and shell**. Nothing buildable remains on this feature | `meeting-deletion/1` in `crates/session-core/src/meeting_deletion.rs` (12 tests), `preview_delete_meeting` over a separate handle map, review token and capability from the audio path, and the §G twice-confirmed control. **Exercising it remains gated:** "exercise real destructive actions only as operator actions before beta admission", and wave C's gate names real deletion decisions — so no real `meeting-deletion/1` receipt exists and the synthetic tests do not advance that gate. What is left on feature 3 is the policy wording, which is the operator's and is listed below. |
 
-This list is short, and that is the honest finding rather than a gap in it. Most
-remaining features are behind an operator decision because the slice boundary put
-them there deliberately, not because sequencing drifted.
+Feature 10 was the last one standing and closed on 2026-08-07 when the signed
+Preview bundle was produced; its row moved to the operator table because running the
+two first-run permission prompts is a person at a machine. See
+`distribution-runbook.md § Preview-bundle lane` for the lane and its two
+commit-traps.
+
+The shortness is deliberate rather than drift: the slice boundary put these decisions
+with the operator on purpose.
 
 ### Blocked on a scope decision, not on evidence or build effort
 
@@ -94,6 +108,7 @@ reason this section now cites line numbers.
 
 | Item | Feature or wave | Shape of the decision |
 |---|---|---|
+| First-run permission prompts | 10 | **The signed Preview bundle exists as of 2026-08-07** and grants `allow-first-run-request-microphone` and `allow-first-run-request-system-audio`, which is what was blocking §H's two request paths from executing anywhere. Running them is a person granting or denying two macOS prompts on a real machine; no build advances it. Lane and traps documented in `distribution-runbook.md § Preview-bundle lane`. |
 | Closure receipt | Wave A | One interactive run on a build already installed: `automatic_deletion`, `consented_hardware_run`, `clean_transfer`. Not another transfer — the activity has happened repeatedly and only the record is missing. |
 | Contingent claims: refuse or surface | 4 | "If we ship Tuesday, we'd need Dana" currently becomes a recorded decision to ship Tuesday. Refusing it loses real information; marking it contingent keeps it and tells the truth. That is a decision about what a note should say. Intervention eight established that a word-list gate cannot make it — it was withdrawn by its own falsifier on 2026-08-07, and regressed two clean fixtures on the way out. |
 | Retention-policy wording | 3 | Recorded here as open. The operator has declined to take it up; it is not to be re-raised. |
