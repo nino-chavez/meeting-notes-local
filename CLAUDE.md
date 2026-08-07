@@ -77,6 +77,17 @@ part to repeat, because a reflex sweep would have destroyed real work:
 Verify a rescue by content, never by exit code. A cherry-pick with a botched conflict
 resolution still exits 0; the line count is the actual check.
 
+**A branch can be pinned from outside this repository, and content checks do not see
+that.** The 2026-08-07 sweep deleted `codex/work-library-publication`, which held the
+only copy of `work-library.publication.yml`. The Work Library portal
+(`~/Workspace/dev/apps/work-library`, `sources.yml` id `local-meeting-notes`) pins that
+branch by name, so its next import blocks at
+`scripts/lib/blueprint-adapter.mjs:143` with `revision-mismatch`. Nothing in step 2
+above could have caught it — the file was unique to the branch, but its *consumer* was
+in another repo. The archive tag made it recoverable, which is the fourth step earning
+its keep. The manifest now lives on `main` so the pin can follow trunk. Before deleting
+a branch whose name appears in another repo's config, grep `~/Workspace/dev` for it.
+
 **Private meeting material never enters Git.** Audio, transcripts, note text, and
 profile material stay out by design, so their absence from the repository proves
 nothing about whether a run happened — the run and closure receipts live outside Git

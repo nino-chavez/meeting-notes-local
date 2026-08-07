@@ -1,0 +1,153 @@
+schema: work-library-publication/0
+case_id: local-meeting-notes
+adapter: git-manifest
+canonical_output: beta-boundary
+
+# Restored on trunk 2026-08-07. This manifest previously lived only on the
+# branch `codex/work-library-publication`, which the 85-to-1 branch
+# reconciliation removed. The work library still pins that deleted branch
+# (`sources.yml` id `local-meeting-notes`), so its next import blocks at
+# `scripts/lib/blueprint-adapter.mjs:143` with `revision-mismatch`. Keeping the
+# manifest on `main` means the pin can follow trunk instead of a branch that
+# any future cleanup will delete again. The prior version is preserved at the
+# tag `archive/work-library-publication` (commit aca9fa4).
+
+catalog:
+  title: Local Meeting Notes
+  subtitle: Private capture research · Bounded beta
+  question: What can the local meeting-notes beta honestly support—and what must a real meeting prove next?
+  summary: A macOS app that records, transcribes, and writes up a meeting entirely on your own machine. Supported today are headphones, deliberate voice calibration, capture-health evidence, and dropping speaker labels rather than guessing. The next proof is an ordinary meeting whose resulting note a human reads and judges useful.
+
+collection_candidates: [commerce, product-research, local-ai]
+
+publication:
+  status: draft
+  clearance: internal
+  assurance:
+    human_validation: pending
+
+outputs:
+  - id: beta-boundary
+    type: decision-record
+    status: draft
+    artifact: docs/work-library-record.md
+    clearance: internal
+    assurance:
+      human_validation: pending
+  - id: capture-evidence
+    type: evidence-register
+    status: ready
+    artifact: spike/RESULTS.md
+    clearance: internal
+    assurance:
+      human_validation: pending
+  - id: notes-evidence
+    type: evidence-register
+    status: ready
+    artifact: notes/EVAL.md
+    clearance: internal
+    assurance:
+      human_validation: pending
+  - id: product-reference
+    type: reference-library
+    status: draft
+    artifact: docs/
+    clearance: internal
+    assurance:
+      human_validation: pending
+
+projections:
+  # Decide — the front door and the three documents that carry the argument.
+  - id: decision
+    output: beta-boundary
+    artifact: docs/work-library-record.md
+    render_as: executive-decision
+    label: Supported beta boundary
+    route: /
+
+  - id: product-definition
+    output: product-reference
+    artifact: docs/product-definition.md
+    render_as: strategy-memo
+    label: What the product is
+    route: /strategy/product-definition
+
+  - id: build-queue
+    output: product-reference
+    artifact: docs/vertical-slice.md
+    render_as: strategy-memo
+    label: Build queue and evidence history
+    route: /strategy/build-queue
+
+  - id: journeys
+    output: product-reference
+    artifact: docs/journeys.md
+    render_as: strategy-memo
+    label: Product journeys
+    route: /strategy/journeys
+
+  # Reference — requirements and surface detail, read by a practitioner.
+  - id: backlog
+    output: product-reference
+    artifact: docs/backlog.md
+    render_as: reference-document
+    label: Epics, stories, and acceptance criteria
+    route: /reference/backlog
+
+  - id: screens
+    output: product-reference
+    artifact: docs/screens-and-states.md
+    render_as: reference-document
+    label: Screens and states
+    route: /reference/screens-and-states
+
+  - id: encounter-acceptance
+    output: product-reference
+    artifact: docs/encounter-acceptance.md
+    render_as: reference-document
+    label: Encounter acceptance
+    route: /reference/encounter-acceptance
+
+  - id: teardown
+    output: product-reference
+    artifact: docs/teardown.md
+    render_as: reference-document
+    label: Teardown and recovery
+    route: /reference/teardown
+
+  # Implications — conditional on human gates that have not been passed.
+  - id: release-runbook
+    output: product-reference
+    artifact: docs/distribution-runbook.md
+    render_as: functional-guidance
+    label: Release runbook and open human gates
+    route: /guidance/release-runbook
+
+  # Proof — the measured evidence the decision rests on.
+  - id: capture-evidence
+    output: capture-evidence
+    artifact: spike/RESULTS.md
+    render_as: evidence-register
+    label: Capture and voice-gate evidence
+    route: /evidence/capture
+
+  - id: notes-evidence
+    output: notes-evidence
+    artifact: notes/EVAL.md
+    render_as: evidence-register
+    label: Note-generation evaluation
+    route: /evidence/notes
+
+# Meeting content never enters this repository, so nothing below is a redaction
+# step — it keeps machine-generated and fixture material out of the reader's way.
+exclude:
+  - assets/**
+  - capture/**
+  - fixtures/**
+  - sessions/**
+  - tests/**
+  - docs/prototype/**
+  - docs/survey/**
+  - "**/__pycache__/**"
+  - "**/.git/**"
+  - "**/.venv/**"
