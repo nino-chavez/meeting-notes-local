@@ -1488,3 +1488,92 @@ not done casually as part of this change. Until that run happens:
 
 That is the honest state, and it is why `admits` stays false for a reason that has
 nothing to do with this gate.
+
+---
+
+## 2026-08-07 — the registered runtime cannot be rebuilt, so the matrix cannot be re-run
+
+Attempting to verify the polarity gate's prediction found a larger problem. It is
+recorded here rather than in a commit message because it blocks every future
+intervention on this path, not just that one.
+
+### What happened
+
+`MLX_RUNTIME["runtime_identity"]` pins Python 3.14.6, mlx 0.32.0, mlx-lm 0.30.4,
+transformers 5.0.0rc1, and a `package_metadata_sha256` of each package's
+`METADATA` and `RECORD`. `local_mlx_provider` compares the running environment
+against it and raises `runtime-package-mismatch` on any difference, which is
+correct and is what happened: all 36 workers exited 1 and the matrix returned
+`every_fixture_ran: false`.
+
+Three environments were built on this machine to try to satisfy it. Python
+version, implementation, and all three package versions matched exactly in every
+one.
+
+| environment | `METADATA` (3 packages) | `RECORD` (3 packages) |
+|---|---|---|
+| uv 0.8.17 | 3 of 3 match | **0 of 3** |
+| pip, byte-compiled (default) | 3 of 3 match | **1 of 3** — `mlx-lm` only |
+| pip `--no-compile` | 3 of 3 match | **0 of 3** |
+
+**Every `METADATA` digest matched in every environment — 9 of 9.** The wheels are
+byte-identical and the pin's package identity is sound. **`RECORD` matched once in
+nine.**
+
+### Why `RECORD` is the wrong thing to pin
+
+`RECORD` is written by the installer, not shipped by the wheel. It lists installed
+files, and its contents vary with things that have nothing to do with package
+identity:
+
+- **The installer.** uv reproduced none of the three; pip reproduced one.
+- **Byte-compilation.** `mlx`'s `RECORD` carries 31 `.pyc` rows with empty hash
+  fields, generated at install time. `mlx-lm` matched *with* compilation and
+  stopped matching *without* it, so the pin was captured from a byte-compiled
+  install — a fact recorded nowhere.
+- **Something further**, still unidentified, that leaves `mlx` and `transformers`
+  differing even under pip with compilation. Not chased further, because the
+  conclusion does not depend on naming it: one more unknown source of variance in
+  a value that already has two is enough to stop pinning it.
+
+### This is the second time, and the first fix was believed to be complete
+
+`package_sha256`'s docstring records the same class of defect being found on
+2026-08-05 — the digest was reproducible only inside the exact disposable
+directory the 2026-08-02 probe used — and fixed by excluding `../`-relative
+script rows, "verified across those same three paths". That verification varied
+the path and held the installer and install method fixed, so it could not have
+caught this. A check that varies one dimension does not establish independence
+from the others.
+
+### What this blocks
+
+The 12-fixture matrix cannot be run by anyone who does not still hold the exact
+environment that produced the 2026-08-06 receipts. Concretely:
+
+- **The polarity gate's predicted effect is unverified and stays that way.** No
+  count from it may be reported. That is a defect in the pin, not in the gate.
+- **Intervention five and every one after it is blocked**, because each is defined
+  as a matrix run.
+- The committed receipts remain valid evidence of what happened on 2026-08-06.
+  They are not reproducible, which is a different and weaker claim than being
+  wrong.
+
+### The direction, grounded in the measurement above
+
+Pin the wheel, not the installation. `METADATA` matched 9 of 9 across three
+installers and two install methods; `RECORD` matched 1 of 9. The artifact identity
+this experiment actually needs is the wheel's own digest — the value a lockfile or
+PyPI's own hash records — and `RECORD` should be dropped from
+`runtime_identity` rather than repaired.
+
+That is a change to the registered runtime contract and every request digest
+downstream of it, so it is named here and preregistered separately, not folded
+into this note.
+
+Reproduce the failure:
+
+    python3.14 -m venv env && env/bin/pip install --pre mlx-lm==0.30.4 \
+      mlx==0.32.0 transformers==5.0.0rc1
+    env/bin/python notes/orchestrate_mlx_note_matrix.py --model-directory <snapshot>
+    # every worker exits 1 with runtime-package-mismatch

@@ -224,7 +224,7 @@ Recorded here because they are invisible in the code and will otherwise be forgo
 
 | Placeholder | Where | Replace with |
 |---|---|---|
-| Matrix re-run for the polarity gate | `notes/mlx_note_admission.py` | An actual run. `mlx_lm` is absent from `.venv`, and installing it would change the environment the committed receipts came from. The gate's logic is unit-tested; its predicted effect on the 12-fixture matrix is **unverified**, so no count may be quoted from it. |
+| Matrix re-run for the polarity gate | `notes/mlx_note_admission.py` | **Blocked, not merely pending (2026-08-07).** `mlx_lm` was installed and the matrix was run: all 36 workers exited on `runtime-package-mismatch`. The pin includes each package's installer-written `RECORD` digest, which three environments reproduced 1 time in 9 while `METADATA` reproduced 9 of 9. The gate's logic is unit-tested; its effect on the matrix is **unverified and unverifiable** until the pin is fixed, so no count may be quoted from it. |
 | Synthetic meeting fixtures only | `meeting_deletion.rs` tests | A real `meeting-deletion/1` receipt. **None has ever been produced.** Passing tests are bounded evidence and do not advance the wave C human gate, so this stays unproven until an Operator runs a real deletion. |
 | Placeholder staged runtime | `apps/desktop/runtime/` (gitignored, local only) | A real staged runtime via `worker/build_manifest.py`. A fresh worktree has no `apps/desktop/runtime`, so the desktop crate's `build.rs` fails on a missing resource path; a stub tree of the eight declared resources lets it compile. Any manifest-dependent assertion measured against that stub is measuring the stub. |
 
