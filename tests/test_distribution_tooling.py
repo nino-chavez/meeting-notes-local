@@ -87,6 +87,32 @@ class DistributionToolingTests(unittest.TestCase):
         self.assertIn('--identifier "$PYTHON_SIGNING_IDENTIFIER"', signing)
         self.assertIn('--entitlements "$CAPTURE_ENTITLEMENTS"', signing)
 
+        # Every binary that asks macOS for the microphone must be signed with the
+        # audio-input entitlement. Shipping a requester without it is not a
+        # cosmetic miss: the requester never appears in System Settings, so the
+        # operator has no way to grant what the app just asked for. That defect
+        # shipped once. These pins are why it cannot ship silently again.
+        self.assertIn(
+            '|| "$path" == "$APP/Contents/Resources/bin/permission-probe" ]]', signing
+        )
+        preview = source("scripts/prepare-preview-bundle.sh")
+        self.assertIn('PROBE="$RESOURCES/bin/permission-probe"', preview)
+        self.assertIn(
+            'codesign --force --sign "$identity" --entitlements "$ENTITLEMENTS" "$PROBE"',
+            preview,
+        )
+        self.assertIn('has_audio_input_entitlement "$PROBE"', preview)
+        verifier = source("scripts/verify-release-bundle.py")
+        self.assertIn(
+            'PROBE_EXECUTABLE = Path("Contents/Resources/bin/permission-probe")', verifier
+        )
+        self.assertIn(
+            "relative in {MAIN_EXECUTABLE, CAPTURE_EXECUTABLE, PROBE_EXECUTABLE}", verifier
+        )
+        runtime_build = source("worker/build_runtime.sh")
+        self.assertIn('[[ -x "$STAGE/bin/permission-probe" ]]', runtime_build)
+        self.assertIn("--product permission-probe", runtime_build)
+
         entitlements = plistlib.loads(
             (ROOT / "apps/desktop/src-tauri/python-entitlements.plist").read_bytes()
         )

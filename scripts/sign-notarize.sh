@@ -96,7 +96,12 @@ while IFS= read -r -d '' path; do
   if [[ "$path" == "$APP/Contents/Resources/python-runtime/bin/python3.12" ]]; then
     sign_args+=(--identifier "$PYTHON_SIGNING_IDENTIFIER" --entitlements "$PYTHON_ENTITLEMENTS")
   elif [[ "$path" == "$APP/Contents/MacOS/local-meeting-notes-desktop" \
-      || "$path" == "$APP/Contents/Resources/bin/meeting-capture" ]]; then
+      || "$path" == "$APP/Contents/Resources/bin/meeting-capture" \
+      || "$path" == "$APP/Contents/Resources/bin/permission-probe" ]]; then
+    # permission-probe calls AVCaptureDevice.requestAccess, so it is a requesting
+    # binary and needs the same audio-input entitlement. Omitting it is the exact
+    # defect that shipped once already: the requester never appears in System
+    # Settings, so the operator is given no way to grant what the app asked for.
     sign_args+=(--entitlements "$CAPTURE_ENTITLEMENTS")
   fi
   codesign "${sign_args[@]}" "$path"

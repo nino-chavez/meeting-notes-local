@@ -29,6 +29,7 @@ fi
 verify() {
   [[ -x "$STAGE/python-runtime/bin/python3.12" ]]
   [[ -x "$STAGE/bin/audiotee" ]]
+  [[ -x "$STAGE/bin/permission-probe" ]]
   [[ -f "$STAGE/app-runtime.json" ]]
   [[ -f "$STAGE/note-runtime-project.json" ]]
   [[ -f "$STAGE/note-bridge.py" ]]
@@ -132,6 +133,17 @@ swift build -c release --product audiotee --package-path "$REPO/capture/audiotee
 cp "$REPO/capture/audiotee/.build/arm64-apple-macosx/release/audiotee" \
   "$STAGE/bin/audiotee"
 chmod 0755 "$STAGE/bin/audiotee"
+
+# First run has to report the two capture permissions without recording, and this
+# is the only thing that can measure them. Staged in every mode, unlike
+# meeting-capture, because first run exists in every mode — a boundary build that
+# cannot answer "is the microphone allowed" has the same lying surface the
+# internal-alpha one would.
+swift build -c release --product permission-probe \
+  --package-path "$REPO/capture/permission-probe"
+cp "$REPO/capture/permission-probe/.build/arm64-apple-macosx/release/permission-probe" \
+  "$STAGE/bin/permission-probe"
+chmod 0755 "$STAGE/bin/permission-probe"
 if [[ "$mode" == build-alpha* ]]; then
   [[ -f "$WHISPER_SOURCE/config.json" && -f "$WHISPER_SOURCE/weights.safetensors" ]] || {
     echo "fixed Whisper snapshot $WHISPER_REVISION is unavailable" >&2

@@ -8,6 +8,7 @@ APP="${LMN_PREVIEW_APP:-$ROOT/target/release/bundle/macos/Local Meeting Notes Pr
 RESOURCES="$APP/Contents/Resources"
 MAIN="$APP/Contents/MacOS/local-meeting-notes-desktop"
 CAPTURE="$RESOURCES/bin/meeting-capture"
+PROBE="$RESOURCES/bin/permission-probe"
 ENTITLEMENTS="$ROOT/apps/desktop/src-tauri/capture-entitlements.plist"
 EXPECTED_TEAM_ID="34VZ63G58M"
 FORBIDDEN_NOTE_RUNTIME_RESOURCES=(
@@ -25,6 +26,7 @@ require_bundle() {
   [[ -d "$APP" ]] || die "Preview app is missing: $APP"
   [[ -x "$MAIN" ]] || die "Preview app executable is missing"
   [[ -x "$CAPTURE" ]] || die "Preview meeting-capture helper is missing"
+  [[ -x "$PROBE" ]] || die "Preview permission-probe helper is missing"
   [[ -x "$RESOURCES/python-runtime/bin/python3.12" ]] \
     || die "Preview Python runtime is missing"
   [[ -f "$ENTITLEMENTS" ]] || die "capture entitlements are missing"
@@ -54,6 +56,9 @@ verify_bundle() {
     || die "Preview executable is missing the audio-input entitlement"
   has_audio_input_entitlement "$CAPTURE" \
     || die "Preview meeting-capture helper is missing the audio-input entitlement"
+  # The probe is a requesting binary too: it calls AVCaptureDevice.requestAccess.
+  has_audio_input_entitlement "$PROBE" \
+    || die "Preview permission-probe helper is missing the audio-input entitlement"
 }
 
 sign_bundle() {
@@ -70,6 +75,7 @@ sign_bundle() {
   # modified. Remove bundle metadata before creating the final code seals.
   xattr -cr "$APP"
   codesign --force --sign "$identity" --entitlements "$ENTITLEMENTS" "$CAPTURE"
+  codesign --force --sign "$identity" --entitlements "$ENTITLEMENTS" "$PROBE"
   "$RESOURCES/python-runtime/bin/python3.12" -E -s -B \
     "$ROOT/worker/build_manifest.py" "$RESOURCES" --admission internal-alpha \
     --exclude-note-runtime

@@ -26,6 +26,12 @@ REQUIRED_PURPOSES = (
 PYTHON_EXECUTABLE = Path("Contents/Resources/python-runtime/bin/python3.12")
 MAIN_EXECUTABLE = Path("Contents/MacOS/local-meeting-notes-desktop")
 CAPTURE_EXECUTABLE = Path("Contents/Resources/bin/meeting-capture")
+# Requests microphone access on first run, so it is a requesting binary and carries
+# the same audio-input entitlement. Listed here because the else-branch below
+# requires an empty entitlement set: an entitled binary missing from these sets
+# fails verification rather than passing quietly, which is the behaviour that makes
+# adding one deliberate.
+PROBE_EXECUTABLE = Path("Contents/Resources/bin/permission-probe")
 PYTHON_ENTITLEMENTS = {
     "com.apple.security.cs.allow-unsigned-executable-memory": True,
 }
@@ -345,7 +351,7 @@ def verify_signatures(app: Path, inventory: list[tuple[Path, str]]) -> None:
         if relative == PYTHON_EXECUTABLE:
             expected_entitlements = PYTHON_ENTITLEMENTS
             verify_exact_code_identity(path, EXPECTED_PYTHON_IDENTIFIER)
-        elif relative in {MAIN_EXECUTABLE, CAPTURE_EXECUTABLE}:
+        elif relative in {MAIN_EXECUTABLE, CAPTURE_EXECUTABLE, PROBE_EXECUTABLE}:
             expected_entitlements = CAPTURE_ENTITLEMENTS
             if relative == MAIN_EXECUTABLE:
                 verify_exact_code_identity(path, EXPECTED_IDENTIFIER)
