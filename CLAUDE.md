@@ -2,18 +2,37 @@
 
 Before proposing, planning, or building any feature, read
 [`docs/product-definition.md`](./docs/product-definition.md). It is the definition
-layer: what the product is, who the reader is, the ten north-star features with
-their research grounding and build status, and the non-goals. Work that serves none
-of the ten features, or crosses a non-goal, needs a dated amendment there first.
+layer: what the product is, who the reader is, and the parity feature set with its
+competitor sources and build status.
+
+**It is a map of the destination, not a gate on the work.** Until 2026-08-07 this
+paragraph said work serving none of the ten features "needs a dated amendment there
+first," and that sentence did real damage: it turned an incomplete feature list into
+a fence, three parity capabilities were refused as non-goals, several more were never
+written down, and the build queue reported itself converged while the product was a
+fraction of its north star.
+
+**The rule runs the other way now.** A capability the category ships and this product
+lacks is a gap in the definition until proven otherwise — not a proposal that has to
+justify itself. If a piece of work does not map to a row there, the likely fault is
+the row list. Add the row with its parity source and keep building. Two invariants
+survive and only two: **evidence is never decoration** (a claim cites resolvable
+words, which nobody in the category does), and **nothing leaves the Mac without the
+operator seeing it leave**.
+
+Do not treat verification discipline as scope gating. Checking a claim against source
+before asserting it is orthogonal to how ambitious the roadmap is, and it stays.
 
 Sequencing authority stays with [`docs/vertical-slice.md`](./docs/vertical-slice.md).
 Read its **Build queue** section first: that decides what gets built next, ordered by
 feature, with everything buildable-without-a-human-decision at the top. The wave
 table under it is the evidence history, not a work order. Surface detail lives in
 [`docs/screens-and-states.md`](./docs/screens-and-states.md), and
-[`docs/backlog.md`](./docs/backlog.md) decomposes the ten features into twelve epics
-and 75 stories — read it to learn what a piece of work *is*, never to learn when it
-happens. Status has exactly one owner and it is the build queue.
+[`docs/backlog.md`](./docs/backlog.md) decomposes the parity feature set into epics
+and stories — read it to learn what a piece of work *is*, never to learn when it
+happens. Status has exactly one owner and it is the build queue. Expect the backlog
+to lag the definition layer while parity is being written down; a story that does not
+exist yet is not evidence that the feature is out of scope.
 
 Each story there carries a **Validation** line naming the check that proves it:
 `Pinned` (a named test fails if the behaviour changes), `Exercised` (the path runs but
