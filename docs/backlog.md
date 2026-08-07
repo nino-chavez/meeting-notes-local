@@ -254,25 +254,49 @@ so that I can check the note instead of trusting it.
 **Refusals:** a claim without its citation, or a "verified" state nothing checked, is
 the failure this product exists to not ship.
 
-#### US-4.2: Close the identifier truncation
+#### US-4.2: Refuse a claim that inverts its evidence, before closing the identifier truncation
 **Feature 4 · J1 · — · P0 · M · **Buildable now***
 
-As a builder, I want the three refusing fixtures to stop truncating the fragment
-identifier, so that the matrix measures comprehension instead of transcription.
+As the Operator, I want a claim that contradicts the words it cites to be refused,
+so that fixing an unrelated bug does not start admitting inverted claims.
 
 **Acceptance criteria:**
-- Given the next intervention is preregistered before it runs, When it runs, Then its prediction is recorded ahead of the result and the result is reported against it whether or not it holds.
-- Given the intervention changes any request, When the matrix runs, Then every request digest on the path is regenerated and the change is stated.
+- Given cited evidence containing a polarity term, When the claim contains that term in no form, Then the claim is refused with code `claim-polarity`.
+- Given evidence and claim that both carry the polarity, When the gate runs, Then the claim is unaffected — `negation-decision` is the control and a gate that fails it is over-broad and withdrawn.
+- Given the gate is added, When the matrix re-runs, Then no fixture that was passing starts failing, because the gate refuses nothing that was passing.
+- Given the polarity gate is in place, When the identifier truncation is then fixed, Then the matrix improves without admitting an inverted claim.
+
+**Why this order.** Reading the semantic-support sheet on 2026-08-07 — the first time
+anyone had — found `negation-proposal` producing the claim "merge the red branch" from
+the evidence "I propose that we do **not** merge the red branch". All three matrix
+failures carry `citation-locator` and nothing else, so the identifier bug is the only
+thing refusing it. Closing that bug alone would take the matrix from 9 of 12 to 12 of
+12 while admitting a claim that asserts the opposite of its own evidence.
+
+**Refusals:** this is not a model search, and the gate must not be folded into the
+identifier work. The amendment discipline requires a rule to be registered on its own
+rather than inside a change measuring something else.
+
+**Risks:** the gate is a word-presence test. A paraphrase that carries polarity without
+the listed terms — "we are keeping the red branch" — would be refused wrongly. If that
+appears, the gate is too crude and the finding still stands: the harness needs *some*
+polarity check, not necessarily this one.
+
+**Evidence:** preregistered in `notes/MLX_NOTE_ADMISSION.md` § 2026-08-07, with its
+prediction stated and its already-known effect on the ten recorded rows separated from
+what remains unknown.
+
+#### US-4.2b: Close the identifier truncation
+**Feature 4 · J1 · — · P0 · M · Blocked on US-4.2**
+
+One characterized mechanism on three fixtures: `sf-` plus 64 hex, cut at 67 characters.
+The margin receipt shows one decision losing three times at the same step with the same
+runner-up token `-t` (−1.11, −0.52, −0.31), so this is not a search.
+
+**Acceptance criteria:**
+- Given the intervention is preregistered before it runs, When it runs, Then its prediction is recorded ahead of the result and reported against it whether or not it holds.
+- Given the polarity gate is already active, When the matrix re-runs, Then `negation-proposal` still refuses — on `claim-polarity` rather than `citation-locator`.
 - Given the run completes, When results are recorded, Then `admits` remains false unless every registered gate passes including the human ones.
-
-**Evidence:** three interventions ran 2026-08-06. Citation gate went 7/10 → **10/10**;
-matrix 8/12 → **9/12**. The remaining three fixtures fail on one mechanism — `sf-`
-plus 64 hex, cut at 67 characters — and the margin receipt shows one decision losing
-three times at the same step with the same runner-up token (−1.11, −0.52, −0.31),
-not three coincidences.
-
-**Refusals:** this is not a model search. Do not schedule a third candidate model to
-avoid the mechanism.
 
 #### US-4.3: Human semantic and usefulness adjudication
 **Feature 4 · J1 · §E · P0 · M · Blocked on Operator**
