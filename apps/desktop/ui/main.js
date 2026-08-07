@@ -9,6 +9,7 @@ import {
   createTransitionGate,
   changedStatusText,
   firstRunDeniedPermissionName,
+  liveNoteStatus,
   firstRunStepFor,
   enrollmentRecorderPresentation,
   transcriptPlainText,
@@ -384,6 +385,10 @@ let renderedLibraryTurns = [];
 let attemptTranscriptRestore = null;
 
 function renderTranscript(snapshot) {
+  // A relaunch reaches this screen without ever having passed through recording,
+  // so the note may not be loaded yet. Loading is idempotent per meeting, so this
+  // resolves immediately in the ordinary case.
+  void loadLiveNoteFor(snapshot.meeting_id).then(renderTranscriptNote);
   renderedAttemptTurns = Array.isArray(snapshot.turns) ? snapshot.turns : [];
   attemptTranscriptRestore =
     snapshot.meeting_id && snapshot.current_transcript_sha256
@@ -779,6 +784,9 @@ function render(snapshot) {
       // The one call site: a started app at rest is the only moment first run may
       // take the screen, and it takes it at most once per launch.
       void considerFirstRun();
+      // No meeting is open, so nothing typed belongs to anything. Reset rather
+      // than carry one meeting's note into the next.
+      resetLiveNote();
       if (workflowOwnsRoute && currentScreen !== "idle-screen") {
         showWorkflowScreen(snapshot, { resetScroll: true });
         initializeFindInBackground();
@@ -804,6 +812,7 @@ function render(snapshot) {
       renderChannelState(systemChannel, snapshot.system_state);
       beginElapsed(snapshot.started_at_epoch_seconds);
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "recording-screen" });
+      void loadLiveNoteFor(snapshot.meeting_id);
       break;
     case "stopping":
       setHeaderState("Stopping and flushing audio");
@@ -2013,6 +2022,10 @@ startForm.addEventListener("submit", async (event) => {
 
 stopButton.addEventListener("click", async () => {
   if (stopCommandPending || lastSnapshot?.capture !== "recording") return;
+  // Whatever was typed since the last autosave is flushed before the meeting
+  // moves on. Without this the final thought — usually the one written as the
+  // call is wrapping up — is the one the debounce loses.
+  await flushLiveNote();
   clearError(stopError);
   stopCommandFailed = false;
   stopCommandPending = true;
@@ -2118,6 +2131,140 @@ meetingOpenTranscript.addEventListener("click", () => {
       detailScrollTop: mainRegion.scrollTop,
     }), null, meetingOpenTranscript);
   }
+});
+
+
+// § D. The operator's own note.
+//
+// Loaded once per meeting rather than polled: the snapshot ticks every 400 ms
+// while recording and this text can be long, so it is read on entry and written
+// on a debounce. The app never reads it back into anything — it is not evidence,
+// nothing cites it, and no generator is given it.
+const liveNoteSection = document.querySelector("#live-note");
+const liveNoteText = document.querySelector("#live-note-text");
+const liveNoteState = document.querySelector("#live-note-state");
+const LIVE_NOTE_SAVE_DELAY = 1200;
+
+let liveNoteMeetingId = null;
+let liveNoteTimer = null;
+let liveNoteDirty = false;
+let liveNoteSaving = false;
+let liveNoteFailure = "";
+let liveNoteSavedRecently = false;
+let liveNoteUnreadable = false;
+
+function renderLiveNote() {
+  const status = liveNoteStatus({
+    unreadable: liveNoteUnreadable,
+    failed: liveNoteFailure,
+    pending: liveNoteDirty || liveNoteSaving,
+    saved: liveNoteSavedRecently,
+    text: liveNoteText.value,
+  });
+  liveNoteSection.dataset.state = status.state;
+  liveNoteText.disabled = !status.editable;
+  liveNoteState.textContent = status.message;
+}
+
+async function loadLiveNoteFor(meetingId) {
+  if (!invoke || !meetingId || liveNoteMeetingId === meetingId) return;
+  liveNoteMeetingId = meetingId;
+  liveNoteDirty = false;
+  liveNoteFailure = "";
+  liveNoteSavedRecently = false;
+  try {
+    const note = await invoke("operator_note");
+    // A meeting can change while this is in flight; a note published onto the
+    // wrong meeting would put one meeting's thinking under another's heading.
+    if (liveNoteMeetingId !== meetingId) return;
+    liveNoteUnreadable = Boolean(note?.unreadable);
+    liveNoteText.value = typeof note?.text === "string" ? note.text : "";
+  } catch {
+    if (liveNoteMeetingId !== meetingId) return;
+    liveNoteUnreadable = false;
+    liveNoteText.value = "";
+    liveNoteFailure = "This meeting's note could not be opened.";
+  }
+  renderLiveNote();
+}
+
+async function saveLiveNote() {
+  if (!invoke || liveNoteSaving || liveNoteUnreadable) return;
+  const meetingId = liveNoteMeetingId;
+  const text = liveNoteText.value;
+  liveNoteSaving = true;
+  liveNoteDirty = false;
+  renderLiveNote();
+  try {
+    const note = await invoke("save_operator_note", { text });
+    if (liveNoteMeetingId !== meetingId) return;
+    liveNoteFailure = "";
+    liveNoteUnreadable = Boolean(note?.unreadable);
+    liveNoteSavedRecently = !liveNoteDirty;
+  } catch (error) {
+    if (liveNoteMeetingId !== meetingId) return;
+    // The text stays in the box. Clearing it on a failed save would destroy the
+    // only copy of something the operator cannot retype from memory.
+    liveNoteDirty = true;
+    liveNoteFailure =
+      typeof error === "string" ? error : "That note could not be saved. It is still here.";
+  } finally {
+    if (liveNoteMeetingId === meetingId) {
+      liveNoteSaving = false;
+      renderLiveNote();
+    }
+  }
+}
+
+function resetLiveNote() {
+  if (liveNoteMeetingId === null) return;
+  if (liveNoteTimer) {
+    window.clearTimeout(liveNoteTimer);
+    liveNoteTimer = null;
+  }
+  liveNoteMeetingId = null;
+  liveNoteDirty = false;
+  liveNoteFailure = "";
+  liveNoteSavedRecently = false;
+  liveNoteUnreadable = false;
+  liveNoteText.value = "";
+  renderLiveNote();
+}
+
+async function flushLiveNote() {
+  if (liveNoteTimer) {
+    window.clearTimeout(liveNoteTimer);
+    liveNoteTimer = null;
+  }
+  if (liveNoteDirty) await saveLiveNote();
+}
+
+// Shown back on the finished-transcript screen, read-only. Without this the
+// note disappears the moment the meeting ends, onto a screen the operator has no
+// way to return to — which reads as lost, not as saved.
+const transcriptNoteSection = document.querySelector("#transcript-note");
+const transcriptNoteText = document.querySelector("#transcript-note-text");
+
+function renderTranscriptNote() {
+  const text = liveNoteUnreadable ? "" : liveNoteText.value;
+  transcriptNoteSection.hidden = !text;
+  // Assigned as text, never parsed as markup — the rule that governs rendered
+  // transcript text governs operator-authored text too. The shell-wide ban on
+  // markup insertion is pinned in shell_contract.rs and caught this comment
+  // naming the forbidden property, which is the pin working exactly as built.
+  transcriptNoteText.textContent = text;
+}
+
+liveNoteText.addEventListener("input", () => {
+  liveNoteDirty = true;
+  liveNoteSavedRecently = false;
+  liveNoteFailure = "";
+  renderLiveNote();
+  if (liveNoteTimer) window.clearTimeout(liveNoteTimer);
+  liveNoteTimer = window.setTimeout(() => {
+    liveNoteTimer = null;
+    void saveLiveNote();
+  }, LIVE_NOTE_SAVE_DELAY);
 });
 
 // § H. First run.

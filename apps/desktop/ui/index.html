@@ -291,6 +291,24 @@
           <div id="system-channel" data-state="unknown"><span class="channel-mark" aria-hidden="true"></span><strong>System audio</strong><small id="system-state">Unknown</small></div>
         </div>
         <p class="form-error" id="stop-error" role="alert" hidden></p>
+
+        <!-- § D. The operator's own note. What someone chooses to write down
+             while listening is not recoverable from the recording afterwards,
+             which is the whole argument for it being here rather than after. -->
+        <section class="live-note" id="live-note" data-state="empty" aria-labelledby="live-note-title">
+          <h2 id="live-note-title">Your notes</h2>
+          <p class="footnote" id="live-note-lede">Type while you listen. This is yours — the app does not read it, change it, or use it to make anything.</p>
+          <textarea id="live-note-text" rows="8" spellcheck="true"
+            aria-describedby="live-note-lede live-note-state"
+            placeholder="What matters to you about this meeting."></textarea>
+          <p class="live-note-state" id="live-note-state" role="status" aria-live="polite"></p>
+          <!-- Stated once, plainly, because the alternative is an operator
+               assuming a transcript is being written beside them as they type.
+               This build has no live transcription at all: capture finishes,
+               then the transcript is made. -->
+          <p class="footnote">The transcript is made after the meeting ends, not while it runs.</p>
+        </section>
+
         <p class="footnote">Stopping flushes both audio files before transcription begins.</p>
       </section>
 
@@ -306,6 +324,15 @@
         <h1 id="transcript-title">Transcript</h1>
         <p class="lede">Review the words captured from this meeting. This Preview has not generated notes, decisions, or action items.</p>
         <div class="notice" id="transcript-warning" hidden></div>
+        <!-- The note the operator typed during the meeting, shown back rather
+             than left behind on a screen they cannot return to. Read-only here:
+             § D is about writing during the meeting, and an editor on this
+             screen would imply the note is still being taken. -->
+        <section class="live-note" id="transcript-note" data-state="empty" aria-labelledby="transcript-note-title" hidden>
+          <h2 id="transcript-note-title">Your notes from this meeting</h2>
+          <p class="transcript-note-text" id="transcript-note-text"></p>
+          <p class="footnote">Kept with the transcript, not with the audio, so the retention period does not remove it.</p>
+        </section>
         <p class="form-error" id="transcript-restore-error" role="alert" hidden></p>
         <div class="transcript-actions">
           <button class="secondary" id="transcript-copy" type="button">Copy transcript</button>

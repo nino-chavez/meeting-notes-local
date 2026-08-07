@@ -359,6 +359,52 @@ runs — the Granola insight, and the reason this isn't just a transcript viewer
 `queued` inherits `local-dictation`'s existing principle: the pipeline degrades
 rather than hard-failing, and the operator is told which leg is down.
 
+### Amendment 2026-08-06 — built, and two of these five cannot occur
+
+This surface was outside v1 until the operator moved it in on 2026-08-06
+(`product-definition.md`). `empty` and `typing` are built. `streaming` and
+`lagging` are **not built, because this build cannot reach them**: nothing
+transcribes while a meeting runs. Capture completes, and only then does
+transcription start — `Captured` → `Transcribing` → `TranscriptReady` in the
+reducer. A surface offering a state its pipeline cannot produce is the failure
+feature 10 forbids, so they are absent rather than stubbed.
+
+**`queued` is not built either, and its absence is a different argument.** Its
+trigger here reads "ASR unavailable; audio buffered, transcript deferred", and
+the transcript *is* deferred in this build — but not because anything is
+unavailable. Nothing is degraded. Rendering `queued` would tell an operator a
+leg is down and imply that a healthy version of this screen streams, which
+would be a claim about a pipeline that does not exist. The screen states the
+plain fact instead: the transcript is made after the meeting ends.
+
+**Two states were added that this table does not have**, both about the note
+rather than the transcript. `failed` keeps the box open after a failed save,
+because the text in it is the only copy and clearing it would destroy something
+the operator cannot retype. `unreadable` closes the box when a note exists that
+this build could not parse — an empty box the operator fills would replace words
+they never saw.
+
+**Storage is the interpretation/evidence distinction, made concrete.** Evidence
+artifacts here are digest-named and bound into `meeting.json`, so a citation can
+only resolve to verified bytes. Nothing cites an operator note. Binding it that
+way would rewrite the meeting record on every autosave and strand an orphaned
+file behind each one, so it is a fixed path in the meeting directory, replaced
+atomically, and the frozen `meeting/2` contract is untouched — which also means
+a note can never make a meeting unreadable to an older build. It is kept with
+the transcript, not the audio, so the retention period does not remove it.
+
+**The note is shown back on the finished-transcript screen, read-only.** Left
+only on the recording screen it would appear to vanish at the moment the meeting
+ended, onto a screen with no way back. Read-only because §D is about writing
+*during* the meeting; an editor after it ends would imply the note is still
+being taken.
+
+**What bounds a crash.** Typing is saved on a 1.2 s debounce and flushed before
+the meeting leaves the recording screen — the closing thought is written as a
+call wraps up, and a debounce alone would lose exactly that one. A crash between
+saves loses at most the typing since the last one; the atomic replace means it
+can never leave a half-written note.
+
 ### Amendment 2026-08-05 — the gate now fires, and two of its reports have no surface
 
 The speaker gate was wired into transcription on 2026-08-05

@@ -536,3 +536,40 @@ export function firstRunDeniedPermissionName(result) {
     ? "Microphone"
     : "System Audio Recording";
 }
+
+// § D. What the live-note surface says about itself.
+//
+// Kept pure and here, with the shell's other decisions, because the previous
+// surface built inline in main.js shipped a route nothing could test. The four
+// states are the ones that can actually occur in this build; `streaming` and
+// `lagging` from the screen inventory cannot, because nothing transcribes while
+// a meeting runs — capture finishes, then the transcript is made. A surface
+// carrying a state its pipeline cannot reach is the failure feature 10 forbids,
+// so they are absent rather than stubbed.
+//
+// `unreadable` is not an error state that resolves on retry. It means a note
+// exists that this build could not parse, and the only correct response is to
+// stop offering to type over it — an empty box the operator fills would replace
+// words they never saw.
+export function liveNoteStatus(note = {}) {
+  if (note.unreadable) {
+    return {
+      state: "unreadable",
+      editable: false,
+      message: "An earlier note for this meeting could not be read, so it has been left alone.",
+    };
+  }
+  if (note.failed) {
+    return { state: "failed", editable: true, message: note.failed };
+  }
+  if (note.pending) {
+    return { state: "typing", editable: true, message: "Saving…" };
+  }
+  if (note.saved) {
+    return { state: "typing", editable: true, message: "Saved." };
+  }
+  if (!note.text) {
+    return { state: "empty", editable: true, message: "" };
+  }
+  return { state: "typing", editable: true, message: "" };
+}

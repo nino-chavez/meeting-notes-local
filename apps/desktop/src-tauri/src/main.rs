@@ -21,6 +21,10 @@ mod manual_delete_facade;
 // probe and parses its output as untrusted input; holds no storage authority and
 // reads no operator content.
 mod first_run;
+// § D. The operator's own note, typed during the meeting. Interpretation, not
+// evidence: a fixed path in the meeting directory, replaced atomically, with the
+// frozen `meeting/2` contract untouched. See the module for why.
+mod operator_note;
 // The storage-backed coordinator and worker bridge behind product_facade.
 // Managed as state so the facade commands can be registered in one move once
 // the operator widens the packaged admission; the commands stay unregistered.
@@ -1715,6 +1719,50 @@ fn first_run_request_system_audio(
 ///
 /// Returns nothing. The snapshot poll carries the result, so there is one path
 /// by which a projection reaches a screen rather than two that can disagree.
+/// The meeting directory of whatever meeting is currently projected.
+///
+/// § D's commands take no meeting identifier from the shell. The note belongs to
+/// the meeting the operator is in, and letting a surface name a different one
+/// would make the note addressable by a caller that has no business addressing
+/// it.
+fn current_meeting_dir(state: &ApplicationState) -> Result<std::path::PathBuf, String> {
+    let meeting_id = state
+        .model
+        .lock()
+        .expect("application model lock")
+        .meeting_id
+        .clone()
+        .ok_or_else(|| "There is no meeting open.".to_string())?;
+    let storage = {
+        let guard = state.storage.lock().expect("storage context lock");
+        guard
+            .as_ref()
+            .map(|context| context.storage.clone())
+            .ok_or_else(|| "Local storage is unavailable.".to_string())?
+    };
+    meeting_dir(&storage, &meeting_id).map_err(error_text)
+}
+
+/// Reading is separate from the snapshot on purpose: the note can be long, the
+/// snapshot is polled every 400 ms while recording, and putting operator prose on
+/// that path would carry it through every tick for no reader.
+#[tauri::command(async)]
+fn operator_note(state: State<'_, ApplicationState>) -> Result<operator_note::OperatorNote, String> {
+    Ok(operator_note::read(&current_meeting_dir(&state)?))
+}
+
+#[tauri::command(async)]
+fn save_operator_note(
+    state: State<'_, ApplicationState>,
+    text: String,
+) -> Result<operator_note::OperatorNote, String> {
+    let directory = current_meeting_dir(&state)?;
+    operator_note::write(&directory, &text)?;
+    // Answer with what is now on disk rather than echoing the argument, so the
+    // surface's "saved" is a statement about storage and not about the request.
+    Ok(operator_note::read(&directory))
+}
+
 #[tauri::command(async)]
 fn refresh_current_transcript(state: State<'_, ApplicationState>) -> Result<(), String> {
     let meeting_id = {
@@ -3269,6 +3317,8 @@ fn main() {
             first_run_request_microphone,
             first_run_request_system_audio,
             refresh_current_transcript,
+            operator_note,
+            save_operator_note,
             preview_library_snapshot,
             preview_retention_overview,
             preview_profile_snapshot,

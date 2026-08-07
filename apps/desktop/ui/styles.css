@@ -469,3 +469,48 @@ footer {
 }
 .first-run-state[data-state="ok"] { color: var(--accent); }
 .first-run-state[data-state="warn"] { color: var(--danger); }
+
+/* § D. The operator's own note.
+   No accent anywhere: DIRECTION.md reserves it for live capture, and this sits
+   on the recording screen beside the thing that owns it. */
+.live-note {
+  margin: 1.5rem 0 0;
+  padding: 1rem;
+  border: 1px solid var(--rule, #d8d8d4);
+  border-radius: 8px;
+}
+.live-note h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
+.live-note textarea {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.6rem;
+  font: inherit;
+  line-height: 1.5;
+  border: 1px solid var(--rule, #d8d8d4);
+  border-radius: 6px;
+  resize: vertical;
+}
+.live-note textarea:disabled {
+  background: var(--surface-muted, #f4f4f2);
+  cursor: not-allowed;
+}
+.live-note-state {
+  min-height: 1.2em;
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted, #66665f);
+}
+/* Failure is the one state that must be legible without reading the words. It
+   takes the same token every other refusal on this shell takes. */
+.live-note[data-state="failed"] .live-note-state,
+.live-note[data-state="unreadable"] .live-note-state {
+  color: var(--semantic-error, #a3271f);
+}
+.transcript-note-text {
+  margin: 0.5rem 0 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}

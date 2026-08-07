@@ -14,6 +14,7 @@ import {
   operatingPointPresentation,
   changedStatusText,
   firstRunDeniedPermissionName,
+  liveNoteStatus,
   firstRunStepFor,
   captureChannelPresentation,
   connectionUncertaintyStatus,
@@ -882,4 +883,30 @@ test("first run routes on what was measured, and never on what was not", () => {
     firstRunDeniedPermissionName(probe({ microphone: "unmeasured", systemAudio: "unavailable" })),
     "System Audio Recording",
   );
+});
+
+test("the live note reports only states this build can actually reach", () => {
+  // Nothing transcribes while a meeting runs — capture finishes, then the
+  // transcript is made — so `streaming` and `lagging` from the screen inventory
+  // cannot occur and are not rendered. These four can.
+  assert.equal(liveNoteStatus({}).state, "empty");
+  assert.equal(liveNoteStatus({ text: "a thought" }).state, "typing");
+  assert.equal(liveNoteStatus({ text: "a thought", pending: true }).message, "Saving…");
+  assert.equal(liveNoteStatus({ text: "a thought", saved: true }).message, "Saved.");
+
+  // An unreadable note is not an error that clears on retry: it means words
+  // exist that this build could not parse, and typing into an empty box would
+  // replace text the operator never saw. So the box closes.
+  const unreadable = liveNoteStatus({ unreadable: true, text: "" });
+  assert.equal(unreadable.state, "unreadable");
+  assert.equal(unreadable.editable, false);
+
+  // A failed save keeps the box open, because the text in it is the only copy.
+  const failed = liveNoteStatus({ text: "a thought", failed: "That note could not be saved." });
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.editable, true);
+  assert.equal(failed.message, "That note could not be saved.");
+
+  // Unreadable outranks everything, including a pending save.
+  assert.equal(liveNoteStatus({ unreadable: true, pending: true, failed: "x" }).editable, false);
 });

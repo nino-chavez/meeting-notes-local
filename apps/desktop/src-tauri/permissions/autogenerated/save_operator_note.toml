@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-operator-note"
+description = "Enables the save_operator_note command without any pre-configured scope."
+commands.allow = ["save_operator_note"]
+
+[[permission]]
+identifier = "deny-save-operator-note"
+description = "Denies the save_operator_note command without any pre-configured scope."
+commands.deny = ["save_operator_note"]

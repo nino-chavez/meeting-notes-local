@@ -97,6 +97,9 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
             // right after a recording needs its projection rebuilt in place —
             // it has no reader to re-walk the way the Library route does.
             "refresh_current_transcript",
+            // § D, 2026-08-06: the operator's own note, for the open meeting only.
+            "operator_note",
+            "save_operator_note",
         ]
     );
 }

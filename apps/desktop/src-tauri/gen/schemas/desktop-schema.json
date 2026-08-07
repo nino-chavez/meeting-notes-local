@@ -207,6 +207,12 @@
           "markdownDescription": "Enables the first_run_request_system_audio command without any pre-configured scope."
         },
         {
+          "description": "Enables the operator_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-operator-note",
+          "markdownDescription": "Enables the operator_note command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_delete_meeting_audio command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-delete-meeting-audio",
@@ -321,6 +327,12 @@
           "markdownDescription": "Enables the retry_startup command without any pre-configured scope."
         },
         {
+          "description": "Enables the save_operator_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-operator-note",
+          "markdownDescription": "Enables the save_operator_note command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_meeting command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-meeting",
@@ -361,6 +373,12 @@
           "type": "string",
           "const": "deny-first-run-request-system-audio",
           "markdownDescription": "Denies the first_run_request_system_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the operator_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-operator-note",
+          "markdownDescription": "Denies the operator_note command without any pre-configured scope."
         },
         {
           "description": "Denies the preview_delete_meeting_audio command without any pre-configured scope.",
@@ -475,6 +493,12 @@
           "type": "string",
           "const": "deny-retry-startup",
           "markdownDescription": "Denies the retry_startup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_operator_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-operator-note",
+          "markdownDescription": "Denies the save_operator_note command without any pre-configured scope."
         },
         {
           "description": "Denies the start_meeting command without any pre-configured scope.",

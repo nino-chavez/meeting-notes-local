@@ -107,7 +107,9 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-preview-library-open-transcript",
             "allow-preview-delete-meeting-audio",
             "allow-restore-withheld-turn",
-            "allow-refresh-current-transcript"
+            "allow-refresh-current-transcript",
+            "allow-operator-note",
+            "allow-save-operator-note"
         ])
     );
     assert!(capability.get("remote").is_none());
@@ -290,7 +292,9 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-preview-library-open-transcript",
             "allow-preview-delete-meeting-audio",
             "allow-restore-withheld-turn",
-            "allow-refresh-current-transcript"
+            "allow-refresh-current-transcript",
+            "allow-operator-note",
+            "allow-save-operator-note"
         ])
     );
     let serialized = serde_json::to_string(&capability).unwrap();
@@ -1272,4 +1276,62 @@ fn the_screen_after_a_recording_can_restore_a_withheld_turn() {
     // Success and redraw are separate sentences. Saying "not restored" after a
     // restore that worked tells the operator to retry something already done.
     assert!(script.contains("The turn was restored. This view could not be refreshed"));
+}
+
+/// § D. The operator's own note, and the three ways this surface could lie.
+///
+/// Brought into v1 by operator decision 2026-08-06; the scope amendment is in
+/// `docs/product-definition.md`.
+#[test]
+fn the_live_note_is_the_operators_alone_and_says_what_it_cannot_do() {
+    let html = include_str!("../../ui/index.html");
+    let script = include_str!("../../ui/main.js");
+    let source = include_str!("../src/main.rs");
+    let module = include_str!("../src/operator_note.rs");
+
+    // It is on the recording screen, where the meeting is.
+    let recording = html
+        .split_once("id=\"recording-screen\"")
+        .expect("recording screen")
+        .1
+        .split_once("</section>\n\n      <section")
+        .map(|(body, _)| body)
+        .unwrap_or_default();
+    assert!(recording.contains("id=\"live-note-text\""));
+
+    // First lie prevented: implying a transcript is being written alongside the
+    // typing. Nothing transcribes while a meeting runs, and the screen says so.
+    assert!(html.contains("The transcript is made after the meeting ends, not while it runs."));
+
+    // Second: appearing to lose the note when the meeting ends. It is shown back
+    // on the finished-transcript screen rather than left on a screen with no way
+    // back, and rendered as text, never as markup.
+    assert!(html.contains("id=\"transcript-note\""));
+    assert!(script.contains("transcriptNoteText.textContent = text;"));
+    assert!(!script.contains("innerHTML"));
+
+    // Third: losing the last thing typed. The debounce is flushed before the
+    // meeting moves on, which is when the closing thought gets written.
+    assert!(script.contains("await flushLiveNote();"));
+
+    // The note is not evidence and is not stored as evidence: no meeting-record
+    // field, a fixed path, replaced atomically. The frozen `meeting/2` contract
+    // must stay untouched — a note can never make a meeting unreadable.
+    assert!(module.contains("const FILE_NAME: &str = \"operator-note.json\";"));
+    assert!(module.contains("durable_replace("));
+    assert!(!module.contains("MeetingArtifacts"));
+
+    // Neither command takes a meeting identifier from the shell.
+    assert!(source.contains("fn operator_note(state: State<'_, ApplicationState>)"));
+    assert!(!script.contains("invoke(\"save_operator_note\", { text, meetingId"));
+    let handler_start = source
+        .find(".invoke_handler(tauri::generate_handler![")
+        .expect("named command handler");
+    let handler_end = source[handler_start..]
+        .find("])")
+        .expect("named command handler end")
+        + handler_start;
+    let handler = &source[handler_start..handler_end];
+    assert!(handler.contains("operator_note"));
+    assert!(handler.contains("save_operator_note"));
 }

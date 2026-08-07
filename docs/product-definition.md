@@ -105,6 +105,39 @@ proportion figure into something a real capture produces. It is also gated on
 human semantic adjudication (`vertical-slice.md` wave D), so no amount of
 autonomous work closes it alone.
 
+### Amendment 2026-08-06 — the operator-authored live note enters v1
+
+`vertical-slice.md` wave H placed the operator-authored live note outside v1,
+alongside the EventKit brief and detection, each needing its own contract. The
+operator moved it into scope on 2026-08-06 and it is being built. Recorded here
+first, per this file's own rule, because it serves no existing north-star
+feature and so cannot be built quietly.
+
+**What it is.** The operator types their own notes during the meeting, on the
+recording surface (§D). This is the Granola insight and the reason the product
+is not a transcript viewer: what a person chooses to write down while listening
+is not recoverable from the recording afterwards.
+
+**What it is not, and why no non-goal moves.** It is not a task manager — the
+text is the operator's own prose, with no status, checkbox, or owner field. It
+is not evidence: the canonical transcript remains the sole retained record, and
+nothing cites an operator note or resolves a claim to it. Nothing leaves the
+Mac. No content is generated, so there is nothing to invent.
+
+**It is interpretation, and it is stored as interpretation.** This decides the
+storage shape. Evidence artifacts in this product are digest-named and bound
+into `meeting.json`, so a citation can only ever resolve to bytes that were
+verified. An operator note is cited by nothing, and binding it that way would
+rewrite the meeting record on every autosave and leave an orphaned digest-named
+file behind each time. It is therefore a fixed-path file in the meeting
+directory, atomically swapped, and the meeting record does not change. The
+frozen `meeting/2` contract is untouched, which also means an operator note can
+never make a meeting unreadable to a build that predates it.
+
+**Retention follows the transcript, not the audio.** It is text the operator
+wrote, so it is kept for as long as the transcript is kept and is not subject to
+the audio deletion period.
+
 ---
 
 ## What this product must not become
