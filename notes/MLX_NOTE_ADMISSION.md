@@ -2116,3 +2116,41 @@ first time a revert could be.
 It is also the strongest available confirmation of the finding above. The gate's cost
 was not a coincidence of a noisy run: removing it removed exactly the two regressions
 and nothing else, in the same environment, byte for byte.
+
+### 2026-08-07 — the harness digest now ratchets, closing the asymmetry named earlier
+
+Intervention six recorded a gap and declined to fix it there: `mlx_note_admission.py`
+is hashed into every receipt's `harness` block, and nothing checked it. The
+orchestrator could not change without a matrix re-run; the harness could change
+freely.
+
+**That asymmetry was not theoretical, and it fired twice in one day without a single
+test failing.** `RECORD` left the runtime pin in the morning, and the conditional
+gate arrived and was withdrawn in the afternoon. Both moved the harness. Both left
+every receipt committed before them naming a hash of a file that no longer existed.
+
+The harness is the instrument for the model arm — it builds the request, parses the
+response, and runs the gates. Intervention eight showed at full strength what a
+harness edit can do to a receipt's meaning: one change moved all thirteen request
+digests and regressed two unrelated fixtures. A receipt that cannot say which harness
+produced it is exactly as useless as one that cannot say which orchestrator did.
+
+`test_the_current_harness_has_produced_committed_evidence` now asserts the same
+property the orchestrator has: the current file has produced *some* committed
+receipt. A shape test alongside it requires every receipt to carry a 64-hex harness
+digest and a base revision, so a receipt cannot satisfy the ratchet by omitting the
+field.
+
+**Verified in the direction that matters.** Appending a single comment line to
+`mlx_note_admission.py` fails the test; restoring the file passes it. A gate that
+cannot fail is not a gate that passed, which is this suite's own stated rule.
+
+**The cost is real, and naming it is the point.** Every edit to
+`mlx_note_admission.py` now requires a matrix re-run before the suite is green, and
+that file changes far more often than the orchestrator. **This is affordable only
+because the runtime pin was fixed the same morning.** Before that, the matrix could
+be run by exactly one environment on one machine, and this ratchet would have been
+unsatisfiable by anyone else — it would have converted every harness edit into a
+blocked change rather than a four-minute one. The pin fix is what makes the
+discipline payable, which is a better argument for it than any of the ones written
+when it landed.
