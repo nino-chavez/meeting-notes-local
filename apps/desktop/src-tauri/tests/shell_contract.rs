@@ -26,7 +26,17 @@ fn generated_preview_library_buttons_bind_their_own_activation() {
         shell.contains("const row = document.createElement(metadataOnly ? \"div\" : \"button\");")
     );
     assert!(shell.contains("row.transcriptAvailable ? \"Open meeting\" : \"Open details\""));
-    assert!(shell.contains("`${formatMeetingTime(row.createdAtEpochSeconds)} · No transcript`"));
+    // The row's subtitle is composed from the label source, because the label
+    // is now one of three things. When there is no title the capture time *is*
+    // the label, so the subtitle must not repeat it.
+    assert!(shell.contains("const captured = formatMeetingTime(row.createdAtEpochSeconds);"));
+    assert!(shell.contains("if (labelSource !== \"date\") notes.push(captured);"));
+    assert!(shell.contains("if (labelSource === \"derived\") notes.push(\"Opening line\");"));
+    assert!(shell.contains("if (!row.transcriptAvailable) notes.push(\"No transcript\");"));
+    assert!(
+        !shell.contains("Untitled meeting"),
+        "every meeting read this, all of them at once, until auto-titling"
+    );
     assert!(!shell.contains("Transcript unavailable"));
     assert!(!shell.contains("libraryList.addEventListener(\"click\""));
     assert!(!shell.contains("librarySearchResults.addEventListener(\"click\""));

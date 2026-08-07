@@ -41,7 +41,17 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is Wave 1 item 2, auto-titling.** Item 1 landed on 2026-08-07.
+**The next build is the second half of Wave 1 item 2: the local model that chooses
+which words name a meeting.** Item 1 landed on 2026-08-07 and so did item 2's first
+half — a meeting is now named by its own opening line, extracted deterministically,
+with the operator's title outranking it and its capture time beneath it. Row 2 below
+is deliberately not struck through, because the half the queue put there — proving
+the store and a local model are wired end to end — has not been built.
+
+Read `backlog.md` US-16.2 before starting it. The short version: the model returns a
+turn index and a character span, never text; an unresolvable span is discarded and
+the deterministic rule produces the name instead; and admission is the operator's,
+not the builder's.
 
 A struck-through row is finished; the first row that is not struck through is the
 work. That rule is the whole resume protocol, and it holds whether the session
@@ -86,7 +96,7 @@ largest surface-area addition and says it has nothing to do with audio.
 | Order | Build | Feature | Why here |
 |---|---|---|---|
 | 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. What remains is US-13.6: the full scan still runs first, because skipping unchanged meetings needs a per-meeting entry point into an audited module | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and, measured, refuses a common word at one meeting |
-| 2 | Auto-titling | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
+| 2 | Auto-titling. **Naming landed 2026-08-07** — `meeting_title.rs`, the first non-gated turn's opening sentence, behind an operator title and above the capture time. What remains is the local model that picks *which* span, which is the half this row was put here for | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | Folders, and the meeting object's sibling views | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | Filters — people, date range, keywords, titles | D3 | Gong documents all four. Free once the store exists |
 | 5 | Semantic search over the corpus, beside exact | D2 | Exact is Registered; semantic is what a question needs |
@@ -1195,6 +1205,23 @@ revision and writes nothing. A missing record means revision zero with no rows.
 A malformed record is left untouched; meetings remain readable under generated
 date-based labels in `Unfiled`, while organization mutation is disabled and a
 content-free recovery diagnostic is shown.
+
+**A meeting's displayed name has three sources and they rank, amended 2026-08-07.**
+The operator's title in this record; then a *derived* title, which is the first
+non-gated transcript turn whose opening sentence runs to at least six words, cleaned
+and cut to the same 120-scalar ceiling; then the meeting's capture time. Only the
+first is authority. The second is recomputed from the validated turns on every read
+and stored nowhere — it is a library label, and no derived index may hold the sole
+copy of one. It is a contiguous span of a canonical turn, never a composed phrase,
+which is what keeps a machine-supplied name inside the rule that evidence is never
+decoration. A gated turn is never its source. It is not a search field, because
+every span it can return is already indexed as part of the turn it came from.
+
+The third is not a string this contract produces. A row already carries
+`created_at_epoch_seconds`, and the surface rendering it knows the operator's locale
+and zone; a second UTC copy of the same instant would be a duplicate rather than a
+label. The two sentences above that promised a "generated date-based label" are
+satisfied by naming the source, not by shipping a formatted string from Rust.
 
 Creating, renaming, or deleting a folder and assigning, unfiling, or titling a
 meeting changes only this record. Deleting a folder atomically sets every row

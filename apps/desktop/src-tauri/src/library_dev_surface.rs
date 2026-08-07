@@ -98,7 +98,12 @@ fn snapshot_response(state: &DevSurfaceState) -> LibrarySnapshot {
         let mut response = library.reader.snapshot(&library.active_meeting_ids);
         if response.state == "populated" {
             for row in &mut response.rows {
-                row.label = "Sanitized library sample".into();
+                // `operator`, not the row's real source: the sanitized string
+                // is not derived from anything, and letting it inherit a
+                // `derived` source would put an "opening line" marker on text
+                // no meeting ever contained.
+                row.label = Some("Sanitized library sample".into());
+                row.label_source = "operator";
             }
             response.message =
                 "Synthetic, sanitized development data only. This does not open production data."

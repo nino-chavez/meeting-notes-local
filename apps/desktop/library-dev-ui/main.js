@@ -115,7 +115,9 @@ async function load() {
     libraryList.replaceChildren();
     message(libraryState, snapshot.message, snapshot.state);
     for (const row of snapshot.rows) {
-      const open = button(row.label, "library-row");
+      // Nullable since auto-titling: a meeting with no title and no transcript
+      // sends none, and this surface's own fixture always has one.
+      const open = button(row.label || "Synthetic meeting", "library-row");
       const detail = document.createElement("small");
       detail.textContent = "Synthetic meeting · transcript available";
       open.append(detail);

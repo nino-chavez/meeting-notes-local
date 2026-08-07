@@ -110,6 +110,21 @@ impl LibraryRow {
         self.title.as_deref()
     }
 
+    /// The meeting's own opening line, when it has a transcript with one.
+    ///
+    /// Recomputed from the validated turns rather than stored, and it is not a
+    /// search field: every span it can return is already indexed as part of the
+    /// retained turn it came from, so indexing it again would return the same
+    /// text twice under two hit kinds. See [`crate::meeting_title`] for why it
+    /// is extracted rather than composed.
+    pub fn derived_title(&self) -> Option<String> {
+        crate::meeting_title::derived_title(
+            self.turns
+                .iter()
+                .map(|turn| (turn.text.as_str(), turn.gated)),
+        )
+    }
+
     /// Everything a derived index is permitted to persist, and nothing else.
     ///
     /// A cache downstream of this method cannot hold a field this module did
@@ -2163,6 +2178,80 @@ mod tests {
             matches!(projection.open(&fixture.storage, &title[0]).unwrap(), OpenedLibraryHit::Meeting { ref title, ref folder, .. } if title.as_deref() == Some("Project kickoff") && folder.as_deref() == Some("Project Atlas"))
         );
         assert_eq!(projection.search("transcript").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_derived_title_is_the_first_long_enough_visible_turn_and_is_never_a_search_field() {
+        let fixture = Fixture::new();
+        fixture.meeting(
+            "meeting-a",
+            10,
+            &[
+                ("Hi.", false),
+                ("The insurer refused the claim again this week.", true),
+                ("We should walk through the migration plan today.", false),
+            ],
+        );
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let row = &projection.rows()[0];
+        assert_eq!(
+            row.derived_title().as_deref(),
+            Some("We should walk through the migration plan today"),
+            "the greeting is too short and the withheld turn is not a label source"
+        );
+        assert!(
+            projection.search("insurer").unwrap().len() == 1
+                && matches!(
+                    projection
+                        .open(&fixture.storage, &projection.search("insurer").unwrap()[0])
+                        .unwrap(),
+                    OpenedLibraryHit::Withheld { .. }
+                ),
+            "the withheld turn stays withheld, which is what it must not leak past"
+        );
+
+        // A derived title is a span of a retained turn, so the turn already
+        // answers for it. One hit, of the transcript kind — not a second
+        // meeting hit for the same words under a label.
+        let hits = projection.search("migration plan").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(matches!(
+            projection.open(&fixture.storage, &hits[0]).unwrap(),
+            OpenedLibraryHit::Transcript { .. }
+        ));
+    }
+
+    #[test]
+    fn an_operator_title_and_a_derived_title_are_separate_readings_of_the_same_row() {
+        let fixture = Fixture::new();
+        fixture.meeting(
+            "meeting-a",
+            10,
+            &[("We should walk through the migration plan today.", false)],
+        );
+        fixture.metadata(
+            br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"Migration review","folder_id":null}]}"#,
+        );
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let row = &projection.rows()[0];
+        assert_eq!(row.title(), Some("Migration review"));
+        assert_eq!(
+            row.derived_title().as_deref(),
+            Some("We should walk through the migration plan today"),
+            "the operator's title is authority over what is displayed, not over \
+             what the transcript says"
+        );
+    }
+
+    #[test]
+    fn a_meeting_with_no_transcript_has_no_derived_title() {
+        let fixture = Fixture::new();
+        fixture.metadata_only_meeting("meeting-a", 10, MeetingLifecycle::Captured);
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert_eq!(projection.rows()[0].derived_title(), None);
     }
 
     #[test]
