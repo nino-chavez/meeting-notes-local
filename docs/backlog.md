@@ -89,7 +89,8 @@ summarised. Those need **Receipted**, and receipts live outside Git by design.
 Check inventory as of 2026-08-07, verified by counting `#[test]` in the sources
 rather than by repeating a prior claim: 269 session-core lib, 16 session-core
 integration, 115 desktop lib, 33 shell-contract, 9 build-matrix, 107 Python,
-42 shell JS. The session-core figure was recorded as 247 earlier the same day and
+42 shell JS (session-core reached 276 with the same-day corrections in US-13.2,
+US-13.3, US-13.4 and US-13.7). The session-core figure was recorded as 247 earlier the same day and
 was already stale; it matches what the runner reports, which is the check worth
 using.
 
@@ -121,7 +122,7 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6 D3** | 6 | **Landed 2026-08-07**, except US-13.6 |
+| **E13** | **The corpus store** | **E6 D3** | 7 | **Landed 2026-08-07**, except US-13.6 |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | — | Wave 1 item 3 |
 | **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | — | Wave 1 items 4–6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | — | Wave 1 item 2, Wave 2 items 7–8 |
@@ -1073,7 +1074,7 @@ answer.
 
 **Decomposed 2026-08-07, when the queue reached it.** The catalog's rule is that new
 epics carry no stories until they are about to be built; this is the first one to
-arrive. Six stories, of which four landed the same day.
+arrive. Seven stories, of which six landed the same day.
 
 #### US-13.1: Measure the scan before replacing it
 **Feature E6 · — · — · P0 · S · Landed 2026-08-07**
@@ -1109,7 +1110,9 @@ meetings live.
 
 **Refusals:** no column may hold anything the canonical files did not produce. The index reaches its data only through `LibraryRow::derived`, so it cannot become a second parser of private bytes, and claims are deliberately excluded because they come from an out-of-process projector rather than from a file.
 
-**Validation:** **Pinned** — `corpus_index::tests::rebuild_from_files_equals_the_live_index` deletes the database and requires digest equality; `a_synced_index_holds_one_row_per_validated_meeting`; `a_removed_meeting_leaves_no_turn_behind`.
+**Validation:** **Pinned** — `corpus_index::tests::rebuild_from_files_equals_the_live_index` deletes the database and requires digest equality; `a_column_no_file_produced_breaks_the_rebuild_digest` proves that test can actually see a write-only column; `a_synced_index_holds_one_row_per_validated_meeting`; `a_removed_meeting_leaves_no_turn_behind`; `an_older_schema_is_dropped_and_re_derived_rather_than_read`.
+
+**Correction, same day.** The first version of `fingerprint()` named its columns and counted to eleven, so a column added by a later migration would never have reached the digest — the rebuild test would have passed with exactly the write-only field it exists to catch. It now uses `SELECT *` driven by `column_count()`, and `a_column_no_file_produced_breaks_the_rebuild_digest` adds a column and requires the digest to move. A pin is only as wide as what it reads.
 
 #### US-13.3: The store answers where the scan refuses
 **Feature D3 · J1 · §F · P0 · M · Landed 2026-08-07**
@@ -1124,7 +1127,7 @@ corpus stays navigable once it is larger than a screen.
 
 **Refusals:** a page must never be presentable as the whole answer. The scan's rule — never expose a prefix as a library — survives as two fields rather than as a refusal.
 
-**Validation:** **Pinned** — `corpus_index::tests::a_filter_answers_where_the_scan_refuses` asserts the scan refuses and the filter answers on the same corpus; `lifecycle_round_trips_through_its_canonical_name`.
+**Validation:** **Pinned** — `corpus_index::tests::a_filter_answers_where_the_scan_refuses` asserts the scan refuses and the filter answers on the same corpus; `list_order_matches_the_scans_order` compares against `LibraryProjection::rows()` itself, on a fixture with two meetings sharing a timestamp so the tiebreak is exercised; `lifecycle_round_trips_through_its_canonical_name`.
 
 #### US-13.4: The database is as private as the files
 **Feature E6 · — · — · P0 · M · Landed 2026-08-07**
@@ -1136,9 +1139,11 @@ corpus stays navigable once it is larger than a screen.
 
 **Refusals:** SQLite opens a path, so none of `storage.rs`'s descriptor-bound guards apply to it. Those checks are re-implemented at the boundary rather than assumed. Error values are content-free: a SQLite error string can carry a column value, and the column values here are transcript text.
 
-**Validation:** **Pinned** — `corpus_index::tests::every_file_the_index_leaves_behind_is_private`, `a_group_readable_database_is_refused_rather_than_opened`.
+**Validation:** **Pinned** — `corpus_index::tests::every_file_the_index_leaves_behind_is_private`, `a_group_readable_database_is_refused_rather_than_opened`, `the_journal_mode_is_read_back_rather_than_assumed`, `a_deleted_meetings_words_do_not_survive_in_the_database_file`.
 
 **Evidence:** WAL was rejected for this reason. Its `-wal` and `-shm` sidecars would hold transcript bytes under permissions SQLite chooses; rollback journalling leaves one file at rest. `secure_delete` is on so a deleted meeting's pages are overwritten rather than left legible in free space, which is how audio is already treated here.
+
+**Correction, same day.** Both halves of that paragraph were prose with nothing behind them. A file listing cannot detect WAL — SQLite removes the sidecars on a clean close, so the one-file assertion passes either way — and `journal_mode` is the pragma where a set can silently not take. It is now read back and the open refuses on anything but `delete`. The `secure_delete` claim is checked the only way it can be: write a distinctive word, remove the meeting, re-sync, and grep the raw database bytes for it.
 
 #### US-13.5: An index carries its own provenance and refuses a future it cannot read
 **Feature E6 · — · — · P1 · S · Landed 2026-08-07**
@@ -1148,6 +1153,26 @@ corpus stays navigable once it is larger than a screen.
 - Given a file written by a newer schema, When an older build opens it, Then the open is refused rather than reading columns whose meaning changed.
 
 **Validation:** **Pinned** — `corpus_index::tests::the_index_records_the_sqlite_build_that_wrote_it`, `a_newer_schema_refuses_instead_of_reading_columns_it_does_not_know`.
+
+#### US-13.7: The index is built where the library is read
+**Feature E6 · J1 · §F · P0 · S · Landed 2026-08-07**
+
+As the Operator, I want the store to exist on my disk without doing anything to
+create it, so that the corpus features have something to read the first time I
+open the library.
+
+**Acceptance criteria:**
+- Given the library is opened or invalidated, When the projection is rebuilt, Then the index is synced beside it.
+- Given the corpus has not changed since the last sync, When the path runs again, Then nothing is written.
+- Given the index cannot be opened or written, When the library is read, Then the library behaves exactly as it did before the index existed.
+
+**Refusals:** a cache failure must never reach the operator or degrade a read. Every error from the sync is dropped at the call site, and no diagnostic is emitted, because the only content distinguishing those failures is private.
+
+**Validation:** **Pinned** — `main::tests::preview_reader_commands_preserve_app_snapshot_and_storage_bytes` now asserts that no canonical byte changes across a read and that `library/corpus.sqlite3` is the *only* path that moved; `corpus_index::tests::an_unchanged_corpus_syncs_once_and_then_skips`; `a_direct_replace_clears_the_recorded_corpus_digest`.
+
+**Evidence:** without this the module had no non-test caller, so `Landed` would have described code nobody ran. Skipping an unchanged corpus is what makes a sync affordable on a path walked every time the library opens: one hash over the projection's row identities and one `SELECT`, no write. It is not incremental sync — one changed meeting still replaces the whole index, and US-13.6 carries that.
+
+**Contract amended here, deliberately.** The read path used to be pinned as "no byte in the storage root changes." It is now "no canonical byte changes, and the derived cache is the only thing that moved" — narrower where it must be and stricter everywhere else, since a read path writing anything other than the index still fails the test.
 
 #### US-13.6: The launch scan stops being paid twice
 **Feature E6 · J1 · §F · P0 · M · Next**
