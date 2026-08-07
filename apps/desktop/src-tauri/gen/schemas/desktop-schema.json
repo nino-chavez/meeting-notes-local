@@ -177,64 +177,28 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Enables the app_snapshot command without any pre-configured scope.",
+          "description": "Enables opening a current claim locator from the synthetic library fixture.",
           "type": "string",
-          "const": "allow-app-snapshot",
-          "markdownDescription": "Enables the app_snapshot command without any pre-configured scope."
+          "const": "allow-library-dev-open-evidence",
+          "markdownDescription": "Enables opening a current claim locator from the synthetic library fixture."
         },
         {
-          "description": "Enables the dismiss_meeting command without any pre-configured scope.",
+          "description": "Enables reading current projected claims from the synthetic library fixture.",
           "type": "string",
-          "const": "allow-dismiss-meeting",
-          "markdownDescription": "Enables the dismiss_meeting command without any pre-configured scope."
+          "const": "allow-library-dev-open-note",
+          "markdownDescription": "Enables reading current projected claims from the synthetic library fixture."
         },
         {
-          "description": "Enables the retry_startup command without any pre-configured scope.",
+          "description": "Enables read-only search of the development-only synthetic library.",
           "type": "string",
-          "const": "allow-retry-startup",
-          "markdownDescription": "Enables the retry_startup command without any pre-configured scope."
+          "const": "allow-library-dev-search",
+          "markdownDescription": "Enables read-only search of the development-only synthetic library."
         },
         {
-          "description": "Enables the start_meeting command without any pre-configured scope.",
+          "description": "Enables the development-only synthetic library snapshot.",
           "type": "string",
-          "const": "allow-start-meeting",
-          "markdownDescription": "Enables the start_meeting command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the stop_meeting command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-stop-meeting",
-          "markdownDescription": "Enables the stop_meeting command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the app_snapshot command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-app-snapshot",
-          "markdownDescription": "Denies the app_snapshot command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the dismiss_meeting command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-dismiss-meeting",
-          "markdownDescription": "Denies the dismiss_meeting command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the retry_startup command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-retry-startup",
-          "markdownDescription": "Denies the retry_startup command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the start_meeting command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-start-meeting",
-          "markdownDescription": "Denies the start_meeting command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the stop_meeting command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-stop-meeting",
-          "markdownDescription": "Denies the stop_meeting command without any pre-configured scope."
+          "const": "allow-library-dev-snapshot",
+          "markdownDescription": "Enables the development-only synthetic library snapshot."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
