@@ -163,6 +163,41 @@ def _object(value: object, names: tuple[str, ...]) -> dict:
     return dict(value)
 
 
+# Terms whose disappearance between the cited slice and the claim reverses the
+# meaning rather than shortening it. Registered 2026-08-07 as intervention four,
+# after the semantic-support sheet found `negation-proposal` claiming "merge the
+# red branch" from evidence reading "I propose that we do not merge the red
+# branch" — an inversion no gate refused, because the only thing failing that
+# fixture was the unrelated identifier truncation.
+#
+# This is the rule's one owner. `read_semantic_support.py` imports it rather than
+# keeping a second copy, because two copies of a list like this is the drift the
+# amendment discipline exists to prevent.
+POLARITY_TERMS = ("not", "no", "never", "cannot", "can't", "don't", "doesn't", "without")
+
+
+def polarity_words(text: str) -> set[str]:
+    return {
+        "".join(character for character in token if character.isalnum() or character == "'")
+        .lower()
+        for token in text.split()
+    }
+
+
+def dropped_polarity_terms(cited: str, claim: str) -> list[str]:
+    """Polarity terms present in the evidence and absent from the claim.
+
+    A word-presence test, and deliberately no more. It cannot see a paraphrase
+    that carries the polarity by other words — "we are keeping the red branch"
+    for "do not merge" — and would refuse one wrongly. If that appears, this gate
+    is too crude and must be replaced; the finding it was built for stands either
+    way, because the harness needs some polarity check and had none.
+    """
+    in_evidence = polarity_words(cited)
+    in_claim = polarity_words(claim)
+    return [term for term in POLARITY_TERMS if term in in_evidence and term not in in_claim]
+
+
 def response_contract(manifest: dict) -> dict:
     """Exact strict root, item ordering, and every rule ``_decode_response`` enforces.
 
@@ -238,6 +273,9 @@ def response_contract(manifest: dict) -> dict:
                                 "min_length": 1,
                                 "max_length": 160,
                                 "no_control_characters": True,
+                                # Registered 2026-08-07. A polarity term in the
+                                # canonical cited slice must appear in the claim.
+                                "must_not_drop_polarity_terms": list(POLARITY_TERMS),
                             },
                         },
                     },
@@ -362,6 +400,12 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
             or any(ord(character) < 32 for character in claim)
         ):
             raise AdmissionRefused("response-contract")
+        # A claim that drops its evidence's polarity asserts the opposite of the
+        # words it cites. Checked against the canonical slice rather than the
+        # model's echoed citation, because the echo was already required to match
+        # it and the canonical text is the one the transcript actually holds.
+        if dropped_polarity_terms(canonical_citation, claim):
+            raise AdmissionRefused("claim-polarity")
         selected.append({
             "source_fragment_ids": source_ids,
             "label": label,
@@ -386,6 +430,8 @@ def _refusal_category(code: str) -> str:
         return "citation-source-or-locator"
     if code == "response-length-truncation":
         return "length-or-truncation"
+    if code == "claim-polarity":
+        return "claim-contradicts-cited-evidence"
     return "other-refusal"
 
 

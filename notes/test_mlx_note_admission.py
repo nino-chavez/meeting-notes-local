@@ -12,9 +12,12 @@ sys.path.insert(0, str(ROOT / "notes"))
 
 from mlx_note_admission import (
     MLX_RUNTIME,
+    POLARITY_TERMS,
     _admission_candidates,
     _decode_response,
+    _refusal_category,
     _sha256,
+    dropped_polarity_terms,
     model_request,
     response_contract,
     run_control_arm,
@@ -347,6 +350,72 @@ class MlxNoteAdmissionTests(unittest.TestCase):
                 self.assertEqual(result.outcome, "transcript-only")
                 self.assertEqual(result.code, code)
                 self.assertIsNone(result.note)
+
+    def test_a_claim_that_drops_its_evidence_polarity_is_refused(self) -> None:
+        """The 2026-08-07 finding, pinned.
+
+        `negation-proposal` claimed "merge the red branch" from evidence reading
+        "I propose that we do not merge the red branch". Nothing registered
+        refused it; the only thing failing that fixture was the unrelated
+        identifier truncation, so closing that bug alone would have admitted a
+        claim asserting the opposite of its own cited evidence.
+        """
+        self.assertEqual(
+            dropped_polarity_terms(
+                "I propose that we do not merge the red branch.",
+                "merge the red branch",
+            ),
+            ["not"],
+        )
+
+    def test_a_claim_that_keeps_the_polarity_is_untouched(self) -> None:
+        """The control. A gate that fails this is over-broad and is withdrawn."""
+        self.assertEqual(
+            dropped_polarity_terms(
+                "We decided not to cancel Project Atlas.",
+                "We decided not to cancel Project Atlas.",
+            ),
+            [],
+        )
+        # Shortened, but the polarity survives.
+        self.assertEqual(
+            dropped_polarity_terms(
+                "We decided not to cancel Project Atlas.",
+                "not cancelling Project Atlas",
+            ),
+            [],
+        )
+
+    def test_evidence_without_polarity_never_triggers_the_gate(self) -> None:
+        self.assertEqual(
+            dropped_polarity_terms(
+                "Dana decided that Battery 7 ships on Tuesday.",
+                "Dana decided to ship Battery 7 on Tuesday.",
+            ),
+            [],
+        )
+
+    def test_the_polarity_rule_is_advertised_as_well_as_enforced(self) -> None:
+        """A rule enforced and unstated is the defect response_contract exists to fix."""
+        transcript = synthetic_transcript()
+        manifest = generate_manifest(transcript, STRATEGY_CUE)
+        contract = response_contract(manifest)
+        claim = contract["root"]["properties"]["items"]["item"]["properties"]["claim"]
+        self.assertEqual(
+            claim["must_not_drop_polarity_terms"], list(POLARITY_TERMS)
+        )
+
+    def test_the_polarity_term_list_has_exactly_one_owner(self) -> None:
+        """read_semantic_support imports it; a second copy is the drift to prevent."""
+        source = (Path(__file__).parent / "read_semantic_support.py").read_text()
+        self.assertIn("POLARITY_TERMS = admission.POLARITY_TERMS", source)
+        self.assertNotIn('POLARITY_TERMS = ("not"', source)
+
+    def test_the_refusal_code_has_its_own_category(self) -> None:
+        self.assertEqual(
+            _refusal_category("claim-polarity"),
+            "claim-contradicts-cited-evidence",
+        )
 
     def test_model_tree_digest_excludes_mutable_transfer_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
