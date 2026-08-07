@@ -33,6 +33,7 @@
     "allow-preview-library-open-evidence",
     "allow-preview-library-open-transcript",
     "allow-preview-delete-meeting-audio",
-    "allow-restore-withheld-turn"
+    "allow-restore-withheld-turn",
+    "allow-refresh-current-transcript"
   ]
 }

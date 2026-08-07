@@ -44,6 +44,7 @@ const PREVIEW_COMMANDS: &[&str] = &[
     "preview_library_open_transcript",
     "preview_delete_meeting_audio",
     "restore_withheld_turn",
+    "refresh_current_transcript",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]

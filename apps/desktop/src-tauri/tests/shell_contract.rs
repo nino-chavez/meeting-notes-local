@@ -106,7 +106,8 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-preview-library-open-evidence",
             "allow-preview-library-open-transcript",
             "allow-preview-delete-meeting-audio",
-            "allow-restore-withheld-turn"
+            "allow-restore-withheld-turn",
+            "allow-refresh-current-transcript"
         ])
     );
     assert!(capability.get("remote").is_none());
@@ -288,7 +289,8 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-preview-library-open-evidence",
             "allow-preview-library-open-transcript",
             "allow-preview-delete-meeting-audio",
-            "allow-restore-withheld-turn"
+            "allow-restore-withheld-turn",
+            "allow-refresh-current-transcript"
         ])
     );
     let serialized = serde_json::to_string(&capability).unwrap();
@@ -1216,4 +1218,43 @@ fn first_run_claims_its_route_and_every_panel_can_be_left() {
             "main.js queries #{id}, which no element carries"
         );
     }
+}
+
+/// Feature 6's remedy is reachable where the damage is first seen.
+///
+/// Until now restoration existed only in the Library: the screen shown right
+/// after a recording rendered withheld turns with no control, and the cohort
+/// handoff told operators to navigate to Meetings to fix it. The gate's worst
+/// failure is a colleague beside the operator being cut from a record of a
+/// meeting nobody can hold again, and that remedy is worth less the longer it
+/// waits — so the delay was the defect.
+#[test]
+fn the_screen_after_a_recording_can_restore_a_withheld_turn() {
+    let script = include_str!("../../ui/main.js");
+    let html = include_str!("../../ui/index.html");
+    let source = include_str!("../src/main.rs");
+
+    // The recording screen passes a restore callback, not `null`.
+    assert!(
+        script.contains("attemptTranscriptRestore ? restoreAttemptWithheldTurnAction : null,"),
+        "the post-recording transcript renders withheld turns with no way to restore them"
+    );
+    // Bound to a digest, so a restore can only name the transcript that was read.
+    assert!(script.contains("snapshot.current_transcript_sha256"));
+    assert!(source.contains("current_transcript_sha256: Option<String>"));
+    // And the failure surface is its own element rather than the copy status.
+    assert!(html.contains("id=\"transcript-restore-error\""));
+
+    // Restoring publishes a new transcript, so the projection is rebuilt before
+    // the next poll — otherwise a second restore names a digest that has moved
+    // and is refused as a changed source, on a screen with no refresh.
+    assert!(script.contains("invoke(\"refresh_current_transcript\")"));
+    assert!(source.contains("fn refresh_current_transcript("));
+    // The rebuild refuses a meeting that changed under it, rather than putting
+    // one meeting's words under another's heading.
+    assert!(source.contains("return Err(\"That transcript is no longer open.\".into());"));
+
+    // Success and redraw are separate sentences. Saying "not restored" after a
+    // restore that worked tells the operator to retry something already done.
+    assert!(script.contains("The turn was restored. This view could not be refreshed"));
 }

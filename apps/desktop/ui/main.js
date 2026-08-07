@@ -378,14 +378,74 @@ function endElapsed() {
 let renderedAttemptTurns = [];
 let renderedLibraryTurns = [];
 
+// The frozen restore shape needs the meeting and the digest the projection was
+// verified against. Both come from the snapshot and are held here, never in the
+// DOM — the same rule the Library route follows.
+let attemptTranscriptRestore = null;
+
 function renderTranscript(snapshot) {
   renderedAttemptTurns = Array.isArray(snapshot.turns) ? snapshot.turns : [];
+  attemptTranscriptRestore =
+    snapshot.meeting_id && snapshot.current_transcript_sha256
+      ? {
+          meetingId: snapshot.meeting_id,
+          currentTranscriptSha256: snapshot.current_transcript_sha256,
+        }
+      : null;
   renderTurns(
     document.querySelector("#transcript-turns"),
     document.querySelector("#transcript-warning"),
     snapshot.turns,
     snapshot.warnings,
+    null,
+    // Restoring belongs here and not only in Meetings. The gate's worst failure
+    // is a colleague beside the operator being cut from a record of a meeting
+    // nobody can hold again, and the remedy is worth less the longer it waits.
+    // Sending the operator to another screen to reach it was the delay.
+    attemptTranscriptRestore ? restoreAttemptWithheldTurnAction : null,
   );
+}
+
+async function restoreAttemptWithheldTurnAction(turn, control) {
+  if (!invoke || !attemptTranscriptRestore) return;
+  const context = attemptTranscriptRestore;
+  const restoreError = document.querySelector("#transcript-restore-error");
+  restoreError.hidden = true;
+  restoreError.textContent = "";
+  control.disabled = true;
+  control.textContent = "Restoring…";
+  try {
+    await invoke("restore_withheld_turn", {
+      meetingId: context.meetingId,
+      sourceTranscriptSha256: context.currentTranscriptSha256,
+      sourceTurnIndex: turn.sourceTurnIndex,
+    });
+  } catch (error) {
+    if (currentScreen !== "transcript-screen") return;
+    control.disabled = false;
+    control.textContent = "Restore this turn";
+    restoreError.textContent =
+      typeof error === "string" ? error : "The turn was not restored. Try again.";
+    restoreError.hidden = false;
+    return;
+  }
+  // Past this line the turn IS restored. A failure to redraw is a different
+  // sentence from a failure to restore, and saying the first one here would tell
+  // the operator to retry something that already succeeded.
+  try {
+    // A restoration publishes a new current transcript, so the projection on
+    // screen — and the digest a second restore would have to name — are both
+    // stale now. Rebuilding before the next poll is what keeps a second restore
+    // from being refused as a changed source.
+    await invoke("refresh_current_transcript");
+  } catch {
+    if (currentScreen !== "transcript-screen") return;
+    restoreError.textContent =
+      "The turn was restored. This view could not be refreshed — open the meeting from Meetings to read it.";
+    restoreError.hidden = false;
+    return;
+  }
+  await refreshCurrent();
 }
 
 async function copyTranscript(turns, control, status) {

@@ -93,6 +93,10 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
             "preview_library_open_transcript",
             "preview_delete_meeting_audio",
             "restore_withheld_turn",
+            // Restoring publishes a new current transcript, so the screen shown
+            // right after a recording needs its projection rebuilt in place —
+            // it has no reader to re-walk the way the Library route does.
+            "refresh_current_transcript",
         ]
     );
 }

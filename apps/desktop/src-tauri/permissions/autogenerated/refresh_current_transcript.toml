@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-refresh-current-transcript"
+description = "Enables the refresh_current_transcript command without any pre-configured scope."
+commands.allow = ["refresh_current_transcript"]
+
+[[permission]]
+identifier = "deny-refresh-current-transcript"
+description = "Denies the refresh_current_transcript command without any pre-configured scope."
+commands.deny = ["refresh_current_transcript"]

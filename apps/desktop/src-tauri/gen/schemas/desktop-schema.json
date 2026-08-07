@@ -303,6 +303,12 @@
           "markdownDescription": "Enables the preview_retention_overview command without any pre-configured scope."
         },
         {
+          "description": "Enables the refresh_current_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-refresh-current-transcript",
+          "markdownDescription": "Enables the refresh_current_transcript command without any pre-configured scope."
+        },
+        {
           "description": "Enables the restore_withheld_turn command without any pre-configured scope.",
           "type": "string",
           "const": "allow-restore-withheld-turn",
@@ -451,6 +457,12 @@
           "type": "string",
           "const": "deny-preview-retention-overview",
           "markdownDescription": "Denies the preview_retention_overview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the refresh_current_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-refresh-current-transcript",
+          "markdownDescription": "Denies the refresh_current_transcript command without any pre-configured scope."
         },
         {
           "description": "Denies the restore_withheld_turn command without any pre-configured scope.",

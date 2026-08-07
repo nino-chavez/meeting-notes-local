@@ -159,6 +159,13 @@ struct AppModel {
     mic_state: Option<String>,
     system_state: Option<String>,
     turns: Vec<TranscriptTurn>,
+    /// The digest the projection in `turns` was verified against.
+    ///
+    /// Held because the frozen restore shape requires it back, so a restore
+    /// request can only ever name the transcript the operator was actually
+    /// reading. It is a hash of an artifact, not content: the same value the
+    /// Library path already hands the shell.
+    current_transcript_sha256: Option<String>,
     warnings: Vec<String>,
     error: Option<String>,
 }
@@ -175,6 +182,7 @@ impl Default for AppModel {
             mic_state: None,
             system_state: None,
             turns: Vec::new(),
+            current_transcript_sha256: None,
             warnings: Vec::new(),
             error: None,
         }
@@ -194,6 +202,7 @@ impl AppModel {
             mic_state: self.mic_state.clone(),
             system_state: self.system_state.clone(),
             turns: self.turns.clone(),
+            current_transcript_sha256: self.current_transcript_sha256.clone(),
             warnings: self.warnings.clone(),
             error: self.error.clone(),
         }
@@ -206,6 +215,7 @@ impl AppModel {
         self.mic_state = None;
         self.system_state = None;
         self.turns.clear();
+        self.current_transcript_sha256 = None;
         self.warnings.clear();
         self.error = None;
     }
@@ -223,6 +233,7 @@ struct AppSnapshot {
     mic_state: Option<String>,
     system_state: Option<String>,
     turns: Vec<TranscriptTurn>,
+    current_transcript_sha256: Option<String>,
     warnings: Vec<String>,
     error: Option<String>,
 }
@@ -242,6 +253,7 @@ struct TranscriptTurn {
 struct RestoredTranscriptProjection {
     meeting_id: String,
     turns: Vec<TranscriptTurn>,
+    current_transcript_sha256: String,
     warnings: Vec<String>,
 }
 
@@ -481,6 +493,7 @@ fn apply_restored_transcript_projection(
         .map_err(error_text)?;
     model.meeting_id = Some(projection.meeting_id);
     model.turns = projection.turns;
+    model.current_transcript_sha256 = Some(projection.current_transcript_sha256);
     model.warnings = projection.warnings;
     Ok(())
 }
@@ -1683,6 +1696,77 @@ fn first_run_request_system_audio(
     state: State<'_, ApplicationState>,
 ) -> first_run::FirstRunPermissions {
     first_run::request_system_audio(&first_run_manifest_path(&state).unwrap_or_default())
+}
+
+/// Rebuild the live model's transcript projection from storage.
+///
+/// A restoration publishes a *new* current transcript, so the projection the
+/// screen shown right after a recording is holding goes stale the instant one
+/// succeeds — including the digest a second restore would have to name, which
+/// would then be refused as a changed source. The Library route survives this
+/// by re-walking its reader from a fresh snapshot; the recording screen has no
+/// reader to re-walk, so it asks for its projection to be rebuilt in place.
+///
+/// It re-derives everything rather than patching the turn it was told about:
+/// the transcript pointer, the artifact digest, and the withheld set all come
+/// from disk, and a restored view resolves through the same audited chain
+/// walker a cold open uses. Nothing the shell sent is trusted, because the
+/// shell is not what holds the meeting.
+///
+/// Returns nothing. The snapshot poll carries the result, so there is one path
+/// by which a projection reaches a screen rather than two that can disagree.
+#[tauri::command(async)]
+fn refresh_current_transcript(state: State<'_, ApplicationState>) -> Result<(), String> {
+    let meeting_id = {
+        let model = state.model.lock().expect("application model lock");
+        // Only a settled transcript has anything to rebuild. Refusing here keeps
+        // this from touching a meeting that is still recording.
+        if model.reducer.capture() != CaptureState::TranscriptReady {
+            return Err("There is no finished transcript to refresh.".into());
+        }
+        model.meeting_id.clone()
+    }
+    .ok_or_else(|| "There is no finished transcript to refresh.".to_string())?;
+
+    let storage = {
+        let guard = state.storage.lock().expect("storage context lock");
+        guard
+            .as_ref()
+            .map(|context| context.storage.clone())
+            .ok_or_else(|| "Local storage is unavailable.".to_string())?
+    };
+
+    let directory = meeting_dir(&storage, &meeting_id).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    let transcript = meeting
+        .artifacts
+        .current_transcript
+        .clone()
+        .ok_or_else(|| "That meeting has no current transcript.".to_string())?;
+    let (turns, mut warnings) = load_transcript_projection(&directory, &meeting_id, &transcript)?;
+    // Same clause the startup path appends, for the same reason: a transcript
+    // whose audio is gone must say so wherever it is read, not only where it
+    // was first opened.
+    if meeting.retention.state == AudioState::Released {
+        warnings.push(
+            "Meeting audio was deleted under the selected retention period. The transcript remains."
+                .into(),
+        );
+    }
+
+    let mut model = state.model.lock().expect("application model lock");
+    // The meeting can change under a slow read — a dismissal, or another
+    // recording. Publishing a projection onto a different meeting would put one
+    // meeting's words under another's heading.
+    if model.meeting_id.as_deref() != Some(meeting_id.as_str())
+        || model.reducer.capture() != CaptureState::TranscriptReady
+    {
+        return Err("That transcript is no longer open.".into());
+    }
+    model.turns = turns;
+    model.current_transcript_sha256 = Some(transcript.sha256);
+    model.warnings = warnings;
+    Ok(())
 }
 
 #[tauri::command]
@@ -3184,6 +3268,7 @@ fn main() {
             first_run_permissions,
             first_run_request_microphone,
             first_run_request_system_audio,
+            refresh_current_transcript,
             preview_library_snapshot,
             preview_retention_overview,
             preview_profile_snapshot,
@@ -4381,6 +4466,7 @@ fn run_capture_task(
         }
     };
     meeting.lifecycle = MeetingLifecycle::TranscriptReady;
+    let current_transcript_sha256 = transcript_reference.sha256.clone();
     meeting.artifacts.current_transcript = Some(transcript_reference);
     if let Err(error) = write_meeting(&attempt.meeting_dir, &meeting) {
         finish_transcription_failure(
@@ -4400,6 +4486,7 @@ fn run_capture_task(
             model.error = Some("The transcript was saved but its screen could not open.".into());
         } else {
             model.turns = turns;
+            model.current_transcript_sha256 = Some(current_transcript_sha256);
             model.warnings = warnings;
             model.error = None;
             model.mic_state = None;
@@ -4739,6 +4826,7 @@ fn load_latest_transcript_projection(
     Ok(Some(RestoredTranscriptProjection {
         meeting_id,
         turns,
+        current_transcript_sha256: transcript.sha256,
         warnings,
     }))
 }
@@ -7198,6 +7286,46 @@ mod tests {
     }
 
     #[test]
+    /// The digest travels with the projection it verified, and leaves with it.
+    ///
+    /// It is what the frozen restore shape requires back, so the recording
+    /// screen can only ever name the transcript the operator was reading. If it
+    /// outlived a dismissal it would name a meeting that is no longer open; if
+    /// it were absent after a restart the screen would render withheld turns
+    /// with the control silently missing, which is the state feature 6 has been
+    /// in since the gate started withholding anything.
+    #[test]
+    fn the_bound_transcript_digest_arrives_and_leaves_with_its_projection() {
+        let mut model = AppModel::default();
+        assert!(model.snapshot().current_transcript_sha256.is_none());
+        transition_startup(&mut model, StartupState::Checking).unwrap();
+
+        apply_restored_transcript_projection(
+            &mut model,
+            RestoredTranscriptProjection {
+                meeting_id: "meeting".into(),
+                turns: vec![TranscriptTurn {
+                    source_turn_index: 0,
+                    speaker: Some("Me".into()),
+                    start: 0.0,
+                    text: "words".into(),
+                    withheld: false,
+                }],
+                current_transcript_sha256: "a".repeat(64),
+                warnings: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            model.snapshot().current_transcript_sha256.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+
+        model.clear_meeting_projection();
+        assert!(model.snapshot().current_transcript_sha256.is_none());
+        assert!(model.snapshot().turns.is_empty());
+    }
+
     fn view_current_transcript_resolves_with_restored_turn_visible() {
         use local_meeting_notes_session_core::operations::{TranscriptView, TranscriptViewSchema};
         use local_meeting_notes_session_core::storage::{create_private_dir, durable_create_new};
@@ -7289,6 +7417,7 @@ mod tests {
                     text: "visible".into(),
                     withheld: false,
                 }],
+                current_transcript_sha256: "b".repeat(64),
                 warnings: Vec::new(),
             },
         )
