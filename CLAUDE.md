@@ -12,8 +12,16 @@ feature, with everything buildable-without-a-human-decision at the top. The wave
 table under it is the evidence history, not a work order. Surface detail lives in
 [`docs/screens-and-states.md`](./docs/screens-and-states.md), and
 [`docs/backlog.md`](./docs/backlog.md) decomposes the ten features into twelve epics
-and their stories — read it to learn what a piece of work *is*, never to learn when
-it happens. Status has exactly one owner and it is the build queue.
+and 75 stories — read it to learn what a piece of work *is*, never to learn when it
+happens. Status has exactly one owner and it is the build queue.
+
+Each story there carries a **Validation** line naming the check that proves it:
+`Pinned` (a named test fails if the behaviour changes), `Exercised` (the path runs but
+nothing pins it), `Receipted` (a digest-bound receipt from a real run exists outside
+Git), or `Unproven` (nothing checks it — stated, because an absent line reads as an
+oversight and this reads as a fact). Before claiming a capability works, read its
+Validation line; a story can be fully `Pinned` and still unproven as a product
+capability, because what is pinned is behaviour on fixtures.
 
 Statuses in any doc are hypotheses, not evidence. Verify against code before
 repeating one: `worker/main.py` (`ALPHA_OPERATIONS`),
