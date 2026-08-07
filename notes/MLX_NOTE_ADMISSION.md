@@ -1761,3 +1761,73 @@ Two fixtures still refuse on the identifier-truncation mechanism, no generator i
 wired into Preview, and the human semantic and usefulness adjudication remains
 unrun. Making an experiment re-runnable is not evidence about the thing being
 experimented on.
+
+### Intervention six — the receipt records what the model was asked
+
+**Registered and run 2026-08-07.** Receipt:
+`notes/mlx_note_matrix_receipt_request_digest.json`, schema `mlx-note-matrix/3`.
+
+**The defect this closes.** Two consecutive preregistrations made claims about the
+request digest that no committed receipt could settle. Intervention four said "this
+changes no request" while moving it. Intervention five guarded against moving it
+with a falsifier written against a value nothing recorded. Neither was checkable
+from an artifact, so both were prose.
+
+Neither existing digest can stand in, and this was measured rather than assumed:
+
+| digest | isolates a changed request? |
+|---|---|
+| `response_sha256` | No. Conflates a changed request with changed model behaviour. |
+| `receipt_sha256` | No. Covers `runtime_identity` too, so it moved on **all twelve** fixtures when `RECORD` left the pin — a change that provably touches no request. |
+
+`request_sha256` was already computed per call and carried inside each call's
+`identity` block. The fixture aggregation dropped it. It is now promoted the same
+way the other digests are: a sorted set over the cold calls, so a request that
+moved mid-run reads as a multi-element list rather than silently taking one call's
+value.
+
+**Schema bumped to `/3`.** The `/1`-to-`/2` comment in the orchestrator records that
+the shape once moved under an unchanged version string and says it must not happen
+twice. Four `/2` receipts are in git and remain valid as `/2`; the frozen
+2026-08-05 baseline is deliberately not back-filled, because inventing a digest for
+a run nobody can re-do is the exact failure this line of work exists to stop.
+
+**The instrument-identity check moved, and the move is a strengthening.** It
+previously asserted that `mlx_note_matrix_receipt.json` — the *oldest* receipt —
+named the current orchestrator, and did not look at the three later receipts at
+all. The property now asserted is that the current orchestrator has produced *some*
+committed receipt. A historical receipt naming a superseded instrument is not a
+defect; it is what makes it history. An orchestrator that has produced no committed
+receipt is the defect, because then every artifact in the tree describes a program
+that no longer exists. The cost is unchanged: editing the orchestrator still
+requires a matrix re-run, and that ratchet fired on this very change.
+
+**Control.** The run is byte-identical to `_wheel_pin.json` on all twelve
+`response_sha256` values — same environment, same day, orchestrator changed only in
+what it records. Recording a field perturbed nothing.
+
+**First use, first finding: the matrix has twelve fixtures and eleven distinct
+requests.** `abstain-chitchat` and `abstain-plain` produce the byte-identical
+request `fec1e608…`. Both transcripts yield zero deterministic candidates, and only
+candidates reach the model — the transcript text does not — so at the model layer
+they are one experiment run twice, not two.
+
+This is not a code defect; a no-candidate transcript *should* produce a
+no-candidate request. It is a coverage fact that was invisible until the digest was
+recorded, and it qualifies a claim already in the test suite:
+`test_nine_supported_fixtures_failed_and_one_unseen_abstention_passed` notes that
+`abstain-plain` had never been run before and passed. It passed the same request
+`abstain-chitchat` passed. The empty-abstention path is therefore pinned once, not
+twice, and a second *distinct* abstention fixture — one that offers candidates and
+should still abstain — is the gap.
+
+**This admits nothing.** `admits` false, `per_fixture_gates` false, ten of twelve
+fixtures passing every registered gate, the same two still refusing on the
+identifier-truncation mechanism.
+
+**A known gap, named rather than fixed here.** `mlx_note_admission.py` is hashed
+into every receipt's `harness` block but is not ratcheted the way the orchestrator
+is. It changed on 2026-08-07 when `RECORD` left the pin, and no test failed, so
+every receipt committed before that names a hash of a file that has since moved.
+Same stale-evidence class, unguarded. Fixing it means deciding whether the harness
+digest should ratchet at all, which is a separate decision from this one.
