@@ -1367,3 +1367,98 @@ Reproduce:
 
     python3 notes/read_semantic_support.py          # the reading sheet
     python3 notes/read_semantic_support.py --json   # the same rows, machine-readable
+
+---
+
+## 2026-08-07 — the first reading of the sheet, and what it found
+
+`read_semantic_support.py` was written on 2026-08-06 and then stranded on an
+unmerged branch until it was rescued on 2026-08-07. This is the first time
+anyone has read its output. It changes what the next intervention should be.
+
+### The finding
+
+Fixture `negation-proposal`. The cited evidence is:
+
+> I propose that we do **not** merge the red branch.
+
+The model's claim is:
+
+> merge the red branch
+
+That is not a shortening or a paraphrase. It asserts the opposite of the
+sentence it cites as its evidence, which is the precise failure this product
+exists to not ship.
+
+**No registered gate caught it.** The fixture failed, and it failed on
+`citation-locator` — the 67-character identifier truncation that also fails
+`ordinary-question` and `name-number-action`. All three failures across the
+whole matrix carry that one code and no other. Nothing in `_decode_response`
+compares a claim's polarity to its evidence's.
+
+**So the identifier fix must not ship alone.** The next intervention registered
+in this file is the fourth attempt at the identifier truncation, and
+`vertical-slice.md`'s build queue lists it as buildable-now. Landing it by
+itself would remove the only thing currently refusing this claim, and a
+semantically inverted claim would become an accepted research candidate. The
+mechanical picture would improve — 9 of 12 to 12 of 12 — while the product got
+worse. That is the exact shape of a metric moving in the wrong direction for a
+real reason.
+
+### Two smaller observations from the same sheet
+
+**The label vocabulary has collapsed to two values.** Across ten rows the model
+emits only `ACTION` (6) and `DECISION` (4). It never emits `PROPOSAL`, including
+on the two fixtures whose deterministic cue is `PROPOSAL`. Label-against-cue
+disagreement is 4 of 10.
+
+**Type disagreement fails nothing.** `ordinary-decision` and `ordinary-proposal`
+both pass every registered gate while labelling the claim `ACTION` against a
+`DECISION` and a `PROPOSAL` cue. A note whose every claim carried the wrong type
+would be mechanically green.
+
+Neither is scored here. The cue is a heuristic from the deterministic cue
+strategy, not ground truth, and `read_semantic_support.py` is right to report
+rather than judge it.
+
+### Preregistration — intervention four, polarity
+
+**Registered before implementation, and honest about what is already known.**
+The effect on the ten recorded rows is *not* a prediction: those responses exist
+and were read to produce this section. Exactly one row (`negation-proposal`)
+drops a polarity term. What is unknown, and what this preregisters, is the
+gate's behaviour on any future response.
+
+**The rule.** A claim is refused when a term from `POLARITY_TERMS` appears in the
+cited canonical slice and in no form in the claim. The list is the one already in
+`read_semantic_support.py`: `not, no, never, cannot, can't, don't, doesn't,
+without`. New refusal code: `claim-polarity`.
+
+**The prediction.** On a re-run of the registered 12-fixture matrix with this
+gate active and no other change:
+
+1. `negation-proposal` carries **two** codes, `citation-locator` and
+   `claim-polarity`, rather than one.
+2. `negation-decision` continues to pass every gate. It is the control: its
+   evidence and its claim both contain "not", so a gate that fails it is
+   over-broad and must be withdrawn.
+3. No other fixture changes outcome. Nine of twelve remains nine of twelve,
+   because the gate refuses nothing that was passing.
+
+**What would falsify the rule rather than the prediction.** A claim that carries
+the evidence's polarity through a paraphrase containing none of the listed terms
+— "we are keeping the red branch" for "do not merge" — would be refused wrongly.
+The gate is a word-presence test and cannot see that. If a future fixture shows
+it, the gate is too crude and the finding still stands: the harness needs *some*
+polarity check, not this one.
+
+**This changes no request.** The gate reads a response, so no request digest on
+this path moves and the pinned model, prompt, and mask are untouched.
+
+**This admits nothing.** `admits` stays false. A gate that refuses an inverted
+claim removes a false positive; it does not demonstrate comprehension, and the
+human semantic and usefulness adjudication remains unrun.
+
+Reproduce the finding:
+
+    python3 notes/read_semantic_support.py | grep -A3 negation-proposal
