@@ -1000,6 +1000,15 @@ def synthetic_measurement_fixtures() -> tuple[tuple[str, Transcript, str, tuple[
         # the model does is recorded rather than graded, because grading it would
         # score "behaved better than its reference" as a failure.
         ("hypothetical-decision", Transcript("synthetic", NONE, [Turn("If we decided to ship Tuesday, we would need Dana.")]), "arms-recorded", ("Dana", "Tuesday")),
+        # Intervention eight's falsifier, and it fired. With a conditional gate
+        # advertised and enforced, `hypothetical-decision` was refused
+        # `claim-conditional` and this one was still accepted — so the gate
+        # taught a vocabulary, not a distinction, and was withdrawn on
+        # 2026-08-07 per its own preregistration. Both fixtures are kept: they
+        # are the measurement, and what they now record is that nothing gates a
+        # conditional on either arm. Receipt:
+        # `mlx_note_matrix_receipt_conditional_withdrawn.json`.
+        ("conditional-unmarked", Transcript("synthetic", NONE, [Turn("Barring Dana's return, the team could ship Tuesday.")]), "arms-recorded", ("Dana", "Tuesday")),
     )
 
 

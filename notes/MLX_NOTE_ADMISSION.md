@@ -1997,3 +1997,122 @@ means nothing.
 
 **Not started.** Recorded so the next session does not reach for the word list
 without the control.
+
+### Intervention eight — run and withdrawn the same day, 2026-08-07
+
+Receipt: `notes/mlx_note_matrix_receipt_conditional_withdrawn.json`, fourteen
+fixtures, `every_fixture_ran: true`. **The gate is not in the harness. This
+section is why, and the receipt is the evidence.**
+
+**The falsifier fired.**
+
+| fixture | evidence | model |
+|---|---|---|
+| `hypothetical-decision` | "**If** we decided to ship Tuesday, we **would** need Dana." | refused `claim-conditional` |
+| `conditional-unmarked` | "Barring Dana's return, the team could ship Tuesday." | **accepted** |
+
+The gate caught the fixture carrying its words and missed the one that did not.
+Both sentences settle nothing. The preregistration named this outcome in advance
+and said what it means: the gate taught a vocabulary rather than a distinction, and
+must be withdrawn rather than kept for the fixture it happens to pass. It was
+withdrawn.
+
+Keeping it would have been indefensible in a specific way. `hypothetical-decision`
+is registered, so a gate tuned to it is tuned to the test. The falsifier existed to
+make that visible, shipped in the same change for exactly that reason, and it
+worked.
+
+**The cost was not zero, which is the more important half.** Two fixtures that had
+been clean started failing:
+
+| fixture | before | with the gate |
+|---|---|---|
+| `ordinary-proposal` | clean | `citation-locator` |
+| `negation-proposal` | clean | `citation-locator` |
+
+Graded fixtures passing every gate went from ten of twelve to **eight of twelve**.
+Neither regression is about conditionals. Neither fixture contains one.
+
+**Why an unrelated fixture regressed, and this generalises past this
+intervention.** Advertising the rule put `must_not_drop_conditional_terms` into
+`response_contract`, and `response_contract` is part of the request. **All thirteen
+pre-existing fixtures' `request_sha256` values moved.** Every fixture on this path
+therefore asked the model a different question than it had before, and four
+responses changed — two of them for the worse.
+
+**There is no such thing as a targeted contract change on this path.** A gain on
+one fixture and a regression on two arrive as one indivisible edit. That is now
+measured rather than suspected, and it is the third recorded instance of
+advertising a rule moving behaviour upstream of enforcing it — the first two were
+gains (intervention three's key rename, intervention four's polarity rule), and
+this is the first showing the mechanism can cost more elsewhere than it buys.
+
+**None of this was attributable before intervention six.** `request_sha256` was
+added two changes ago because two preregistrations in a row made request claims no
+receipt could settle. Without it, this would have read as "the gate works and two
+fixtures got flaky."
+
+**What is kept.** Both fixtures, both ungraded. What they record now is that
+nothing gates a conditional on either arm: the deterministic extractor cannot see
+one, and neither can the model. That is a worse state to be in than having a gate,
+and a more honest one to publish.
+
+**What is pinned.** `test_the_conditional_gate_was_withdrawn_and_nothing_replaced_it`
+asserts the withdrawal by behaviour — no `CONDITIONAL_TERMS` attribute, no
+`dropped_conditional_terms`, `claim-conditional` falling through to
+`other-refusal`, the contract not advertising the rule, and the polarity rule still
+advertised. Deliberately not a source grep: this document and the fixture comments
+still discuss the withdrawn gate on purpose, and a text check would force deleting
+the record to keep the suite green.
+
+**This admits nothing**, and it removes nothing that was admitted.
+
+### What the next attempt has to beat
+
+Do not reach for a longer word list. The failure was not that the list was too
+short; `conditional-unmarked` was built to be outside any list, and a longer list
+just moves where the falsifier has to stand.
+
+Two directions remain, and both are more expensive than a word list, which is why
+the word list was tried first and is recorded here as spent rather than promising:
+
+1. **Ask the model to classify rather than to comply.** A separate call whose only
+   job is "is this fragment settled or contingent", scored against fixtures, with
+   the note generation downstream of the answer. Costs a second call per candidate
+   and needs its own admission.
+2. **Accept that this class is not gateable here and surface it.** The product
+   already has a vocabulary for a claim it cannot stand behind. A note that marks
+   contingent items as contingent, rather than refusing them, may be the honest
+   shape — and it is a product decision, not a harness one.
+
+Either way the falsifier discipline holds: any candidate ships with an
+unadvertised control fixture in the same change, or its pass means nothing.
+
+### The withdrawal is verified, not asserted
+
+Receipt: `notes/mlx_note_matrix_receipt_no_conditional_gate.json`, the fourteen-fixture
+matrix re-run with the gate removed.
+
+**Every pre-existing fixture returned to its exact pre-intervention values: 13 of 13
+`request_sha256` restored, and 13 of 13 `response_sha256` restored.** Graded fixtures
+passing every gate is back to ten of twelve, and the two regressions — `ordinary-proposal`
+and `negation-proposal` — are gone. The only fixtures still refusing are the two that
+were refusing before intervention eight, on the identifier truncation.
+
+Both conditional fixtures are accepted again, which is the true state and the reason
+the withdrawal is worth publishing rather than quietly reverting:
+
+    hypothetical-decision   with gate: refused claim-conditional   now: accepted
+    conditional-unmarked    with gate: accepted                    now: accepted
+
+**Why this check is worth a four-minute run.** A revert that leaves a stray field in
+the contract would still pass every unit test, still look clean in a diff review, and
+would silently mean every future receipt on this path is incomparable with every
+receipt before it. Byte-identical restoration is the only evidence that distinguishes
+"the code was removed" from "the experiment was undone". This document has already
+recorded two cases of a claim that could not be checked from an artifact; this is the
+first time a revert could be.
+
+It is also the strongest available confirmation of the finding above. The gate's cost
+was not a coincidence of a noisy run: removing it removed exactly the two regressions
+and nothing else, in the same environment, byte for byte.

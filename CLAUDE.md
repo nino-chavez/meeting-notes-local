@@ -88,6 +88,17 @@ in another repo. The archive tag made it recoverable, which is the fourth step e
 its keep. The manifest now lives on `main` so the pin can follow trunk. Before deleting
 a branch whose name appears in another repo's config, grep `~/Workspace/dev` for it.
 
+**A frozen artifact must never be asserted through a live constant.** Hit three
+times on 2026-08-07, each time while growing the registered fixture suite:
+`mlx_note_matrix_receipt.json` (a 2026-08-05 receipt) asserted its fixture count as
+`EXPECTED_FIXTURES`; a second test asserted a synthetic receipt the same way and
+was correct to; and `mlx_note_id_alignment_receipt.json` asserted its row count as
+`EXPECTED_FIXTURES - 2`, a proxy for "the non-abstention fixtures" that silently
+became wrong. The test for a historical receipt pins the literal it was produced
+with. The test for live behaviour follows the constant. Deciding which one a test
+is takes a sentence and prevents a green suite from certifying a receipt against a
+suite that did not produce it.
+
 **Private meeting material never enters Git.** Audio, transcripts, note text, and
 profile material stay out by design, so their absence from the repository proves
 nothing about whether a run happened — the run and closure receipts live outside Git
