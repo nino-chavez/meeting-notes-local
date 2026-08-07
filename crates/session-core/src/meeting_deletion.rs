@@ -24,7 +24,7 @@
 //! is the specific failure this operation must never produce.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -32,8 +32,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::meeting::{
-    MAX_RECEIPT_BYTES, MeetingError, load_meeting, read_private_bytes, require_private_directory,
-    valid_opaque_id,
+    MAX_RECEIPT_BYTES, MeetingError, load_meeting, open_private_file, read_private_bytes,
+    require_private_directory, valid_opaque_id,
 };
 use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
 use crate::operation_store::{OperationStore, OperationStoreError, StoredOperationRequest};
@@ -118,6 +118,8 @@ pub enum MeetingDeletionError {
     MalformedReceipt,
     #[error("meeting storage contains an entry that is not a regular private file")]
     UnsafeEntry,
+    #[error("meeting storage holds more entries than an inventory may describe")]
+    InventoryTooLarge,
     #[error("no such meeting")]
     NoSuchMeeting,
 }
@@ -208,16 +210,29 @@ fn take_inventory(meeting_dir: &Path) -> Result<Vec<DeletedArtifact>, MeetingDel
                 return Err(MeetingDeletionError::UnsafeEntry);
             }
             if artifacts.len() >= MAX_INVENTORY_ENTRIES {
-                return Err(MeetingDeletionError::UnsafeEntry);
+                return Err(MeetingDeletionError::InventoryTooLarge);
             }
             let relative = path
                 .strip_prefix(meeting_dir)
                 .map_err(|_| MeetingDeletionError::UnsafeEntry)?
                 .to_string_lossy()
                 .into_owned();
-            let bytes = fs::read(&path)?;
+            // Streamed in fixed blocks rather than read whole, and through the
+            // private-file opener, matching `inspect_audio` in the audited
+            // audio path. A meeting's two capture legs are the largest files
+            // this walks and an hour of them is gigabytes, so reading a whole
+            // file to digest it would spike memory by the size of the meeting.
+            let mut file =
+                open_private_file(&path).map_err(|_| MeetingDeletionError::UnsafeEntry)?;
             let mut hasher = Sha256::new();
-            hasher.update(&bytes);
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let read = file.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
             artifacts.push(DeletedArtifact {
                 relative_name: relative,
                 byte_size: metadata.len(),
@@ -234,7 +249,6 @@ fn take_inventory(meeting_dir: &Path) -> Result<Vec<DeletedArtifact>, MeetingDel
 /// Every transition is written before the mutation it authorizes, so a crash
 /// resumes from a state that is never ahead of the filesystem.
 fn finish_removal(
-    storage: &StorageRoot,
     meeting_dir: &Path,
     receipt_path: &Path,
     mut receipt: MeetingDeletionReceipt,
@@ -259,7 +273,6 @@ fn finish_removal(
         write_receipt(receipt_path, &receipt, false)?;
     }
 
-    let _ = storage;
     Ok(())
 }
 
@@ -298,7 +311,7 @@ pub(crate) fn delete_meeting_wholly(
         if receipt.state == MeetingDeletionState::Removed && !meeting_dir.exists() {
             return Ok(MeetingDeletionOutcome::AlreadyRemoved);
         }
-        finish_removal(storage, &meeting_dir, &receipt_path, receipt)?;
+        finish_removal(&meeting_dir, &receipt_path, receipt)?;
         return Ok(MeetingDeletionOutcome::RecoveredRemoval);
     }
 
@@ -344,7 +357,7 @@ pub(crate) fn delete_meeting_wholly(
     // The receipt exists on disk before the first byte is removed. That
     // ordering is what makes an interrupted deletion recoverable at all.
     write_receipt(&receipt_path, &receipt, true)?;
-    finish_removal(storage, &meeting_dir, &receipt_path, receipt)?;
+    finish_removal(&meeting_dir, &receipt_path, receipt)?;
     Ok(MeetingDeletionOutcome::MeetingRemoved)
 }
 
@@ -354,8 +367,17 @@ pub(crate) fn delete_meeting_wholly(
 /// and `removed` transitions the directory exists without a `meeting.json`, and
 /// both readers would otherwise report that as a quarantined meeting — which
 /// would show the operator a damaged meeting where they asked for an absent one.
+///
+/// This is a read and behaves like one: an absent `deletions/` directory means
+/// no deletion has ever been started, so it reports none rather than creating
+/// the directory as a side effect of being asked.
 pub fn pending_deletion_ids(storage: &StorageRoot) -> Result<Vec<String>, MeetingDeletionError> {
-    let directory = deletions_dir(storage)?;
+    let directory = storage
+        .resolve(Path::new(DELETIONS_DIR))
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
     let mut ids = Vec::new();
     for entry in fs::read_dir(&directory)? {
         let entry = entry?;
@@ -700,5 +722,27 @@ mod tests {
             Err(MeetingDeletionError::MalformedReceipt)
         ));
         assert!(directory.join("meeting.json").exists());
+    }
+
+    #[test]
+    fn a_file_larger_than_the_read_buffer_digests_correctly() {
+        // The inventory streams in 64 KiB blocks instead of reading whole files,
+        // because a meeting's capture legs are the largest thing it walks and an
+        // hour of them is gigabytes. A chunked digest that mishandled a block
+        // boundary would still pass every other test here, since every other
+        // fixture file is a few bytes.
+        let (_temp, storage) = storage();
+        let directory = fixture(&storage, "large");
+        let payload: Vec<u8> = (0..(64 * 1024 * 2 + 517)).map(|i| (i % 251) as u8).collect();
+        fs::write(directory.join("capture/mic.wav"), &payload).unwrap();
+
+        let expected = format!("{:x}", Sha256::digest(&payload));
+        let inventory = take_inventory(&directory).unwrap();
+        let recorded = inventory
+            .iter()
+            .find(|artifact| artifact.relative_name == "capture/mic.wav")
+            .unwrap();
+        assert_eq!(recorded.sha256, expected);
+        assert_eq!(recorded.byte_size, payload.len() as u64);
     }
 }

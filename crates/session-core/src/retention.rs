@@ -892,9 +892,13 @@ pub fn execute_due_retention_excluding(
     // loading it fails and it would be reported as quarantined. That would show
     // the operator a damaged meeting where they asked for an absent one, so
     // these are skipped and left to `reconcile_pending_meeting_deletions`.
+    // Propagated rather than defaulted: if we cannot tell which meetings are
+    // mid-deletion, we do not know that none are. Swallowing the error here
+    // would fail open, and would produce exactly the quarantine report this
+    // skip exists to prevent.
     let deleting = crate::meeting_deletion::pending_deletion_ids(storage)
         .map(|ids| ids.into_iter().collect::<HashSet<_>>())
-        .unwrap_or_default();
+        .map_err(|error| io::Error::other(error.to_string()))?;
     let mut outcomes = Vec::new();
     for entry in fs::read_dir(meetings)? {
         let entry = entry?;
