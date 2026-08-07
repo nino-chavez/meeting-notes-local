@@ -34,6 +34,18 @@ rather than a judgment made fresh each session.
 "pushed" is how this repo reached 85 branches, 44 worktrees, and two unrelated root
 commits — consolidated 2026-08-07 by fast-forwarding `main` onto the app line.
 
+**Merging has two rules, both learned by breaking them on 2026-08-07.** Do not chain
+a push straight into `gh pr merge`: GitHub computes mergeability asynchronously, and
+a merge issued in the same breath fails with "Pull Request is not mergeable" for no
+reason other than timing. Poll `gh pr view <n> --json mergeable` until it reads
+`MERGEABLE` first. And **gate cleanup on the merge having actually landed** —
+
+    git merge-base --is-ancestor <sha> main && git branch -D <branch>
+
+Running the delete unconditionally after a failed merge deletes the branch, closes
+the PR, and leaves the work reachable only through the object store. It is
+recoverable, and recovering it is pure waste. One `if` prevents it.
+
 Work in `<repo>/.worktrees/<branch>`. Remove the worktree once the work has landed
 **or** the session is finished with it — it does not have to be merged first, and on
 2026-08-07 thirty-eight worktrees on unmerged branches were removed safely. Removing
