@@ -1567,9 +1567,8 @@ this experiment actually needs is the wheel's own digest — the value a lockfil
 PyPI's own hash records — and `RECORD` should be dropped from
 `runtime_identity` rather than repaired.
 
-That is a change to the registered runtime contract and every request digest
-downstream of it, so it is named here and preregistered separately, not folded
-into this note.
+That is a change to the registered runtime contract, so it is named here and
+preregistered separately, not folded into this note.
 
 Reproduce the failure:
 
@@ -1577,3 +1576,100 @@ Reproduce the failure:
       mlx==0.32.0 transformers==5.0.0rc1
     env/bin/python notes/orchestrate_mlx_note_matrix.py --model-directory <snapshot>
     # every worker exits 1 with runtime-package-mismatch
+
+**Correction, 2026-08-07.** The paragraph above read "the registered runtime
+contract and every request digest downstream of it" until this line was written.
+The second half was wrong, and it made the change look more expensive than it is.
+`request_sha256` is the digest of the system prompt and the remaining request keys
+only (`mlx_note_admission.py:696` and `:907`); `runtime_identity` is not an input
+to it and does not appear anywhere in a request. Dropping `RECORD` therefore moves
+no request digest, and the committed receipts' request and response digests stay
+comparable with any future run. What moves is the receipt's `runtime_identity`
+block, which is the entire point. A test now pins that separation
+(`test_dropping_record_moves_no_request_digest`) so the claim cannot drift back.
+
+### Preregistration — intervention five, wheel-shipped runtime identity
+
+**The rule.** `runtime_identity.package_metadata_sha256` pins `METADATA` only.
+`RECORD` is removed, not narrowed a third time. `METADATA` travels inside the
+wheel, so every installer writes the same bytes; `RECORD` is written by the
+installer at install time.
+
+**Why removal and not a third narrowing.** Both earlier attempts narrowed it and
+both were believed complete. The 2026-08-02 pin hashed `RECORD` whole and was
+reproducible only inside one disposable directory. The 2026-08-05 fix excluded the
+`../`-relative console-script rows and was "verified across those same three
+paths" — a check that varied the directory while holding the installer and the
+install method fixed, so it could not have caught either remaining cause. **A
+check that varies one dimension does not establish independence from the others.**
+A third narrowing would inherit that structure.
+
+**The mechanism, confirmed independently 2026-08-07.** The 9-of-9 versus 1-of-9
+table above was measured on the three pinned packages. To check the mechanism
+rather than re-read the finding, two environments were built on a package the
+original measurement never touched (`idna==3.10`), same interpreter, same
+installer, differing only in byte-compilation:
+
+| | `METADATA` | `RECORD` | `.pyc` rows in `RECORD` |
+|---|---|---|---|
+| pip, byte-compiled | `5114796720df4353` | `d4a11041e100510a` | 8 |
+| pip `--no-compile` | `5114796720df4353` | `288cff77be506542` | 0 |
+
+Same wheel, same installer, one flag. `METADATA` identical, `RECORD` not. The
+divergence is entirely install-time artifacts. Reproduce it with:
+
+    python3 -m venv a && a/bin/pip install idna==3.10
+    python3 -m venv b && b/bin/pip install --no-compile idna==3.10
+    # compare */lib/python*/site-packages/idna-3.10.dist-info/{METADATA,RECORD}
+
+**The prediction.** On a re-run of the registered 12-fixture matrix in a fresh
+environment with matching Python and matching package versions, and no other
+change:
+
+1. No worker exits with `runtime-package-mismatch`. That refusal is what returned
+   `every_fixture_ran: false` and is the only thing this change targets.
+2. The matrix runs to completion, and the intervention-four polarity prediction —
+   `negation-proposal` carrying both `citation-locator` and `claim-polarity`,
+   `negation-decision` still passing, nothing else moving — becomes testable for
+   the first time.
+3. Every fixture's `request_sha256` equals the value in the committed 2026-08-06
+   receipts, because no request input changed. **If any request digest moves, this
+   change did something it was not supposed to do and must be withdrawn.**
+
+Item 3 is the falsifier that matters. Items 1 and 2 are what the change is for;
+item 3 is what proves it stayed inside its own boundary.
+
+**What would falsify the rule rather than the prediction.** A `METADATA` digest
+that diverges across installers for the pinned packages — meaning wheel-shipped
+metadata is not installer-independent after all — would leave nothing derivable
+from an installed environment worth pinning. The pin would then have to move to
+the wheel's own distribution hash from a lockfile, which is a different mechanism,
+not a repair to this one. `package_sha256` keeps its `filename` parameter so that
+addition does not need a signature change.
+
+**This admits nothing.** `admits` stays false. Making an experiment re-runnable is
+not evidence about the thing being experimented on.
+
+**The committed receipts are not rewritten.** They carry the two-key
+`package_metadata_sha256` shape in their `registered_runtime` block, which is the
+correct record of what was registered on 2026-08-06. `test_probe_receipts_repeat`
+compares those three receipts against each other rather than against the current
+pin, so it is unaffected.
+
+### Implemented 2026-08-07
+
+`RECORD` is gone from `MLX_RUNTIME["runtime_identity"]` and from the observed
+identity `local_mlx_provider` builds. `package_sha256` lost its `RECORD` row-
+filtering branch, and its docstring now records why the file is not pinned at all
+rather than how it was filtered.
+
+Three tests: that only wheel-shipped files are pinned (asserted on shape, so
+re-adding any installer-written file under a new key still fails), that no request
+digest depends on the runtime identity, and that an environment still reporting a
+`record` digest is refused as `runtime-package-mismatch`.
+
+**The prediction is not yet tested.** Running the matrix needs `mlx_lm`, which is
+not installed in this repository's `.venv`, and the fresh environment this change
+exists to make possible has not been built. Until that run happens the pin's
+*mechanism* is verified and its *effect on the matrix* is not. Nobody may report
+the matrix as re-runnable, or quote any count from it, without running it.

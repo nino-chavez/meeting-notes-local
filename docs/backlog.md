@@ -92,7 +92,7 @@ repeating a prior claim: 247 session-core, 115 desktop lib, 33 shell-contract,
 | E1 | Consent-first local two-leg capture | 1 | J3 | §B §C | 7 | Shipped |
 | E2 | Operator voice isolation | 2 | J3 J5 | §I | 8 | Shipped 0.4.0, unmeasured on live audio |
 | E3 | Audio lifetime and deletion | 3 | J5 | §G §K | 7 | Whole-meeting deletion landed; wording open |
-| E4 | Evidence-linked notes | 4 | J1 J2 | §E | 8 | **Blocked** — the runtime pin cannot be rebuilt |
+| E4 | Evidence-linked notes | 4 | J1 J2 | §E | 8 | Pin fixed 2026-08-07; the matrix run is unrun |
 | E5 | Honest incompleteness | 5 | J1 | §E §F | 5 | Blocked on evidence (needs E4) |
 | E6 | Correction and regeneration | 6 | J4 | §E | 5 | Restoration shipped; regeneration needs E4 |
 | E7 | Retrieval | 7 | J1 | §F | 6 | Registered; claim-level landing needs E4 |
@@ -544,13 +544,13 @@ specification, so that any registered experiment can be re-run by anyone.
 **Acceptance criteria:**
 - Given the pinned specification, When an environment is built from it on a clean machine, Then `local_mlx_provider` accepts it.
 - Given two environments built by different installers from the same specification, When both are checked, Then both are accepted.
-- Given the change lands, When request digests are compared, Then the change to `runtime_identity` is preregistered because every downstream digest moves.
+- Given the change lands, When request digests are compared, Then none has moved — `runtime_identity` is not an input to any request, and a moved request digest withdraws the change.
 
-**Evidence:** three environments on one machine reproduced `METADATA` 9 of 9 and `RECORD` 1 of 9. `RECORD` is installer-written and varies with the installer and with byte-compilation.
+**Evidence:** three environments on one machine reproduced `METADATA` 9 of 9 and `RECORD` 1 of 9. `RECORD` is installer-written and varies with the installer and with byte-compilation. Confirmed independently 2026-08-07 on a package the original measurement never touched: `idna==3.10` under pip with and without byte-compilation gives one `METADATA` digest and two `RECORD` digests, differing by 8 `.pyc` rows.
 
-**Validation:** **Unproven** — and this story exists because that is currently true of everything downstream of it.
+**Validation:** **Pinned** — `test_the_registered_runtime_pins_only_wheel_shipped_files` (asserted on shape, so re-adding any installer-written file under a new key still fails), `test_dropping_record_moves_no_request_digest`, `test_a_runtime_carrying_a_record_digest_is_refused`. **Unproven** for the criteria that matter most: no environment has been built from the corrected specification, so "accepted on a clean machine" and "accepted under two installers" are both unrun. The mechanism is verified; the rebuild is not.
 
-**Refusals:** do not repair `RECORD`; drop it. Pin the wheel, not the installation.
+**Refusals:** do not repair `RECORD`; drop it. Pin the wheel, not the installation. A third narrowing inherits the structure of the two that failed — each varied one dimension and held the others fixed.
 
 ---
 
