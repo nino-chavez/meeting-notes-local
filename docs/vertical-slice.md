@@ -37,6 +37,58 @@ The contract exists now so the first implementation does not have to settle
 process ownership, persistence, recovery, and security while it is also trying
 to prove a real meeting path.
 
+## Build queue
+
+Written 2026-08-07. **This section decides what gets built next.** The wave table
+below records what has been proven, and remains the evidence history. It stopped
+working as a build order because it is organized by what needs proving, so the ten
+north-star features in `product-definition.md` never got to set priority — which is
+why work kept arriving in an order nobody chose.
+
+The order here is: everything buildable without a human decision, first. Evidence is
+an attribute of an item, not the spine.
+
+Statuses are derived from `product-definition.md § North-star features and
+functions` (verified there 2026-08-06) and are hypotheses until re-checked against
+code.
+
+### Buildable now, no human input required
+
+| # | Feature | The next build | Why it is unblocked |
+|---|---|---|---|
+| 8 | Commitment view | The `filtered` state on §F, terminal action export | **Decided**, unbuilt. No gate names it. |
+| 9 | Preparation brief | Local read-only calendar through EventKit (`DESIGN.md § Context inputs`) | **Decided**, unbuilt. The counterparty half stays Open and is deliberately not in this item. |
+| 10 | Shell that never lies | A signed preview bundle, so §H's two request paths can execute at all | Both are Registered and neither has run anywhere. Running one outside the signed bundle mutates the calling application's TCC state and answers about the wrong binary. The bundle is the entire blocker, and it is a build. |
+| 3 | Audio has a stated lifetime | Whole-meeting deletion | The build is unblocked. The policy wording is a separate item below; the two were being carried as one, which made a buildable thing look gated. |
+
+### Blocked on evidence, not on a person
+
+| # | Feature | Waiting on |
+|---|---|---|
+| 5 | Honest incompleteness | A real gated capture to measure. Prototyped, but the checkable-proportion figure has nothing true to count until feature 4 produces claims. |
+| 6 | Correction that changes the note | Restoration is Registered and reachable on a shipped image since 0.4.0. Regeneration stays unregistered until a generator passes admission — feature 4. |
+| 7 | Retrieval | Registered and working over transcripts and metadata. Claim-level landing waits on feature 4. |
+
+### Blocked on the operator
+
+| Item | Feature or wave | Shape of the decision |
+|---|---|---|
+| Closure receipt | Wave A | One interactive run on a build already installed: `automatic_deletion`, `consented_hardware_run`, `clean_transfer`. Not another transfer — the activity has happened repeatedly and only the record is missing. |
+| Retention-policy wording | 3 | Recorded here as open. The operator has declined to take it up; it is not to be re-raised. |
+| Encoder admission verdict | 2 | Direction chosen 2026-08-03 (ONNX Runtime CPU preferred). The verdict itself is unmade. |
+| Which repair to preregister | 4 | Two candidates: state the three parser rules `_decode_response` enforces but never documents, which is a defect fix; or enumerate the offered fragment IDs, which removes identifier transcription from the test and is a larger claim. Deferred 2026-08-06. |
+| Semantic and usefulness adjudication | 4 | A person reads the notes and says whether they are any good. Unautomatable by design — it is the product's central question. |
+| Cold operator review | Wave E | Someone who has not seen the app uses it. |
+| Real enrolment sittings | 2 | The threshold shipped in 0.4.0 is enrolment-derived and unmeasured on live meeting audio. The app says so on every checked transcript, which is honest but not a substitute. |
+
+**Feature 4 is the load-bearing item.** Features 5, 6, and 7 all converge on the
+admitted note generator, and its unblocking is entirely a human call. No amount of
+autonomous work closes it. That is the argument for spending autonomous time on 8,
+9, 10, and 3 rather than waiting on it.
+
+Features 1 and 2 are Shipped. The §D operator-authored live note entered scope by
+amendment on 2026-08-06 and shipped the same day.
+
 ## Current milestone plan
 
 Status as of 2026-08-06. ETA ranges assume timely human review and no major reset in
