@@ -78,9 +78,21 @@ demands an identical content digest.
 in the product could write. A meeting is now named by the first thing said in it that
 is long enough to identify it — a quotation from the transcript, not a phrase written
 about it, so the words can be read back where they were said. A title you type
-outranks it. Competing products let a model compose the phrase; that half is not
-built here yet, and when it is, the model will choose which words to quote rather
-than supply words of its own.
+outranks it.
+
+**We tested whether a small local model could pick a better sentence, and it could
+not.** Competing products hand the transcript to a model and print whatever phrase it
+writes back. We tried something narrower: let the model choose *which* sentence to
+quote, and never let it supply words of its own. Before running it we wrote down what
+would count as working — agreeing with a human's choice on 6 to 10 of ten test
+meetings — so the answer could not be argued afterwards. It got 5, three times in a
+row, identically. So the simple rule stands and nothing was added to the app.
+
+Two things came out of it worth keeping. The model does beat guessing, so it is not
+useless, just not good enough by the standard we set in advance. And it never once
+said "no sentence here names this meeting" — not on any of thirty tries, including
+the test built entirely of small talk, where it confidently picked "Yes I can hear you
+perfectly well." A tool that cannot say *I don't know* is a tool you have to check.
 
 ## What shipped
 
