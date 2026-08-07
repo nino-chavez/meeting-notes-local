@@ -43,10 +43,11 @@ microphone leg only, marks the turns that don't match. A marked turn is **not
 deleted.** It stays in the transcript in its place, its text hidden behind the
 label "Withheld", and you can put it back.
 
-**Restoring is in Meetings, not on the screen you see right after recording.**
-Open the meeting from Meetings and the withheld turns each carry a "Restore this
-turn" button. The screen right after a recording shows you the withheld turns
-and the warnings but has no restore control.
+**Restoring is on both screens, as of 2026-08-06.** The withheld turns each
+carry a "Restore this turn" button on the screen you see right after recording,
+and on the meeting opened from Meetings. It used to be in Meetings only, which
+meant the fix for the mistake that matters most was one navigation away from
+where you saw it. If you are on a build from before that date, use Meetings.
 
 **Where it can be wrong, and why that matters more than a mangled word.** The
 threshold that decides "not you" was measured on your own setup recordings and

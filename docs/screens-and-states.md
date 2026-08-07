@@ -654,6 +654,70 @@ of a valid profile, both current permissions, and an explicitly selected retenti
 period. Reviewing a panel or satisfying only one requirement cannot make it appear
 ready.
 
+### Amendment 2026-08-06 — six of these exist, and two deliberately do not
+
+This screen was built on 2026-08-06. `welcome`, `request-microphone`,
+`request-audio-capture`, `denied-recovery`, `enrol-voice` and a bounded `ready`
+are rendered; `choose-retention` and `offer-calendar` are absent and are not
+stubbed. A step that asks a question the app cannot honour is worse than a step
+that is not there.
+
+**Why this could not have been built honestly before.** Nothing could measure
+either permission. The microphone check lived inside the capture start path and
+the system-audio check is the status of the tap-create call — both reachable only
+by recording. A first-run screen written on top of that would have had to claim
+states it never measured, which feature 10 forbids. `capture/permission-probe` is
+a separate signed binary that measures them, digest-verified through
+`app-runtime/1` before it is spawned, like every other child this app executes.
+
+**The two permissions are not symmetric, and the surface says so.** The
+microphone has a status API, so it can be checked without asking. System audio
+has none — the only check is creating a tap, and creating one is what raises the
+prompt. A status read therefore reports system audio as `unmeasured`, and the
+screen tells the operator that pressing the button *is* the check rather than
+implying a check already happened.
+
+**"We could not ask" is a separate panel from "you said no".** They look similar
+and lead to opposite advice: sending an operator to System Settings to grant a
+permission that was never refused is a dead end that reads like a fix. The
+`unavailable` panel says nothing was asked and names an incomplete installation.
+
+**Nothing is remembered.** There is no completion flag on disk. The step is
+re-derived from a live measurement each launch, so revoking a permission in
+System Settings brings the flow back and granting it makes the flow leave on its
+own. A stored flag would keep insisting setup was finished in exactly the state
+this screen exists to catch.
+
+**What the built `ready` does not claim.** The `ready` in the table above means
+permissions, retention *and* a measured voice profile. Retention is not asked
+here, so the built panel states the two things that were checked and names where
+the third is actually decided — the recording screen, per K. Claiming the table's
+`ready` would be the lie feature 10 forbids.
+
+**Every panel can be left.** `denied-recovery` needs System Settings and
+`unavailable` needs a reinstall; neither can succeed from inside the window, so
+each carries an exit that names what leaving costs. Shipped without one first —
+a setup screen whose only control retries something the operator cannot fix is a
+lockout, and this is the first screen a new operator meets.
+
+**The screen takes the route explicitly.** `workflowOwnsRoute` starts true and
+the snapshot poll resolves a workflow destination on every tick, so the first
+build was navigated away from within 1500 ms and was unreachable in practice with
+every test green. A startup failure outranks first run and takes the route back,
+because a diagnostic knows more than a permission check that cannot resolve its
+probe without storage.
+
+**`choose-retention` is blocked twice over.** Its wording awaits the Wave C human
+gate, and two of the four options drafted for it — "Until I delete them" and "Ask
+me after each meeting" — have no encoding: `validate_start_request` accepts only
+`1 | 7 | 30`. **`offer-calendar` crosses the stated envelope** and belongs with
+the EventKit decision (feature 9), not here.
+
+**What has never run.** Both request paths. Executing either outside the signed
+bundle mutates the calling application's TCC state and answers about the wrong
+binary, so only `status` has evidence. The first honest exercise of either is a
+signed build on hardware.
+
 ---
 
 ## I. Voice enrolment
