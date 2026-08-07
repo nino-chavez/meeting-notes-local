@@ -530,7 +530,12 @@ class IdAlignmentReceiptTests(unittest.TestCase):
         self.assertTrue(all(row["boundary_is_token_aligned"] for row in receipt["rows"]))
         self.assertTrue(all(row["fragment_id_length"] > 67 for row in receipt["rows"]))
         self.assertEqual(receipt["counts"]["fragments"], len(receipt["rows"]))
-        self.assertGreaterEqual(len(receipt["rows"]), EXPECTED_FIXTURES - 2)
+        # The literal 11, not a expression over EXPECTED_FIXTURES. This receipt is
+        # a frozen measurement from the 12-fixture era, and `EXPECTED_FIXTURES - 2`
+        # was a proxy for "the non-abstention fixtures" that silently became wrong
+        # the moment the registered suite grew. Third instance of this class today:
+        # a historical artifact must not be asserted through a live constant.
+        self.assertEqual(len(receipt["rows"]), 11)
         # Measured with the pinned tokenizer, since alignment is a property of
         # one tokenizer and of no other.
         self.assertEqual(receipt["model"]["tree_sha256"], MLX_RUNTIME["model"]["expected_tree_sha256"])
@@ -559,7 +564,7 @@ class IdAlignmentReceiptTests(unittest.TestCase):
 
 
 class RegisteredShapeTests(unittest.TestCase):
-    def test_the_fixture_suite_is_the_thirteen_the_protocol_registers(self) -> None:
+    def test_the_fixture_suite_is_the_fourteen_the_protocol_registers(self) -> None:
         fixtures = matrix._fixtures()
         self.assertEqual(len(fixtures), EXPECTED_FIXTURES)
         # The protocol names the composition, not just the count: four ordinary,
@@ -569,8 +574,8 @@ class RegisteredShapeTests(unittest.TestCase):
         prefixes = sorted(identifier.split("-")[0] for identifier in fixtures)
         self.assertEqual(
             prefixes,
-            ["abstain"] * 2 + ["hypothetical"] + ["locator"] * 2 + ["name"] * 2
-            + ["negation"] * 2 + ["ordinary"] * 4,
+            ["abstain"] * 2 + ["conditional"] + ["hypothetical"] + ["locator"] * 2
+            + ["name"] * 2 + ["negation"] * 2 + ["ordinary"] * 4,
         )
 
     def test_the_single_process_runner_still_refuses_the_full_scope(self) -> None:

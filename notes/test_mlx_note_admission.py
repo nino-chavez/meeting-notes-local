@@ -91,15 +91,18 @@ class MlxNoteAdmissionTests(unittest.TestCase):
 
     def test_synthetic_measurement_plan_has_registered_coverage(self) -> None:
         fixtures = synthetic_measurement_fixtures()
-        self.assertEqual(len(fixtures), 13)
+        self.assertEqual(len(fixtures), 14)
         identifiers = [fixture[0] for fixture in fixtures]
         self.assertEqual(len(identifiers), len(set(identifiers)))
         self.assertEqual(sum(fixture[2] == "accepted-research-candidate" for fixture in fixtures), 10)
         self.assertEqual(sum(fixture[2] == "transcript-only" for fixture in fixtures), 2)
-        # Exactly one, and it stays that way until another is argued for: an
-        # ungraded fixture cannot fail, so a suite quietly accumulating them
-        # would report a rising pass count while measuring less.
-        self.assertEqual(sum(fixture[2] == "arms-recorded" for fixture in fixtures), 1)
+        # Two as of 2026-08-07, and the second was argued for rather than added:
+        # `conditional-unmarked` is intervention eight's falsifier and has to be
+        # ungraded because its correct outcome is the unknown being measured.
+        # The count stays pinned because an ungraded fixture cannot fail, so a
+        # suite quietly accumulating them reports a rising pass count while
+        # measuring less. Report the graded count separately, always.
+        self.assertEqual(sum(fixture[2] == "arms-recorded" for fixture in fixtures), 2)
         self.assertTrue(any("not" in fixture[3] for fixture in fixtures))
         self.assertTrue(any(any(character.isdigit() for character in term) for fixture in fixtures for term in fixture[3]))
         for _identifier, transcript, expected, _terms in fixtures:
@@ -412,6 +415,51 @@ class MlxNoteAdmissionTests(unittest.TestCase):
         )
         self.assertEqual(len(generate_manifest(hypothetical, STRATEGY_CUE)["candidates"]), 1)
         self.assertEqual(run_control_arm(hypothetical).outcome, "accepted-research-candidate")
+
+    def test_the_conditional_gate_was_withdrawn_and_nothing_replaced_it(self) -> None:
+        """Intervention eight failed its own falsifier and was withdrawn.
+
+        With a conditional gate advertised in `response_contract` and enforced in
+        `_decode_response`, `hypothetical-decision` was refused `claim-conditional`
+        and `conditional-unmarked` — conditional in meaning, built from markers the
+        list did not carry — was still accepted. The preregistration said that
+        outcome means the gate taught a vocabulary rather than a distinction and
+        must be withdrawn rather than kept for the fixture it passes.
+
+        It also regressed two fixtures that had been clean, `ordinary-proposal` and
+        `negation-proposal`, because advertising any rule moves every request on
+        the path.
+
+        This asserts the withdrawal is complete by behaviour rather than by
+        grepping the source, because the source still *discusses* the withdrawn
+        gate on purpose — a text check would either fail on its own documentation
+        or force the record to be deleted to keep the test green.
+        """
+        import mlx_note_admission
+
+        self.assertFalse(hasattr(mlx_note_admission, "CONDITIONAL_TERMS"))
+        self.assertFalse(hasattr(mlx_note_admission, "dropped_conditional_terms"))
+        # Unrecognised codes fall through to the generic category. If this ever
+        # returns something specific again, the gate is back.
+        self.assertEqual(_refusal_category("claim-conditional"), "other-refusal")
+        transcript = synthetic_transcript()
+        contract = response_contract(generate_manifest(transcript, STRATEGY_CUE))
+        claim = contract["root"]["properties"]["items"]["item"]["properties"]["claim"]
+        self.assertNotIn("must_not_drop_conditional_terms", claim)
+        # The polarity gate is untouched by the withdrawal.
+        self.assertIn("must_not_drop_polarity_terms", claim)
+
+    def test_both_conditional_fixtures_are_kept_and_stay_ungraded(self) -> None:
+        """The gate went; the measurement stays.
+
+        What these two now record is that nothing gates a conditional on either
+        arm — the deterministic extractor cannot see one, and neither can the
+        model. They are ungraded because the control accepts both, so grading
+        them would fail on the control rather than measure anything.
+        """
+        plan = {row[0]: row[2] for row in synthetic_measurement_fixtures()}
+        self.assertEqual(plan["hypothetical-decision"], "arms-recorded")
+        self.assertEqual(plan["conditional-unmarked"], "arms-recorded")
 
     def test_the_registered_runtime_pins_only_wheel_shipped_files(self) -> None:
         """The 2026-08-07 finding, pinned so a third narrowing cannot reappear.
