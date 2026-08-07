@@ -39,70 +39,81 @@ to prove a real meeting path.
 
 ## Build queue
 
-Written 2026-08-07. **This section decides what gets built next.** The wave table
-below records what has been proven, and remains the evidence history. It stopped
-working as a build order because it is organized by what needs proving, so the ten
-north-star features in `product-definition.md` never got to set priority — which is
-why work kept arriving in an order nobody chose.
+**Rewritten 2026-08-07 after the north star expanded to category parity.** The
+previous queue sequenced ten features and reported itself empty of builder-owned
+work. That was true of those ten and false of the product: parity is 26 Phase 1
+features and most are Unbuilt. See
+[`product-definition.md`](./product-definition.md) for the feature set and the
+competitor each row comes from.
 
-The order here is: everything buildable without a human decision, first. Evidence is
-an attribute of an item, not the spine.
+**Order is by dependency and by where the felt value is, not by what is easiest.**
+`journeys.md` records that retrieval across the corpus is the category's headline
+feature and that history is the primary paywall in both Granola and Otter — so the
+corpus is where the value is, and the corpus is what nothing currently has.
 
-[`backlog.md`](./backlog.md) decomposes these ten features into twelve epics and
-their stories. It deliberately carries no status of its own — it points back here —
-so that this repo never again has two files that both look like they decide order.
+### Wave 1 — the corpus, because everything above it needs one
 
-Every row below was checked against **both** `product-definition.md § North-star
-features and functions` (status column, verified there 2026-08-06) **and** this
-file's own scope and gate text, with line references given. The two disagree, and
-this file wins: "Decided" in the definition layer means the *design question* is
-answered, not that the work is in scope. Statuses remain hypotheses until re-checked
-against code.
+Nothing in retrieval, folders, filters or cross-meeting answers can be built on a
+directory of JSON files. `teardown.md § What is genuinely new` names this the
+largest surface-area addition and says it has nothing to do with audio.
 
-### Buildable now, no human input required — empty as of 2026-08-07
-
-**This section is empty, and that is a finding rather than a gap.** It held three
-features this morning. Each was built out to the point where the next step needs a
-person, and the rows below record where that boundary fell rather than being deleted:
-a queue that silently loses its history cannot be checked.
-
-Nothing here means the builder is blocked on nothing. It means every remaining step
-on these features is a decision, a permission prompt, or a real destructive action —
-the four things this repo reserves for the operator — and the list of those is under
-"Blocked on the operator" below.
-
-| # | Feature | Where the builder-owned work ended | What proved it |
+| Order | Build | Feature | Why here |
 |---|---|---|---|
-| 4 | Evidence-linked notes | **Nothing buildable remains that does not need a decision.** The harness ratchet landed 2026-08-07, closing the last builder-owned gap on this path | Every receipt's `harness` block hashes `mlx_note_admission.py`, and until now nothing checked it — so the orchestrator could not change without a matrix re-run while the harness could change freely and silently orphan every committed receipt. It did twice in one day and no test failed either time. Now pinned by `test_the_current_harness_has_produced_committed_evidence`, and demonstrated to fail on a one-comment change. **Affordable only because the runtime pin was fixed the same morning** — before that, the ratchet would have been unsatisfiable by anyone lacking the single environment that produced the receipts. |
-| 3 | Audio has a stated lifetime | Whole-meeting deletion — **landed 2026-08-07, core and shell**. Nothing buildable remains on this feature | `meeting-deletion/1` in `crates/session-core/src/meeting_deletion.rs` (12 tests), `preview_delete_meeting` over a separate handle map, review token and capability from the audio path, and the §G twice-confirmed control. **Exercising it remains gated:** "exercise real destructive actions only as operator actions before beta admission", and wave C's gate names real deletion decisions — so no real `meeting-deletion/1` receipt exists and the synthetic tests do not advance that gate. What is left on feature 3 is the policy wording, which is the operator's and is listed below. |
+| 1 | A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs | E6 | Every D-group feature reads it. Currently Registered search walks files, which does not survive a real corpus |
+| 2 | Auto-titling | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
+| 3 | Folders, and the meeting object's sibling views | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
+| 4 | Filters — people, date range, keywords, titles | D3 | Gong documents all four. Free once the store exists |
+| 5 | Semantic search over the corpus, beside exact | D2 | Exact is Registered; semantic is what a question needs |
+| 6 | **Ask across every meeting, answer with citations** | D1 | The category headline. Depends on 1–5 and on B5's citation machinery |
 
-Feature 10 was the last one standing and closed on 2026-08-07 when the signed
-Preview bundle was produced; its row moved to the operator table because running the
-two first-run permission prompts is a person at a machine. See
-`distribution-runbook.md § Preview-bundle lane` for the lane and its two
-commit-traps.
+### Wave 2 — the note becomes worth reading
 
-The shortness is deliberate rather than drift: the slice boundary put these decisions
-with the operator on purpose.
+| Order | Build | Feature | Why here |
+|---|---|---|---|
+| 7 | Meeting-type templates | B3 | Appears in no prior planning doc. A summary with no shape is why generated notes get ignored |
+| 8 | AI-enhanced note: summary, outline, highlights, open questions | B2 | Gong's call object. Needs a generator that passes admission — see `notes/MLX_NOTE_ADMISSION.md` |
+| 9 | Action items with owner and status | C1 | Was refused as a non-goal; three of six colleagues asked for it and Wispr ships a `Todos` table |
+| 10 | Commitment view across meetings, export as the terminal action | C2 C3 | Needs 9 and the store |
 
-### Blocked on a scope decision, not on evidence or build effort
+### Wave 3 — identity
 
-Both were previously listed here as buildable-now on the strength of the definition
-layer's "Decided" status. That was wrong in both cases, and the corrections are the
-reason this section now cites line numbers.
+| Order | Build | Feature | Why here |
+|---|---|---|---|
+| 11 | Named speakers from a local roster plus voice enrollment | A3 | Was refused as a non-goal. The enrollment leg already ships |
+| 12 | One-click name correction, propagated across the transcript | A3 | Wispr's actual mechanism, and the cheapest of its three signals |
+| 13 | Long-form ASR: chunked streaming, VAD, timestamp stitching | A4 | A rewrite of the recording loop, not a parameter change |
 
-| # | Feature | What actually gates it |
+### Wave 4 — Phase 2 begins
+
+Calendar first, because it unblocks both the roster leg of named speakers and the
+preparation brief. See `product-definition.md § Phase 2`.
+
+---
+
+## What still needs the operator, and what no longer does
+
+**Shortened deliberately.** Several items sat here because the old non-goals made
+them decisions. They are now build work.
+
+No longer blocked on a decision: named speakers, action items with status, and
+export as a note's terminal action. All three were refused by non-goals overturned
+on 2026-08-07.
+
+Still genuinely the operator's:
+
+### Unblocked 2026-08-07 by the parity decision
+
+Two features sat here waiting for a scope call. The operator made it, so both are
+queued work rather than open questions. Kept as a record because the reason they were
+stuck is worth not repeating.
+
+| Was | Was gated by | Now |
 |---|---|---|
-| 8 | Commitment view | The terminal action is export, and **"copy/export remains disabled until the separate redaction and export decision closes"** (this file, § Exact library retrieval). The commitment-organized library is already specified as `view: recorded-actions` rather than a separate surface, so the view is not the open part — the export is. |
-| 9 | Preparation brief | **Wave H, "Outside v1: optional EventKit brief"**, gate "separate scope and release decisions". The slice's own conditions list excludes "calendar preparation" outright, and §H first run deliberately omits `offer-calendar` because it crosses the envelope. Moving this into v1 needs the same kind of dated operator decision that moved the §D live note on 2026-08-06. |
+| Commitment view | Export "remains disabled until the separate redaction and export decision closes" | Wave 2, item 10. Export is the terminal action and the redaction question is a build detail inside it, not a gate on the view |
+| Preparation brief | Wave H, "Outside v1: optional EventKit brief", gate "separate scope and release decisions" | Wave 4. It needs calendar, so it lands with Phase 2's first feature rather than being excluded from the product |
 
-### Blocked on evidence, not on a person
-
-| # | Feature | Waiting on |
-|---|---|---|
-| 5 | Honest incompleteness | A real gated capture to measure. Prototyped, but the checkable-proportion figure has nothing true to count until feature 4 produces claims. |
-| 6 | Correction that changes the note | Restoration is Registered and reachable on a shipped image since 0.4.0. Regeneration stays unregistered until a generator passes admission — feature 4. |
-| 7 | Retrieval | Registered and working over transcripts and metadata. Claim-level landing waits on feature 4. |
+Neither was blocked on evidence or effort. Both were blocked on a boundary that has
+moved.
 
 ### Blocked on the operator
 

@@ -1,7 +1,7 @@
 # Backlog — epics, user stories, acceptance criteria
 
 Written 2026-08-07, expanded the same day. This is the **decomposition layer**: it
-breaks the ten north-star features into epics, epics into stories, and stories into
+breaks the parity feature set into epics, epics into stories, and stories into
 acceptance criteria a person can build against and a machine can be checked against.
 
 ```
@@ -15,6 +15,11 @@ journeys.md             the reader, the market, journeys J0–J6
 **This file does not own status or order.** `vertical-slice.md § Build queue` does.
 Two sequencing authorities is the exact confusion this repo already had, so every
 epic carries a pointer to its queue row rather than a state of its own.
+
+**It does not own scope either, and until 2026-08-07 it was read as if it did.** An
+absent story was treated as evidence a capability was out of scope. It is not: this
+file lags the definition layer on purpose, and `product-definition.md` is where the
+product's shape is decided.
 
 **On the missing PRD.** A separate PRD is deliberately not created.
 `product-definition.md` already does that job — what the product is, who the reader
@@ -87,26 +92,54 @@ repeating a prior claim: 247 session-core, 115 desktop lib, 33 shell-contract,
 
 ## 5. Epic catalog
 
-| # | Epic | Feature | Journey | Surface | Stories | Queue status (2026-08-07) |
-|---|---|---|---|---|---|---|
-| E1 | Consent-first local two-leg capture | 1 | J3 | §B §C | 7 | Shipped |
-| E2 | Operator voice isolation | 2 | J3 J5 | §I | 8 | Shipped 0.4.0, unmeasured on live audio |
-| E3 | Audio lifetime and deletion | 3 | J5 | §G §K | 7 | Whole-meeting deletion landed; wording open |
-| E4 | Evidence-linked notes | 4 | J1 J2 | §E | 8 | Matrix re-runnable 2026-08-07; 10 of 12 fixtures |
-| E5 | Honest incompleteness | 5 | J1 | §E §F | 5 | Blocked on evidence (needs E4) |
-| E6 | Correction and regeneration | 6 | J4 | §E | 5 | Restoration shipped; regeneration needs E4 |
-| E7 | Retrieval | 7 | J1 | §F | 6 | Registered; claim-level landing needs E4 |
-| E8 | Commitment handoff | 8 | J2 | §F | 4 | Blocked on a scope decision (export) |
-| E9 | Preparation brief | 9 | J0 | — | 4 | Wave H, outside v1 |
-| E10 | Shell that never lies | 10 | J3 | §A §C §H §J | 9 | **Buildable now** (signed preview bundle) |
-| E11 | Operator-authored live note | §D amendment | J3 | §D | 5 | Shipped 2026-08-06 |
-| E12 | Release, distribution, admission | cross-cutting | — | — | 7 | Mixed; closure receipt blocked on Operator |
+**Rewritten 2026-08-07 for category parity.** The previous catalog had twelve epics
+covering ten features. The north star is now 26 Phase 1 features
+(`product-definition.md`), so seven epics are new and the existing twelve keep their
+identifiers — renumbering would break every citation in this file and in the queue
+for no gain.
 
-**Read the dependency, not the numbering.** E4 is upstream of E5, E6 and E7. Nothing
-in those three finishes before an admitted note generator exists. That single edge
-explains most of what looks like slow progress.
+**This catalog is ahead of the stories, deliberately.** The new epics carry no
+stories yet. Writing 150 speculative stories in one pass produces a document nobody
+trusts; the queue decides which epic gets decomposed next, and stories land when that
+epic is about to be built. **An epic with no stories is not out of scope** — that
+inference is what went wrong before.
+
+| # | Epic | Features | Stories | Queue |
+|---|---|---|---|---|
+| E1 | Consent-first local two-leg capture | A1 | 7 | Shipped |
+| E2 | Operator voice isolation | A2 | 8 | Shipped 0.4.0, unmeasured live |
+| E3 | Audio lifetime and deletion | E5 | 7 | Whole-meeting deletion landed |
+| E4 | Evidence-linked notes | B5 B6 | 8 | Generator unadmitted; matrix re-runnable |
+| E5 | Honest incompleteness | B6 | 5 | Needs E4 |
+| E6 | Correction and regeneration | B7 | 5 | Restore shipped; regeneration needs E4 |
+| E7 | Exact retrieval | D2 | 6 | Registered — **search, not retrieval** |
+| E8 | Commitment handoff | C2 C3 | 4 | Wave 2 item 10 |
+| E9 | Preparation brief | E3 | 4 | Wave 4, with calendar |
+| E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
+| E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
+| E12 | Release, distribution, admission | — | 7 | Mixed |
+| **E13** | **The corpus store** | **E6** | — | **Wave 1 item 1 — next** |
+| **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | — | Wave 1 item 3 |
+| **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | — | Wave 1 items 4–6 |
+| **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | — | Wave 1 item 2, Wave 2 items 7–8 |
+| **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
+| **E18** | **Named speakers** | **A3** | — | Wave 3 items 11–12 |
+| **E19** | **Long-form ASR at meeting length** | **A4 A5** | — | Wave 3 item 13 |
+| **E20** | **Phase 2: calendar, directory, sync, push, workspaces** | **P1–P6** | — | Wave 4 |
+
+**Read the dependency, not the numbering.** E13 is upstream of E14, E15, E17 and the
+useful half of E7 — a corpus store is what makes organisation, cross-meeting
+questions and a commitment view possible at all. That single edge is why Wave 1 leads
+with it and why E7 shipped four stories of exact file search that will not survive a
+real corpus.
+
+**E7 is misnamed and the name is the finding.** It is exact search over transcripts
+and metadata. The category's headline — ask a question across every conversation and
+get an answer — is E15, which had no epic until today and existed as one unproven
+story inside E7.
 
 ---
+
 
 ## 6. Epic details
 
