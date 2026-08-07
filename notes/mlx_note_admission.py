@@ -989,7 +989,17 @@ def synthetic_measurement_fixtures() -> tuple[tuple[str, Transcript, str, tuple[
         ("negation-decision", Transcript("synthetic", NONE, [Turn("We decided not to cancel Project Atlas.")]), "accepted-research-candidate", ("not", "Atlas")),
         ("negation-proposal", Transcript("synthetic", NONE, [Turn("I propose that we do not merge the red branch.")]), "accepted-research-candidate", ("not", "red branch")),
         ("abstain-chitchat", Transcript("synthetic", NONE, [Turn("The weather was pleasant and the coffee was warm.")]), "transcript-only", ()),
+        # Both abstention fixtures above build the byte-identical request, and so
+        # would any other zero-candidate transcript: only candidates reach the
+        # model. They are one experiment run twice, kept as a cross-fixture
+        # determinism control rather than as two units of coverage.
         ("abstain-plain", Transcript("synthetic", NONE, [Turn("The window is open.")]), "transcript-only", ()),
+        # Added 2026-08-07, intervention seven. A hypothetical: it carries a
+        # decision cue and states no decision. The deterministic arm accepts it,
+        # measured — it is word-presence and cannot see a counterfactual. What
+        # the model does is recorded rather than graded, because grading it would
+        # score "behaved better than its reference" as a failure.
+        ("hypothetical-decision", Transcript("synthetic", NONE, [Turn("If we decided to ship Tuesday, we would need Dana.")]), "arms-recorded", ("Dana", "Tuesday")),
     )
 
 

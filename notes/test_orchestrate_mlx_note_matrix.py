@@ -203,7 +203,13 @@ class MatrixReceiptTests(unittest.TestCase):
         receipt = self.receipt()
         self.assertTrue(receipt["passed"], receipt["gates"])
         self.assertIs(receipt["admits"], False)
-        self.assertEqual(receipt["matrix"], {"fixtures": 12, "cold_repeats": 3, "warm_repeats": 2})
+        # Follows the constant: this builds a receipt from synthetic workers and
+        # is describing live behaviour, unlike the frozen 2026-08-05 receipt,
+        # which pins the literal 12 it was actually produced with.
+        self.assertEqual(
+            receipt["matrix"],
+            {"fixtures": EXPECTED_FIXTURES, "cold_repeats": COLD_REPEATS, "warm_repeats": WARM_REPEATS},
+        )
 
     def test_fewer_than_twelve_fixtures_cannot_pass(self) -> None:
         receipt = self.receipt(rows=self.rows[:11])
@@ -404,7 +410,11 @@ class CommittedMatrixReceiptTests(unittest.TestCase):
 
     def test_the_run_is_the_registered_shape_and_admits_nothing(self) -> None:
         self.assertEqual(self.receipt["matrix"], {"fixtures": 12, "cold_repeats": 3, "warm_repeats": 2})
-        self.assertEqual(len(self.receipt["fixtures"]), EXPECTED_FIXTURES)
+        # The literal 12, not EXPECTED_FIXTURES. This is a frozen 2026-08-05
+        # receipt; reading the live constant made history break the moment the
+        # registered suite grew, which is the same defect as a receipt that
+        # cannot say which instrument produced it.
+        self.assertEqual(len(self.receipt["fixtures"]), 12)
         self.assertIs(self.receipt["admits"], False)
         self.assertEqual(self.receipt["decoding"], "structure-constrained")
         # Schema version has exactly one owner:
@@ -549,15 +559,18 @@ class IdAlignmentReceiptTests(unittest.TestCase):
 
 
 class RegisteredShapeTests(unittest.TestCase):
-    def test_the_fixture_suite_is_the_twelve_the_protocol_registers(self) -> None:
+    def test_the_fixture_suite_is_the_thirteen_the_protocol_registers(self) -> None:
         fixtures = matrix._fixtures()
         self.assertEqual(len(fixtures), EXPECTED_FIXTURES)
         # The protocol names the composition, not just the count: four ordinary,
-        # two locator-order, two name/number, two negation, two abstention.
+        # two locator-order, two name/number, two negation, two abstention, and
+        # since 2026-08-07 one hypothetical whose arms are recorded rather than
+        # graded.
         prefixes = sorted(identifier.split("-")[0] for identifier in fixtures)
         self.assertEqual(
             prefixes,
-            ["abstain"] * 2 + ["locator"] * 2 + ["name"] * 2 + ["negation"] * 2 + ["ordinary"] * 4,
+            ["abstain"] * 2 + ["hypothetical"] + ["locator"] * 2 + ["name"] * 2
+            + ["negation"] * 2 + ["ordinary"] * 4,
         )
 
     def test_the_single_process_runner_still_refuses_the_full_scope(self) -> None:

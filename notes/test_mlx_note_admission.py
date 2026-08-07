@@ -91,11 +91,15 @@ class MlxNoteAdmissionTests(unittest.TestCase):
 
     def test_synthetic_measurement_plan_has_registered_coverage(self) -> None:
         fixtures = synthetic_measurement_fixtures()
-        self.assertEqual(len(fixtures), 12)
+        self.assertEqual(len(fixtures), 13)
         identifiers = [fixture[0] for fixture in fixtures]
         self.assertEqual(len(identifiers), len(set(identifiers)))
         self.assertEqual(sum(fixture[2] == "accepted-research-candidate" for fixture in fixtures), 10)
         self.assertEqual(sum(fixture[2] == "transcript-only" for fixture in fixtures), 2)
+        # Exactly one, and it stays that way until another is argued for: an
+        # ungraded fixture cannot fail, so a suite quietly accumulating them
+        # would report a rising pass count while measuring less.
+        self.assertEqual(sum(fixture[2] == "arms-recorded" for fixture in fixtures), 1)
         self.assertTrue(any("not" in fixture[3] for fixture in fixtures))
         self.assertTrue(any(any(character.isdigit() for character in term) for fixture in fixtures for term in fixture[3]))
         for _identifier, transcript, expected, _terms in fixtures:
@@ -103,6 +107,11 @@ class MlxNoteAdmissionTests(unittest.TestCase):
             if expected == "transcript-only":
                 self.assertEqual(control.outcome, "transcript-only")
                 self.assertEqual(control.code, "no-deterministic-candidates")
+            elif expected == "arms-recorded":
+                # The control must ACCEPT here, or the fixture asks nothing:
+                # its whole subject is what the model does with a candidate the
+                # extractor was willing to offer.
+                self.assertEqual(control.outcome, "accepted-research-candidate")
             else:
                 self.assertEqual(control.outcome, expected)
 
