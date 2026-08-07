@@ -30,6 +30,7 @@ from mlx_note_admission import (
 from measure_mlx_note_candidate import fixtures_for_scope
 from candidate_first import STRATEGY_CUE, generate_manifest
 from summarize import structured_artifact_citations
+from transcript import NONE, Transcript, Turn
 
 
 def advertised_response(request: dict, *, empty: bool = False) -> str:
@@ -350,6 +351,58 @@ class MlxNoteAdmissionTests(unittest.TestCase):
                 self.assertEqual(result.outcome, "transcript-only")
                 self.assertEqual(result.code, code)
                 self.assertIsNone(result.note)
+
+    def test_every_abstaining_transcript_produces_one_identical_request(self) -> None:
+        """The empty-abstention path can only ever be pinned by a single request.
+
+        Recording `request_sha256` per fixture on 2026-08-07 showed that
+        `abstain-chitchat` and `abstain-plain` send the model byte-identical
+        input. That is not a collision between two unlucky fixtures: only
+        candidates reach the model — the transcript text does not — so *every*
+        zero-candidate transcript builds the same request by construction.
+
+        The consequence is a coverage ceiling, not a bug. Adding a third
+        chitchat fixture costs three worker processes and buys nothing. This
+        pins the fact so that a future change which does let transcript text
+        into the request fails here loudly rather than quietly widening what a
+        registered receipt means.
+        """
+        digests = set()
+        for text in (
+            "The weather was pleasant and the coffee was warm.",
+            "The window is open.",
+            "Nothing of consequence occurred during the interval.",
+            "Bananas.",
+        ):
+            transcript = Transcript("synthetic", NONE, [Turn(text)])
+            manifest = generate_manifest(transcript, STRATEGY_CUE)
+            self.assertEqual(len(manifest["candidates"]), 0, text)
+            request = model_request(transcript, manifest)
+            self.assertEqual(request["candidates"], [])
+            digests.add(_sha256(json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))))
+        self.assertEqual(len(digests), 1, "zero-candidate transcripts must build one request")
+
+    def test_the_deterministic_control_accepts_a_hypothetical_as_a_decision(self) -> None:
+        """Why an abstention fixture that offers candidates cannot be added yet.
+
+        `strict_empty_abstention` is only reachable when the expected outcome is
+        `transcript-only`, and `control_expected` additionally requires the
+        deterministic arm to abstain on that fixture. The control abstains only
+        when there are no candidates — so "offers candidates, should still
+        abstain" is unreachable under the registered checks, and a fixture
+        written for it would fail on the control rather than measure the model.
+
+        The reason is recorded here because it is a finding in its own right:
+        the control is word-presence, so a sentence that states no decision at
+        all still reads as one. If this ever starts abstaining, the check
+        structure has changed and the preregistered decision in
+        MLX_NOTE_ADMISSION.md has to be revisited.
+        """
+        hypothetical = Transcript(
+            "synthetic", NONE, [Turn("If we decided to ship Tuesday, we would need Dana.")]
+        )
+        self.assertEqual(len(generate_manifest(hypothetical, STRATEGY_CUE)["candidates"]), 1)
+        self.assertEqual(run_control_arm(hypothetical).outcome, "accepted-research-candidate")
 
     def test_the_registered_runtime_pins_only_wheel_shipped_files(self) -> None:
         """The 2026-08-07 finding, pinned so a third narrowing cannot reappear.

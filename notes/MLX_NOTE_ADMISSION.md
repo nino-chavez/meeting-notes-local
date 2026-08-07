@@ -1831,3 +1831,92 @@ is. It changed on 2026-08-07 when `RECORD` left the pin, and no test failed, so
 every receipt committed before that names a hash of a file that has since moved.
 Same stale-evidence class, unguarded. Fixing it means deciding whether the harness
 digest should ratchet at all, which is a separate decision from this one.
+
+### 2026-08-07 — the abstention path has a coverage ceiling, and the next fixture is not buildable
+
+The build queue said the next build was "a second, distinct abstention fixture —
+one that offers candidates and should still abstain." **That is not buildable
+under the registered checks, and the reason is worth more than the fixture would
+have been.** Recorded here rather than quietly dropped from the queue.
+
+**First, the earlier finding generalises.** `abstain-chitchat` and
+`abstain-plain` do not share a request by coincidence. Only candidates reach the
+model — the transcript text does not — so *every* zero-candidate transcript builds
+the byte-identical request. Measured on four transcripts including two the matrix
+has never run:
+
+| transcript | candidates | request digest |
+|---|---|---|
+| "The weather was pleasant and the coffee was warm." | 0 | `b74a34c8…` |
+| "The window is open." | 0 | `b74a34c8…` |
+| "Nothing of consequence occurred during the interval." | 0 | `b74a34c8…` |
+| "Bananas." | 0 | `b74a34c8…` |
+
+So `strict_empty_abstention` is pinned by exactly one request and cannot be pinned
+by more. A third chitchat fixture costs three worker processes and buys nothing.
+This is a coverage ceiling, not a defect — a no-candidate transcript *should*
+produce a no-candidate request.
+
+**Second, the fixture that would break the ceiling is blocked by the check
+structure.** `strict_empty_abstention` is only reachable when the expected outcome
+is `transcript-only`, and `control_expected` additionally requires the
+deterministic arm to abstain on that same fixture. The control abstains only when
+there are no candidates. "Offers candidates, should still abstain" therefore fails
+on the control before the model is consulted, and would measure nothing.
+
+**Third, and this is the part worth keeping.** The obvious candidate-bearing
+abstention case is a hypothetical — a sentence containing a decision cue that
+states no decision. Measured:
+
+    "If we decided to ship Tuesday, we would need Dana."
+    → 1 candidate, control outcome accepted-research-candidate
+
+The deterministic control reads a hypothetical as a decision. That is the same
+class of defect as the inverted claim intervention four was built for, on the
+*other* arm — and unlike the model arm, nothing gates it. Both are word-presence
+failures; the polarity gate exists precisely because word-presence is not
+comprehension.
+
+### Preregistration — intervention seven, and the decision it needs
+
+**The rule to change.** `control_expected` currently makes "deterministic accepts,
+model abstains" an automatic fixture failure. That treats the deterministic arm as
+ground truth.
+
+**The decision, and it is made rather than deferred: a disagreement between the
+arms should be recorded, not graded.** The experiment exists to compare the two
+arms. Grading the model against the control assumes the control is right, and this
+document already contains the measurement showing it is not — it accepts a
+hypothetical as a decision. A model that abstains there is behaving *better* than
+its reference, and a check that scores that as a failure would suppress the one
+result most worth finding.
+
+**What that implies, concretely.** A fixture gains a third expected outcome
+alongside `accepted-research-candidate` and `transcript-only`: one meaning *the
+arms are expected to disagree, and the receipt must say which way*. The per-call
+checks gain a recorded field rather than a stricter gate. `admits` is untouched by
+any of it.
+
+**Why it is not implemented in this change.** It moves `EXPECTED_FIXTURES`, the
+registered fixture set, and the per-call check shape — three registered surfaces —
+and every one of them requires a matrix re-run to re-establish evidence. That is
+affordable now (the run is roughly four minutes and the environment is
+reproducible, which was not true yesterday), but bundling a protocol change with
+the finding that motivated it would make the pass unattributable. This document
+has recorded that failure once already, on the identifier bug.
+
+**The prediction, for when it is run.** The hypothetical fixture will be *accepted*
+by the model arm, not abstained on — the model has no more notion of a
+counterfactual than the extractor does, and nothing in the request marks one. If it
+abstains, that is the first evidence in this document of the model arm exceeding
+its reference, and it should be reported as such rather than folded into a count.
+
+**What is pinned now, without the protocol change.** Two tests:
+`test_every_abstaining_transcript_produces_one_identical_request`, so a future
+change that lets transcript text into the request fails loudly rather than quietly
+widening what a receipt means; and
+`test_the_deterministic_control_accepts_a_hypothetical_as_a_decision`, so the
+control's false positive cannot disappear unnoticed and take this argument with it.
+
+**This admits nothing** and changes no request. No matrix re-run was needed: only
+the test file moved, and it is hashed into no receipt.
