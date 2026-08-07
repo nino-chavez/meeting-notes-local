@@ -98,6 +98,15 @@ pub(crate) struct LibraryNoteResponse {
     pub(crate) meeting_id: String,
     pub(crate) claims: Vec<LibraryClaim>,
     pub(crate) audio_retention: LibraryAudioRetention,
+    /// The operator's own note (§ D), carried here so it stays reachable after
+    /// the meeting is dismissed.
+    ///
+    /// Without it the note is readable exactly until the operator navigates
+    /// away once, and then never again — saved, and lost as far as anyone using
+    /// the app can tell. It carries its own `unreadable` flag rather than
+    /// collapsing to text, because "could not be read" and "nothing written"
+    /// lead a reader to opposite conclusions.
+    pub(crate) operator_note: crate::operator_note::OperatorNote,
     pub(crate) message: String,
 }
 
@@ -532,6 +541,7 @@ impl LibraryReader {
             return Self::stale_note(&meeting_id);
         };
         let audio_retention = self.audio_retention(&meeting_id);
+        let operator_note = self.operator_note(&meeting_id);
         let audio_deletion_handle =
             self.retain_audio_deletion_handle(&meeting_id, audio_retention.state == "retained");
         match lifecycle {
@@ -543,6 +553,7 @@ impl LibraryReader {
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
                     audio_retention,
+                    operator_note,
                     message: "A note was not produced. Retained transcript text remains available."
                         .into(),
                 };
@@ -557,6 +568,7 @@ impl LibraryReader {
                     meeting_id: meeting_id.into(),
                     claims: Vec::new(),
                     audio_retention,
+                    operator_note,
                     message: if transcript_handle.is_some() {
                         "No admitted note is available. Retained transcript text remains available."
                             .into()
@@ -599,6 +611,7 @@ impl LibraryReader {
             meeting_id: meeting_id.into(),
             claims,
             audio_retention,
+            operator_note,
             message: "Claim words can be opened against their exact transcript locators.".into(),
         }
     }
@@ -743,6 +756,7 @@ impl LibraryReader {
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
             audio_retention: Self::unavailable_audio_retention(),
+            operator_note: crate::operator_note::OperatorNote::none(),
             message: UNAVAILABLE_MESSAGE.into(),
         }
     }
@@ -850,6 +864,16 @@ impl LibraryReader {
 
     fn audio_retention(&self, meeting_id: &str) -> LibraryAudioRetention {
         Self::read_audio_retention(&self.storage, meeting_id)
+    }
+
+    /// Read alongside the retention facts, from the same resolved directory and
+    /// with the same failure posture: a meeting that cannot be resolved reports
+    /// nothing rather than guessing.
+    fn operator_note(&self, meeting_id: &str) -> crate::operator_note::OperatorNote {
+        match meeting_dir(&self.storage, meeting_id) {
+            Ok(directory) => crate::operator_note::read(&directory),
+            Err(_) => crate::operator_note::OperatorNote::none(),
+        }
     }
 
     pub(crate) fn read_audio_retention(
@@ -1021,6 +1045,7 @@ impl LibraryReader {
             meeting_id: meeting_id.into(),
             claims: Vec::new(),
             audio_retention: Self::unavailable_audio_retention(),
+            operator_note: crate::operator_note::OperatorNote::none(),
             message: STALE_MESSAGE.into(),
         }
     }

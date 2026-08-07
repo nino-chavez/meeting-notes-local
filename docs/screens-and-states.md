@@ -393,11 +393,20 @@ atomically, and the frozen `meeting/2` contract is untouched — which also mean
 a note can never make a meeting unreadable to an older build. It is kept with
 the transcript, not the audio, so the retention period does not remove it.
 
-**The note is shown back on the finished-transcript screen, read-only.** Left
-only on the recording screen it would appear to vanish at the moment the meeting
-ended, onto a screen with no way back. Read-only because §D is about writing
-*during* the meeting; an editor after it ends would imply the note is still
-being taken.
+**The note is readable after the meeting, on two screens, read-only on both.**
+Left only on the recording screen it would appear to vanish the moment the
+meeting ended. Left only on the finished-transcript screen it would be readable
+until the operator navigated away once and then never again — saved, and lost as
+far as anyone using the app could tell. So it is also on the retained-meeting
+screen, carried through the Library reader's existing handle discipline. Both are
+read-only: §D is about writing *during* the meeting, and an editor afterwards
+would imply the note is still being taken.
+
+**`unreadable` is carried on all three surfaces, not just the one that measured
+it.** Telling an operator "no note" when the app holds words it could not parse
+is the same mistake as a check whose result no surface carries — which this
+document already names as the mirror of a surface implying a check it did not
+perform.
 
 **What bounds a crash.** Typing is saved on a 1.2 s debounce and flushed before
 the meeting leaves the recording screen — the closing thought is written as a

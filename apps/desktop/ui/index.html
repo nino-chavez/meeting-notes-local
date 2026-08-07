@@ -399,6 +399,13 @@
         <h1 id="meeting-detail-title">Note and transcript.</h1>
         <p class="lede" id="meeting-detail-lede">An automatic note is a reading aid. Evidence links locate the exact retained transcript words behind each claim.</p>
         <p class="notice" id="meeting-detail-state" role="status" aria-live="polite">Opening this retained meeting…</p>
+        <!-- § D. The note the operator typed during this meeting, reachable
+             after it has been dismissed. Without it the note is readable until
+             they navigate away once, and then not again. -->
+        <section class="live-note" id="detail-note" data-state="empty" aria-labelledby="detail-note-title" hidden>
+          <h2 id="detail-note-title">Your notes from this meeting</h2>
+          <p class="transcript-note-text" id="detail-note-text"></p>
+        </section>
         <section class="meeting-retention" id="meeting-retention" aria-labelledby="meeting-retention-title" hidden>
           <p class="label">Recording retention</p>
           <h2 id="meeting-retention-title">Checking retained audio</h2>

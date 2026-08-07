@@ -1325,6 +1325,17 @@ fn the_live_note_is_the_operators_alone_and_says_what_it_cannot_do() {
     assert!(module.contains("durable_replace("));
     assert!(!module.contains("MeetingArtifacts"));
 
+    // Reachable after the meeting is dismissed. Shown only on the transcript
+    // screen, the note is readable until the operator navigates away once and
+    // then never again — saved, and lost as far as anyone using the app can
+    // tell. The retained-meeting screen carries it through the library reader's
+    // existing handle discipline, with the unreadable state intact.
+    let reader = include_str!("../src/library_reader.rs");
+    assert!(reader.contains("pub(crate) operator_note: crate::operator_note::OperatorNote,"));
+    assert!(html.contains("id=\"detail-note\""));
+    assert!(script.contains("renderDetailNote(response?.operatorNote);"));
+    assert!(script.contains("if (note?.unreadable) {"));
+
     // Neither command takes a meeting identifier from the shell.
     assert!(source.contains("fn operator_note(state: State<'_, ApplicationState>)"));
     assert!(!script.contains("invoke(\"save_operator_note\", { text, meetingId"));

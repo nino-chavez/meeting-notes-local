@@ -71,6 +71,18 @@ pub struct OperatorNote {
     pub unreadable: bool,
 }
 
+impl OperatorNote {
+    /// Nothing to report: no meeting resolved, so neither a note nor a failure
+    /// to read one. Distinct from a meeting with an empty note only in what
+    /// produced it, and identical in what a surface should show.
+    pub fn none() -> Self {
+        Self {
+            text: String::new(),
+            unreadable: false,
+        }
+    }
+}
+
 pub fn read(meeting_dir: &Path) -> OperatorNote {
     let path = meeting_dir.join(FILE_NAME);
     if !path.exists() {

@@ -1615,7 +1615,27 @@ function claimTypeLabel(value) {
   }[value] || "Claim";
 }
 
+// § D on the retained-meeting screen. Same two states the live surface keeps
+// apart, for the same reason: an unreadable note told as "no note" says the
+// operator wrote nothing while the app is holding words it could not parse.
+function renderDetailNote(note) {
+  const section = document.querySelector("#detail-note");
+  const target = document.querySelector("#detail-note-text");
+  if (note?.unreadable) {
+    section.hidden = false;
+    section.dataset.state = "unreadable";
+    target.textContent =
+      "A note was saved for this meeting and could not be read back. It has been left on disk untouched.";
+    return;
+  }
+  const text = typeof note?.text === "string" ? note.text : "";
+  section.hidden = !text;
+  section.dataset.state = "typing";
+  target.textContent = text;
+}
+
 function renderMeetingDetail(response) {
+  renderDetailNote(response?.operatorNote);
   const presentation = meetingDetailPresentation(response);
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
