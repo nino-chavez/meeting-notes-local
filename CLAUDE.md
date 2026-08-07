@@ -29,9 +29,18 @@ rather than a judgment made fresh each session.
 
 **Every session converges.** Branch, then PR, then merge. A session that ends at
 "pushed" is how this repo reached 85 branches, 44 worktrees, and two unrelated root
-commits — consolidated 2026-08-07 by fast-forwarding `main` onto the app line. Work
-in `<repo>/.worktrees/<branch>`, and remove the worktree after the merge; removing a
-worktree does not delete its branch.
+commits — consolidated 2026-08-07 by fast-forwarding `main` onto the app line.
+
+Work in `<repo>/.worktrees/<branch>`. Remove the worktree once the work has landed
+**or** the session is finished with it — it does not have to be merged first, and on
+2026-08-07 thirty-eight worktrees on unmerged branches were removed safely. Removing
+a worktree never deletes its branch, so nothing is lost by removing it early.
+
+Deleting a *branch* is the irreversible one, and is a separate decision. Only delete
+one that exists on the remote: `git ls-remote --exit-code --heads origin <branch>`.
+Of the 85 branches here, 59 are local-only, so a reflex `git branch -d` sweep would
+have destroyed the only copy of most of them. None were deleted; that backlog is
+still open work, not clutter.
 
 **Private meeting material never enters Git.** Audio, transcripts, note text, and
 profile material stay out by design, so their absence from the repository proves
