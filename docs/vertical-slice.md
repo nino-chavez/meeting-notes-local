@@ -41,17 +41,26 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the second half of Wave 1 item 2: the local model that chooses
-which words name a meeting.** Item 1 landed on 2026-08-07 and so did item 2's first
-half — a meeting is now named by its own opening line, extracted deterministically,
-with the operator's title outranking it and its capture time beneath it. Row 2 below
-is deliberately not struck through, because the half the queue put there — proving
-the store and a local model are wired end to end — has not been built.
+**The next build is Wave 1 item 3, folders and the meeting object's sibling views.**
+Items 1 and 2 are both finished, and item 2 finished in two different ways that are
+worth keeping straight.
 
-Read `backlog.md` US-16.2 before starting it. The short version: the model returns a
-turn index and a character span, never text; an unresolvable span is discarded and
-the deterministic rule produces the name instead; and admission is the operator's,
-not the builder's.
+Its first half shipped 2026-08-07: a meeting is named by its own opening line,
+extracted deterministically, with the operator's title above it and its capture time
+below.
+
+Its second half — the local model the queue wanted wired end to end — was
+**measured and refused, not built.** `notes/MLX_TITLE_SELECTION.md` registered a
+two-sided prediction of 6–9 of 10 before running anything; three cold runs returned
+5 of 10, byte-identical, and the registered consequence closes the path for
+`Qwen2.5-1.5B-Instruct-4bit`. No Rust seam was written, because the probe existed to
+answer that before the seam was spent. A separate finding worth carrying: the model
+**never abstained**, on any of 30 calls, including the fixture where nothing said
+identifies a meeting.
+
+The harness, mask, fixtures and receipts are committed and re-runnable against a
+different candidate with one flag. Doing that is a real option and it is not the
+next build; picking it up again should be a decision about candidates, not a default.
 
 A struck-through row is finished; the first row that is not struck through is the
 work. That rule is the whole resume protocol, and it holds whether the session
@@ -96,7 +105,7 @@ largest surface-area addition and says it has nothing to do with audio.
 | Order | Build | Feature | Why here |
 |---|---|---|---|
 | 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. What remains is US-13.6: the full scan still runs first, because skipping unchanged meetings needs a per-meeting entry point into an audited module | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and, measured, refuses a common word at one meeting |
-| 2 | Auto-titling. **Naming landed 2026-08-07** — `meeting_title.rs`, the first non-gated turn's opening sentence, behind an operator title and above the capture time. What remains is the local model that picks *which* span, which is the half this row was put here for | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
+| 2 | ~~Auto-titling~~ **Landed 2026-08-07** as `meeting_title.rs` — the first non-gated turn's opening sentence, behind an operator title and above the capture time. The local-model half was **measured and refused** on 2026-08-08 at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`); the seam was not built, and re-running the committed harness against another candidate is a decision, not a pending task | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | Folders, and the meeting object's sibling views | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | Filters — people, date range, keywords, titles | D3 | Gong documents all four. Free once the store exists |
 | 5 | Semantic search over the corpus, beside exact | D2 | Exact is Registered; semantic is what a question needs |

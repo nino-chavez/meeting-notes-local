@@ -356,6 +356,99 @@ class TitleFixtureTests(unittest.TestCase):
         self.assertGreaterEqual(len(differing), len(fixtures) - 2)
 
 
+def _receipt_paths() -> list[Path]:
+    here = Path(__file__).resolve().parent
+    return [
+        here / "mlx_title_selection_receipt.json",
+        here / "mlx_title_selection_receipt_run2.json",
+        here / "mlx_title_selection_receipt_run3.json",
+    ]
+
+
+class TitleReceiptTests(unittest.TestCase):
+    """Against the committed 2026-08-08 receipts.
+
+    Every number here is a **literal**, not a value read back from the live
+    fixture file or a live constant. CLAUDE.md records this being got wrong three
+    times in one day: a frozen receipt asserted through `EXPECTED_FIXTURES`
+    silently re-certifies itself against whatever the suite later became. These
+    receipts describe a run that happened once, with ten fixtures, and they will
+    still describe it after an eleventh is added.
+    """
+
+    def test_the_committed_receipts_were_produced_by_the_current_harness(self):
+        from mlx_note_admission import _sha256
+
+        here = Path(__file__).resolve().parent
+        current = {
+            "source_sha256": _sha256((here / "mlx_title_selection.py").read_bytes()),
+            "decoder_sha256": _sha256((here / "title_decoding.py").read_bytes()),
+        }
+        fixtures_sha256 = _sha256((here / "title_selection_fixtures.json").read_bytes())
+        for path in _receipt_paths():
+            receipt = json.loads(path.read_text())
+            self.assertEqual(receipt["harness"], current, path.name)
+            self.assertEqual(receipt["fixtures_sha256"], fixtures_sha256, path.name)
+
+    def test_the_registered_prediction_failed_at_five_of_ten(self):
+        """The literal the run produced. The registered range was 6 to 9."""
+        for path in _receipt_paths():
+            receipt = json.loads(path.read_text())
+            rows = receipt["rows"]
+            self.assertEqual(len(rows), 10, path.name)
+            self.assertEqual(
+                sum(bool(row["agreed_with_intended"]) for row in rows), 5, path.name
+            )
+
+    def test_the_model_never_abstained_on_any_fixture(self):
+        for path in _receipt_paths():
+            rows = json.loads(path.read_text())["rows"]
+            self.assertEqual([row["outcome"] for row in rows], ["selected"] * 10)
+            self.assertEqual(
+                [row["selected_turn"] for row in rows].count(None),
+                0,
+                "an abstention would change the finding recorded in the doc",
+            )
+
+    def test_the_three_cold_runs_are_identical_apart_from_timings(self):
+        """The repeatability gate, resting on the artifacts rather than on a
+        sentence in the doc."""
+
+        def without_timings(receipt: dict) -> dict:
+            receipt = json.loads(json.dumps(receipt))
+            receipt["load"].pop("model_load_elapsed_s", None)
+            for row in receipt["rows"]:
+                generation = row.get("observed", {}).get("generation", {})
+                generation.pop("call_elapsed_s", None)
+                generation.pop("mask_build_elapsed_s", None)
+            return receipt
+
+        stripped = [
+            without_timings(json.loads(path.read_text())) for path in _receipt_paths()
+        ]
+        self.assertEqual(stripped[0], stripped[1])
+        self.assertEqual(stripped[1], stripped[2])
+
+    def test_the_mask_never_refused_and_every_response_finished(self):
+        for path in _receipt_paths():
+            for row in json.loads(path.read_text())["rows"]:
+                self.assertNotIn("code", row, path.name)
+                self.assertEqual(row["observed"]["generation"]["finish_reason"], "stop")
+
+    def test_the_model_tree_was_unchanged_across_the_run(self):
+        for path in _receipt_paths():
+            receipt = json.loads(path.read_text())
+            self.assertEqual(
+                receipt["load"]["preflight_model_tree_sha256"],
+                receipt["postflight_model_tree_sha256"],
+                path.name,
+            )
+            self.assertEqual(
+                receipt["postflight_model_tree_sha256"],
+                MLX_RUNTIME["model"]["expected_tree_sha256"],
+            )
+
+
 class TitleRuntimeTests(unittest.TestCase):
     def test_the_runtime_fields_are_driven_by_the_pin_rather_than_restated(self):
         self.assertEqual(

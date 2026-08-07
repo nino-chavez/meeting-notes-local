@@ -186,8 +186,100 @@ This changes no product runtime, adds no command, and admits nothing.
 
 ---
 
-## Result
+## Result — 2026-08-08 — the prediction failed, and the path is closed for this model
 
-*Not yet run. This section is deliberately empty in the commit that registers the
-prediction above, so that the registration and the result cannot be confused for
-having been written together.*
+Run against the pinned model tree `3aaeeac4…`, the pinned wheels, and the
+fixtures at the digest the receipts carry. Three cold runs from fresh processes.
+Receipts: `mlx_title_selection_receipt.json` and its `_run2` / `_run3` siblings.
+
+**The model agreed with `intended_turn` on 5 of 10. The registered range was 6 to
+9. The prediction is wrong and the registered consequence stands: the selection
+path is closed for this model at this size.**
+
+| fixture | control | intended | selected | agreed |
+|---|---|---|---|---|
+| `agenda-after-logistics` | 1 | 2 | **2** | yes |
+| `agenda-first` | 0 | 0 | **0** | yes |
+| `agenda-late` | 1 | 4 | 5 | no |
+| `two-topics` | 0 | 2 | 3 | no |
+| `question-agenda` | 0 | 1 | **1** | yes |
+| `no-agenda-abstain` | 0 | null | 1 | no |
+| `numbers-and-names` | 0 | 2 | 1 | no |
+| `negation` | 0 | 1 | **1** | yes |
+| `withheld-first` | 1 | 2 | **2** | yes |
+| `long-identifying-turn` | 0 | 2 | 1 | no |
+
+### The number is better than every baseline and still below the floor, and the floor wins
+
+5 of 10 beats the shipped rule at 1, the best position rule at 3, and uniform
+random at an expected 2.28. It is doing something.
+
+**That paragraph is the whole reason the floor was registered in advance.** The
+argument "5 beats every baseline, so this is a pass" is available now and was
+available before the run, and adopting it after seeing 5 is the charitable
+re-reading this discipline exists to refuse. The floor was set at 6 — double the
+strongest non-reading rule — while the outcome was unknown. It stays where it was
+put. What the comparison earns is a narrower statement, not a different verdict:
+**the result is between random and useful, and the registered threshold for
+"useful" was not met.**
+
+### Every mechanical gate passed, which is what makes the selection number readable
+
+| Gate | Result |
+|---|---|
+| Mask never refused | Pass — no `MaskRefused` on any of 30 calls |
+| Syntax and schema | Pass, and non-discriminating by construction — 10 bytes and 7 generated tokens on every call, finish `stop` every time |
+| Repeatability | **Pass** — response digests, selections and whole receipts identical across three cold runs once timings are excluded, and a test compares the committed artifacts rather than this sentence |
+| Latency | 0.41–0.55 s per call, model load 0.42–0.44 s, mask build 0.25–0.28 s. Reported, not a rejection criterion |
+| Model tree | `3aaeeac4…` before and after every run |
+| Control 2 — `agenda-first` returns 0 | **Pass**. The model did not buy late-agenda fixtures by avoiding the first turn |
+| Control 1 — `no-agenda-abstain` returns null | **Fail**, and see below |
+
+The failure is not a shape failure. Unlike the note probe, whose first two
+attempts died on JSON syntax and had to be re-run under a corrected mask, nothing
+here was spent measuring a serializer.
+
+### The model never abstained, on any fixture
+
+**0 of 30 calls returned `{"turn":null}`**, including every call on the fixture
+built for it, where nothing said identifies a meeting and the model answered
+"Yes I can hear you perfectly well."
+
+This is a distinct finding from picking the wrong turn, and it is worse for the
+product. A selection model that cannot abstain cannot be given the decision "does
+this meeting have a subject at all" — it will always name one. The abstention
+branch is reachable in the language, the mask admits it, and the system prompt
+asks for it in as many words; it was simply never taken.
+
+### What is not claimed
+
+**No mechanism.** Four of the five misses are visible — the reaction chosen over
+the statement, the second topic over the first, logistics over substance twice —
+and it would be easy to write a sentence explaining them. `MLX_NOTE_ADMISSION.md`
+asserted two mechanisms as established and retracted both; this section is not
+going to assert a third from ten fixtures and no probe. The observations are
+recorded and nothing is inferred from them.
+
+**Not a statement about local models.** One model, one size, one quantisation,
+one prompt, ten synthetic fixtures, one author's judgment of what "intended"
+means. A 7B model, a different prompt, or few-shot examples are all untested, and
+this result forecloses none of them — it forecloses spending the Rust seam on
+*this* candidate.
+
+**Not a statement about auto-titling.** The shipped extractive rule is unaffected
+and still names every meeting. What did not happen is the improvement.
+
+### What this licenses
+
+Nothing new gets built. The Rust `title_from_turn` seam is **not** written,
+because it now has neither a caller nor a measurement supporting one — which was
+the whole point of running the probe before building it.
+
+The harness, mask, fixtures and receipts stay. They are the instrument for the
+next candidate, and re-running it against a different model is a `--model-directory`
+away.
+
+**A falsifier for anyone who repeats this.** If a candidate clears 6 of 10 here
+but still never abstains, the abstention failure is the model class and not this
+one, and the contract needs a different answer to "no subject" than asking the
+model for one.

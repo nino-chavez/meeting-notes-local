@@ -1,0 +1,504 @@
+{
+  "decoding": {
+    "max_kv_size": 4096,
+    "max_tokens": 24,
+    "seed": 0,
+    "temperature": 0.0
+  },
+  "fixtures_sha256": "fbf9e4d4636d263f730f5e23611a545798aa25917e1f42eb8ea8d5dc314f5300",
+  "harness": {
+    "decoder_sha256": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+    "source_sha256": "9520e2cea186e4480004dbf87b21ac6c41c8462298760e7ff79ecf2806405e78"
+  },
+  "load": {
+    "model_load_elapsed_s": 0.420546,
+    "preflight_model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+    "runtime_identity": {
+      "implementation": "CPython",
+      "mlx": "0.32.0",
+      "package_metadata_sha256": {
+        "mlx": {
+          "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+        },
+        "mlx-lm": {
+          "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+        },
+        "transformers": {
+          "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+        }
+      },
+      "python": "3.14.6",
+      "transformers": "5.0.0rc1"
+    }
+  },
+  "postflight_model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+  "rows": [
+    {
+      "agreed_with_intended": true,
+      "control_turn": 1,
+      "differs_from_control": true,
+      "fixture": "agenda-after-logistics",
+      "intended_turn": 2,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.531169,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.265431,
+          "prompt_tokens": 207
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "a5f721609021435aae90f95f50dc2d2430fa3f51a128d6bee3061af74b619d9f",
+        "request_sha256": "063f7c8764f485da6c6b9033e66463b40abc4543ce08fc1f05eee2712894fd70",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "e3630aee9bfafb81daa863fee390849bc545def85f4a60cfd3ffd06f809dab7e",
+      "selected_turn": 2
+    },
+    {
+      "agreed_with_intended": true,
+      "control_turn": 0,
+      "differs_from_control": false,
+      "fixture": "agenda-first",
+      "intended_turn": 0,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.422473,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.265474,
+          "prompt_tokens": 186
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "0d09e8bcbc32579f60870ed6cdceccefb4bfceca5d2df4470783387dd09107f1",
+        "request_sha256": "a7f1c6d1afdeca65cdad31fb37b75c5d644b58afaeb1c73ccbb940534feb0a84",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "305641ce9846d7a22e13029f91a1e1b80d7b46c64ab5ba76b4bb9ad503abab1e",
+      "selected_turn": 0
+    },
+    {
+      "agreed_with_intended": false,
+      "control_turn": 1,
+      "differs_from_control": true,
+      "fixture": "agenda-late",
+      "intended_turn": 4,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.477534,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.26863,
+          "prompt_tokens": 241
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "9a0f8f908cb04c097f69d9919e4fa6e9e2e28025b4e00b379da856ee0e6fbb1f",
+        "request_sha256": "e471a5777e2fa8ee3edd452a735cb2a75d2eb9ed52e538f8807b3cdfc2da212d",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "0f1890dbebad456904bc0de7bd874068de5236a0513618f3c9c3658ad0539f48",
+      "selected_turn": 5
+    },
+    {
+      "agreed_with_intended": false,
+      "control_turn": 0,
+      "differs_from_control": true,
+      "fixture": "two-topics",
+      "intended_turn": 2,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.450804,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.253768,
+          "prompt_tokens": 222
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "9632f8852d12abde12af2646ed8c9a9ada019873364dbd6a5e1b848d24f404a8",
+        "request_sha256": "d523b065da161be057d6ea7d92381f8c1ce28011f472707f6d67d89bdc39c87e",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "1bc92118ddeea2010f583a297e62ebd58c50e21370292e61ed4c9b2aa2290cc6",
+      "selected_turn": 3
+    },
+    {
+      "agreed_with_intended": true,
+      "control_turn": 0,
+      "differs_from_control": true,
+      "fixture": "question-agenda",
+      "intended_turn": 1,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.460634,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.283769,
+          "prompt_tokens": 201
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "b006b9f3ab5bdc13e49cbcc4bd98892c9063fd9a15c47585a1d1475f05e03860",
+        "request_sha256": "035029021a780ea1b7cb26c18aac6194bd06bf62f139e84f41678da29cba9d38",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1,
+        2
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "7ee019d8ac6085c162dfca8628f73d191e8814fdbf1aa44e8ef28e88b17710ce",
+      "selected_turn": 1
+    },
+    {
+      "agreed_with_intended": false,
+      "control_turn": 0,
+      "differs_from_control": true,
+      "fixture": "no-agenda-abstain",
+      "intended_turn": null,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.442653,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.27647,
+          "prompt_tokens": 198
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "88f574f21e9efdde9dec931f21e3507dce3421ce19bafc142543b2fa77b9103a",
+        "request_sha256": "cc45a40918a0770e509664da3e31ee9c4ced60d73e7dced742aef357328d2089",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1,
+        2
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "7ee019d8ac6085c162dfca8628f73d191e8814fdbf1aa44e8ef28e88b17710ce",
+      "selected_turn": 1
+    },
+    {
+      "agreed_with_intended": false,
+      "control_turn": 0,
+      "differs_from_control": true,
+      "fixture": "numbers-and-names",
+      "intended_turn": 2,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.437472,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.281128,
+          "prompt_tokens": 225
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "31e0478140e28a1a53c22262ec76eb03c680ac0d7fd27c6451b2a64c72d0c8d4",
+        "request_sha256": "315600733daf608a6b1a29942f7f00c64239ee9c8556a050d4fba75a0ee00867",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "7ee019d8ac6085c162dfca8628f73d191e8814fdbf1aa44e8ef28e88b17710ce",
+      "selected_turn": 1
+    },
+    {
+      "agreed_with_intended": true,
+      "control_turn": 0,
+      "differs_from_control": true,
+      "fixture": "negation",
+      "intended_turn": 1,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.434064,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.274313,
+          "prompt_tokens": 200
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "a71878c4b8528674acde5b6ddb0adfe01c111b27090dc1ddca11aef2eb88bd0d",
+        "request_sha256": "17e8f4e7ef7f4566accc8d930c1b36219031645921bcdb03f793e2c712b02faf",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1,
+        2
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "7ee019d8ac6085c162dfca8628f73d191e8814fdbf1aa44e8ef28e88b17710ce",
+      "selected_turn": 1
+    },
+    {
+      "agreed_with_intended": true,
+      "control_turn": 1,
+      "differs_from_control": true,
+      "fixture": "withheld-first",
+      "intended_turn": 2,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.441771,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.260835,
+          "prompt_tokens": 203
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "7475b471a3d888ab2ae58214755992e54d934592119b13ef6d9b2099b475bb8e",
+        "request_sha256": "4786fc611512178c0231f7eccc1c5b9cf3686e7bee7045f5f564c3889d17637d",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        1,
+        2,
+        3
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "e3630aee9bfafb81daa863fee390849bc545def85f4a60cfd3ffd06f809dab7e",
+      "selected_turn": 2
+    },
+    {
+      "agreed_with_intended": false,
+      "control_turn": 0,
+      "differs_from_control": true,
+      "fixture": "long-identifying-turn",
+      "intended_turn": 2,
+      "observed": {
+        "decoder": "795ebbdadf1c2865297aba11e9e052095551377394a13f0b8bd1e16ac3e435ac",
+        "generation": {
+          "call_elapsed_s": 0.465182,
+          "finish_reason": "stop",
+          "generated_tokens": 7,
+          "mask_build_elapsed_s": 0.280152,
+          "prompt_tokens": 237
+        },
+        "model_tree_sha256": "3aaeeac4e5bffd4308187dac1b34d5145bc697f589255ff57d04cc53381ddb95",
+        "rendered_template_sha256": "e911722d554c1d68230c09e2318a7333f817225e2dca06c3ed28d7f4f83044ef",
+        "request_sha256": "15664a7291564cb15c165e201e45e5c0e6521943c05dba6bd888134bce0e08e1",
+        "runtime_identity": {
+          "implementation": "CPython",
+          "mlx": "0.32.0",
+          "package_metadata_sha256": {
+            "mlx": {
+              "metadata": "d41601d7dc5acdd43978f4afedacae9cf825b872cd82ff4012ee19a9eb1d19f8"
+            },
+            "mlx-lm": {
+              "metadata": "7a0f3dc672bd6feae79e225f3b0f5947b04e4e7fc36b615462f1fff876a96f8b"
+            },
+            "transformers": {
+              "metadata": "a2af7da550d233d50ead4db003f71522a5084fab6124564892ba5cde4996f7b0"
+            }
+          },
+          "python": "3.14.6",
+          "transformers": "5.0.0rc1"
+        }
+      },
+      "offered": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "outcome": "selected",
+      "response_bytes": 10,
+      "response_sha256": "7ee019d8ac6085c162dfca8628f73d191e8814fdbf1aa44e8ef28e88b17710ce",
+      "selected_turn": 1
+    }
+  ],
+  "schema": "mlx-title-selection/1"
+}
