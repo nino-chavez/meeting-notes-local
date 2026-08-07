@@ -5,8 +5,11 @@
 //! boundary; the process-local meeting coordinator below is not that lock.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
+use std::ffi::CString;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -16,9 +19,7 @@ use thiserror::Error;
 
 use crate::meeting::valid_opaque_id;
 use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
-use crate::storage::{
-    StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
-};
+use crate::storage::{StorageRoot, create_private_dir, durable_create_new, durable_replace};
 
 /// Kept equal to the bounded input accepted by the strict Python profile loader.
 const MAX_PROFILE_BYTES: u64 = 4 * 1024 * 1024;
@@ -26,6 +27,10 @@ const MAX_RECEIPT_BYTES: u64 = 16 * 1024;
 const PROFILE_RELATIVE_PATH: &str = "profile/voiceprint.json";
 const RESET_OPERATIONS_RELATIVE_PATH: &str = "profile/reset-operations";
 const STAGED_NAME: &str = "voiceprint.staged";
+// This name is unique because it lives inside the operation-ID directory. It
+// narrows the final removal race: no-replace move, identity revalidation, then
+// unlink. A crash in this substep remains the existing `staged` receipt phase.
+const REMOVING_NAME: &str = "voiceprint.removing";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InjectedFailurePhase {
@@ -106,6 +111,21 @@ enum ResetPhase {
 struct ProfileBinding {
     byte_size: u64,
     sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    owner: u32,
+    byte_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProfileSnapshot {
+    binding: ProfileBinding,
+    identity: FileIdentity,
 }
 
 /// Start a new account-level reset or resume exactly the same incomplete one.
@@ -233,12 +253,14 @@ fn finish_receipt(
     validate_receipt(&receipt)?;
     validate_private_directory(operation_dir)?;
     let receipt_path = operation_dir.join("receipt.json");
-    let staged = operation_dir.join(STAGED_NAME);
     let profile_dir = profile_dir(storage)?;
-    let live = profile_dir.join("voiceprint.json");
+    let profile_fd = open_private_directory_fd(&profile_dir)?;
+    let operation_fd = open_private_directory_fd(operation_dir)?;
 
     if receipt.phase == ResetPhase::Removed {
-        if path_exists(&staged)? {
+        if entry_exists_at(&operation_fd, STAGED_NAME)?
+            || entry_exists_at(&operation_fd, REMOVING_NAME)?
+        {
             return Err(ProfileResetError::Quarantined);
         }
         return Ok(());
@@ -247,19 +269,33 @@ fn finish_receipt(
     let binding = binding_from_receipt(&receipt)?;
     match receipt.phase {
         ResetPhase::Deleting => {
-            let live_state = exact_profile_state(&live, &binding)?;
-            let staged_state = exact_profile_state(&staged, &binding)?;
+            let live_state = exact_profile_at(&profile_fd, "voiceprint.json", &binding)?;
+            let staged_state = exact_profile_at(&operation_fd, STAGED_NAME, &binding)?;
+            if entry_exists_at(&operation_fd, REMOVING_NAME)? {
+                return Err(ProfileResetError::Quarantined);
+            }
             match (live_state, staged_state) {
-                (ExactPathState::Exact, ExactPathState::Absent) => {
-                    fs::rename(&live, &staged)?;
-                    sync_directory(&profile_dir)?;
-                    sync_directory(operation_dir)?;
+                (ExactPathState::Exact(live), ExactPathState::Absent) => {
+                    run_test_hook(
+                        TestHookPoint::BeforeLiveStageMove,
+                        &profile_dir,
+                        operation_dir,
+                    );
+                    rename_no_replace(&profile_fd, "voiceprint.json", &operation_fd, STAGED_NAME)?;
+                    let staged = exact_profile_at(&operation_fd, STAGED_NAME, &binding)?;
+                    if staged != ExactPathState::Exact(live)
+                        || entry_exists_at(&profile_fd, "voiceprint.json")?
+                    {
+                        return Err(ProfileResetError::Quarantined);
+                    }
+                    sync_directory_fd(&profile_fd)?;
+                    sync_directory_fd(&operation_fd)?;
                     maybe_interrupt(fail_after, InjectedFailurePhase::RenameBeforeReceipt)?;
                 }
-                (ExactPathState::Absent, ExactPathState::Exact) => {
+                (ExactPathState::Absent, ExactPathState::Exact(_)) => {
                     // The rename was durable but the phase write was not.
-                    sync_directory(&profile_dir)?;
-                    sync_directory(operation_dir)?;
+                    sync_directory_fd(&profile_fd)?;
+                    sync_directory_fd(&operation_fd)?;
                 }
                 _ => return Err(ProfileResetError::Quarantined),
             }
@@ -270,17 +306,38 @@ fn finish_receipt(
         ResetPhase::Staged | ResetPhase::Removed => {}
     }
 
-    let live_state = exact_profile_state(&live, &binding)?;
-    let staged_state = exact_profile_state(&staged, &binding)?;
-    match (live_state, staged_state) {
-        (ExactPathState::Absent, ExactPathState::Exact) => {
-            fs::remove_file(&staged)?;
-            sync_directory(operation_dir)?;
+    let live_state = exact_profile_at(&profile_fd, "voiceprint.json", &binding)?;
+    let staged_state = exact_profile_at(&operation_fd, STAGED_NAME, &binding)?;
+    let removing_state = exact_profile_at(&operation_fd, REMOVING_NAME, &binding)?;
+    match (live_state, staged_state, removing_state) {
+        (ExactPathState::Absent, ExactPathState::Exact(staged), ExactPathState::Absent) => {
+            run_test_hook(
+                TestHookPoint::BeforeStagedRemovalMove,
+                &profile_dir,
+                operation_dir,
+            );
+            rename_no_replace(&operation_fd, STAGED_NAME, &operation_fd, REMOVING_NAME)?;
+            let removing = exact_profile_at(&operation_fd, REMOVING_NAME, &binding)?;
+            if removing != ExactPathState::Exact(staged.clone())
+                || entry_exists_at(&operation_fd, STAGED_NAME)?
+            {
+                return Err(ProfileResetError::Quarantined);
+            }
+            sync_directory_fd(&operation_fd)?;
+            unlink_checked(&operation_fd, REMOVING_NAME, &staged)?;
+            sync_directory_fd(&operation_fd)?;
             maybe_interrupt(fail_after, InjectedFailurePhase::UnlinkBeforeTerminal)?;
         }
-        (ExactPathState::Absent, ExactPathState::Absent) => {
+        (ExactPathState::Absent, ExactPathState::Absent, ExactPathState::Exact(removing)) => {
+            // A crash happened after moving into the unique removal name. Recheck
+            // that exact inode before the only unlink in this executor.
+            unlink_checked(&operation_fd, REMOVING_NAME, &removing)?;
+            sync_directory_fd(&operation_fd)?;
+            maybe_interrupt(fail_after, InjectedFailurePhase::UnlinkBeforeTerminal)?;
+        }
+        (ExactPathState::Absent, ExactPathState::Absent, ExactPathState::Absent) => {
             // The unlink was durable but the terminal receipt was not.
-            sync_directory(operation_dir)?;
+            sync_directory_fd(&operation_fd)?;
         }
         _ => return Err(ProfileResetError::Quarantined),
     }
@@ -338,7 +395,7 @@ fn scan_journal(storage: &StorageRoot) -> Result<Journal, ProfileResetError> {
         }
         if !names
             .iter()
-            .all(|name| name == "receipt.json" || name == STAGED_NAME)
+            .all(|name| name == "receipt.json" || name == STAGED_NAME || name == REMOVING_NAME)
             || !names.iter().any(|name| name == "receipt.json")
         {
             return Err(ProfileResetError::Quarantined);
@@ -349,8 +406,9 @@ fn scan_journal(storage: &StorageRoot) -> Result<Journal, ProfileResetError> {
         }
         validate_receipt(&receipt)?;
         let staged_present = path_exists(&operation_dir.join(STAGED_NAME))?;
+        let removing_present = path_exists(&operation_dir.join(REMOVING_NAME))?;
         if receipt.phase == ResetPhase::Removed {
-            if staged_present || terminals.insert(name, receipt).is_some() {
+            if staged_present || removing_present || terminals.insert(name, receipt).is_some() {
                 return Err(ProfileResetError::Quarantined);
             }
         } else {
@@ -422,7 +480,44 @@ fn reset_root(storage: &StorageRoot) -> Result<PathBuf, ProfileResetError> {
 fn load_receipt(path: &Path) -> Result<ResetReceipt, ProfileResetError> {
     let bytes =
         read_private_file(path, MAX_RECEIPT_BYTES).map_err(|_| ProfileResetError::Quarantined)?;
-    serde_json::from_slice(&bytes).map_err(|_| ProfileResetError::Quarantined)
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| ProfileResetError::Quarantined)?;
+    validate_receipt_key_set(&value)?;
+    serde_json::from_value(value).map_err(|_| ProfileResetError::Quarantined)
+}
+
+/// `Option<T>` cannot distinguish a missing property from an explicit JSON
+/// `null`. The journal is phase-closed, so validate the exact key set before
+/// deserializing its typed values.
+fn validate_receipt_key_set(value: &serde_json::Value) -> Result<(), ProfileResetError> {
+    let object = value.as_object().ok_or(ProfileResetError::Quarantined)?;
+    let phase = object
+        .get("phase")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(ProfileResetError::Quarantined)?;
+    let expected: &[&str] = match phase {
+        "deleting" | "staged" => &[
+            "schema",
+            "operation_id",
+            "requested_at_epoch_seconds",
+            "phase",
+            "relative_path",
+            "byte_size",
+            "sha256",
+        ],
+        "removed" => &[
+            "schema",
+            "operation_id",
+            "requested_at_epoch_seconds",
+            "phase",
+            "removed_at_epoch_seconds",
+        ],
+        _ => return Err(ProfileResetError::Quarantined),
+    };
+    if object.len() != expected.len() || expected.iter().any(|key| !object.contains_key(*key)) {
+        return Err(ProfileResetError::Quarantined);
+    }
+    Ok(())
 }
 
 enum ProfilePresence {
@@ -440,26 +535,235 @@ fn inspect_private_profile(path: &Path) -> Result<ProfileBinding, ProfilePresenc
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ExactPathState {
     Absent,
-    Exact,
+    Exact(ProfileSnapshot),
     Other,
 }
 
-fn exact_profile_state(
-    path: &Path,
+fn exact_profile_at(
+    parent: &File,
+    name: &str,
     expected: &ProfileBinding,
 ) -> Result<ExactPathState, ProfileResetError> {
-    match exact_profile(path, Some(expected)) {
-        Ok(Some(_)) => Ok(ExactPathState::Exact),
-        Ok(None) => Ok(ExactPathState::Absent),
-        Err(ProfileResetError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-            Ok(ExactPathState::Absent)
-        }
-        Err(ProfileResetError::Io(error)) => Err(error.into()),
-        Err(_) => Ok(ExactPathState::Other),
+    let name = c_name(name)?;
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor < 0 {
+        return match io::Error::last_os_error().kind() {
+            io::ErrorKind::NotFound => Ok(ExactPathState::Absent),
+            _ => Ok(ExactPathState::Other),
+        };
     }
+    let mut file = unsafe { File::from_raw_fd(descriptor) };
+    let snapshot = match read_profile_snapshot(&mut file, Some(expected)) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(ExactPathState::Other),
+    };
+    // The fd pins the bytes while they are read. Reopen the directory-relative
+    // entry no-follow and compare inode identity before an operation names it.
+    let current = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW,
+        )
+    };
+    if current < 0 {
+        return Ok(ExactPathState::Other);
+    }
+    let current = unsafe { File::from_raw_fd(current) };
+    let current_metadata = current.metadata()?;
+    if !private_file_metadata(&current_metadata) || identity(&current_metadata) != snapshot.identity
+    {
+        return Ok(ExactPathState::Other);
+    }
+    Ok(ExactPathState::Exact(snapshot))
+}
+
+fn open_private_directory_fd(path: &Path) -> Result<File, ProfileResetError> {
+    let path =
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| ProfileResetError::Quarantined)?;
+    let descriptor = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor < 0 {
+        return Err(ProfileResetError::Quarantined);
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let metadata = file.metadata()?;
+    if !private_directory_metadata(&metadata) {
+        return Err(ProfileResetError::Quarantined);
+    }
+    Ok(file)
+}
+
+fn read_profile_snapshot(
+    file: &mut File,
+    expected: Option<&ProfileBinding>,
+) -> Result<ProfileSnapshot, ProfileResetError> {
+    let before = file.metadata()?;
+    if !private_file_metadata(&before) || before.len() > MAX_PROFILE_BYTES {
+        return Err(ProfileResetError::Quarantined);
+    }
+    let mut hasher = Sha256::new();
+    let mut remaining = before.len();
+    let mut buffer = [0_u8; 64 * 1024];
+    while remaining > 0 {
+        let read = file.read(&mut buffer)?;
+        if read == 0 || read as u64 > remaining {
+            return Err(ProfileResetError::Quarantined);
+        }
+        hasher.update(&buffer[..read]);
+        remaining -= read as u64;
+    }
+    let after = file.metadata()?;
+    if identity(&before) != identity(&after) || !private_file_metadata(&after) {
+        return Err(ProfileResetError::Quarantined);
+    }
+    let binding = ProfileBinding {
+        byte_size: before.len(),
+        sha256: format!("{:x}", hasher.finalize()),
+    };
+    if expected.is_some_and(|expected| expected != &binding) {
+        return Err(ProfileResetError::Quarantined);
+    }
+    Ok(ProfileSnapshot {
+        binding,
+        identity: identity(&before),
+    })
+}
+
+fn identity(metadata: &fs::Metadata) -> FileIdentity {
+    FileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+        owner: metadata.uid(),
+        byte_size: metadata.len(),
+    }
+}
+
+fn entry_exists_at(parent: &File, name: &str) -> Result<bool, ProfileResetError> {
+    let name = c_name(name)?;
+    let result = unsafe {
+        libc::faccessat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::F_OK,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        Ok(true)
+    } else if io::Error::last_os_error().kind() == io::ErrorKind::NotFound {
+        Ok(false)
+    } else {
+        Err(ProfileResetError::Quarantined)
+    }
+}
+
+fn sync_directory_fd(directory: &File) -> Result<(), ProfileResetError> {
+    directory.sync_all().map_err(Into::into)
+}
+
+fn c_name(name: &str) -> Result<CString, ProfileResetError> {
+    if name.is_empty() || name.contains('/') {
+        return Err(ProfileResetError::Quarantined);
+    }
+    CString::new(name).map_err(|_| ProfileResetError::Quarantined)
+}
+
+fn rename_no_replace(
+    from_directory: &File,
+    from_name: &str,
+    to_directory: &File,
+    to_name: &str,
+) -> Result<(), ProfileResetError> {
+    let from_name = c_name(from_name)?;
+    let to_name = c_name(to_name)?;
+    rename_no_replace_platform(
+        from_directory.as_raw_fd(),
+        &from_name,
+        to_directory.as_raw_fd(),
+        &to_name,
+    )
+    .map_err(|_| ProfileResetError::Quarantined)
+}
+
+#[cfg(target_os = "macos")]
+fn rename_no_replace_platform(
+    from_directory: libc::c_int,
+    from_name: &CString,
+    to_directory: libc::c_int,
+    to_name: &CString,
+) -> io::Result<()> {
+    unsafe extern "C" {
+        fn renameatx_np(
+            fromfd: libc::c_int,
+            from: *const libc::c_char,
+            tofd: libc::c_int,
+            to: *const libc::c_char,
+            flags: libc::c_uint,
+        ) -> libc::c_int;
+    }
+    // RENAME_EXCL prevents replacement; RENAME_NOFOLLOW_ANY rejects a leaf or
+    // intermediate symlink even if a hostile same-UID writer races this process.
+    const RENAME_EXCL: libc::c_uint = 0x0000_0004;
+    const RENAME_NOFOLLOW_ANY: libc::c_uint = 0x0000_0010;
+    let result = unsafe {
+        renameatx_np(
+            from_directory,
+            from_name.as_ptr(),
+            to_directory,
+            to_name.as_ptr(),
+            RENAME_EXCL | RENAME_NOFOLLOW_ANY,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn rename_no_replace_platform(
+    _from_directory: libc::c_int,
+    _from_name: &CString,
+    _to_directory: libc::c_int,
+    _to_name: &CString,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "profile reset requires macOS renameatx_np RENAME_EXCL",
+    ))
+}
+
+fn unlink_checked(
+    directory: &File,
+    name: &str,
+    expected: &ProfileSnapshot,
+) -> Result<(), ProfileResetError> {
+    if exact_profile_at(directory, name, &expected.binding)?
+        != ExactPathState::Exact(expected.clone())
+    {
+        return Err(ProfileResetError::Quarantined);
+    }
+    let name = c_name(name)?;
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err(ProfileResetError::Quarantined);
+    }
+    Ok(())
 }
 
 /// Open no-follow, bound the complete bytes, and ensure the descriptor did not
@@ -562,14 +866,17 @@ fn private_file_metadata_for_owner(metadata: &fs::Metadata, owner: u32) -> bool 
 
 fn validate_private_directory(path: &Path) -> Result<(), ProfileResetError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| ProfileResetError::Quarantined)?;
-    if !metadata.file_type().is_dir()
-        || metadata.file_type().is_symlink()
-        || metadata.permissions().mode() & 0o777 != 0o700
-        || metadata.uid() != unsafe { libc::geteuid() }
-    {
+    if !private_directory_metadata(&metadata) {
         return Err(ProfileResetError::Quarantined);
     }
     Ok(())
+}
+
+fn private_directory_metadata(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_dir()
+        && !metadata.file_type().is_symlink()
+        && metadata.permissions().mode() & 0o777 == 0o700
+        && metadata.uid() == unsafe { libc::geteuid() }
 }
 
 fn path_exists(path: &Path) -> Result<bool, ProfileResetError> {
@@ -585,6 +892,35 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TestHookPoint {
+    BeforeLiveStageMove,
+    BeforeStagedRemovalMove,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(TestHookPoint, &Path, &Path)>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(not(test))]
+fn run_test_hook(_point: TestHookPoint, _profile_dir: &Path, _operation_dir: &Path) {}
+
+#[cfg(test)]
+fn run_test_hook(point: TestHookPoint, profile_dir: &Path, operation_dir: &Path) {
+    TEST_HOOK.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().as_mut() {
+            hook(point, profile_dir, operation_dir);
+        }
+    });
+}
+
+#[cfg(test)]
+fn install_test_hook(hook: impl FnMut(TestHookPoint, &Path, &Path) + 'static) {
+    TEST_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
 }
 
 #[cfg(test)]
