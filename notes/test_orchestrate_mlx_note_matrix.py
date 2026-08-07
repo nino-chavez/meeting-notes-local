@@ -470,6 +470,51 @@ class CommittedMatrixReceiptTests(unittest.TestCase):
             "the orchestrator changed and no committed receipt was produced by it; re-run the matrix",
         )
 
+    def test_the_current_harness_has_produced_committed_evidence(self) -> None:
+        """The same ratchet as the orchestrator's, on the file that was missing it.
+
+        `_harness_identity` hashes `mlx_note_admission.py` into every receipt's
+        `harness` block, and until 2026-08-07 nothing checked it. The asymmetry
+        was live: the orchestrator could not change without a matrix re-run, and
+        the harness could change freely, silently orphaning every committed
+        receipt. It did, twice in one day — `RECORD` leaving the runtime pin, and
+        the conditional gate arriving and being withdrawn — and no test failed
+        either time.
+
+        The harness is the instrument for the model arm. It builds the request,
+        parses the response, and runs the gates, so a change to it can change what
+        a receipt means. Intervention eight demonstrated that at full strength: one
+        harness edit moved all thirteen request digests.
+
+        **The cost is real and is the point.** Editing `mlx_note_admission.py` now
+        requires re-running the matrix before this passes, and that file changes far
+        more often than the orchestrator. It is affordable only because the runtime
+        pin was fixed earlier the same day — before that, this ratchet would have
+        been unsatisfiable by anyone who did not still hold the one environment
+        that produced the receipts.
+        """
+        from mlx_note_admission import _sha256
+
+        source = Path(__file__).resolve().parent / "mlx_note_admission.py"
+        current = _sha256(source.read_bytes())
+        named = {
+            json.loads(path.read_text()).get("harness", {}).get("source_sha256")
+            for path in _matrix_receipt_paths()
+        }
+        self.assertIn(
+            current,
+            named,
+            "the harness changed and no committed receipt was produced by it; re-run the matrix",
+        )
+
+    def test_every_committed_receipt_names_the_harness_that_produced_it(self) -> None:
+        """Shape half, so a receipt cannot omit the field and satisfy the ratchet."""
+        for path in sorted(_matrix_receipt_paths()):
+            with self.subTest(receipt=path.name):
+                harness = json.loads(path.read_text()).get("harness", {})
+                self.assertRegex(harness.get("source_sha256", ""), r"\A[0-9a-f]{64}\Z")
+                self.assertTrue(harness.get("base_revision"))
+
     def test_the_frozen_baseline_keeps_its_own_schema_and_results(self) -> None:
         """`mlx_note_matrix_receipt.json` is history and does not move.
 
