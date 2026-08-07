@@ -12,8 +12,8 @@ or a person planning work reads this file first, then descends:
    build order, human gates. That file, not this one, decides what gets built next;
    its **Build queue** section is the order and the status. Open proposal awaiting an
    operator decision: [`speaker-gate-slice.md`](./speaker-gate-slice.md).
-5. [`backlog.md`](./backlog.md) — the decomposition layer: the ten features broken
-   into twelve epics and into stories with Given/When/Then criteria. It owns neither
+5. [`backlog.md`](./backlog.md) — the decomposition layer: the parity feature set broken
+   into epics and into stories with Given/When/Then criteria. It owns neither
    order nor status; it answers what a piece of work *is*, not when it happens.
 6. [`teardown.md`](./teardown.md) — the mechanism research underneath all of it.
 
@@ -79,120 +79,172 @@ from capture topology plus owner-only voice isolation, and does not chase names.
 
 ---
 
-## North-star features and functions
+## Direction, decided 2026-08-07
 
-Status vocabulary, inherited from `journeys.md` and kept strict: **Shipped** =
-proven on real hardware or by a real receipt. **Registered** = command, capability,
-and UI exist in the internal-alpha build with synthetic evidence only.
-**Prototyped** = reviewable outside the app, touches no real product state.
-**Decided** = the design question is answered; the build follows. **Open** = nobody
-has answered it yet. **Research candidate** = deliberately outside the beta.
+**Build feature parity with the category — Granola, Wispr Flow, Circleback, Otter,
+Gong — and be local-first where they are cloud-first. Then add remote integrations
+and cloud as the next north star.**
 
-| # | Feature | Journey | Surface | Status (verified 2026-08-06) |
-|---|---|---|---|---|
-| 1 | Consent-first local two-leg capture | J3 | §B §C | **Shipped** — real-hardware capture, local transcription, fresh-process recovery in the signed internal alpha |
-| 2 | Operator voice isolation: guided enrollment, measured operating points, owner-only profile | J3 J5 | §I | **Registered** end to end as of 2026-08-05 — enrollment (sittings, derivation, choices, build, publication) plus the gate itself, which now runs over the microphone leg, marks non-operator turns, and records what it did in the transcript's `voiceprint` field. An installed profile the runtime cannot apply refuses the transcript rather than writing one that reads as checked; see `docs/speaker-gate-slice.md`. **Shipped in 0.4.0** (2026-08-05), the first image where an enrolled profile changes a transcript. Still unmeasured on live meeting audio: the threshold is enrolment-derived, and the app now says so on every checked transcript |
-| 3 | Transcript is the retained evidence; audio has a stated lifetime | J1×J5 | §K | **Shipped** for automatic audio deletion (real `audio-deletion/1` receipt, 2026-08-02); **Registered** per-meeting audio deletion and retention overview; whole-meeting deletion and policy wording **Open** (human gate) |
-| 4 | Evidence-linked notes: typed claims, each citing verbatim turns | J1 J2 | §E | **Prototyped** (`note/1` contract, claim `type` recovered, citation checker repaired); **no note generator is admitted** and `note.inspect` stays boundary-lane. Both small-model rejections were response *shape*, so neither measured comprehension. Under structure-constrained decoding the same model, prompt, and parser produced an accepted candidate on both probe fixtures at the same 181 generated tokens the rejected 2026-08-02 run recorded — one byte of that response had been invalid JSON. The registered 12-fixture matrix then ran and **failed 9 of 12** — but not on comprehension: eight failures are one behaviour, the model emitting a well-formed fragment identifier in the format of the *other* identifier the request carries, on nine fixtures but not the tenth, for reasons three checked explanations all fail to account for. The harness enforces three rules it never states and enumerates two of three identifier fields, so the decisive field is measured unfairly. **Corrected 2026-08-07: the clause "both are unfixed and each needs preregistering" is withdrawn.** Both were preregistered and run on 2026-08-06, and a third intervention followed. Enumeration reached 8 of 12; renaming one request key from `equals` to `rule`, with the surrounding prose byte-identical, reached **9 of 12** and took the citation gate from 7 of 10 to **10 of 10** — the model was reading the key, not the sentence. What remains is one mechanism on three fixtures: a 67-character identifier truncation where the margin receipt shows a single decision losing three times at the same step with the same runner-up token. `admits` is still **false** and human semantic adjudication is still untouched; see `notes/MLX_NOTE_ADMISSION.md` |
-| 5 | Honest incompleteness: "not captured" ≠ "never said", checkable proportion visible before opening | J1 | §E §F | **Prototyped**, not yet measured on a real gated capture |
-| 6 | Correction that changes the note: restore a withheld turn, note goes stale, regeneration required | J4 | §E | **Registered (0.2.2)** for restoration, and reachable on a shipped image from 0.4.0 — until the gate was wired in, nothing withheld a turn, so restoration was a correct implementation of an operation that could never have an input. **Corrected 2026-08-06: it is no longer reachable from Meetings only.** The screen shown right after a recording now carries the control too, because the gate's worst failure is a colleague cut from a record that cannot be re-made and that remedy is worth less the longer it waits — the navigation was the delay. Restoring publishes a new current transcript, so that screen also rebuilds its projection in place (`refresh_current_transcript`); without it a second restore would name a digest that had moved and be refused as a changed source. Regeneration stays deliberately unregistered until a generator passes admission |
-| 7 | Retrieval that enters with a question and lands on a claim | J1 | §F | **Registered** — library snapshot, search over transcripts and metadata, open-to-evidence/transcript/note; claim-level landing waits on feature 4 |
-| 8 | Commitment view that hands off instead of managing tasks | J2 | §F | **Decided** — a `filtered` state on F, terminal action is export, never a checkbox; unbuilt |
-| 9 | Preparation brief before the meeting | J0 | none yet | **Decided** — local read-only calendar via EventKit (`DESIGN.md § Context inputs`); unbuilt. The counterparty half — who spoke vs who was invited — stays **Open, possibly unbridgeable** *for local audio*. The clause "and the market has not bridged it either" was **falsified 2026-08-06** and is corrected here: Wispr Flow ships named speakers by combining a calendar roster, an OAuth grant reaching the org's full Workspace directory, accessibility-tree polling of Zoom and Teams for the active-speaker indicator, LLM inference over address terms, and a one-click human correction applied across the transcript. Nobody bridged it from sound; one vendor made the failure cheap to repair. See `teardown.md § Wispr Flow, disassembled` |
-| 10 | A shell that never lies at menubar size: degradation is a beat, not an error | J3 | §A §C §H §J | **Shipped (0.2.2)** — tray truth table, close-to-tray, startup-failure honesty. **§H first run joined 2026-08-06** as **Registered**: six of eight states over a signed, digest-verified permission probe, deriving the step from a live measurement rather than a stored completion flag, and keeping "we could not ask" a different screen from "you said no". Neither request path has executed anywhere — running one outside the signed bundle answers about the wrong binary — so only the status read has evidence |
+This replaces a ten-feature list that scoped the product to capture and custody.
+That list was not wrong about what it contained; it was wrong about what it left
+out, and three of its non-goals were product choices being enforced as if they were
+physical limits. **Overturned by operator decision, 2026-08-07.** The two that
+survive are below as invariants, and they survive because they are the
+differentiators rather than the fence.
 
-The dependency to keep in view: features 4, 5, 6, and 7 converge on the same
-artifact. The admitted note generator is the single biggest unlock in the table —
-it turns restoration into regeneration, search results into claims, and the
-proportion figure into something a real capture produces. It is also gated on
-human semantic adjudication (`vertical-slice.md` wave D), so no amount of
-autonomous work closes it alone.
+The research this is built on is already in the repository and is not re-derived
+here: [`teardown.md`](./teardown.md) disassembles a shipped Wispr Flow binary and
+maps the three capture paths, and [`journeys.md § What the market says`](./journeys.md)
+compares Granola, Circleback, Otter and Gong from their own documentation. Every
+parity row below cites which of those it comes from.
 
-### Amendment 2026-08-06 — the operator-authored live note enters v1
-
-`vertical-slice.md` wave H placed the operator-authored live note outside v1,
-alongside the EventKit brief and detection, each needing its own contract. The
-operator moved it into scope on 2026-08-06 and it is being built. Recorded here
-first, per this file's own rule, because it serves no existing north-star
-feature and so cannot be built quietly.
-
-**What it is.** The operator types their own notes during the meeting, on the
-recording surface (§D). This is the Granola insight and the reason the product
-is not a transcript viewer: what a person chooses to write down while listening
-is not recoverable from the recording afterwards.
-
-**What it is not, and why no non-goal moves.** It is not a task manager — the
-text is the operator's own prose, with no status, checkbox, or owner field. It
-is not evidence: the canonical transcript remains the sole retained record, and
-nothing cites an operator note or resolves a claim to it. Nothing leaves the
-Mac. No content is generated, so there is nothing to invent.
-
-**It is interpretation, and it is stored as interpretation.** This decides the
-storage shape. Evidence artifacts in this product are digest-named and bound
-into `meeting.json`, so a citation can only ever resolve to bytes that were
-verified. An operator note is cited by nothing, and binding it that way would
-rewrite the meeting record on every autosave and leave an orphaned digest-named
-file behind each time. It is therefore a fixed-path file in the meeting
-directory, atomically swapped, and the meeting record does not change. The
-frozen `meeting/2` contract is untouched, which also means an operator note can
-never make a meeting unreadable to a build that predates it.
-
-**Retention follows the transcript, not the audio.** It is text the operator
-wrote, so it is kept for as long as the transcript is kept and is not subject to
-the audio deletion period.
+**Almost everything here is Unbuilt, and that is the point of writing it down.** A
+roadmap that only lists what exists is a status report. The failure to avoid is a
+definition that implies coverage it does not have — in either direction.
 
 ---
 
-## What this product must not become
+## Phase 1 — local-first parity
 
-Non-goals with the same authority as the features. Each earned its place in the
-research; violating one needs an amendment here first, not a quiet exception.
+Status vocabulary is unchanged and strict. **Shipped** = proven on real hardware or
+by a real receipt. **Registered** = command, capability and UI exist with synthetic
+evidence only. **Prototyped** = reviewable outside the app. **Unbuilt** = nothing
+exists. **Research** = mechanism not yet chosen.
 
-- **Not a task manager.** The moment a commitment view offers a checkbox, the tool
-  owns follow-through and the operator has two task systems (`journeys.md` J2).
-  Export and hand off, always. *Counterevidence recorded 2026-08-06, and the non-goal
-  stands.* Wispr Flow shipped the checkbox — a `Todos` table with an open/closed
-  status, a tasks tab, a `meetingId` key — and "tracking action items" is one of the
-  four frustrations its own onboarding offers. Three of six colleagues surveyed named
-  capturing actions and owners as a job, and all six wanted action items in the note.
-  None of that reaches the reason for the non-goal, which is about *owning
-  follow-through*, not about extracting commitments.
-- **Not a named-speaker product.** Names would require a bot, UI scraping, or an
-  extension — every path the teardown rejected. Me/Them plus operator isolation is
-  the honest ceiling of local audio. *Confirmed 2026-08-06 by disassembling the
-  newest entrant:* Wispr Flow's speaker naming runs through a helper bundle
-  identified as `…accessibility-mac-app`, carrying `AXUIElementCopyAttributeValue`
-  and per-platform `ZoomSpeakerStrategy` / `TeamsSpeakerStrategy` classes that poll
-  the meeting window's active-speaker indicator. That is UI scraping, exactly as the
-  teardown predicted. The enumeration above is incomplete — it omits the cloud
-  directory grant and the LLM address-term inference Wispr also uses — and its
-  conclusion is unchanged and better supported.
-- **Nothing leaves the Mac.** No cloud ASR, no telemetry, no built-in upload. J6
-  (evaluation contribution) stays a research candidate, export-first, with consent
-  machinery specified before any transfer path exists. *Note for messaging, not for
-  the boundary (2026-08-06):* six of six colleagues surveyed refused unprompted
-  sharing and one named local-only processing. What they asked for is control of
-  egress; locality is the mechanism that guarantees it. The boundary does not move —
-  the way it is described should lead with the guarantee. For contrast, Wispr Flow's
-  own copy states its notetaker "requires" cloud sync to process transcriptions, and
-  gates the retention control behind it.
-- **No invented content on judged surfaces.** Prototypes populate from the real
-  corpus or labelled specimens carrying published measurements — never fabricated
-  meetings (`journeys.md § What to prototype`).
-- **The note's evidence is never decoration.** A claim without its citation, or a
-  "verified" state nothing checked, is the failure the category ships everywhere;
-  it is the one thing this product exists to not do.
+### A. Capture and identity
+
+| # | Feature | Parity source | Status |
+|---|---|---|---|
+| A1 | Consent-first local two-leg capture, fresh-process recovery | own | **Shipped** |
+| A2 | Operator voice isolation — guided enrollment, measured operating points | own | **Shipped 0.4.0**, unmeasured on live audio |
+| A3 | **Named speakers**, not Me/Them | Wispr ships it; Granola/Otter name speakers | **Unbuilt** — was a non-goal, overturned |
+| A4 | Long-form ASR: chunked streaming, VAD, timestamp stitching at meeting length | category baseline | **Partial** — dictation-shaped loop, `teardown.md § What is genuinely new` calls this a rewrite |
+| A5 | Two-clock drift correction between mic and system legs | own measurement | **Shipped** as detection; correction **Unbuilt** |
+
+**A3 is the reversal that matters.** The old non-goal said names require a bot, UI
+scraping or an extension, so Me/Them was "the honest ceiling of local audio." That
+is true of *sound alone* and was never the whole method. Wispr combines a calendar
+roster, a directory grant, accessibility polling of the meeting window, LLM
+inference over address terms, and one-click human correction propagated across the
+transcript. Locally we can build the roster leg, the enrollment leg, and the
+correction leg today; the meeting-window leg is Phase 2 because it needs an
+accessibility grant, and the directory leg is Phase 2 because it needs OAuth.
+
+### B. The note
+
+| # | Feature | Parity source | Status |
+|---|---|---|---|
+| B1 | Operator-authored live note during the meeting | Granola's core insight | **Shipped 2026-08-06** |
+| B2 | AI-enhanced note: summary, outline, highlights, open questions | Gong's one call object; Wispr's summary tab | **Prototyped** — no generator admitted |
+| B3 | **Meeting-type templates** | category standard | **Unbuilt** — appears in no prior planning doc |
+| B4 | **Auto-titling** | category standard | **Unbuilt** — appears in no prior planning doc |
+| B5 | Evidence-linked claims: every claim cites verbatim turns | **nobody does this** | **Prototyped** — the differentiator |
+| B6 | Honest incompleteness: "not captured" ≠ "never said" | own | **Prototyped** |
+| B7 | Correction that changes the note; restore a withheld turn, regenerate | correction is undescribed everywhere | **Registered** for restore |
+
+### C. Commitments and handoff
+
+| # | Feature | Parity source | Status |
+|---|---|---|---|
+| C1 | **Action items with owner and status — a real task list** | Wispr ships a `Todos` table with open/closed and a tasks tab | **Unbuilt** — was a non-goal, overturned |
+| C2 | Commitment view across meetings | own J2 | **Unbuilt** |
+| C3 | Export and share a note as a document | Wispr's docs tab | **Unbuilt**, gated on the redaction decision |
+
+**C1 is the second reversal.** "Not a task manager" refused the checkbox on the
+grounds that owning follow-through gives the operator two task systems. Three of six
+colleagues surveyed asked for exactly this, and Wispr shipped it. The concern was
+real and the remedy was wrong: build the task list, and let it export rather than
+becoming the system of record.
+
+### D. Retrieval and memory — the category's headline
+
+| # | Feature | Parity source | Status |
+|---|---|---|---|
+| D1 | **Ask a question across every meeting, get an answer with citations** | Granola ships this on the *free* tier; Circleback's headline | **Unbuilt** — one unproven story today |
+| D2 | Search: exact plus semantic, over transcript and metadata | Otter free vs Pro | **Registered** for exact |
+| D3 | Filters — people, date range, keywords, titles | Gong documents all four | **Unbuilt** |
+| D4 | Saved searches and streams that collect future matching meetings | Gong | **Unbuilt** |
+| D5 | Land on a claim, not a document | nobody does this | **Unbuilt**, needs B5 |
+
+**D1 was mis-sequenced and this corrects it.** `journeys.md` records that retrieval
+across the corpus is "the category's headline feature, not a late-stage nicety" and
+that history is the primary paywall in both Granola and Otter — the strongest
+available signal that the corpus is where the felt value is. It was decomposed as
+four stories of exact search plus one unproven story for the actual headline.
+
+### E. Organisation and surfaces
+
+| # | Feature | Parity source | Status |
+|---|---|---|---|
+| E1 | Folders, and channels or workspaces | Granola and Otter both ship folders; Otter adds channels | **Unbuilt** |
+| E2 | One meeting object with sibling views: transcript, summary, notes, tasks, docs | Gong's call page; Wispr's six tabs | **Partial** |
+| E3 | Preparation brief before the meeting | Wispr's preread tab | **Unbuilt** |
+| E4 | A shell that never lies at menubar size | own | **Shipped** |
+| E5 | Retention with named auto-deletion periods | Granola enterprise vocabulary | **Shipped** automatic; periods **Unbuilt** |
+| E6 | Local store and retrieval at corpus scale | `teardown.md` names SQLite | **Research** |
+
+---
+
+## Phase 2 — the next north star: remote and cloud
+
+Not deferred vaguely. These are the features that need a network, and each names
+what it unblocks in Phase 1.
+
+| # | Feature | Unblocks |
+|---|---|---|
+| P1 | Calendar integration — attendee roster, meeting detection | A3's roster leg, E3's preread |
+| P2 | Directory grant for org-wide name resolution | A3 at Wispr's fidelity |
+| P3 | Meeting-window reading for live active-speaker attribution | A3's third signal |
+| P4 | Cloud sync and multi-device | corpus continuity |
+| P5 | Push to Slack, Notion, CRM | C3 beyond a local file |
+| P6 | Shared workspaces and team retrieval | E1 beyond one operator |
+
+**Local-first is a Phase 1 default and a Phase 2 guarantee, not a prohibition.**
+Every Phase 2 feature ships with the egress visible and refusable. Six of six
+colleagues surveyed refused unprompted sharing and asked for control of egress —
+locality is the mechanism, control is the requirement.
+
+---
+
+## Invariants — the two that survive
+
+Not gates on scope. Both are the reasons to use this instead of Granola.
+
+- **Evidence is never decoration.** A claim without a resolvable citation, or a
+  "verified" state nothing checked, is the failure the category ships everywhere.
+  Re-tested 2026-08-06 against a shipped Wispr binary: its meeting detail is six
+  sibling tabs and a searchable transcript drawer, and an enumeration of its 411
+  `hub_*` interface keys finds no key naming a jump from a claim to its source turn.
+  Adjacency is not citation.
+- **Nothing leaves the Mac without the operator seeing it leave.** Phase 1 has no
+  network path for meeting content. Phase 2 adds paths that are visible and
+  refusable per destination.
+
+**Verification discipline is not a scope gate and is not listed as a non-goal.**
+Checking a claim against source before asserting it has never blocked a feature; on
+2026-08-07 it caught three wrong numbers in a published document. It stays.
 
 ---
 
 ## How planning uses this file
 
-`vertical-slice.md` remains the implementation contract; its waves and human gates
-decide sequencing, and its Status section is the operational truth. This file
-answers the question one level up: *does a proposed piece of work serve one of the
-ten features for the named reader, without crossing a non-goal?* If it does not,
-either the proposal is wrong or this definition is — and the fix is a dated
-amendment here, in place, the way `screens-and-states.md` amends.
+`vertical-slice.md` remains the implementation contract; its build queue decides
+sequencing and is the operational truth. This file answers the question one level
+up: **what is this product when it is finished, and how far from that is it now?**
+
+**This file does not gate work, and the previous version of this paragraph did.** It
+read: *does a proposed piece of work serve one of the ten features, without crossing
+a non-goal? If it does not, either the proposal is wrong or this definition is.*
+That sentence turned an incomplete feature list into a fence, and the fence held for
+weeks — three parity capabilities were refused as non-goals and several more were
+never written down at all, while the queue reported itself converged.
+
+The rule now runs the other way. **A capability the category ships and this product
+lacks is a gap in this file until proven otherwise, not a proposal to be justified
+against it.** If work does not map to a row above, the likely fault is the row list,
+and the fix is to add the row with its parity source. Amendments are still dated and
+in place; they are just no longer the price of admission for building something
+obvious.
 
 ---
 
