@@ -1455,6 +1455,14 @@ polarity check, not this one.
 **This changes no request.** The gate reads a response, so no request digest on
 this path moves and the pinned model, prompt, and mask are untouched.
 
+> **Wrong, corrected 2026-08-07.** The gate does read a response, but the same
+> change advertises it in `response_contract` under `must_not_drop_polarity_terms`,
+> and `response_contract` is a request key. The request moved. Four of twelve
+> fixtures returned a different `response_sha256` on the next run, and
+> `negation-proposal` — the fixture this gate was built for — now passes instead of
+> carrying the predicted second code, because the model read the advertised rule.
+> See "Run — 2026-08-07, fresh environment" at the end of this document.
+
 **This admits nothing.** `admits` stays false. A gate that refuses an inverted
 claim removes a false positive; it does not demonstrate comprehension, and the
 human semantic and usefulness adjudication remains unrun.
@@ -1668,8 +1676,88 @@ re-adding any installer-written file under a new key still fails), that no reque
 digest depends on the runtime identity, and that an environment still reporting a
 `record` digest is refused as `runtime-package-mismatch`.
 
-**The prediction is not yet tested.** Running the matrix needs `mlx_lm`, which is
-not installed in this repository's `.venv`, and the fresh environment this change
-exists to make possible has not been built. Until that run happens the pin's
-*mechanism* is verified and its *effect on the matrix* is not. Nobody may report
-the matrix as re-runnable, or quote any count from it, without running it.
+### Run — 2026-08-07, fresh environment
+
+Receipt: `notes/mlx_note_matrix_receipt_wheel_pin.json`. Environment built the same
+day from the corrected specification: `python3 -m venv` on 3.14.6, pip, default
+byte-compilation, into a scratch directory unrelated to any prior probe. Model tree
+read from the HuggingFace cache; `preflight_tree_sha256` equals the pin and equals
+the 2026-08-06 receipt's. `orchestrator_sha256` unchanged.
+
+Before the run, the fresh environment's identity was compared to the pin directly:
+`METADATA` matched 3 of 3. **All three `RECORD` digests differed from the values the
+old pin carried** — `db09769b…`, `691ea958…`, `7be5a01f…` against `11151543…`,
+`75a95fb4…`, `2fbbba0c…`. Under the old pin this environment would have been
+refused 3 of 3, which is the defect reproduced one more time on the way out.
+
+**Prediction item 1 — passed.** `every_fixture_ran: true`. It was `false` on every
+attempt since 2026-08-06, and no worker exited `runtime-package-mismatch`. **The
+registered matrix is re-runnable by anyone who can build the specification.** That
+was the entire point of this intervention and it is the only claim here that rests
+on it.
+
+**Prediction item 2 — the matrix ran, and intervention four's prediction was
+falsified.** Ten of twelve fixtures now pass every registered gate, against nine on
+2026-08-06. `ordinary-question` and `name-number-action` still fail
+`checks_pass_on_every_call` with `citation-locator`, exactly as before.
+
+`negation-proposal` was predicted to carry **two** codes, `citation-locator` and
+`claim-polarity`. It carries **none** — it passes every gate. `negation-decision`,
+the registered control, also passes, so the gate is not over-broad. But the gate
+did not fire at all, on the one fixture built to trigger it.
+
+**Why, and it is the same mechanism intervention three found.** The polarity rule is
+not only enforced in `_decode_response`; it is *advertised* in `response_contract`
+under `must_not_drop_polarity_terms`. `response_contract` is a request key. The
+model reads the rule, and produced a claim that keeps the evidence's polarity and
+fixed its own locator — so there was nothing left to refuse. Intervention three
+recorded this once already: renaming one request key moved the citation gate from 7
+of 10 to 10 of 10, and the finding was "the model had been reading the key, not the
+sentence." Advertising a rule changes behaviour upstream of enforcing it. That is
+now observed twice and should stop being a surprise.
+
+**Correction — intervention four's "This changes no request" is wrong.** Its
+preregistration reads: "The gate reads a response, so no request digest on this path
+moves and the pinned model, prompt, and mask are untouched." The gate does read a
+response. But the same change added `must_not_drop_polarity_terms` to
+`response_contract`, and that is inside the request. Verified mechanically:
+`'must_not_drop_polarity_terms' in json.dumps(model_request(...))` is `True`. Four
+of twelve fixtures returned a different `response_sha256` from the 2026-08-06 run —
+`ordinary-decision`, `locator-second-turn`, `negation-decision`,
+`negation-proposal` — which is the request having moved, not non-determinism: every
+fixture's `response_sha256` is a single-element list, so all three cold processes in
+this run agreed byte-for-byte, and `repeatable` is true on all twelve.
+
+**Prediction item 3 — my own falsifier was unusable as written, and that is the
+finding about this preregistration.** It said: "Every fixture's `request_sha256`
+equals the value in the committed 2026-08-06 receipts... If any request digest
+moves, this change did something it was not supposed to do and must be withdrawn."
+The matrix receipt does not record `request_sha256`. I wrote a falsifier against a
+value the instrument does not capture, so it could neither fire nor clear.
+
+The change is not withdrawn, and here is the argument rather than an assertion. What
+the falsifier was *for* is the claim that `runtime_identity` is not an input to any
+request. That is pinned directly by `test_dropping_record_moves_no_request_digest`,
+which asserts the runtime identity and its digests appear nowhere in a built
+request. The request did move between 2026-08-06 and this run — by intervention
+four, merged earlier the same day, whose own preregistration wrongly said it moved
+nothing. Attributing that to this change would be wrong, and attributing it to
+nothing would be worse.
+
+**The lesson generalises past both.** Two consecutive preregistrations claimed "this
+changes no request" and both were wrong, in opposite ways: intervention four moved
+the request while saying it did not, and this one guarded against moving the request
+using a value nothing records. A preregistration that names a digest must name where
+that digest is written down, or it is prose. The matrix receipt should carry
+`request_sha256` per fixture; it does not, and until it does this class of claim
+cannot be checked from a receipt at all.
+
+**Latency was not a confound.** Cold median 2.53 s against a 30 s ceiling, warm
+1.76 s against 15 s; the 2026-08-06 run recorded 2.53 s and 1.74 s. Load average
+2.25–2.56 during, against 3.6–4.18 for the baseline.
+
+**This admits nothing.** `admits` stays false and `per_fixture_gates` stays false.
+Two fixtures still refuse on the identifier-truncation mechanism, no generator is
+wired into Preview, and the human semantic and usefulness adjudication remains
+unrun. Making an experiment re-runnable is not evidence about the thing being
+experimented on.

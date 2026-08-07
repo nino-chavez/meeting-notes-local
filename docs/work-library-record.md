@@ -28,21 +28,32 @@ Three properties are the point, and each is enforced rather than promised:
 - **It stays local.** No network path exists for meeting content.
 - **It refuses rather than guesses.** When the two tracks bleed into each other,
   it drops speaker labels instead of inventing a plausible speaker history.
-- **It keeps its receipts.** Capture integrity, drift, acoustic bleed, retention,
-  and deletion each leave a record you can check afterward.
+- **It keeps its receipts.** Capture integrity, timing drift between the two
+  tracks, acoustic bleed, retention, and deletion each leave a record you can
+  check afterward.
 
 ## What shipped
 
 **Version 0.4.0, cut 2026-08-05**, signed and notarized, built at commit `331c9e9`.
-Signed-release verification returned PASS. Installation on a second Mac is proven.
+Signed-release verification returned PASS.
 
 The speaker gate ships from 0.4.0 onward. Before that, an installed copy with no
 voice profile had no gate at all.
 
-**One thing is not closed.** Versions 0.2.2, 0.3.0, 0.3.1, and 0.4.0 each still owe
-an interactive operator run — a person sitting down with the installed app and
-recording what happened. 0.4.0 inherits that chain rather than clearing it. The
-activity has happened repeatedly; the record of it is what is missing.
+**One thing is not closed, and it is a record rather than an activity.** Installing
+on another Mac has happened repeatedly — the app is distributed to a small cohort,
+and a cohort member's report is what produced 0.3.1's one change. Gatekeeper,
+notarization, and stapling pass on every recorded build.
+
+What has never been written is the **closure receipt**: one short record covering
+automatic deletion, a consented run on real hardware, and a clean transfer, all
+bound to a single unchanged build. A search of the repository on 2026-08-06 found
+no filled instance for any version. So the activity is done several times over and
+the evidence chain is empty. Versions 0.2.2, 0.3.0, 0.3.1, and 0.4.0 each owe one,
+and because one version's evidence does not carry to the next, each restarts it.
+
+The fix is not another install. It is someone writing down a run they are already
+doing.
 
 ## What the research changed
 
@@ -71,8 +82,8 @@ fake number.
 
 ## Where the build stands
 
-Ten features define the product. Four things are buildable right now with no
-decision from anyone:
+Ten features define the product. Three of them have work that is buildable right
+now with no decision from anyone:
 
 | Feature | Next build |
 |---|---|
@@ -102,8 +113,13 @@ terms:
 - **Pinned** — a named test fails if the behaviour changes.
 - **Exercised** — the path runs, but nothing pins the outcome.
 - **Receipted** — a receipt from a real run exists, bound to the exact bytes.
-- **Unproven** — nothing checks it. Eighteen stories say this, out loud, because an
-  absent line reads as an oversight and a stated one reads as a fact.
+- **Unproven** — nothing checks it. Fifteen of the seventy-five stories say this,
+  out loud, because an absent line reads as an oversight and a stated one reads as
+  a fact.
+
+Counted 2026-08-07: 51 Pinned, 3 Receipted, 15 Unproven — 69 lines across 75
+stories. The six with no line are all waiting on a decision rather than on build
+work, so there is nothing yet for a check to prove.
 
 The distinction that matters: **a story can be fully Pinned and still unproven as a
 product capability.** What is pinned is behaviour on fixtures. Whether a real
