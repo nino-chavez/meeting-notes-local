@@ -1462,3 +1462,29 @@ human semantic and usefulness adjudication remains unrun.
 Reproduce the finding:
 
     python3 notes/read_semantic_support.py | grep -A3 negation-proposal
+
+### Implemented 2026-08-07 — and what is still unmeasured
+
+The gate is in `_decode_response` raising `claim-polarity`, advertised in
+`response_contract` under the claim's `must_not_drop_polarity_terms`, and
+categorised as `claim-contradicts-cited-evidence`. Six unit tests cover the
+inversion, the control, evidence without polarity, that the rule is advertised
+as well as enforced, that the term list has exactly one owner, and the category.
+
+`read_semantic_support.py` now imports the term list rather than keeping a second
+copy, and both its docstring and its printed summary were corrected: polarity was
+described there as an unscored pointer a reader may overrule, and that stopped
+being true the moment it became a gate.
+
+**The prediction is not yet tested.** Re-running the registered 12-fixture matrix
+needs `mlx_lm`, which is not installed in this repository's `.venv`. Installing it
+would change the environment the committed receipts were produced in, so it was
+not done casually as part of this change. Until that run happens:
+
+- The gate's *logic* is verified against the recorded rows and by unit test.
+- The gate's *effect on the matrix* — prediction items 1 through 3 — is unverified.
+  Nobody may report 9 of 12, 12 of 12, or any other count from this change without
+  running it.
+
+That is the honest state, and it is why `admits` stays false for a reason that has
+nothing to do with this gate.

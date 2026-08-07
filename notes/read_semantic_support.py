@@ -25,15 +25,20 @@ Two things this deliberately does not do.
 
 It renders no verdict. Whether a claim is semantically supported by its evidence, and
 whether it is useful, is the operator's adjudication and this script has no opinion slot
-for it. What it mechanically flags — polarity terms present in the evidence and absent
-from the claim, and label-against-cue disagreement — are pointers for a reader, not
-findings, and both are printed as observations with the evidence next to them so the
-reader can overrule either.
+for it. Label-against-cue disagreement is printed as an observation with the evidence
+next to it, so the reader can overrule it.
 
-And it adds no rule. `_decode_response` does not compare `label` to `cue_type`, and this
-script does not make it. Adding a check is a rule added, which the amendment discipline
-in MLX_NOTE_ADMISSION.md requires be registered on its own rather than folded into a
-change that is measuring something else. The disagreement is reported and left in place.
+It adds no rule of its own. `_decode_response` does not compare `label` to `cue_type`,
+and this script does not make it. Adding a check is a rule added, which the amendment
+discipline in MLX_NOTE_ADMISSION.md requires be registered on its own rather than folded
+into a change measuring something else. The disagreement is reported and left in place.
+
+**Amended 2026-08-07: polarity is no longer one of those observations.** Reading this
+sheet for the first time found a claim asserting the opposite of its cited evidence, so
+the polarity check was preregistered and promoted to a registered gate in the harness.
+This script imports the term list from there rather than keeping its own, and what it
+prints for polarity now describes a rule that refuses, not a pointer a reader may
+overrule.
 
 The cue_type is itself a heuristic from the deterministic cue strategy, not ground truth.
 A disagreement between it and the model's label is a prompt to look, not a defect.
@@ -54,19 +59,11 @@ from candidate_first import STRATEGY_CUE, generate_manifest
 DEFAULT_RECEIPT = Path(__file__).resolve().parent / "mlx_note_citation_branch_receipt_rule_key.json"
 DEFAULT_MATRIX = Path(__file__).resolve().parent / "mlx_note_matrix_receipt_rule_key.json"
 
-# Terms whose disappearance between evidence and claim reverses the meaning rather
-# than shortening it. Presence in the cited slice and absence from the claim is
-# reported; it is not scored, and a reader may find a paraphrase that carries the
-# polarity some other way.
-POLARITY_TERMS = ("not", "no", "never", "cannot", "can't", "don't", "doesn't", "without")
-
-
-def _words(text: str) -> set[str]:
-    return {
-        "".join(character for character in token if character.isalnum() or character == "'")
-        .lower()
-        for token in text.split()
-    }
+# Owned by the harness since 2026-08-07, when this stopped being an observation
+# and became a registered gate. Imported rather than copied: two copies of this
+# list is exactly the drift the amendment discipline exists to prevent.
+POLARITY_TERMS = admission.POLARITY_TERMS
+_words = admission.polarity_words
 
 
 def _dropped_polarity(cited: str, claim: str) -> list[str]:
@@ -140,10 +137,15 @@ def _render(rows: list[dict]) -> str:
         f"label disagrees with the harness's own cue_type: {len(disagree)}"
         f" ({len(passing_disagree)} of them on fixtures that pass every registered gate)"
     )
-    lines.append(f"claims dropping a polarity term present in their evidence: {len(polarity)}")
+    lines.append(
+        f"claims dropping a polarity term present in their evidence: {len(polarity)}"
+        "  (a registered gate since 2026-08-07 — these are refused)"
+    )
     lines.append("")
-    lines.append("Neither number is a gate and neither is a verdict. The semantic and")
-    lines.append("usefulness adjudication is the operator's, and it has not been run.")
+    lines.append("The cue disagreement is not a gate and not a verdict. The polarity count")
+    lines.append("is a gate and still not a verdict: refusing a claim that contradicts its")
+    lines.append("evidence removes a false positive, it does not show comprehension. The")
+    lines.append("semantic and usefulness adjudication is the operator's and has not run.")
     return "\n".join(lines)
 
 
