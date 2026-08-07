@@ -3218,10 +3218,17 @@ fn with_preview_meeting_deletion_gate<T>(
 
 /// Removes one whole meeting after the operator confirmed it twice.
 ///
-/// `confirmed` carries the shell's second confirmation. It is turned into the
-/// closed `MeetingDeletionReview` immediately and never travels further as a
-/// bare boolean, so the only value that reaches storage authority is one this
-/// process constructed.
+/// `confirmed` is the shell reporting that its § G confirmation panel was
+/// answered. Be precise about what that buys: this process cannot verify the
+/// operator actually saw the panel, so the flag is a report from the trusted
+/// local shell, not a proof. It is stricter than the audio path, which hardcodes
+/// `Reviewed` and takes no flag at all.
+///
+/// What the closed `MeetingDeletionReview` token does protect is the in-process
+/// boundary. The facade is the only route to storage authority and it refuses
+/// without the token, so no future Rust caller reaches whole-meeting removal
+/// without stating a reviewed decision — and because the token is a distinct
+/// type from `AudioDeletionReview`, it cannot state the wrong one by accident.
 #[tauri::command(async)]
 fn preview_delete_meeting(
     handle: String,

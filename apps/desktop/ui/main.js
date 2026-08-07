@@ -2193,9 +2193,10 @@ meetingDeleteConfirm.addEventListener("click", async () => {
   meetingDeleteStatus.hidden = false;
   meetingDeleteStatus.textContent = "Permanently deleting this meeting and everything recorded with it…";
   try {
-    // `confirmed` is this click. The shell cannot fabricate the reviewed
-    // decision on the Rust side: the command turns this into a closed
-    // in-process token that the webview has no way to construct.
+    // `confirmed` is this click, and this shell is what asked. The panel above
+    // is the operator-facing confirmation; sending `true` asserts it happened.
+    // The Rust side does not and cannot re-derive that, so this is a report,
+    // not a proof.
     const response = await invoke("preview_delete_meeting", { handle, confirmed: true });
     if (response.state === "removed" || response.state === "already-removed") {
       // The meeting no longer exists, so its detail view must not remain open.
