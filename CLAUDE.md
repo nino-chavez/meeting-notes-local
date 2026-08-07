@@ -70,13 +70,28 @@ commits — consolidated 2026-08-07 by fast-forwarding `main` onto the app line.
 a push straight into `gh pr merge`: GitHub computes mergeability asynchronously, and
 a merge issued in the same breath fails with "Pull Request is not mergeable" for no
 reason other than timing. Poll `gh pr view <n> --json mergeable` until it reads
-`MERGEABLE` first. And **gate cleanup on the merge having actually landed** —
-
-    git merge-base --is-ancestor <sha> main && git branch -D <branch>
+`MERGEABLE` first. And **gate cleanup on the merge having actually landed.**
 
 Running the delete unconditionally after a failed merge deletes the branch, closes
 the PR, and leaves the work reachable only through the object store. It is
 recoverable, and recovering it is pure waste. One `if` prevents it.
+
+**Gate on content, not on ancestry.** This paragraph carried
+`git merge-base --is-ancestor <sha> main` from 2026-08-07 until 2026-08-08, and that
+check can never pass here: every PR in this repository lands through
+`gh pr merge --squash`, which writes a *new* commit, so the branch tip is never an
+ancestor of `main`. A rule that always refuses is not a safety gate — it is a rule
+the next session works around, which is worse than no rule. Ask instead whether the
+content arrived:
+
+    [ -z "$(git diff main <branch>)" ] \
+      && [ "$(gh pr view <n> --json state -q .state)" = MERGED ] \
+      && git branch -D <branch>
+
+An empty `git diff` says every line of the branch is in `main` however it got there
+— squash, rebase or merge — and the PR state says a human-visible merge happened
+rather than the branch having been empty all along. Both, because either alone
+passes for a branch that never carried anything.
 
 Work in `<repo>/.worktrees/<branch>`. Remove the worktree once the work has landed
 **or** the session is finished with it — it does not have to be merged first, and on
