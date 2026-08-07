@@ -65,7 +65,10 @@ from mlx_note_admission import (
 # assertion rather than a quieter matrix.
 COLD_REPEATS = 3
 WARM_REPEATS = 2
-EXPECTED_FIXTURES = 12
+# 13 since 2026-08-07: intervention seven added `hypothetical-decision`.
+# The registered matrix was a 12-fixture matrix in every write-up before
+# that date, and those receipts remain 12-fixture receipts.
+EXPECTED_FIXTURES = 13
 COLD_MEDIAN_CEILING_S = 30.0
 WARM_MEDIAN_CEILING_S = 15.0
 PEAK_RSS_CEILING = 4_282_063_304

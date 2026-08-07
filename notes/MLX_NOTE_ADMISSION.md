@@ -1920,3 +1920,80 @@ control's false positive cannot disappear unnoticed and take this argument with 
 
 **This admits nothing** and changes no request. No matrix re-run was needed: only
 the test file moved, and it is hashed into no receipt.
+
+### Intervention seven — run 2026-08-07. The prediction held, and both arms fail the same way
+
+Receipt: `notes/mlx_note_matrix_receipt_arms_recorded.json`, schema
+`mlx-note-matrix/3`, thirteen fixtures, `every_fixture_ran: true`.
+
+**The prediction was that the model would accept the hypothetical rather than
+abstain. It accepted.**
+
+    fixture:  hypothetical-decision
+    input:    "If we decided to ship Tuesday, we would need Dana."
+    control:  accepted-research-candidate
+    model:    accepted-research-candidate     codes: none
+
+**So the arms agree, and agreeing is the bad outcome here.** The fixture was built
+to find a disagreement worth recording. What it found is that neither arm can see a
+counterfactual. The deterministic extractor is word-presence and was already known
+not to. The model, given the same sentence, produced a note the citation gate
+accepted.
+
+**The citation gate passing is the part to read carefully.**
+`required_citation_terms` held: the model cited the real sentence, containing both
+"Dana" and "Tuesday". This is not a citation failure and no locator gate could have
+caught it. It is correct citation with wrong inference — the same shape as the
+inverted claim intervention four addressed, and nothing gates this one on either
+arm.
+
+**What that means for the product, stated plainly.** A meeting in which someone
+says "if we decided to ship Tuesday, we would need Dana" would currently produce a
+note recording a decision to ship Tuesday, correctly cited to a sentence that
+decides nothing. Evidence-linked is not the same as true, and this is the cleanest
+demonstration of that gap in this document.
+
+**Do not read the pass count as progress.** Eleven of thirteen fixtures pass every
+registered gate, against ten of twelve before. **The graded count is unchanged at
+ten of twelve.** The entire increase is `hypothetical-decision`, which is ungraded
+on outcome by design and therefore cannot fail. A suite that accumulated ungraded
+fixtures would report a rising number while measuring less;
+`test_synthetic_measurement_plan_has_registered_coverage` holds the count of them
+at exactly one until another is argued for.
+
+**Nothing else moved, and this is the first time that could be checked.** No
+pre-existing fixture's `request_sha256` or `response_sha256` changed. Intervention
+six added that field precisely because the two preregistrations before it made
+claims of this kind that no receipt could settle; one run later it settles one.
+
+**This admits nothing.** `admits` false, `per_fixture_gates` false, the same two
+fixtures still refusing on the identifier truncation.
+
+### Preregistration — intervention eight, and an argument against the obvious version
+
+The obvious next move is a counterfactual gate shaped like the polarity gate:
+refuse a claim whose cited slice opens with "if", "were", "would", "suppose".
+**Registered here as the candidate, with the reason it may be wrong.**
+
+The polarity gate taught two things. The first is that word-presence catches the
+registered fixture and generalises badly — it cannot see "we are keeping the red
+branch" as an inversion of "do not merge". A conditional gate inherits exactly that
+limit: "had we shipped Tuesday, Dana would have been needed" carries no listed
+term, and "if" appears in plenty of real decisions ("we decided to ship if QA
+signs off") where refusing would be wrong.
+
+The second is subtler and was measured: advertising the rule in
+`response_contract` changed the model's output before the gate ever ran. A
+conditional rule may therefore fix this fixture by teaching the model the word
+rather than the concept, and the receipt could not tell those apart.
+
+**The prediction, so it can be wrong.** With a conditional gate advertised and
+enforced, `hypothetical-decision` stops being accepted. **The falsifier that
+matters is a second, unadvertised conditional fixture using none of the listed
+terms** — if that one is still accepted, the gate taught a vocabulary and not a
+distinction, and should be withdrawn rather than kept for the fixture it passes.
+That control fixture has to be written and run in the same change, or the result
+means nothing.
+
+**Not started.** Recorded so the next session does not reach for the word list
+without the control.
