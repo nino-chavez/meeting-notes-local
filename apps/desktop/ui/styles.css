@@ -343,6 +343,28 @@ button.library-search-result:hover:not(:disabled), button.library-row:hover:not(
 .library-empty { margin: 0; padding: var(--space-6) 0; border-bottom: 1px solid var(--line); color: var(--muted); line-height: 1.52; }
 /* Sits under its row, quiet by default. Naming a meeting is available rather
    than urged: the row already reads well without one. */
+/* The filter section's heading exists for a screen reader; the controls are
+   self-labelling on screen and a visible "Narrow this list" would be noise. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.library-filters { margin: var(--space-6) 0; padding: var(--space-4) 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.filter-row:last-child { margin-bottom: 0; }
+.filter-row label { color: var(--muted); font-size: 0.8125rem; }
+.filter-row input, .filter-row select { padding: var(--space-2); border: 1px solid var(--line); border-radius: 4px; background: transparent; font: inherit; font-size: 0.875rem; }
+.filter-row input[type="search"] { min-width: 22ch; flex: 1 1 22ch; }
+.filter-row .footnote { margin: 0; flex: 1 1 100%; }
+.library-move { margin: 0 var(--space-3) var(--space-4) 0; padding: var(--space-1) var(--space-2); border: 1px solid var(--line); border-radius: 4px; background: transparent; font: inherit; font-size: 0.8125rem; }
+
 .library-rename {
   margin: 0 0 var(--space-4);
   padding: 0;

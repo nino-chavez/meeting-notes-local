@@ -377,6 +377,31 @@
           <ul id="retention-overview-rows" hidden></ul>
           <p class="footnote">Deleting a recording is reviewed inside its meeting. Each meeting keeps the auto-deletion period you chose when it was recorded; deletion runs while the app is open, or the next time it opens.</p>
         </section>
+        <section class="library-filters" id="library-filters" aria-labelledby="library-filters-title">
+          <h2 id="library-filters-title" class="visually-hidden">Narrow this list</h2>
+          <div class="filter-row">
+            <label for="filter-folder">Folder</label>
+            <select id="filter-folder">
+              <option value="">All folders</option>
+              <option value="unfiled">Unfiled</option>
+            </select>
+            <button type="button" id="filter-new-folder">New folder</button>
+          </div>
+          <div class="filter-row">
+            <label for="filter-name">Name contains</label>
+            <input type="search" id="filter-name" autocomplete="off" spellcheck="false" placeholder="Part of a meeting's name" />
+          </div>
+          <div class="filter-row">
+            <label for="filter-from">Recorded from</label>
+            <input type="date" id="filter-from" />
+            <label for="filter-to">to</label>
+            <input type="date" id="filter-to" />
+          </div>
+          <div class="filter-row">
+            <button type="button" id="filter-clear" hidden>Clear filters</button>
+            <p class="footnote" id="filter-people-note">Filtering by person needs named speakers, which are not built. Recordings label speech only as you or the other side.</p>
+          </div>
+        </section>
         <div class="section-heading">
           <h2>Recent meetings</h2>
           <span>Stored locally</span>

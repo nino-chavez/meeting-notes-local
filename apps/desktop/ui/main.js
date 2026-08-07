@@ -92,6 +92,17 @@ const libraryNotice = document.querySelector("#library-notice");
 // The meetings screen's own status line. `library-notice` belongs to Find,
 // and a rename refusal shown there is a refusal the operator never sees.
 const libraryOrganizationNotice = document.querySelector("#library-organization-notice");
+const filterFolder = document.querySelector("#filter-folder");
+const filterName = document.querySelector("#filter-name");
+const filterFrom = document.querySelector("#filter-from");
+const filterTo = document.querySelector("#filter-to");
+const filterClear = document.querySelector("#filter-clear");
+const filterNewFolder = document.querySelector("#filter-new-folder");
+// What the operator has narrowed to. Held here rather than read back off the
+// controls, because the snapshot has to be requested with the same filter the
+// controls show, and re-deriving it in two places is how those drift apart.
+let libraryFilter = {};
+let libraryMetadataRevision = null;
 const librarySearch = document.querySelector("#library-search");
 const librarySearchQuery = document.querySelector("#library-search-query");
 const librarySearchSubmit = librarySearch.querySelector("button[type=\"submit\"]");
@@ -148,7 +159,10 @@ let stopCommandFailed = false;
 let announcedHeaderState = headerState.textContent;
 const screenScrollPositions = new Map();
 const libraryInitialization = createSingleFlight(
-  () => invoke("preview_library_snapshot"),
+  // The filter travels with the request. Rust applies it and reports both
+  // counts, so the shell never computes "showing N of M" from a list it
+  // already trimmed itself.
+  () => invoke("preview_library_snapshot", { filter: libraryFilter }),
 );
 const findRefreshOperation = createSingleFlight(performFindRefresh);
 const handleTransitionGate = createTransitionGate();
@@ -664,6 +678,13 @@ function renderAudioRetention(retention, deletionHandle = "") {
 }
 
 function renderLibrary(snapshot) {
+  libraryMetadataRevision = Number.isInteger(snapshot.metadataRevision)
+    ? snapshot.metadataRevision
+    : null;
+  renderFolderOptions(snapshot);
+  // Shown only when something is narrowed. A permanently visible "Clear" on an
+  // unfiltered list implies a filter that is not there.
+  filterClear.hidden = !snapshot.filterActive;
   libraryList.replaceChildren();
   document.querySelector("#library-copy").textContent = snapshot.message || "Opening retained meetings on this Mac.";
   if (snapshot.state !== "populated" && snapshot.state !== "populated-incomplete") {
@@ -725,6 +746,23 @@ function renderLibrary(snapshot) {
       rename.textContent = labelSource === "operator" ? "Rename" : "Name this meeting";
       rename.addEventListener("click", () => renameMeeting(row, snapshot.metadataRevision));
       libraryList.append(rename);
+
+      const move = document.createElement("select");
+      move.className = "library-move";
+      move.setAttribute("aria-label", `Folder for ${labelText}`);
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "Unfiled";
+      move.append(none);
+      for (const folder of snapshot.folders || []) {
+        const option = document.createElement("option");
+        option.value = folder.id;
+        option.textContent = folder.name;
+        move.append(option);
+      }
+      move.value = row.folderId || "";
+      move.addEventListener("change", () => moveMeeting(row, move.value || null));
+      libraryList.append(move);
     }
   }
 }
@@ -933,6 +971,128 @@ async function refreshRetentionOverview(revision) {
   const overview = await invoke("preview_retention_overview").catch(() => null);
   if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
   renderRetentionOverview(overview);
+}
+
+
+// A date input gives a local calendar day; capture time is UTC epoch seconds.
+// `from` takes the first second of that day and `to` the last, so a range of one
+// day means that whole day rather than one instant at midnight.
+function dayStartEpochSeconds(value) {
+  if (!value) return undefined;
+  const parsed = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
+}
+
+function dayEndEpochSeconds(value) {
+  const start = dayStartEpochSeconds(value);
+  return start === undefined ? undefined : start + 86_399;
+}
+
+function readLibraryFilter() {
+  const folder = filterFolder.value;
+  const name = filterName.value.trim();
+  const filter = {};
+  if (folder === "unfiled") filter.unfiled = true;
+  else if (folder) filter.folderId = folder;
+  if (name) filter.title = name;
+  const from = dayStartEpochSeconds(filterFrom.value);
+  const to = dayEndEpochSeconds(filterTo.value);
+  if (from !== undefined) filter.startEpochSeconds = from;
+  if (to !== undefined) filter.endEpochSeconds = to;
+  return filter;
+}
+
+// Rebuilt from the snapshot rather than appended to, so a folder deleted
+// elsewhere stops being offered. The current selection is restored when it
+// still exists and dropped when it does not — a filter naming a folder that is
+// gone would show an empty list with no way to tell why.
+function renderFolderOptions(snapshot) {
+  const chosen = filterFolder.value;
+  filterFolder.replaceChildren();
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "All folders";
+  const unfiled = document.createElement("option");
+  unfiled.value = "unfiled";
+  unfiled.textContent = "Unfiled";
+  filterFolder.append(all, unfiled);
+  for (const folder of snapshot.folders || []) {
+    const option = document.createElement("option");
+    option.value = folder.id;
+    option.textContent = folder.name;
+    filterFolder.append(option);
+  }
+  const stillThere = Array.from(filterFolder.options).some((option) => option.value === chosen);
+  filterFolder.value = stillThere ? chosen : "";
+  if (!stillThere && chosen) {
+    delete libraryFilter.folderId;
+    delete libraryFilter.unfiled;
+  }
+}
+
+async function applyLibraryFilter() {
+  libraryFilter = readLibraryFilter();
+  await rebuildMeetingsView();
+}
+
+function clearLibraryFilter() {
+  filterFolder.value = "";
+  filterName.value = "";
+  filterFrom.value = "";
+  filterTo.value = "";
+  libraryFilter = {};
+  void rebuildMeetingsView();
+}
+
+// Filing a meeting is one command and a reload, like renaming. The select is
+// per row rather than a bulk action: moving several meetings at once is a
+// surface decision nobody has made, and guessing at it here would be the
+// speculative half of this feature.
+async function moveMeeting(row, folderId) {
+  if (!invoke) return;
+  clearError(libraryOrganizationNotice);
+  if (!Number.isInteger(libraryMetadataRevision)) return;
+  let response;
+  try {
+    response = await invoke("library_assign_meeting_folder", {
+      expectedRevision: libraryMetadataRevision,
+      meetingId: row.meetingId,
+      folderId,
+    });
+  } catch {
+    setError(libraryOrganizationNotice, "That change could not be saved. Nothing was written.");
+    return;
+  }
+  if (response.state !== "ok") {
+    setError(libraryOrganizationNotice, response.message);
+    if (response.state === "revision-conflict") await rebuildMeetingsView();
+    return;
+  }
+  await rebuildMeetingsView();
+}
+
+async function createFolder() {
+  if (!invoke) return;
+  clearError(libraryOrganizationNotice);
+  if (!Number.isInteger(libraryMetadataRevision)) return;
+  const answer = window.prompt("Name the new folder.", "");
+  if (answer === null || answer.trim() === "") return;
+  let response;
+  try {
+    response = await invoke("library_create_folder", {
+      expectedRevision: libraryMetadataRevision,
+      name: answer,
+    });
+  } catch {
+    setError(libraryOrganizationNotice, "That folder could not be created. Nothing was written.");
+    return;
+  }
+  if (response.state !== "ok") {
+    setError(libraryOrganizationNotice, response.message);
+    if (response.state === "revision-conflict") await rebuildMeetingsView();
+    return;
+  }
+  await rebuildMeetingsView();
 }
 
 // The operator's own title, which outranks the meeting's opening line and the
@@ -2564,6 +2724,23 @@ document.querySelector("#first-run-skip-enrol").addEventListener("click", () => 
 document.querySelector("#first-run-done").addEventListener("click", () => {
   selectProductScreen("idle-screen", { resetScroll: true });
 });
+// Narrowing the list. Folder and the two dates re-request on change; the name box
+// waits for the operator to stop typing rather than issuing a snapshot per
+// keystroke, because each one is a validated read of every meeting on disk.
+filterFolder.addEventListener("change", () => void applyLibraryFilter());
+filterFrom.addEventListener("change", () => void applyLibraryFilter());
+filterTo.addEventListener("change", () => void applyLibraryFilter());
+let filterNameTimer = null;
+filterName.addEventListener("input", () => {
+  if (filterNameTimer !== null) clearTimeout(filterNameTimer);
+  filterNameTimer = setTimeout(() => {
+    filterNameTimer = null;
+    void applyLibraryFilter();
+  }, 250);
+});
+filterClear.addEventListener("click", clearLibraryFilter);
+filterNewFolder.addEventListener("click", () => void createFolder());
+
 // The two dead ends get an exit. Neither panel's primary control can succeed from
 // inside this window — one needs System Settings, the other needs a reinstall — so
 // without this the first thing a new operator meets is a screen they cannot leave.

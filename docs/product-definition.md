@@ -162,7 +162,7 @@ becoming the system of record.
 |---|---|---|---|
 | D1 | **Ask a question across every meeting, get an answer with citations** | Granola ships this on the *free* tier; Circleback's headline | **Unbuilt** — one unproven story today |
 | D2 | Search: exact plus semantic, over transcript and metadata | Otter free vs Pro | **Registered** for exact |
-| D3 | Filters — people, date range, keywords, titles | Gong documents all four | **Unbuilt** |
+| D3 | Filters — people, date range, keywords, titles | Gong documents all four | **Three of four shipped 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search. **People is blocked on A3**: attribution is Me/Them and the contract records that named participants are absent |
 | D4 | Saved searches and streams that collect future matching meetings | Gong | **Unbuilt** |
 | D5 | Land on a claim, not a document | nobody does this | **Unbuilt**, needs B5 |
 
@@ -176,12 +176,12 @@ four stories of exact search plus one unproven story for the actual headline.
 
 | # | Feature | Parity source | Status |
 |---|---|---|---|
-| E1 | Folders, and channels or workspaces | Granola and Otter both ship folders; Otter adds channels | **Partly shipped 2026-08-08** — the record has a writer and five registered commands; naming a meeting is wired, the folder surface is not, channels are unbuilt |
+| E1 | Folders, and channels or workspaces | Granola and Otter both ship folders; Otter adds channels | **Shipped 2026-08-08** for folders — create, file, unfile and filter by one, from the meetings list. Renaming and deleting a folder are registered commands with no surface; channels are unbuilt |
 | E2 | One meeting object with sibling views: transcript, summary, notes, tasks, docs | Gong's call page; Wispr's six tabs | **Partial** |
 | E3 | Preparation brief before the meeting | Wispr's preread tab | **Unbuilt** |
 | E4 | A shell that never lies at menubar size | own | **Shipped** |
 | E5 | Retention with named auto-deletion periods | Granola enterprise vocabulary | **Shipped** automatic; periods **Unbuilt** |
-| E6 | Local store and retrieval at corpus scale | `teardown.md` names SQLite | **Partial** — derived SQLite index landed 2026-08-07 and is built when the library is opened; the full scan still runs first (US-13.6) |
+| E6 | Local store and retrieval at corpus scale | `teardown.md` names SQLite | **Partial** — the derived SQLite index landed 2026-08-07 and is written whenever the library is opened. **Nothing reads it yet**: the app builds the full projection first, so filters are answered from memory, and the index earns a reader when US-13.6 stops the scan being the entry point |
 
 ---
 

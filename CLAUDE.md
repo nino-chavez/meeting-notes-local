@@ -127,6 +127,22 @@ in another repo. The archive tag made it recoverable, which is the fourth step e
 its keep. The manifest now lives on `main` so the pin can follow trunk. Before deleting
 a branch whose name appears in another repo's config, grep `~/Workspace/dev` for it.
 
+**`cargo test` does not compile this app.** It compiles one of three lanes, and
+the other two are behind `#[cfg(feature = ...)]`. Adding a field to a shared type
+— `LibrarySnapshot` has taken four — leaves the development lane's tests
+constructing it without that field, invisibly, because the default lane never
+parses them. This has happened twice: #38 broke it and #39 found it, then the
+filter work broke it again the same day. Before a PR touching a shared DTO:
+
+    cargo test -p local-meeting-notes-desktop
+    TAURI_CONFIG="$(cat apps/desktop/src-tauri/tauri.library-dev.conf.json)" \
+      cargo test -p local-meeting-notes-desktop --features library-dev-surface
+    TAURI_CONFIG="$(cat apps/desktop/src-tauri/tauri.preview.conf.json)" \
+      cargo test -p local-meeting-notes-desktop --features preview-surface
+
+`cargo test --workspace` does not cover this either — the feature is off there
+too. The lanes are isolated on purpose and the isolation is what hides the break.
+
 **A frozen artifact must never be asserted through a live constant.** Hit three
 times on 2026-08-07, each time while growing the registered fixture suite:
 `mlx_note_matrix_receipt.json` (a 2026-08-05 receipt) asserted its fixture count as

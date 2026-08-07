@@ -69,6 +69,58 @@ pub enum LibraryReadError {
     ArtifactUnavailable,
 }
 
+/// Which meetings a surface is currently looking at.
+///
+/// **Applied in memory, over the projection this snapshot already validated.**
+/// The corpus index carries the same folder and capture-time columns and could
+/// answer these in SQL, and doing that today would buy nothing: the app builds
+/// the full projection before anything else happens, so the rows are already
+/// here and the query would be a second walk over data in hand. The index earns
+/// its read path when US-13.6 stops the scan from being the entry point — at
+/// which point *not* having built the projection is the whole advantage. Until
+/// then, filtering here is the honest implementation and no commit claims a
+/// speed it does not have.
+///
+/// Text matching runs through `normalized_matches`, the same transform search
+/// uses, rather than a second lowercase-and-contains. `search-normalization/1`
+/// pins Unicode 17.0.0, three crate checksums and a Rust commit for
+/// `char::to_lowercase`; a filter with its own rule would disagree with search
+/// on composed `é` and expanding `İ`, and two owners for one rule is the drift
+/// that pin exists to prevent.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LibraryFilter {
+    pub folder: FolderFilter,
+    /// Inclusive, in UTC epoch seconds, matching the capture-time range the
+    /// contract already specifies for search.
+    pub start_epoch_seconds: Option<u64>,
+    pub end_epoch_seconds: Option<u64>,
+    /// Narrows by the meeting's *name* — the operator's title if there is one,
+    /// and the meeting's own opening line if there is not.
+    ///
+    /// Deliberately not a transcript search. Search already covers transcript
+    /// text and returns spans; this narrows a list of meetings, and a filter
+    /// that quietly searched everything would return meetings whose names do
+    /// not contain what was typed.
+    pub title: Option<String>,
+}
+
+/// `Any` and `Unfiled` are different questions and a nullable folder cannot ask
+/// both: "no folder constraint" and "only meetings in no folder" would collapse
+/// into one value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FolderFilter {
+    #[default]
+    Any,
+    Unfiled,
+    Named(String),
+}
+
+impl LibraryFilter {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 pub struct LibraryProjection {
     snapshot_id: Uuid,
     rows: Vec<LibraryRow>,
@@ -95,6 +147,13 @@ pub struct LibraryRow {
     attempt_sha256: String,
     title: Option<String>,
     folder: Option<String>,
+    /// The folder's identifier, beside its resolved name.
+    ///
+    /// Two folders may carry the same name — that is the operator's business
+    /// and the writer allows it — so a filter that matched on the name would
+    /// silently union them. Nothing displays this; it exists so a filter can
+    /// mean one folder.
+    folder_id: Option<String>,
 }
 
 impl LibraryRow {
@@ -108,6 +167,14 @@ impl LibraryRow {
     /// Exposing the accepted title does not create a broader metadata reader.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// Which folder the operator filed this meeting in, if any.
+    ///
+    /// The identifier, not the name: two folders may share a name and a surface
+    /// that offered to move a meeting "to Clients" could not say which.
+    pub fn folder_id(&self) -> Option<&str> {
+        self.folder_id.as_deref()
     }
 
     /// The meeting's own opening line, when it has a transcript with one.
@@ -430,6 +497,7 @@ impl LibraryProjection {
                             .as_ref()
                             .and_then(|id| document.folders.iter().find(|folder| &folder.id == id))
                             .map(|folder| folder.name.clone());
+                        row.folder_id = label.folder_id.clone();
                     }
                 }
             } else {
@@ -464,6 +532,104 @@ impl LibraryProjection {
     }
     pub fn quarantined_meetings(&self) -> usize {
         self.quarantined_meetings
+    }
+
+    /// Rows this filter admits, in the projection's own order.
+    ///
+    /// Returns references into the snapshot rather than clones: a filtered view
+    /// is a way of looking at one immutable projection, not a second copy of it
+    /// that could drift.
+    pub fn filtered_rows(&self, filter: &LibraryFilter) -> Vec<&LibraryRow> {
+        self.rows
+            .iter()
+            .filter(|row| Self::admits(row, filter))
+            .collect()
+    }
+
+    /// Whether one row survives the filter.
+    ///
+    /// Every clause is a narrowing, so an empty filter admits everything and a
+    /// surface that has not chosen anything sees the whole library.
+    fn admits(row: &LibraryRow, filter: &LibraryFilter) -> bool {
+        match &filter.folder {
+            FolderFilter::Any => {}
+            FolderFilter::Unfiled => {
+                if row.folder_id.is_some() {
+                    return false;
+                }
+            }
+            FolderFilter::Named(id) => {
+                if row.folder_id.as_deref() != Some(id.as_str()) {
+                    return false;
+                }
+            }
+        }
+        if filter
+            .start_epoch_seconds
+            .is_some_and(|start| row.created_at_epoch_seconds < start)
+            || filter
+                .end_epoch_seconds
+                .is_some_and(|end| row.created_at_epoch_seconds > end)
+        {
+            return false;
+        }
+        if let Some(needle) = &filter.title {
+            // Normalized here, once, through the same transform the field is
+            // normalized by. An empty needle after normalization admits
+            // everything rather than nothing: a surface with an empty box has
+            // not asked a question.
+            let Ok(normalized) = normalize_query(needle) else {
+                return true;
+            };
+            let name = row
+                .title
+                .clone()
+                .or_else(|| row.derived_title())
+                .unwrap_or_default();
+            if normalized_matches(&name, &normalized).is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Search, narrowed to the meetings the filter admits.
+    ///
+    /// The filter selects *meetings*; it never changes what counts as a match
+    /// inside one. A hit in an excluded meeting is dropped whole rather than
+    /// reported without its meeting.
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        filter: &LibraryFilter,
+    ) -> Result<Vec<LibraryHit>, LibraryReadError> {
+        let hits = self.search(query)?;
+        if filter.is_empty() {
+            return Ok(hits);
+        }
+        let admitted: HashSet<&str> = self
+            .filtered_rows(filter)
+            .into_iter()
+            .map(|row| row.meeting_id.as_str())
+            .collect();
+        Ok(hits
+            .into_iter()
+            .filter(|hit| {
+                self.hits
+                    .borrow()
+                    .get(&hit.key)
+                    .map(|sealed| {
+                        let authority = match sealed {
+                            SealedHit::Claim { authority, .. }
+                            | SealedHit::Transcript { authority, .. }
+                            | SealedHit::Withheld { authority, .. }
+                            | SealedHit::Meeting { authority, .. } => authority,
+                        };
+                        admitted.contains(authority.meeting_id.as_str())
+                    })
+                    .unwrap_or(false)
+            })
+            .collect())
     }
 
     /// The organization revision this snapshot was built against, or `None`
@@ -1245,6 +1411,7 @@ fn inspect_meeting(
         attempt_sha256: attempt.sha256,
         title: None,
         folder: None,
+        folder_id: None,
     }))
 }
 
@@ -2282,6 +2449,154 @@ mod tests {
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         assert_eq!(projection.rows()[0].derived_title(), None);
+    }
+
+    #[test]
+    fn a_folder_filter_means_one_folder_even_when_two_share_a_name() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 10, &[("alpha turn text here", false)]);
+        fixture.meeting("meeting-b", 20, &[("beta turn text here", false)]);
+        fixture.meeting("meeting-c", 30, &[("gamma turn text here", false)]);
+        // Two folders, same name, different ids. The writer permits this and a
+        // filter that matched on the name would union them.
+        fixture.metadata(
+            br#"{"schema":"library-metadata/1","revision":1,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"Clients"},{"id":"22222222-2222-4222-8222-222222222222","name":"Clients"}],"meetings":[{"meeting_id":"meeting-a","title":null,"folder_id":"11111111-1111-4111-8111-111111111111"},{"meeting_id":"meeting-b","title":null,"folder_id":"22222222-2222-4222-8222-222222222222"}]}"#,
+        );
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+
+        let one = LibraryFilter {
+            folder: FolderFilter::Named("11111111-1111-4111-8111-111111111111".into()),
+            ..Default::default()
+        };
+        let rows = projection.filtered_rows(&one);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].meeting_id, "meeting-a");
+
+        let unfiled = LibraryFilter {
+            folder: FolderFilter::Unfiled,
+            ..Default::default()
+        };
+        let rows = projection.filtered_rows(&unfiled);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].meeting_id, "meeting-c");
+
+        assert_eq!(
+            projection.filtered_rows(&LibraryFilter::default()).len(),
+            3,
+            "an empty filter is not a narrowing"
+        );
+    }
+
+    #[test]
+    fn a_capture_time_range_is_inclusive_at_both_ends() {
+        let fixture = Fixture::new();
+        for (id, created) in [("meeting-a", 10), ("meeting-b", 20), ("meeting-c", 30)] {
+            fixture.meeting(id, created, &[("some turn text goes here", false)]);
+        }
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let filter = LibraryFilter {
+            start_epoch_seconds: Some(20),
+            end_epoch_seconds: Some(30),
+            ..Default::default()
+        };
+        let ids: Vec<_> = projection
+            .filtered_rows(&filter)
+            .into_iter()
+            .map(|row| row.meeting_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            ["meeting-c", "meeting-b"],
+            "newest first, both ends in"
+        );
+
+        let single = LibraryFilter {
+            start_epoch_seconds: Some(20),
+            end_epoch_seconds: Some(20),
+            ..Default::default()
+        };
+        assert_eq!(projection.filtered_rows(&single).len(), 1);
+    }
+
+    /// The filter and search must agree about what a character is.
+    ///
+    /// `search-normalization/1` pins Unicode 17.0.0, three crate checksums and a
+    /// Rust commit for `char::to_lowercase`. A filter written with its own
+    /// `to_lowercase().contains()` would disagree with search on exactly these
+    /// inputs, which is why the filter runs through `normalized_matches` rather
+    /// than growing a second rule.
+    #[test]
+    fn the_title_filter_normalizes_the_same_way_search_does() {
+        let fixture = Fixture::new();
+        // Composed é in the title, decomposed é in the needle.
+        fixture.meeting("meeting-a", 10, &[("nothing relevant in this turn", false)]);
+        fixture.metadata(
+            "{\"schema\":\"library-metadata/1\",\"revision\":1,\"folders\":[],\"meetings\":[{\"meeting_id\":\"meeting-a\",\"title\":\"Caf\u{00e9} review\",\"folder_id\":null}]}".as_bytes(),
+        );
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+
+        for needle in ["Caf\u{00e9}", "cafe\u{0301}", "CAF\u{00c9} REVIEW"] {
+            let filter = LibraryFilter {
+                title: Some(needle.into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                projection.filtered_rows(&filter).len(),
+                1,
+                "{needle:?} did not match a title search would have matched"
+            );
+        }
+
+        let miss = LibraryFilter {
+            title: Some("warehouse".into()),
+            ..Default::default()
+        };
+        assert!(projection.filtered_rows(&miss).is_empty());
+    }
+
+    #[test]
+    fn the_title_filter_reads_the_derived_name_when_no_operator_title_exists() {
+        let fixture = Fixture::new();
+        fixture.meeting(
+            "meeting-a",
+            10,
+            &[("We should walk through the migration plan today.", false)],
+        );
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        let filter = LibraryFilter {
+            title: Some("migration".into()),
+            ..Default::default()
+        };
+        assert_eq!(projection.filtered_rows(&filter).len(), 1);
+    }
+
+    #[test]
+    fn a_filter_narrows_which_meetings_search_answers_from_and_not_what_matches() {
+        let fixture = Fixture::new();
+        fixture.meeting(
+            "meeting-a",
+            10,
+            &[("the needle appears in this turn", false)],
+        );
+        fixture.meeting("meeting-b", 20, &[("the needle appears here too", false)]);
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+
+        assert_eq!(projection.search("needle").unwrap().len(), 2);
+        let filter = LibraryFilter {
+            start_epoch_seconds: Some(20),
+            ..Default::default()
+        };
+        let hits = projection.search_filtered("needle", &filter).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(matches!(
+            projection.open(&fixture.storage, &hits[0]).unwrap(),
+            OpenedLibraryHit::Transcript { ref meeting_id, .. } if meeting_id == "meeting-b"
+        ));
     }
 
     #[test]

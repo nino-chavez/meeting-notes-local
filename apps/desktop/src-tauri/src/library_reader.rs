@@ -8,8 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use local_meeting_notes_session_core::corpus_index::CorpusIndex;
+use local_meeting_notes_session_core::library_read::FolderFilter;
 use local_meeting_notes_session_core::library_read::{
-    ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, LibraryRow,
+    ClaimEvidenceState, LibraryFilter, LibraryHit, LibraryProjection, LibraryReadError, LibraryRow,
     OpenedLibraryHit, ReadLimits,
 };
 use local_meeting_notes_session_core::meeting::{
@@ -19,7 +20,7 @@ use local_meeting_notes_session_core::meeting::{
 use local_meeting_notes_session_core::note_projection::ClaimType;
 use local_meeting_notes_session_core::retention::meeting_dir;
 use local_meeting_notes_session_core::storage::StorageRoot;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const STALE_MESSAGE: &str = "That view is no longer current. Reopen it and try again.";
@@ -54,6 +55,46 @@ pub(crate) struct LibraryReader {
     meeting_deletion_handles: HashMap<String, LibraryHit>,
 }
 
+/// The filter as the shell states it, before it becomes a `LibraryFilter`.
+///
+/// Every field is optional and absent means "no constraint", so a surface that
+/// has chosen nothing sends nothing and sees the whole library. `unfiled` is
+/// separate from `folderId` because "any folder" and "no folder" are different
+/// questions that one nullable identifier cannot ask.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LibraryFilterArgs {
+    pub(crate) folder_id: Option<String>,
+    pub(crate) unfiled: Option<bool>,
+    pub(crate) start_epoch_seconds: Option<u64>,
+    pub(crate) end_epoch_seconds: Option<u64>,
+    pub(crate) title: Option<String>,
+}
+
+impl LibraryFilterArgs {
+    pub(crate) fn to_filter(&self) -> LibraryFilter {
+        LibraryFilter {
+            // `unfiled` wins when both arrive. They contradict each other, and
+            // resolving a contradiction by taking the narrower reading is
+            // safer than showing more than was asked for.
+            folder: match (self.unfiled, self.folder_id.as_deref()) {
+                (Some(true), _) => FolderFilter::Unfiled,
+                (_, Some(id)) => FolderFilter::Named(id.to_owned()),
+                _ => FolderFilter::Any,
+            },
+            start_epoch_seconds: self.start_epoch_seconds,
+            end_epoch_seconds: self.end_epoch_seconds,
+            // An empty or whitespace-only box has not asked a question.
+            title: self
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LibrarySnapshot {
@@ -69,7 +110,25 @@ pub(crate) struct LibrarySnapshot {
     /// zero — writing over a record you could not read is the one outcome the
     /// conflict check exists to prevent.
     pub(crate) metadata_revision: Option<u64>,
+    /// Every folder the operator has, whether or not any meeting is in it.
+    pub(crate) folders: Vec<LibraryFolder>,
+    /// Meetings this snapshot could show, before the filter.
+    pub(crate) total: usize,
+    /// Meetings it is showing. Equal to `total` when nothing is filtered.
+    ///
+    /// Two numbers rather than one, because "a shell that never lies" is a
+    /// shipped property and a list quietly showing 3 of 40 breaks it. The
+    /// surface renders "showing N of M" from these and offers a way back.
+    pub(crate) shown: usize,
+    pub(crate) filter_active: bool,
     pub(crate) message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LibraryFolder {
+    pub(crate) id: String,
+    pub(crate) name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +148,9 @@ pub(crate) struct LibrarySnapshotRow {
     /// wrote and the others are not, and a list that renders them identically
     /// tells them they named a meeting when they did not.
     pub(crate) label_source: &'static str,
+    /// Which folder this meeting is in, or null for unfiled. The identifier
+    /// rather than the name, because two folders may share a name.
+    pub(crate) folder_id: Option<String>,
     pub(crate) created_at_epoch_seconds: u64,
     pub(crate) transcript_available: bool,
 }
@@ -291,10 +353,29 @@ impl LibraryReader {
     }
 
     pub(crate) fn snapshot(&mut self, active_meeting_ids: &HashSet<String>) -> LibrarySnapshot {
+        self.snapshot_filtered(active_meeting_ids, &LibraryFilter::default())
+    }
+
+    pub(crate) fn snapshot_filtered(
+        &mut self,
+        active_meeting_ids: &HashSet<String>,
+        filter: &LibraryFilter,
+    ) -> LibrarySnapshot {
         if !self.revalidate(active_meeting_ids) {
             return Self::stale_snapshot();
         }
-        self.snapshot_current()
+        self.snapshot_current(filter)
+    }
+
+    fn folders(&self) -> Vec<LibraryFolder> {
+        self.projection
+            .folders()
+            .into_iter()
+            .map(|(id, name)| LibraryFolder {
+                id: id.to_owned(),
+                name: name.to_owned(),
+            })
+            .collect()
     }
 
     /// Identity-only projection rows for the standing §K retention overview.
@@ -318,10 +399,13 @@ impl LibraryReader {
         )
     }
 
-    fn snapshot_current(&mut self) -> LibrarySnapshot {
+    fn snapshot_current(&mut self, filter: &LibraryFilter) -> LibrarySnapshot {
         self.clear_handles();
         let unavailable_count = self.projection.quarantined_meetings();
-        if self.projection.rows().is_empty() {
+        let total = self.projection.rows().len();
+        let filtered = self.projection.filtered_rows(filter);
+        let shown = filtered.len();
+        if filtered.is_empty() {
             return LibrarySnapshot {
                 state: if unavailable_count == 0 {
                     "empty"
@@ -331,31 +415,44 @@ impl LibraryReader {
                 rows: Vec::new(),
                 unavailable_count,
                 metadata_revision: self.projection.metadata_revision(),
-                message: if unavailable_count == 0 {
+                folders: self.folders(),
+                total,
+                shown,
+                filter_active: !filter.is_empty(),
+                // "No meetings match" and "you have no meetings" lead a reader
+                // to opposite conclusions, so they are different sentences.
+                message: if !filter.is_empty() && total > 0 {
+                    format!("No meeting matches this filter. {total} are retained.")
+                } else if unavailable_count == 0 {
                     "No retained meetings are available.".into()
                 } else {
                     format!("{unavailable_count} retained meeting(s) could not be read.")
                 },
             };
         }
-        let source_rows: Vec<_> = self
-            .projection
-            .rows()
-            .iter()
+        let source_rows: Vec<_> = filtered
+            .into_iter()
             .map(|row| {
                 let (label, label_source) = label_for(row);
                 (
                     row.meeting_id.clone(),
                     label,
                     label_source,
+                    row.folder_id().map(str::to_owned),
                     row.created_at_epoch_seconds,
                     row.transcript_sha256.is_some(),
                 )
             })
             .collect();
         let mut rows = Vec::new();
-        for (meeting_id, label, label_source, created_at_epoch_seconds, transcript_available) in
-            source_rows
+        for (
+            meeting_id,
+            label,
+            label_source,
+            folder_id,
+            created_at_epoch_seconds,
+            transcript_available,
+        ) in source_rows
         {
             let Ok(hit) = self.projection.meeting_handle(&meeting_id) else {
                 return Self::unavailable_snapshot();
@@ -365,6 +462,7 @@ impl LibraryReader {
                 meeting_id,
                 label,
                 label_source,
+                folder_id,
                 created_at_epoch_seconds,
                 transcript_available,
             });
@@ -378,7 +476,16 @@ impl LibraryReader {
             rows,
             unavailable_count,
             metadata_revision: self.projection.metadata_revision(),
-            message: if unavailable_count == 0 {
+            folders: self.folders(),
+            total,
+            shown,
+            filter_active: !filter.is_empty(),
+            message: if !filter.is_empty() {
+                // Said in words as well as in numbers. A count in a corner is
+                // easy to miss; a list that is showing a fraction of itself
+                // must say so where the reader is already looking.
+                format!("Showing {shown} of {total} retained meetings.")
+            } else if unavailable_count == 0 {
                 "Retained meetings are available.".into()
             } else {
                 format!("Retained meetings are available. {unavailable_count} could not be read.")
@@ -391,18 +498,27 @@ impl LibraryReader {
         query: &str,
         active_meeting_ids: &HashSet<String>,
     ) -> LibrarySearchResponse {
+        self.search_filtered(query, active_meeting_ids, &LibraryFilter::default())
+    }
+
+    pub(crate) fn search_filtered(
+        &mut self,
+        query: &str,
+        active_meeting_ids: &HashSet<String>,
+        filter: &LibraryFilter,
+    ) -> LibrarySearchResponse {
         if !self.revalidate(active_meeting_ids) {
             return Self::stale_search();
         }
-        self.search_current(query)
+        self.search_current(query, filter)
     }
 
-    fn search_current(&mut self, query: &str) -> LibrarySearchResponse {
+    fn search_current(&mut self, query: &str, filter: &LibraryFilter) -> LibrarySearchResponse {
         // A handle is valid only for the response that returned it. Keeping old
         // handles would retain an unbounded amount of private snapshot state.
         self.clear_handles();
         let unavailable_count = self.projection.quarantined_meetings();
-        match self.projection.search(query) {
+        match self.projection.search_filtered(query, filter) {
             Ok(hits) if hits.is_empty() => LibrarySearchResponse {
                 state: if unavailable_count == 0 {
                     "no-results"
@@ -823,6 +939,10 @@ impl LibraryReader {
             rows: Vec::new(),
             unavailable_count: 0,
             metadata_revision: None,
+            folders: Vec::new(),
+            total: 0,
+            shown: 0,
+            filter_active: false,
             message: UNAVAILABLE_MESSAGE.into(),
         }
     }
@@ -1144,6 +1264,10 @@ impl LibraryReader {
             rows: Vec::new(),
             unavailable_count: 0,
             metadata_revision: None,
+            folders: Vec::new(),
+            total: 0,
+            shown: 0,
+            filter_active: false,
             message: STALE_MESSAGE.into(),
         }
     }
@@ -1528,6 +1652,75 @@ mod tests {
             "a title the operator wrote outranks one the meeting said"
         );
         assert_eq!(row.label_source, "operator");
+    }
+
+    /// "A shell that never lies" is a shipped property, and a list quietly
+    /// showing a fraction of itself breaks it. The counts and the sentence are
+    /// both asserted, because a number in a corner is easy to miss and the
+    /// message is where the reader is already looking.
+    #[test]
+    fn a_filtered_snapshot_states_how_many_it_is_hiding() {
+        let fixture = fixture(
+            AudioState::Released,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
+
+        let all = reader.snapshot(&HashSet::new());
+        assert_eq!((all.total, all.shown), (1, 1));
+        assert!(!all.filter_active);
+        assert!(!all.message.contains("Showing"));
+
+        // A range that excludes the only meeting.
+        let args = LibraryFilterArgs {
+            start_epoch_seconds: Some(1_900_000_000),
+            ..Default::default()
+        };
+        let filtered = reader.snapshot_filtered(&HashSet::new(), &args.to_filter());
+        assert_eq!((filtered.total, filtered.shown), (1, 0));
+        assert!(filtered.filter_active);
+        assert!(filtered.rows.is_empty());
+        assert!(
+            filtered.message.contains("No meeting matches this filter"),
+            "{}",
+            filtered.message
+        );
+        assert!(
+            filtered.message.contains("1 are retained"),
+            "an empty filtered list must not read as an empty library"
+        );
+    }
+
+    #[test]
+    fn unfiled_wins_over_a_folder_id_because_the_two_contradict() {
+        let args = LibraryFilterArgs {
+            folder_id: Some("11111111-1111-4111-8111-111111111111".into()),
+            unfiled: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(args.to_filter().folder, FolderFilter::Unfiled);
+
+        let args = LibraryFilterArgs {
+            folder_id: Some("11111111-1111-4111-8111-111111111111".into()),
+            unfiled: Some(false),
+            ..Default::default()
+        };
+        assert!(matches!(args.to_filter().folder, FolderFilter::Named(_)));
+    }
+
+    #[test]
+    fn a_whitespace_only_title_box_is_not_a_question() {
+        for value in ["", "   ", "\t"] {
+            let args = LibraryFilterArgs {
+                title: Some(value.into()),
+                ..Default::default()
+            };
+            assert_eq!(args.to_filter().title, None, "{value:?}");
+            assert!(args.to_filter().is_empty());
+        }
     }
 
     #[test]

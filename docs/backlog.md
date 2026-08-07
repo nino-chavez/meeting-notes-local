@@ -123,8 +123,8 @@ inference is what went wrong before.
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
 | **E13** | **The corpus store** | **E6 D3** | 7 | **Landed 2026-08-07**, except US-13.6 |
-| **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.3 landed 2026-08-08**; US-14.4 (folder surface) next; channels and E2's sibling views undecomposed |
-| **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | — | Wave 1 items 4–6 |
+| **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
+| **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | 2 | **US-15.1 landed 2026-08-08**; US-15.2 blocked on A3; semantic search and cross-meeting answers are Wave 1 items 5–6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
 | **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
 | **E18** | **Named speakers** | **A3** | — | Wave 3 items 11–12 |
@@ -1376,24 +1376,73 @@ product capability: nobody has renamed a meeting in the running app.
 `labelSource === "operator"` was a case the shell handled and could never receive.
 
 #### US-14.4: A folder surface
-**Feature E1 · J1 · §F · P1 · M · Next**
+**Feature E1 · J1 · §F · P1 · M · Landed 2026-08-08**
 
 As the Operator, I want to make folders and file meetings into them, so that a
 hundred meetings are navigable.
 
 **Acceptance criteria:**
-- Given folders exist, When the library is shown, Then meetings can be filtered to one folder.
-- Given a meeting row, When the operator files it, Then it moves without opening the meeting.
-- Given a folder is deleted, When it is confirmed, Then its meetings become unfiled and no meeting is removed.
+- Given folders exist, When the library is shown, Then meetings can be narrowed to one folder or to those in none.
+- Given a meeting row, When the operator picks a folder for it, Then it moves without the meeting being opened.
+- Given a folder the filter names is deleted elsewhere, When the list is rebuilt, Then the filter drops it rather than showing an empty list with no explanation.
 
-**Validation:** **Unproven** — not built. The five commands exist, are registered,
-and are granted in both capability files; four of them have no surface yet.
+**Validation:** **Pinned** for the boundary and the wiring —
+`library_reader::tests::unfiled_wins_over_a_folder_id_because_the_two_contradict`,
+`a_filtered_snapshot_states_how_many_it_is_hiding`, and shell-contract greps on the
+create and assign invocations. **Unproven** as a product capability: nobody has
+filed a meeting in the running app.
 
-**Evidence:** deliberately deferred rather than rushed. The writer, its authority,
-the deletion ordering and one end-to-end path landed together; a folder list, a
-filter and a move affordance are a surface design, and `screens-and-states.md` does
-not cover them. Building them badly to close the row faster is the trade this repo
-does not make.
+**Still without a surface:** renaming and deleting a folder. Both are registered
+commands, granted in both capability files, and reachable only from a future
+surface. Deleting one in particular wants a confirmation this list does not have.
+
+#### US-15.1: Narrowing the library
+**Feature D3 · J1 · §F · P0 · M · Landed 2026-08-08**
+
+As the Operator, I want to narrow my meetings to a folder, a stretch of time, or a
+name, so that finding one is not scrolling.
+
+**Acceptance criteria:**
+- Given a filter, When the list is shown, Then it states how many meetings it is showing and how many are retained.
+- Given a filter that matches nothing, When the list is shown, Then it says so in words that cannot be read as an empty library.
+- Given a capture-date range, When it is applied, Then both ends are inclusive.
+- Given two folders with the same name, When one is filtered to, Then only its own meetings appear.
+- Given a filter, When a search runs, Then it answers only from the meetings the filter admits, and what counts as a match inside one is unchanged.
+
+**Refusals:** the name filter is not a transcript search. Search already covers
+transcript text and returns spans; this narrows a list of meetings, and quietly
+searching everything would return meetings whose names do not contain what was
+typed.
+
+**Validation:** **Pinned** — `library_read::tests` on folder identity, inclusive
+range, and the normalization agreement; `library_reader::tests` on the counts and
+the argument mapping.
+
+**One rule, one owner.** The name filter runs through `normalized_matches`, the
+same transform search uses. `search-normalization/1` pins Unicode 17.0.0, three
+crate checksums and a Rust commit for `char::to_lowercase`; a filter with its own
+lowercase-and-contains would disagree with search on composed `é` and expanding
+`İ`, and `the_title_filter_normalizes_the_same_way_search_does` is the check that
+they do not.
+
+**Applied in memory, deliberately.** The corpus index carries the same folder and
+capture-time columns and could answer these in SQL. It would buy nothing today: the
+app builds the full projection before anything else happens, so the rows are already
+in hand. The index earns its read path when US-13.6 stops the scan being the entry
+point — and until then it is written on every library open and read by nothing,
+which is stated here rather than left for someone to discover.
+
+#### US-15.2: Filtering by person
+**Feature D3 · J1 · §F · P1 · M · Blocked on A3**
+
+As the Operator, I want to narrow my meetings to the people in them.
+
+**Validation:** **Unproven** — not built, and not buildable here. Attribution is
+`channel` (Me/Them) or `none`, and the contract states that named participants,
+inferred counterparties, tags and generated subjects are absent. This needs E18 /
+Wave 3 item 11, named speakers. The meetings surface says so where the filters are,
+rather than leaving a person to conclude the control is missing.
+
 
 ---
 
