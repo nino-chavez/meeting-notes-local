@@ -1308,6 +1308,10 @@ fn the_live_note_is_the_operators_alone_and_says_what_it_cannot_do() {
     // back, and rendered as text, never as markup.
     assert!(html.contains("id=\"transcript-note\""));
     assert!(script.contains("transcriptNoteText.textContent = text;"));
+    // And an unreadable note is not shown as no note. Collapsing them would tell
+    // an operator they took no notes while the app holds words it could not
+    // parse — the same conflation the recording screen already refuses.
+    assert!(script.contains("A note was saved for this meeting and could not be read back."));
     assert!(!script.contains("innerHTML"));
 
     // Third: losing the last thing typed. The debounce is flushed before the

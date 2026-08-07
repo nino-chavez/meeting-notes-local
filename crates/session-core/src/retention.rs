@@ -1888,6 +1888,42 @@ mod tests {
         assert!(!storage.path().join("operations").exists());
     }
 
+    /// Releasing audio removes the recordings it was told about and nothing
+    /// else in the meeting directory.
+    ///
+    /// Added 2026-08-06 with § D, whose surface tells the operator in shipped
+    /// copy that their own note is "kept with the transcript, not with the
+    /// audio, so the retention period does not remove it." That promise is
+    /// about someone's own words, so it is proved against the real release
+    /// path rather than argued from how the path is written. This crate does
+    /// not know what an operator note is, which is the point: the property is
+    /// that release names its artifacts and never sweeps the directory.
+    #[test]
+    fn releasing_audio_leaves_entries_the_release_was_never_told_about() {
+        let (_temp, storage) = storage();
+        let (directory, _) = fixture(&storage, "meeting-a", Some(10));
+        durable_create_new(
+            &directory.join("operator-note.json"),
+            br#"{"schema":"operator-note/1","text":"what I actually thought"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            execute_due_retention(&storage, 10).unwrap(),
+            vec![RetentionOutcome::AudioReleased("meeting-a".into())]
+        );
+        assert!(!directory.join("capture/mic.wav").exists());
+        assert!(!directory.join("capture/system.wav").exists());
+        assert_eq!(
+            fs::read(directory.join("operator-note.json")).unwrap(),
+            br#"{"schema":"operator-note/1","text":"what I actually thought"}"#,
+        );
+        // And the record still verifies, so an unrecognised entry beside the
+        // named artifacts does not make the meeting fail its own checks.
+        let released = load_meeting(&directory).unwrap();
+        verify_record_artifacts(&directory, &released).unwrap();
+    }
+
     #[test]
     fn due_retention_preserves_content_lifecycle() {
         let (_temp, storage) = storage();

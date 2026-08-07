@@ -2246,7 +2246,18 @@ const transcriptNoteSection = document.querySelector("#transcript-note");
 const transcriptNoteText = document.querySelector("#transcript-note-text");
 
 function renderTranscriptNote() {
-  const text = liveNoteUnreadable ? "" : liveNoteText.value;
+  // "Could not be read" is not "nothing was written", and collapsing them here
+  // would undo the whole reason the flag exists — the operator would be told
+  // they took no notes when the app is holding words it could not parse.
+  if (liveNoteUnreadable) {
+    transcriptNoteSection.hidden = false;
+    transcriptNoteSection.dataset.state = "unreadable";
+    transcriptNoteText.textContent =
+      "A note was saved for this meeting and could not be read back. It has been left on disk untouched rather than replaced.";
+    return;
+  }
+  transcriptNoteSection.dataset.state = "typing";
+  const text = liveNoteText.value;
   transcriptNoteSection.hidden = !text;
   // Assigned as text, never parsed as markup — the rule that governs rendered
   // transcript text governs operator-authored text too. The shell-wide ban on
