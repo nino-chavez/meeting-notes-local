@@ -176,7 +176,7 @@ four stories of exact search plus one unproven story for the actual headline.
 
 | # | Feature | Parity source | Status |
 |---|---|---|---|
-| E1 | Folders, and channels or workspaces | Granola and Otter both ship folders; Otter adds channels | **Shipped 2026-08-08** for folders — create, file, unfile and filter by one, from the meetings list. Renaming and deleting a folder are registered commands with no surface; channels are unbuilt |
+| E1 | Folders, and channels or workspaces | Granola and Otter both ship folders; Otter adds channels | **Partly shipped 2026-08-08** — create, file, unfile and filter by one, from the meetings list, on synthetic evidence only. Renaming and deleting a folder are registered commands with no surface; channels are unbuilt |
 | E2 | One meeting object with sibling views: transcript, summary, notes, tasks, docs | Gong's call page; Wispr's six tabs | **Partial** |
 | E3 | Preparation brief before the meeting | Wispr's preread tab | **Unbuilt** |
 | E4 | A shell that never lies at menubar size | own | **Shipped** |

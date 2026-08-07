@@ -975,17 +975,46 @@ async function refreshRetentionOverview(revision) {
 
 
 // A date input gives a local calendar day; capture time is UTC epoch seconds.
-// `from` takes the first second of that day and `to` the last, so a range of one
-// day means that whole day rather than one instant at midnight.
+// The conversion happens here because this is the only layer that knows the
+// operator's zone — Rust deliberately does not, and `meeting_title.rs` refused to
+// format dates in UTC for the same reason.
+//
+// **These parsed the date as UTC midnight until 2026-08-08 — the date string with
+// a zulu suffix appended — and that silently dropped meetings.** A day interpreted
+// in UTC is not the day the operator picked:
+// west of UTC the end bound lands hours early, so filtering "to 8 August" in
+// Chicago excluded a meeting recorded at 20:30 that evening — reproduced before
+// the fix. The list then reported "showing 3 of 40" with a wrong 3, which is
+// exactly the quiet lie the two-count message exists to prevent.
+//
+// Both bounds are built from local date parts. The end is the next local midnight
+// minus one second rather than start + 86,399, because a day is not always 86,400
+// seconds long: on a spring-forward date it is 82,800, and the arithmetic version
+// would have run an hour past midnight into the following day.
+function localDayParts(value) {
+  if (!value) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  return [year, month, day];
+}
+
 function dayStartEpochSeconds(value) {
-  if (!value) return undefined;
-  const parsed = Date.parse(`${value}T00:00:00Z`);
-  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
+  const parts = localDayParts(value);
+  if (!parts) return undefined;
+  const [year, month, day] = parts;
+  const local = new Date(year, month - 1, day, 0, 0, 0, 0);
+  return Number.isFinite(local.getTime()) ? Math.floor(local.getTime() / 1000) : undefined;
 }
 
 function dayEndEpochSeconds(value) {
-  const start = dayStartEpochSeconds(value);
-  return start === undefined ? undefined : start + 86_399;
+  const parts = localDayParts(value);
+  if (!parts) return undefined;
+  const [year, month, day] = parts;
+  // `day + 1` normalizes across month and year ends on its own.
+  const nextMidnight = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
+  return Number.isFinite(nextMidnight.getTime())
+    ? Math.floor(nextMidnight.getTime() / 1000) - 1
+    : undefined;
 }
 
 function readLibraryFilter() {

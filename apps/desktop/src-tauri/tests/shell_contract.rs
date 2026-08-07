@@ -646,6 +646,19 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     // and then reports how many it trimmed.
     assert!(script.contains("() => invoke(\"preview_library_snapshot\", { filter: libraryFilter })"));
     assert!(script.contains("filterClear.hidden = !snapshot.filterActive;"));
+    // The capture-date range is built from *local* date parts. Built as
+    // `${value}T00:00:00Z` it silently dropped meetings: filtering "to 8 August"
+    // in a negative-offset zone excluded one recorded at 20:30 that evening,
+    // and the list still reported a count as though it had not.
+    assert!(script.contains("new Date(year, month - 1, day, 0, 0, 0, 0)"));
+    assert!(script.contains("new Date(year, month - 1, day + 1, 0, 0, 0, 0)"));
+    assert!(
+        !script.contains("T00:00:00Z"),
+        "a UTC day is not the day the operator picked"
+    );
+    // Next local midnight minus one second, not start + 86,399: a spring-forward
+    // day is 82,800 seconds and the arithmetic form runs into the next day.
+    assert!(!script.contains("86_399"));
     assert!(script.contains("invoke(\"library_assign_meeting_folder\", {"));
     assert!(script.contains("invoke(\"library_create_folder\", {"));
 }
