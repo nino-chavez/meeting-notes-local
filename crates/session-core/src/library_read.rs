@@ -23,9 +23,8 @@ use crate::meeting::{
     open_private_file, require_private_directory, valid_opaque_id, verify_artifact_ref,
     verify_record_static_artifacts,
 };
-use crate::note_projection::{
-    NoteProjector, ProjectRequest, ProjectionError, UnavailableProjector, project_claims,
-};
+use crate::note_projection::{NoteProjector, ProjectRequest, ProjectionError, project_claims};
+use crate::note_projector_process::ProcessNoteProjector;
 use crate::storage::StorageRoot;
 
 const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
@@ -213,7 +212,18 @@ pub struct OpenedClaimLocator {
 
 impl LibraryProjection {
     pub fn rebuild(storage: &StorageRoot, limits: ReadLimits) -> Result<Self, LibraryReadError> {
-        Self::rebuild_with_projector(storage, limits, Arc::new(UnavailableProjector))
+        // The default path is deliberately fixed to the resource root coupled
+        // to this storage authority.  A caller cannot redirect a private
+        // library read to a separately supplied interpreter or manifest.
+        let manifest = storage.protected_root().join("note-project-runtime.json");
+        Self::rebuild_with_projector(
+            storage,
+            limits,
+            Arc::new(ProcessNoteProjector::new(
+                storage.path().to_path_buf(),
+                manifest,
+            )),
+        )
     }
 
     /// Rebuilds through an injected, read-only `note.project` transport.  The
@@ -1093,7 +1103,7 @@ fn hit_location(hit: &SealedHit) -> (u64, u64) {
         SealedHit::Claim { claim, .. } => claim
             .locators
             .first()
-            .map(|locator| (locator.projected.turn, locator.projected.start))
+            .map(|locator| (locator.source_turn_index as u64, locator.projected.start))
             .unwrap_or((u64::MAX, u64::MAX)),
         SealedHit::Transcript {
             source_turn_index,
@@ -1510,6 +1520,40 @@ mod tests {
             projection.open(&fixture.storage, &hit).unwrap(),
             OpenedLibraryHit::Claim { locators, .. }
                 if locators[0].turn == 0 && locators[0].source_turn_index == 1
+        ));
+    }
+
+    #[test]
+    fn claim_order_uses_original_source_turn_before_projected_turn() {
+        let fixture = Fixture::new();
+        fixture.ready_meeting_with_turns(
+            "meeting-a",
+            10,
+            &[("a-withheld", true), ("alpha", false), ("beta", false)],
+        );
+        let projection = LibraryProjection::rebuild_with_projector(
+            &fixture.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Success)),
+        )
+        .unwrap();
+        let hits = projection.search("a").unwrap();
+        assert!(matches!(
+            projection.sealed(&hits[0]),
+            Some(SealedHit::Withheld {
+                source_turn_index: 0,
+                ..
+            })
+        ));
+        assert!(matches!(
+            projection.sealed(&hits[1]),
+            Some(SealedHit::Claim {
+                claim: StoredClaim {
+                    locators,
+                    ..
+                },
+                ..
+            }) if locators[0].source_turn_index == 1
         ));
     }
 

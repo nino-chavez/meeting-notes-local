@@ -129,6 +129,10 @@ fn macos_bundle_declares_capture_purposes_and_common_resources() {
         "app-runtime.json"
     );
     assert_eq!(
+        config["bundle"]["resources"]["../runtime/note-project-runtime.json"],
+        "note-project-runtime.json"
+    );
+    assert_eq!(
         config["bundle"]["icon"],
         serde_json::json!(["icons/icon.png"])
     );

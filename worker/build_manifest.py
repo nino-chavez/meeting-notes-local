@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import tempfile
+import zipfile
 from pathlib import Path
 
 
@@ -21,6 +22,51 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def write_note_project_runtime(root: Path) -> None:
+    """Stage the read-only projection bridge beside the already fixed runtime."""
+    repository = Path(__file__).resolve().parent.parent
+    notes = root / "notes"
+    notes.mkdir(exist_ok=True)
+    bridge = notes / "note_bridge.py"
+    bridge.write_bytes((repository / "worker/note_bridge.py").read_bytes())
+    os.chmod(bridge, 0o644)
+
+    validator = notes / "note-validator.zip"
+    sources = {
+        "note_validator.py": repository / "worker/note_validator.py",
+        "summarize.py": repository / "notes/summarize.py",
+        "transcript.py": repository / "notes/transcript.py",
+        "capture_health.py": repository / "spike/capture_health.py",
+    }
+    with zipfile.ZipFile(validator, "w", compression=zipfile.ZIP_STORED) as archive:
+        for name, source in sources.items():
+            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type = zipfile.ZIP_STORED
+            archive.writestr(entry, source.read_bytes())
+    os.chmod(validator, 0o644)
+
+    resources = {
+        "runtime": Path("python-runtime/bin/python3.12"),
+        "bridge": Path("notes/note_bridge.py"),
+        "validator": Path("notes/note-validator.zip"),
+    }
+    manifest = {
+        "schema": "note-runtime/1",
+        "role": "project",
+        **{
+            name: {"relative_path": str(relative), "sha256": sha256(root / relative)}
+            for name, relative in resources.items()
+        },
+        "generator": None,
+        "models": [],
+    }
+    # The frozen note-runtime contract intentionally has no terminal newline.
+    (root / "note-project-runtime.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.chmod(root / "note-project-runtime.json", 0o644)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -31,6 +77,7 @@ def main() -> int:
     )
     arguments = parser.parse_args()
     root = arguments.root.resolve(strict=True)
+    write_note_project_runtime(root)
     resources = {
         "runtime": Path("python-runtime/bin/python3.12"),
         "worker": Path("worker/main.py"),

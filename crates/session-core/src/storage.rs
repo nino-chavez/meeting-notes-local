@@ -25,6 +25,11 @@ pub enum StorageError {
 #[derive(Debug, Clone)]
 pub struct StorageRoot {
     root: PathBuf,
+    // This is the immutable application resource root in a packaged build (and
+    // the repository root in the debug harness).  Keep it with the storage
+    // authority so read-only consumers cannot accept an arbitrary runtime
+    // location from a UI or a search request.
+    protected_root: PathBuf,
 }
 
 impl StorageRoot {
@@ -51,11 +56,20 @@ impl StorageRoot {
         if normalized_repo.exists() && canonical.starts_with(normalized_repo.canonicalize()?) {
             return Err(StorageError::RootInsideRepository);
         }
-        Ok(Self { root: canonical })
+        Ok(Self {
+            root: canonical,
+            protected_root: normalized_repo,
+        })
     }
 
     pub fn path(&self) -> &Path {
         &self.root
+    }
+
+    /// The fixed resource root that was approved when this storage root was
+    /// created.  It is not an application-data path.
+    pub fn protected_root(&self) -> &Path {
+        &self.protected_root
     }
 
     pub fn resolve(&self, relative: &Path) -> Result<PathBuf, StorageError> {

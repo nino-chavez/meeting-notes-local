@@ -18,6 +18,10 @@ pub const MAX_PROJECTION_FRAME_BYTES: usize = 64 * 1024;
 /// implement this without changing parsing or library authority.
 pub trait NoteProjector: Send + Sync {
     fn project(&self, request: &ProjectRequest) -> Result<Vec<u8>, ProjectTransportError>;
+
+    /// Cancels the exact in-flight request, if this transport owns one.  The
+    /// library never treats cancellation as a partial projection.
+    fn cancel(&self, _: Uuid) {}
 }
 
 /// Content-free transport failure.  Raw child stderr and protocol bytes never

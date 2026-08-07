@@ -4,19 +4,17 @@
 //! receipts, locks, or diagnostics and is deliberately not registered with the
 //! desktop command surface.
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "private until the retrieval command is admitted")
-)]
-
+use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -39,6 +37,13 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub(crate) struct ProcessNoteProjector {
     storage_root: PathBuf,
     manifest_path: PathBuf,
+    active: Mutex<Option<Arc<ActiveProjection>>>,
+}
+
+struct ActiveProjection {
+    request_id: uuid::Uuid,
+    process_group_id: AtomicI32,
+    cancelled: AtomicBool,
 }
 
 impl ProcessNoteProjector {
@@ -46,25 +51,57 @@ impl ProcessNoteProjector {
         Self {
             storage_root,
             manifest_path,
+            active: Mutex::new(None),
         }
     }
 
     fn project_inner(&self, request: &ProjectRequest) -> Result<Vec<u8>, ()> {
+        let active = Arc::new(ActiveProjection {
+            request_id: request.request_id,
+            process_group_id: AtomicI32::new(0),
+            cancelled: AtomicBool::new(false),
+        });
+        {
+            let mut slot = self.active.lock().map_err(|_| ())?;
+            if slot.is_some() {
+                return Err(());
+            }
+            *slot = Some(active.clone());
+        }
+        let _registration = ActiveRegistration {
+            projector: self,
+            active: active.clone(),
+        };
+        self.project_active(request, &active)
+    }
+
+    fn project_active(
+        &self,
+        request: &ProjectRequest,
+        active: &ActiveProjection,
+    ) -> Result<Vec<u8>, ()> {
         validate_storage_root(&self.storage_root)?;
         validate_request(request)?;
-        let runtime = verify_manifest(&self.manifest_path)?;
+        let mut runtime = verify_manifest(&self.manifest_path)?;
+        if active.cancelled.load(Ordering::SeqCst) {
+            return Err(());
+        }
         let (read_fd, write_fd) = create_liveness_pipe().map_err(|_| ())?;
-        let mut command = Command::new(&runtime.executable);
+        // Execute the exact interpreter and bridge descriptors we just
+        // verified.  Reopening either pathname after hashing would make the
+        // check a time-of-check/time-of-use promise instead of an identity.
+        let runtime_fd = runtime.runtime.file.as_raw_fd();
+        let bridge_fd = runtime.bridge.file.as_raw_fd();
+        let mut command = Command::new(execution_path(&runtime.runtime, runtime_fd));
         command
             .args(["-I", "-S", "-E", "-s", "-B"])
-            .arg(&runtime.bridge)
+            .arg(execution_path(&runtime.bridge, bridge_fd))
             .arg("--temporary-private-root")
             .arg(&self.storage_root)
             .arg("--note-runtime-manifest")
             .arg(&self.manifest_path)
             .arg("--parent-liveness-fd")
             .arg(read_fd.to_string())
-            .current_dir(&runtime.resource_root)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -73,6 +110,9 @@ impl ProcessNoteProjector {
             command.pre_exec(move || {
                 if libc::setpgid(0, 0) != 0 {
                     return Err(io::Error::last_os_error());
+                }
+                for descriptor in [runtime_fd, bridge_fd, read_fd] {
+                    clear_close_on_exec(descriptor)?;
                 }
                 Ok(())
             });
@@ -105,6 +145,13 @@ impl ProcessNoteProjector {
             };
         let stderr_thread = std::thread::spawn(move || drain_stderr(stderr));
         let mut guard = ChildGuard::new(child, liveness, stderr_thread);
+        active
+            .process_group_id
+            .store(guard.process_group_id, Ordering::SeqCst);
+        if active.cancelled.load(Ordering::SeqCst) {
+            guard.abort();
+            return Err(());
+        }
         let ready_deadline = Instant::now() + READY_TIMEOUT;
         verify_spawned_identity(guard.pid(), &runtime)?;
 
@@ -126,6 +173,11 @@ impl ProcessNoteProjector {
         };
         let _ = ready_thread.join();
         let ready = ready.map_err(|_| ())?;
+        if active.cancelled.load(Ordering::SeqCst) {
+            guard.abort();
+            return Err(());
+        }
+        runtime.require_unchanged()?;
         parse_ready(&ready, &runtime.manifest_sha256)?;
 
         let command = project_command(request)?;
@@ -151,6 +203,10 @@ impl ProcessNoteProjector {
         };
         let _ = result_thread.join();
         let result = result.map_err(|_| ())?;
+        if active.cancelled.load(Ordering::SeqCst) {
+            guard.abort();
+            return Err(());
+        }
         if !guard.finish_success(project_deadline)? {
             return Err(());
         }
@@ -163,14 +219,135 @@ impl NoteProjector for ProcessNoteProjector {
         self.project_inner(request)
             .map_err(|_| ProjectTransportError)
     }
+
+    fn cancel(&self, request_id: uuid::Uuid) {
+        let active = self.active.lock().ok().and_then(|slot| slot.clone());
+        let Some(active) = active else { return };
+        if active.request_id != request_id {
+            return;
+        }
+        active.cancelled.store(true, Ordering::SeqCst);
+        let group = active.process_group_id.load(Ordering::SeqCst);
+        if group > 0 {
+            let _ = signal_group(group, libc::SIGTERM);
+        }
+    }
+}
+
+struct ActiveRegistration<'a> {
+    projector: &'a ProcessNoteProjector,
+    active: Arc<ActiveProjection>,
+}
+
+impl Drop for ActiveRegistration<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.projector.active.lock()
+            && slot
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &self.active))
+        {
+            *slot = None;
+        }
+    }
 }
 
 struct VerifiedRuntime {
-    resource_root: PathBuf,
-    executable: PathBuf,
+    manifest: PinnedFile,
+    runtime: PinnedFile,
+    bridge: PinnedFile,
+    validator: PinnedFile,
     executable_sha256: String,
-    bridge: PathBuf,
     manifest_sha256: String,
+}
+
+impl VerifiedRuntime {
+    fn require_unchanged(&mut self) -> Result<(), ()> {
+        for resource in [
+            &mut self.manifest,
+            &mut self.runtime,
+            &mut self.bridge,
+            &mut self.validator,
+        ] {
+            resource.require_unchanged()?;
+        }
+        Ok(())
+    }
+}
+
+struct PinnedFile {
+    file: File,
+    path: PathBuf,
+    identity: FileIdentity,
+    sha256: String,
+}
+
+#[derive(Clone, Copy)]
+struct FileIdentity {
+    dev: u64,
+    ino: u64,
+    mode: u32,
+    uid: u32,
+    size: u64,
+}
+
+impl FileIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Result<Self, ()> {
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(());
+        }
+        Ok(Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+            mode: metadata.mode(),
+            uid: metadata.uid(),
+            size: metadata.len(),
+        })
+    }
+
+    fn matches(self, metadata: &fs::Metadata) -> bool {
+        self.dev == metadata.dev()
+            && self.ino == metadata.ino()
+            && self.mode == metadata.mode()
+            && self.uid == metadata.uid()
+            && self.size == metadata.len()
+    }
+}
+
+impl PinnedFile {
+    fn open(
+        root: &File,
+        root_path: &Path,
+        relative_path: &str,
+        expected_sha256: Option<&str>,
+    ) -> Result<Self, ()> {
+        let file = open_beneath(root, relative_path)?;
+        let identity = FileIdentity::from_metadata(&file.metadata().map_err(|_| ())?)?;
+        let sha256 = digest_pinned(&mut file.try_clone().map_err(|_| ())?, identity)?;
+        if expected_sha256.is_some_and(|expected| expected != sha256) {
+            return Err(());
+        }
+        Ok(Self {
+            file,
+            path: root_path.join(relative_path),
+            identity,
+            sha256,
+        })
+    }
+
+    fn require_unchanged(&mut self) -> Result<(), ()> {
+        let metadata = self.file.metadata().map_err(|_| ())?;
+        if !self.identity.matches(&metadata) {
+            return Err(());
+        }
+        let actual = digest_pinned(&mut self.file, self.identity)?;
+        if actual != self.sha256 {
+            return Err(());
+        }
+        Ok(())
+    }
 }
 
 struct RuntimeResource {
@@ -182,15 +359,18 @@ fn verify_manifest(path: &Path) -> Result<VerifiedRuntime, ()> {
     if !path.is_absolute() {
         return Err(());
     }
-    let resource_root = path.parent().ok_or(())?.to_path_buf();
-    require_owned_directory(&resource_root)?;
-    require_owned_file(path)?;
-    let metadata = path.metadata().map_err(|_| ())?;
-    if metadata.len() > MAX_MANIFEST_BYTES {
+    let resource_root_path = path.parent().ok_or(())?.to_path_buf();
+    let resource_root = open_absolute_directory(&resource_root_path)?;
+    let manifest_name = path.file_name().and_then(|name| name.to_str()).ok_or(())?;
+    if manifest_name.is_empty() || manifest_name.contains('/') {
         return Err(());
     }
-    let bytes = fs::read(path).map_err(|_| ())?;
-    if bytes.len() as u64 != metadata.len() || bytes.contains(&b'\\') {
+    let mut manifest = PinnedFile::open(&resource_root, &resource_root_path, manifest_name, None)?;
+    if manifest.identity.size > MAX_MANIFEST_BYTES {
+        return Err(());
+    }
+    let bytes = read_pinned(&mut manifest.file, manifest.identity)?;
+    if bytes.contains(&b'\\') {
         return Err(());
     }
     let root = strict_json(&bytes).map_err(|_| ())?;
@@ -220,14 +400,31 @@ fn verify_manifest(path: &Path) -> Result<VerifiedRuntime, ()> {
     if canonical_manifest(&runtime, &bridge, &validator).as_bytes() != bytes {
         return Err(());
     }
-    let executable = verify_resource(&resource_root, &runtime)?;
-    let bridge_path = verify_resource(&resource_root, &bridge)?;
-    let _validator_path = verify_resource(&resource_root, &validator)?;
+    let runtime_file = PinnedFile::open(
+        &resource_root,
+        &resource_root_path,
+        &runtime.relative_path,
+        Some(&runtime.sha256),
+    )?;
+    let bridge_file = PinnedFile::open(
+        &resource_root,
+        &resource_root_path,
+        &bridge.relative_path,
+        Some(&bridge.sha256),
+    )?;
+    let validator_file = PinnedFile::open(
+        &resource_root,
+        &resource_root_path,
+        &validator.relative_path,
+        Some(&validator.sha256),
+    )?;
+    manifest.require_unchanged()?;
     Ok(VerifiedRuntime {
-        resource_root,
-        executable,
+        manifest,
+        runtime: runtime_file,
+        bridge: bridge_file,
+        validator: validator_file,
         executable_sha256: runtime.sha256,
-        bridge: bridge_path,
         manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
     })
 }
@@ -261,48 +458,119 @@ fn canonical_manifest(
     )
 }
 
-fn verify_resource(root: &Path, resource: &RuntimeResource) -> Result<PathBuf, ()> {
-    let mut current = root.to_path_buf();
-    let parts: Vec<_> = Path::new(&resource.relative_path).components().collect();
-    for (index, component) in parts.iter().enumerate() {
-        let Component::Normal(component) = component else {
+fn open_absolute_directory(path: &Path) -> Result<File, ()> {
+    if !path.is_absolute() {
+        return Err(());
+    }
+    let mut current = open_at(
+        libc::AT_FDCWD,
+        Path::new("/"),
+        libc::O_RDONLY | libc::O_DIRECTORY,
+    )?;
+    for component in path.components().skip(1) {
+        let Component::Normal(name) = component else {
             return Err(());
         };
-        current.push(component);
-        let metadata = fs::symlink_metadata(&current).map_err(|_| ())?;
-        if metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.file_type().is_symlink()
-            || (index + 1 < parts.len() && !metadata.is_dir())
-            || (index + 1 == parts.len() && !metadata.is_file())
-        {
-            return Err(());
-        }
+        let next = open_at(
+            current.as_raw_fd(),
+            Path::new(name),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+        )?;
+        current = next;
     }
-    let bytes = fs::read(&current).map_err(|_| ())?;
-    if format!("{:x}", Sha256::digest(&bytes)) != resource.sha256 {
+    let metadata = current.metadata().map_err(|_| ())?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o022 != 0
+    {
         return Err(());
     }
     Ok(current)
 }
 
-fn require_owned_file(path: &Path) -> Result<(), ()> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != unsafe { libc::geteuid() }
-    {
-        return Err(());
+fn open_beneath(root: &File, relative_path: &str) -> Result<File, ()> {
+    let mut current = root.try_clone().map_err(|_| ())?;
+    let parts: Vec<_> = Path::new(relative_path).components().collect();
+    for (index, component) in parts.iter().enumerate() {
+        let Component::Normal(name) = component else {
+            return Err(());
+        };
+        let flags = libc::O_RDONLY
+            | if index + 1 == parts.len() {
+                0
+            } else {
+                libc::O_DIRECTORY
+            };
+        let next = open_at(current.as_raw_fd(), Path::new(name), flags)?;
+        current = next;
     }
-    Ok(())
+    Ok(current)
 }
 
-fn require_owned_directory(path: &Path) -> Result<(), ()> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != unsafe { libc::geteuid() }
-    {
+fn open_at(parent: RawFd, path: &Path, flags: i32) -> Result<File, ()> {
+    let name = CString::new(path.as_os_str().as_bytes()).map_err(|_| ())?;
+    let descriptor = unsafe {
+        libc::openat(
+            parent,
+            name.as_ptr(),
+            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
         return Err(());
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn read_pinned(file: &mut File, identity: FileIdentity) -> Result<Vec<u8>, ()> {
+    use std::io::Seek;
+    file.rewind().map_err(|_| ())?;
+    let mut bytes = Vec::with_capacity(identity.size.try_into().map_err(|_| ())?);
+    file.take(identity.size + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 != identity.size || !identity.matches(&file.metadata().map_err(|_| ())?) {
+        return Err(());
+    }
+    Ok(bytes)
+}
+
+fn digest_pinned(file: &mut File, identity: FileIdentity) -> Result<String, ()> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(read_pinned(file, identity)?)
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn fd_path(descriptor: RawFd) -> PathBuf {
+    PathBuf::from(format!("/dev/fd/{descriptor}"))
+}
+
+fn execution_path(resource: &PinnedFile, descriptor: RawFd) -> PathBuf {
+    // Darwin has neither fexecve nor an executable /dev/fd mount.  Its launch
+    // path is therefore checked by the pinned descriptor immediately after
+    // spawn and again before ready; the bridge independently performs the same
+    // no-follow manifest/resource verification.  Other Unix targets execute
+    // the retained descriptor directly.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = descriptor;
+        resource.path.clone()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = resource;
+        fd_path(descriptor)
+    }
+}
+
+fn clear_close_on_exec(descriptor: RawFd) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+    if flags == -1
+        || unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1
+    {
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }
@@ -425,9 +693,7 @@ fn verify_spawned_identity(pid: u32, runtime: &VerifiedRuntime) -> Result<(), ()
     loop {
         match SystemProcessInspector.inspect(pid).map_err(|_| ())? {
             ProcessInspection::Identity(identity)
-                if identity.executable_sha256 == runtime.executable_sha256
-                    && fs::canonicalize(&identity.executable_path).map_err(|_| ())?
-                        == fs::canonicalize(&runtime.executable).map_err(|_| ())? =>
+                if identity.executable_sha256 == runtime.executable_sha256 =>
             {
                 return Ok(());
             }
@@ -600,21 +866,37 @@ fn signal_group(group: i32, signal: i32) -> io::Result<()> {
 }
 
 fn create_liveness_pipe() -> io::Result<(RawFd, RawFd)> {
-    let mut descriptors = [-1; 2];
-    if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let flags = unsafe { libc::fcntl(descriptors[1], libc::F_GETFD) };
-    if flags == -1
-        || unsafe { libc::fcntl(descriptors[1], libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1
+    // macOS has no pipe2/SOCK_CLOEXEC API.  This fallback remains local to the
+    // supported platform; the atomic pipe2 branch covers targets that expose
+    // it.  Both ends are closed-on-exec before any child is configured.
+    #[cfg(target_os = "macos")]
     {
-        unsafe {
-            libc::close(descriptors[0]);
-            libc::close(descriptors[1]);
+        let mut descriptors = [-1; 2];
+        if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
         }
-        return Err(io::Error::last_os_error());
+        for descriptor in descriptors {
+            let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+            if flags == -1
+                || unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1
+            {
+                unsafe {
+                    libc::close(descriptors[0]);
+                    libc::close(descriptors[1]);
+                }
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok((descriptors[0], descriptors[1]))
     }
-    Ok((descriptors[0], descriptors[1]))
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut descriptors = [-1; 2];
+        if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((descriptors[0], descriptors[1]))
+    }
 }
 
 #[cfg(test)]
@@ -641,6 +923,74 @@ mod tests {
         ] {
             assert!(read_to_exact_eof(Cursor::new(invalid.to_vec())).is_err());
         }
+    }
+
+    #[test]
+    fn malformed_ready_and_stderr_overflow_are_refused_without_content() {
+        let digest = "a".repeat(64);
+        assert!(parse_ready(b"{}\n", &digest).is_err());
+        assert!(parse_ready(
+            format!("{{\"schema\":\"note-bridge-event/1\",\"event\":\"ready\",\"protocol\":1,\"role\":\"project\",\"manifest_sha256\":\"{digest}\",\"operations\":[\"note.project\"]}}\r\n").as_bytes(),
+            &digest,
+        ).is_err());
+        assert!(!drain_stderr(Cursor::new(vec![b'x'; MAX_STDERR_BYTES + 1])));
+    }
+
+    #[test]
+    fn retained_descriptor_rejects_replacement_after_verification() {
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("resource");
+        fs::write(&path, b"first").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let directory = open_absolute_directory(&root).unwrap();
+        let mut pinned = PinnedFile::open(&directory, &root, "resource", None).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, b"second").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        // The open descriptor remains the verified object; a name replacement
+        // cannot change its digest or identity.
+        assert!(pinned.require_unchanged().is_ok());
+        assert_eq!(
+            read_pinned(&mut pinned.file, pinned.identity).unwrap(),
+            b"first"
+        );
+    }
+
+    #[test]
+    fn cancellation_is_request_scoped_and_marks_the_owned_process_group() {
+        let temporary = TempDir::new().unwrap();
+        let projector = ProcessNoteProjector::new(
+            temporary.path().join("app"),
+            temporary.path().join("manifest"),
+        );
+        let active = Arc::new(ActiveProjection {
+            request_id: Uuid::new_v4(),
+            process_group_id: AtomicI32::new(0),
+            cancelled: AtomicBool::new(false),
+        });
+        *projector.active.lock().unwrap() = Some(active.clone());
+        projector.cancel(Uuid::new_v4());
+        assert!(!active.cancelled.load(Ordering::SeqCst));
+        projector.cancel(active.request_id);
+        assert!(active.cancelled.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn liveness_channel_is_close_on_exec_and_reports_parent_eof() {
+        let (read_fd, write_fd) = create_liveness_pipe().unwrap();
+        for descriptor in [read_fd, write_fd] {
+            let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+            assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        }
+        unsafe { libc::close(write_fd) };
+        let mut byte = 0_u8;
+        assert_eq!(
+            unsafe { libc::read(read_fd, &mut byte as *mut u8 as *mut libc::c_void, 1) },
+            0
+        );
+        unsafe { libc::close(read_fd) };
     }
 
     #[test]

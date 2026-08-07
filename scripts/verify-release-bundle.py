@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import plistlib
@@ -147,6 +148,44 @@ np.fft.fft(np.ones(4))
         require(
             completed.returncode == 0,
             "internal-alpha offline transcription runtime failed to import",
+        )
+    verify_note_project_runtime(resources)
+
+
+def verify_note_project_runtime(resources: Path) -> None:
+    path = resources / "note-project-runtime.json"
+    try:
+        raw = path.read_bytes()
+        document = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VerificationError(f"note projection runtime is unreadable ({exc})") from None
+    require(raw and not raw.endswith(b"\n"), "note projection manifest is not canonical")
+    require(
+        list(document) == [
+            "schema", "role", "runtime", "bridge", "validator", "generator", "models"
+        ]
+        and document.get("schema") == "note-runtime/1"
+        and document.get("role") == "project"
+        and document.get("generator") is None
+        and document.get("models") == [],
+        "note projection manifest has the wrong role or shape",
+    )
+    for name in ("runtime", "bridge", "validator"):
+        resource = document.get(name)
+        require(
+            isinstance(resource, dict)
+            and list(resource) == ["relative_path", "sha256"]
+            and isinstance(resource["relative_path"], str)
+            and isinstance(resource["sha256"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", resource["sha256"]) is not None,
+            f"note projection {name} is unsafe",
+        )
+        candidate = resources / resource["relative_path"]
+        require(
+            candidate.is_file()
+            and not candidate.is_symlink()
+            and hashlib.sha256(candidate.read_bytes()).hexdigest() == resource["sha256"],
+            f"note projection {name} is missing or changed",
         )
 
 
