@@ -14,9 +14,9 @@ canonical_output: beta-boundary
 
 catalog:
   title: Local Meeting Notes
-  subtitle: Private capture research · Bounded beta
-  question: What can the local meeting-notes beta honestly support—and what must a real meeting prove next?
-  summary: A macOS app that records, transcribes, and writes up a meeting entirely on your own machine. Supported today are headphones, deliberate voice calibration, capture-health evidence, and dropping speaker labels rather than guessing. The next proof is an ordinary meeting whose resulting note a human reads and judges useful.
+  subtitle: A local-first meeting notetaker · Category parity, phase one
+  question: Can a Mac run everything Granola, Wispr Flow and Circleback do in the cloud—and what is still missing?
+  summary: "A macOS app that records, transcribes, and writes up a meeting entirely on your own machine. The goal is the working surface of a modern notetaker—a searchable corpus, shaped notes, action items, named speakers—with remote and cloud features as a stated next phase. Six of twenty-six phase-one capabilities ship today. Two commitments are the reason to choose it: a claim cites the words it came from, which nobody in the category does, and nothing leaves the Mac without the operator seeing it leave."
 
 collection_candidates: [commerce, product-research, local-ai]
 
@@ -69,7 +69,7 @@ projections:
     output: product-reference
     artifact: docs/product-definition.md
     render_as: strategy-memo
-    label: What the product is
+    label: What the product is, and the phase roadmap
     route: /strategy/product-definition
 
   - id: build-queue
