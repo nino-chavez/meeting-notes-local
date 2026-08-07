@@ -9,8 +9,8 @@ use std::fs;
 
 use local_meeting_notes_session_core::corpus_index::CorpusIndex;
 use local_meeting_notes_session_core::library_read::{
-    ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, OpenedLibraryHit,
-    ReadLimits,
+    ClaimEvidenceState, LibraryHit, LibraryProjection, LibraryReadError, LibraryRow,
+    OpenedLibraryHit, ReadLimits,
 };
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetentionRule, AudioState, MeetingLifecycle, load_meeting, resolve_artifact,
@@ -68,9 +68,35 @@ pub(crate) struct LibrarySnapshot {
 pub(crate) struct LibrarySnapshotRow {
     pub(crate) handle: String,
     pub(crate) meeting_id: String,
-    pub(crate) label: String,
+    /// Null when the meeting has neither an operator title nor a transcript to
+    /// take one from. The shell falls back to `created_at_epoch_seconds`, which
+    /// it already renders in the operator's own locale — a UTC copy of the same
+    /// instant sent from here would be a duplicate, not a label.
+    pub(crate) label: Option<String>,
+    /// Which source produced `label`: `operator`, `derived`, or `date` when
+    /// there is none.
+    ///
+    /// The shell needs it because one of the three is something the operator
+    /// wrote and the others are not, and a list that renders them identically
+    /// tells them they named a meeting when they did not.
+    pub(crate) label_source: &'static str,
     pub(crate) created_at_epoch_seconds: u64,
     pub(crate) transcript_available: bool,
+}
+
+/// Operator title, then the meeting's own opening line, then nothing.
+///
+/// Before this existed every row read `Untitled meeting` — all of them, at
+/// once, because the operator title is read from a record that
+/// `library_metadata` has no writer for, so the fallback was never a fallback.
+fn label_for(row: &LibraryRow) -> (Option<String>, &'static str) {
+    if let Some(title) = row.title() {
+        return (Some(title.to_owned()), "operator");
+    }
+    match row.derived_title() {
+        Some(derived) => (Some(derived), "derived"),
+        None => (None, "date"),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -307,16 +333,20 @@ impl LibraryReader {
             .rows()
             .iter()
             .map(|row| {
+                let (label, label_source) = label_for(row);
                 (
                     row.meeting_id.clone(),
-                    row.title().unwrap_or("Untitled meeting").to_owned(),
+                    label,
+                    label_source,
                     row.created_at_epoch_seconds,
                     row.transcript_sha256.is_some(),
                 )
             })
             .collect();
         let mut rows = Vec::new();
-        for (meeting_id, label, created_at_epoch_seconds, transcript_available) in source_rows {
+        for (meeting_id, label, label_source, created_at_epoch_seconds, transcript_available) in
+            source_rows
+        {
             let Ok(hit) = self.projection.meeting_handle(&meeting_id) else {
                 return Self::unavailable_snapshot();
             };
@@ -324,6 +354,7 @@ impl LibraryReader {
                 handle: self.retain_handle(hit),
                 meeting_id,
                 label,
+                label_source,
                 created_at_epoch_seconds,
                 transcript_available,
             });
@@ -1251,11 +1282,24 @@ mod tests {
         directory: std::path::PathBuf,
     }
 
+    /// Its one turn is three words, which is under `MIN_TITLE_WORDS`, so every
+    /// test using it sees a meeting with no derivable title. Use
+    /// [`fixture_with_turn`] where the title is the subject.
     fn fixture(
         state: AudioState,
         rule: AudioRetentionRule,
         microphone: &[u8],
         system: &[u8],
+    ) -> Fixture {
+        fixture_with_turn(state, rule, microphone, system, "synthetic exact words")
+    }
+
+    fn fixture_with_turn(
+        state: AudioState,
+        rule: AudioRetentionRule,
+        microphone: &[u8],
+        system: &[u8],
+        turn_text: &str,
     ) -> Fixture {
         let temporary = TempDir::new().unwrap();
         let protected = temporary.path().join("protected");
@@ -1292,7 +1336,7 @@ mod tests {
                 "start": 0.0,
                 "end": 1.0,
                 "speaker": "Me",
-                "text": "synthetic exact words"
+                "text": turn_text
             }]
         }))
         .unwrap();
@@ -1414,6 +1458,63 @@ mod tests {
                 .unwrap()
                 .contains("capture/")
         );
+    }
+
+    /// The three label sources, in the order a row consults them.
+    ///
+    /// Written because the row that shipped before this had exactly one
+    /// source, it had no writer, and so every meeting in the library read
+    /// `Untitled meeting` — the fallback was unreachable and the identical
+    /// rows were the product.
+    #[test]
+    fn a_row_is_named_by_the_operator_then_by_its_own_first_words_then_by_nothing() {
+        let short = fixture(
+            AudioState::Released,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let projection = LibraryProjection::rebuild(&short.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(short.storage.clone(), projection);
+        let row = reader.snapshot(&HashSet::new()).rows.remove(0);
+        assert_eq!(row.label, None, "three words do not name a meeting");
+        assert_eq!(row.label_source, "date");
+
+        let spoken = fixture_with_turn(
+            AudioState::Released,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+            "We should walk through the migration plan today. Ravi has the numbers.",
+        );
+        let projection = LibraryProjection::rebuild(&spoken.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(spoken.storage.clone(), projection);
+        let row = reader.snapshot(&HashSet::new()).rows.remove(0);
+        assert_eq!(
+            row.label.as_deref(),
+            Some("We should walk through the migration plan today")
+        );
+        assert_eq!(row.label_source, "derived");
+
+        let library = spoken.storage.path().join("library");
+        create_private_dir(&library).unwrap();
+        durable_create_new(
+            &library.join("metadata.json"),
+            format!(
+                r#"{{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{{"meeting_id":"{MEETING_ID}","title":"Migration review","folder_id":null}}]}}"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let projection = LibraryProjection::rebuild(&spoken.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(spoken.storage.clone(), projection);
+        let row = reader.snapshot(&HashSet::new()).rows.remove(0);
+        assert_eq!(
+            row.label.as_deref(),
+            Some("Migration review"),
+            "a title the operator wrote outranks one the meeting said"
+        );
+        assert_eq!(row.label_source, "operator");
     }
 
     #[test]

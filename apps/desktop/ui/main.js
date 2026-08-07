@@ -680,7 +680,13 @@ function renderLibrary(snapshot) {
     button.className = "library-row";
     button.dataset.meetingHandle = row.handle;
     button.dataset.meetingId = row.meetingId || "";
-    button.dataset.label = row.label || "Untitled meeting";
+    // A meeting with no title is named by when it was recorded, which the row
+    // already carries. Rust sends no second, UTC copy of that instant.
+    const captured = formatMeetingTime(row.createdAtEpochSeconds);
+    const labelSource = row.labelSource || "date";
+    const labelText = row.label || captured;
+    button.dataset.label = labelText;
+    button.dataset.labelSource = labelSource;
     button.addEventListener("click", () => openMeetingDetail(
       row.handle,
       "meetings-screen",
@@ -688,11 +694,16 @@ function renderLibrary(snapshot) {
     ));
     const summary = document.createElement("span");
     const label = document.createElement("strong");
-    label.textContent = row.label || "Untitled meeting";
+    label.textContent = labelText;
+    const notes = [];
+    if (labelSource !== "date") notes.push(captured);
+    // Said in the meeting, not written by the operator. Without this the row
+    // reads as a title somebody chose.
+    if (labelSource === "derived") notes.push("Opening line");
+    if (!row.transcriptAvailable) notes.push("No transcript");
     const time = document.createElement("small");
-    time.textContent = row.transcriptAvailable
-      ? formatMeetingTime(row.createdAtEpochSeconds)
-      : `${formatMeetingTime(row.createdAtEpochSeconds)} · No transcript`;
+    time.textContent = notes.join(" · ");
+    time.hidden = notes.length === 0;
     summary.append(label, time);
     const action = document.createElement("span");
     action.textContent = row.transcriptAvailable ? "Open meeting" : "Open details";
