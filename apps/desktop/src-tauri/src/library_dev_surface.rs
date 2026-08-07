@@ -110,6 +110,15 @@ fn sanitize_snapshot(response: &mut LibrarySnapshot) {
         row.label = Some("Sanitized library sample".into());
         row.label_source = "operator";
     }
+    // Null, always. A revision is what a surface sends back as
+    // `expected_revision` to write the record, and this surface has no
+    // organization command in its handler — so a non-null value here advertises
+    // an action that cannot complete. `ui/main.js` offers renaming exactly when
+    // this field is an integer, so today the affordance is absent only because
+    // the development frontend is a different file that does not draw it. That
+    // is a fact about another file, and this module's guarantee should not rest
+    // on one.
+    response.metadata_revision = None;
 }
 
 fn snapshot_response(state: &DevSurfaceState) -> LibrarySnapshot {
@@ -1025,6 +1034,22 @@ mod tests {
         );
     }
 
+    /// The revision is what a surface would send back to write the record, and
+    /// this one has no command that could. Null is refusal by absence rather
+    /// than by a check somewhere else.
+    #[test]
+    fn development_snapshots_carry_no_organization_revision() {
+        let mut response = LibrarySnapshot {
+            state: "populated",
+            rows: Vec::new(),
+            unavailable_count: 0,
+            metadata_revision: Some(7),
+            message: "untrusted test response".into(),
+        };
+        sanitize_snapshot(&mut response);
+        assert_eq!(response.metadata_revision, None);
+    }
+
     /// Every snapshot state, because the fixture's own first turn is eight
     /// words and therefore derives a label. Before this ran unconditionally,
     /// `populated-incomplete` would have carried that span to the surface.
@@ -1042,6 +1067,7 @@ mod tests {
                     transcript_available: true,
                 }],
                 unavailable_count: 0,
+                metadata_revision: Some(3),
                 message: "untrusted test response".into(),
             };
             sanitize_snapshot(&mut response);
