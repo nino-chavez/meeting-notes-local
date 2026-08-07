@@ -1250,6 +1250,21 @@ fn the_screen_after_a_recording_can_restore_a_withheld_turn() {
     // and is refused as a changed source, on a screen with no refresh.
     assert!(script.contains("invoke(\"refresh_current_transcript\")"));
     assert!(source.contains("fn refresh_current_transcript("));
+    // Defined is not registered. Grants are pinned elsewhere, but a command
+    // missing from the handler is granted, permitted, and still unreachable —
+    // the shell would fail on a restore's refresh with the capability list
+    // looking correct.
+    let handler_start = source
+        .find(".invoke_handler(tauri::generate_handler![")
+        .expect("named command handler");
+    let handler_end = source[handler_start..]
+        .find("])")
+        .expect("named command handler end")
+        + handler_start;
+    assert!(
+        source[handler_start..handler_end].contains("refresh_current_transcript"),
+        "refresh_current_transcript is defined and granted but never registered"
+    );
     // The rebuild refuses a meeting that changed under it, rather than putting
     // one meeting's words under another's heading.
     assert!(source.contains("return Err(\"That transcript is no longer open.\".into());"));
