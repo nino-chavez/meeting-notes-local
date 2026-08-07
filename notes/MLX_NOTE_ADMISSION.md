@@ -1307,3 +1307,63 @@ This predates all three interventions; the `equals`-era receipt shows the same o
 row against two offered candidates. Recorded, not fixed: a completeness rule is a
 rule added, which the amendment discipline says must be registered on its own rather
 than folded into a change measuring something else.
+
+## 2026-08-06 — the first look at what the model actually wrote
+
+Every measurement above scores the shape of a response. None of them reads one. This
+file has said since 2026-08-02 that no human has read any output for usefulness, and
+that was partly a packaging problem: the outputs existed only as digests and booleans
+inside receipts, so there was nothing to hand a reader. `notes/read_semantic_support.py`
+lays each claim beside the evidence it cites. It loads no model, touches no network,
+builds no request, and changes no digest — it presents results already recorded.
+
+**This is not the semantic gate.** That adjudication is the operator's and it has not
+been run. What follows is what a mechanical pass over the same rows shows, with the
+evidence printed next to it so any of it can be overruled.
+
+**One claim contradicts the evidence it correctly cites.** On `negation-proposal` the
+cited slice is `I propose that we do not merge the red branch.` — exact, `citation_matches`
+true — and the claim is `merge the red branch`. A reader shown that claim in a decision
+log reads the opposite of what was said. This is the registered second outcome,
+"schema-valid and wrong", which every prior section of this file has correctly reported
+had not yet occurred. It has now.
+
+**The gate that refused it did not refuse it for that.** `negation-proposal` is one of
+the three fixtures failing on the 67-character identifier. Had the identifier been
+transcribed correctly, nothing in `_decode_response` would have caught the inversion:
+the parser checks the citation against the canonical slice and never checks the claim
+against either. So the count of refusals on this path has been reading as a floor on
+correctness, and on this row it was an accident.
+
+**The label is type-checked and never truth-checked.** `_decode_response` validates that
+`label` is one of `DECISION | ACTION | PROPOSAL | QUESTION` and stops. The harness holds
+a `cue_type` for every candidate — it is carried in the candidate rows and used to build
+the control arm's label — and never compares the two. They disagree on 4 of 10 rows, 2 of
+those on fixtures that pass every registered gate. On `ordinary-decision` the disagreement
+is not arguable: the cited evidence is `Dana decided that Battery 7 ships on Tuesday.` and
+the emitted label is `ACTION`. On `ordinary-question` the cue strategy's own `PROPOSAL` for
+a sentence beginning "Could" is at least as questionable as the model's `ACTION`, which is
+why this is reported as disagreement and not as error.
+
+**Recorded, not fixed — for the third time on this path.** Comparing `label` to `cue_type`
+is a rule added, and the amendment discipline above requires it be registered on its own
+rather than folded into a change measuring something else. The same applies to any claim
+check. The standing list of unexercised rules is now three: the `order` and
+`unique_by_first_source_fragment_id` rules that `locator-canonical-order` never exercises,
+and the label. All three are cases of the harness holding the data and not looking at it.
+
+**What this does and does not establish.** It does not establish that the small-model path
+is closed — ten synthetic fixtures, one row each, one run. It does not establish the path
+is good. It removes an assumption that has been load-bearing since the matrix first ran:
+that a fixture passing every registered gate has produced a usable note. Nine fixtures
+pass; two of them are abstentions and emit no row, so seven passing rows exist. Of those
+seven, 2 carry a label that disagrees with the harness's own cue_type and 4 emit a claim
+shorter than the evidence it cites — the second number is a pointer, not a defect, since
+a shorter claim may be a fair summary and on this fixture set several are. The registered
+gates rate all seven identically. `admits` is false, and the reason it is false is no
+longer only mechanical.
+
+Reproduce:
+
+    python3 notes/read_semantic_support.py          # the reading sheet
+    python3 notes/read_semantic_support.py --json   # the same rows, machine-readable
