@@ -125,7 +125,7 @@ inference is what went wrong before.
 | **E13** | **The corpus store** | **E6 D3** | 7 | **Landed 2026-08-07**, except US-13.6 |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | — | Wave 1 item 3 |
 | **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | — | Wave 1 items 4–6 |
-| **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 next; B2 B3 undecomposed until Wave 2 |
+| **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
 | **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
 | **E18** | **Named speakers** | **A3** | — | Wave 3 items 11–12 |
 | **E19** | **Long-form ASR at meeting length** | **A4 A5** | — | Wave 3 item 13 |
@@ -1240,32 +1240,47 @@ Circleback print a phrase a model composed, and no rule here will ever produce
 measured — it is the arbitrary number in the module, it changes no contract, and the
 operator is its falsifier.
 
-#### US-16.2: A local model chooses the span
-**Feature B4 · J1 · §F · P1 · L · Next**
+#### US-16.2: A local model chooses the turn
+**Feature B4 · J1 · §F · P1 · L · Measured 2026-08-08, not built**
 
 As the Operator, I want the phrase that names a meeting to be the one that actually
 identifies it, so that a title is worth reading rather than merely present.
 
 **Acceptance criteria:**
-- Given a transcript, When the model runs, Then it returns the index and character span of one turn, and no free text.
-- Given a returned span, When it is validated, Then it resolves verbatim in the canonical transcript or the deterministic rule is used instead.
-- Given a gated turn, When the model is offered candidates, Then that turn is not among them.
+- Given a transcript, When the model runs, Then it returns one offered turn number and no free text.
+- Given a returned turn, When a title is made, Then US-16.1's cleaning and ceiling produce it, so the title is a span of that turn.
+- Given a gated turn, When candidates are offered, Then it is absent from the offered set, not marked within it.
 - Given the model is unavailable, refuses, or exceeds its budget, When a name is needed, Then US-16.1's rule produces it and nothing reports a failure to the operator.
 
-**Refusals:** the model's output is untrusted and it is not the title. It selects
-among words the transcript already contains; it never supplies them. A title that
-cannot be resolved back to a span is discarded, not displayed with a caveat.
+**Refusals:** the model's output is untrusted and it is not the title. It names a
+turn; it never supplies words. A turn number outside the offered set is discarded,
+not displayed with a caveat.
 
-**Validation:** **Unproven** — not built. It is registered here as the next build so
-that the deterministic rule is not mistaken for the finished feature.
+**Validation:** **Receipted, and the receipt says no.** `notes/MLX_TITLE_SELECTION.md`
+registered a two-sided prediction of 6–9 of 10 before the run; three cold runs
+returned **5 of 10**, byte-identical. The registered consequence stands: the
+selection path is closed for `Qwen2.5-1.5B-Instruct-4bit`. Receipts are committed
+and pinned by `TitleReceiptTests`.
+
+**Do not build the Rust seam.** It has no caller and no measurement supporting one,
+which is exactly what the probe was run to find out before the seam was written.
+
+**Two findings worth carrying to any next candidate.** 5 of 10 beats every baseline
+that reads nothing — the shipped rule scores 1, the best position rule 3, random an
+expected 2.28 — so the model is doing something and the honest reading is *between
+random and useful*. And separately: **it never abstained**, on any of 30 calls,
+including the fixture where nothing said identifies a meeting. A selection model
+that cannot abstain cannot be asked whether a meeting has a subject at all.
 
 **Evidence:** the build queue names auto-titling "the cheapest possible test that the
 store and a local model are wired together end to end", and this half is the local
 model. MLX already ships in the internal-alpha lane for ASR, so `mlx-lm` and a pinned
-small model are an incremental dependency rather than a new framework — but
-`MLX_NOTE_ADMISSION.md`'s gate table ends at "no admission without a recorded human
-decision", and that gate belongs to the operator. A builder can register, measure,
-and pin this; a builder cannot admit it.
+small model would have been an incremental dependency rather than a new framework.
+The probe cost no dependency at all: it ran in a disposable environment against a
+model already in the local cache, and answered the question before anything was
+added to the product. `MLX_NOTE_ADMISSION.md`'s gate table ends at "no admission
+without a recorded human decision" — a builder can register, measure and pin this,
+and cannot admit it. That gate was never reached.
 
 ---
 

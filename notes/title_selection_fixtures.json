@@ -1,0 +1,126 @@
+{
+  "schema": "title-selection-fixtures/1",
+  "purpose": "Synthetic transcripts for the title-selection probe. Every word here was invented for this file: no meeting recording, Preview datum, or product record appears in it. Both arms read this one file, which is why it carries their expectations rather than either implementation carrying its own copy.",
+  "control_turn": "The turn `meeting_title::derived_title` picks — the first non-gated turn whose opening sentence runs to at least MIN_TITLE_WORDS words. It is asserted by a Rust test against the real function, so a wrong value here fails the build rather than quietly redefining the baseline.",
+  "intended_turn": "The turn that names the meeting, in the judgment of whoever wrote the fixture, recorded before any model ran. Agreement with it is a selection measurement and not a usefulness claim; no mechanical result can make a title worth reading. Null means no turn names the meeting and the model is expected to abstain.",
+  "shape": "The identifying turn sits at a different position in each fixture, deliberately. A first draft had it second-from-the-start in five of ten cases and last in five, so 'always take the second offered turn' scored 6 of 10 and 'always take the last' scored 5 — a suite a model could pass without reading anything. `test_no_degenerate_position_rule_scores_well` now pins that, and it is the reason several fixtures carry a turn after the identifying one.",
+  "fixtures": [
+    {
+      "name": "agenda-after-logistics",
+      "control_turn": 1,
+      "intended_turn": 2,
+      "why": "The screen check clears the word bar and identifies nothing. The turn after it states the decision.",
+      "turns": [
+        { "text": "Hey.", "gated": false },
+        { "text": "Can everyone see my screen okay now?", "gated": false },
+        { "text": "We need to decide whether the launch slips to March.", "gated": false },
+        { "text": "I think it has to.", "gated": false }
+      ]
+    },
+    {
+      "name": "agenda-first",
+      "control_turn": 0,
+      "intended_turn": 0,
+      "why": "Control and intended agree. Present so the probe cannot be passed by a rule that always avoids the deterministic pick.",
+      "turns": [
+        { "text": "Let's decide today whether we renew the Halloway contract.", "gated": false },
+        { "text": "Sure, I pulled the usage numbers this morning.", "gated": false }
+      ]
+    },
+    {
+      "name": "agenda-late",
+      "control_turn": 1,
+      "intended_turn": 4,
+      "why": "Three turns of small talk clear the word bar before anyone says what the meeting is.",
+      "turns": [
+        { "text": "Morning.", "gated": false },
+        { "text": "Sorry I am two minutes late again.", "gated": false },
+        { "text": "No problem.", "gated": false },
+        { "text": "How was your weekend by the way?", "gated": false },
+        { "text": "The whole point today is the warehouse move in April.", "gated": false },
+        { "text": "Right, the April date is the one I am worried about.", "gated": false }
+      ]
+    },
+    {
+      "name": "two-topics",
+      "control_turn": 0,
+      "intended_turn": 2,
+      "why": "Two subjects are named. The first is the one a person would title the meeting with, and the fixture asserts that rather than accepting either.",
+      "turns": [
+        { "text": "Sorry, I had the wrong link at first.", "gated": false },
+        { "text": "Give me one second to find the right document.", "gated": false },
+        { "text": "We have two things today and the first is the pricing page.", "gated": false },
+        { "text": "The second is whether Dana takes over onboarding.", "gated": false }
+      ]
+    },
+    {
+      "name": "question-agenda",
+      "control_turn": 0,
+      "intended_turn": 1,
+      "why": "The identifying turn is a question. A title may be one.",
+      "turns": [
+        { "text": "Is the recording running on your side too?", "gated": false },
+        { "text": "Should we cancel the Bristol pilot or extend it?", "gated": false },
+        { "text": "Extend, but only if the numbers hold.", "gated": false }
+      ]
+    },
+    {
+      "name": "no-agenda-abstain",
+      "control_turn": 0,
+      "intended_turn": null,
+      "why": "Nothing said here identifies a meeting. The registered answer is abstention, and the deterministic rule then names it.",
+      "turns": [
+        { "text": "Can you hear me alright on this line?", "gated": false },
+        { "text": "Yes I can hear you perfectly well.", "gated": false },
+        { "text": "Let me know if I cut out again.", "gated": false }
+      ]
+    },
+    {
+      "name": "numbers-and-names",
+      "control_turn": 0,
+      "intended_turn": 2,
+      "why": "The identifying turn carries a name and two numerals. Selection returns an index, so nothing here can be mis-transcribed — which is the point of the design and is recorded as such.",
+      "turns": [
+        { "text": "Can you hear me now that I moved rooms?", "gated": false },
+        { "text": "Give me a moment to share the deck.", "gated": false },
+        { "text": "Priya wants the Q3 number moved from 41 to 38.", "gated": false },
+        { "text": "That is a bigger cut than we discussed.", "gated": false }
+      ]
+    },
+    {
+      "name": "negation",
+      "control_turn": 0,
+      "intended_turn": 1,
+      "why": "The identifying turn is a negation, which the note matrix found this model preserves in text it selects.",
+      "turns": [
+        { "text": "Sorry, my camera is not working again today.", "gated": false },
+        { "text": "We are not shipping the Atlas migration this quarter.", "gated": false },
+        { "text": "That is going to upset the field team.", "gated": false }
+      ]
+    },
+    {
+      "name": "withheld-first",
+      "control_turn": 1,
+      "intended_turn": 2,
+      "why": "The first turn is withheld and is the most quotable thing said. It is absent from the offered set entirely, so no response the mask admits can name it.",
+      "turns": [
+        { "text": "The clinic called about my results this morning.", "gated": true },
+        { "text": "Give me one second to open the spreadsheet.", "gated": false },
+        { "text": "We are deciding the renewal terms for Halloway today.", "gated": false },
+        { "text": "Agreed, and we should tell them this week.", "gated": false }
+      ]
+    },
+    {
+      "name": "long-identifying-turn",
+      "control_turn": 0,
+      "intended_turn": 2,
+      "why": "The identifying turn's opening sentence exceeds the 120-scalar ceiling, so the selected turn still has to survive the same cleaning and cut as any other.",
+      "turns": [
+        { "text": "My laptop decided to update itself this morning.", "gated": false },
+        { "text": "Okay let me get started here.", "gated": false },
+        { "text": "The reason I called this is that the schema change landed last night and nobody has looked at what it did to the reporting jobs yet, which is a problem.", "gated": false },
+        { "text": "I can look at the reporting jobs this afternoon.", "gated": false }
+      ]
+    }
+  ]
+}

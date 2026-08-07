@@ -167,6 +167,54 @@ mod tests {
         rows.iter().copied()
     }
 
+    /// The probe's fixtures assert which turn this function picks. This test is
+    /// the assertion — without it `control_turn` would be a number in a JSON
+    /// file describing behaviour nothing checks, and the probe would be
+    /// measuring the model against a baseline it had guessed at.
+    ///
+    /// It needs no new public API. Deriving from the whole transcript and
+    /// deriving from the named turn alone must produce the same string, and
+    /// every turn before it must produce nothing — which is exactly what "the
+    /// first turn that qualifies" means.
+    #[test]
+    fn the_probe_fixtures_name_the_turn_this_function_actually_picks() {
+        let document: serde_json::Value =
+            serde_json::from_str(include_str!("../../../notes/title_selection_fixtures.json"))
+                .expect("fixtures parse");
+        assert_eq!(document["schema"], "title-selection-fixtures/1");
+        let fixtures = document["fixtures"].as_array().expect("fixture array");
+        assert!(!fixtures.is_empty());
+
+        for fixture in fixtures {
+            let name = fixture["name"].as_str().expect("fixture name");
+            let rows: Vec<(&str, bool)> = fixture["turns"]
+                .as_array()
+                .expect("turns")
+                .iter()
+                .map(|turn| {
+                    (
+                        turn["text"].as_str().expect("turn text"),
+                        turn["gated"].as_bool().expect("turn gated"),
+                    )
+                })
+                .collect();
+            let control = fixture["control_turn"].as_u64().expect("control_turn") as usize;
+
+            let whole = derived_title(turns(&rows));
+            let alone = derived_title(turns(&rows[control..=control]));
+            assert!(alone.is_some(), "{name}: control turn derives no title");
+            assert_eq!(whole, alone, "{name}: the picked turn is not control_turn");
+
+            for (index, row) in rows[..control].iter().enumerate() {
+                assert_eq!(
+                    derived_title(turns(std::slice::from_ref(row))),
+                    None,
+                    "{name}: turn {index} qualifies, so control_turn is not the first"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_first_long_enough_opening_line_becomes_the_title() {
         assert_eq!(

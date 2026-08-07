@@ -137,7 +137,7 @@ accessibility grant, and the directory leg is Phase 2 because it needs OAuth.
 | B1 | Operator-authored live note during the meeting | Granola's core insight | **Shipped 2026-08-06** |
 | B2 | AI-enhanced note: summary, outline, highlights, open questions | Gong's one call object; Wispr's summary tab | **Prototyped** — no generator admitted |
 | B3 | **Meeting-type templates** | category standard | **Unbuilt** — appears in no prior planning doc |
-| B4 | **Auto-titling** | category standard | **Partly shipped 2026-08-07** — a meeting is named by its own first words; the model that would choose *which* words is not built |
+| B4 | **Auto-titling** | category standard | **Partly shipped 2026-08-07** — a meeting is named by its own first words. The model that would choose *which* words was measured on 2026-08-08 and refused at 5 of 10 against a registered 6–9; the category's abstractive titles remain unbuilt on purpose |
 | B5 | Evidence-linked claims: every claim cites verbatim turns | **nobody does this** | **Prototyped** — the differentiator |
 | B6 | Honest incompleteness: "not captured" ≠ "never said" | own | **Prototyped** |
 | B7 | Correction that changes the note; restore a withheld turn, regenerate | correction is undescribed everywhere | **Registered** for restore |
