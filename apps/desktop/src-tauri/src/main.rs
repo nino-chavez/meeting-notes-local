@@ -1653,32 +1653,27 @@ fn first_run_manifest_path(state: &ApplicationState) -> Option<std::path::PathBu
         .map(|context| context.manifest_path.clone())
 }
 
+// An absent storage context is a legitimate first-run state, not an error: these
+// commands are reachable from the startup-failure screen. The empty path it
+// resolves to fails verification, so every one of these reports
+// `probe_unavailable` — which is the state § H renders — instead of raising.
 #[tauri::command]
 fn first_run_permissions(state: State<'_, ApplicationState>) -> first_run::FirstRunPermissions {
-    match first_run_manifest_path(&state) {
-        Some(manifest) => first_run::permissions_status(&manifest),
-        None => first_run::permissions_status(&std::path::PathBuf::new()),
-    }
+    first_run::permissions_status(&first_run_manifest_path(&state).unwrap_or_default())
 }
 
 #[tauri::command]
 fn first_run_request_microphone(
     state: State<'_, ApplicationState>,
 ) -> first_run::FirstRunPermissions {
-    match first_run_manifest_path(&state) {
-        Some(manifest) => first_run::request_microphone(&manifest),
-        None => first_run::request_microphone(&std::path::PathBuf::new()),
-    }
+    first_run::request_microphone(&first_run_manifest_path(&state).unwrap_or_default())
 }
 
 #[tauri::command]
 fn first_run_request_system_audio(
     state: State<'_, ApplicationState>,
 ) -> first_run::FirstRunPermissions {
-    match first_run_manifest_path(&state) {
-        Some(manifest) => first_run::request_system_audio(&manifest),
-        None => first_run::request_system_audio(&std::path::PathBuf::new()),
-    }
+    first_run::request_system_audio(&first_run_manifest_path(&state).unwrap_or_default())
 }
 
 #[tauri::command]

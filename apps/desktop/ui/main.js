@@ -2052,5 +2052,148 @@ meetingOpenTranscript.addEventListener("click", () => {
   }
 });
 
+// § H. First run.
+//
+// The step is derived from a measurement every time, never remembered. There is no
+// "first run completed" flag on disk on purpose: a stored flag would keep claiming
+// setup was finished after an operator revoked a permission in System Settings,
+// which is precisely the state this surface exists to catch. Deriving it means the
+// flow reappears exactly when it is true again and disappears on its own.
+const firstRunScreen = document.querySelector("#first-run-screen");
+const firstRunPanels = new Map(
+  [...firstRunScreen.querySelectorAll("[data-step-panel]")].map((panel) => [
+    panel.dataset.stepPanel,
+    panel,
+  ]),
+);
+const firstRunDeniedPane = document.querySelector("#first-run-denied-pane");
+
+function showFirstRunStep(step) {
+  firstRunScreen.dataset.step = step;
+  for (const [name, panel] of firstRunPanels) panel.hidden = name !== step;
+}
+
+// The one place a permission result becomes a step. Kept as a pure function of the
+// response so the mapping can be read in one screenful and argued with.
+function firstRunStepFor(result) {
+  if (!result || result.probeUnavailable) return "unavailable";
+  const microphone = result.microphone;
+  if (microphone === "not-determined") return "request-microphone";
+  // restricted is grouped with denied because the operator's next action is the
+  // same — it cannot be resolved from inside this app either way.
+  if (microphone === "denied" || microphone === "restricted") return "denied-recovery";
+  if (microphone === "unknown") return "unavailable";
+  switch (result.systemAudio) {
+    case "authorized":
+      return "enrol-voice";
+    case "unavailable":
+      return "denied-recovery";
+    case "unsupported":
+    case "unknown":
+      return "unavailable";
+    default:
+      // `unmeasured` is the ordinary case: there is no status API for taps, so the
+      // only way to learn this is to ask, and asking is the step.
+      return "request-audio-capture";
+  }
+}
+
+function renderFirstRun(result, { origin = "" } = {}) {
+  const step = firstRunStepFor(result);
+  if (step === "denied-recovery") {
+    // Name the exact System Settings row, which differs by which permission was
+    // refused. The microphone is checked first, so a denial there is the reason
+    // unless the microphone is fine.
+    const microphoneRefused =
+      result.microphone === "denied" || result.microphone === "restricted";
+    firstRunDeniedPane.textContent = microphoneRefused
+      ? "Microphone"
+      : "System Audio Recording";
+  }
+  if (origin === "microphone" && step === "request-audio-capture") {
+    message(
+      document.querySelector("#first-run-microphone-state"),
+      "Microphone allowed.",
+      "ok",
+    );
+  }
+  showFirstRunStep(step);
+  return step;
+}
+
+async function readFirstRunPermissions() {
+  try {
+    return await invoke("first_run_permissions");
+  } catch {
+    return null;
+  }
+}
+
+async function runFirstRunRequest(command, control, statusNode, origin) {
+  control.disabled = true;
+  try {
+    const result = await invoke(command);
+    // A request that showed no dialog is the signal to route to System Settings
+    // rather than let the operator press the same button again.
+    if (result && result.prompted === false && origin === "microphone"
+      && (result.microphone === "denied" || result.microphone === "restricted")) {
+      message(statusNode, "macOS did not show a prompt; this was refused earlier.", "warn");
+    }
+    renderFirstRun(result, { origin });
+  } catch {
+    message(statusNode, "The permission request could not run.", "warn");
+  } finally {
+    control.disabled = false;
+  }
+}
+
+document.querySelector("#first-run-begin").addEventListener("click", async () => {
+  renderFirstRun(await readFirstRunPermissions());
+});
+document.querySelector("#first-run-ask-microphone").addEventListener("click", (event) => {
+  runFirstRunRequest(
+    "first_run_request_microphone",
+    event.currentTarget,
+    document.querySelector("#first-run-microphone-state"),
+    "microphone",
+  );
+});
+document.querySelector("#first-run-ask-system-audio").addEventListener("click", (event) => {
+  runFirstRunRequest(
+    "first_run_request_system_audio",
+    event.currentTarget,
+    document.querySelector("#first-run-system-audio-state"),
+    "system-audio",
+  );
+});
+document.querySelector("#first-run-recheck").addEventListener("click", async () => {
+  renderFirstRun(await readFirstRunPermissions());
+});
+document.querySelector("#first-run-retry-probe").addEventListener("click", async () => {
+  renderFirstRun(await readFirstRunPermissions());
+});
+document.querySelector("#first-run-enrol").addEventListener("click", () => {
+  // Routes to the enrolment surface that already exists rather than duplicating it.
+  selectProductScreen("profile-screen", { resetScroll: true });
+});
+document.querySelector("#first-run-skip-enrol").addEventListener("click", () => {
+  showFirstRunStep("ready");
+});
+document.querySelector("#first-run-done").addEventListener("click", () => {
+  selectProductScreen("idle-screen", { resetScroll: true });
+});
+
+// Entry. Runs once at load; routes into first run only when a measurement says a
+// permission is missing, so an already-set-up Mac never sees it.
+async function enterFirstRunIfIncomplete() {
+  const result = await readFirstRunPermissions();
+  if (!result) return;
+  const step = firstRunStepFor(result);
+  if (step === "enrol-voice" || step === "ready") return;
+  renderFirstRun(result);
+  showScreen("first-run-screen", { resetScroll: true });
+}
+
 renderStartup("shell-rendered");
 refreshCurrent();
+enterFirstRunIfIncomplete();

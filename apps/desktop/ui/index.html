@@ -46,6 +46,92 @@
         <button class="secondary" id="retry-startup" type="button" hidden>Check again</button>
       </section>
 
+      <!-- § H. First run. One surface, six states, driven by data-step. The two
+           states § H lists that are absent are deliberate: choose-retention's
+           wording and its policy semantics are both awaiting the Wave C human
+           gate, and offer-calendar crosses the supported envelope. Neither is
+           stubbed here, because a step that asks a question the app cannot honour
+           is worse than a step that does not exist. -->
+      <section class="screen first-run-screen" id="first-run-screen" data-step="welcome" aria-labelledby="first-run-title">
+        <p class="kicker">Setting up</p>
+        <h1 id="first-run-title">Yawn records meetings on this Mac only.</h1>
+
+        <div class="first-run-step" data-step-panel="welcome">
+          <p class="lede">Audio, transcripts and search stay on this machine. There is no account, no server, and nothing is uploaded.</p>
+          <p>Two permissions are needed before a meeting can be recorded: your microphone, and the meeting audio your Mac plays. macOS asks for each one separately.</p>
+          <div class="screen-actions">
+            <button class="primary" id="first-run-begin" type="button">Continue</button>
+          </div>
+        </div>
+
+        <div class="first-run-step" data-step-panel="request-microphone" hidden>
+          <p class="lede">First, your microphone.</p>
+          <p>This is the half of the meeting you speak. Without it a recording holds only the other people.</p>
+          <p class="first-run-state" id="first-run-microphone-state" role="status"></p>
+          <div class="screen-actions">
+            <button class="primary" id="first-run-ask-microphone" type="button">Allow microphone</button>
+            <button class="secondary" id="first-run-microphone-next" type="button" hidden>Continue</button>
+          </div>
+        </div>
+
+        <div class="first-run-step" data-step-panel="request-audio-capture" hidden>
+          <p class="lede">Now the audio your Mac plays.</p>
+          <p>This is the other people on the call. macOS calls it system audio recording.</p>
+          <p class="footnote">There is no way to check this one without asking: macOS reports it only when a recording is actually attempted, so pressing the button below is the check.</p>
+          <p class="first-run-state" id="first-run-system-audio-state" role="status"></p>
+          <div class="screen-actions">
+            <button class="primary" id="first-run-ask-system-audio" type="button">Allow system audio</button>
+            <button class="secondary" id="first-run-system-audio-next" type="button" hidden>Continue</button>
+          </div>
+        </div>
+
+        <div class="first-run-step" data-step-panel="denied-recovery" hidden>
+          <p class="lede">macOS is not showing that prompt again.</p>
+          <p>Once a permission has been refused, asking a second time does nothing visible. It has to be changed by hand.</p>
+          <p>Open System Settings, then Privacy &amp; Security, then <strong id="first-run-denied-pane">Microphone</strong>, and switch Yawn on. Then come back here and check again.</p>
+          <p class="footnote">This screen does not open System Settings for you. Doing that would need a permission to launch other applications, which this window deliberately does not have.</p>
+          <p class="first-run-state" id="first-run-denied-state" role="status"></p>
+          <div class="screen-actions">
+            <button class="primary" id="first-run-recheck" type="button">Check again</button>
+          </div>
+        </div>
+
+        <div class="first-run-step" data-step-panel="enrol-voice" hidden>
+          <p class="lede">Both permissions are granted.</p>
+          <p>Setting up a voice profile is what lets a transcript mark which speech was not yours. It is optional, and recording works without it.</p>
+          <div class="screen-actions">
+            <button class="primary" id="first-run-enrol" type="button">Set up voice</button>
+            <button class="secondary" id="first-run-skip-enrol" type="button">Skip for now</button>
+          </div>
+        </div>
+
+        <div class="first-run-step" data-step-panel="ready" hidden>
+          <p class="lede">Setup is done.</p>
+          <!-- Deliberately not the `ready` § H defines. That one means permissions,
+               retention AND a voice profile all exist; retention is not asked here,
+               so this copy states exactly the two things that were checked and
+               names where the third is decided. Claiming § H's ready would be the
+               lie feature 10 forbids. -->
+          <p>Both permissions are granted. How long recordings are kept is still chosen at the start of each meeting, on the recording screen.</p>
+          <p class="first-run-state" id="first-run-ready-state" role="status"></p>
+          <div class="screen-actions">
+            <button class="primary" id="first-run-done" type="button">Done</button>
+          </div>
+        </div>
+
+        <div class="first-run-step" data-step-panel="unavailable" hidden>
+          <p class="lede">The permission check could not run.</p>
+          <!-- Distinct from denied on purpose: "we could not ask" is not "you said
+               no", and sending an operator to System Settings to fix a permission
+               that was never the problem is the failure this panel prevents. -->
+          <p>This is not the same as a permission being refused — nothing has been asked yet. The check itself is unavailable, which usually means the installed app is incomplete.</p>
+          <p class="first-run-state" id="first-run-unavailable-state" role="status"></p>
+          <div class="screen-actions">
+            <button class="primary" id="first-run-retry-probe" type="button">Try again</button>
+          </div>
+        </div>
+      </section>
+
       <section class="screen" id="idle-screen" aria-labelledby="idle-title">
         <p class="kicker">Start a meeting</p>
         <h1 id="idle-title">Before you record.</h1>

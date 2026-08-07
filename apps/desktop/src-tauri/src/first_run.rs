@@ -83,6 +83,7 @@ impl SystemAudioPermission {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FirstRunPermissions {
     pub microphone: MicrophonePermission,
     pub system_audio: SystemAudioPermission,
@@ -122,8 +123,12 @@ fn run_probe(manifest_path: &PathBuf, mode: &str) -> Option<Value> {
     if output.status.code() != Some(0) {
         return None;
     }
-    // Bounded by construction: the probe caps its own microphone wait and the tap
-    // create returns immediately, so this cannot block a command thread forever.
+    // Bounded by construction rather than by measurement: the probe caps its own
+    // microphone wait at 120 s and the tap create returns immediately, so this
+    // cannot block a command thread forever. Stated from the probe's source — as of
+    // 2026-08-06 neither request mode has been executed in any context, because
+    // running one outside the signed bundle mutates the calling app's TCC state and
+    // answers about the wrong binary. Only `status` has been exercised.
     let parsed: Value = serde_json::from_slice(&output.stdout).ok()?;
     if parsed.get("schema").and_then(Value::as_str) != Some("permission-probe/1") {
         return None;
@@ -211,6 +216,26 @@ mod tests {
                 "{hostile:?} must not be treated as a known state"
             );
         }
+    }
+
+    #[test]
+    fn the_shell_reads_camel_case_keys_and_kebab_case_states() {
+        // The shell reads `probeUnavailable` and `systemAudio`. Serializing this
+        // struct with Rust's default naming would hand it `probe_unavailable`, so
+        // every field would read `undefined` and the surface would silently route
+        // to its unavailable panel forever. Pinned because nothing else would fail.
+        let encoded = serde_json::to_string(&FirstRunPermissions {
+            microphone: MicrophonePermission::NotDetermined,
+            system_audio: SystemAudioPermission::Unmeasured,
+            probe_unavailable: false,
+            prompted: true,
+        })
+        .unwrap();
+        assert!(encoded.contains("\"probeUnavailable\":false"), "{encoded}");
+        assert!(encoded.contains("\"systemAudio\":\"unmeasured\""), "{encoded}");
+        // The state values are compared as literals in main.js, so their casing is
+        // part of the contract too.
+        assert!(encoded.contains("\"microphone\":\"not-determined\""), "{encoded}");
     }
 
     #[test]

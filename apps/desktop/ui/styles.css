@@ -452,3 +452,20 @@ footer {
   font-size: 0.85rem;
   color: var(--muted);
 }
+
+/* § H. First run. One surface, one visible step; the panels carry their own
+   spacing so a step reads as a page rather than as a section of a longer one. */
+.first-run-step {
+  max-width: 60ch;
+}
+.first-run-step p {
+  margin-bottom: var(--space-3);
+}
+.first-run-state {
+  margin-top: var(--space-3);
+  font-size: 0.9rem;
+  color: var(--muted);
+  min-height: 1.2em;
+}
+.first-run-state[data-state="ok"] { color: var(--accent); }
+.first-run-state[data-state="warn"] { color: var(--danger); }
