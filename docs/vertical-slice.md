@@ -48,6 +48,10 @@ why work kept arriving in an order nobody chose.
 The order here is: everything buildable without a human decision, first. Evidence is
 an attribute of an item, not the spine.
 
+[`backlog.md`](./backlog.md) decomposes these ten features into twelve epics and
+their stories. It deliberately carries no status of its own — it points back here —
+so that this repo never again has two files that both look like they decide order.
+
 Every row below was checked against **both** `product-definition.md § North-star
 features and functions` (status column, verified there 2026-08-06) **and** this
 file's own scope and gate text, with line references given. The two disagree, and
