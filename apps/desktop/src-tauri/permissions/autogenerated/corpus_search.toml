@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-corpus-search"
+description = "Enables the corpus_search command without any pre-configured scope."
+commands.allow = ["corpus_search"]
+
+[[permission]]
+identifier = "deny-corpus-search"
+description = "Denies the corpus_search command without any pre-configured scope."
+commands.deny = ["corpus_search"]

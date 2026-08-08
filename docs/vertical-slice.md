@@ -41,9 +41,56 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is asking a question: embed the question, rank with
-`nearest_windows`, and render the hit as a quoted passage with its locators.**
-Every piece under it now exists and runs.
+**The next build is a signed DMG carrying the embedding model and the search
+surface, because the one question this feature turns on can only be answered by
+the operator on their own meetings and they currently have no build that can ask
+it.** Everything below has landed on trunk and none of it is installed anywhere.
+The retrieval figure — 7 of 10, and 3 of 5 on the questions exact search cannot
+answer — has not moved since 2026-08-08 and no code will move it. What is missing
+is a person typing a description of a real meeting and saying whether what comes
+back is worth having. That is `internal-alpha`, the ~18-minute signing lane in
+`docs/distribution-runbook.md`, and then an operator decision this repository
+cannot make for itself.
+
+**Semantic search reached the surface on 2026-08-09** (US-13.13). The Find screen
+has a second field: describe the meeting instead of quoting it. An answer is the
+passage that matched, quoted in full with the turns it came from, and the
+transcript is one press away. `corpus_search` embeds the question through the
+same [`WindowEmbedder`] the fill uses — one seam, so a question and a passage can
+never be encoded by two tokenizers that agree today.
+
+**One meeting, one name.** The corpus index stores only the operator's title —
+a derived title is recomputed from turns and deliberately never stored — so an
+untitled meeting would have read as its opening sentence in the library list and
+as its capture time in a search result. `meeting_title::label` now owns that
+three-tier precedence and both surfaces call it.
+
+**Three things the surface says out loud, each because a number alone would lie.**
+It reports how much of the corpus it actually searched in *every* state, so
+"nothing matched" and "nothing has been prepared" are different sentences. It
+shows the tie count when the top scores crowd, because both failures at scale
+were ties at a margin of 0.0000 and an accuracy figure hides exactly that case.
+And it prints no percentage: cosine similarity is not a confidence, and the
+quoted words are what let a person judge the match.
+
+**Preparing the passages is a press, not a consequence of asking.**
+`corpus_embed_pending` was registered on 2026-08-08 with a test asserting nothing
+called it; that test is now inverted with its comment, because the condition it
+encoded — no surface asks a semantic question yet — stopped being true. The other
+half is unchanged and pinned: `searchCorpus` must not contain
+`corpus_embed_pending`, so 34 worker round trips can never land on the path a
+person waits on.
+
+**A question was a new input shape and it was measured before it shipped**
+(`notes/packaged_question_receipt.json`). Padding does not reach the pooled
+vector — a question alone and the same question in a ragged batch agree to
+1 − 6.1 × 10⁻¹³, six orders inside the registered 10⁻⁶ — so a single-question
+request and a twenty-four-window batch compute in the same space. **The ranking
+prediction failed, 4 of 5**: "who is covering while someone is away" scored 0.0810
+on its own passage and 0.1035 on an unrelated one. Both near zero, a margin of
+0.0225 against a `DENSITY_BAND` of 0.02 — the near-tie the surface was already
+built to show, arriving unprompted. Five hand-written pairs is not a benchmark and
+that count must never be quoted as an accuracy figure.
 
 **The seam landed 2026-08-08** (US-13.12). `corpus_embedding::fill_vectors` walks
 unembedded windows through a [`WindowEmbedder`] in batches of 24 and into the
@@ -58,12 +105,13 @@ later name. A failure is never retried, because `ProcessWorkerPort` drops the
 worker on any error and a retry would keep transcription down longer. And a
 budget bounds every pass.
 
-**It is registered, not automatic, and that is a decision.** `corpus_embed_pending`
-is a command nothing calls yet. Filling 800 windows is 34 round trips holding the
-worker mutex, which must not sit on a path a person waits on or ahead of capture —
-and no surface asks a semantic question yet, so there is nothing to keep warm for.
-`shell_contract.rs` pins both halves: the command is registered, and the shell
-renders no control for it.
+**It is registered, not automatic, and that is a decision.** Filling 800 windows
+is 34 round trips holding the worker mutex, which must not sit on a path a person
+waits on or ahead of capture. *Superseded in part on 2026-08-09*: the second
+reason given here — no surface asks a semantic question yet — stopped being true
+when search landed, and `corpus_embed_pending` is now reached by an explicit
+press. The first reason is unchanged and is what `shell_contract.rs` still pins:
+the search handler must not call it.
 
 **Measured before it was designed**: 39 ms to load the model, 210 ms for a first
 24-window batch, 32 ms warm. A whole 200-meeting corpus is 2.4 seconds even
@@ -218,7 +266,7 @@ largest surface-area addition and says it has nothing to do with audio.
 | 2 | ~~Auto-titling~~ **Landed 2026-08-07** as `meeting_title.rs` — the first non-gated turn's opening sentence, behind an operator title and above the capture time. The local-model half was **measured and refused** on 2026-08-08 at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`); the seam was not built, and re-running the committed harness against another candidate is a decision, not a pending task | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | ~~Folders, and the meeting object's sibling views~~ **Writer landed 2026-08-08** — `library-metadata/1` gained the five named commands, whole-meeting deletion now takes the organization row first, and naming a meeting is wired end to end. The folder surface is `backlog.md` US-14.4 and is deliberately unbuilt | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | ~~Filters — people, date range, keywords, titles~~ **Three of four landed 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search, plus the folder surface item 3 deferred. **People is blocked on A3** (Wave 3 item 11), because attribution is Me/Them and named participants are absent by contract | D3 | Gong documents all four. Free once the store exists |
-| 5 | Semantic search over the corpus, beside exact. **Measured, then re-measured at scale: 7 of 10 and 3 of 5 on 200 realistic meetings** (`notes/SEMANTIC_RETRIEVAL.md`). **The store landed 2026-08-08** — 128-word windows citing their turns, a vector table bound to the text digest, best-window ranking with coverage and tie density (US-13.8). What remains is **the embedder itself**: nothing in the app turns text into a vector, so the store truthfully reports zero windows searched | D2 | Exact is Registered; semantic is what a question needs |
+| 5 | ~~Semantic search over the corpus, beside exact~~ **Landed 2026-08-09** (US-13.13). The Find screen takes a description in words and answers with the passage that matched, quoted, its turns named and its transcript one click away. Every state reports how much of the corpus it searched, and preparing the passages is a press rather than a step on the way to an answer. **The retrieval figure is unchanged and unjudged: 7 of 10, 3 of 5 on the questions exact search cannot answer** (`notes/SEMANTIC_RETRIEVAL.md`) — a surface cannot move it, and now there is somewhere to see it | D2 | Exact is Registered; semantic is what a question needs |
 | 6 | **Ask across every meeting, answer with citations** | D1 | The category headline. Depends on 1–5 and on B5's citation machinery |
 
 ### Wave 2 — the note becomes worth reading

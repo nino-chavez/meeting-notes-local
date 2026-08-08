@@ -17,6 +17,7 @@ use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetentionRule, AudioState, MeetingLifecycle, load_meeting, resolve_artifact,
     verify_record_artifacts, verify_record_static_artifacts,
 };
+use local_meeting_notes_session_core::meeting_title;
 use local_meeting_notes_session_core::note_projection::ClaimType;
 use local_meeting_notes_session_core::retention::meeting_dir;
 use local_meeting_notes_session_core::storage::StorageRoot;
@@ -161,13 +162,7 @@ pub(crate) struct LibrarySnapshotRow {
 /// once, because the operator title is read from a record that
 /// `library_metadata` has no writer for, so the fallback was never a fallback.
 fn label_for(row: &LibraryRow) -> (Option<String>, &'static str) {
-    if let Some(title) = row.title() {
-        return (Some(title.to_owned()), "operator");
-    }
-    match row.derived_title() {
-        Some(derived) => (Some(derived), "derived"),
-        None => (None, "date"),
-    }
+    meeting_title::label(row.title(), row.derived_title())
 }
 
 #[derive(Debug, Serialize)]
@@ -1099,7 +1094,15 @@ impl LibraryReader {
         self.meeting_deletion_handles.clear();
     }
 
-    fn retain_transcript_handle(&mut self, meeting_id: &str) -> Option<String> {
+    /// A single-use transcript handle for a meeting named by ID rather than
+    /// found through this reader.
+    ///
+    /// Semantic search ranks in the corpus index, which knows meeting IDs and
+    /// nothing about handle generations. Minting here rather than letting that
+    /// path hand an ID to an open command is the point: the handle is checked
+    /// against *this* projection, dies with it, and a meeting with no
+    /// transcript gets `None` instead of a handle that opens nothing.
+    pub(crate) fn retain_transcript_handle(&mut self, meeting_id: &str) -> Option<String> {
         if !self.meeting_has_transcript(meeting_id) {
             return None;
         }

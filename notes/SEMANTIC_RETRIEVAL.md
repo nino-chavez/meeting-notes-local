@@ -703,3 +703,62 @@ the `app-runtime.json` `models[]` entries for the weights and `tokenizer.json`,
 the `build_runtime.sh` rebuild, the `corpus.embed` operation, and the Rust
 wiring. Landing the lock without the rebuild puts the lock and the staged runtime
 in disagreement.
+
+---
+
+## Asking in words, through the packaged model (2026-08-09)
+
+`notes/packaged_question_parity.py`, receipt `notes/packaged_question_receipt.json`.
+Run on the staged runtime's own interpreter — mlx 0.29.3, numpy 2.4.6,
+tokenizers 0.22.2, CPython 3.12.
+
+### Why it was run
+
+Every measurement before it fed `worker/embedding.py` 128-word windows. The search
+surface feeds it a sentence, alone, in a request of one. Two of that file's
+defaults are silent — `tokenizer.json` at this revision bakes in truncation at 128
+and *fixed* padding to 128, both turned off explicitly in `PackagedTokenizer` — so
+a new input shape through that path is worth measuring before it ships rather than
+after somebody notices bad results.
+
+### Padding does not reach the pooled vector
+
+**Registered:** a question embedded alone and the same question inside a ragged
+batch beside five 128-word passages agree to a cosine of at least 1 − 10⁻⁶.
+
+**Measured:** worst case 1 − 6.1 × 10⁻¹³ across five questions. Six orders of
+magnitude inside the threshold. The attention mask excludes padding, so
+`corpus_search` sending one question and `fill_vectors` sending twenty-four
+windows compute in the same space.
+
+The wrapper leg is the same story: `worker.embedding.embed_windows` and
+`mlx_minilm.encode` agree to 1 − 6.1 × 10⁻¹³ on the same strings in the same
+process. The worker wrapper adds nothing but base64.
+
+### The ranking prediction failed, 4 of 5
+
+**Registered:** on five hand-written pairs — one passage a question is about, one
+it is not — the target scores above the distractor on **all five**.
+
+**Measured: four.** "who is covering while someone is away" scored 0.0810 against
+its own passage and **0.1035** against the roof-lease passage, a margin of
+**−0.0225**.
+
+The registration stands as written. What it means is worth more than the count:
+
+- **Both scores are near zero.** 0.08 and 0.10 are not a model choosing wrongly
+  between two candidates; they are a model matching neither. That is the same
+  character as the two scale-run failures, which landed at a margin of exactly
+  0.0000 on generated filler.
+- **The margin is 0.0225, against a `DENSITY_BAND` of 0.02.** This failure is a
+  near-tie, one thousandth outside the band the surface already reports. It is the
+  case `SemanticSearch::near_ties` was built for, arriving unprompted.
+- A plausible reason, offered as a hypothesis and not a finding: the question asks
+  **who**, and the passage names nobody — "she", "I", "the shared channel". This
+  model has no purchase on a pronoun.
+
+**This probe measures no accuracy figure and must not be quoted as one.** Five
+hand-written pairs written to be separable is not a retrieval benchmark. The
+number that stands is still **7 of 10, and 3 of 5 on the questions exact search
+cannot answer**, from the 200-meeting run above. A 5-of-5 sweep here would have
+been evidence of nothing; a 4-of-5 with a near-tie is evidence for showing ties.

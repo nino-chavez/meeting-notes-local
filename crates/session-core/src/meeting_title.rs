@@ -74,6 +74,27 @@ pub const MAX_TITLE_SCALARS: usize = 120;
 /// restore it, and search exposes it only as `withheld`. A label is a list
 /// surface with no gate behind it, so gated turns are skipped here — that is
 /// the one rule in this module that is a safety property rather than a taste.
+/// The precedence this module's doc names, in the one place that owns it.
+///
+/// Operator title, then derived title, then the capture time. The third tier
+/// returns `None` rather than a string: a surface already holds
+/// `created_at_epoch_seconds` and formats it in the operator's own zone, so a
+/// second copy of the same instant rendered here in UTC would be a duplicate.
+///
+/// It exists because the rule had two readers before it had a home. The library
+/// list applied it and the search surface did not, which put the same meeting on
+/// the same screen under a sentence in one place and a timestamp in the other —
+/// the kind of disagreement a reader finds and a test does not.
+pub fn label(operator: Option<&str>, derived: Option<String>) -> (Option<String>, &'static str) {
+    if let Some(title) = operator {
+        return (Some(title.to_owned()), "operator");
+    }
+    match derived {
+        Some(derived) => (Some(derived), "derived"),
+        None => (None, "date"),
+    }
+}
+
 pub fn derived_title<'a, I>(turns: I) -> Option<String>
 where
     I: IntoIterator<Item = (&'a str, bool)>,

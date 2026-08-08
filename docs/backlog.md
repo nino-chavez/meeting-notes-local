@@ -122,9 +122,9 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6 D3 D2** | 12 | **Landed 2026-08-07**, plus the vector store, the tokenizer decision, `corpus.embed`, its packaging and the fill seam 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 through US-13.12 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
+| **E13** | **The corpus store** | **E6 D3 D2** | 12 | **Landed 2026-08-07**, plus the vector store, the tokenizer decision, `corpus.embed`, its packaging and the fill seam 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 through US-13.13 are D2 work that sits here by number while E15 keeps D2's user-facing story. **US-13.13 landed the surface 2026-08-09** and is the first of them a person can see |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
-| **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3 measured the same day and its store is the next build; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
+| **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3's retrieval reached a surface 2026-08-09 as US-13.13 and its 7-of-10 figure is unjudged until an operator runs it on their own meetings; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
 | **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
 | **E18** | **Named speakers** | **A3** | — | Wave 3 items 11–12 |
@@ -1345,6 +1345,67 @@ A 200-meeting corpus costs 2.4 s reloading the model every request against 1.1 s
 held open, so there is no cache and the difference is recorded rather than
 optimised away.
 
+#### US-13.13: Asking the corpus a question in words
+**Feature D2 · J1 · §F · P0 · M · Landed 2026-08-09**
+
+As the Operator, I want to find a meeting by describing it, and to see the words
+that made it come back.
+
+**Acceptance criteria:**
+- Given a description and a prepared corpus, When I search, Then each meeting comes back with the passage that matched, quoted, and the turns it came from.
+- Given a result, When I press it, Then the transcript opens at the turn the passage starts on.
+- Given a corpus with no vectors, When I search, Then it says how many passages are unprepared and offers to prepare them — not that nothing matched.
+- Given any outcome at all, When it renders, Then it states how much of the corpus was actually searched.
+- Given several meetings scoring within the measured tie band, When they render, Then the crowd is named rather than presented as a ranking.
+- Given a recording in progress, When I search by meaning, Then it refuses and says exact search still works.
+
+**Refusals, and why each is local.** A blank description and one longer than a
+window are refused before the model: the worker's own `SequenceTooLong` reaches
+this process as a bare `ok: false`, indistinguishable from a worker that died, so
+a length gate that named its cause had to live on this side. A manifest that does
+not match the identity refuses before the first request, exactly as the fill does.
+
+**Validation:** **Pinned** — 12 tests over `corpus_question::ask` against a real
+`CorpusIndex` and a fake embedder, plus 2 over `quote_window` and 8 assertions in
+`shell_contract.rs`. Five were mutation-verified, each failing exactly one test
+and no others: `near_ties` rewritten to the returned row count, the passage
+word-join applied to a question, the coverage check moved after the model,
+`(async)` removed from `corpus_search`, and the label precedence reduced to the
+operator title. **Receipted** for the model path —
+`notes/packaged_question_receipt.json`, pinned by literal and by the digests of
+the three files it measured. **Unproven as a product capability** — no operator
+has run it against their own meetings, and the retrieval figure it inherits is 7
+of 10.
+
+**One meeting, one name.** The index stores only the operator's title; the
+derived title is recomputed from turns and never stored. So an untitled meeting
+would have read as its opening sentence in the library list and as its capture
+time in a search result — the same meeting, the same screen. The precedence now
+has one owner, `meeting_title::label`, which the library list calls too.
+
+**A question and a passage go through one encoder.** `ask` embeds the question
+through the same [`WindowEmbedder`] the fill uses, with the same manifest check.
+Two encoders that agree today drift silently, and a question encoded by a
+different tokenizer produces a vector of the right width pointing the wrong way,
+which nothing downstream can catch.
+
+**A question is embedded as typed.** Trimmed, and nothing else — the scale probe
+embedded each question string as it stood. Only passages go through the word-join,
+because the harness had re-split those. `a_question_crosses_as_typed_and_is_not_re_joined_like_a_passage`
+pins it against a description containing runs of whitespace.
+
+**No score reaches the surface.** Cosine similarity is not a confidence and
+printing one as a match rate would claim a number nobody measured. The quote is
+the evidence, and `shell_contract.rs` fails if `answer.similarity` appears in the
+shell.
+
+**A new input shape, measured before it shipped.** `notes/packaged_question_receipt.json`:
+padding does not reach the pooled vector — a question alone and the same question
+inside a ragged batch agree to 1 − 6.1 × 10⁻¹³ against a registered 10⁻⁶. The
+ranking leg of that registration **failed at 4 of 5**, on a pair whose margin was
+0.0225 against a `DENSITY_BAND` of 0.02; both scores were near zero, which is the
+"matches nothing in particular" shape the scale run already found.
+
 #### US-13.11: The runtime carries the embedding model
 **Feature D2 · J1 · §F · P0 · M · Landed 2026-08-08**
 
@@ -1668,13 +1729,12 @@ search cannot answer**, against 10 of 10 and 5 of 5 on ten short fixtures. The
 degradation is in the half the feature exists for. Receipt:
 `semantic_scale_receipt.json`.
 
-**The store landed 2026-08-08** as US-13.8 — windows, segments, the vector
-table, the digest binding and best-window ranking. **What is not built is the
-embedder**, so no vector has ever been computed inside this app and the ranking
-path returns an empty result with `coverage.embedded` at zero. Whether 7 of 10 is
-good enough to build a surface on is a judgment for the operator, not a
-measurement — it is well above exact search and well below what the first probe
-implied.
+**The store landed 2026-08-08** as US-13.8, the embedder across US-13.10 to
+US-13.12, and **the surface on 2026-08-09 as US-13.13**. Whether 7 of 10 is good
+enough is a judgment for the operator, not a measurement — it is well above exact
+search and well below what the first probe implied — and until 2026-08-09 there
+was nowhere for that judgment to be made. There is now, and it still requires a
+build the operator can install and their own meetings inside it.
 
 **Evidence:** the fixtures were hardened mid-registration. A word-overlap ranker
 with no model in it initially scored 8 of 10 and 3 of 5 on the hard half, because

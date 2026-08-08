@@ -55,6 +55,12 @@ const PREVIEW_COMMANDS: &[&str] = &[
     // meeting only. Neither command takes a meeting identifier.
     "operator_note",
     "save_operator_note",
+    // § D2, 2026-08-09. Meaning search and the pass that prepares it. Both
+    // reach the worker; neither takes or returns a meeting identifier the
+    // caller did not already hold, and `corpus_search` answers with passages
+    // from meetings this projection can already open.
+    "corpus_search",
+    "corpus_embed_pending",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]

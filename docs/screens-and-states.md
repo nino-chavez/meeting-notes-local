@@ -652,6 +652,45 @@ elsewhere, not what is best.
 **A commitment-organised view is a state on this surface**, not a surface of its own —
 see `journeys.md` J2, and the reason it stops at export rather than offering a checkbox.
 
+### Amendment 2026-08-09 — Find holds two searches, and they fail differently
+
+The Find screen no longer asks one question. It has the exact-word field it always
+had and, beneath it, a field that takes a description in words. They are stacked
+rather than tabbed, because a person who cannot remember the words does not know
+in advance which one will work and a tab hides the second one from them.
+
+Meaning search adds these states, and none of them collapses into `no-results`:
+
+| State | Trigger | What it must say |
+|---|---|---|
+| `answered` | A ranking came back | The passage, quoted, with the turns it came from. Plus how much of the corpus was searched |
+| `empty` | Ranked, nothing scored | Nothing matched — distinct from the two below |
+| `nothing-prepared` | Windows exist, none embedded | How many passages are unprepared, and a control that prepares them |
+| `nothing-to-search` | No transcripts at all | Not an error and not a failed search |
+| `too-long` / `blank` | The description does not fit the shape | Refused locally, before the model |
+| `busy` | A recording is running | Exact search still works; this one waits |
+| `model-mismatch` | The installed model is not the one the passages were prepared with | Reinstall. Not retryable |
+| `worker-unavailable` | The local model did not answer | Reopen the app |
+
+**Three of these exist only because a count would have lied.** `nothing-prepared`
+and `nothing-to-search` are both "no results" to a naive surface, and both would
+have read as "this feature does not work". Every state reports searched-of-total
+for the same reason.
+
+**A result is a passage, never a percentage.** Cosine similarity is not a
+confidence and printing one as a match rate claims a number nobody measured. What
+is shown is the words the vector was computed from — which is also what lets a
+person tell a right answer from a plausible one.
+
+**When the top scores crowd, the surface says so.** Both failures in the
+200-meeting run arrived as ties at a margin of 0.0000, and the probe run on
+2026-08-09 reproduced the shape unprompted. A person told "these three are
+indistinguishable, read the passages" can recover; a ranking that hides it cannot.
+
+**Preparing is a press.** It is never a step on the way to an answer, because
+filling the vector column holds the worker mutex for dozens of round trips and
+that worker is what transcribes.
+
 ---
 
 ## G. Settings

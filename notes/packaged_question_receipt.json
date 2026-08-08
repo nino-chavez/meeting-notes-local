@@ -1,0 +1,107 @@
+{
+  "schema": "packaged-question-parity/1",
+  "model_directory_name": "all-MiniLM-L6-v2",
+  "harness_sha256": "fe1f5fee17e19b800a3627452c44e5b98dfdbb930870fb571d089d37c8443759",
+  "embedding_sha256": "8737a4beb9507e7009bcd8117da37d09a3c8c822c516443cc6a4b8eb0708194c",
+  "mlx_minilm_sha256": "2b71614b0e72ccdbb4d060e5c215eeeb66d13c5daab80414e426c1a81d28dfc4",
+  "environment": {
+    "python": "3.12.13",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "mlx": "0.29.3",
+    "numpy": "2.4.6",
+    "tokenizers": "0.22.2"
+  },
+  "padding_independence": {
+    "batch_size": 15,
+    "worst_cosine": 0.9999999999993896,
+    "rows": [
+      {
+        "question": "when does the lease end",
+        "cosine": 0.9999999999996885
+      },
+      {
+        "question": "what did we decide about hiring",
+        "cosine": 0.9999999999996916
+      },
+      {
+        "question": "the conversation about slow page loads",
+        "cosine": 0.9999999999997427
+      },
+      {
+        "question": "who is covering while someone is away",
+        "cosine": 0.9999999999993896
+      },
+      {
+        "question": "the budget argument",
+        "cosine": 0.9999999999997412
+      }
+    ]
+  },
+  "question_ranking": {
+    "pairs": 5,
+    "targets_first": 4,
+    "smallest_margin": -0.02247599958733712,
+    "rows": [
+      {
+        "question": "when does the lease end",
+        "target": 0.6264962516816868,
+        "distractor": 0.0887702229585382,
+        "margin": 0.5377260287231486,
+        "target_wins": true
+      },
+      {
+        "question": "what did we decide about hiring",
+        "target": 0.2180962504151139,
+        "distractor": 0.06968582301574917,
+        "margin": 0.14841042739936472,
+        "target_wins": true
+      },
+      {
+        "question": "the conversation about slow page loads",
+        "target": 0.26179159427543136,
+        "distractor": 0.034946215330111524,
+        "margin": 0.22684537894531984,
+        "target_wins": true
+      },
+      {
+        "question": "who is covering while someone is away",
+        "target": 0.08099709176134151,
+        "distractor": 0.10347309134867863,
+        "margin": -0.02247599958733712,
+        "target_wins": false
+      },
+      {
+        "question": "the budget argument",
+        "target": 0.4218352191680198,
+        "distractor": 0.06324215269628586,
+        "margin": 0.35859306647173395,
+        "target_wins": true
+      }
+    ]
+  },
+  "wrapper_parity": {
+    "worst_cosine": 0.9999999999993932,
+    "rows": [
+      {
+        "question": "when does the lease end",
+        "cosine": 0.9999999999996863
+      },
+      {
+        "question": "what did we decide about hiring",
+        "cosine": 0.9999999999996928
+      },
+      {
+        "question": "the conversation about slow page loads",
+        "cosine": 0.999999999999743
+      },
+      {
+        "question": "who is covering while someone is away",
+        "cosine": 0.9999999999993932
+      },
+      {
+        "question": "the budget argument",
+        "cosine": 0.9999999999997417
+      }
+    ]
+  }
+}

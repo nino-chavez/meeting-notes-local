@@ -28,6 +28,8 @@
     "allow-preview-library-snapshot",
     "allow-preview-retention-overview",
     "allow-preview-library-search",
+    "allow-corpus-search",
+    "allow-corpus-embed-pending",
     "allow-preview-library-open-search-result",
     "allow-preview-library-open-note",
     "allow-preview-library-open-evidence",

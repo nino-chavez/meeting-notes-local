@@ -183,6 +183,18 @@
           "markdownDescription": "Enables the app_snapshot command without any pre-configured scope."
         },
         {
+          "description": "Enables the corpus_embed_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-corpus-embed-pending",
+          "markdownDescription": "Enables the corpus_embed_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the corpus_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-corpus-search",
+          "markdownDescription": "Enables the corpus_search command without any pre-configured scope."
+        },
+        {
           "description": "Enables the dismiss_meeting command without any pre-configured scope.",
           "type": "string",
           "const": "allow-dismiss-meeting",
@@ -385,6 +397,18 @@
           "type": "string",
           "const": "deny-app-snapshot",
           "markdownDescription": "Denies the app_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the corpus_embed_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-corpus-embed-pending",
+          "markdownDescription": "Denies the corpus_embed_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the corpus_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-corpus-search",
+          "markdownDescription": "Denies the corpus_search command without any pre-configured scope."
         },
         {
           "description": "Denies the dismiss_meeting command without any pre-configured scope.",
