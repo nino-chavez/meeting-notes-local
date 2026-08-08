@@ -1,5 +1,11 @@
 # What a library open actually costs, and what actually refuses
 
+**Updated 2026-08-08, after the fix.** The refusal this file recorded is gone,
+and the receipt was re-run on the same harness so the before and after are one
+artifact rather than two. `notes/scan_cost_receipt.json` is now `scan-cost/2`:
+the query fields report `{shown, matched}` where they used to report the string
+`library read capacity exceeded`. The timing conclusions below are unchanged.
+
 Measured 2026-08-08 with `crates/session-core/src/bin/corpus-scan-bench.rs` on a
 synthetic corpus it generates itself. Receipt: `notes/scan_cost_receipt.json`.
 Every byte it reads is written by the harness from a counter; it touches no real
@@ -20,10 +26,10 @@ sync the corpus index. Both, every open.
 
 | Meetings | Projection rebuild | Index sync, cold | Index sync, warm | Windows |
 |---|---|---|---|---|
-| 5 | 4.3 ms | 3.3 ms | 0.03 ms | 95 |
-| 20 | 20.3 ms | 11.6 ms | 0.04 ms | 380 |
-| 200 | 179.1 ms | 111.3 ms | 0.26 ms | 3,800 |
-| 800 | 662.6 ms | 443.1 ms | 1.13 ms | 15,200 |
+| 5 | 5.2 ms | 3.3 ms | 0.02 ms | 95 |
+| 20 | 18.3 ms | 11.5 ms | 0.05 ms | 380 |
+| 200 | 171.2 ms | 108.8 ms | 0.26 ms | 3,800 |
+| 800 | 671.8 ms | 446.9 ms | 1.10 ms | 15,200 |
 
 200 turns per meeting throughout; 200 meetings is 7.4 MB of transcript.
 
@@ -60,31 +66,63 @@ hardware and the per-meeting work will both have moved.
 
 ## What the same run found instead, and it is shipped
 
-**A common word refuses at five meetings.**
+**A common word refused at five meetings. Fixed the same day.**
 
-`LibraryProjection::search` collects every hit in memory and then, past
-`MAX_SEARCH_RESULTS` (100), returns `CapacityExceeded` for the *whole query*. Not
-a truncated list — an error. The shell renders it as "That search has too many
-matches. Use a more specific exact phrase," with no results.
+`LibraryProjection::search` collected every hit in memory and then, past
+`MAX_SEARCH_RESULTS` (100), returned `CapacityExceeded` for the *whole query*.
+Not a truncated list — an error. The shell rendered it as "That search has too
+many matches. Use a more specific exact phrase," with no results.
 
-Five synthetic meetings hold 95 windows and already exceed the cap on the word
-`alpha`. It refuses at every size measured: 5, 20, 200, 800.
+Five synthetic meetings already exceeded the cap on the word `alpha`, and it
+refused at every size measured: 5, 20, 200, 800.
+
+It now filters, then cuts to a hundred, and reports what it cut from. The same
+harness, re-run:
+
+| Meetings | Shown | Matched |
+|---|---|---|
+| 5 | 100 | 1,500 |
+| 20 | 100 | 6,000 |
+| 200 | 100 | 60,000 |
+| 800 | 100 | 240,000 |
+
+**Filter first, then cut, and the order is load-bearing.** Cutting to a hundred
+before applying a folder or date filter would answer "the hundred most recent
+matches anywhere, minus the ones outside this filter" — nothing at all when the
+filter selects older meetings.
+`a_filtered_search_pages_within_the_filter_and_not_across_it` pins it, and it
+fails under exactly that mutation. The old code could not have this bug, because
+past the cap it refused rather than answering.
+
+**The cap's real job is unchanged.** It bounds how many handles one response
+holds open, and truncating to a hundred bounds that exactly as refusing did. What
+changed is what a person gets for a common word: a hundred results instead of
+none.
 
 This is not a scale problem a user reaches eventually. It is the first week. Any
 word that appears more than a hundred times across a library — a project name, a
 person's name, "invoice", "deadline" — returns nothing, in a build that shipped
 on 2026-08-08 as 0.5.0.
 
-**It is a known defect that was recorded and not tracked.** The build queue's
+**It was a known defect that was recorded and not tracked.** The build queue's
 Wave 1 row 1 has said since 2026-08-07 that file-walking search "does not survive
 a real corpus — and, measured, refuses a common word at one meeting." That
-sentence is the justification for the store existing. The store was then built,
-and exact search was never moved onto it: `library_reader.rs::search_current`
-still calls `self.projection.search_filtered`.
+sentence is the justification for the store existing, and the refusal outlived
+the store by a day.
 
-The store can answer this. It holds turns in SQLite and can rank and `LIMIT` in
-the query, which is what a search over a real corpus has to do. Nothing about
-that is research — it is the work row 1 was justified by and did not finish.
+**Moving matching into SQL was considered and rejected.** The store could rank
+and `LIMIT` in a query, which is the scalable shape. It would also be a second
+implementation of `search-normalization/1`, which is pinned to
+`char::to_lowercase` in a named rustc release and enforced by a test that shells
+out to `rustc -Vv`. Two normalizations do not merely differ in speed; they differ
+in what matches, and the offsets one of them returns are what highlights a span.
+So matching stays in Rust and the fix is the cut, not the storage.
+
+That leaves the scan linear: a query costs 171 ms at 200 meetings and 672 ms at
+800. **The trigger for pushing candidate selection into the store is that
+latency**, and the shape that keeps one normalization is a token table built at
+sync time *by the same Rust normalizer*, with the pinned matcher run only over
+the turns it selects. Not built, and not needed at any size measured here.
 
 ## What this does not measure
 

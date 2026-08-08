@@ -170,6 +170,11 @@ fn label_for(row: &LibraryRow) -> (Option<String>, &'static str) {
 pub(crate) struct LibrarySearchResponse {
     pub(crate) state: &'static str,
     pub(crate) results: Vec<LibrarySearchResult>,
+    /// Matches found before the page was cut. Separate from `results.len()`
+    /// deliberately: the result is what a person can open, and this is the
+    /// diagnostic that tells them whether narrowing is worth doing. It must
+    /// never be rendered in the result position.
+    pub(crate) total_matches: usize,
     pub(crate) unavailable_count: usize,
     pub(crate) message: String,
 }
@@ -514,13 +519,14 @@ impl LibraryReader {
         self.clear_handles();
         let unavailable_count = self.projection.quarantined_meetings();
         match self.projection.search_filtered(query, filter) {
-            Ok(hits) if hits.is_empty() => LibrarySearchResponse {
+            Ok(found) if found.hits.is_empty() => LibrarySearchResponse {
                 state: if unavailable_count == 0 {
                     "no-results"
                 } else {
                     "incomplete"
                 },
                 results: Vec::new(),
+                total_matches: 0,
                 unavailable_count,
                 message: if unavailable_count == 0 {
                     "No retained text matched that search.".into()
@@ -530,9 +536,9 @@ impl LibraryReader {
                     )
                 },
             },
-            Ok(hits) => {
+            Ok(found) => {
                 let mut results = Vec::new();
-                for hit in hits {
+                for hit in found.hits {
                     match self.projection.open_snapshot(&hit) {
                         Ok(OpenedLibraryHit::Claim {
                             meeting_id,
@@ -611,6 +617,7 @@ impl LibraryReader {
                         "results-incomplete"
                     },
                     results,
+                    total_matches: found.total,
                     unavailable_count,
                     message: if unavailable_count == 0 {
                         "Exact results from the current library snapshot.".into()
@@ -622,7 +629,10 @@ impl LibraryReader {
                 }
             }
             Err(LibraryReadError::InvalidRequest) => Self::invalid_search(),
-            Err(LibraryReadError::CapacityExceeded) => Self::bounded_search(),
+            // `bounded` is gone with the refusal that produced it. `search_filtered`
+            // was the only path here that returned `CapacityExceeded`, and it now
+            // truncates instead — so an arm for it would be dead copy the next
+            // reader treats as reachable.
             Err(_) => Self::stale_search(),
         }
     }
@@ -946,6 +956,7 @@ impl LibraryReader {
         LibrarySearchResponse {
             state: "unavailable",
             results: Vec::new(),
+            total_matches: 0,
             unavailable_count: 0,
             message: UNAVAILABLE_MESSAGE.into(),
         }
@@ -1256,6 +1267,7 @@ impl LibraryReader {
         LibrarySearchResponse {
             state: "stale",
             results: Vec::new(),
+            total_matches: 0,
             unavailable_count: 0,
             message: STALE_MESSAGE.into(),
         }
@@ -1364,17 +1376,9 @@ impl LibraryReader {
         LibrarySearchResponse {
             state: "invalid",
             results: Vec::new(),
+            total_matches: 0,
             unavailable_count: 0,
             message: "Enter at least two characters to search retained text.".into(),
-        }
-    }
-
-    fn bounded_search() -> LibrarySearchResponse {
-        LibrarySearchResponse {
-            state: "bounded",
-            results: Vec::new(),
-            unavailable_count: 0,
-            message: "That search has too many matches. Use a more specific exact phrase.".into(),
         }
     }
 }

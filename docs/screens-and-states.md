@@ -652,6 +652,21 @@ elsewhere, not what is best.
 **A commitment-organised view is a state on this surface**, not a surface of its own —
 see `journeys.md` J2, and the reason it stops at export rather than offering a checkbox.
 
+### Amendment 2026-08-08 — a broad exact search is a page, not a refusal
+
+`bounded` is retired. It was a real state — "That search has too many matches.
+Use a more specific exact phrase." with no results — and it fired at five
+meetings, which is the first week rather than a scale limit.
+
+Exact search now returns the hundred most recent matches and says how many
+matched. The two numbers are separate on purpose: the rows are the result, and
+the total is the diagnostic that tells a person whether adding a word is worth
+doing. **The total must never be the headline.** "60,000 matches" describes how
+much text the library holds, not how well the search answered.
+
+The state table above gains nothing and loses one: `no-results` still means
+nothing matched, and a cut page is `results`.
+
 ### Amendment 2026-08-09 — Find holds two searches, and they fail differently
 
 The Find screen no longer asks one question. It has the exact-word field it always

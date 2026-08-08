@@ -1176,6 +1176,49 @@ open the library.
 
 **Contract amended here, deliberately.** The read path used to be pinned as "no byte in the storage root changes." It is now "no canonical byte changes, and the derived cache is the only thing that moved" — narrower where it must be and stricter everywhere else, since a read path writing anything other than the index still fails the test.
 
+#### US-13.14: A broad search is answered, not refused
+**Feature D3 · J1 · §F · P0 · S · Landed 2026-08-08**
+
+As the Operator, I want a common word to return results, so that searching for a
+project name or a colleague's name is not the query that breaks search.
+
+**Acceptance criteria:**
+- Given more matches than the page holds, When I search, Then I get the most recent page and it says how many matched.
+- Given a folder or date filter, When more than a page matches inside it, Then the page comes from inside the filter rather than from a global page intersected with it.
+- Given a page, When it is returned, Then exactly one handle is retained per returned hit.
+
+**What was wrong.** `LibraryProjection::search` returned `CapacityExceeded` for
+the whole query past `MAX_SEARCH_RESULTS`, and the shell rendered it as "That
+search has too many matches." Measured 2026-08-08: five synthetic meetings
+already cross it on a common word, and it refused at 5, 20, 200 and 800
+(`notes/SCAN_COST.md`). It shipped that way in 0.5.0.
+
+**Why matching stayed in Rust.** The store could rank and `LIMIT` in SQL, which
+is the scalable shape and is what the build queue's row 1 has implied since
+2026-08-07. It would also be a second implementation of `search-normalization/1`
+— pinned to `char::to_lowercase` in a named rustc release, enforced by a test
+that shells out to `rustc -Vv`, and returning the offsets that highlight a span.
+Two normalizations differ in what matches, not merely in speed. So the fix is
+the cut rather than the storage, and the scalable shape (a token table built at
+sync time by the same Rust normalizer) has a latency trigger rather than a date.
+
+**The cap's job is unchanged**, which is the reason truncating is safe: it bounds
+how many handles one response holds open, and a truncated page holds exactly as
+many as a refused query's cap allowed. What changed is that a broad query yields
+a hundred results instead of none.
+
+**Validation:** **Pinned** — `transcript_search_and_limits_refuse_whole_build`
+inverted to assert the page, the total and recency order;
+`a_filtered_search_pages_within_the_filter_and_not_across_it` added for the order
+that only truncation makes observable; `a_filter_counts_what_the_scan_can_only_page`
+rewritten in `corpus_index.rs`, where the old refusal was read as the store's
+justification. Both orderings mutation-verified: truncating before filtering and
+dropping the truncation each fail exactly the tests that name them.
+**Receipted** — `notes/scan_cost_receipt.json` at `scan-cost/2`, the same harness
+before and after, its query field moving from the string
+`library read capacity exceeded` to `{shown: 100, matched: 1500}` at five
+meetings.
+
 #### US-13.6: The launch scan stops being paid twice
 **Feature E6 · J1 · §F · P0 · M · Next**
 

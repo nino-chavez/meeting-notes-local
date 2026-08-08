@@ -121,6 +121,19 @@ impl LibraryFilter {
     }
 }
 
+/// A page of search hits, and how many there were before it was cut.
+///
+/// Two numbers rather than one. `hits` is the result — what a person can open.
+/// `total` is a diagnostic that says whether narrowing the query is worth doing,
+/// and it must never be rendered in the result position: a search that reported
+/// "4,312 matches" as its headline would be reporting how much text the library
+/// holds, not how well it answered.
+#[derive(Debug)]
+pub struct SearchHits {
+    pub hits: Vec<LibraryHit>,
+    pub total: usize,
+}
+
 pub struct LibraryProjection {
     snapshot_id: Uuid,
     rows: Vec<LibraryRow>,
@@ -598,38 +611,41 @@ impl LibraryProjection {
     /// The filter selects *meetings*; it never changes what counts as a match
     /// inside one. A hit in an excluded meeting is dropped whole rather than
     /// reported without its meeting.
+    /// Match, filter, then cut — in that order, and the order is the point.
+    ///
+    /// **A broad query is answered rather than refused.** Until 2026-08-08 more
+    /// than [`MAX_SEARCH_RESULTS`] matches returned `CapacityExceeded` for the
+    /// whole query, and the shell rendered it as "That search has too many
+    /// matches." Measured the same day: five synthetic meetings already exceed
+    /// the cap on a common word, so any word appearing more than a hundred times
+    /// across a library returned nothing. The cap bounds how many handles one
+    /// response holds open, and truncating to it bounds that exactly as well as
+    /// refusing did — a response still seals at most a hundred hits. What
+    /// changes is what a person gets for a common word: a hundred results
+    /// instead of none.
+    ///
+    /// The order is recency first (see `hit_order`), so a cut page is the most
+    /// recent matches rather than an arbitrary hundred.
     pub fn search_filtered(
         &self,
         query: &str,
         filter: &LibraryFilter,
-    ) -> Result<Vec<LibraryHit>, LibraryReadError> {
-        let hits = self.search(query)?;
-        if filter.is_empty() {
-            return Ok(hits);
+    ) -> Result<SearchHits, LibraryReadError> {
+        let mut hits = self.matches(query)?;
+        if !filter.is_empty() {
+            let admitted: HashSet<&str> = self
+                .filtered_rows(filter)
+                .into_iter()
+                .map(|row| row.meeting_id.as_str())
+                .collect();
+            hits.retain(|hit| admitted.contains(hit_authority(hit).meeting_id.as_str()));
         }
-        let admitted: HashSet<&str> = self
-            .filtered_rows(filter)
-            .into_iter()
-            .map(|row| row.meeting_id.as_str())
-            .collect();
-        Ok(hits
-            .into_iter()
-            .filter(|hit| {
-                self.hits
-                    .borrow()
-                    .get(&hit.key)
-                    .map(|sealed| {
-                        let authority = match sealed {
-                            SealedHit::Claim { authority, .. }
-                            | SealedHit::Transcript { authority, .. }
-                            | SealedHit::Withheld { authority, .. }
-                            | SealedHit::Meeting { authority, .. } => authority,
-                        };
-                        admitted.contains(authority.meeting_id.as_str())
-                    })
-                    .unwrap_or(false)
-            })
-            .collect())
+        let total = hits.len();
+        hits.truncate(MAX_SEARCH_RESULTS);
+        Ok(SearchHits {
+            hits: self.seal(hits),
+            total,
+        })
     }
 
     /// The organization revision this snapshot was built against, or `None`
@@ -662,7 +678,15 @@ impl LibraryProjection {
             .unwrap_or_default()
     }
 
-    pub fn search(&self, query: &str) -> Result<Vec<LibraryHit>, LibraryReadError> {
+    /// Every match, in order, before any cut. Retains no handle.
+    ///
+    /// Split out from [`Self::search`] on 2026-08-08 so that truncation can
+    /// happen **after** filtering. Capping first and filtering second would
+    /// answer a folder search with "the hundred most recent matches anywhere,
+    /// minus the ones outside this folder" — three results where four hundred
+    /// exist. The old code capped first and could not have that bug, because
+    /// past the cap it refused the whole query instead of answering it.
+    fn matches(&self, query: &str) -> Result<Vec<SealedHit>, LibraryReadError> {
         let normalized = normalize_search_query(query)?;
         let mut hits = Vec::new();
         for row in &self.rows {
@@ -721,13 +745,18 @@ impl LibraryProjection {
         }
         hits.sort_by(hit_order);
         hits.dedup_by(|left, right| hit_key(left) == hit_key(right));
-        if hits.len() > MAX_SEARCH_RESULTS {
-            return Err(LibraryReadError::CapacityExceeded);
-        }
+        Ok(hits)
+    }
+
+    /// Seals a page of hits into handles, replacing whatever was retained.
+    ///
+    /// One handle per returned hit and no more: the retained map is what bounds
+    /// how much private snapshot state a response holds open, so it must be cut
+    /// to the page rather than to the match set.
+    fn seal(&self, hits: Vec<SealedHit>) -> Vec<LibraryHit> {
         let mut retained = self.hits.borrow_mut();
         retained.clear();
-        Ok(hits
-            .into_iter()
+        hits.into_iter()
             .map(|hit| {
                 let key = format!("{}:{}", self.snapshot_id, hit_key(&hit));
                 retained.insert(key.clone(), hit);
@@ -736,7 +765,28 @@ impl LibraryProjection {
                     key,
                 }
             })
-            .collect())
+            .collect()
+    }
+
+    pub fn search(&self, query: &str) -> Result<SearchHits, LibraryReadError> {
+        self.search_filtered(query, &LibraryFilter::default())
+    }
+
+    /// The hits alone, for assertions that are about hit content rather than
+    /// about the cut. Test-only and a plain forward: a test that cares how many
+    /// matched calls [`Self::search`] and reads `total`.
+    #[cfg(test)]
+    fn search_hits(&self, query: &str) -> Result<Vec<LibraryHit>, LibraryReadError> {
+        self.search(query).map(|found| found.hits)
+    }
+
+    #[cfg(test)]
+    fn search_filtered_hits(
+        &self,
+        query: &str,
+        filter: &LibraryFilter,
+    ) -> Result<Vec<LibraryHit>, LibraryReadError> {
+        self.search_filtered(query, filter).map(|found| found.hits)
     }
 
     /// Returns the current projected claims for one already-listed meeting.
@@ -2038,7 +2088,7 @@ mod tests {
         assert_eq!(projection.rows().len(), 1);
         assert_eq!(projection.rows()[0].meeting_id, "meeting-stable");
         assert_eq!(projection.quarantined_meetings(), 0);
-        let handle = projection.search("stable").unwrap().remove(0);
+        let handle = projection.search_hits("stable").unwrap().remove(0);
         assert!(
             projection
                 .open_excluding(&fixture.storage, &handle, &excluded)
@@ -2059,7 +2109,7 @@ mod tests {
             projector.clone(),
         )
         .unwrap();
-        let hits = projection.search("claim-a").unwrap();
+        let hits = projection.search_hits("claim-a").unwrap();
         assert!(matches!(
             projection.sealed(&hits[0]),
             Some(SealedHit::Claim {
@@ -2067,7 +2117,7 @@ mod tests {
                 ..
             })
         ));
-        let claim_hits = projection.search("claim-a").unwrap();
+        let claim_hits = projection.search_hits("claim-a").unwrap();
         assert_eq!(claim_hits.len(), 3, "same text remains distinct by ordinal");
         for (ordinal, hit) in claim_hits.iter().enumerate() {
             assert!(
@@ -2086,7 +2136,7 @@ mod tests {
             projector,
         )
         .unwrap();
-        let hit = projection.search("claim-a").unwrap().remove(0);
+        let hit = projection.search_hits("claim-a").unwrap().remove(0);
         let note = load_meeting(&directory)
             .unwrap()
             .artifacts
@@ -2143,7 +2193,7 @@ mod tests {
         )
         .unwrap();
 
-        let cited_span_hits = projection.search("alpha").unwrap();
+        let cited_span_hits = projection.search_hits("alpha").unwrap();
         assert_eq!(cited_span_hits.len(), 4);
         assert!(
             cited_span_hits
@@ -2158,7 +2208,7 @@ mod tests {
                 .any(|hit| matches!(projection.sealed(hit), Some(SealedHit::Transcript { .. })))
         );
 
-        let claim_and_span_hits = projection.search("claim-a").unwrap();
+        let claim_and_span_hits = projection.search_hits("claim-a").unwrap();
         assert_eq!(
             claim_and_span_hits
                 .iter()
@@ -2213,7 +2263,7 @@ mod tests {
             Arc::new(FixtureProjector::new(ProjectorMode::Success)),
         )
         .unwrap();
-        let hit = projection.search("alpha").unwrap().remove(0);
+        let hit = projection.search_hits("alpha").unwrap().remove(0);
         assert!(matches!(
             projection.open(&fixture.storage, &hit).unwrap(),
             OpenedLibraryHit::Claim { locators, .. }
@@ -2234,7 +2284,7 @@ mod tests {
         )
         .unwrap();
         let ordered: Vec<_> = projection
-            .search("claim-a")
+            .search_hits("claim-a")
             .unwrap()
             .iter()
             .map(|hit| match projection.sealed(hit).unwrap() {
@@ -2363,18 +2413,18 @@ mod tests {
         let fixture = Fixture::new();
         fixture.meeting("meeting-a", 10, &[("transcript token", false)]);
         let missing = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        assert_eq!(missing.search("transcript").unwrap().len(), 1);
-        assert!(missing.search("project").unwrap().is_empty());
+        assert_eq!(missing.search_hits("transcript").unwrap().len(), 1);
+        assert!(missing.search_hits("project").unwrap().is_empty());
 
         fixture.metadata(br#"{"schema":"library-metadata/1","revision":4,"folders":[{"id":"11111111-1111-4111-8111-111111111111","name":"Project Atlas"}],"meetings":[{"meeting_id":"meeting-a","title":"Project kickoff","folder_id":"11111111-1111-4111-8111-111111111111"}]}"#);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let title = projection.search("project").unwrap();
+        let title = projection.search_hits("project").unwrap();
         assert_eq!(title.len(), 1, "title and folder are one meeting hit");
         assert!(
             matches!(projection.open(&fixture.storage, &title[0]).unwrap(), OpenedLibraryHit::Meeting { ref title, ref folder, .. } if title.as_deref() == Some("Project kickoff") && folder.as_deref() == Some("Project Atlas"))
         );
-        assert_eq!(projection.search("transcript").unwrap().len(), 1);
+        assert_eq!(projection.search_hits("transcript").unwrap().len(), 1);
     }
 
     #[test]
@@ -2398,10 +2448,13 @@ mod tests {
             "the greeting is too short and the withheld turn is not a label source"
         );
         assert!(
-            projection.search("insurer").unwrap().len() == 1
+            projection.search_hits("insurer").unwrap().len() == 1
                 && matches!(
                     projection
-                        .open(&fixture.storage, &projection.search("insurer").unwrap()[0])
+                        .open(
+                            &fixture.storage,
+                            &projection.search_hits("insurer").unwrap()[0]
+                        )
                         .unwrap(),
                     OpenedLibraryHit::Withheld { .. }
                 ),
@@ -2411,7 +2464,7 @@ mod tests {
         // A derived title is a span of a retained turn, so the turn already
         // answers for it. One hit, of the transcript kind — not a second
         // meeting hit for the same words under a label.
-        let hits = projection.search("migration plan").unwrap();
+        let hits = projection.search_hits("migration plan").unwrap();
         assert_eq!(hits.len(), 1);
         assert!(matches!(
             projection.open(&fixture.storage, &hits[0]).unwrap(),
@@ -2586,12 +2639,12 @@ mod tests {
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
 
-        assert_eq!(projection.search("needle").unwrap().len(), 2);
+        assert_eq!(projection.search_hits("needle").unwrap().len(), 2);
         let filter = LibraryFilter {
             start_epoch_seconds: Some(20),
             ..Default::default()
         };
-        let hits = projection.search_filtered("needle", &filter).unwrap();
+        let hits = projection.search_filtered_hits("needle", &filter).unwrap();
         assert_eq!(hits.len(), 1);
         assert!(matches!(
             projection.open(&fixture.storage, &hits[0]).unwrap(),
@@ -2617,7 +2670,10 @@ mod tests {
 
         let fixture = Fixture::new();
         let meetings = document["meetings"].as_array().expect("meetings");
-        assert!(meetings.len() >= 8, "too few meetings to make top-1 meaningful");
+        assert!(
+            meetings.len() >= 8,
+            "too few meetings to make top-1 meaningful"
+        );
         for meeting in meetings {
             let turns: Vec<(&str, bool)> = meeting["turns"]
                 .as_array()
@@ -2627,7 +2683,9 @@ mod tests {
                 .collect();
             fixture.meeting(
                 meeting["id"].as_str().expect("id"),
-                meeting["created_at_epoch_seconds"].as_u64().expect("created"),
+                meeting["created_at_epoch_seconds"]
+                    .as_u64()
+                    .expect("created"),
                 &turns,
             );
         }
@@ -2642,21 +2700,27 @@ mod tests {
             let intended = question["intended_meeting"].as_str().expect("intended");
             let claims_help = question["exact_helps"].as_bool().expect("exact_helps");
 
-            let hits = projection.search(keyword).unwrap();
+            let hits = projection.search_hits(keyword).unwrap();
             let found: BTreeSet<String> = hits
                 .iter()
-                .map(|hit| match projection.open(&fixture.storage, hit).unwrap() {
-                    OpenedLibraryHit::Claim { meeting_id, .. }
-                    | OpenedLibraryHit::Transcript { meeting_id, .. }
-                    | OpenedLibraryHit::Withheld { meeting_id, .. }
-                    | OpenedLibraryHit::Meeting { meeting_id, .. } => meeting_id,
-                })
+                .map(
+                    |hit| match projection.open(&fixture.storage, hit).unwrap() {
+                        OpenedLibraryHit::Claim { meeting_id, .. }
+                        | OpenedLibraryHit::Transcript { meeting_id, .. }
+                        | OpenedLibraryHit::Withheld { meeting_id, .. }
+                        | OpenedLibraryHit::Meeting { meeting_id, .. } => meeting_id,
+                    },
+                )
                 .collect();
             assert_eq!(
                 found.contains(intended),
                 claims_help,
                 "{keyword:?}: exact_helps is {claims_help} and exact search {} the intended meeting",
-                if found.contains(intended) { "found" } else { "missed" }
+                if found.contains(intended) {
+                    "found"
+                } else {
+                    "missed"
+                }
             );
             helped += usize::from(claims_help);
         }
@@ -2685,15 +2749,15 @@ mod tests {
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         assert_eq!(projection.rows().len(), 5);
-        assert_eq!(projection.search("organizer").unwrap().len(), 4);
-        let folder = projection.search("Atlas").unwrap();
+        assert_eq!(projection.search_hits("organizer").unwrap().len(), 4);
+        let folder = projection.search_hits("Atlas").unwrap();
         assert_eq!(folder.len(), 1);
         assert!(matches!(
             projection.open(&fixture.storage, &folder[0]).unwrap(),
             OpenedLibraryHit::Meeting { ref meeting_id, ref folder, .. }
                 if meeting_id == "meeting-a" && folder.as_deref() == Some("Project Atlas")
         ));
-        assert_eq!(projection.search("transcript").unwrap().len(), 1);
+        assert_eq!(projection.search_hits("transcript").unwrap().len(), 1);
         for (id, lifecycle) in cases {
             let row = projection
                 .rows()
@@ -2722,8 +2786,8 @@ mod tests {
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
         assert!(started.elapsed() < Duration::from_secs(1));
-        assert_eq!(projection.search("transcript").unwrap().len(), 1);
-        assert!(projection.search("metadata").unwrap().is_empty());
+        assert_eq!(projection.search_hits("transcript").unwrap().len(), 1);
+        assert!(projection.search_hits("metadata").unwrap().is_empty());
     }
 
     #[test]
@@ -2750,8 +2814,8 @@ mod tests {
             fixture.metadata(bytes);
             let projection =
                 LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-            assert!(projection.search("xx").unwrap().is_empty());
-            assert_eq!(projection.search("transcript").unwrap().len(), 1);
+            assert!(projection.search_hits("xx").unwrap().is_empty());
+            assert_eq!(projection.search_hits("transcript").unwrap().len(), 1);
         }
     }
 
@@ -2760,7 +2824,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.meeting("meeting-a", 10, &[("transcript token", false)]);
         let missing = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let missing_hit = missing.search("transcript").unwrap().remove(0);
+        let missing_hit = missing.search_hits("transcript").unwrap().remove(0);
         fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"first","folder_id":null}]}"#);
         assert_stale!(missing.open(&fixture.storage, &missing_hit));
 
@@ -2776,7 +2840,7 @@ mod tests {
             fixture.metadata(br#"{"schema":"library-metadata/1","revision":1,"folders":[],"meetings":[{"meeting_id":"meeting-a","title":"first","folder_id":null}]}"#);
             let projection =
                 LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-            let hit = projection.search("first").unwrap().remove(0);
+            let hit = projection.search_hits("first").unwrap().remove(0);
             let path = fixture.storage.path().join("library/metadata.json");
             match replacement {
                 Some(bytes) => {
@@ -2816,8 +2880,15 @@ mod tests {
             }
             let projection =
                 LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-            assert!(projection.search("private").unwrap().is_empty(), "{fault}");
-            assert_eq!(projection.search("transcript").unwrap().len(), 1, "{fault}");
+            assert!(
+                projection.search_hits("private").unwrap().is_empty(),
+                "{fault}"
+            );
+            assert_eq!(
+                projection.search_hits("transcript").unwrap().len(),
+                1,
+                "{fault}"
+            );
         }
     }
 
@@ -2827,7 +2898,7 @@ mod tests {
         fixture.meeting("meeting-a", 10, &[("e\u{301}chooooo", false)]);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let hits = projection.search(" ÉCHO ").unwrap();
+        let hits = projection.search_hits(" ÉCHO ").unwrap();
         assert_eq!(hits.len(), 1);
         assert!(matches!(
             projection.sealed(&hits[0]),
@@ -2841,7 +2912,7 @@ mod tests {
             hit_key(&projection.sealed(&hits[0]).unwrap()),
             hit_key(
                 &projection
-                    .sealed(&projection.search("écho").unwrap()[0])
+                    .sealed(&projection.search_hits("écho").unwrap()[0])
                     .unwrap()
             )
         );
@@ -2858,7 +2929,7 @@ mod tests {
         );
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let retained = projection.search("visible").unwrap().remove(0);
+        let retained = projection.search_hits("visible").unwrap().remove(0);
         assert!(matches!(
             projection.open(&fixture.storage, &retained).unwrap(),
             OpenedLibraryHit::Transcript {
@@ -2867,7 +2938,7 @@ mod tests {
                 ..
             }
         ));
-        let withheld = projection.search("hidden").unwrap().remove(0);
+        let withheld = projection.search_hits("hidden").unwrap().remove(0);
         assert!(matches!(
             projection.open(&fixture.storage, &withheld).unwrap(),
             OpenedLibraryHit::Withheld { .. }
@@ -2905,12 +2976,12 @@ mod tests {
 
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let freed = projection.search("freed").unwrap().remove(0);
+        let freed = projection.search_hits("freed").unwrap().remove(0);
         assert!(matches!(
             projection.open(&fixture.storage, &freed).unwrap(),
             OpenedLibraryHit::Transcript { .. }
         ));
-        let withheld = projection.search("hidden").unwrap().remove(0);
+        let withheld = projection.search_hits("hidden").unwrap().remove(0);
         assert!(matches!(
             projection.open(&fixture.storage, &withheld).unwrap(),
             OpenedLibraryHit::Withheld { .. }
@@ -2958,8 +3029,8 @@ mod tests {
 
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        assert_eq!(projection.search("good").unwrap().len(), 1);
-        assert!(projection.search("bad").unwrap().is_empty());
+        assert_eq!(projection.search_hits("good").unwrap().len(), 1);
+        assert!(projection.search_hits("bad").unwrap().is_empty());
     }
 
     #[test]
@@ -3009,7 +3080,7 @@ mod tests {
             let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
             let projection =
                 LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-            let hit = projection.search("stable").unwrap().remove(0);
+            let hit = projection.search_hits("stable").unwrap().remove(0);
             match target {
                 "meeting" => fs::write(directory.join("meeting.json"), b"{}").unwrap(),
                 "attempt" => fs::write(directory.join("attempt.json"), b"{}").unwrap(),
@@ -3038,14 +3109,14 @@ mod tests {
         fixture.meeting("meeting-a", 10, &[("stable token", false)]);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let handle = projection.search("stable").unwrap().remove(0);
+        let handle = projection.search_hits("stable").unwrap().remove(0);
         let forged = LibraryHit {
             projection_id: projection.snapshot_id,
             key: "forged".into(),
         };
         assert_stale!(projection.open(&fixture.storage, &forged));
         let other = LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        assert_stale!(projection.open(&fixture.storage, &other.search("stable").unwrap()[0]));
+        assert_stale!(projection.open(&fixture.storage, &other.search_hits("stable").unwrap()[0]));
         assert!(projection.open(&fixture.storage, &handle).is_ok());
     }
 
@@ -3055,7 +3126,7 @@ mod tests {
         let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let handle = projection.search("stable").unwrap().remove(0);
+        let handle = projection.search_hits("stable").unwrap().remove(0);
         let mut record = load_meeting(&directory).unwrap();
         record.lifecycle = MeetingLifecycle::SummaryFailed;
         write_meeting(&directory, &record).unwrap();
@@ -3065,7 +3136,7 @@ mod tests {
         let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let handle = projection.search("stable").unwrap().remove(0);
+        let handle = projection.search_hits("stable").unwrap().remove(0);
         let mut record = load_meeting(&directory).unwrap();
         durable_create_new(&directory.join("capture/mic.wav"), b"mic").unwrap();
         durable_create_new(&directory.join("capture/system.wav"), b"system").unwrap();
@@ -3082,7 +3153,7 @@ mod tests {
         let directory = fixture.meeting("meeting-a", 10, &[("stable token", false)]);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        let handle = projection.search("stable").unwrap().remove(0);
+        let handle = projection.search_hits("stable").unwrap().remove(0);
         let mut record = load_meeting(&directory).unwrap();
         let original = record.artifacts.current_transcript.clone().unwrap();
         let bytes = fs::read(directory.join(&original.relative_path)).unwrap();
@@ -3101,9 +3172,9 @@ mod tests {
         let directory = fixture.meeting("meeting-a", 10, &[("token", false)]);
         let projection =
             LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
-        assert_eq!(projection.search("token").unwrap().len(), 1);
+        assert_eq!(projection.search_hits("token").unwrap().len(), 1);
         assert_eq!(
-            projection.search("t"),
+            projection.search_hits("t"),
             Err(LibraryReadError::InvalidRequest)
         );
         assert!(matches!(
@@ -3175,10 +3246,75 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(
-            projection.search("common"),
-            Err(LibraryReadError::CapacityExceeded)
+        // Until 2026-08-08 this asserted `Err(CapacityExceeded)` — a query with
+        // more than a hundred matches refused entirely, and the shell showed
+        // "That search has too many matches" with no results. Measured the same
+        // day: five synthetic meetings already cross the cap on a common word,
+        // so that refusal was reachable in a first week rather than at scale.
+        //
+        // It follows the constant rather than a literal hundred, because it is a
+        // test of live behaviour and not of a frozen artifact.
+        let found = projection
+            .search("common")
+            .expect("a broad query is answered");
+        assert_eq!(found.hits.len(), MAX_SEARCH_RESULTS);
+        assert_eq!(found.total, MAX_SEARCH_RESULTS + 1);
+        // Recency first, so the page a person sees is the newest matches rather
+        // than an arbitrary hundred of them.
+        assert!(
+            found.hits[0]
+                .key
+                .contains(&format!("meeting-{MAX_SEARCH_RESULTS:03}")),
+            "the cut page did not start at the most recent match: {}",
+            found.hits[0].key
         );
+        // One handle per returned hit, not per match. The cap's job was always
+        // to bound retained snapshot state, and truncating bounds it exactly as
+        // refusing did.
+        assert_eq!(projection.hits.borrow().len(), MAX_SEARCH_RESULTS);
+    }
+
+    /// Filter first, then cut — and the order is only visible when the filter
+    /// selects meetings the global page would not contain.
+    ///
+    /// A hundred and twenty meetings, all matching the word, ordered newest
+    /// first. The filter admits the twenty *oldest*. Cutting to a hundred before
+    /// filtering leaves nothing of them, so a folder or date search would report
+    /// no matches while twenty exist. The old code could not have this bug
+    /// because past the cap it refused the whole query instead of answering it;
+    /// truncation is what makes the order matter.
+    #[test]
+    fn a_filtered_search_pages_within_the_filter_and_not_across_it() {
+        let fixture = Fixture::new();
+        for ordinal in 0..120_u64 {
+            fixture.meeting(
+                &format!("meeting-{ordinal:03}"),
+                100 + ordinal,
+                &[("common phrase", false)],
+            );
+        }
+        let projection = LibraryProjection::rebuild(
+            &fixture.storage,
+            ReadLimits {
+                max_meetings: 200,
+                ..ReadLimits::default()
+            },
+        )
+        .unwrap();
+
+        let oldest_twenty = LibraryFilter {
+            end_epoch_seconds: Some(119),
+            ..LibraryFilter::default()
+        };
+        let found = projection
+            .search_filtered("common", &oldest_twenty)
+            .expect("a filtered query is answered");
+        assert_eq!(
+            found.total, 20,
+            "the total counted matches outside the filter"
+        );
+        assert_eq!(found.hits.len(), 20);
+        assert_eq!(projection.hits.borrow().len(), 20);
     }
 
     #[test]
