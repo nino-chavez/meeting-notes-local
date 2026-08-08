@@ -2599,6 +2599,74 @@ mod tests {
         ));
     }
 
+    /// The semantic-retrieval probe measures against exact search, so exact
+    /// search's actual behaviour on these fixtures is asserted here rather than
+    /// written down in the fixture file from memory.
+    ///
+    /// `exact_helps` is the load-bearing field: it says whether today's search
+    /// finds the meeting a person wanted, given the one word they would type.
+    /// Five questions where it does and five where it does not — a suite of only
+    /// the second kind would reward any non-empty retrieval at all.
+    #[test]
+    fn the_semantic_probe_fixtures_describe_what_exact_search_actually_does() {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../notes/semantic_retrieval_fixtures.json"
+        ))
+        .expect("fixtures parse");
+        assert_eq!(document["schema"], "semantic-retrieval-fixtures/1");
+
+        let fixture = Fixture::new();
+        let meetings = document["meetings"].as_array().expect("meetings");
+        assert!(meetings.len() >= 8, "too few meetings to make top-1 meaningful");
+        for meeting in meetings {
+            let turns: Vec<(&str, bool)> = meeting["turns"]
+                .as_array()
+                .expect("turns")
+                .iter()
+                .map(|turn| (turn.as_str().expect("turn text"), false))
+                .collect();
+            fixture.meeting(
+                meeting["id"].as_str().expect("id"),
+                meeting["created_at_epoch_seconds"].as_u64().expect("created"),
+                &turns,
+            );
+        }
+        let projection =
+            LibraryProjection::rebuild(&fixture.storage, ReadLimits::default()).unwrap();
+        assert_eq!(projection.rows().len(), meetings.len());
+
+        let questions = document["questions"].as_array().expect("questions");
+        let mut helped = 0;
+        for question in questions {
+            let keyword = question["keyword"].as_str().expect("keyword");
+            let intended = question["intended_meeting"].as_str().expect("intended");
+            let claims_help = question["exact_helps"].as_bool().expect("exact_helps");
+
+            let hits = projection.search(keyword).unwrap();
+            let found: BTreeSet<String> = hits
+                .iter()
+                .map(|hit| match projection.open(&fixture.storage, hit).unwrap() {
+                    OpenedLibraryHit::Claim { meeting_id, .. }
+                    | OpenedLibraryHit::Transcript { meeting_id, .. }
+                    | OpenedLibraryHit::Withheld { meeting_id, .. }
+                    | OpenedLibraryHit::Meeting { meeting_id, .. } => meeting_id,
+                })
+                .collect();
+            assert_eq!(
+                found.contains(intended),
+                claims_help,
+                "{keyword:?}: exact_helps is {claims_help} and exact search {} the intended meeting",
+                if found.contains(intended) { "found" } else { "missed" }
+            );
+            helped += usize::from(claims_help);
+        }
+        assert_eq!(
+            (helped, questions.len() - helped),
+            (5, 5),
+            "the suite must be balanced between questions exact search answers and questions it cannot"
+        );
+    }
+
     #[test]
     fn every_safe_metadata_only_lifecycle_is_projected_without_transcript_authority() {
         let fixture = Fixture::new();

@@ -124,7 +124,7 @@ inference is what went wrong before.
 | E12 | Release, distribution, admission | — | 7 | Mixed |
 | **E13** | **The corpus store** | **E6 D3** | 7 | **Landed 2026-08-07**, except US-13.6 |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
-| **E15** | **Question answering across the corpus** | **D1 D3 D4 D5** | 2 | **US-15.1 landed 2026-08-08**; US-15.2 blocked on A3; semantic search and cross-meeting answers are Wave 1 items 5–6 |
+| **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3 measured the same day and its store is the next build; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
 | **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
 | **E18** | **Named speakers** | **A3** | — | Wave 3 items 11–12 |
@@ -1431,6 +1431,39 @@ app builds the full projection before anything else happens, so the rows are alr
 in hand. The index earns its read path when US-13.6 stops the scan being the entry
 point — and until then it is written on every library open and read by nothing,
 which is stated here rather than left for someone to discover.
+
+#### US-15.3: Semantic retrieval, measured before it is built
+**Feature D2 · J1 · §F · P0 · M · Measured 2026-08-08, store not built**
+
+As the Operator, I want to find a meeting by describing it, so that forgetting the
+exact words somebody used does not lose it.
+
+**Acceptance criteria:**
+- Given a question whose words appear in no meeting, When retrieval runs, Then the meeting a person meant is ranked first.
+- Given a question exact search already answers, When retrieval runs, Then it is not worse.
+- Given the same corpus and question, When retrieval runs again from a fresh process, Then the ranking and the margins are identical.
+
+**Validation:** **Receipted** — `notes/SEMANTIC_RETRIEVAL.md` registered a
+two-sided prediction of 8–10 of 10 before any download; three cold runs returned
+10 of 10 overall and 5 of 5 on the questions exact search cannot answer, with
+byte-identical receipts. `ReceiptTests` pins the numbers as literals and
+`the_semantic_probe_fixtures_describe_what_exact_search_actually_does` asserts the
+baseline against `library_read::search` itself.
+
+**The margins are the finding, not the score.** Three of the five hard questions
+were decided by less than 0.04 cosine — one by 0.013 — on a corpus of ten
+meetings. That justifies building the store and says nothing about a thousand
+meetings. The next measurement here is distractor density.
+
+**Not built:** the vector column, the MLX forward pass, and any surface. The
+probe used the Apache-2.0 reference implementation because `mlx-embeddings` is
+GPL-3.0 and this repository is MIT — so the shipping path is a forward pass
+written here, checkable against the committed receipts.
+
+**Evidence:** the fixtures were hardened mid-registration. A word-overlap ranker
+with no model in it initially scored 8 of 10 and 3 of 5 on the hard half, because
+two transcripts contained words the fixture claimed were absent. Both were
+removed and a test now fails if any non-semantic strategy answers a hard question.
 
 #### US-15.2: Filtering by person
 **Feature D3 · J1 · §F · P1 · M · Blocked on A3**

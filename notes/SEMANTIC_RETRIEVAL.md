@@ -1,0 +1,219 @@
+# Semantic retrieval probe
+
+**Registered 2026-08-08, before any download or inference call. Nothing in this
+section reports a result.**
+
+Separate contract, separate files. It shares no pin, prompt or receipt with
+`MLX_NOTE_ADMISSION.md` or `MLX_TITLE_SELECTION.md`, so no committed receipt on
+either path is invalidated by anything here.
+
+## The question
+
+Exact search over the corpus shipped and works on the words people actually said.
+Wave 1 item 5 asks for semantic search beside it.
+
+**Given a question, does a small local embedding model retrieve the meeting a
+person meant — including when the question's words appear nowhere in it?**
+
+## What is embedded, and what is not
+
+**One vector per meeting**, over the concatenation of its retained turns. The
+queue row asks for search over the corpus, and that is a question about which
+meeting to open. Landing on the exact claim inside one is item 6 and needs a
+different unit; measuring it here would answer a question nobody asked yet.
+
+Nothing is embedded that search does not already read. Withheld turns are absent
+from the projection's searchable text and are absent here for the same reason.
+
+## What it is measured against, and why that is the hard part
+
+`library_read::search` is a substring search. Typing a whole question into it
+returns nothing, and reporting that as a win would be measuring a strawman. So
+the baseline is what a person actually does today: **the single keyword they
+would type.**
+
+`semantic_retrieval_fixtures.json` carries ten synthetic meetings and ten
+questions. Each question names the meeting a person meant, the keyword they would
+try, and whether that keyword finds it. **`exact_helps` is asserted by a Rust test
+against the real function** —
+`the_semantic_probe_fixtures_describe_what_exact_search_actually_does` — so the
+baseline cannot drift from the shipped one or be written down from memory.
+
+The suite is deliberately half and half. Five questions where the keyword already
+works, five where it does not. A suite of only the second kind rewards any
+non-empty retrieval; a suite of only the first measures nothing a substring match
+cannot already do.
+
+### The fixtures were hardened against a control that reads no meaning
+
+A crude word-overlap ranker — shared words between question and transcript, no
+model — initially scored **8 of 10 overall and 3 of 5 on the questions exact
+search cannot answer.** That is a strategy with no understanding in it, and it
+was passing the half of the suite that exists to need understanding.
+
+Two of the three were real: the transcript for "office space" contained the word
+*office*, and the one for "database change" contained *change*, while the
+fixture's own note claimed those words were absent. The third was a tie-break
+artifact — zero shared words ranked first on identifier order alone.
+
+Both words were removed from the transcripts and the control now treats zero
+overlap as no answer. **The fixtures were changed, not the bar.**
+
+### Registered baselines, all measured before the run
+
+| Strategy | Overall | On the five exact search cannot answer | Reads meaning? |
+|---|---|---|---|
+| `library_read::search` with the keyword | **5 / 10** | **0 / 5** | no — substring |
+| Word-overlap ranker, no model | 5 / 10 | 0 / 5 | no |
+| Uniform random top-1 over ten meetings | 1 / 10 expected | 0.5 / 5 expected | no |
+
+## The prediction, stated before the answer is known
+
+**Registered prediction, two-sided: top-1 accuracy of 8 to 10 of 10 overall, and
+at least 4 of the 5 questions exact search cannot answer.**
+
+The second clause is the discriminating one. Overall accuracy can be carried by
+the easy half; only the hard half distinguishes retrieval from matching.
+
+- **Below 4 on the hard five**, the model is not supplying what semantic search
+  exists to supply, and the path is closed for this model at this size. Two
+  non-semantic strategies already score 5 overall, so an overall score alone
+  cannot rescue it.
+- **Above 9 overall with fewer than 4 on the hard five** would mean it is winning
+  exactly where a substring match already wins, which is not a reason to add a
+  model, and must be found before anything is claimed.
+
+**One control, registered with it:** the five questions exact search already
+answers must score at least 4 of 5. An arm that buys paraphrase at the cost of
+proper nouns is a regression wearing a feature's name.
+
+## Gates
+
+| Gate | Pass condition | Failure |
+|---|---|---|
+| Retrieval | 8–10 overall **and** ≥4 of the hard five | See the two clauses above |
+| Control — no regression | ≥4 of the five exact search already answers | Reported separately; on its own it does not close the path |
+| Repeatability | Byte-identical vectors and identical rankings across three runs from fresh processes | Any variation rejects the result rather than being averaged |
+| Latency | Embedding the ten-meeting corpus and one query, reported. **Not a rejection criterion** — this is a reference implementation, not the shipping one | — |
+| Human judgment of whether the results are useful | **Unreachable from here.** Ten synthetic meetings is not a corpus | — |
+
+## What is pinned
+
+- Model `sentence-transformers/all-MiniLM-L6-v2`, Apache-2.0, at immutable
+  revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`. `model.safetensors` is
+  90,868,376 bytes with SHA-256
+  `53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db`, taken from
+  the Hugging Face metadata endpoint before any download.
+- Package `sentence-transformers==5.7.0`, Apache-2.0.
+- A disposable pip environment under `/private/tmp`, as every probe here uses.
+
+### The convenient MLX route is GPL and this repository is MIT
+
+`mlx-embeddings` 0.1.0 is **GPL-3.0**. This repository is MIT, and the product
+runtime is MLX-based, so the obvious "just use the MLX embedding wrapper" path is
+closed for anything that ships — not on preference, on licence.
+
+That is why the probe uses the reference implementation rather than the eventual
+one. The question here is whether *these weights* retrieve the right meeting; the
+answer does not depend on which framework multiplies the matrices. **If it passes,
+writing the forward pass against MLX directly is the packaging task**, and its
+vectors can be checked against this run's. If it fails, that work is never
+started, which is the whole reason for probing first.
+
+## What a pass would and would not authorize
+
+It **would** authorize building the vector store — a column beside the corpus
+index, written when the index syncs — and an MLX forward pass to fill it.
+
+It would **not** admit anything into the product runtime, add a command, package
+a model, or establish that semantic results are useful. Ten synthetic meetings
+written by the person grading them is a measurement of retrieval mechanics on a
+toy corpus. `MLX_NOTE_ADMISSION.md`'s gate table ends at a recorded human
+decision, and that gate is the operator's.
+
+## Scope
+
+Synthetic fixtures only. No meeting recording, Preview data, or product record.
+This changes no product runtime, adds no command, and admits nothing.
+
+---
+
+## Result — 2026-08-08 — the prediction holds, and the margins are the finding
+
+Three runs from fresh processes against the pinned revision. The weights' SHA-256
+matched the digest taken from the metadata endpoint **before** the download.
+Receipts: `semantic_retrieval_receipt.json` and its `_run2` / `_run3` siblings.
+
+**10 of 10 overall, and 5 of 5 on the questions exact search cannot answer.** The
+registered range was 8–10 overall with at least 4 of the hard five, and the
+no-regression control required at least 4 of the easy five. All three hold.
+
+| Arm | Overall | Hard five | Easy five |
+|---|---|---|---|
+| `library_read::search` with the keyword | 5 / 10 | **0 / 5** | 5 / 5 |
+| Word-overlap ranker, no model | 5 / 10 | **0 / 5** | 5 / 5 |
+| **all-MiniLM-L6-v2, cosine over one vector per meeting** | **10 / 10** | **5 / 5** | 5 / 5 |
+
+Repeatability held: the three receipts are identical once the embedding time is
+excluded, including every similarity margin to six decimals.
+
+### The score is not the interesting number. The margins are.
+
+| Question class | Margin over the runner-up |
+|---|---|
+| The five exact search already answers | 0.101, 0.237, 0.323, 0.429, 0.461 |
+| The five it cannot | **0.013, 0.021, 0.038**, 0.117, 0.214 |
+
+**Three of the five questions this feature exists for were near-ties.**
+
+| Question | Chose | Runner-up |
+|---|---|---|
+| "Which meeting was about hiring problems?" | `meeting-h` 0.2426 | `meeting-d` 0.2299 |
+| "Did we talk about giving up some of our office space?" | `meeting-i` 0.3158 | `meeting-a` 0.2777 |
+| "What was the data retention problem?" | `meeting-j` 0.2719 | `meeting-d` 0.2505 |
+
+A 0.013 separation on a corpus of **ten** meetings is a coin landing the right way
+up, not a capability. The relevant number is not this run's accuracy; it is how
+many distractors sit within 0.013 of the right answer when there are a thousand
+meetings instead of nine. Nothing here measures that, and this section is not going
+to infer it.
+
+Read the two tables together and the honest statement is narrow: **on a
+ten-meeting corpus, this model separates the right meeting from nine wrong ones —
+comfortably where the words match and barely where they do not.** That is enough
+to justify building the store. It is not enough to predict behaviour at scale, and
+the next measurement on this path is a distractor-density one, not a bigger
+question list.
+
+### Everything else was uneventful, which is worth one line
+
+The corpus embedded in 0.11–0.92 s (the first run includes a cold model load).
+Nothing in the mechanical envelope is near a limit, and latency was registered as
+reported-not-rejecting because this is the reference implementation rather than
+the shipping one.
+
+### What is not claimed
+
+**Not usefulness.** Ten synthetic meetings written by the person grading them is a
+measurement of retrieval mechanics on a toy corpus. Whether semantic results help
+is the operator's gate, and it is unreachable from here.
+
+**Not a scale claim**, per the margins above.
+
+**Not a packaging decision.** These vectors came from the Apache-2.0 reference
+implementation. `mlx-embeddings` is GPL-3.0 and this repository is MIT, so the
+shipping path is a forward pass written against MLX — and its vectors can now be
+checked against this run's receipts, which is what makes that task verifiable
+rather than hopeful.
+
+### What this licenses
+
+Building the vector store: a column beside the corpus index, written when the
+index syncs, and an MLX forward pass to fill it. That is Wave 1 item 5's build,
+and it now has a measurement behind it rather than an assumption.
+
+**A falsifier for whoever does it.** If the MLX forward pass reproduces these ten
+rankings but its margins on the hard five differ by more than 0.01, the two
+implementations are not computing the same thing and the difference must be found
+before either is trusted — the rankings agreeing is a weaker check than it looks
+when three of them are decided by 0.013.

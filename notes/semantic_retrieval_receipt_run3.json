@@ -1,0 +1,139 @@
+{
+  "control": {
+    "on_hard": 0,
+    "overall": 5
+  },
+  "corpus_embed_elapsed_s": 0.110113,
+  "fixtures_sha256": "154ccba3657a2113c603a3af64d304299d674d8bc4a652f78401a021ac0e3d1d",
+  "harness_sha256": "fd7af8c5053ad4be2f57a2c647c215011211c33e242b181242f98592b9ca7d9e",
+  "model": {
+    "on_easy": 5,
+    "on_hard": 5,
+    "overall": 10
+  },
+  "model_weights_sha256": "53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db",
+  "pin": {
+    "model": {
+      "expected_model_safetensors_bytes": 90868376,
+      "expected_model_safetensors_sha256": "53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db",
+      "license": "Apache-2.0",
+      "repository": "sentence-transformers/all-MiniLM-L6-v2",
+      "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+    },
+    "package": "sentence-transformers==5.7.0",
+    "package_license": "Apache-2.0",
+    "product_records": "forbidden",
+    "rejected_dependency": {
+      "license": "GPL-3.0",
+      "name": "mlx-embeddings",
+      "version": "0.1.0"
+    },
+    "role": "research-only",
+    "schema": "semantic-retrieval-runtime/1"
+  },
+  "python": "3.13.14",
+  "questions": 10,
+  "rows": [
+    {
+      "control_correct": true,
+      "control_top1": "meeting-a",
+      "exact_helps": true,
+      "intended_meeting": "meeting-a",
+      "model_correct": true,
+      "model_margin": 0.236599,
+      "model_top1": "meeting-a",
+      "question_sha256": "e9b0e212528b2a899c41c83f5e997f62c89c3704b7056d3454d8ef6817ebeaa9"
+    },
+    {
+      "control_correct": true,
+      "control_top1": "meeting-c",
+      "exact_helps": true,
+      "intended_meeting": "meeting-c",
+      "model_correct": true,
+      "model_margin": 0.429107,
+      "model_top1": "meeting-c",
+      "question_sha256": "d5dc63225edebfee4c0bfca547fde4021f7c776e8b475dfafdd77a5423989e12"
+    },
+    {
+      "control_correct": true,
+      "control_top1": "meeting-e",
+      "exact_helps": true,
+      "intended_meeting": "meeting-e",
+      "model_correct": true,
+      "model_margin": 0.101,
+      "model_top1": "meeting-e",
+      "question_sha256": "f2ab4084c5963e844d47f9d2119ab9809be8699131d1e34aa1559cc30ddf3d0e"
+    },
+    {
+      "control_correct": true,
+      "control_top1": "meeting-f",
+      "exact_helps": true,
+      "intended_meeting": "meeting-f",
+      "model_correct": true,
+      "model_margin": 0.322839,
+      "model_top1": "meeting-f",
+      "question_sha256": "ef64e9941010ce3e5d11ccf6f990434d8b692ead823f626f99307580423fb273"
+    },
+    {
+      "control_correct": true,
+      "control_top1": "meeting-g",
+      "exact_helps": true,
+      "intended_meeting": "meeting-g",
+      "model_correct": true,
+      "model_margin": 0.460787,
+      "model_top1": "meeting-g",
+      "question_sha256": "f317beed316a5d2bcc6db38d1359d975908ae645d20acd9db0e95916efd2f2af"
+    },
+    {
+      "control_correct": false,
+      "control_top1": "meeting-i",
+      "exact_helps": false,
+      "intended_meeting": "meeting-h",
+      "model_correct": true,
+      "model_margin": 0.012699,
+      "model_top1": "meeting-h",
+      "question_sha256": "c2e316f99420edbc7771b383e881f0163f5763c23ee6af3fac18d8ef63c5ddc6"
+    },
+    {
+      "control_correct": false,
+      "control_top1": null,
+      "exact_helps": false,
+      "intended_meeting": "meeting-i",
+      "model_correct": true,
+      "model_margin": 0.038104,
+      "model_top1": "meeting-i",
+      "question_sha256": "f43936d9a303d4dfbbe7b2b21dd41b5f689d081241117d02d1a7d5f7ab5a3f34"
+    },
+    {
+      "control_correct": false,
+      "control_top1": null,
+      "exact_helps": false,
+      "intended_meeting": "meeting-j",
+      "model_correct": true,
+      "model_margin": 0.021364,
+      "model_top1": "meeting-j",
+      "question_sha256": "6aa26687054cfd00f30f496a9f4207dd9643a965fcc1afddaca3a5ce12e5f7e5"
+    },
+    {
+      "control_correct": false,
+      "control_top1": null,
+      "exact_helps": false,
+      "intended_meeting": "meeting-d",
+      "model_correct": true,
+      "model_margin": 0.214309,
+      "model_top1": "meeting-d",
+      "question_sha256": "8fb614dd6e3fee275c8f46cd8ae33c64eee72683461a52738989092be1c42855"
+    },
+    {
+      "control_correct": false,
+      "control_top1": "meeting-h",
+      "exact_helps": false,
+      "intended_meeting": "meeting-b",
+      "model_correct": true,
+      "model_margin": 0.117157,
+      "model_top1": "meeting-b",
+      "question_sha256": "73d690c81b744f7391a81def0a7f400cf3d4b624aa7342a9c1e01a99a6f4b2ce"
+    }
+  ],
+  "schema": "semantic-retrieval/1"
+}
