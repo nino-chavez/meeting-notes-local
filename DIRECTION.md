@@ -1,46 +1,40 @@
 # Direction — local-meeting-notes
 
-Art direction for this surface. Unlike the records that quote an existing
-`DESIGN.md`, this one is **authored, not derived**: there is no shipped
-`DESIGN.md` stating a direction to quote, because there is no shipped surface.
-The thesis below is written first and `DESIGN.md`'s tokens answer to it, rather
-than the reverse.
+Art direction for the Yawn desktop app. This record was rebaselined on
+2026-08-08 from the implemented paper app, the delivery site's harvested brand,
+and direct operator review. It supersedes the earlier graphite "field recorder"
+direction, which incorrectly described the surface as unshipped and treated an
+interaction metaphor as permission to replace the product's visual identity.
 
-A finding with no `authorized` row here is a defect. Absence of a record is not
+A finding with no ledger verdict is a defect. Absence of a record is not
 permission. Direction constrains *how* a correctness failure is fixed — never
 *whether*.
-
-**The ledger is empty on purpose.** Every device row in the six existing records
-adjudicates shipped code and cites a file and line. A ledger of hypothetical
-devices would be exactly the "reads like a mood" failure the direction contract
-rejects. Rows are added as devices land, not before. An empty ledger is a valid
-state: it means the defect gate wins by default, which is the correct posture
-for a surface that does not exist yet.
 
 ---
 
 ## The contract
 
-The ≤150-word block below is the canonical direction text. It ships as an HTML
-comment in the emitted markup so it survives the production build, per
-impeccable's direction contract (`skill/reference/new-work.md:71`).
+The block below is the canonical direction text and stays under 150 words.
 
 ```html
 <!--
-THESIS: One bit of state — is it listening — must be readable at a glance;
-everything else recedes.
+THESIS: Yawn is a private meeting record whose capture state is unmistakable.
+The record feels calm; the live control feels exact.
 
-OWN-WORLD: An instrument, not a productivity app. A field recorder's panel:
-dark, dense, metered. Not the soft pastel SaaS notetaker.
+OWN-WORLD: A first-party Mac utility with a private meeting record at its
+center. Native window anatomy, familiar controls, and flexible navigation own
+the shell. Yawn's editorial voice belongs inside the record.
 
-STORY: Dormant, alert, armed, running, settled. One indicator carries the whole
-arc; the window is only where it lands.
+STORY: Browse, choose, focus, capture, verify. The note is the reading surface;
+the transcript remains the evidence beneath it.
 
-FIRST VIEWPORT: The library, the last note already written beside it. Real
-content, and the choice of which. Never an empty dashboard, never a welcome card.
+FIRST VIEWPORT: The library and a selected recent note. Real content, with the
+operator still choosing which meeting to open. Never an empty dashboard.
 
-FORM: Dark neutral ramp, monospace transcript, no shadows, no ambient motion.
-The single accent is reserved for live capture and appears nowhere else.
+FORM: System sans and familiar symbols own the chrome. A restrained serif may
+mark the meeting title; mono marks transcript evidence. Terracotta carries
+identity. Dedicated green plus a state word and mark carries live capture.
+Critical capture control never depends on a bottom bar. No ambient motion.
 -->
 ```
 
@@ -48,145 +42,123 @@ The single accent is reserved for live capture and appears nowhere else.
 
 ## Why this thesis and not another
 
-The product's defining fact is that it listens to a room and you never watch it
-work. Every competing product resolves that by putting recording chrome in front
-of you — a bot tile in the participant grid, a browser tab, a floating window.
-This one has no such affordance by construction, which makes ambiguity about its
-state the central design risk rather than a detail.
+The earlier direction correctly identified the hardest interaction problem:
+Yawn can listen without a bot or browser tab, so the operator must always know
+whether capture is running. It then made an unsupported leap from that behavior
+to an all-dark hardware atmosphere.
 
-So the thesis is not a mood ("calm", "focused", "minimal"). It is a ranking: the
-listening indicator outranks every other element on every surface, and anything
-that competes with it loses. That ranking is falsifiable, which is the test the
-direction contract applies.
+That leap erased evidence already in the product. The implemented app used a
+paper canvas, deep green, editorial serif headings, and restrained terracotta.
+The Yawn delivery site later documented those same choices as harvested from
+the app and explicitly described the app as a paper surface. The dark record
+said no surface existed. Both claims could not be true, and the implemented
+lineage wins.
 
-**The instrument framing is a rejection, not a reference.** Naming Linear,
-Stripe and Vercel as references asks the surface to look like the category —
-that is genre assignment, not art direction. The reference here is a class of
-object: metered hardware whose job is to show you one reading you can trust. It
-generates constraints the genre label cannot, most obviously the accent rule
-below.
+The correction preserves the useful part of the instrument idea. Instrument
+precision belongs where capture is controlled: the header state, quick control,
+recording workflow, meters, elapsed time, and degraded-channel warning. It does
+not require every retained note, library row, and settings page to look like a
+mixing console.
+
+The 2026-08-08 side-by-side review exposed a second unsupported leap. Restoring
+the paper lineage did not make the shell feel native. The Paper Focus decision
+measured task steps, visible controls, and words against Paper Instrument. It
+proved only that Focus was less cluttered inside the same visual frame. It did
+not test Mac window anatomy, perceived quality, platform familiarity, or
+composition beside a finished desktop app.
+
+The functional shell therefore remains useful as an interaction map, but it is
+not the visual direction. Native calibration compared a conventional split
+view, a document-first window, and a system-default reference. The operator
+selected the conventional Mac split on 2026-08-08: persistent meeting context
+won over the Document candidate's calmer but hidden library.
 
 ---
 
 ## Constraints this thesis generates
 
-These bind `DESIGN.md` and pre-commit any device that would violate them.
+**Brand and live state are separate tokens.** Terracotta identifies Yawn and may
+mark selected or emphasized product actions. It never claims that capture is
+running. Dedicated green is reserved for healthy live capture. The word
+"Recording" and a clear state mark accompany it, so color is never the only
+signal. Degraded capture changes both wording and shape.
 
-**The accent means live and nothing else.** One color, used for exactly one
-meaning: capture is running. It appears nowhere in navigation, selection,
-links, focus rings, or charts. The immediate consequence — the palette carries
-**no amber warning color**, because a warning that resembles the live indicator
-destroys the one reading the product exists to make trustworthy. Warnings are
-neutral foreground plus text.
+**Native chrome is the product shell; paper belongs to the record.** Window
+frame, toolbar, sidebar, controls, symbols, active state, and resizing follow
+Mac conventions before Yawn styling. Warm paper and editorial treatment may
+appear inside the selected meeting. They do not repaint navigation, settings,
+or system status as a document.
 
-*This collides with a real accessibility requirement, and the collision is resolved
-here rather than at the first focus ring.* film-room's interaction contract states
-"every keyboard-reachable control has a visible accent focus ring"
-(`~/Workspace/dev/wip/film-room/docs/design-system/interaction-contract.md`), and
-that project is further along than this one, so the instinct is to copy it. It
-cannot be copied: an accent focus ring would put the live-capture color under the
-cursor on every tab press. **Focus rings here are a high-contrast neutral outline
-plus an offset**, which is visible against both the dark ramp and any raised
-surface, and carries no state meaning at all. Contrast, not hue, is what makes a
-focus ring findable — the accent was never doing that job, only marking it.
+**Serif type marks the record, not the controls.** A retained meeting title may
+use the editorial serif. Navigation, buttons, labels, status, settings, and
+workflow instructions use the UI sans. Transcript turns and timestamps use the
+mono face. Marketing-scale display type does not enter the desktop shell.
 
-*And no state may be carried by color alone.* film-room's component catalog requires
-every health and progress stage to "pair state word/icon with color". Here that is
-not merely accessibility hygiene: `recording` and `degraded` must be distinguishable
-at menubar size, and one accent used for both with only a tint between them fails
-the product's central reading. Shape and a mark carry the difference; the accent
-says only that something is live.
+**Depth represents actual layering.** System materials, adjacency, tone, and
+borders establish window hierarchy. Shadows are reserved for real overlays
+such as a command launcher, popover, or modal. Cards do not float merely to
+decorate empty space.
+
+**Critical capture control stays in the window frame or menubar.** A record
+button may live in the integrated toolbar and the current state remains in the
+menubar. A bottom bar can display contextual information, but it cannot be the
+only or primary home for Record or Stop.
 
 **No ambient motion anywhere.** A pulse, breath, shimmer, or looping gradient can
-be misread as activity. The only moving element permitted is an audio level
-meter, which is moving *because* audio is arriving — it is a reading, not
-decoration. Reduced-motion still applies to it.
+be misread as activity. The audio level meter is the only permitted repeating
+motion, because it is a reading of arriving audio. Reduced-motion still applies.
 
-**Degraded is never silent.** Any state where capture is running with one leg
-down must be visually distinct from healthy capture at menubar size, not only in
-an opened window. This is what makes `degraded` a design constraint rather than
-an error-handling detail.
+**First viewport shows real content without choosing the operator's intent.**
+The window opens on the notes library with a recent note already rendered beside
+it. The operator can choose another meeting. Focus mode is entered by selecting
+a meeting or using the explicit Focus control; it is never an invisible default.
 
-**First viewport shows real content — but does not resume a session.** The window
-opens on the notes library with the most recent note already rendered beside it,
-not on a bare list and not on a single note filling the frame.
-
-The second half of that is a correction, and it comes from the operator rejecting
-exactly this pattern in a sibling project. Reviewing film-room
-(`~/Workspace/dev/wip/film-room`), he wrote:
-
-> "that intent feels incorrect. it's not how i would start lightroom or capcut. i
-> would expect to open to a starting page then select what 'job' or 'library' or
-> 'project' i wanted to work on, rather than assuming i want to go straight back to
-> the last job/library/project."
-
-An earlier version of this rule said the window opens *on* the last meeting's note,
-which is the pattern he rejected. It is not fully transferable — film-room switches
-between projects where "the last one" is genuinely ambiguous, while this tool holds
-one chronological stream where the newest note usually is the answer — but the
-underlying objection survives the difference: **do not decide for him which note he
-came for.** Choosing is his; having something real to look at while he chooses is
-ours.
-
-List–detail with the newest note pre-rendered satisfies both, and it is why the
-inventory has a library surface and no dashboard. The failure this avoids is also
-recorded in that project — "so where is the content I use for reviewing with 630?"
-— an app that could not show the operator his own material.
+**Planned work stays out of ordinary use.** A dedicated review mode may expose
+placeholder rooms to make the complete journey inspectable. The normal product
+encounter presents what works now and does not turn roadmap classifications into
+navigation, badges, or disabled controls.
 
 ---
 
 ## Ledger
 
 Verdicts: `authorized` / `condemned` / `undecided` / `removed`. Parsed only under
-this heading, rows shaped `| \`device-id\` | verdict | … |`. Populated as devices
-ship.
+this heading, rows shaped `| \`device-id\` | verdict | … |`.
 
 | id | verdict | device | cites the thesis by | rules |
 |---|---|---|---|---|
-| — | — | *No devices shipped yet.* | — | — |
+| `paper-canvas` | authorized | Warm treatment inside the selected meeting record | Gives the private record an editorial identity without repainting Mac chrome | native calibration boundary |
+| `record-title-serif` | authorized | Serif only on retained meeting titles | Marks the document without turning workflow chrome into editorial display | `apps/desktop/ui/styles.css:1514` |
+| `capture-live-green` | authorized | Dedicated live green plus word and mark | Separates capture truth from terracotta brand emphasis | `apps/desktop/ui/styles.css:1586` |
+| `overlay-elevation-only` | authorized | Shadows only on popovers, dialogs, and menus | Makes depth correspond to an actual layer | `apps/desktop/ui/styles.css:1644` |
+| `graphite-everywhere` | removed | All-dark shell for every state and record | Confused an interaction metaphor with the product's visual identity | superseded 2026-08-08 |
+| `display-serif-in-chrome` | condemned | Serif buttons, navigation, labels, or workflow copy | Breaks the record-versus-control type hierarchy | this record |
+| `instrument-shell` | removed | Paper Instrument control rail + library + record | Added seven visible controls and thirty words without shortening the equal task | removed 2026-08-08 after operator approval |
+| `focus-shell` | removed | Library shell with explicit document focus | Calmer record, but hides meeting context and adds a return action | not selected 2026-08-08 |
+| `bottom-capture-dock` | condemned | Critical Record and query controls fixed to the lower window edge | Detaches the primary action from Mac window anatomy and can disappear at the vulnerable edge | 2026-08-08 side-by-side review |
+| `native-shell` | authorized | Integrated toolbar plus flexible sidebar, list, and record | Uses familiar Mac anatomy while keeping the selected meeting central | `apps/desktop/ui/native-calibration.css` |
+| `mac-split-shell` | authorized | Product sidebar, meeting list, and selected record at wide sizes; compact product rail at the desktop minimum; focused capture states hide unrelated navigation | Keeps switching context visible in the reading flow without weakening capture truth | operator selection and full-state pass 2026-08-08 |
+| `native-reference` | authorized | System-default comparison geometry, not a product treatment | Keeps platform familiarity as the quality floor for implementation review | `apps/desktop/native-reference/YawnNativeReference.swift` |
 
 ---
 
 ## Notes
 
-**This record is not machine-checked yet, but it will be, and the stack choice
-that decides it is already made.** `DESIGN.md § Shell decision` chose Tauri over
-SwiftUI, and enforceability of this file was the deciding factor rather than a
-side effect: the `tools/design-qa` resolver, the impeccable detector, and the
-forge-brand token bridge are all web-surface tools reading CSS custom properties,
-rendered DOM and linked stylesheets, so a SwiftUI shell would have left this file
-as prose nobody checks.
+The product surface now exists, and this record is no longer hypothetical.
+The complete Paper Focus shell is retained as a functional wireframe at
+`?prototype=1&calibration=wireframe`. Mac Split is the default prototype shell;
+Document and Native Reference remain comparison evidence. The installed Tauri
+window now adopts Mac Split by default; browser-only traffic-light geometry is
+suppressed there in favor of the native overlay titlebar.
 
-What remains is wiring, not deciding: `sites/local-meeting-notes/site.json`
-pointing at this record, and suppressions required to cite an `authorized` row.
-Neither can be built before a surface exists, which is why the ledger below is
-still empty.
+The ledger authorizes the record identity and rejects both the superseded dark
+atmosphere and the bottom critical-action dock. Paper Focus completed the same
+retrieval and source-check path with fewer visible controls and words, but the
+side-by-side review rescinded its visual approval. Mac Split then won the native
+calibration comparison. H1 is closed.
 
-An earlier version of this note described the shell as an open question. It was
-not — `DESIGN.md` had already decided it with both candidates developed — and
-leaving that phrasing in place had a reader treat a settled call as a live fork.
-
-**The J1 prototype proposed devices, and the ledger stays empty anyway.**
-`docs/prototype/build.py` renders four claim-evidence treatments, a proportional
-trust bar, and an epistemic annotation layer, all designed against the thesis
-above. None of them earns a row. The rule at the top of this file is that a device
-row adjudicates shipped code and cites a file and line on a product surface; the
-prototype is a design instrument whose output is gitignored, and rows for devices
-living only in a generator would be exactly the hypothetical-device ledger this
-record refuses.
-
-The reasoning is instead recorded where those states are defined —
-`docs/screens-and-states.md § E` — which is also where a person building the
-surface will meet it. When a product surface ships them, they arrive here with
-line numbers and get adjudicated then. **Prototyping a device is not shipping
-one, and this file's verdict vocabulary has no word for "drawn once in a test
-harness."**
-
-That sequencing is borrowed rather than invented. `website-nc`'s IA prototype
-acceptance states that a prototype "may use neutral styling. Art direction is a
-separate decision and begins only after this structure is accepted." The
-prototype here went slightly further by harvesting `DESIGN.md`'s tokens instead
-of free-picking a palette — which is the safe direction to err, since a
-free-picked palette is how a surface lands in the generated-design cluster — but
-it settles the note's *structure*, and nothing about it constitutes acceptance of
-a visual direction.
+Tauri remains the implementation baseline. Mac Split earned the composition
+decision through operator comparison, not because its CSS is testable. A thin
+SwiftUI reference source records the native comparison ceiling; it remains a
+platform check, not a requirement to reopen the selected composition. No stack
+migration is authorized without rendered evidence from both implementations.

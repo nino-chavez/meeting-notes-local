@@ -1,5 +1,21 @@
 use serde_json::Value;
 
+pub fn merge_config(base: &mut Value, override_value: Value) {
+    match (base, override_value) {
+        (Value::Object(base), Value::Object(override_value)) => {
+            for (key, value) in override_value {
+                match base.get_mut(&key) {
+                    Some(existing) => merge_config(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, override_value) => *base = override_value,
+    }
+}
+
 pub const DEV_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.library-dev";
 pub const DEV_WINDOW: &str = "library-dev";
 pub const DEV_CAPABILITY: &str = "library-dev-window";

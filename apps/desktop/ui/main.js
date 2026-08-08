@@ -19,6 +19,10 @@ import {
   connectionUncertaintyStatus,
   headerActionPolicy,
   headerStatusPresentation,
+  quickControlPresentation,
+  commandMenuPresentation,
+  helpTopicPresentation,
+  shellStatePresentation,
   mutableActionPolicy,
   prepareConsentTransition,
   retentionDeadlineMessage,
@@ -34,6 +38,30 @@ import {
 } from "./navigation-state.mjs";
 
 const invoke = window.__TAURI__?.core?.invoke;
+const shellParams = new window.URLSearchParams(window.location.search);
+const shellEnvironment = invoke ? "installed" : "browser";
+const shellPrototype = !invoke
+  && shellParams.has("prototype");
+const requestedNativeCalibration = shellPrototype
+  ? shellParams.get("calibration") || "split"
+  : "";
+const nativeCalibration = requestedNativeCalibration === "wireframe"
+  ? ""
+  : ["document", "reference"].includes(requestedNativeCalibration)
+    ? requestedNativeCalibration
+    : shellPrototype || invoke
+      ? "split"
+      : "";
+document.documentElement.dataset.shellEnvironment = shellEnvironment;
+if (nativeCalibration) {
+  document.documentElement.dataset.nativeCalibration = nativeCalibration;
+  const calibrationTitles = {
+    split: "Mac Split",
+    document: "Document",
+    reference: "Native Reference",
+  };
+  if (shellPrototype) document.title = `Yawn — ${calibrationTitles[nativeCalibration]}`;
+}
 
 const screens = new Map(
   [...document.querySelectorAll(".screen")].map((screen) => [screen.id, screen]),
@@ -43,21 +71,90 @@ const headerStatusDot = document.querySelector("#header-status-dot");
 const releaseBadge = document.querySelector("#release-badge");
 const meetingLabel = document.querySelector("#meeting-id");
 const mainRegion = document.querySelector("main");
+const skipLink = document.querySelector(".skip-link");
 const startForm = document.querySelector("#start-form");
 const startButton = document.querySelector("#start-button");
 const startError = document.querySelector("#start-error");
 const stopButton = document.querySelector("#stop-button");
 const stopError = document.querySelector("#stop-error");
 const retryStartup = document.querySelector("#retry-startup");
+const commandMenuTrigger = document.querySelector("#command-menu-trigger");
+const commandMenuBackdrop = document.querySelector("#command-menu-backdrop");
+const commandMenuClose = document.querySelector("#command-menu-close");
+const commandMenuInput = document.querySelector("#command-menu-input");
+const commandMenuList = document.querySelector("#command-menu-list");
+const commandMenuEmpty = document.querySelector("#command-menu-empty");
+const quickControlTrigger = document.querySelector("#quick-control-trigger");
+const quickControlTriggerGlyph = document.querySelector("#quick-control-trigger-glyph");
+const quickControlTriggerLabel = document.querySelector("#quick-control-trigger-label");
+const quickControlPopover = document.querySelector("#quick-control-popover");
+const quickControlClose = document.querySelector("#quick-control-close");
+const quickControlStatusGlyph = document.querySelector("#quick-control-status-glyph");
+const quickControlState = document.querySelector("#quick-control-state");
+const quickControlElapsed = document.querySelector("#quick-control-elapsed");
+const quickControlDetail = document.querySelector("#quick-control-detail");
+const quickControlPrimary = document.querySelector("#quick-control-primary");
+const quickControlSecondary = document.querySelector("#quick-control-secondary");
 const productNav = document.querySelector("#product-nav");
+const homeLink = document.querySelector("#home-link");
 const findLink = document.querySelector("#find-link");
 const meetingsLink = document.querySelector("#meetings-link");
 const promisesLink = document.querySelector("#promises-link");
+const allMeetingsLink = document.querySelector("#all-meetings-link");
+const unfiledMeetingsLink = document.querySelector("#unfiled-meetings-link");
 const profileLink = document.querySelector("#profile-link");
 const workflowReturn = document.querySelector("#workflow-return");
 const startMeetingAction = document.querySelector("#start-meeting-action");
 const newMeetingButton = document.querySelector("#new-meeting");
 const recoverButton = document.querySelector("#recover-button");
+const homeRecord = document.querySelector("#home-record");
+const homeMeetings = document.querySelector("#home-meetings");
+const homeAsk = document.querySelector("#home-ask");
+const homeActions = document.querySelector("#home-actions");
+const homeWorkspacePreview = document.querySelector("#home-workspace-preview");
+const actionsWorkspacePreview = document.querySelector("#actions-workspace-preview");
+const meetingsWorkspacePreview = document.querySelector("#meetings-workspace-preview");
+const meetingsRetainedPreview = document.querySelector("#meetings-retained-preview");
+const prototypeMeetingBack = document.querySelector("#prototype-meeting-back");
+const settingsTabs = [...document.querySelectorAll("[data-settings-tab]")];
+const settingsPanels = [...document.querySelectorAll("[data-settings-panel]")];
+const settingsRetentionPreview = document.querySelector("#settings-retention-preview");
+const settingsRetentionPreviewStatus = document.querySelector("#settings-retention-preview-status");
+const settingsReviewAudio = document.querySelector("#settings-review-audio");
+const settingsPreviewFirstRun = document.querySelector("#settings-preview-first-run");
+const settingsPreviewStates = document.querySelector("#settings-preview-states");
+const settingsOpenHelp = document.querySelector("#settings-open-help");
+const settingsPreviewWindow = document.querySelector("#settings-preview-window");
+const desktopBehaviorBackdrop = document.querySelector("#desktop-behavior-backdrop");
+const desktopPreviewClose = document.querySelector("#desktop-preview-close");
+const desktopPreviewTitle = document.querySelector("#desktop-preview-title");
+const desktopPreviewOpen = document.querySelector("#desktop-preview-open");
+const desktopPreviewMenubarControl = document.querySelector("#desktop-preview-menubar-control");
+const desktopPreviewCapture = document.querySelector("#desktop-preview-capture");
+const desktopPreviewBackground = [
+  document.querySelector(".skip-link"),
+  document.querySelector(".app-header"),
+  document.querySelector(".app-workspace"),
+  document.querySelector("footer"),
+].filter(Boolean);
+const stateReviewTabs = [...document.querySelectorAll("[data-state-preview]")];
+const statePreviewCard = document.querySelector("#state-preview-card");
+const statePreviewContext = document.querySelector("#state-preview-context");
+const statePreviewTitle = document.querySelector("#state-preview-title");
+const statePreviewLede = document.querySelector("#state-preview-lede");
+const statePreviewFacts = document.querySelector("#state-preview-facts");
+const stateReviewPrimary = document.querySelector("#state-review-primary");
+const stateReviewExit = document.querySelector("#state-review-exit");
+const stateReviewHome = document.querySelector("#state-review-home");
+const helpTabs = [...document.querySelectorAll("[data-help-topic]")];
+const helpTopicCard = document.querySelector("#help-topic-card");
+const helpTopicContext = document.querySelector("#help-topic-context");
+const helpTopicTitle = document.querySelector("#help-topic-title");
+const helpTopicLede = document.querySelector("#help-topic-lede");
+const helpTopicFacts = document.querySelector("#help-topic-facts");
+const helpTopicPrimary = document.querySelector("#help-topic-primary");
+const helpExit = document.querySelector("#help-exit");
+const helpHome = document.querySelector("#help-home");
 const startTransitionError = document.querySelector("#start-transition-error");
 const profileLede = document.querySelector("#profile-lede");
 const profileStatusTitle = document.querySelector("#profile-status-title");
@@ -119,11 +216,19 @@ const corpusPrepare = document.querySelector("#corpus-prepare");
 const meetingDetailState = document.querySelector("#meeting-detail-state");
 const meetingDetailTitle = document.querySelector("#meeting-detail-title");
 const meetingDetailLede = document.querySelector("#meeting-detail-lede");
+const meetingFocusToggle = document.querySelector("#meeting-focus-toggle");
+const meetingDockRecord = document.querySelector("#meeting-dock-record");
+const meetingContextList = document.querySelector("#meeting-context-list");
 const meetingClaimList = document.querySelector("#meeting-claim-list");
 const meetingNoNote = document.querySelector("#meeting-no-note");
 const meetingNoNoteTitle = document.querySelector("#meeting-no-note-title");
 const meetingNoNoteCopy = document.querySelector("#meeting-no-note-copy");
 const meetingOpenTranscript = document.querySelector("#meeting-open-transcript");
+const meetingTranscriptSummary = document.querySelector("#meeting-transcript-summary");
+const meetingActionList = document.querySelector("#meeting-action-list");
+const meetingActionEmpty = document.querySelector("#meeting-action-empty");
+const meetingEvidenceList = document.querySelector("#meeting-evidence-list");
+const meetingEvidenceEmpty = document.querySelector("#meeting-evidence-empty");
 const meetingRetention = document.querySelector("#meeting-retention");
 const meetingRetentionTitle = document.querySelector("#meeting-retention-title");
 const meetingRetentionPolicy = document.querySelector("#meeting-retention-policy");
@@ -142,6 +247,7 @@ const meetingDeleteCancel = document.querySelector("#meeting-delete-cancel");
 const meetingDeleteConfirm = document.querySelector("#meeting-delete-confirm");
 const meetingDeleteStatus = document.querySelector("#meeting-delete-status");
 const retention = document.querySelector("#retention-days");
+const preflightRetentionSummary = document.querySelector("#preflight-retention-summary");
 const checks = [
   document.querySelector("#consent-check"),
   document.querySelector("#headphones-check"),
@@ -154,8 +260,12 @@ let startedAt = null;
 let elapsedTimer = null;
 let meetingAudioDeletionHandle = "";
 let meetingDeletionHandle = "";
+let retainedMeetingTab = "note";
+let meetingContextRows = [];
+let activeMeetingId = "";
+let meetingContextBusyId = "";
 let currentScreen = "startup-screen";
-let productRootScreen = "find-screen";
+let productRootScreen = "home-screen";
 let transcriptReturnContext = null;
 let routeRevision = 0;
 let findNavigationBusy = false;
@@ -164,6 +274,16 @@ let handleNavigationBusy = false;
 let workflowOwnsRoute = true;
 let stopCommandPending = false;
 let stopCommandFailed = false;
+let prototypeCaptureStartedAt = 0;
+let prototypeCaptureDegraded = false;
+let activeSettingsTab = shellPrototype ? "capture" : "voice";
+let activeStateReviewId = "loading";
+let activeHelpTopicId = "overview";
+let helpReturnScreen = "home-screen";
+let desktopPreviewReturnFocus = null;
+let commandMenuReturnFocus = null;
+let commandMenuEntries = [];
+let commandMenuActiveIndex = 0;
 let announcedHeaderState = headerState.textContent;
 const screenScrollPositions = new Map();
 const libraryInitialization = createSingleFlight(
@@ -186,6 +306,7 @@ const dismissMeetingOperation = createSingleFlight(async () => {
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
   const destination = screens.get(id);
   if (!destination) return;
+  if (id !== "meeting-detail-screen" && shellPrototype) setMeetingFocus(false);
   const routeChanged = currentScreen !== id;
   if (routeChanged) screenScrollPositions.set(currentScreen, mainRegion.scrollTop);
   if (routeChanged) routeRevision += 1;
@@ -212,10 +333,11 @@ function showScreen(id, { resetScroll = false, focus = true } = {}) {
 
 function syncProductNavigation() {
   const settingsActive = currentScreen === "profile-screen";
-  const directRoot = ["find-screen", "meetings-screen", "promises-screen"].includes(currentScreen)
+  const directRoot = ["home-screen", "find-screen", "meetings-screen", "promises-screen"].includes(currentScreen)
     ? currentScreen
     : productRootScreen;
   for (const [link, destination] of [
+    [homeLink, "home-screen"],
     [findLink, "find-screen"],
     [meetingsLink, "meetings-screen"],
     [promisesLink, "promises-screen"],
@@ -287,6 +409,34 @@ function setHeaderState(text) {
   headerState.textContent = next;
 }
 
+function setMeetingFocus(focused) {
+  const enabled = Boolean(
+    shellPrototype
+      && focused
+      && !["split", "reference"].includes(nativeCalibration),
+  );
+  document.documentElement.dataset.meetingFocus = enabled ? "true" : "false";
+  meetingFocusToggle.setAttribute("aria-pressed", String(enabled));
+  meetingFocusToggle.textContent = enabled ? "Show library" : "Focus meeting";
+}
+
+function restoreShellSnapshotStatus() {
+  if (!shellPrototype || !lastSnapshot) return;
+  const startup = lastSnapshot.startup || "diagnostic-written";
+  const capture = lastSnapshot.capture || "idle";
+  headerStatusDot.dataset.state = headerStatusPresentation(lastSnapshot);
+  if (startup !== "ready") setHeaderState("Nothing is recording");
+  else if (capture === "idle") setHeaderState("Ready");
+  else if (capture === "arming") setHeaderState("Preparing recording");
+  else if (capture === "recording") setHeaderState(lastSnapshot.degraded
+    ? "Recording · channel needs attention"
+    : "Recording · both channels active");
+  else if (capture === "stopping") setHeaderState("Stopping and flushing audio");
+  else if (["captured", "transcribing"].includes(capture)) setHeaderState("Transcribing locally");
+  else if (capture === "transcript-ready") setHeaderState("Transcript ready");
+  else setHeaderState("Needs attention");
+}
+
 function scheduleSnapshotPoll(snapshot) {
   const active = ["arming", "recording", "stopping", "captured", "transcribing"].includes(snapshot.capture);
   schedulePoll(active ? 400 : 1500);
@@ -306,6 +456,24 @@ function showWorkflowScreen(snapshot, options = {}) {
   return destination;
 }
 
+function renderQuickControl(snapshot) {
+  const presentation = quickControlPresentation(snapshot);
+  quickControlTriggerGlyph.dataset.state = presentation.state;
+  quickControlStatusGlyph.dataset.state = presentation.state;
+  quickControlTriggerLabel.textContent = presentation.triggerLabel;
+  quickControlTrigger.setAttribute(
+    "aria-label",
+    `Recording status: ${presentation.triggerLabel}. Open quick control.`,
+  );
+  quickControlState.textContent = presentation.title;
+  quickControlDetail.textContent = presentation.detail;
+  const showElapsed = ["recording", "degraded"].includes(presentation.state);
+  quickControlElapsed.hidden = !showElapsed;
+  quickControlPrimary.textContent = presentation.primaryLabel;
+  quickControlSecondary.hidden = !presentation.secondaryLabel;
+  quickControlSecondary.textContent = presentation.secondaryLabel || "";
+}
+
 function renderCaptureAction(snapshot) {
   if ((snapshot?.capture || "idle") !== "recording") {
     stopCommandPending = false;
@@ -317,6 +485,7 @@ function renderCaptureAction(snapshot) {
     currentScreen,
   });
   productNav.hidden = !policy.showProductNavigation;
+  document.documentElement.dataset.productNavigation = String(policy.showProductNavigation);
   profileLink.hidden = !policy.showProductNavigation;
   startMeetingAction.hidden = !policy.showStart;
   stopButton.hidden = !policy.showStop;
@@ -325,6 +494,7 @@ function renderCaptureAction(snapshot) {
   workflowReturn.hidden = !policy.showWorkflowReturn;
   workflowReturn.textContent = policy.workflowReturnLabel;
   workflowReturn.dataset.destination = policy.workflowDestination;
+  renderQuickControl(snapshot);
   return policy;
 }
 
@@ -344,7 +514,9 @@ function renderConnectionUncertainty() {
 
 async function initializeLibraryReader() {
   if (!invoke) throw new Error("The local application bridge is unavailable.");
-  return libraryInitialization.run();
+  const snapshot = await libraryInitialization.run();
+  rememberMeetingContext(snapshot);
+  return snapshot;
 }
 
 function initializeFindInBackground() {
@@ -359,7 +531,13 @@ function invalidateLibraryHandles() {
   // would be buttons that look live and open nothing.
   corpusSearchResults.replaceChildren();
   meetingClaimList.replaceChildren();
+  meetingActionList.replaceChildren();
+  meetingEvidenceList.replaceChildren();
+  document.querySelector("#detail-note").hidden = true;
   meetingNoNote.hidden = true;
+  meetingActionEmpty.hidden = true;
+  meetingEvidenceEmpty.hidden = true;
+  meetingOpenTranscript.hidden = true;
   document.querySelector("#meeting-detail-transcript-handle").value = "";
   meetingAudioDeletionHandle = "";
   meetingDeletionHandle = "";
@@ -367,6 +545,67 @@ function invalidateLibraryHandles() {
   meetingDeleteAction.hidden = true;
   closeRecordingDeleteReview();
   closeMeetingDeleteReview();
+}
+
+// The context pane keeps presentation metadata only. A library snapshot's
+// handles belong to that one backend projection and become stale as soon as a
+// meeting is opened. Switching by durable meeting ID lets us request a fresh
+// row and use only the handle minted by that request.
+function rememberMeetingContext(snapshot) {
+  if (!["populated", "populated-incomplete", "empty"].includes(snapshot?.state)) return;
+  meetingContextRows = (snapshot.rows || []).map((row) => ({
+    meetingId: row.meetingId || "",
+    label: row.label || "",
+    labelSource: row.labelSource || "date",
+    createdAtEpochSeconds: row.createdAtEpochSeconds,
+    transcriptAvailable: Boolean(row.transcriptAvailable),
+  })).filter((row) => row.meetingId);
+  renderMeetingContextList();
+}
+
+function renderMeetingContextList() {
+  meetingContextList.replaceChildren();
+  if (!meetingContextRows.length) {
+    const empty = document.createElement("p");
+    empty.className = "meeting-context-empty";
+    empty.textContent = "No other retained meetings are available in this view.";
+    meetingContextList.append(empty);
+    return;
+  }
+  for (const row of meetingContextRows) {
+    const captured = formatMeetingTime(row.createdAtEpochSeconds);
+    const labelText = row.label || captured;
+    const selected = row.meetingId === activeMeetingId;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "meeting-context-row";
+    button.dataset.meetingId = row.meetingId;
+    button.setAttribute("aria-current", selected ? "page" : "false");
+    button.disabled = Boolean(meetingContextBusyId);
+    button.addEventListener("click", () => {
+      if (selected) {
+        meetingDetailTitle.focus({ preventScroll: true });
+        return;
+      }
+      void openMeetingByIdFresh(row.meetingId, button);
+    });
+    const copy = document.createElement("span");
+    const label = document.createElement("strong");
+    label.textContent = labelText;
+    const meta = document.createElement("small");
+    const notes = [];
+    if (row.labelSource !== "date") notes.push(captured);
+    if (!row.transcriptAvailable) notes.push("No transcript");
+    meta.textContent = notes.join(" · ");
+    meta.hidden = notes.length === 0;
+    copy.append(label, meta);
+    const state = document.createElement("span");
+    state.textContent = row.meetingId === meetingContextBusyId
+      ? "Opening…"
+      : selected ? "Current" : "Open";
+    button.append(copy, state);
+    meetingContextList.append(button);
+  }
 }
 
 function setError(element, message) {
@@ -395,6 +634,53 @@ function updateStartButton() {
   startButton.disabled = !startIsAllowed() || startButton.dataset.busy === "true";
 }
 
+function updatePreflightRetentionSummary() {
+  const days = Number(retention.value);
+  preflightRetentionSummary.textContent = days > 0
+    ? `Delete meeting audio after ${days} ${days === 1 ? "day" : "days"}. The transcript remains.`
+    : "Choose how long it stays on this Mac.";
+}
+
+function prototypeCaptureSnapshot(capture, overrides = {}) {
+  return {
+    startup: "ready",
+    capture,
+    retention_operational: true,
+    meeting_id: "prototype-capture",
+    started_at_epoch_seconds: prototypeCaptureStartedAt,
+    degraded: prototypeCaptureDegraded,
+    mic_state: "Active",
+    system_state: prototypeCaptureDegraded ? "Unavailable" : "Active",
+    turns: [],
+    warnings: [],
+    ...overrides,
+  };
+}
+
+function renderPrototypeCapture(capture, overrides = {}) {
+  render(prototypeCaptureSnapshot(capture, overrides));
+}
+
+function finishPrototypeTranscript() {
+  renderPrototypeCapture("transcript-ready", {
+    turns: [
+      { sourceTurnIndex: 0, speaker: "Them", start: 4, text: "Let’s keep the pilot to one customer for two weeks." },
+      { sourceTurnIndex: 1, speaker: "Me", start: 11, text: "I’ll schedule the review for Friday and bring the handoff notes." },
+      { sourceTurnIndex: 2, speaker: "Them", start: 19, text: "That works. Legal still needs to clear the sample data first." },
+    ],
+  });
+}
+
+function leavePrototypeCapture(destination = "home-screen") {
+  endElapsed();
+  clearAttemptReview(true);
+  resetLiveNote();
+  prototypeCaptureDegraded = false;
+  lastSnapshot = prototypeCaptureSnapshot("idle", { meeting_id: null });
+  setHeaderState("Click-through prototype · nothing is recording");
+  selectProductScreen(destination, { resetScroll: true });
+}
+
 function formatElapsed(seconds) {
   const safe = Math.max(0, Math.floor(seconds));
   return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
@@ -404,7 +690,9 @@ function beginElapsed(epochSeconds) {
   startedAt = Number(epochSeconds) * 1000;
   const render = () => {
     const elapsed = startedAt ? (Date.now() - startedAt) / 1000 : 0;
-    document.querySelector("#elapsed-time").textContent = formatElapsed(elapsed);
+    const elapsedText = formatElapsed(elapsed);
+    document.querySelector("#elapsed-time").textContent = elapsedText;
+    quickControlElapsed.textContent = elapsedText;
   };
   render();
   if (!elapsedTimer) elapsedTimer = window.setInterval(render, 1000);
@@ -629,16 +917,20 @@ function closeRecordingDeleteReview() {
   recordingDeleteConfirmation.hidden = true;
   recordingDeleteStatus.hidden = true;
   recordingDeleteStatus.textContent = "";
-  recordingDeleteConfirm.disabled = false;
-  recordingDeleteConfirm.textContent = "Permanently delete recording";
+  recordingDeleteConfirm.disabled = shellPrototype;
+  recordingDeleteConfirm.textContent = shellPrototype
+    ? "Deletion unavailable in shell"
+    : "Permanently delete recording";
 }
 
 function closeMeetingDeleteReview() {
   meetingDeleteConfirmation.hidden = true;
   meetingDeleteStatus.hidden = true;
   meetingDeleteStatus.textContent = "";
-  meetingDeleteConfirm.disabled = false;
-  meetingDeleteConfirm.textContent = "Permanently delete meeting";
+  meetingDeleteConfirm.disabled = shellPrototype;
+  meetingDeleteConfirm.textContent = shellPrototype
+    ? "Deletion unavailable in shell"
+    : "Permanently delete meeting";
 }
 
 function renderAudioRetention(retention, deletionHandle = "") {
@@ -690,6 +982,7 @@ function renderAudioRetention(retention, deletionHandle = "") {
 }
 
 function renderLibrary(snapshot) {
+  rememberMeetingContext(snapshot);
   libraryMetadataRevision = Number.isInteger(snapshot.metadataRevision)
     ? snapshot.metadataRevision
     : null;
@@ -917,6 +1210,10 @@ function renderCorpusAnswers(response) {
 
 async function searchCorpus(event) {
   event.preventDefault();
+  if (shellPrototype) {
+    setError(corpusNotice, "The browser shell has no retained passages to search. Nothing was queried or invented.");
+    return false;
+  }
   if (!invoke) return false;
   const revision = routeRevision;
   const ownsRoute = () => currentScreen === "find-screen" && routeRevision === revision;
@@ -965,6 +1262,10 @@ async function openCorpusAnswer(answer, control = null) {
 }
 
 async function prepareCorpusPassages() {
+  if (shellPrototype) {
+    setError(corpusNotice, "The browser shell has no retained meetings to prepare. The installed app performs this work locally.");
+    return false;
+  }
   if (!invoke) return false;
   const revision = routeRevision;
   const ownsRoute = () => currentScreen === "find-screen" && routeRevision === revision;
@@ -1034,7 +1335,7 @@ function render(snapshot) {
   document.documentElement.dataset.captureState = capture;
   document.documentElement.dataset.connectionState = "connected";
   headerStatusDot.dataset.state = headerStatusPresentation(snapshot);
-  releaseBadge.textContent = "Preview";
+  releaseBadge.textContent = shellPrototype ? "Shell preview" : "Preview";
   renderCaptureAction(snapshot);
   meetingLabel.hidden = !snapshot.meeting_id;
   meetingLabel.textContent = snapshot.meeting_id ? `Meeting ${snapshot.meeting_id.slice(0, 8)}` : "";
@@ -1373,20 +1674,36 @@ async function rebuildMeetingsView() {
 }
 
 async function openFind({ resetQuery = false } = {}) {
-  if (!invoke) return;
+  if (!invoke && !shellPrototype) return;
+  restoreShellSnapshotStatus();
   if (resetQuery) librarySearchQuery.value = "";
   selectProductScreen("find-screen");
-  await refreshFindView();
+  if (invoke) await refreshFindView();
 }
 
-async function openMeetings({ resetFind = false } = {}) {
-  if (!invoke) return;
+async function openMeetings({ resetFind = false, browseAll = false } = {}) {
+  if (!invoke && !shellPrototype) return;
+  restoreShellSnapshotStatus();
   if (resetFind) librarySearchQuery.value = "";
+  if (shellPrototype && !browseAll) {
+    openPrototypeMeetingDetail(activeMeetingId || "prototype-meeting", { focus: true });
+    return;
+  }
   selectProductScreen("meetings-screen");
-  await rebuildMeetingsView();
+  if (invoke) await rebuildMeetingsView();
+}
+
+function openHome() {
+  restoreShellSnapshotStatus();
+  if (shellPrototype) {
+    openPrototypeMeetingDetail(activeMeetingId || "prototype-meeting", { focus: true });
+    return;
+  }
+  selectProductScreen("home-screen", { resetScroll: true });
 }
 
 async function openPromises({ resetFind = false } = {}) {
+  restoreShellSnapshotStatus();
   if (resetFind) librarySearchQuery.value = "";
   invalidateLibraryHandles();
   selectProductScreen("promises-screen", { resetScroll: true });
@@ -1398,6 +1715,17 @@ function showStartTransitionError() {
 }
 
 async function openStartMeeting() {
+  if (shellPrototype) {
+    beginWorkflowRoute();
+    prototypeCaptureDegraded = false;
+    lastSnapshot = prototypeCaptureSnapshot("idle", { meeting_id: null });
+    renderCaptureAction(lastSnapshot);
+    setHeaderState("Click-through prototype · nothing is recording");
+    clearAttemptReview(true);
+    clearError(startError);
+    showScreen("idle-screen", { resetScroll: true });
+    return;
+  }
   if (!invoke || !mutableActionPolicy(lastSnapshot).canStartMeeting) return;
   clearError(startError);
   const routeToken = beginWorkflowRoute();
@@ -1903,8 +2231,15 @@ function runProfileAction() {
 }
 
 async function openProfile() {
+  if (shellPrototype) {
+    restoreShellSnapshotStatus();
+    selectProductScreen("profile-screen", { resetScroll: true });
+    selectSettingsPanel(activeSettingsTab);
+    return;
+  }
   if (!invoke) return;
   selectProductScreen("profile-screen", { resetScroll: true });
+  selectSettingsPanel("voice");
   const revision = routeRevision;
   try {
     const snapshot = await invoke("preview_profile_snapshot");
@@ -1920,7 +2255,170 @@ async function openProfile() {
   }
 }
 
+function selectSettingsPanel(tabName, { focusTab = false } = {}) {
+  const tab = settingsTabs.find((candidate) => candidate.dataset.settingsTab === tabName);
+  if (!tab || (tab.classList.contains("prototype-only") && !shellPrototype)) return;
+  activeSettingsTab = tabName;
+  for (const candidate of settingsTabs) {
+    const selected = candidate === tab;
+    candidate.setAttribute("aria-selected", String(selected));
+    candidate.tabIndex = selected ? 0 : -1;
+  }
+  for (const panel of settingsPanels) {
+    panel.hidden = panel.dataset.settingsPanel !== tabName;
+  }
+  if (shellPrototype && tabName === "voice") {
+    profileStatusTitle.textContent = "Setup unavailable in this browser shell";
+    profileStatusCopy.textContent = "The installed app reads private setup status and enforces its measured voice-profile gates. This prototype does not open or store setup audio.";
+    profileRecorderEntry.textContent = "Install-level setup recording is not connected in this browser representation.";
+    profileSetup.disabled = true;
+  }
+  if (focusTab) tab.focus();
+}
+
+function moveSettingsTab(currentTab, direction) {
+  const available = settingsTabs.filter((tab) => (
+    shellPrototype || !tab.classList.contains("prototype-only")
+  ));
+  const currentIndex = available.indexOf(currentTab);
+  if (currentIndex < 0) return;
+  const next = available[(currentIndex + direction + available.length) % available.length];
+  selectSettingsPanel(next.dataset.settingsTab, { focusTab: true });
+}
+
+function renderStateReview(stateId, { focusTab = false } = {}) {
+  const presentation = shellStatePresentation(stateId);
+  activeStateReviewId = presentation.id;
+  const selectedTab = stateReviewTabs.find((tab) => tab.dataset.statePreview === presentation.id);
+  for (const tab of stateReviewTabs) {
+    const selected = tab === selectedTab;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  statePreviewCard.dataset.tone = presentation.tone;
+  statePreviewCard.setAttribute("aria-labelledby", selectedTab.id);
+  statePreviewContext.textContent = presentation.context;
+  statePreviewTitle.textContent = presentation.title;
+  statePreviewLede.textContent = presentation.lede;
+  stateReviewPrimary.textContent = presentation.primaryLabel;
+  stateReviewPrimary.dataset.action = presentation.primaryAction;
+  statePreviewFacts.replaceChildren(...presentation.facts.map(([term, value, detail]) => {
+    const row = document.createElement("div");
+    const label = document.createElement("dt");
+    label.textContent = term;
+    const description = document.createElement("dd");
+    const title = document.createElement("strong");
+    title.textContent = value;
+    const copy = document.createElement("span");
+    copy.textContent = detail;
+    description.append(title, copy);
+    row.append(label, description);
+    return row;
+  }));
+  if (focusTab) selectedTab.focus();
+}
+
+function openStateReview() {
+  if (!shellPrototype) return;
+  claimExplicitRoute();
+  renderStateReview(activeStateReviewId);
+  setHeaderState("System-state preview · nothing is recording");
+  showScreen("state-review-screen", { resetScroll: true });
+}
+
+function renderHelpTopic(topicId, { focusTab = false } = {}) {
+  const presentation = helpTopicPresentation(topicId);
+  activeHelpTopicId = presentation.id;
+  const selectedTab = helpTabs.find((tab) => tab.dataset.helpTopic === presentation.id);
+  for (const tab of helpTabs) {
+    const selected = tab === selectedTab;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  helpTopicCard.setAttribute("aria-labelledby", selectedTab.id);
+  helpTopicContext.textContent = presentation.context;
+  helpTopicTitle.textContent = presentation.title;
+  helpTopicLede.textContent = presentation.lede;
+  helpTopicPrimary.textContent = presentation.primaryLabel;
+  helpTopicPrimary.dataset.action = presentation.primaryAction;
+  helpTopicFacts.replaceChildren(...presentation.facts.map(([term, value, detail]) => {
+    const row = document.createElement("div");
+    const label = document.createElement("dt");
+    label.textContent = term;
+    const description = document.createElement("dd");
+    const title = document.createElement("strong");
+    title.textContent = value;
+    const copy = document.createElement("span");
+    copy.textContent = detail;
+    description.append(title, copy);
+    row.append(label, description);
+    return row;
+  }));
+  if (focusTab) selectedTab.focus();
+}
+
+function openHelp() {
+  if (!shellPrototype) return;
+  if (currentScreen !== "help-screen") helpReturnScreen = currentScreen;
+  claimExplicitRoute();
+  renderHelpTopic(activeHelpTopicId);
+  setHeaderState("Help · nothing is recording");
+  showScreen("help-screen", { resetScroll: true });
+}
+
+function moveHelpTab(currentTab, direction) {
+  const currentIndex = helpTabs.indexOf(currentTab);
+  if (currentIndex < 0) return;
+  const next = helpTabs[(currentIndex + direction + helpTabs.length) % helpTabs.length];
+  renderHelpTopic(next.dataset.helpTopic, { focusTab: true });
+}
+
+function runHelpAction(action) {
+  if (action === "start") void openStartMeeting();
+  else if (action === "setup") openPrototypeFirstRun();
+  else if (action === "privacy") {
+    activeSettingsTab = "privacy";
+    restoreShellSnapshotStatus();
+    void openProfile();
+  } else if (action === "states") {
+    activeStateReviewId = "repair";
+    openStateReview();
+  } else if (action === "about") {
+    activeSettingsTab = "about";
+    restoreShellSnapshotStatus();
+    void openProfile();
+  }
+}
+
+function closeHelp() {
+  restoreShellSnapshotStatus();
+  if (helpReturnScreen === "profile-screen") {
+    void openProfile();
+    return;
+  }
+  void returnToProductHome();
+}
+
+function moveStateReviewTab(currentTab, direction) {
+  const currentIndex = stateReviewTabs.indexOf(currentTab);
+  if (currentIndex < 0) return;
+  const next = stateReviewTabs[(currentIndex + direction + stateReviewTabs.length) % stateReviewTabs.length];
+  renderStateReview(next.dataset.statePreview, { focusTab: true });
+}
+
+function runStateReviewPrimary() {
+  const action = stateReviewPrimary.dataset.action;
+  if (action === "home") openHome();
+  else if (action === "start") void openStartMeeting();
+  else if (action === "meetings") void openMeetings({ resetFind: true });
+  else if (action === "loading") renderStateReview("loading");
+}
+
 async function returnToProductHome() {
+  if (productRootScreen === "home-screen") {
+    openHome();
+    return;
+  }
   if (productRootScreen === "meetings-screen") {
     await openMeetings();
     return;
@@ -1938,6 +2436,179 @@ function returnToWorkflow() {
   if (!workflowRouteIsCurrent(routeToken)) return;
   if (lastSnapshot.capture === "transcript-ready") renderTranscript(lastSnapshot);
   showWorkflowScreen(lastSnapshot, { resetScroll: true });
+}
+
+function setCommandMenuActiveIndex(nextIndex, { reveal = false } = {}) {
+  if (!commandMenuEntries.length) {
+    commandMenuActiveIndex = 0;
+    commandMenuInput.removeAttribute("aria-activedescendant");
+    return;
+  }
+  commandMenuActiveIndex = (nextIndex + commandMenuEntries.length) % commandMenuEntries.length;
+  commandMenuEntries.forEach(({ button }, index) => {
+    const active = index === commandMenuActiveIndex;
+    button.dataset.active = String(active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  const activeButton = commandMenuEntries[commandMenuActiveIndex].button;
+  commandMenuInput.setAttribute("aria-activedescendant", activeButton.id);
+  if (reveal) activeButton.scrollIntoView({ block: "nearest" });
+}
+
+function renderCommandMenu() {
+  const query = commandMenuInput.value.trim().toLocaleLowerCase();
+  const commands = commandMenuPresentation(lastSnapshot).filter((command) => (
+    `${command.label} ${command.detail}`.toLocaleLowerCase().includes(query)
+  ));
+  commandMenuList.replaceChildren();
+  commandMenuEntries = commands.map((command) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "command-menu-row";
+    button.id = `command-option-${command.id}`;
+    button.setAttribute("role", "option");
+    button.dataset.commandId = command.id;
+
+    const copy = document.createElement("span");
+    copy.className = "command-menu-copy";
+    const label = document.createElement("strong");
+    label.textContent = command.label;
+    const detail = document.createElement("small");
+    detail.textContent = command.detail;
+    copy.append(label, detail);
+
+    const meta = document.createElement("span");
+    meta.className = "command-menu-meta";
+    if (command.planned) {
+      const planned = document.createElement("span");
+      planned.className = "command-menu-planned";
+      planned.textContent = "Planned";
+      meta.append(planned);
+    }
+    if (command.shortcut) {
+      const shortcut = document.createElement("kbd");
+      shortcut.setAttribute("aria-hidden", "true");
+      shortcut.textContent = command.shortcut;
+      meta.append(shortcut);
+    }
+    button.append(copy, meta);
+    button.addEventListener("mouseenter", () => {
+      const index = commandMenuEntries.findIndex((entry) => entry.button === button);
+      if (index >= 0) setCommandMenuActiveIndex(index);
+    });
+    button.addEventListener("click", () => runShellCommand(command));
+    commandMenuList.append(button);
+    return { command, button };
+  });
+  commandMenuEmpty.hidden = commandMenuEntries.length > 0;
+  setCommandMenuActiveIndex(0);
+}
+
+function closeCommandMenu({ restoreFocus = true } = {}) {
+  commandMenuBackdrop.hidden = true;
+  commandMenuTrigger.setAttribute("aria-expanded", "false");
+  commandMenuInput.removeAttribute("aria-activedescendant");
+  if (restoreFocus && commandMenuReturnFocus?.isConnected) commandMenuReturnFocus.focus();
+  commandMenuReturnFocus = null;
+}
+
+function openCommandMenu() {
+  if (!shellPrototype) return;
+  closeQuickControl();
+  commandMenuReturnFocus = document.activeElement;
+  commandMenuInput.value = "";
+  renderCommandMenu();
+  commandMenuBackdrop.hidden = false;
+  commandMenuTrigger.setAttribute("aria-expanded", "true");
+  commandMenuInput.focus();
+}
+
+function runShellCommand(command) {
+  closeCommandMenu({ restoreFocus: false });
+  if (command.action === "home") openHome();
+  else if (command.action === "meetings") void openMeetings({ resetFind: true });
+  else if (command.action === "ask") void openFind({ resetQuery: true });
+  else if (command.action === "actions") void openPromises({ resetFind: true });
+  else if (command.action === "settings") void openProfile();
+  else if (command.action === "desktop") {
+    activeSettingsTab = "desktop";
+    void openProfile();
+  }
+  else if (command.action === "setup") openPrototypeFirstRun();
+  else if (command.action === "states") openStateReview();
+  else if (command.action === "help") openHelp();
+  else if (command.action === "start") void openStartMeeting();
+  else if (command.action === "workflow") returnToWorkflow();
+  else if (command.action === "stop") stopButton.click();
+}
+
+function runShellCommandById(commandId) {
+  const command = commandMenuPresentation(lastSnapshot).find((entry) => entry.id === commandId);
+  if (command) runShellCommand(command);
+}
+
+function closeQuickControl({ restoreFocus = false } = {}) {
+  quickControlPopover.hidden = true;
+  quickControlTrigger.setAttribute("aria-expanded", "false");
+  if (restoreFocus) quickControlTrigger.focus();
+}
+
+function openQuickControl() {
+  renderQuickControl(lastSnapshot);
+  quickControlPopover.hidden = false;
+  quickControlTrigger.setAttribute("aria-expanded", "true");
+  quickControlPrimary.focus();
+}
+
+function openDesktopBehaviorPreview() {
+  if (!shellPrototype) return;
+  closeQuickControl();
+  desktopPreviewReturnFocus = document.activeElement;
+  const presentation = quickControlPresentation(lastSnapshot);
+  desktopPreviewCapture.textContent = presentation.state === "recording" || presentation.state === "degraded"
+    ? presentation.detail
+    : "Nothing is recording";
+  for (const node of desktopPreviewBackground) {
+    node.inert = true;
+    node.setAttribute("aria-hidden", "true");
+  }
+  desktopBehaviorBackdrop.hidden = false;
+  settingsPreviewWindow.setAttribute("aria-expanded", "true");
+  desktopPreviewTitle.focus();
+}
+
+function closeDesktopBehaviorPreview({ restoreFocus = true } = {}) {
+  desktopBehaviorBackdrop.hidden = true;
+  for (const node of desktopPreviewBackground) {
+    node.inert = false;
+    node.removeAttribute("aria-hidden");
+  }
+  settingsPreviewWindow.setAttribute("aria-expanded", "false");
+  if (restoreFocus && desktopPreviewReturnFocus?.isConnected) desktopPreviewReturnFocus.focus();
+  desktopPreviewReturnFocus = null;
+}
+
+function showDesktopMenubarControl() {
+  closeDesktopBehaviorPreview({ restoreFocus: false });
+  openQuickControl();
+}
+
+function runQuickControlPrimary() {
+  closeQuickControl();
+  if ((lastSnapshot?.capture || "idle") === "idle") {
+    void openStartMeeting();
+    return;
+  }
+  returnToWorkflow();
+}
+
+function runQuickControlSecondary() {
+  closeQuickControl();
+  if (lastSnapshot?.capture === "recording") {
+    stopButton.click();
+    return;
+  }
+  if (lastSnapshot?.capture === "transcript-ready") void openStartMeeting();
 }
 
 function reportLibraryOpenFailure(messageText) {
@@ -2101,20 +2772,126 @@ function renderDetailNote(note) {
   target.textContent = text;
 }
 
+function selectRetainedMeetingTab(tabName, { focus = false, reveal = false } = {}) {
+  const validTabs = ["note", "transcript", "actions", "evidence", "details"];
+  retainedMeetingTab = validTabs.includes(tabName) ? tabName : "note";
+  for (const tab of document.querySelectorAll("[data-retained-meeting-tab]")) {
+    const selected = tab.dataset.retainedMeetingTab === retainedMeetingTab;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected && focus) tab.focus({ preventScroll: true });
+  }
+  let activePanel = null;
+  for (const panel of document.querySelectorAll("[data-retained-meeting-panel]")) {
+    const active = panel.dataset.retainedMeetingPanel === retainedMeetingTab;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+    if (active) activePanel = panel;
+  }
+  if (reveal && activePanel) {
+    activePanel.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "start",
+    });
+  }
+}
+
+function appendMeetingClaim(target, claim, response, index, sourceTab, variant = "note") {
+  const card = document.createElement("article");
+  card.className = variant === "action"
+    ? "meeting-action-card"
+    : variant === "evidence"
+      ? "meeting-evidence-card"
+      : "meeting-claim";
+  const meta = document.createElement("p");
+  meta.className = "claim-meta";
+  meta.textContent = variant === "action"
+    ? "Action · owner and status planned"
+    : `${claimTypeLabel(claim.claimType)} · words located`;
+  const text = document.createElement("p");
+  text.className = "claim-text";
+  text.textContent = claim.claim;
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "secondary claim-evidence";
+  open.dataset.claimOrdinal = String(claim.ordinal);
+  open.dataset.claimIndex = String(index);
+  open.textContent = shellPrototype
+    ? sourceTab === "evidence" ? "Show exact words" : "Show in Evidence"
+    : "Show exact words in transcript";
+  let prototypeEvidencePreview = null;
+  if (shellPrototype && sourceTab === "evidence") {
+    prototypeEvidencePreview = document.createElement("blockquote");
+    prototypeEvidencePreview.className = "prototype-evidence-preview";
+    prototypeEvidencePreview.hidden = true;
+    const quote = document.createElement("p");
+    quote.textContent = `“${claim.evidenceText || "Synthetic source words are not available for this claim."}”`;
+    const source = document.createElement("span");
+    source.textContent = `Synthetic transcript · ${claim.evidenceSpeaker || "Speaker"} · ${claim.evidenceTime || "time unavailable"}`;
+    prototypeEvidencePreview.append(quote, source);
+    open.setAttribute("aria-expanded", "false");
+  }
+  open.addEventListener("click", () => {
+    if (shellPrototype) {
+      if (sourceTab === "evidence") {
+        const expanded = prototypeEvidencePreview.hidden;
+        prototypeEvidencePreview.hidden = !expanded;
+        open.setAttribute("aria-expanded", String(expanded));
+        open.textContent = expanded ? "Hide exact words" : "Show exact words";
+      } else {
+        selectRetainedMeetingTab("evidence", { focus: true, reveal: true });
+      }
+      return;
+    }
+    openMeetingEvidence(
+      claim.handle,
+      response.meetingId,
+      claim,
+      open,
+      sourceTab,
+    );
+  });
+  card.append(meta, text, open);
+  if (prototypeEvidencePreview) card.append(prototypeEvidencePreview);
+  target.append(card);
+}
+
 function renderMeetingDetail(response) {
   renderDetailNote(response?.operatorNote);
   const presentation = meetingDetailPresentation(response);
   meetingClaimList.replaceChildren();
+  meetingActionList.replaceChildren();
+  meetingEvidenceList.replaceChildren();
   meetingNoNote.hidden = true;
-  meetingDetailTitle.textContent = presentation.title;
+  meetingActionEmpty.hidden = true;
+  meetingEvidenceEmpty.hidden = true;
+  const selectedContext = meetingContextRows.find((row) => row.meetingId === response.meetingId);
+  meetingDetailTitle.textContent = selectedContext?.label
+    || (selectedContext ? formatMeetingTime(selectedContext.createdAtEpochSeconds) : "")
+    || presentation.title;
   meetingDetailLede.textContent = presentation.lede;
   meetingNoNoteTitle.textContent = presentation.fallbackTitle;
   meetingNoNoteCopy.textContent = presentation.fallbackCopy;
-  meetingOpenTranscript.hidden = !presentation.canOpenTranscript;
+  const transcriptAvailable = Boolean(response?.transcriptHandle);
+  meetingOpenTranscript.hidden = !transcriptAvailable;
+  meetingOpenTranscript.disabled = false;
+  meetingOpenTranscript.textContent = shellPrototype
+    ? "Preview retained transcript"
+    : "Open retained transcript";
+  meetingTranscriptSummary.dataset.state = transcriptAvailable ? "available" : "unavailable";
+  meetingTranscriptSummary.querySelector("h3").textContent = transcriptAvailable
+    ? "Open the retained words."
+    : "No retained transcript is available.";
+  meetingTranscriptSummary.querySelector("p").textContent = transcriptAvailable
+    ? "The transcript stays separate from any generated note. Withheld speech remains marked as unavailable."
+    : "This meeting has no transcript that can be opened from the current retained record.";
   meetingDetailState.dataset.meetingId = response.meetingId || "";
+  activeMeetingId = response.meetingId || activeMeetingId;
+  renderMeetingContextList();
   renderAudioRetention(response.audioRetention, response.audioDeletionHandle);
   // Offered for any meeting the reader could open, including one whose audio
   // was already released: the transcript, the note and the record are still there.
+  closeMeetingDeleteReview();
   meetingDeletionHandle = response.meetingDeletionHandle || "";
   meetingDeleteAction.hidden = !meetingDeletionHandle;
   const statusCopy = presentation.kind === "transcript-only"
@@ -2125,35 +2902,22 @@ function renderMeetingDetail(response) {
   message(meetingDetailState, statusCopy, response.state || "");
   if (response.state !== "note") {
     meetingNoNote.hidden = presentation.kind === "note";
+    meetingActionEmpty.hidden = false;
+    meetingEvidenceEmpty.hidden = false;
     return;
   }
   for (const [index, claim] of (response.claims || []).entries()) {
-    const card = document.createElement("article");
-    card.className = "meeting-claim";
-    const meta = document.createElement("p");
-    meta.className = "claim-meta";
-    meta.textContent = `${claimTypeLabel(claim.claimType)} · words located`;
-    const text = document.createElement("p");
-    text.className = "claim-text";
-    text.textContent = claim.claim;
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "secondary claim-evidence";
-    open.dataset.claimOrdinal = String(claim.ordinal);
-    open.dataset.claimIndex = String(index);
-    open.textContent = "Show exact words in transcript";
-    open.addEventListener("click", () => openMeetingEvidence(
-      claim.handle,
-      response.meetingId,
-      claim,
-      open,
-    ));
-    card.append(meta, text, open);
-    meetingClaimList.append(card);
+    appendMeetingClaim(meetingClaimList, claim, response, index, "note");
+    appendMeetingClaim(meetingEvidenceList, claim, response, index, "evidence", "evidence");
+    if (claim.claimType === "action") {
+      appendMeetingClaim(meetingActionList, claim, response, index, "actions", "action");
+    }
   }
   if (!meetingClaimList.children.length) {
     message(meetingDetailState, "This automatic note has no claims with text locators. The retained transcript remains the source of record.", "note");
   }
+  meetingActionEmpty.hidden = Boolean(meetingActionList.children.length);
+  meetingEvidenceEmpty.hidden = Boolean(meetingEvidenceList.children.length);
 }
 
 async function openMeetingDetail(handle, returnScreen = "meetings-screen", control = null) {
@@ -2161,8 +2925,13 @@ async function openMeetingDetail(handle, returnScreen = "meetings-screen", contr
   if (handleTransitionGate.active()) return false;
   claimExplicitRoute();
   productRootScreen = rootForDestination(returnScreen, productRootScreen);
+  activeMeetingId = control?.dataset.meetingId || activeMeetingId;
+  renderMeetingContextList();
   invalidateLibraryHandles();
   meetingRetention.hidden = true;
+  selectRetainedMeetingTab("note");
+  meetingDetailTitle.textContent = "Opening meeting";
+  meetingDetailLede.textContent = "Reading this meeting’s retained note, transcript status, and recording details.";
   message(meetingDetailState, "Opening this retained meeting…");
   showScreen("meeting-detail-screen", { resetScroll: true });
   const transition = beginHandleTransition("open-meeting-detail", control);
@@ -2183,9 +2952,60 @@ async function openMeetingDetail(handle, returnScreen = "meetings-screen", contr
   }
 }
 
+async function openMeetingByIdFresh(meetingId, control = null) {
+  if (!meetingId) return false;
+  if (shellPrototype) {
+    openPrototypeMeetingDetail(meetingId, { focus: true });
+    return true;
+  }
+  if (!invoke || handleTransitionGate.active()) return false;
+  claimExplicitRoute();
+  productRootScreen = "meetings-screen";
+  activeMeetingId = meetingId;
+  meetingContextBusyId = meetingId;
+  renderMeetingContextList();
+  invalidateLibraryHandles();
+  meetingRetention.hidden = true;
+  selectRetainedMeetingTab("note");
+  meetingDetailTitle.textContent = "Opening meeting";
+  meetingDetailLede.textContent = "Refreshing the local meeting list before opening this retained record.";
+  message(meetingDetailState, "Refreshing this meeting from its durable ID…");
+  showScreen("meeting-detail-screen", { resetScroll: true });
+  const transition = beginHandleTransition("switch-meeting-detail", control);
+  if (!transition) {
+    meetingContextBusyId = "";
+    renderMeetingContextList();
+    return false;
+  }
+  try {
+    const snapshot = await initializeLibraryReader();
+    if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
+    const row = rowForMeetingId(snapshot, meetingId);
+    if (!row?.handle) {
+      message(meetingDetailState, "That meeting is no longer available in the refreshed Meetings view.", "stale");
+      return false;
+    }
+    const response = await invoke("preview_library_open_note", { handle: row.handle });
+    if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
+    document.querySelector("#meeting-detail-transcript-handle").value = response.transcriptHandle || "";
+    renderMeetingDetail(response);
+    return true;
+  } catch {
+    if (!currentTransitionOwnsRoute(transition, "meeting-detail-screen")) return false;
+    message(meetingDetailState, "That meeting could not be reopened from the refreshed Meetings view.", "stale");
+    return false;
+  } finally {
+    meetingContextBusyId = "";
+    renderMeetingContextList();
+    finishHandleTransition(transition);
+  }
+}
+
 function focusRestoredMeetingOrigin(context, response) {
+  selectRetainedMeetingTab(context.detailTab || "note");
   if (context.claim) {
-    const origin = [...meetingClaimList.querySelectorAll(".claim-evidence")].find((control) => {
+    const activePanel = document.querySelector(`[data-retained-meeting-panel="${retainedMeetingTab}"]`);
+    const origin = [...(activePanel?.querySelectorAll(".claim-evidence") || [])].find((control) => {
       const claim = response.claims?.[Number(control.dataset.claimIndex)];
       return sameDisplayedClaim(claim, context.claim);
     });
@@ -2223,6 +3043,7 @@ async function restoreMeetingDetailAfterTranscript(context, transition) {
     if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
     document.querySelector("#meeting-detail-transcript-handle").value = response.transcriptHandle || "";
     renderMeetingDetail(response);
+    selectRetainedMeetingTab(context.detailTab || "note");
     screenScrollPositions.set("meeting-detail-screen", context.detailScrollTop);
     showScreen("meeting-detail-screen", { resetScroll: false, focus: false });
     mainRegion.scrollTop = context.detailScrollTop;
@@ -2258,12 +3079,13 @@ async function returnFromLibraryTranscript() {
   }
 }
 
-async function openMeetingEvidence(handle, meetingId, claim, control) {
+async function openMeetingEvidence(handle, meetingId, claim, control, sourceTab = "note") {
   if (!invoke || !handle) return;
   claimExplicitRoute();
   const returnContext = transcriptReturnRoute("meeting-detail", meetingId, {
     claim,
     detailScrollTop: mainRegion.scrollTop,
+    detailTab: sourceTab,
   });
   const transition = beginHandleTransition("open-claim-evidence", control);
   if (!transition) return false;
@@ -2350,6 +3172,10 @@ async function refreshFindView() {
 
 async function searchLibrary(event) {
   event.preventDefault();
+  if (shellPrototype) {
+    setError(libraryNotice, "The browser shell has no retained meetings to search. Nothing was queried or invented.");
+    return;
+  }
   await refreshFindView();
 }
 
@@ -2421,10 +3247,15 @@ function refreshCurrent() {
 function clearAttemptReview(clearRetention = false) {
   checks.forEach((check) => { check.checked = false; });
   if (clearRetention) retention.value = "";
+  updatePreflightRetentionSummary();
   updateStartButton();
 }
 
 async function dismissAttemptAndReturnFind(control) {
+  if (shellPrototype) {
+    leavePrototypeCapture("find-screen");
+    return;
+  }
   if (!invoke) {
     showStartTransitionError();
     return;
@@ -2481,12 +3312,28 @@ for (const field of checks) field.addEventListener("change", updateStartButton);
 // Changing the retention period never invalidates the attestation checkboxes:
 // consent, headphones, and one-operator are facts about the room, not about
 // how long audio is kept.
-retention.addEventListener("change", updateStartButton);
+retention.addEventListener("change", () => {
+  updatePreflightRetentionSummary();
+  updateStartButton();
+});
 
 startForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearError(startError);
-  if (!startIsAllowed() || !invoke) return;
+  if (!startIsAllowed()) return;
+  if (shellPrototype) {
+    prototypeCaptureStartedAt = Math.floor(Date.now() / 1000);
+    prototypeCaptureDegraded = false;
+    liveNoteMeetingId = "prototype-capture";
+    liveNoteSavedText = "";
+    liveNoteText.value = "";
+    liveNoteDirty = false;
+    liveNoteFailure = "";
+    renderLiveNote();
+    renderPrototypeCapture("arming");
+    return;
+  }
+  if (!invoke) return;
   const request = {
     retentionDays: Number(retention.value),
     attestation: {
@@ -2513,6 +3360,14 @@ startForm.addEventListener("submit", async (event) => {
 
 stopButton.addEventListener("click", async () => {
   if (stopCommandPending || lastSnapshot?.capture !== "recording") return;
+  if (shellPrototype) {
+    liveNoteSavedText = liveNoteText.value;
+    liveNoteDirty = false;
+    liveNoteSavedRecently = Boolean(liveNoteSavedText);
+    renderLiveNote();
+    renderPrototypeCapture("transcribing");
+    return;
+  }
   // The flag closes the re-entrancy window BEFORE the first await, and the
   // re-render disables the button. Setting it after the flush left the guard
   // open for the whole of it: a second click would pass, find nothing dirty,
@@ -2538,6 +3393,24 @@ stopButton.addEventListener("click", async () => {
     renderCaptureAction(lastSnapshot);
     setHeaderState("Recording · Stop needs attention");
   }
+});
+
+document.querySelector("#prototype-arming-ready").addEventListener("click", () => {
+  renderPrototypeCapture("recording");
+});
+document.querySelector("#prototype-arming-cancel").addEventListener("click", () => {
+  leavePrototypeCapture();
+});
+document.querySelector("#prototype-recording-degrade").addEventListener("click", (event) => {
+  prototypeCaptureDegraded = !prototypeCaptureDegraded;
+  renderPrototypeCapture("recording");
+  event.currentTarget.textContent = prototypeCaptureDegraded
+    ? "Restore both synthetic channels"
+    : "Simulate system-audio issue";
+});
+document.querySelector("#prototype-processing-complete").addEventListener("click", finishPrototypeTranscript);
+document.querySelector("#prototype-open-result").addEventListener("click", () => {
+  openPrototypeMeetingDetail("prototype-meeting", { focus: true });
 });
 
 newMeetingButton.addEventListener("click", () => dismissAttemptAndReturnFind(newMeetingButton));
@@ -2566,7 +3439,247 @@ retryStartup.addEventListener("click", async () => {
 findLink.addEventListener("click", () => openFind({ resetQuery: true }));
 meetingsLink.addEventListener("click", () => openMeetings({ resetFind: true }));
 promisesLink.addEventListener("click", () => openPromises({ resetFind: true }));
+homeLink.addEventListener("click", openHome);
+allMeetingsLink.addEventListener("click", () => openMeetings({ resetFind: true, browseAll: true }));
+unfiledMeetingsLink.addEventListener("click", () => {
+  filterFolder.value = "unfiled";
+  libraryFilter = { folder: "unfiled" };
+  void openMeetings({ resetFind: true, browseAll: true });
+});
+document.querySelector("#prototype-browse-all").addEventListener("click", () => {
+  void openMeetings({ resetFind: true, browseAll: true });
+});
+for (const folder of document.querySelectorAll("[data-prototype-folder]")) {
+  folder.addEventListener("click", () => openPrototypeMeetingDetail());
+}
+homeRecord.addEventListener("click", openStartMeeting);
+homeMeetings.addEventListener("click", () => openMeetings({ resetFind: true }));
+homeAsk.addEventListener("click", () => openFind({ resetQuery: true }));
+homeActions.addEventListener("click", () => openPromises({ resetFind: true }));
+for (const control of [homeWorkspacePreview, actionsWorkspacePreview, meetingsWorkspacePreview]) {
+  control.addEventListener("click", () => {
+    productRootScreen = "home-screen";
+    selectProductScreen("prototype-meeting-screen", { resetScroll: true });
+  });
+}
+const prototypeMeetingRows = [
+  { meetingId: "prototype-meeting", label: "Acme pilot planning", labelSource: "operator", createdAtEpochSeconds: 1786153800, transcriptAvailable: true },
+  { meetingId: "prototype-weekly", label: "Weekly product check-in", labelSource: "derived", createdAtEpochSeconds: 1786066200, transcriptAvailable: true },
+  { meetingId: "prototype-intake", label: "Customer intake", labelSource: "operator", createdAtEpochSeconds: 1785897000, transcriptAvailable: false },
+];
+
+function prototypeMeetingResponse(meetingId) {
+  const fixtures = {
+    "prototype-meeting": {
+      operatorNote: "Use Acme for the pilot if legal clears the sample data.",
+      claims: [
+        { ordinal: 0, claimType: "decision", claim: "The pilot will run for two weeks with one customer.", handle: "prototype-evidence-0", evidenceText: "Let’s keep the pilot to one customer for two weeks, then review the handoff data.", evidenceSpeaker: "You", evidenceTime: "12:08" },
+        { ordinal: 1, claimType: "action", claim: "Run the pilot review on Friday.", handle: "prototype-evidence-1", evidenceText: "I’ll run the pilot review Friday and bring back the completion time.", evidenceSpeaker: "Other side", evidenceTime: "12:21" },
+        { ordinal: 2, claimType: "question", claim: "Which customer gives the pilot a fair test?", handle: "prototype-evidence-2", evidenceText: "We still need to decide which customer gives us a fair test.", evidenceSpeaker: "You", evidenceTime: "12:42" },
+      ],
+    },
+    "prototype-weekly": {
+      operatorNote: "Confirm the onboarding copy before the next build.",
+      claims: [
+        { ordinal: 0, claimType: "decision", claim: "The team will keep the first-run flow to three steps.", handle: "prototype-weekly-evidence-0", evidenceText: "Let’s keep first run to three steps. Anything else can wait until after the first successful note.", evidenceSpeaker: "You", evidenceTime: "08:14" },
+        { ordinal: 1, claimType: "action", claim: "Review the first-run copy before Tuesday.", handle: "prototype-weekly-evidence-1", evidenceText: "I’ll review the first-run copy before Tuesday and flag anything unclear.", evidenceSpeaker: "Other side", evidenceTime: "08:37" },
+      ],
+    },
+    "prototype-intake": { operatorNote: "Waiting for consent before recording.", claims: [] },
+  };
+  const fixture = fixtures[meetingId] || fixtures["prototype-meeting"];
+  const transcriptAvailable = meetingId !== "prototype-intake";
+  return {
+    state: transcriptAvailable ? "note" : "transcript-only",
+    meetingId,
+    transcriptHandle: transcriptAvailable ? `prototype-transcript-${meetingId}` : "",
+    audioDeletionHandle: transcriptAvailable ? `prototype-audio-delete-${meetingId}` : "",
+    meetingDeletionHandle: `prototype-meeting-delete-${meetingId}`,
+    operatorNote: { text: fixture.operatorNote, unreadable: false },
+    claims: fixture.claims,
+    audioRetention: transcriptAvailable ? {
+      state: "retained",
+      policy: "scheduled",
+      deadlineEpochSeconds: Math.floor(Date.now() / 1000) + 604800,
+      retainedBytes: 25165824,
+      message: "Synthetic retention example.",
+    } : { state: "not-recorded", message: "Synthetic example: no recording was retained." },
+    message: "Synthetic meeting opened. Nothing was read from or written to your Mac.",
+  };
+}
+
+function openPrototypeMeetingDetail(meetingId = "prototype-meeting", { focus = false } = {}) {
+  productRootScreen = "meetings-screen";
+  meetingContextRows = prototypeMeetingRows.map((row) => ({ ...row }));
+  const response = prototypeMeetingResponse(meetingId);
+  document.querySelector("#meeting-detail-transcript-handle").value = response.transcriptHandle;
+  renderMeetingDetail(response);
+  selectRetainedMeetingTab("note");
+  selectProductScreen("meeting-detail-screen", { resetScroll: true });
+  setMeetingFocus(focus);
+  if (focus) {
+    meetingDetailTitle.tabIndex = -1;
+    meetingDetailTitle.focus({ preventScroll: true });
+  }
+}
+
+meetingsRetainedPreview.addEventListener("click", () => {
+  openPrototypeMeetingDetail();
+});
+prototypeMeetingBack.addEventListener("click", openHome);
+for (const tab of settingsTabs) {
+  tab.addEventListener("click", () => selectSettingsPanel(tab.dataset.settingsTab));
+  tab.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowRight"].includes(event.key)) {
+      event.preventDefault();
+      moveSettingsTab(tab, 1);
+    } else if (["ArrowUp", "ArrowLeft"].includes(event.key)) {
+      event.preventDefault();
+      moveSettingsTab(tab, -1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      const first = settingsTabs.find((candidate) => shellPrototype || !candidate.classList.contains("prototype-only"));
+      selectSettingsPanel(first.dataset.settingsTab, { focusTab: true });
+    } else if (event.key === "End") {
+      event.preventDefault();
+      const available = settingsTabs.filter((candidate) => shellPrototype || !candidate.classList.contains("prototype-only"));
+      selectSettingsPanel(available.at(-1).dataset.settingsTab, { focusTab: true });
+    }
+  });
+}
+settingsRetentionPreview.addEventListener("change", (event) => {
+  if (!shellPrototype || event.target.name !== "settings-retention") return;
+  settingsRetentionPreviewStatus.textContent = `Preview choice: ${event.target.value}. This is not saved and does not change any existing recording.`;
+});
+settingsReviewAudio.addEventListener("click", async () => {
+  await openMeetings({ resetFind: true });
+  document.querySelector("#retention-overview").scrollIntoView({ block: "start" });
+});
+settingsPreviewFirstRun.addEventListener("click", openPrototypeFirstRun);
+settingsPreviewStates.addEventListener("click", openStateReview);
+settingsOpenHelp.addEventListener("click", openHelp);
+settingsPreviewWindow.addEventListener("click", openDesktopBehaviorPreview);
+skipLink.addEventListener("click", (event) => {
+  event.preventDefault();
+  mainRegion.scrollTop = 0;
+  mainRegion.focus({ preventScroll: true });
+});
+desktopPreviewClose.addEventListener("click", () => closeDesktopBehaviorPreview());
+desktopPreviewOpen.addEventListener("click", () => closeDesktopBehaviorPreview());
+desktopPreviewMenubarControl.addEventListener("click", (event) => {
+  event.stopPropagation();
+  showDesktopMenubarControl();
+});
+desktopBehaviorBackdrop.addEventListener("click", (event) => {
+  if (event.target === desktopBehaviorBackdrop) closeDesktopBehaviorPreview();
+});
+desktopBehaviorBackdrop.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab") return;
+  const focusable = [desktopPreviewClose, desktopPreviewOpen, desktopPreviewMenubarControl];
+  const currentIndex = focusable.indexOf(document.activeElement);
+  const direction = event.shiftKey ? -1 : 1;
+  const nextIndex = currentIndex < 0
+    ? event.shiftKey ? focusable.length - 1 : 0
+    : (currentIndex + direction + focusable.length) % focusable.length;
+  event.preventDefault();
+  focusable[nextIndex].focus();
+});
+for (const tab of helpTabs) {
+  tab.addEventListener("click", () => renderHelpTopic(tab.dataset.helpTopic));
+  tab.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowRight" && event.key !== "ArrowUp" && event.key !== "ArrowLeft") return;
+    event.preventDefault();
+    moveHelpTab(tab, event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1);
+  });
+}
+helpTopicPrimary.addEventListener("click", () => runHelpAction(helpTopicPrimary.dataset.action));
+helpExit.addEventListener("click", closeHelp);
+helpHome.addEventListener("click", () => {
+  restoreShellSnapshotStatus();
+  openHome();
+});
+for (const tab of stateReviewTabs) {
+  tab.addEventListener("click", () => renderStateReview(tab.dataset.statePreview));
+  tab.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowRight"].includes(event.key)) {
+      event.preventDefault();
+      moveStateReviewTab(tab, 1);
+    } else if (["ArrowUp", "ArrowLeft"].includes(event.key)) {
+      event.preventDefault();
+      moveStateReviewTab(tab, -1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      renderStateReview(stateReviewTabs[0].dataset.statePreview, { focusTab: true });
+    } else if (event.key === "End") {
+      event.preventDefault();
+      renderStateReview(stateReviewTabs.at(-1).dataset.statePreview, { focusTab: true });
+    }
+  });
+}
+stateReviewPrimary.addEventListener("click", runStateReviewPrimary);
+stateReviewExit.addEventListener("click", openHome);
+stateReviewHome.addEventListener("click", openHome);
+for (const control of document.querySelectorAll(".action-filter")) {
+  control.addEventListener("click", () => {
+    for (const peer of document.querySelectorAll(".action-filter")) {
+      peer.setAttribute("aria-pressed", String(peer === control));
+    }
+  });
+}
+function selectMeetingPreviewTab(tabName) {
+  for (const tab of document.querySelectorAll("[data-meeting-tab]")) {
+    const selected = tab.dataset.meetingTab === tabName;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  for (const panel of document.querySelectorAll("[data-meeting-panel]")) {
+    const active = panel.dataset.meetingPanel === tabName;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+  }
+}
+for (const tab of document.querySelectorAll("[data-meeting-tab]")) {
+  tab.addEventListener("click", () => selectMeetingPreviewTab(tab.dataset.meetingTab));
+  tab.addEventListener("keydown", (event) => {
+    const tabs = [...document.querySelectorAll("[data-meeting-tab]")];
+    const currentIndex = tabs.indexOf(tab);
+    let next = null;
+    if (["ArrowRight", "ArrowDown"].includes(event.key)) next = tabs[(currentIndex + 1) % tabs.length];
+    else if (["ArrowLeft", "ArrowUp"].includes(event.key)) next = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
+    else if (event.key === "Home") next = tabs[0];
+    else if (event.key === "End") next = tabs.at(-1);
+    if (!next) return;
+    event.preventDefault();
+    selectMeetingPreviewTab(next.dataset.meetingTab);
+    next.focus();
+  });
+}
+for (const jump of document.querySelectorAll("[data-meeting-tab-jump]")) {
+  jump.addEventListener("click", () => selectMeetingPreviewTab(jump.dataset.meetingTabJump));
+}
+for (const tab of document.querySelectorAll("[data-retained-meeting-tab]")) {
+  tab.addEventListener("click", () => selectRetainedMeetingTab(
+    tab.dataset.retainedMeetingTab,
+    { reveal: true },
+  ));
+  tab.addEventListener("keydown", (event) => {
+    const tabs = [...document.querySelectorAll("[data-retained-meeting-tab]")];
+    const currentIndex = tabs.indexOf(tab);
+    let next = null;
+    if (["ArrowRight", "ArrowDown"].includes(event.key)) next = tabs[(currentIndex + 1) % tabs.length];
+    else if (["ArrowLeft", "ArrowUp"].includes(event.key)) next = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
+    else if (event.key === "Home") next = tabs[0];
+    else if (event.key === "End") next = tabs.at(-1);
+    if (!next) return;
+    event.preventDefault();
+    selectRetainedMeetingTab(next.dataset.retainedMeetingTab, { focus: true });
+  });
+}
 profileLink.addEventListener("click", openProfile);
+meetingFocusToggle.addEventListener("click", () => {
+  setMeetingFocus(document.documentElement.dataset.meetingFocus !== "true");
+});
+meetingDockRecord.addEventListener("click", openStartMeeting);
 profileSetup.addEventListener("click", runProfileAction);
 profileResetConfirm.addEventListener("click", resetStoredProfile);
 profileResetCancel.addEventListener("click", cancelProfileReset);
@@ -2580,6 +3693,78 @@ operatingPointsForm.addEventListener("change", () => {
 });
 workflowReturn.addEventListener("click", returnToWorkflow);
 startMeetingAction.addEventListener("click", openStartMeeting);
+commandMenuTrigger.addEventListener("click", () => {
+  if (commandMenuBackdrop.hidden) openCommandMenu();
+  else closeCommandMenu();
+});
+commandMenuClose.addEventListener("click", closeCommandMenu);
+commandMenuInput.addEventListener("input", renderCommandMenu);
+commandMenuBackdrop.addEventListener("click", (event) => {
+  if (event.target === commandMenuBackdrop) closeCommandMenu();
+});
+commandMenuBackdrop.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    setCommandMenuActiveIndex(commandMenuActiveIndex + 1, { reveal: true });
+    commandMenuInput.focus();
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    setCommandMenuActiveIndex(commandMenuActiveIndex - 1, { reveal: true });
+    commandMenuInput.focus();
+  } else if (event.key === "Enter" && commandMenuEntries.length) {
+    event.preventDefault();
+    runShellCommand(commandMenuEntries[commandMenuActiveIndex].command);
+  } else if (event.key === "Tab") {
+    const focusable = [commandMenuInput, ...commandMenuEntries.map(({ button }) => button), commandMenuClose];
+    const currentIndex = focusable.indexOf(document.activeElement);
+    const direction = event.shiftKey ? -1 : 1;
+    const nextIndex = (currentIndex + direction + focusable.length) % focusable.length;
+    event.preventDefault();
+    focusable[nextIndex].focus();
+  }
+});
+quickControlTrigger.addEventListener("click", () => {
+  if (quickControlPopover.hidden) openQuickControl();
+  else closeQuickControl({ restoreFocus: true });
+});
+quickControlClose.addEventListener("click", () => closeQuickControl({ restoreFocus: true }));
+quickControlPrimary.addEventListener("click", runQuickControlPrimary);
+quickControlSecondary.addEventListener("click", runQuickControlSecondary);
+document.addEventListener("keydown", (event) => {
+  if (!shellPrototype) return;
+  if (event.key === "Escape" && !desktopBehaviorBackdrop.hidden) {
+    event.preventDefault();
+    closeDesktopBehaviorPreview();
+    return;
+  }
+  if (!desktopBehaviorBackdrop.hidden) return;
+  const commandKey = event.metaKey && !event.altKey && !event.ctrlKey;
+  if (commandKey && event.key.toLocaleLowerCase() === "k") {
+    event.preventDefault();
+    if (commandMenuBackdrop.hidden) openCommandMenu();
+    else closeCommandMenu();
+    return;
+  }
+  if (commandKey && !event.shiftKey) {
+    const routeShortcut = { "1": "meetings", "2": "ask", "3": "actions", ",": "settings" }[event.key];
+    if (routeShortcut) {
+      event.preventDefault();
+      runShellCommandById(routeShortcut);
+      return;
+    }
+  }
+  if (event.key === "Escape" && !commandMenuBackdrop.hidden) {
+    event.preventDefault();
+    closeCommandMenu();
+  } else if (event.key === "Escape" && !quickControlPopover.hidden) {
+    closeQuickControl({ restoreFocus: true });
+  }
+});
+document.addEventListener("click", (event) => {
+  if (quickControlPopover.hidden) return;
+  if (quickControlPopover.contains(event.target) || quickControlTrigger.contains(event.target)) return;
+  closeQuickControl();
+});
 document.querySelector("#start-back").addEventListener("click", returnToProductHome);
 document.querySelector("#start-transition-back").addEventListener(
   "click",
@@ -2594,7 +3779,7 @@ document.querySelector("#meeting-detail-back").addEventListener("click", returnT
 recordingDeleteReview.addEventListener("click", () => {
   if (!meetingAudioDeletionHandle) return;
   recordingDeleteConfirmation.hidden = false;
-  recordingDeleteConfirm.focus();
+  (shellPrototype ? recordingDeleteCancel : recordingDeleteConfirm).focus();
 });
 recordingDeleteCancel.addEventListener("click", () => {
   closeRecordingDeleteReview();
@@ -2626,7 +3811,7 @@ recordingDeleteConfirm.addEventListener("click", async () => {
 meetingDeleteReview.addEventListener("click", () => {
   if (!meetingDeletionHandle) return;
   meetingDeleteConfirmation.hidden = false;
-  meetingDeleteConfirm.focus();
+  (shellPrototype ? meetingDeleteCancel : meetingDeleteConfirm).focus();
 });
 meetingDeleteCancel.addEventListener("click", () => {
   closeMeetingDeleteReview();
@@ -2663,11 +3848,18 @@ meetingDeleteConfirm.addEventListener("click", async () => {
   }
 });
 meetingOpenTranscript.addEventListener("click", () => {
+  if (shellPrototype) {
+    productRootScreen = "meetings-screen";
+    selectMeetingPreviewTab("transcript");
+    selectProductScreen("prototype-meeting-screen", { resetScroll: true });
+    return;
+  }
   const handle = document.querySelector("#meeting-detail-transcript-handle").value;
   const meetingId = meetingDetailState.dataset.meetingId || "";
   if (handle) {
     openLibraryTranscript(handle, null, transcriptReturnRoute("meeting-detail", meetingId, {
       detailScrollTop: mainRegion.scrollTop,
+      detailTab: "transcript",
     }), null, meetingOpenTranscript);
   }
 });
@@ -2857,10 +4049,54 @@ const firstRunPanels = new Map(
   ]),
 );
 const firstRunDeniedPane = document.querySelector("#first-run-denied-pane");
+const firstRunProgressItems = [...firstRunScreen.querySelectorAll("[data-first-run-progress]")];
+const firstRunProgressOrder = [
+  "welcome",
+  "request-microphone",
+  "request-audio-capture",
+  "enrol-voice",
+  "ready",
+];
+
+function renderFirstRunProgress(step) {
+  let currentStep = step;
+  let attention = false;
+  if (step === "denied-recovery") {
+    currentStep = firstRunDeniedPane.textContent === "Microphone"
+      ? "request-microphone"
+      : "request-audio-capture";
+    attention = true;
+  } else if (step === "unavailable") {
+    currentStep = "welcome";
+    attention = true;
+  }
+  const currentIndex = firstRunProgressOrder.indexOf(currentStep);
+  firstRunProgressItems.forEach((item, index) => {
+    item.dataset.state = index < currentIndex
+      ? "complete"
+      : index === currentIndex
+        ? attention ? "attention" : "current"
+        : "upcoming";
+  });
+}
 
 function showFirstRunStep(step) {
   firstRunScreen.dataset.step = step;
   for (const [name, panel] of firstRunPanels) panel.hidden = name !== step;
+  renderFirstRunProgress(step);
+}
+
+function openPrototypeFirstRun() {
+  if (!shellPrototype) return;
+  claimExplicitRoute();
+  for (const status of firstRunScreen.querySelectorAll(".first-run-state")) {
+    status.textContent = "";
+    status.removeAttribute("data-state");
+  }
+  firstRunDeniedPane.textContent = "Microphone";
+  showFirstRunStep("welcome");
+  setHeaderState("Setup preview · nothing is recording");
+  showScreen("first-run-screen", { resetScroll: true });
 }
 
 function renderFirstRun(result, { origin = "" } = {}) {
@@ -2908,9 +4144,18 @@ async function runFirstRunRequest(command, control, statusNode, origin) {
 }
 
 document.querySelector("#first-run-begin").addEventListener("click", async () => {
+  if (shellPrototype) {
+    showFirstRunStep("request-microphone");
+    return;
+  }
   renderFirstRun(await readFirstRunPermissions());
 });
 document.querySelector("#first-run-ask-microphone").addEventListener("click", (event) => {
+  if (shellPrototype) {
+    message(document.querySelector("#first-run-microphone-state"), "Synthetic state: microphone allowed.", "ok");
+    showFirstRunStep("request-audio-capture");
+    return;
+  }
   runFirstRunRequest(
     "first_run_request_microphone",
     event.currentTarget,
@@ -2919,6 +4164,11 @@ document.querySelector("#first-run-ask-microphone").addEventListener("click", (e
   );
 });
 document.querySelector("#first-run-ask-system-audio").addEventListener("click", (event) => {
+  if (shellPrototype) {
+    message(document.querySelector("#first-run-system-audio-state"), "Synthetic state: system audio allowed.", "ok");
+    showFirstRunStep("enrol-voice");
+    return;
+  }
   runFirstRunRequest(
     "first_run_request_system_audio",
     event.currentTarget,
@@ -2927,20 +4177,47 @@ document.querySelector("#first-run-ask-system-audio").addEventListener("click", 
   );
 });
 document.querySelector("#first-run-recheck").addEventListener("click", async () => {
+  if (shellPrototype) {
+    showFirstRunStep(
+      firstRunDeniedPane.textContent === "Microphone"
+        ? "request-audio-capture"
+        : "enrol-voice",
+    );
+    return;
+  }
   renderFirstRun(await readFirstRunPermissions());
 });
 document.querySelector("#first-run-retry-probe").addEventListener("click", async () => {
+  if (shellPrototype) {
+    showFirstRunStep("welcome");
+    return;
+  }
   renderFirstRun(await readFirstRunPermissions());
 });
+document.querySelector("#prototype-first-run-unavailable").addEventListener("click", () => {
+  showFirstRunStep("unavailable");
+});
+document.querySelector("#prototype-first-run-deny-microphone").addEventListener("click", () => {
+  firstRunDeniedPane.textContent = "Microphone";
+  showFirstRunStep("denied-recovery");
+});
+document.querySelector("#prototype-first-run-deny-system-audio").addEventListener("click", () => {
+  firstRunDeniedPane.textContent = "System Audio Recording";
+  showFirstRunStep("denied-recovery");
+});
+document.querySelector("#first-run-exit").addEventListener("click", openHome);
 document.querySelector("#first-run-enrol").addEventListener("click", () => {
   // Routes to the enrolment surface that already exists rather than duplicating it.
+  activeSettingsTab = "voice";
   selectProductScreen("profile-screen", { resetScroll: true });
+  selectSettingsPanel("voice");
 });
 document.querySelector("#first-run-skip-enrol").addEventListener("click", () => {
   showFirstRunStep("ready");
 });
 document.querySelector("#first-run-done").addEventListener("click", () => {
-  selectProductScreen("idle-screen", { resetScroll: true });
+  if (shellPrototype) openHome();
+  else selectProductScreen("idle-screen", { resetScroll: true });
 });
 // Narrowing the list. Folder and the two dates re-request on change; the name box
 // waits for the operator to stop typing rather than issuing a snapshot per
@@ -2964,7 +4241,8 @@ filterNewFolder.addEventListener("click", () => void createFolder());
 // without this the first thing a new operator meets is a screen they cannot leave.
 for (const id of ["#first-run-leave-denied", "#first-run-leave-unavailable"]) {
   document.querySelector(id).addEventListener("click", () => {
-    selectProductScreen("idle-screen", { resetScroll: true });
+    if (shellPrototype) openHome();
+    else selectProductScreen("idle-screen", { resetScroll: true });
   });
 }
 
@@ -2998,5 +4276,16 @@ async function considerFirstRun() {
   showScreen("first-run-screen", { resetScroll: true });
 }
 
-renderStartup("shell-rendered");
-refreshCurrent();
+if (shellPrototype) {
+  document.documentElement.dataset.prototype = "true";
+  releaseBadge.textContent = "Shell preview";
+  lastSnapshot = { startup: "ready", capture: "idle", retention_operational: true };
+  workflowOwnsRoute = false;
+  renderCaptureAction(lastSnapshot);
+  setHeaderState("Click-through prototype · nothing is recording");
+  openHome();
+  if (nativeCalibration === "document") setMeetingFocus(true);
+} else {
+  renderStartup("shell-rendered");
+  refreshCurrent();
+}

@@ -363,6 +363,19 @@ competitor each row comes from.
 feature and that history is the primary paywall in both Granola and Otter — so the
 corpus is where the value is, and the corpus is what nothing currently has.
 
+### 2026-08-08 review overlay — shell first, implementation queue unchanged
+
+The operator asked to see the full UI/UX shell before the remaining native build-out.
+That adds a review overlay in front of the waves below; it does not rearrange their
+technical dependencies. The browser prototype must show the library-first entry,
+capture and recovery, one meeting with sibling views, Ask, Actions, and Settings, plus
+labelled rooms for every planned feature. Two direction-compliant visual treatments and
+the former shell as a control are reviewed at the H1 visual-direction gate. No planned
+room registers a Tauri command, reads local data, or counts as feature completion.
+
+After H1, the native queue resumes at the first still-open item below. Human-only
+permission, semantic-usefulness, cold-operator, and real-audio gates remain human-only.
+
 ### Wave 1 — the corpus, because everything above it needs one
 
 Nothing in retrieval, folders, filters or cross-meeting answers can be built on a

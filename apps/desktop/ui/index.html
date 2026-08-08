@@ -3,13 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light" />
+    <meta name="color-scheme" content="light dark" />
     <title>Yawn</title>
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="native-calibration.css" />
   </head>
   <body>
-    <header class="app-header">
-      <div class="header-identity">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="app-header" data-tauri-drag-region>
+      <div class="header-identity" data-tauri-drag-region>
         <div class="product-mark">
           <p class="eyebrow">Yawn</p>
           <span class="release-badge" id="release-badge">Preview</span>
@@ -17,12 +19,14 @@
         <p class="product-state"><span class="status-dot" id="header-status-dot" aria-hidden="true"></span><span id="header-state" role="status" aria-atomic="true">Opening safely</span></p>
       </div>
       <div class="header-actions">
-        <nav class="product-nav" id="product-nav" aria-label="Meeting memory" hidden>
-          <button id="find-link" type="button">Find</button>
-          <button id="meetings-link" type="button">Meetings</button>
-          <button id="promises-link" type="button">Promises</button>
-        </nav>
-        <button class="settings-link" id="profile-link" type="button" hidden>Settings</button>
+        <button class="prototype-only command-menu-trigger" id="command-menu-trigger" type="button" aria-label="Open commands" aria-expanded="false" aria-controls="command-menu-dialog">
+          <span>Commands</span>
+          <kbd aria-hidden="true">⌘K</kbd>
+        </button>
+        <button class="prototype-only quick-control-trigger" id="quick-control-trigger" type="button" aria-label="Recording status: Ready. Open quick control." aria-expanded="false" aria-controls="quick-control-popover">
+          <span class="quick-control-glyph" id="quick-control-trigger-glyph" data-state="idle" aria-hidden="true"></span>
+          <span id="quick-control-trigger-label">Ready</span>
+        </button>
         <div class="workflow-actions">
           <button class="secondary workflow-return" id="workflow-return" type="button" hidden>View progress</button>
           <button class="stop header-stop" id="stop-button" type="button" hidden>Stop recording</button>
@@ -31,7 +35,118 @@
       </div>
     </header>
 
-    <main tabindex="-1">
+    <section class="prototype-only quick-control-popover" id="quick-control-popover" aria-labelledby="quick-control-title" hidden>
+      <div class="quick-control-heading">
+        <div>
+          <p class="label">Desktop quick control · synthetic shell</p>
+          <h2 id="quick-control-title">Yawn</h2>
+        </div>
+        <button class="quick-control-close" id="quick-control-close" type="button" aria-label="Close quick control">Close</button>
+      </div>
+      <div class="quick-control-status">
+        <span class="quick-control-glyph large" id="quick-control-status-glyph" data-state="idle" aria-hidden="true"></span>
+        <div>
+          <p class="quick-control-state" id="quick-control-state">Ready to record</p>
+          <p class="quick-control-elapsed" id="quick-control-elapsed" hidden>00:00</p>
+          <p class="quick-control-detail" id="quick-control-detail">Nothing is recording.</p>
+        </div>
+      </div>
+      <div class="quick-control-actions">
+        <button class="primary" id="quick-control-primary" type="button">Record a meeting</button>
+        <button class="secondary" id="quick-control-secondary" type="button" hidden></button>
+      </div>
+      <div class="quick-control-boundary" role="note">
+        <strong>Browser representation.</strong>
+        <span>The installed app uses a native macOS menubar item. Automatic meeting detection and an armed countdown remain dormant and are not shown here.</span>
+      </div>
+    </section>
+
+    <div class="prototype-only command-menu-backdrop" id="command-menu-backdrop" hidden>
+      <section class="command-menu-dialog" id="command-menu-dialog" role="dialog" aria-modal="true" aria-labelledby="command-menu-title">
+        <div class="command-menu-heading">
+          <div>
+            <p class="label">Keyboard navigation</p>
+            <h2 id="command-menu-title">Commands</h2>
+          </div>
+          <button class="command-menu-close" id="command-menu-close" type="button" aria-label="Close commands">Close</button>
+        </div>
+        <label class="command-menu-search" for="command-menu-input">
+          <span class="sr-only">Find a command</span>
+          <input id="command-menu-input" type="search" placeholder="Type a command" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-menu-list" />
+          <kbd aria-hidden="true">Esc</kbd>
+        </label>
+        <div class="command-menu-list" id="command-menu-list" role="listbox" aria-label="Available commands"></div>
+        <p class="command-menu-empty" id="command-menu-empty" hidden>No matching command.</p>
+        <div class="command-menu-help" aria-label="Keyboard help">
+          <span><kbd>↑</kbd><kbd>↓</kbd> Move</span>
+          <span><kbd>Enter</kbd> Open</span>
+          <span>Planned functions stay labelled.</span>
+        </div>
+      </section>
+    </div>
+
+    <div class="prototype-only desktop-behavior-backdrop" id="desktop-behavior-backdrop" hidden>
+      <section class="desktop-behavior-dialog" id="desktop-behavior-dialog" role="dialog" aria-modal="true" aria-labelledby="desktop-preview-title">
+        <div class="desktop-preview-menubar" aria-hidden="true"><span>○</span><strong>Yawn</strong></div>
+        <div class="desktop-preview-heading">
+          <div>
+            <p class="label">Window behavior · synthetic preview</p>
+            <h2 id="desktop-preview-title" tabindex="-1">The main window is hidden.</h2>
+          </div>
+          <button class="desktop-preview-close" id="desktop-preview-close" type="button" aria-label="Close window behavior preview">Close</button>
+        </div>
+        <p class="desktop-preview-lede">In the installed app, closing the window hides it. Yawn stays open in the menubar and keeps showing its current capture state.</p>
+        <dl class="desktop-preview-facts">
+          <div><dt>Capture</dt><dd><strong id="desktop-preview-capture">Nothing is recording</strong><span>The window does not own the recording process</span></dd></div>
+          <div><dt>Retention</dt><dd><strong>Still enforced while Yawn remains open</strong><span>Quitting pauses deletion until the next launch</span></dd></div>
+          <div><dt>Notifications</dt><dd><strong>None sent</strong><span>No notification plugin is installed</span></dd></div>
+        </dl>
+        <div class="screen-actions">
+          <button class="primary" id="desktop-preview-open" type="button">Open Yawn</button>
+          <button class="secondary" id="desktop-preview-menubar-control" type="button">Show menubar control</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="app-workspace">
+      <aside class="app-sidebar">
+        <nav class="product-nav" id="product-nav" aria-label="Yawn" hidden>
+          <div class="sidebar-primary">
+            <button class="legacy-home-link" id="home-link" type="button"><span>Home</span></button>
+            <button id="meetings-link" type="button"><span>Meetings</span><kbd class="nav-shortcut" aria-hidden="true">⌘1</kbd></button>
+            <button id="find-link" type="button"><span>Ask</span><kbd class="nav-shortcut" aria-hidden="true">⌘2</kbd></button>
+            <button id="promises-link" type="button"><span>Actions</span><span class="nav-trailing"><span class="nav-badge">Planned</span><kbd class="nav-shortcut" aria-hidden="true">⌘3</kbd></span></button>
+          </div>
+
+          <div class="sidebar-section" aria-labelledby="folders-heading">
+            <div class="sidebar-section-heading">
+              <p id="folders-heading">Folders</p>
+              <span>Local</span>
+            </div>
+            <button class="sidebar-subitem" id="all-meetings-link" type="button">All meetings</button>
+            <button class="sidebar-subitem" id="unfiled-meetings-link" type="button">Unfiled</button>
+            <button class="prototype-only sidebar-subitem synthetic-folder" type="button" data-prototype-folder="customer-calls">Customer calls <span>3</span></button>
+            <button class="prototype-only sidebar-subitem synthetic-folder" type="button" data-prototype-folder="product">Product <span>2</span></button>
+            <p class="sidebar-empty">Created folders appear here.</p>
+          </div>
+
+          <div class="prototype-only sidebar-section" aria-labelledby="saved-views-heading">
+            <div class="sidebar-section-heading">
+              <p id="saved-views-heading">Saved views</p>
+              <span>Planned</span>
+            </div>
+            <button class="sidebar-subitem" type="button" disabled>Open actions</button>
+            <button class="sidebar-subitem" type="button" disabled>Customer signals</button>
+          </div>
+
+          <div class="sidebar-footer">
+            <p class="privacy-lockup"><strong>On this Mac</strong><span>No account or upload</span></p>
+            <button class="settings-link" id="profile-link" type="button" hidden><span>Settings</span><kbd class="nav-shortcut" aria-hidden="true">⌘,</kbd></button>
+          </div>
+        </nav>
+      </aside>
+
+      <main id="main-content" tabindex="-1">
       <section class="screen active" id="startup-screen" aria-labelledby="startup-title">
         <p class="kicker">Nothing is recording</p>
         <h1 id="startup-title">Checking this installation.</h1>
@@ -46,6 +161,76 @@
         <button class="secondary" id="retry-startup" type="button" hidden>Check again</button>
       </section>
 
+      <section class="screen state-review-screen" id="state-review-screen" aria-labelledby="state-review-title">
+        <div class="state-review-heading">
+          <div>
+            <p class="kicker">Prototype review</p>
+            <h1 id="state-review-title">Loading, empty, failure, and recovery.</h1>
+            <p class="lede">These are product states, not destinations. This review surface is available only in the browser shell.</p>
+          </div>
+          <button class="secondary" id="state-review-exit" type="button">Exit review</button>
+        </div>
+        <div class="state-review-boundary" role="note">
+          <strong>Synthetic state preview.</strong>
+          <span>No installation, meeting, diagnostic, or recovery evidence was inspected. Each panel demonstrates the copy and next action the real state must provide.</span>
+        </div>
+        <div class="state-review-shell">
+          <nav class="state-review-nav" aria-label="System states" role="tablist" aria-orientation="vertical">
+            <button type="button" id="state-tab-loading" data-state-preview="loading" role="tab" aria-selected="true" aria-controls="state-preview-card"><strong>Loading</strong><span>Safe while local components answer</span></button>
+            <button type="button" id="state-tab-empty" data-state-preview="empty" role="tab" aria-selected="false" aria-controls="state-preview-card"><strong>Empty library</strong><span>Nothing stored is not an error</span></button>
+            <button type="button" id="state-tab-failure" data-state-preview="failure" role="tab" aria-selected="false" aria-controls="state-preview-card"><strong>Processing failure</strong><span>Audio survived; transcript did not</span></button>
+            <button type="button" id="state-tab-recovery" data-state-preview="recovery" role="tab" aria-selected="false" aria-controls="state-preview-card"><strong>Interrupted recovery</strong><span>Recovered never means complete</span></button>
+            <button type="button" id="state-tab-repair" data-state-preview="repair" role="tab" aria-selected="false" aria-controls="state-preview-card"><strong>Installation repair</strong><span>Window first, ordered recovery</span></button>
+          </nav>
+          <article class="state-preview-card" id="state-preview-card" data-tone="loading" role="tabpanel">
+            <div class="state-preview-icon" id="state-preview-icon" aria-hidden="true"><span></span></div>
+            <p class="label" id="state-preview-context">Opening Yawn</p>
+            <h2 id="state-preview-title">Checking this installation.</h2>
+            <p class="state-preview-lede" id="state-preview-lede">The window is ready. Recording controls stay unavailable until the bundled local components answer.</p>
+            <dl class="state-preview-facts" id="state-preview-facts"></dl>
+            <div class="screen-actions">
+              <button class="primary" id="state-review-primary" type="button">Show ready state</button>
+              <button class="secondary" id="state-review-home" type="button">Return Home</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="screen help-screen" id="help-screen" aria-labelledby="help-title">
+        <div class="help-heading">
+          <div>
+            <p class="kicker">Help and diagnostics</p>
+            <h1 id="help-title">Fix the problem you can see.</h1>
+            <p class="lede">Recording help, local-data boundaries, diagnostics, and updates in one place.</p>
+          </div>
+          <button class="secondary" id="help-exit" type="button">Close Help</button>
+        </div>
+        <div class="help-boundary" role="note">
+          <strong>Browser representation.</strong>
+          <span>No permission, meeting, diagnostic file, installed version, or update service was inspected. Actions either open another shell journey or explain an unavailable capability.</span>
+        </div>
+        <div class="help-shell">
+          <nav class="help-nav" aria-label="Help topics" role="tablist" aria-orientation="vertical">
+            <button type="button" id="help-tab-overview" data-help-topic="overview" role="tab" aria-selected="true" aria-controls="help-topic-card"><strong>Help home</strong><span>Choose the right recovery path</span></button>
+            <button type="button" id="help-tab-recording" data-help-topic="recording" role="tab" aria-selected="false" aria-controls="help-topic-card"><strong>Record a meeting</strong><span>Consent, audio, and retention</span></button>
+            <button type="button" id="help-tab-permissions" data-help-topic="permissions" role="tab" aria-selected="false" aria-controls="help-topic-card"><strong>Permission problems</strong><span>Refused versus unavailable</span></button>
+            <button type="button" id="help-tab-privacy" data-help-topic="privacy" role="tab" aria-selected="false" aria-controls="help-topic-card"><strong>Privacy and retention</strong><span>What stays local and for how long</span></button>
+            <button type="button" id="help-tab-diagnostics" data-help-topic="diagnostics" role="tab" aria-selected="false" aria-controls="help-topic-card"><strong>Diagnostics</strong><span>Contents, redaction, and handling</span></button>
+            <button type="button" id="help-tab-updates" data-help-topic="updates" role="tab" aria-selected="false" aria-controls="help-topic-card"><strong>Updates</strong><span>Manual installation for now</span></button>
+          </nav>
+          <article class="help-topic-card" id="help-topic-card" role="tabpanel" aria-labelledby="help-tab-overview">
+            <p class="label" id="help-topic-context">Help</p>
+            <h2 id="help-topic-title">Find the right next step.</h2>
+            <p class="help-topic-lede" id="help-topic-lede">Choose the problem that matches what you can see.</p>
+            <dl class="help-topic-facts" id="help-topic-facts"></dl>
+            <div class="screen-actions">
+              <button class="primary" id="help-topic-primary" type="button">Check recording setup</button>
+              <button class="secondary" id="help-home" type="button">Return Home</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <!-- § H. First run. One surface, six states, driven by data-step. The two
            states § H lists that are absent are deliberate: choose-retention's
            wording and its policy semantics are both awaiting the Wave C human
@@ -53,14 +238,31 @@
            stubbed here, because a step that asks a question the app cannot honour
            is worse than a step that does not exist. -->
       <section class="screen first-run-screen" id="first-run-screen" data-step="welcome" aria-labelledby="first-run-title">
-        <p class="kicker">Setting up</p>
-        <h1 id="first-run-title">Yawn records meetings on this Mac only.</h1>
+        <div class="first-run-heading">
+          <div>
+            <p class="kicker">Setting up</p>
+            <h1 id="first-run-title">Yawn records meetings on this Mac only.</h1>
+          </div>
+          <button class="prototype-only secondary first-run-exit" id="first-run-exit" type="button">Exit setup</button>
+        </div>
+        <ol class="prototype-only first-run-progress" aria-label="Setup progress">
+          <li data-first-run-progress="welcome"><span>1</span><strong>Welcome</strong></li>
+          <li data-first-run-progress="request-microphone"><span>2</span><strong>Microphone</strong></li>
+          <li data-first-run-progress="request-audio-capture"><span>3</span><strong>System audio</strong></li>
+          <li data-first-run-progress="enrol-voice"><span>4</span><strong>Voice</strong><small>Optional</small></li>
+          <li data-first-run-progress="ready"><span>5</span><strong>Ready</strong></li>
+        </ol>
+        <div class="prototype-only first-run-prototype-boundary" role="note">
+          <strong>Synthetic permission preview.</strong>
+          <span>No macOS prompt opens and no permission is measured or changed. Retention and calendar steps remain absent because the product cannot honour them yet.</span>
+        </div>
 
         <div class="first-run-step" data-step-panel="welcome">
           <p class="lede">Audio, transcripts and search stay on this machine. There is no account, no server, and nothing is uploaded.</p>
           <p>Two permissions are needed before a meeting can be recorded: your microphone, and the meeting audio your Mac plays. macOS asks for each one separately.</p>
           <div class="screen-actions">
             <button class="primary" id="first-run-begin" type="button">Continue</button>
+            <button class="prototype-only secondary" id="prototype-first-run-unavailable" type="button">Preview installation issue</button>
           </div>
         </div>
 
@@ -70,6 +272,7 @@
           <p class="first-run-state" id="first-run-microphone-state" role="status"></p>
           <div class="screen-actions">
             <button class="primary" id="first-run-ask-microphone" type="button">Allow microphone</button>
+            <button class="prototype-only secondary" id="prototype-first-run-deny-microphone" type="button">Simulate earlier refusal</button>
           </div>
         </div>
 
@@ -80,6 +283,7 @@
           <p class="first-run-state" id="first-run-system-audio-state" role="status"></p>
           <div class="screen-actions">
             <button class="primary" id="first-run-ask-system-audio" type="button">Allow system audio</button>
+            <button class="prototype-only secondary" id="prototype-first-run-deny-system-audio" type="button">Simulate unavailable prompt</button>
           </div>
         </div>
 
@@ -116,6 +320,10 @@
                names where the third is decided. Claiming § H's ready would be the
                lie feature 10 forbids. -->
           <p>Both permissions are granted. How long recordings are kept is still chosen at the start of each meeting, on the recording screen.</p>
+          <div class="prototype-only first-run-ready-boundary">
+            <strong>No retention choice was made here.</strong>
+            <span>A global default is still unbuilt. The next recording will ask again.</span>
+          </div>
           <p class="first-run-state" id="first-run-ready-state" role="status"></p>
           <div class="screen-actions">
             <button class="primary" id="first-run-done" type="button">Done</button>
@@ -142,7 +350,20 @@
         <h1 id="idle-title">Before you record.</h1>
         <p class="lede">This Preview keeps audio and transcripts on this Mac. It does not create an automatic note.</p>
 
-        <form id="start-form">
+        <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
+          <li aria-current="step"><span>1</span><strong>Check</strong><small>Consent and retention</small></li>
+          <li><span>2</span><strong>Record</strong><small>Both audio channels</small></li>
+          <li><span>3</span><strong>Process</strong><small>Transcribe locally</small></li>
+          <li><span>4</span><strong>Review</strong><small>Retained transcript</small></li>
+        </ol>
+
+        <div class="prototype-only placeholder-boundary capture-shell-boundary" role="note">
+          <strong>Synthetic capture journey.</strong>
+          <span>The controls below demonstrate the intended flow. No microphone or system audio is opened in this browser shell.</span>
+        </div>
+
+        <div class="preflight-layout">
+          <form id="start-form">
           <fieldset>
             <legend>Confirm before recording</legend>
             <label class="check-row">
@@ -175,13 +396,123 @@
             <button class="primary" id="start-button" type="submit" disabled>Start recording</button>
             <button class="secondary" id="start-back" type="button">Back</button>
           </div>
-        </form>
+          </form>
+
+          <aside class="preflight-summary" aria-labelledby="preflight-summary-title">
+            <p class="label">This attempt</p>
+            <h2 id="preflight-summary-title">What happens after Start</h2>
+            <dl>
+              <div><dt>Capture</dt><dd>Microphone and system audio are kept as separate local channels.</dd></div>
+              <div><dt>Transcript</dt><dd>Made on this Mac after the meeting stops, not while it runs.</dd></div>
+              <div><dt>Recording audio</dt><dd id="preflight-retention-summary">Choose how long it stays on this Mac.</dd></div>
+              <div><dt>Your note</dt><dd>Kept with the transcript when the recording audio is deleted.</dd></div>
+            </dl>
+          </aside>
+        </div>
       </section>
 
       <section class="screen profile-screen" id="profile-screen" aria-labelledby="profile-title">
         <p class="kicker" id="profile-kicker">Settings</p>
-        <h1 id="profile-title">Voice profile.</h1>
-        <p class="lede" id="profile-lede">Checking whether this build can run guided voice setup.</p>
+        <h1 id="profile-title">Settings.</h1>
+        <p class="lede" id="profile-lede">See what Yawn can access, what stays on this Mac, and which controls are available.</p>
+        <div class="settings-shell">
+          <nav class="settings-map" aria-label="Settings sections" role="tablist" aria-orientation="vertical">
+            <button class="prototype-only" type="button" id="settings-capture" data-settings-tab="capture" role="tab" aria-selected="true" aria-controls="settings-panel-capture"><strong>Capture</strong><span>Permissions, devices, and local models</span></button>
+            <button class="prototype-only" type="button" id="settings-privacy" data-settings-tab="privacy" role="tab" aria-selected="false" aria-controls="settings-panel-privacy"><strong>Privacy &amp; retention</strong><span>Recording audio and local storage</span></button>
+            <button class="prototype-only" type="button" id="settings-connections" data-settings-tab="connections" role="tab" aria-selected="false" aria-controls="settings-panel-connections"><strong>Connections</strong><span>Calendar, export, sync, and sharing</span></button>
+            <button type="button" id="settings-voice-profile" data-settings-tab="voice" role="tab" aria-selected="false" aria-controls="settings-panel-voice"><strong>Voice profile</strong><span>Separate your speech from other voices</span></button>
+            <button class="prototype-only" type="button" id="settings-desktop" data-settings-tab="desktop" role="tab" aria-selected="false" aria-controls="settings-panel-desktop"><strong>Desktop behavior</strong><span>Window, menubar, and alerts</span></button>
+            <button class="prototype-only" type="button" id="settings-shortcuts" data-settings-tab="shortcuts" role="tab" aria-selected="false" aria-controls="settings-panel-shortcuts"><strong>Shortcuts</strong><span>Keyboard navigation</span></button>
+            <button class="prototype-only" type="button" id="settings-about" data-settings-tab="about" role="tab" aria-selected="false" aria-controls="settings-panel-about"><strong>About Yawn</strong><span>Version, data, and product boundary</span></button>
+          </nav>
+          <div class="settings-content">
+            <section class="prototype-only settings-panel" id="settings-panel-capture" data-settings-panel="capture" role="tabpanel" aria-labelledby="settings-capture">
+              <p class="label">Capture</p>
+              <h2>Recording starts only after both channels are ready.</h2>
+              <p class="settings-intro">The installed app checks microphone and system-audio access before every recording. This browser shell cannot inspect either permission.</p>
+              <dl class="settings-status-list">
+                <div><dt>Microphone</dt><dd><strong>Required</strong><span>Checked before capture</span></dd></div>
+                <div><dt>System audio</dt><dd><strong>Required</strong><span>Checked before capture</span></dd></div>
+                <div><dt>Manual start</dt><dd><strong>Available</strong><span>Always opens consent and retention review</span></dd></div>
+                <div><dt>Automatic meeting detection</dt><dd><strong>Planned</strong><span>Dormant; Yawn does not watch for meetings today</span></dd></div>
+              </dl>
+              <div class="settings-section-action">
+                <div><strong>First-run setup</strong><span>Review permission, recovery, and optional voice-setup states.</span></div>
+                <button class="secondary" id="settings-preview-first-run" type="button">Preview setup journey</button>
+              </div>
+              <section class="settings-subsection" aria-labelledby="settings-devices-title">
+                <div class="settings-section-heading">
+                  <div><p class="label">Audio devices</p><h3 id="settings-devices-title">Choose what Yawn records.</h3></div>
+                  <span class="planned-tag">Planned shell</span>
+                </div>
+                <div class="settings-field-grid">
+                  <label>Microphone<select disabled><option>System default</option></select></label>
+                  <label>Meeting audio<select disabled><option>Automatic system audio</option></select></label>
+                </div>
+                <p class="footnote">Device selection is shown to define the intended interaction. It is not connected in this prototype.</p>
+              </section>
+              <section class="settings-subsection" aria-labelledby="settings-models-title">
+                <p class="label">Local models</p>
+                <h3 id="settings-models-title">Processing stays on this Mac.</h3>
+                <dl class="settings-status-list compact">
+                  <div><dt>Transcription</dt><dd><strong>Bundled local runtime</strong><span>Checked by the installed app</span></dd></div>
+                  <div><dt>Automatic notes</dt><dd><strong>Unavailable</strong><span>No note generator is admitted to Preview</span></dd></div>
+                </dl>
+              </section>
+            </section>
+
+            <section class="prototype-only settings-panel" id="settings-panel-privacy" data-settings-panel="privacy" role="tabpanel" aria-labelledby="settings-privacy" hidden>
+              <p class="label">Privacy &amp; retention</p>
+              <h2>Audio and transcripts have separate lifetimes.</h2>
+              <p class="settings-intro">Deleting recording audio leaves the retained transcript, note, and evidence. You lose playback, transcription checking, and the ability to transcribe that audio again.</p>
+              <div class="settings-trust-statement">
+                <strong>Current product boundary</strong>
+                <span>No account. No upload. Meeting data stays on this Mac.</span>
+              </div>
+              <fieldset class="settings-retention-preview" id="settings-retention-preview">
+                <legend>Proposed auto-deletion options · not approved</legend>
+                <p>No default is chosen. Every recording continues to ask until a real setting is implemented.</p>
+                <label><input type="radio" name="settings-retention" value="manual" /><span><strong>Until I delete the audio</strong><small>Keep each recording until you remove it.</small></span></label>
+                <label><input type="radio" name="settings-retention" value="7 days" /><span><strong>7 days</strong><small>Delete each recording after seven days.</small></span></label>
+                <label><input type="radio" name="settings-retention" value="30 days" /><span><strong>30 days</strong><small>Delete each recording after thirty days.</small></span></label>
+                <label><input type="radio" name="settings-retention" value="ask after each meeting" /><span><strong>Ask after each meeting</strong><small>Choose separately when a recording ends.</small></span></label>
+              </fieldset>
+              <p class="settings-preview-status" id="settings-retention-preview-status" role="status">Shell preview only. Nothing is selected, saved, or deleted.</p>
+              <div class="notice settings-unresolved">
+                <strong>Existing recordings are deliberately unresolved.</strong>
+                <span>Changing a future default may delete audio already on disk. That needs a separate decision and confirmation before this control can ship.</span>
+              </div>
+              <div class="settings-section-action">
+                <div><strong>Recording audio currently held</strong><span>The Meetings view carries the live per-meeting retention overview.</span></div>
+                <button class="secondary" id="settings-review-audio" type="button">Review retained audio</button>
+              </div>
+              <p class="footnote">The owner-only voice profile is separate. Its deletion control appears under Voice profile and never deletes meetings.</p>
+            </section>
+
+            <section class="prototype-only settings-panel" id="settings-panel-connections" data-settings-panel="connections" role="tabpanel" aria-labelledby="settings-connections" hidden>
+              <p class="label">Connections · planned</p>
+              <h2>Nothing leaves this Mac by default.</h2>
+              <p class="settings-intro">These rooms define the intended journey. No account, calendar, cloud store, or destination is connected in this prototype.</p>
+              <div class="settings-trust-statement">
+                <strong>Current product boundary</strong>
+                <span>Local recording, transcripts, notes, search, and folders. No meeting content egress.</span>
+              </div>
+              <dl class="settings-status-list feature-status-list">
+                <div data-feature="P1"><dt>Calendar</dt><dd><strong>Planned</strong><span>Upcoming meetings, preparation briefs, and a speaker roster</span></dd></div>
+                <div data-feature="C3 P5"><dt>Export &amp; destinations</dt><dd><strong>Planned</strong><span>Local document first; Slack, Notion, and CRM only after a visible destination review</span></dd></div>
+                <div data-feature="P4"><dt>Cloud sync</dt><dd><strong>Phase 2</strong><span>Optional corpus continuity across devices, with egress stated before enabling</span></dd></div>
+                <div data-feature="P6"><dt>Shared workspaces</dt><dd><strong>Phase 2</strong><span>Private by default; sharing changes only through an explicit access review</span></dd></div>
+                <div data-feature="P2 P3"><dt>Speaker context</dt><dd><strong>Phase 2</strong><span>Directory and meeting-window signals supplement local voice enrollment and correction</span></dd></div>
+              </dl>
+              <div class="placeholder-boundary" role="note">
+                <strong>These controls are intentionally inactive.</strong>
+                <span>The shell specifies where each decision lives without pretending an authorization or network path exists.</span>
+              </div>
+            </section>
+
+            <section class="settings-panel" id="settings-panel-voice" data-settings-panel="voice" role="tabpanel" aria-labelledby="settings-voice-profile" hidden>
+              <p class="label">Voice profile</p>
+              <h2>Separate your speech from speech that is not yours.</h2>
         <div class="status-card profile-status-card">
           <div>
             <p class="label">Current status</p>
@@ -272,6 +603,84 @@
         </section>
         <div class="screen-actions">
           <button class="primary" id="profile-setup" type="button" disabled>Set up voice profile</button>
+        </div>
+            </section>
+
+            <section class="prototype-only settings-panel" id="settings-panel-desktop" data-settings-panel="desktop" role="tabpanel" aria-labelledby="settings-desktop" hidden>
+              <p class="label">Desktop behavior</p>
+              <h2>The window can leave without stopping Yawn.</h2>
+              <p class="settings-intro">The installed app treats the window and the running process separately. Closing the window hides it; quitting the app ends it.</p>
+              <dl class="settings-status-list">
+                <div><dt>Close window</dt><dd><strong>Hide the window</strong><span>The menubar item and local process remain active</span></dd></div>
+                <div><dt>Open again</dt><dd><strong>Use the menubar or launch Yawn again</strong><span>The existing window is shown and focused</span></dd></div>
+                <div><dt>Quit Yawn</dt><dd><strong>Exit with ⌘Q</strong><span>Use Stop before quitting an active meeting</span></dd></div>
+                <div><dt>Retention after quit</dt><dd><strong>Resume on next launch</strong><span>There is no background deletion daemon</span></dd></div>
+              </dl>
+              <div class="settings-section-action">
+                <div><strong>Close and reopen</strong><span>Preview the installed window’s hide-to-menubar behavior.</span></div>
+                <button class="secondary" id="settings-preview-window" type="button" aria-expanded="false" aria-controls="desktop-behavior-dialog">Preview window behavior</button>
+              </div>
+              <section class="settings-subsection" aria-labelledby="settings-notifications-title">
+                <p class="label">Notifications</p>
+                <h3 id="settings-notifications-title">Yawn does not send system notifications today.</h3>
+                <div class="desktop-notification-list">
+                  <article><span class="planned-tag">Dormant</span><strong>Meeting detected</strong><p>Automatic meeting detection is not built. Its consent notification and cancellable countdown remain a planned surface.</p></article>
+                  <article><span class="planned-tag">Unavailable</span><strong>Transcript ready</strong><p>No completion notification is implemented or specified. Processing state remains in the menubar and window.</p></article>
+                  <article><span class="planned-tag">Unavailable</span><strong>Needs attention</strong><p>No failure alert is sent. The menubar carries a neutral error mark until the window is opened.</p></article>
+                </div>
+              </section>
+              <section class="settings-subsection" aria-labelledby="settings-accessibility-title">
+                <p class="label">Accessibility</p>
+                <h3 id="settings-accessibility-title">State stays readable without color or motion.</h3>
+                <dl class="settings-status-list compact">
+                  <div><dt>Keyboard focus</dt><dd><strong>Neutral high-contrast outline</strong><span>The live-capture color is not used for focus</span></dd></div>
+                  <div><dt>Status</dt><dd><strong>Word, shape, and color</strong><span>Recording and degraded states never differ by color alone</span></dd></div>
+                  <div><dt>Motion</dt><dd><strong>No ambient animation</strong><span>Reduced-motion preferences also disable transition effects</span></dd></div>
+                </dl>
+              </section>
+            </section>
+
+            <section class="prototype-only settings-panel" id="settings-panel-shortcuts" data-settings-panel="shortcuts" role="tabpanel" aria-labelledby="settings-shortcuts" hidden>
+              <p class="label">Shortcuts</p>
+              <h2>Move through Yawn without leaving the keyboard.</h2>
+              <p class="settings-intro">The command menu also shows the capture action that is safe for the current state.</p>
+              <dl class="shortcut-list">
+                <div><dt>Open commands</dt><dd><kbd>⌘K</kbd></dd></div>
+                <div><dt>Meetings</dt><dd><kbd>⌘1</kbd></dd></div>
+                <div><dt>Ask</dt><dd><kbd>⌘2</kbd></dd></div>
+                <div><dt>Actions</dt><dd><kbd>⌘3</kbd><span>Planned shell</span></dd></div>
+                <div><dt>Settings</dt><dd><kbd>⌘,</kbd></dd></div>
+                <div><dt>Close a menu or panel</dt><dd><kbd>Esc</kbd></dd></div>
+                <div><dt>Move through commands</dt><dd><kbd>↑</kbd><kbd>↓</kbd><span>Then Enter</span></dd></div>
+              </dl>
+            </section>
+
+            <section class="prototype-only settings-panel" id="settings-panel-about" data-settings-panel="about" role="tabpanel" aria-labelledby="settings-about" hidden>
+              <p class="label">About Yawn</p>
+              <h2>Local meeting notes, with the evidence kept close.</h2>
+              <p class="settings-intro">This is a browser representation of the intended desktop shell. It does not open audio devices, save settings, or create meetings.</p>
+              <dl class="settings-status-list">
+                <div><dt>Build</dt><dd><strong>Click-through prototype</strong><span>Uncommitted interface shell</span></dd></div>
+                <div><dt>Account</dt><dd><strong>None</strong><span>No sign-in or cloud identity</span></dd></div>
+                <div><dt>Meeting data</dt><dd><strong>On this Mac</strong><span>No upload path in the current product boundary</span></dd></div>
+                <div><dt>Automatic notes</dt><dd><strong>Unavailable</strong><span>Synthetic examples are labelled wherever shown</span></dd></div>
+              </dl>
+              <div class="settings-section-action">
+                <div><strong>Non-happy paths</strong><span>Review loading, empty, failure, recovery, and repair states.</span></div>
+                <button class="secondary" id="settings-preview-states" type="button">Preview system states</button>
+              </div>
+              <div class="settings-section-action">
+                <div><strong>Help and diagnostics</strong><span>Recording help, diagnostic privacy, and the manual update path.</span></div>
+                <button class="secondary" id="settings-open-help" type="button">Open Help</button>
+              </div>
+              <div class="notice">
+                <strong>Installed-app difference.</strong>
+                <span>The native app owns the menubar item, permission checks, capture, retention receipts, and local processing. This browser shell demonstrates interaction only.</span>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="screen-actions settings-back-action">
           <button class="secondary" id="profile-back" type="button">Back</button>
         </div>
       </section>
@@ -280,17 +689,49 @@
         <p class="kicker">Nothing is recording yet</p>
         <h1 id="arming-title">Preparing both audio channels.</h1>
         <p class="lede">macOS may ask for microphone and system-audio access. Recording starts only after both channels are ready.</p>
+        <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
+          <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
+          <li aria-current="step"><span>2</span><strong>Record</strong><small>Preparing channels</small></li>
+          <li><span>3</span><strong>Process</strong><small>After stopping</small></li>
+          <li><span>4</span><strong>Review</strong><small>Retained transcript</small></li>
+        </ol>
+        <section class="capture-state-card" aria-labelledby="arming-state-title">
+          <div class="capture-state-icon" aria-hidden="true"><span></span><span></span></div>
+          <div>
+            <p class="label">Before capture</p>
+            <h2 id="arming-state-title">Waiting for both channels</h2>
+            <p>No meeting audio is retained unless preparation completes.</p>
+          </div>
+        </section>
+        <div class="prototype-only prototype-scenario-controls" role="group" aria-label="Synthetic arming controls">
+          <p><strong>Shell control</strong><span>The installed app advances automatically when both channels are ready.</span></p>
+          <div class="screen-actions">
+            <button class="primary" id="prototype-arming-ready" type="button">Simulate channels ready</button>
+            <button class="secondary" id="prototype-arming-cancel" type="button">Cancel this attempt</button>
+          </div>
+        </div>
       </section>
 
       <section class="screen recording-screen" id="recording-screen" aria-labelledby="recording-title">
         <p class="kicker live"><span class="live-dot" aria-hidden="true"></span>Recording</p>
         <h1 id="recording-title"><time id="elapsed-time">00:00</time></h1>
         <p class="lede" id="capture-health">Microphone and system audio are both arriving.</p>
+        <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
+          <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
+          <li aria-current="step"><span>2</span><strong>Record</strong><small>Capture is live</small></li>
+          <li><span>3</span><strong>Process</strong><small>After stopping</small></li>
+          <li><span>4</span><strong>Review</strong><small>Retained transcript</small></li>
+        </ol>
         <div class="channel-grid" aria-label="Capture channels">
           <div id="mic-channel" data-state="unknown"><span class="channel-mark" aria-hidden="true"></span><strong>Microphone</strong><small id="mic-state">Unknown</small></div>
           <div id="system-channel" data-state="unknown"><span class="channel-mark" aria-hidden="true"></span><strong>System audio</strong><small id="system-state">Unknown</small></div>
         </div>
         <p class="form-error" id="stop-error" role="alert" hidden></p>
+
+        <div class="prototype-only prototype-scenario-controls compact" role="group" aria-label="Synthetic recording controls">
+          <p><strong>Shell control</strong><span>Preview the persistent state shown when one channel needs attention.</span></p>
+          <button class="secondary" id="prototype-recording-degrade" type="button">Simulate system-audio issue</button>
+        </div>
 
         <!-- § D. The operator's own note. What someone chooses to write down
              while listening is not recoverable from the recording afterwards,
@@ -299,6 +740,7 @@
           <h2 id="live-note-title">Your notes</h2>
           <p class="footnote" id="live-note-lede">Type while you listen. This is yours — the app does not read it, change it, or use it to make anything.</p>
           <textarea id="live-note-text" rows="8" spellcheck="true"
+            aria-labelledby="live-note-title"
             aria-describedby="live-note-lede live-note-state"
             placeholder="What matters to you about this meeting."></textarea>
           <p class="live-note-state" id="live-note-state" role="status" aria-live="polite"></p>
@@ -316,13 +758,38 @@
         <p class="kicker">Recording stopped</p>
         <h1 id="processing-title">Transcribing on this Mac.</h1>
         <p class="lede">The fixed offline model is processing both channels. No meeting content is sent to a service.</p>
-        <p class="footnote">You may leave this window open while the transcript is prepared.</p>
+        <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
+          <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
+          <li data-state="complete"><span>2</span><strong>Record</strong><small>Audio secured</small></li>
+          <li aria-current="step"><span>3</span><strong>Process</strong><small>Transcribing locally</small></li>
+          <li><span>4</span><strong>Review</strong><small>Waiting</small></li>
+        </ol>
+        <section class="processing-card" aria-label="Local processing status">
+          <div data-state="complete"><span aria-hidden="true">✓</span><div><strong>Recording secured</strong><small>Both local audio files were closed before transcription began.</small></div></div>
+          <div aria-current="step"><span class="processing-spinner" aria-hidden="true"></span><div><strong>Making the transcript</strong><small>The fixed offline model is working on this Mac.</small></div></div>
+          <div><span aria-hidden="true">3</span><div><strong>Retain the result</strong><small>The transcript will remain after recording audio reaches its deletion date.</small></div></div>
+        </section>
+        <p class="footnote">You may use the rest of the app while the transcript is prepared. The header keeps this progress available.</p>
+        <div class="prototype-only prototype-scenario-controls" role="group" aria-label="Synthetic processing controls">
+          <p><strong>Shell control</strong><span>The installed app advances automatically. This button reveals the synthetic retained result.</span></p>
+          <button class="primary" id="prototype-processing-complete" type="button">Finish synthetic transcript</button>
+        </div>
       </section>
 
       <section class="screen transcript-screen" id="transcript-screen" aria-labelledby="transcript-title">
         <p class="kicker">Transcript ready</p>
         <h1 id="transcript-title">Transcript</h1>
         <p class="lede">Review the words captured from this meeting. This Preview has not generated notes, decisions, or action items.</p>
+        <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
+          <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
+          <li data-state="complete"><span>2</span><strong>Record</strong><small>Audio secured</small></li>
+          <li data-state="complete"><span>3</span><strong>Process</strong><small>Transcript made</small></li>
+          <li aria-current="step"><span>4</span><strong>Review</strong><small>Source record</small></li>
+        </ol>
+        <div class="prototype-only placeholder-boundary capture-shell-boundary" role="note">
+          <strong>Synthetic retained transcript.</strong>
+          <span>These words were written for the shell. They were not recorded, transcribed, saved, or checked against audio.</span>
+        </div>
         <div class="notice" id="transcript-warning" hidden></div>
         <!-- The note the operator typed during the meeting, shown back rather
              than left behind on a screen they cannot return to. Read-only here:
@@ -339,13 +806,78 @@
           <span class="transcript-copy-status" id="transcript-copy-status" role="status" aria-live="polite"></span>
         </div>
         <article id="transcript-turns" aria-label="Meeting transcript"></article>
-        <button class="primary" id="new-meeting" type="button">Return to Find</button>
+        <section class="prototype-only result-handoff" aria-labelledby="result-handoff-title">
+          <div>
+            <p class="label">Intended next step · synthetic</p>
+            <h2 id="result-handoff-title">Carry the meeting into its workspace</h2>
+            <p>The retained transcript remains the source record. The meeting workspace adds the operator note and evidence-linked reading aids.</p>
+          </div>
+          <button class="primary" id="prototype-open-result" type="button">Open meeting workspace</button>
+        </section>
+        <div class="screen-actions transcript-exit-actions">
+          <button class="secondary" id="new-meeting" type="button">Return to Find</button>
+        </div>
+      </section>
+
+      <section class="screen home-screen" id="home-screen" aria-labelledby="home-title">
+        <div class="page-heading-row">
+          <div>
+            <p class="kicker">Your meeting memory</p>
+            <h1 id="home-title">Pick up where the meeting left off.</h1>
+            <p class="lede">Record locally, review what was captured, and carry the work forward without sending meeting content to a service.</p>
+          </div>
+          <span class="local-badge">On this Mac</span>
+        </div>
+
+        <section class="journey-grid" aria-label="Primary meeting journey">
+          <article class="journey-card current-capability">
+            <p class="label">1 · Capture</p>
+            <h2>Record a meeting</h2>
+            <p>Confirm consent and retention, then keep your own live notes while both sides are recorded.</p>
+            <button class="primary" id="home-record" type="button">Record a meeting</button>
+          </article>
+          <article class="journey-card current-capability">
+            <p class="label">2 · Remember</p>
+            <h2>Review or find what was said</h2>
+            <p>Open a retained transcript, search exact words, or describe the passage you remember.</p>
+            <div class="card-actions">
+              <button class="secondary" id="home-meetings" type="button">Browse meetings</button>
+              <button class="secondary" id="home-ask" type="button">Ask</button>
+            </div>
+          </article>
+          <article class="journey-card planned-capability">
+            <p class="label">3 · Follow through <span class="planned-tag">Planned</span></p>
+            <h2>Turn decisions into action</h2>
+            <p>Review evidence-linked actions across meetings, assign an owner, and mark the work open or done.</p>
+            <button class="secondary" id="home-actions" type="button">Preview Actions</button>
+          </article>
+        </section>
+
+        <section class="workspace-preview" aria-labelledby="workspace-preview-title">
+          <div>
+            <p class="label">Click-through shell</p>
+            <h2 id="workspace-preview-title">See the intended meeting workspace.</h2>
+            <p>Walk through Notes, Transcript, Actions, Evidence, and Details using clearly marked synthetic content. Nothing is saved.</p>
+          </div>
+          <button class="secondary" id="home-workspace-preview" type="button">Open example workspace</button>
+        </section>
+
+        <section class="upcoming-preview" aria-labelledby="upcoming-preview-title">
+          <div class="section-heading">
+            <div>
+              <p class="label">Before the meeting</p>
+              <h2 id="upcoming-preview-title">Preparation brief</h2>
+            </div>
+            <span class="planned-tag">Planned</span>
+          </div>
+          <p>A future calendar connection can place the next meeting, recent context, and unresolved actions here. No calendar is connected in this build.</p>
+        </section>
       </section>
 
       <section class="screen find-screen" id="find-screen" aria-labelledby="find-title">
         <p class="kicker">Meeting memory</p>
-        <h1 id="find-title">Find a meeting.</h1>
-        <p class="lede">Two ways, both on this Mac. Search the exact words if you remember them. Describe what the meeting was about if you don't.</p>
+        <h1 id="find-title">Find what was said.</h1>
+        <p class="lede">Search exact words if you remember them. Describe the meeting if you do not. Both searches stay on this Mac and show the retained passage behind each result.</p>
         <form class="library-search" id="library-search">
           <label for="library-search-query">What do you remember?</label>
           <div class="library-search-field">
@@ -373,14 +905,34 @@
         <div class="notice" id="corpus-notice" role="status" aria-live="polite" hidden></div>
         <div class="corpus-coverage" id="corpus-coverage" hidden>
           <p id="corpus-coverage-copy"></p>
-          <button class="secondary" type="button" id="corpus-prepare">Prepare passages</button>
+          <button class="secondary" type="button" id="corpus-prepare">Make older meetings searchable</button>
         </div>
         <div class="corpus-search-results" id="corpus-search-results"></div>
+
+        <section class="prototype-only planned-answer-shell" data-feature="D1 D4 D5" aria-labelledby="planned-answer-title">
+          <div class="section-heading">
+            <div>
+              <p class="label">Across meetings · Planned</p>
+              <h2 id="planned-answer-title">Answer with quoted evidence</h2>
+            </div>
+            <span class="planned-tag">Planned</span>
+          </div>
+          <p>Meaning search can return matching passages today. A composed answer, saved searches, future-matching streams, and direct claim landing still need accuracy checks and their own working screens.</p>
+          <div class="planned-answer-example" role="note">
+            <strong>Example answer shape</strong>
+            <p>“The pilot stays at one customer for two weeks.”</p>
+            <span>2 supporting passages · every sentence opens its retained words</span>
+          </div>
+          <div class="card-actions">
+            <button class="secondary" type="button" disabled>Save this search</button>
+            <button class="secondary" type="button" disabled>Create a stream</button>
+          </div>
+        </section>
       </section>
 
       <section class="screen library-screen" id="meetings-screen" aria-labelledby="library-title">
         <p class="kicker">Retained meetings</p>
-        <h1 id="library-title">Your Library.</h1>
+        <h1 id="library-title">Meetings</h1>
         <p class="lede" id="library-copy">Opening retained meetings on this Mac.</p>
         <div class="notice" id="library-organization-notice" role="status" aria-live="polite" hidden></div>
         <section class="retention-overview" id="retention-overview" aria-labelledby="retention-overview-title">
@@ -421,73 +973,319 @@
           <h2>Recent meetings</h2>
           <span>Stored locally</span>
         </div>
+        <div class="prototype-only prototype-library-preview" role="note">
+          <strong>This browser preview does not read meetings on your Mac.</strong>
+          <p>The installed app lists meetings kept on this Mac. Open the example workspace to inspect the intended meeting detail.</p>
+          <div class="card-actions">
+            <button class="secondary" id="meetings-workspace-preview" type="button">Open intended workspace</button>
+            <button class="secondary" id="meetings-retained-preview" type="button">Open retained meeting preview</button>
+          </div>
+        </div>
         <div class="library-list" id="library-list" aria-live="polite"></div>
       </section>
 
-      <section class="screen promises-screen" id="promises-screen" aria-labelledby="promises-title">
-        <p class="kicker">Across your meetings</p>
-        <h1 id="promises-title">Recorded promises.</h1>
-        <p class="lede">When evidence-linked notes are ready, this view will collect action items across meetings. It will not become a task list.</p>
-        <section class="availability-card" aria-labelledby="promises-status-title">
-          <p class="label">Not available in this Preview</p>
-          <h2 id="promises-status-title">Automatic notes are not available yet.</h2>
-          <p>Your transcripts remain available in Find and Meetings. Until notes pass review, this view stays empty instead of guessing promises from transcript words.</p>
-        </section>
+      <section class="screen actions-screen" id="promises-screen" aria-labelledby="promises-title">
+        <div class="page-heading-row">
+          <div>
+            <p class="kicker">Across your meetings</p>
+            <h1 id="promises-title">Actions</h1>
+            <p class="lede">See what was promised, who owns it, and whether it is still open. Every generated action will point back to the words that support it.</p>
+          </div>
+          <span class="planned-tag">Planned</span>
+        </div>
+
+        <div class="placeholder-boundary" role="note">
+          <strong>This is the intended workflow, not generated meeting data.</strong>
+          <span>Automatic notes and action extraction are not available yet.</span>
+        </div>
+
+        <div class="action-toolbar" aria-label="Action filters">
+          <div class="segmented-control">
+            <button type="button" class="action-filter" data-action-filter="open" aria-pressed="true">Open</button>
+            <button type="button" class="action-filter" data-action-filter="done" aria-pressed="false">Done</button>
+            <button type="button" class="action-filter" data-action-filter="all" aria-pressed="false">All</button>
+          </div>
+          <button class="secondary" type="button" disabled>Export actions</button>
+        </div>
+
+        <div class="action-table" role="table" aria-label="Planned action list">
+          <div class="action-table-head" role="row">
+            <span role="columnheader">Action</span>
+            <span role="columnheader">Meeting</span>
+            <span role="columnheader">Owner</span>
+            <span role="columnheader">Status</span>
+          </div>
+          <div class="action-empty" role="row">
+            <div>
+              <strong>No generated actions</strong>
+              <p>When action extraction is connected, open work from every meeting will collect here. Until then, Yawn will not infer promises from transcript words.</p>
+            </div>
+            <button class="secondary" id="actions-workspace-preview" type="button">See an example</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen prototype-meeting-screen" id="prototype-meeting-screen" aria-labelledby="prototype-meeting-title">
+        <button class="text-button prototype-back" id="prototype-meeting-back" type="button">Back to library</button>
+        <div class="placeholder-boundary prominent" role="note">
+          <strong>Shell preview · synthetic content</strong>
+          <span>No meeting was recorded and nothing on this screen is saved or quotable.</span>
+        </div>
+        <div class="meeting-workspace-heading">
+          <div>
+            <p class="kicker">Example meeting · Today, 10:00 AM</p>
+            <h1 id="prototype-meeting-title">Project Atlas weekly</h1>
+            <p class="lede">A complete meeting workspace showing the intended relationship between the note, source transcript, follow-up, and local record.</p>
+          </div>
+          <button class="secondary" type="button" disabled>Share note <span class="planned-tag">Planned</span></button>
+        </div>
+
+        <nav class="meeting-tabs" aria-label="Example meeting views" role="tablist">
+          <button id="example-tab-note" type="button" data-meeting-tab="note" role="tab" aria-selected="true" aria-controls="example-panel-note">Note</button>
+          <button id="example-tab-transcript" type="button" data-meeting-tab="transcript" role="tab" aria-selected="false" aria-controls="example-panel-transcript" tabindex="-1">Transcript</button>
+          <button id="example-tab-actions" type="button" data-meeting-tab="actions" role="tab" aria-selected="false" aria-controls="example-panel-actions" tabindex="-1">Actions <span class="planned-tag">Planned</span></button>
+          <button id="example-tab-evidence" type="button" data-meeting-tab="evidence" role="tab" aria-selected="false" aria-controls="example-panel-evidence" tabindex="-1">Evidence <span class="planned-tag">Planned</span></button>
+          <button id="example-tab-details" type="button" data-meeting-tab="details" role="tab" aria-selected="false" aria-controls="example-panel-details" tabindex="-1">Details</button>
+        </nav>
+
+        <div class="meeting-tab-panel active" id="example-panel-note" data-meeting-panel="note" role="tabpanel" aria-labelledby="example-tab-note">
+          <div class="note-layout">
+            <article class="note-document">
+              <p class="label">AI-enhanced note · Planned</p>
+              <h2>Atlas moves to a two-week pilot.</h2>
+              <p>The team agreed to test the new handoff with one customer before changing the wider process.</p>
+              <h3>What mattered</h3>
+              <ul>
+                <li>The pilot starts after the Friday data review.</li>
+                <li>Results will be judged on completion time and missing handoffs.</li>
+                <li>The wider rollout remains undecided.</li>
+              </ul>
+              <h3>Open question</h3>
+              <p>Which customer is representative enough for the pilot?</p>
+            </article>
+            <aside class="operator-note-card">
+              <p class="label">Your note</p>
+              <p>Use Acme for the pilot if legal clears the sample data.</p>
+              <span>Written during the meeting · not changed by Yawn</span>
+            </aside>
+          </div>
+        </div>
+
+        <div class="meeting-tab-panel" id="example-panel-transcript" data-meeting-panel="transcript" role="tabpanel" aria-labelledby="example-tab-transcript" hidden>
+          <div class="panel-heading">
+            <div><p class="label">Source of record</p><h2>Transcript</h2></div>
+            <button class="secondary" type="button" disabled>Copy transcript</button>
+          </div>
+          <div class="example-transcript">
+            <article class="turn"><div class="turn-meta"><strong>You</strong><span>12:08</span></div><p>Let’s keep this to one customer for two weeks, then review the handoff data.</p></article>
+            <article class="turn"><div class="turn-meta"><strong>Other side</strong><span>12:21</span></div><p>I can own the Friday review and bring back the completion time and anything that went missing.</p></article>
+            <article class="turn"><div class="turn-meta"><strong>You</strong><span>12:42</span></div><p>Good. We still need to decide which customer gives us a fair test.</p></article>
+          </div>
+          <p class="footnote">Named speakers are planned. Current recordings distinguish only you and the other side.</p>
+        </div>
+
+        <div class="meeting-tab-panel" id="example-panel-actions" data-meeting-panel="actions" role="tabpanel" aria-labelledby="example-tab-actions" hidden>
+          <div class="panel-heading"><div><p class="label">Follow-through · Planned</p><h2>Actions from this meeting</h2></div></div>
+          <div class="example-action-list">
+            <article><label><input type="checkbox" disabled /><span><strong>Run the Friday pilot review</strong><small>Owner: Jordan · Due Friday</small></span></label><button class="text-button" type="button" data-meeting-tab-jump="evidence">View evidence</button></article>
+            <article><label><input type="checkbox" disabled /><span><strong>Choose the pilot customer</strong><small>Owner: Unassigned · No due date</small></span></label><button class="text-button" type="button" data-meeting-tab-jump="evidence">View evidence</button></article>
+          </div>
+          <p class="footnote">Example only. Yawn will require review before generated actions join the cross-meeting list.</p>
+        </div>
+
+        <div class="meeting-tab-panel" id="example-panel-evidence" data-meeting-panel="evidence" role="tabpanel" aria-labelledby="example-tab-evidence" hidden>
+          <div class="panel-heading"><div><p class="label">Claim provenance · Planned</p><h2>Evidence behind the note</h2></div></div>
+          <article class="evidence-card">
+            <p class="claim-meta">Claim in note</p>
+            <h3>The pilot will run for two weeks with one customer.</h3>
+            <blockquote>“Let’s keep this to one customer for two weeks, then review the handoff data.”</blockquote>
+            <span>Transcript · You · 12:08</span>
+          </article>
+          <p class="footnote">A generated claim will remain a reading aid. The retained transcript stays the source of record.</p>
+        </div>
+
+        <div class="meeting-tab-panel" id="example-panel-details" data-meeting-panel="details" role="tabpanel" aria-labelledby="example-tab-details" hidden>
+          <div class="panel-heading"><div><p class="label">Local record</p><h2>Meeting details</h2></div></div>
+          <dl class="details-list">
+            <div><dt>Stored</dt><dd>On this Mac</dd></div>
+            <div><dt>Transcript</dt><dd>Retained</dd></div>
+            <div><dt>Recording audio</dt><dd>Example: delete after 7 days</dd></div>
+            <div><dt>Speakers</dt><dd>You and other side · named speakers planned</dd></div>
+            <div><dt>Export</dt><dd>Planned · gated on redaction review</dd></div>
+          </dl>
+          <button class="secondary danger-outline" type="button" disabled>Delete meeting</button>
+          <p class="footnote">Destructive controls are disabled in the synthetic shell. The live app requires a consequence review before deletion.</p>
+        </div>
       </section>
 
       <section class="screen" id="meeting-detail-screen" aria-labelledby="meeting-detail-title">
-        <p class="kicker">Retained meeting</p>
-        <h1 id="meeting-detail-title">Note and transcript.</h1>
-        <p class="lede" id="meeting-detail-lede">An automatic note is a reading aid. Evidence links locate the exact retained transcript words behind each claim.</p>
+        <div class="meeting-split-view">
+          <aside class="meeting-context-pane" aria-label="Meeting list">
+            <div class="prototype-only context-utility-row">
+              <strong>Library</strong>
+              <button class="text-button meeting-detail-back" id="prototype-browse-all" type="button">Browse all</button>
+            </div>
+            <button class="text-button meeting-detail-back installed-only" id="meeting-detail-back" type="button">Back to Meetings</button>
+            <section class="prototype-only preparation-brief" data-feature="E3 P1" aria-labelledby="preparation-brief-title">
+              <div><p class="label">Next meeting · Planned</p><h2 id="preparation-brief-title">No calendar connected</h2></div>
+              <p>A future brief will collect recent context and open actions here before the call.</p>
+            </section>
+            <div class="meeting-context-heading">
+              <p class="label">Recent meetings</p>
+              <p>Switch meetings without leaving the workspace.</p>
+            </div>
+            <div class="meeting-context-list" id="meeting-context-list" aria-live="polite"></div>
+          </aside>
+
+          <div class="meeting-detail-content">
+          <div class="prototype-only placeholder-boundary prominent" role="note">
+          <strong>Synthetic preview</strong>
+          <span>These three meetings are examples. This browser does not read or save meetings on your Mac.</span>
+          </div>
+          <div class="meeting-workspace-heading">
+          <div>
+            <p class="kicker">Retained meeting</p>
+            <h1 id="meeting-detail-title">Meeting</h1>
+            <p class="lede" id="meeting-detail-lede">Opening the retained note, transcript, and recording details.</p>
+          </div>
+          <div class="meeting-heading-actions">
+            <button class="secondary prototype-only meeting-focus-toggle" id="meeting-focus-toggle" type="button" aria-pressed="false">Focus meeting</button>
+            <span class="local-badge">On this Mac</span>
+            <button class="secondary prototype-only" type="button" disabled>Export note <span class="planned-tag">Planned</span></button>
+          </div>
+        </div>
         <p class="notice" id="meeting-detail-state" role="status" aria-live="polite">Opening this retained meeting…</p>
-        <!-- § D. The note the operator typed during this meeting, reachable
-             after it has been dismissed. Without it the note is readable until
-             they navigate away once, and then not again. -->
-        <section class="live-note" id="detail-note" data-state="empty" aria-labelledby="detail-note-title" hidden>
-          <h2 id="detail-note-title">Your notes from this meeting</h2>
-          <p class="transcript-note-text" id="detail-note-text"></p>
-        </section>
-        <section class="meeting-retention" id="meeting-retention" aria-labelledby="meeting-retention-title" hidden>
-          <p class="label">Recording retention</p>
-          <h2 id="meeting-retention-title">Checking retained audio</h2>
-          <p id="meeting-retention-policy"></p>
-          <p id="meeting-retention-size"></p>
-          <p id="meeting-retention-consequence"></p>
-          <div class="recording-delete-action" id="recording-delete-action" hidden>
-            <button class="secondary danger-outline" id="recording-delete-review" type="button">Delete recording now</button>
-            <div class="recording-delete-confirmation" id="recording-delete-confirmation" hidden>
-              <p><strong>Permanently delete this recording?</strong></p>
-              <p>This deletes only this meeting’s local audio. The transcript, note, evidence, and meeting details remain. The separate voice profile is unaffected.</p>
-              <p>You will no longer be able to listen to this recording, check its transcription against the audio, or transcribe it again.</p>
-              <div class="recording-delete-buttons">
-                <button class="secondary" id="recording-delete-cancel" type="button">Cancel</button>
-                <button class="danger" id="recording-delete-confirm" type="button">Permanently delete recording</button>
-              </div>
-              <p class="notice error" id="recording-delete-status" role="status" aria-live="polite" hidden></p>
+
+        <nav class="meeting-tabs retained-meeting-tabs" aria-label="Meeting views" role="tablist">
+          <button id="retained-tab-note" type="button" data-retained-meeting-tab="note" role="tab" aria-selected="true" aria-controls="retained-panel-note">Note</button>
+          <button id="retained-tab-transcript" type="button" data-retained-meeting-tab="transcript" role="tab" aria-selected="false" aria-controls="retained-panel-transcript" tabindex="-1">Transcript</button>
+          <button id="retained-tab-actions" type="button" data-retained-meeting-tab="actions" role="tab" aria-selected="false" aria-controls="retained-panel-actions" tabindex="-1">Actions <span class="planned-tag">Partial</span></button>
+          <button id="retained-tab-evidence" type="button" data-retained-meeting-tab="evidence" role="tab" aria-selected="false" aria-controls="retained-panel-evidence" tabindex="-1">Evidence <span class="planned-tag">Partial</span></button>
+          <button id="retained-tab-details" type="button" data-retained-meeting-tab="details" role="tab" aria-selected="false" aria-controls="retained-panel-details" tabindex="-1">Details</button>
+        </nav>
+
+        <div class="meeting-tab-panel active" id="retained-panel-note" data-retained-meeting-panel="note" role="tabpanel" aria-labelledby="retained-tab-note">
+          <div class="prototype-only note-generation-toolbar" data-feature="B2 B3 B7">
+            <div><span>Note template</span><strong>General meeting</strong></div>
+            <button class="secondary" type="button" disabled>Change template</button>
+            <button class="secondary" type="button" disabled>Regenerate note</button>
+            <span class="planned-tag">Planned</span>
+          </div>
+          <!-- The note the operator typed during this meeting remains separate
+               from generated claims. Yawn never treats the operator's words as
+               source evidence or generator input. -->
+          <section class="live-note" id="detail-note" data-state="empty" aria-labelledby="detail-note-title" hidden>
+            <h2 id="detail-note-title">Your note</h2>
+            <p class="transcript-note-text" id="detail-note-text"></p>
+            <p class="footnote">Written during the meeting and kept with its transcript. Yawn does not rewrite it.</p>
+          </section>
+          <section class="meeting-no-note" id="meeting-no-note" hidden aria-labelledby="meeting-no-note-title">
+            <h2 id="meeting-no-note-title">Transcript only</h2>
+            <p id="meeting-no-note-copy">No automatic note is available for this meeting. The retained transcript remains the source of record.</p>
+          </section>
+          <section id="meeting-claim-list" class="meeting-claim-list" aria-label="Automatic note claims" aria-live="polite"></section>
+        </div>
+
+        <div class="meeting-tab-panel" id="retained-panel-transcript" data-retained-meeting-panel="transcript" role="tabpanel" aria-labelledby="retained-tab-transcript" hidden>
+          <div class="panel-heading">
+            <div><p class="label">Source of record</p><h2>Transcript</h2></div>
+            <div class="prototype-only transcript-planned-actions" data-feature="A3 A4 A5">
+              <button class="secondary" type="button" disabled>Name speakers</button>
+              <button class="secondary" type="button" disabled>Correct speaker</button>
+              <span class="planned-tag">Planned</span>
             </div>
           </div>
-          <div class="recording-delete-action" id="meeting-delete-action" hidden>
-            <button class="secondary danger-outline" id="meeting-delete-review" type="button">Delete this meeting</button>
-            <div class="recording-delete-confirmation" id="meeting-delete-confirmation" hidden>
-              <p><strong>Permanently delete this whole meeting?</strong></p>
-              <p>This removes the transcript, the note, your own note, and any audio still held. The transcript is the retained record of what was said, and it cannot be recreated from anything else on this Mac.</p>
-              <p>Other meetings and your voice profile are unaffected.</p>
-              <div class="recording-delete-buttons">
-                <button class="secondary" id="meeting-delete-cancel" type="button">Cancel</button>
-                <button class="danger" id="meeting-delete-confirm" type="button">Permanently delete meeting</button>
-              </div>
-              <p class="notice error" id="meeting-delete-status" role="status" aria-live="polite" hidden></p>
-            </div>
+          <section class="workspace-empty" id="meeting-transcript-summary">
+            <h3>Open the retained words.</h3>
+            <p>The transcript stays separate from any generated note. Withheld speech remains marked as unavailable.</p>
+            <button class="secondary" id="meeting-open-transcript" type="button">Open retained transcript</button>
+          </section>
+          <p class="footnote prototype-only">Current capture labels only you and the other side. Named speakers, correction, meeting-length transcription, and timing correction between audio channels remain planned or partial.</p>
+        </div>
+
+        <div class="meeting-tab-panel" id="retained-panel-actions" data-retained-meeting-panel="actions" role="tabpanel" aria-labelledby="retained-tab-actions" hidden>
+          <div class="panel-heading">
+            <div><p class="label">Follow-through · Partial</p><h2>Actions from this meeting</h2></div>
           </div>
-        </section>
-        <section id="meeting-claim-list" class="meeting-claim-list" aria-live="polite"></section>
-        <section class="meeting-no-note" id="meeting-no-note" hidden aria-labelledby="meeting-no-note-title">
-          <h2 id="meeting-no-note-title">Transcript only</h2>
-          <p id="meeting-no-note-copy">No automatic note is available for this meeting. The retained transcript remains the source of record.</p>
-          <button class="secondary" id="meeting-open-transcript" type="button">Open retained transcript</button>
-        </section>
-        <input id="meeting-detail-transcript-handle" type="hidden" />
-        <button class="secondary" id="meeting-detail-back" type="button">Back to Meetings</button>
+          <div class="placeholder-boundary" role="note">
+            <strong>Read-only in this build.</strong>
+            <span>Owner, status, due dates, and the cross-meeting task list are planned.</span>
+          </div>
+          <section id="meeting-action-list" class="meeting-action-list" aria-live="polite"></section>
+          <section id="meeting-action-empty" class="workspace-empty" hidden>
+            <h3>No evidence-linked actions</h3>
+            <p>This meeting has no generated action claim. Yawn will not infer one from transcript words alone.</p>
+          </section>
+        </div>
+
+        <div class="meeting-tab-panel" id="retained-panel-evidence" data-retained-meeting-panel="evidence" role="tabpanel" aria-labelledby="retained-tab-evidence" hidden>
+          <div class="panel-heading">
+            <div><p class="label">Claim provenance · Partial</p><h2>Evidence behind the note</h2></div>
+          </div>
+          <p class="panel-intro">Each item below opens the exact retained transcript words behind that claim. The transcript remains the source of record.</p>
+          <section id="meeting-evidence-list" class="meeting-evidence-list" aria-live="polite"></section>
+          <section id="meeting-evidence-empty" class="workspace-empty" hidden>
+            <h3>No evidence-linked claims</h3>
+            <p>No generated claim with a transcript locator is available for this meeting.</p>
+          </section>
+        </div>
+
+        <div class="meeting-tab-panel" id="retained-panel-details" data-retained-meeting-panel="details" role="tabpanel" aria-labelledby="retained-tab-details" hidden>
+          <div class="panel-heading">
+            <div><p class="label">Local record</p><h2>Meeting details</h2></div>
+          </div>
+          <section class="meeting-retention" id="meeting-retention" aria-labelledby="meeting-retention-title" hidden>
+            <p class="label">Recording retention</p>
+            <h2 id="meeting-retention-title">Checking retained audio</h2>
+            <p id="meeting-retention-policy"></p>
+            <p id="meeting-retention-size"></p>
+            <p id="meeting-retention-consequence"></p>
+            <div class="recording-delete-action" id="recording-delete-action" hidden>
+              <button class="secondary danger-outline" id="recording-delete-review" type="button">Delete recording now</button>
+              <div class="recording-delete-confirmation" id="recording-delete-confirmation" hidden>
+                <p><strong>Permanently delete this recording?</strong></p>
+                <p>This deletes only this meeting’s local audio. The transcript, note, evidence, and meeting details remain. The separate voice profile is unaffected.</p>
+                <p>You will no longer be able to listen to this recording, check its transcription against the audio, or transcribe it again.</p>
+                <p class="prototype-only deletion-preview-boundary" role="note">Shell preview only. You can review this consequence, but nothing can be deleted here.</p>
+                <div class="recording-delete-buttons">
+                  <button class="secondary" id="recording-delete-cancel" type="button">Cancel</button>
+                  <button class="danger" id="recording-delete-confirm" type="button">Permanently delete recording</button>
+                </div>
+                <p class="notice error" id="recording-delete-status" role="status" aria-live="polite" hidden></p>
+              </div>
+            </div>
+            <div class="recording-delete-action" id="meeting-delete-action" hidden>
+              <button class="secondary danger-outline" id="meeting-delete-review" type="button">Delete this meeting</button>
+              <div class="recording-delete-confirmation" id="meeting-delete-confirmation" hidden>
+                <p><strong>Permanently delete this whole meeting?</strong></p>
+                <p>This removes the transcript, the note, your own note, and any audio still held. The transcript is the retained record of what was said, and it cannot be recreated from anything else on this Mac.</p>
+                <p>Other meetings and your voice profile are unaffected.</p>
+                <p class="prototype-only deletion-preview-boundary" role="note">Shell preview only. You can review this consequence, but nothing can be deleted here.</p>
+                <div class="recording-delete-buttons">
+                  <button class="secondary" id="meeting-delete-cancel" type="button">Cancel</button>
+                  <button class="danger" id="meeting-delete-confirm" type="button">Permanently delete meeting</button>
+                </div>
+                <p class="notice error" id="meeting-delete-status" role="status" aria-live="polite" hidden></p>
+              </div>
+            </div>
+          </section>
+          <dl class="prototype-only details-list feature-status-list" data-feature="E1 E5 C3">
+            <div><dt>Folder controls</dt><dd>Move is partial; rename and delete are planned</dd></div>
+            <div><dt>Retention periods</dt><dd>Automatic deletion works; named default periods remain unapproved</dd></div>
+            <div><dt>Export &amp; share</dt><dd>Planned; every destination must show what leaves this Mac</dd></div>
+          </dl>
+        </div>
+          <div class="prototype-only meeting-command-dock" id="meeting-command-dock" data-feature="D1" aria-label="Meeting controls">
+            <button class="primary" id="meeting-dock-record" type="button">Record a meeting</button>
+            <label class="meeting-dock-query">
+              <span class="sr-only">Ask this meeting</span>
+              <input type="text" placeholder="Ask this meeting · Planned" disabled />
+            </label>
+            <span class="planned-tag">Planned</span>
+          </div>
+          <input id="meeting-detail-transcript-handle" type="hidden" />
+          </div>
+        </div>
       </section>
 
       <section class="screen transcript-screen" id="library-transcript-screen" aria-labelledby="library-transcript-title">
@@ -519,7 +1317,8 @@
         <div class="notice error" id="error-detail"></div>
         <button class="secondary" id="recover-button" type="button">Return to Find</button>
       </section>
-    </main>
+      </main>
+    </div>
 
     <footer>
       <span>Local-only Preview</span>
