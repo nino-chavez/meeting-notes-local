@@ -129,6 +129,21 @@ We wrote down what would count as working before running anything. A small model
 that runs on the Mac found the right meeting every time, including all five of the
 ones word-matching cannot answer.
 
+**Then we tested it properly, and it got worse.** The first test used ten
+three-sentence meetings. The real test used two hundred meetings of realistic
+length, each padded with the small talk that actually opens a call. The score fell
+from ten out of ten to **seven out of ten** — and on the questions that need real
+understanding, from five out of five to **three out of five**. That is the half
+this feature exists for.
+
+It is still far better than searching for exact words, which gets none of those.
+Whether seven out of ten is good enough to build on is your call rather than a
+number we can settle.
+
+One useful shape did come out of it: when it gets an answer wrong, it tends to be
+visibly unsure — several meetings tied for first place — rather than confidently
+wrong. That is something the screen could show you.
+
 **A follow-up the same day found the real limit, and it is not the model.** The
 version of the model we tested reads about the first 256 words of a meeting and
 silently ignores the rest. Our test meetings were three sentences long, so this

@@ -187,5 +187,62 @@ class ReceiptTests(unittest.TestCase):
             )
 
 
+class ScaleReceiptTests(unittest.TestCase):
+    """Against the committed 2026-08-08 scale run. Literals, not constants."""
+
+    def setUp(self):
+        import json
+
+        self.receipt = json.loads(
+            (Path(__file__).resolve().parent / "semantic_scale_receipt.json").read_text()
+        )
+
+    def at(self, unit: str, size: int) -> dict:
+        return next(
+            row
+            for row in self.receipt["results"]
+            if row["unit"] == unit and row["size"] == size
+        )
+
+    def test_every_meeting_in_the_corpus_crossed_the_truncation_ceiling(self):
+        """The first corpus produced 212-token meetings and 8 of 200 crossed it.
+        It would have measured dilution and reported it as truncation."""
+        tokens = self.receipt["meeting_tokens"]
+        self.assertEqual(tokens["over_ceiling"], 200)
+        self.assertGreater(tokens["min"], 256)
+
+    def test_both_registered_clauses_held(self):
+        truncated = self.at("meeting-truncated", 200)["correct"]
+        turn = self.at("turn", 200)["correct"]
+        window = self.at("window", 200)["correct"]
+        self.assertEqual((truncated, turn, window), (1, 7, 7))
+        self.assertGreaterEqual(turn - truncated, 3)
+        self.assertGreaterEqual(window - truncated, 3)
+        self.assertLessEqual(abs(turn - window), 1)
+
+    def test_the_tiebreak_that_chose_the_window_unit_is_twenty_to_one(self):
+        self.assertEqual(self.at("turn", 200)["pieces"], 16020)
+        self.assertEqual(self.at("window", 200)["pieces"], 800)
+
+    def test_truncated_meetings_crowd_together_as_the_corpus_grows(self):
+        medians = [self.at("meeting-truncated", n)["median_within_band"] for n in (30, 60, 120, 200)]
+        self.assertEqual(medians, [3, 6, 13, 22])
+        for unit in ("turn", "window"):
+            self.assertEqual(
+                [self.at(unit, n)["median_within_band"] for n in (30, 60, 120, 200)],
+                [0, 0, 0, 0],
+                unit,
+            )
+
+    def test_the_two_failures_arrive_as_exact_ties_rather_than_confident_answers(self):
+        """A wrong answer with a 0.0000 margin and a crowded band is something a
+        surface could act on. A wrong answer with a clean margin is not."""
+        rows = [row for row in self.at("window", 200)["rows"] if not row["correct"]]
+        self.assertEqual(len(rows), 3)
+        tied = [row for row in rows if row["margin"] == 0.0]
+        self.assertEqual(len(tied), 2)
+        self.assertTrue(all(row["within_band"] >= 10 for row in tied))
+
+
 if __name__ == "__main__":
     unittest.main()

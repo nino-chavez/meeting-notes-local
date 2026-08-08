@@ -60,6 +60,10 @@ AGGREGATION = "max-chunk-similarity"
 
 WINDOW_TOKENS = 128
 
+# The model's window, from `mlx_minilm.MAX_SEQUENCE_LENGTH`. Named here so the
+# truncating arm cuts where the reference implementation cuts.
+MAX_TOKENS = 256
+
 
 def _sha256(value: str | bytes) -> str:
     if isinstance(value, str):
@@ -96,16 +100,26 @@ def build_corpus(parts: dict, size: int) -> list[dict]:
     closings = parts["closings"]
     meetings: list[dict] = []
 
+    # How much small talk surrounds the substance. Four openings and three
+    # closings puts a meeting at roughly 1,400 tokens with the substantive block
+    # in the middle — a twenty-minute call rather than a three-minute one.
+    #
+    # **The first version used one of each and produced 212-token meetings, of
+    # which 8 in 200 crossed the 256 ceiling.** It measured dilution and called
+    # it truncation. Corrected before the result was written, and recorded
+    # because it is the third time on this path that fixtures too small to carry
+    # the property under test nearly produced a confident answer about it.
+    CHATTER_BEFORE = 4
+    CHATTER_AFTER = 3
+
     def compose(identifier: str, kind: str, substantive: list[str], seed: int) -> dict:
-        return {
-            "id": identifier,
-            "kind": kind,
-            "turns": (
-                openings[seed % len(openings)]
-                + substantive
-                + closings[(seed * 5) % len(closings)]
-            ),
-        }
+        before: list[str] = []
+        for step in range(CHATTER_BEFORE):
+            before += openings[(seed + step * 5) % len(openings)]
+        after: list[str] = []
+        for step in range(CHATTER_AFTER):
+            after += closings[(seed * 5 + step * 3) % len(closings)]
+        return {"id": identifier, "kind": kind, "turns": before + substantive + after}
 
     for index, target in enumerate(parts["targets"]):
         meetings.append(compose(target["id"], "target", target["turns"], index))
@@ -185,7 +199,15 @@ def main() -> int:
                 # The truncated arm is the only one that may exceed the ceiling,
                 # and it is the arm whose whole point is that it does.
                 if unit == "meeting-truncated":
-                    piece = " ".join(piece.split()[:200])
+                    # Cut at the real token boundary, which is what the reference
+                    # implementation does. An earlier version cut at 200 *words*
+                    # and the encoder refused it at 266 tokens — words are not
+                    # tokens, and the encoder refusing rather than truncating is
+                    # what surfaced it.
+                    piece = tokenizer.decode(
+                        tokenizer.encode(piece, add_special_tokens=False)[: MAX_TOKENS - 2],
+                        skip_special_tokens=True,
+                    )
                 pieces.append(piece)
                 owners.append(index)
         vectors = normalize(embed(pieces))

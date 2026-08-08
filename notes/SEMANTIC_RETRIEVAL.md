@@ -384,3 +384,98 @@ It would decide the unit, and license building the vector store around it.
 
 It would **not** establish that retrieval is useful, that a synthetic corpus
 predicts a real one, or that the model is admitted. Those are unchanged.
+
+### Result — 2026-08-08 — the prediction holds, and yesterday's headline does not
+
+Receipt: `semantic_scale_receipt.json`. 200 meetings of 497–638 tokens each,
+**every one over the 256 ceiling**, nested so each size is a prefix of the next.
+
+**Both registered clauses hold.** `turn` and `window` each beat
+`meeting-truncated` by 6 of 10 at N=200, against a registered floor of 3, and
+they land 0 apart, inside the registered 1.
+
+| Unit | N=200 | Hard five | Easy five | Pieces stored | Median within 0.02 |
+|---|---|---|---|---|---|
+| `meeting-truncated` | **1 / 10** | 0 / 5 | 1 / 5 | 200 | **22** |
+| `turn` | 7 / 10 | 2 / 5 | 5 / 5 | **16,020** | 0 |
+| `window` (128 words) | 7 / 10 | **3 / 5** | 4 / 5 | **800** | 0 |
+
+#### The unit is `window`, and the tie clause is what decides it
+
+Both non-truncating units score 7. The registered tiebreak was cost and shape,
+and it is not close: `window` stores **800 pieces where `turn` stores 16,020** —
+twenty times fewer — and its count is bounded and predictable per meeting, while
+turn count varies with how much people interrupt each other.
+
+Registering that tiebreak in advance is what makes this a decision rather than a
+preference. Had it not been written down, 3/5 versus 2/5 on the hard half would
+have been available to argue `window` won on quality, and a one-question
+difference cannot carry that.
+
+#### Yesterday's result does not survive a realistic corpus
+
+| | 2026-08-08, ten 48-token meetings | 2026-08-08, 200 realistic meetings |
+|---|---|---|
+| Overall | 10 / 10 | 7 / 10 |
+| The five exact search cannot answer | **5 / 5** | **3 / 5** |
+
+**The hard half is where it degrades**, which is the half the feature exists for.
+Adding the small talk that actually surrounds a decision costs two of those five,
+with the unit chosen and the corpus only 200 meetings deep.
+
+The two failures are legible in the receipt and neither is a near-miss confusion:
+the "hiring problems" and "data retention" questions land on generated filler at
+a margin of **exactly 0.0000**, with 11 and 15 meetings inside the band. They are
+not choosing wrongly between plausible candidates; they are matching nothing in
+particular and landing on chatter.
+
+#### Density is the finding the accuracy hides
+
+Median meetings within 0.02 of the top hit, as the corpus grows:
+
+| Unit | N=30 | N=60 | N=120 | N=200 |
+|---|---|---|---|---|
+| `meeting-truncated` | 3 | 6 | 13 | **22** |
+| `turn` | 0 | 0 | 0 | 0 |
+| `window` | 0 | 0 | 0 | 0 |
+
+Truncated meetings become indistinguishable at a rate proportional to the corpus
+— at 200 meetings, roughly one in nine sits inside the band. The other two units
+hold a clean separation **on the questions they answer**, and all of their density
+is concentrated on the questions they fail. That is the more useful shape: a wrong
+answer arrives with a visible tie rather than a confident margin, which is
+something a surface could act on.
+
+#### Two things this overstates, said plainly
+
+**The truncated arm's collapse is exaggerated by the corpus.** Openings are drawn
+verbatim from a bank of twelve, so truncated meetings are near-duplicates of each
+other and several margins are exactly 0.0000. Real meetings open formulaically but
+not identically. Truncation is clearly bad; 1 of 10 is worse than it would be on
+real transcripts, and the direction is the finding rather than the magnitude.
+
+**Two hundred meetings of ten minutes is not a year of work.** The meetings are
+497–638 tokens; an hour is roughly twelve thousand. Density grows with both corpus
+size and meeting length, and only the first was varied here.
+
+#### What this licenses
+
+Building the vector store around **one vector per 128-word window**, with the
+piece count that implies — 4 per meeting at this length, bounded, and cheap enough
+that a thousand meetings is four thousand vectors.
+
+It does **not** establish that retrieval is useful. 7 of 10 with the hard half at
+3 of 5 is a number the operator should see before anything is built on it, and it
+is materially worse than the number this document reported yesterday.
+
+#### The third fixture-shape failure on this path, caught by the receipt
+
+The first corpus produced 212-token meetings, of which 8 in 200 crossed the
+ceiling. It would have measured **dilution and reported it as truncation**. The
+receipt's own `meeting_tokens.over_ceiling` field is what surfaced it, before the
+result was written.
+
+A fourth was caught by the implementation: the truncating arm cut at 200 *words*,
+which is 266 tokens, and `encode` refused rather than truncating — the refusal
+added in the previous change. A run that silently truncated would have produced
+plausible numbers for a different experiment.
