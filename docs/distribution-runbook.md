@@ -1,6 +1,6 @@
 # Yawn distribution runbook
 
-**0.5.0 is being cut, 2026-08-08 — the first build in which a person can ask the
+**0.5.0 is cut, 2026-08-08 — the first build in which a person can ask the
 corpus a question.** Everything the feature needs landed across #45–#53 and none
 of it is in any image: the embedding model entered the runtime on 2026-08-08 and
 the search surface the day after. 0.4.0 cannot do any of this, so the standing
@@ -16,6 +16,33 @@ close for itself.
 It also inherits, and does not clear, the open interactive operator runs from
 0.2.2, 0.3.0, 0.3.1 and 0.4.0 — and 0.4.0's speaker gate, whose threshold has
 still never been measured on live meeting audio.
+
+**0.5.0's record.** Built at commit `e39f576` on `main`; DMG SHA-256
+`5dc8b760d0f3cb17b37eaffc766123e722762ef82964205b4767492dbf53fae3`,
+1,840,005,044 bytes; signed, notarized, stapled, and Gatekeeper-accepted for
+both the app and the image — `source=Notarized Developer ID` on each, checked
+twice — with `verify-signed-release.sh … internal-alpha` PASS and the lane
+exiting 0. Re-verified afterwards under `script`, the pty-backed form this file
+recommends: PASS at exit 0 again, from a run written down. Its interactive operator run is open, and it inherits the chain from
+0.2.2, 0.3.0, 0.3.1 and 0.4.0 rather than clearing it.
+
+**It is the first build cut from `main` rather than a feature branch**, which is
+what the 2026-08-07 trunk consolidation was for. Every prior record names a
+commit on `codex/guided-voice-enrollment`.
+
+**The image is smaller than 0.4.0's** — 1.840 GB against 1.858 — while carrying
+87 MB of embedding model it did not have. Recorded because the arithmetic looks
+wrong and is not: DMG compression, not a missing component. The four MiniLM
+files are physically present at `Contents/Resources/models/all-MiniLM-L6-v2`,
+and `verify-release-bundle.py` digests each one against the manifest rather than
+taking the manifest's word.
+
+**The release verifier refused this build once, correctly.** Its `expected_models`
+allowlist is a second, independent statement of what a bundle may carry, and the
+four MiniLM entries were added to `worker/build_manifest.py` on 2026-08-08 and
+not to it. Fixed in `e39f576` along with a test that compares the two files, so
+the next drift of that kind fails in an ordinary test run rather than at the
+signing lane.
 
 **Two things a first user of this build should be told.** Meaning search finds
 nothing until passages are prepared, which is a press on the Find screen and
@@ -449,6 +476,12 @@ script -q verify.log scripts/verify-signed-release.sh \
 On 0.4.0 that returned exit 0 with the full `signed release verification: PASS`.
 Prefer this to a bare interactive run; there is no reason to publish off a
 verdict nobody wrote down.
+
+**A zero-byte `$DMG.sha256` mid-lane is `tee` still writing, not the kill
+below.** Read on 2026-08-08 seconds before the lane finished, and reported as a
+timeout kill on the strength of the paragraph that follows. It was not: the lane
+exited 0 and the file held the digest a moment later. Check `LANE_EXIT` — or the
+absence of it — before concluding anything from an empty checksum file.
 
 **A lane killed after stapling leaves complete artifacts and no checksum.** The
 0.4.0 run was killed by an agent harness's own ten-minute background timeout

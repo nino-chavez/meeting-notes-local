@@ -41,16 +41,37 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is a signed DMG carrying the embedding model and the search
-surface, because the one question this feature turns on can only be answered by
-the operator on their own meetings and they currently have no build that can ask
-it.** Everything below has landed on trunk and none of it is installed anywhere.
-The retrieval figure — 7 of 10, and 3 of 5 on the questions exact search cannot
-answer — has not moved since 2026-08-08 and no code will move it. What is missing
-is a person typing a description of a real meeting and saying whether what comes
-back is worth having. That is `internal-alpha`, the ~18-minute signing lane in
-`docs/distribution-runbook.md`, and then an operator decision this repository
-cannot make for itself.
+**The next build is US-13.6, the launch scan that is paid twice** — and the
+reason it jumps the queue is the operator, not the code. 0.5.0 is cut and sits
+on this machine; the next thing that happens to this product is a person opening
+it against a real library and searching it. Every library open still re-reads
+every meeting from disk before the index is consulted, so the first thing they
+would meet is a wait that grows every month. `backlog.md` US-13.6 carries it and
+already names why it was deferred: skipping unchanged meetings needs a
+per-meeting entry point into `library_read`, which passed an independent
+adversarial audit, and changing it in the same breath as a new C dependency
+would have made that audit result unattributable. That dependency landed a day
+ago. The reason has expired.
+
+**Wave 1 item 6 is the first unstruck row and it is not ready, which is a
+different problem.** "Ask across every meeting, answer with citations" is written
+against note generation, and note generation was measured and **closed for this
+model** at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`,
+E16 US-16.2). Before that row can be built, one fork has to be decided rather
+than discovered: whether a cross-meeting answer is **composed** — which needs a
+generator that passes admission and does not exist — or **assembled** from the
+passages retrieval already returns, which needs no generator and is what "a claim
+cites resolvable words" would prefer. Neither is obviously right. Deciding it is
+the work, not a preliminary to it.
+
+**0.5.0 was cut 2026-08-08** at commit `e39f576`, the first release from `main`
+and the first that can answer a question. Signed, notarized, stapled,
+Gatekeeper-accepted for app and image, `verify-signed-release.sh … internal-alpha`
+PASS; full record in `docs/distribution-runbook.md`. **It does not move the
+retrieval figure — 7 of 10, and 3 of 5 on the questions exact search cannot
+answer — and nothing in a build can.** What it allows is the operator answering
+whether that is useful, on their own meetings, which is the one gate this
+repository has never been able to close for itself.
 
 **Semantic search reached the surface on 2026-08-09** (US-13.13). The Find screen
 has a second field: describe the meeting instead of quoting it. An answer is the
