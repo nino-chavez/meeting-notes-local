@@ -47,6 +47,15 @@ oversight and this reads as a fact). Before claiming a capability works, read it
 Validation line; a story can be fully `Pinned` and still unproven as a product
 capability, because what is pinned is behaviour on fixtures.
 
+**`ALPHA_OPERATIONS` exists twice, in two languages, and `parse_ready` compares
+them for exact equality.** `worker/main.py` advertises the set and
+`supervision.rs::internal_alpha_operations` expects it; a difference is not a
+warning but a worker the app refuses to start. On 2026-08-08 an operation was
+added to one and not the other, every Rust test passed because they all build
+their own fixture sets, and trunk shipped an app that could not start its own
+worker. `the_alpha_operation_set_is_read_from_the_worker_itself` now reads the
+Python and fails until both agree.
+
 Statuses in any doc are hypotheses, not evidence. Verify against code before
 repeating one: `worker/main.py` (`ALPHA_OPERATIONS`),
 `apps/desktop/src-tauri/tests/shell_contract.rs` (registered-command pins), and
