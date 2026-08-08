@@ -50,9 +50,14 @@ build for this** — the one the queue was waiting on is on the desktop, and the
 0.5.0 image that carried the search defect was deleted so the wrong one cannot be
 installed.
 
-What is left is not code. Install it, press to prepare the passages, and ask it
+That step is not code. Install it, press to prepare the passages, and ask it
 something. What comes back is the answer to the only open question — whether 7 of
 10 is useful — and nothing in this repository can produce it.
+
+**The next build that is code is US-15.4's measurement**, and it does not wait on
+the operator run above. Wave 1 item 6's fork was decided below; its first unit is
+a registered probe of passage-level retrieval, because the shipped 7 of 10 is a
+figure about meetings and item 6 changes the unit to the passage.
 
 **Exact search stopped refusing a common word on 2026-08-08** (US-13.14). It
 returned `CapacityExceeded` for the whole query past a hundred matches — an
@@ -91,16 +96,51 @@ a corpus size rather than a date**: between about 1,400 and 1,800 meetings the r
 crosses 1.5 s on this hardware. Re-run `corpus-scan-bench` before building it
 rather than re-reading that number.
 
-**Wave 1 item 6 is the first unstruck row and it is not ready, which is a
-different problem.** "Ask across every meeting, answer with citations" is written
-against note generation, and note generation was measured and **closed for this
-model** at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`,
-E16 US-16.2). Before that row can be built, one fork has to be decided rather
-than discovered: whether a cross-meeting answer is **composed** — which needs a
-generator that passes admission and does not exist — or **assembled** from the
-passages retrieval already returns, which needs no generator and is what "a claim
-cites resolvable words" would prefer. Neither is obviously right. Deciding it is
-the work, not a preliminary to it.
+**Wave 1 item 6's fork is decided, 2026-08-08: the answer is assembled, and the
+decision was made by fact rather than preference.** The row asks to "ask across
+every meeting, answer with citations", and the open question was whether such an
+answer is **composed** by a generator or **assembled** from passages retrieval
+already returns.
+
+**Composed is unavailable, not declined.** It needs a generator whose output has
+been admitted, and no generator in this repository carries a passing admission.
+`notes/MLX_NOTE_ADMISSION.md` says so three times — its gate table ends at "no
+admission without a recorded human decision, even if every mechanical gate
+passes", and two later sections state plainly that nothing there is an admission.
+The one generation task that was measured, title selection, returned 5 of 10
+against a registered 6–9 and is **closed for this model**
+(`notes/MLX_TITLE_SELECTION.md`, E16 US-16.2). So composing is not a path being
+passed over on taste; it is a path whose first step is an admission run that does
+not exist and would be its own registered unit.
+
+**The citation half of the row is already met.** `corpus_index::quote_window`
+returns the passage with the first and last turn it spans, and the Find screen
+renders `turns 12–19` with the transcript one press away. Item 6 inherits that
+machinery rather than building it, which is what B5 was a dependency for.
+
+**What it does not inherit is the unit, and that is the whole of the row.**
+`corpus_index::nearest_windows` keeps the best-scoring window *per meeting* and
+then ranks meetings. That collapse is deliberate and is item 5's answer shape —
+which meeting did you mean. `semantic_retrieval_fixtures.json` states the boundary
+in its own schema: "One vector per meeting… Landing on the exact claim inside one
+is Wave 1 item 6 and needs a different unit, so it is not measured here." So item
+6 is one change of unit and everything that follows from it: rank passages rather
+than meetings, return more than one from a meeting when the answer is in more than
+one place, and say how many meetings the answers came from.
+
+**The 7-of-10 figure does not carry over.** It measures whether the right *meeting*
+ranked first. Whether the passage that answers ranks first has never been measured
+on any corpus. That measurement is the first build of item 6 and comes before any
+surface, registered two-sided before it runs, exactly as US-15.3 was.
+
+**Changing the unit makes a weak score a lie, and that is a new obligation rather
+than a refinement.** Five candidate meetings offered for a person to choose among
+is honest at any score — the ranking is admittedly uncertain and the person
+decides. Five passages presented as *the answer* is a claim, so the same weak
+ranking that was honest at the meeting unit becomes a false one at the passage
+unit. Item 6 therefore needs a score floor, registered with the probe, below which
+the response is that nothing in these meetings answers the question — not the best
+rows of a bad ranking. Written as US-15.4 in [`backlog.md`](./backlog.md).
 
 **0.5.0 was cut 2026-08-08** at commit `e39f576`, the first release from `main`
 and the first that can answer a question — **and recalled the same day** for the
@@ -328,7 +368,7 @@ largest surface-area addition and says it has nothing to do with audio.
 | 3 | ~~Folders, and the meeting object's sibling views~~ **Writer landed 2026-08-08** — `library-metadata/1` gained the five named commands, whole-meeting deletion now takes the organization row first, and naming a meeting is wired end to end. The folder surface is `backlog.md` US-14.4 and is deliberately unbuilt | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | ~~Filters — people, date range, keywords, titles~~ **Three of four landed 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search, plus the folder surface item 3 deferred. **People is blocked on A3** (Wave 3 item 11), because attribution is Me/Them and named participants are absent by contract | D3 | Gong documents all four. Free once the store exists |
 | 5 | ~~Semantic search over the corpus, beside exact~~ **Landed 2026-08-09** (US-13.13). The Find screen takes a description in words and answers with the passage that matched, quoted, its turns named and its transcript one click away. Every state reports how much of the corpus it searched, and preparing the passages is a press rather than a step on the way to an answer. **The retrieval figure is unchanged and unjudged: 7 of 10, 3 of 5 on the questions exact search cannot answer** (`notes/SEMANTIC_RETRIEVAL.md`) — a surface cannot move it, and now there is somewhere to see it | D2 | Exact is Registered; semantic is what a question needs |
-| 6 | **Ask across every meeting, answer with citations** | D1 | The category headline. Depends on 1–5 and on B5's citation machinery |
+| 6 | **Ask across every meeting, answer with citations** — **assembled, decided 2026-08-08** (US-15.4). Composing needs an admitted generator and none exists, so the answer is the passages themselves. The unit moves from the meeting to the 128-word window; B5's citation machinery is already met by `quote_window`. **First build is the measurement**, not the surface: passage-level retrieval is unmeasured, and a score floor is registered with it because a passage shown as an answer is a claim where a meeting offered as a candidate is not | D1 | The category headline. Depends on 1–5 and on B5's citation machinery |
 
 ### Wave 2 — the note becomes worth reading
 

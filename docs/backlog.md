@@ -124,7 +124,7 @@ inference is what went wrong before.
 | E12 | Release, distribution, admission | — | 7 | Mixed |
 | **E13** | **The corpus store** | **E6 D3 D2** | 12 | **Landed 2026-08-07**, plus the vector store, the tokenizer decision, `corpus.embed`, its packaging and the fill seam 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 through US-13.13 are D2 work that sits here by number while E15 keeps D2's user-facing story. **US-13.13 landed the surface 2026-08-09** and is the first of them a person can see |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
-| **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3's retrieval reached a surface 2026-08-09 as US-13.13 and its 7-of-10 figure is unjudged until an operator runs it on their own meetings; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
+| **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 4 | **US-15.1 landed 2026-08-08**; US-15.3's retrieval reached a surface 2026-08-09 as US-13.13 and its 7-of-10 figure is unjudged until an operator runs it on their own meetings; US-15.2 blocked on A3. **US-15.4 added 2026-08-08** — Wave 1 item 6's fork decided as assembled-from-passages, because composing needs an admitted generator and none exists. Nothing built; its first unit is a registered probe, since 7 of 10 measures meetings and this changes the unit to the passage |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
 | **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
 | **E18** | **Named speakers** | **A3** | — | Wave 3 items 11–12 |
@@ -1803,6 +1803,52 @@ build the operator can install and their own meetings inside it.
 with no model in it initially scored 8 of 10 and 3 of 5 on the hard half, because
 two transcripts contained words the fixture claimed were absent. Both were
 removed and a test now fails if any non-semantic strategy answers a hard question.
+
+#### US-15.4: The answer across meetings, assembled from passages
+**Feature D1 · J1 · §F · P0 · L · Fork decided 2026-08-08, nothing built**
+
+As the Operator, I want to ask a question and be shown the passages that answer
+it, so that I do not have to open five meetings and read them myself.
+
+**Acceptance criteria:**
+- Given a question whose answer sits in one passage, When the corpus is asked, Then that passage is ranked first — not merely the meeting containing it.
+- Given a question whose answer sits in several passages across more than one meeting, When the corpus is asked, Then more than one is returned, and each names its own meeting and the turns it spans.
+- Given any returned answer, When it is shown, Then every word in it was said by somebody in a retained turn, quoted, with its transcript one press away.
+- Given no passage scores above the registered floor, When the corpus is asked, Then the response says nothing in these meetings answers the question, rather than returning the best rows of a bad ranking.
+
+**Validation:** **Unproven** — nothing is built and nothing is measured. The
+`Pinned` behaviour that exists is US-13.13's, and it is the meeting unit.
+
+**The fork was decided by fact, not preference.** A cross-meeting answer is either
+composed by a generator or assembled from retrieved passages. Composing needs an
+admitted generator and this repository has none: `MLX_NOTE_ADMISSION.md`'s gate
+table ends at "no admission without a recorded human decision, even if every
+mechanical gate passes", two later sections state that nothing there is an
+admission, and the one generation task measured — title selection — returned 5 of
+10 against a registered 6–9 and is closed for this model (US-16.2). Assembling
+needs no generator, and "a claim cites resolvable words" is satisfied by
+construction when the answer *is* the words.
+
+**The citation dependency is already met.** `corpus_index::quote_window` returns a
+passage with its first and last turn, and US-13.13 renders exactly that. This story
+inherits it.
+
+**What it does not inherit is the unit.** `corpus_index::nearest_windows` keeps the
+best window per meeting and ranks meetings, which is US-13.13's question — which
+meeting did you mean. `semantic_retrieval_fixtures.json` records the boundary in
+its own schema: "Landing on the exact claim inside one is Wave 1 item 6 and needs
+a different unit, so it is not measured here."
+
+**So the first build is the measurement, not the surface.** 7 of 10 is a figure
+about meetings. Passage-level retrieval has never been measured on any corpus, and
+the probe registers its two-sided prediction before it runs, as US-15.3 did.
+
+**The score floor is a new obligation created by the unit change, not a
+refinement.** Five candidate meetings offered to choose among is honest at any
+score — the person decides. Five passages presented as the answer is a claim, so
+the same weak ranking that was honest becomes false. The floor is registered with
+the probe rather than tuned after it, because a threshold chosen once the scores
+are known is fitted to them.
 
 #### US-15.2: Filtering by person
 **Feature D3 · J1 · §F · P1 · M · Blocked on A3**
