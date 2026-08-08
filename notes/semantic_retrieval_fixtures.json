@@ -1,0 +1,172 @@
+{
+  "schema": "semantic-retrieval-fixtures/1",
+  "purpose": "A synthetic ten-meeting corpus and the questions asked of it. Every word was invented for this file: no meeting recording, Preview datum, or product record appears in it. Both arms read this one file, so neither implementation carries its own copy of what the right answer is.",
+  "unit": "One vector per meeting. The queue row asks for search over the corpus, which is a question about which meeting to open. Landing on the exact claim inside one is Wave 1 item 6 and needs a different unit, so it is not measured here.",
+  "keyword": "The single word a person would type into today's exact search when trying to find this meeting. It is what the probe is measured against, because it is what the product already does.",
+  "exact_finds": "Meeting IDs `library_read::search(keyword)` actually returns. Asserted by a Rust test against the real function, so the baseline cannot drift from the shipped one or be written down from memory.",
+  "shape": "Five questions where the keyword already works and five where it does not. A suite of only the second kind rewards any non-empty retrieval; a suite of only the first measures nothing a substring search cannot already do.",
+  "meetings": [
+    {
+      "id": "meeting-a",
+      "created_at_epoch_seconds": 1700000000,
+      "turns": [
+        "Right, the warehouse move. We are looking at the second week of April.",
+        "That gives the fulfilment team three weeks to run both sites in parallel.",
+        "Ravi wants the racking installed before the first pallet arrives."
+      ]
+    },
+    {
+      "id": "meeting-b",
+      "created_at_epoch_seconds": 1700100000,
+      "turns": [
+        "The pricing page conversion has dropped every week since the redesign.",
+        "We changed the annual toggle to be the default and it has not helped.",
+        "I want to put the monthly option back on top and watch it for a fortnight."
+      ]
+    },
+    {
+      "id": "meeting-c",
+      "created_at_epoch_seconds": 1700200000,
+      "turns": [
+        "Halloway are up for renewal at the end of the quarter.",
+        "Their usage is down about a third but they have added two new teams.",
+        "I think we hold the price and offer the onboarding sessions instead."
+      ]
+    },
+    {
+      "id": "meeting-d",
+      "created_at_epoch_seconds": 1700300000,
+      "turns": [
+        "The schema migration went out last night and nobody looked at the reporting jobs.",
+        "Three of them are writing into a column that no longer exists.",
+        "I can roll the migration back but we lose the new audit fields."
+      ]
+    },
+    {
+      "id": "meeting-e",
+      "created_at_epoch_seconds": 1700400000,
+      "turns": [
+        "Dana is taking over onboarding from the first of next month.",
+        "She wants two weeks of shadowing before she runs a session on her own.",
+        "We should tell the customers who already have sessions booked."
+      ]
+    },
+    {
+      "id": "meeting-f",
+      "created_at_epoch_seconds": 1700500000,
+      "turns": [
+        "The Bristol pilot ends in three weeks and they have not signed anything.",
+        "Their finance team keeps asking for a breakdown we have already sent twice.",
+        "Either we extend it another month or we let it lapse quietly."
+      ]
+    },
+    {
+      "id": "meeting-g",
+      "created_at_epoch_seconds": 1700600000,
+      "turns": [
+        "We are not shipping the Atlas migration this quarter.",
+        "The field team will be unhappy but the rollback plan is not written.",
+        "I would rather slip it than spend a weekend restoring from backups."
+      ]
+    },
+    {
+      "id": "meeting-h",
+      "created_at_epoch_seconds": 1700700000,
+      "turns": [
+        "Two people have resigned from the support rota this month.",
+        "That leaves us with one person covering the overnight window.",
+        "We either pause overnight cover or we pay an agency to fill it."
+      ]
+    },
+    {
+      "id": "meeting-i",
+      "created_at_epoch_seconds": 1700800000,
+      "turns": [
+        "The lease on this floor is up in September and the landlord wants a five year term.",
+        "Half the team has not come in more than once a week since January.",
+        "A smaller floor with better meeting rooms would suit us better."
+      ]
+    },
+    {
+      "id": "meeting-j",
+      "created_at_epoch_seconds": 1700900000,
+      "turns": [
+        "The security review flagged the way we store the export files.",
+        "They are sitting in a bucket with no expiry and no access logging.",
+        "Adding a lifecycle rule is a day of work and closes the finding."
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "question": "When are we moving the warehouse?",
+      "keyword": "warehouse",
+      "intended_meeting": "meeting-a",
+      "exact_helps": true,
+      "why": "The word is in the meeting. A substring search already finds it and semantic must not lose it."
+    },
+    {
+      "question": "What did we decide about the Halloway renewal?",
+      "keyword": "Halloway",
+      "intended_meeting": "meeting-c",
+      "exact_helps": true,
+      "why": "A proper noun, said aloud. Exact search is good at these and should stay the thing to beat."
+    },
+    {
+      "question": "Who is taking over onboarding?",
+      "keyword": "onboarding",
+      "intended_meeting": "meeting-e",
+      "exact_helps": true,
+      "why": "The keyword appears in two meetings, so retrieval has to pick between them rather than merely find one."
+    },
+    {
+      "question": "What is happening with the Bristol pilot?",
+      "keyword": "Bristol",
+      "intended_meeting": "meeting-f",
+      "exact_helps": true,
+      "why": "Another proper noun. Present so the suite is not only cases where exact search fails."
+    },
+    {
+      "question": "Are we still shipping the Atlas migration?",
+      "keyword": "Atlas",
+      "intended_meeting": "meeting-g",
+      "exact_helps": true,
+      "why": "The word is there and so is the negation. Exact search wins; semantic must too."
+    },
+    {
+      "question": "Which meeting was about hiring problems?",
+      "keyword": "hiring",
+      "intended_meeting": "meeting-h",
+      "exact_helps": false,
+      "why": "Nobody said hiring. They said two people resigned and one person is covering nights."
+    },
+    {
+      "question": "Did we talk about giving up some of our office space?",
+      "keyword": "downsize",
+      "intended_meeting": "meeting-i",
+      "exact_helps": false,
+      "why": "The meeting is about a lease and a smaller floor. Neither the question's words nor its idea appear literally — the word office was in this transcript until it was removed, because a lexical control found the meeting through it."
+    },
+    {
+      "question": "What was the data retention problem?",
+      "keyword": "retention",
+      "intended_meeting": "meeting-j",
+      "exact_helps": false,
+      "why": "The meeting says no expiry and no access logging. Retention is the concept, not the word."
+    },
+    {
+      "question": "Where did the database change break something?",
+      "keyword": "database",
+      "intended_meeting": "meeting-d",
+      "exact_helps": false,
+      "why": "The transcript says schema, migration and column, never database — and the word change was removed for the same reason office was, because the control matched on it."
+    },
+    {
+      "question": "Why are fewer people buying the subscription?",
+      "keyword": "subscription",
+      "intended_meeting": "meeting-b",
+      "exact_helps": false,
+      "why": "The meeting is about conversion on a pricing page and an annual toggle. The word is absent."
+    }
+  ]
+}
