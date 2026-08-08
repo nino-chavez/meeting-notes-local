@@ -1365,14 +1365,23 @@ this process as a bare `ok: false`, indistinguishable from a worker that died, s
 a length gate that named its cause had to live on this side. A manifest that does
 not match the identity refuses before the first request, exactly as the fill does.
 
-**Validation:** **Pinned** — 10 tests over `corpus_question::ask` against a real
-`CorpusIndex` and a fake embedder, plus 2 over `quote_window` and 6 assertions in
-`shell_contract.rs`. Three of the ten were mutation-verified: rewriting
-`near_ties` to the returned row count, applying the passage word-join to a
-question, and moving the coverage check to after the model each failed exactly
-one test and no others. **Unproven as a product capability** — no operator has
-run it against their own meetings, and the retrieval figure it inherits is 7 of
-10.
+**Validation:** **Pinned** — 12 tests over `corpus_question::ask` against a real
+`CorpusIndex` and a fake embedder, plus 2 over `quote_window` and 8 assertions in
+`shell_contract.rs`. Five were mutation-verified, each failing exactly one test
+and no others: `near_ties` rewritten to the returned row count, the passage
+word-join applied to a question, the coverage check moved after the model,
+`(async)` removed from `corpus_search`, and the label precedence reduced to the
+operator title. **Receipted** for the model path —
+`notes/packaged_question_receipt.json`, pinned by literal and by the digests of
+the three files it measured. **Unproven as a product capability** — no operator
+has run it against their own meetings, and the retrieval figure it inherits is 7
+of 10.
+
+**One meeting, one name.** The index stores only the operator's title; the
+derived title is recomputed from turns and never stored. So an untitled meeting
+would have read as its opening sentence in the library list and as its capture
+time in a search result — the same meeting, the same screen. The precedence now
+has one owner, `meeting_title::label`, which the library list calls too.
 
 **A question and a passage go through one encoder.** `ask` embeds the question
 through the same [`WindowEmbedder`] the fill uses, with the same manifest check.

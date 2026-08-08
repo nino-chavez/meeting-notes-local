@@ -190,7 +190,9 @@ pub fn ask(
         let quoted = index.quote_window(&hit.meeting_id, hit.window_index)?;
         answers.push(Answer {
             meeting_id: hit.meeting_id,
-            title: quoted.title,
+            // The library list's precedence, from the module that owns it, so
+            // one meeting cannot carry two names on one screen.
+            title: crate::meeting_title::label(quoted.title.as_deref(), quoted.derived_title).0,
             folder: quoted.folder,
             created_at_epoch_seconds: quoted.created_at_epoch_seconds,
             similarity: hit.similarity,
@@ -588,5 +590,88 @@ mod tests {
         .expect("asks");
 
         assert_eq!(outcome.answers[0].title.as_deref(), Some("Landlord call"));
+    }
+
+    /// The tier between an operator title and a timestamp. Before this landed,
+    /// an untitled meeting read as its opening sentence in the library list and
+    /// as its capture time in a search result — the same meeting, the same
+    /// screen, two names.
+    #[test]
+    fn an_untitled_meeting_is_named_the_way_the_library_names_it() {
+        let opening =
+            "so the roof lease renews in March and the landlord wants a decision by Friday";
+        let (_fixture, index, identity) = prepared(&[("meeting-a", opening)]);
+        let embedder = FakeEmbedder::new(identity.dimension as usize);
+
+        let outcome = ask(
+            &index,
+            &identity,
+            &embedder,
+            &measured_models(&identity),
+            "the lease",
+            ANSWER_LIMIT,
+        )
+        .expect("asks");
+
+        let derived = crate::meeting_title::derived_title([(opening, false)]);
+        assert!(
+            derived.is_some(),
+            "the fixture has no derived title to carry"
+        );
+        assert_eq!(outcome.answers[0].title, derived);
+    }
+
+    /// Frozen artifact. `notes/packaged_question_receipt.json` records one run
+    /// on 2026-08-09 through the staged runtime, and the numbers here are the
+    /// literals it was produced with — deliberately not `PAIRS.len()` or a
+    /// threshold constant. A test that followed a live value would keep passing
+    /// while the receipt described a measurement nobody had re-run.
+    ///
+    /// It also asserts the receipt still describes the files on disk. Change
+    /// `worker/embedding.py` or `notes/mlx_minilm.py` and this fails, which is
+    /// the point: the measurement is of those bytes.
+    #[test]
+    fn the_packaged_question_receipt_describes_the_files_it_measured() {
+        use sha2::{Digest, Sha256};
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let receipt: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("notes/packaged_question_receipt.json"))
+                .expect("the receipt is committed"),
+        )
+        .expect("the receipt is JSON");
+
+        assert_eq!(receipt["schema"], "packaged-question-parity/1");
+        assert_eq!(receipt["question_ranking"]["pairs"].as_u64(), Some(5));
+        assert_eq!(
+            receipt["question_ranking"]["targets_first"].as_u64(),
+            Some(4)
+        );
+        let margin = receipt["question_ranking"]["smallest_margin"]
+            .as_f64()
+            .expect("a margin");
+        assert!(
+            (margin - -0.02247599958733712).abs() < 1e-15,
+            "the receipt's failing margin is not the one recorded: {margin}"
+        );
+        // The registered threshold was 1e-6 and both legs cleared it by six
+        // orders. Asserted as the registration wrote it.
+        for leg in ["padding_independence", "wrapper_parity"] {
+            let worst = receipt[leg]["worst_cosine"].as_f64().expect("a cosine");
+            assert!(worst >= 1.0 - 1e-6, "{leg} regressed to {worst}");
+        }
+
+        for (field, path) in [
+            ("embedding_sha256", "worker/embedding.py"),
+            ("mlx_minilm_sha256", "notes/mlx_minilm.py"),
+            ("harness_sha256", "notes/packaged_question_parity.py"),
+        ] {
+            let bytes = std::fs::read(root.join(path)).expect("the measured file is committed");
+            assert_eq!(
+                receipt[field].as_str(),
+                Some(format!("{:x}", Sha256::digest(&bytes)).as_str()),
+                "{path} changed since the receipt was produced; re-run the probe"
+            );
+        }
     }
 }

@@ -912,12 +912,32 @@ impl CorpusIndex {
             .ok_or(CorpusIndexError::UnderivableRow)?;
         Ok(QuotedWindow {
             quote,
+            derived_title: self.derived_title(meeting_id)?,
             title,
             folder,
             created_at_epoch_seconds: created_at_epoch_seconds as u64,
             first_turn_index: first.source_turn_index,
             last_turn_index: last.source_turn_index,
         })
+    }
+
+    /// This meeting's opening line, by exactly the rule the library list uses.
+    ///
+    /// Reads every turn including the gated ones, because
+    /// [`crate::meeting_title::derived_title`] is what skips them and doing it
+    /// twice would let the two rules drift apart.
+    fn derived_title(&self, meeting_id: &str) -> Result<Option<String>, CorpusIndexError> {
+        let mut prepared = self.connection.prepare(
+            "SELECT text, gated FROM turn WHERE meeting_id = ?1 ORDER BY turn_index ASC",
+        )?;
+        let turns: Vec<(String, bool)> = prepared
+            .query_map(params![meeting_id], |row| {
+                Ok((row.get(0)?, row.get::<_, i64>(1)? != 0))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(crate::meeting_title::derived_title(
+            turns.iter().map(|(text, gated)| (text.as_str(), *gated)),
+        ))
     }
 
     fn window_provenance(
@@ -1040,7 +1060,13 @@ pub struct SemanticHit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotedWindow {
     pub quote: String,
+    /// The operator's own title, which is the only one the index stores.
     pub title: Option<String>,
+    /// Recomputed from this meeting's turns, never stored — see
+    /// [`crate::meeting_title`] for why. Carried because a surface that showed
+    /// only the operator title would label a meeting with its timestamp while
+    /// the library list showed its opening sentence.
+    pub derived_title: Option<String>,
     pub folder: Option<String>,
     /// Carried because an untitled meeting is named by when it happened, and a
     /// search result that cannot name its meeting is not a result.

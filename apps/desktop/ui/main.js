@@ -890,7 +890,13 @@ function renderCorpusAnswers(response) {
     const quote = document.createElement("blockquote");
     quote.textContent = answer.quote;
     const action = document.createElement("span");
-    action.textContent = openable ? "Open transcript" : "No transcript to open";
+    // Three sentences, not two. A row with no handle because the library reader
+    // was gone must not tell the operator this meeting has no transcript.
+    action.textContent = openable
+      ? "Open transcript"
+      : response.handles === "unavailable"
+        ? "Open it from Meetings"
+        : "No transcript to open";
     row.append(label, where, quote, action);
     corpusSearchResults.append(row);
   }

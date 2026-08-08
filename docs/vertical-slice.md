@@ -59,6 +59,12 @@ transcript is one press away. `corpus_search` embeds the question through the
 same [`WindowEmbedder`] the fill uses — one seam, so a question and a passage can
 never be encoded by two tokenizers that agree today.
 
+**One meeting, one name.** The corpus index stores only the operator's title —
+a derived title is recomputed from turns and deliberately never stored — so an
+untitled meeting would have read as its opening sentence in the library list and
+as its capture time in a search result. `meeting_title::label` now owns that
+three-tier precedence and both surfaces call it.
+
 **Three things the surface says out loud, each because a number alone would lie.**
 It reports how much of the corpus it actually searched in *every* state, so
 "nothing matched" and "nothing has been prepared" are different sentences. It

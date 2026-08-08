@@ -1820,6 +1820,12 @@ struct CorpusSearchResponse {
     /// Meetings within the measured tie band of the top score, counted before
     /// [`ANSWER_LIMIT`] truncated anything.
     near_ties: usize,
+    /// Whether transcript handles were mintable at all: `"minted"` or
+    /// `"unavailable"`. Two words rather than a bare absence, because a row with
+    /// no handle would otherwise render "No transcript to open" — which tells
+    /// the operator these meetings have no transcript when the truth is the
+    /// library reader was gone. A row does not claim something untrue.
+    handles: &'static str,
     message: String,
 }
 
@@ -1831,6 +1837,7 @@ impl CorpusSearchResponse {
             windows: 0,
             covered: 0,
             near_ties: 0,
+            handles: "unavailable",
             message: message.into(),
         }
     }
@@ -1846,6 +1853,20 @@ impl CorpusSearchResponse {
 /// recorded since then arrives as an unembedded window — which shows up
 /// honestly as `covered` below `windows` rather than as a meeting that
 /// silently does not match.
+///
+/// # Lock order
+///
+/// `command_lock` first, then `with_preview_library`'s storage sequence and
+/// reader mutex. That is the order every other command in this file takes —
+/// checked, not assumed: all thirteen acquisitions of `command_lock` are at the
+/// top of their function and none sits inside a `with_preview_library` closure.
+/// The reader's own doc names the sequence-before-reader half; this is the tier
+/// above it, and this is the first command to hold both.
+///
+/// The ask itself happens **outside** that closure, deliberately. Minting
+/// handles takes the meeting-storage sequence, and holding it across a worker
+/// round trip would make a question block capture for as long as the model
+/// takes.
 ///
 /// # Why it refuses during a take
 ///
@@ -1968,24 +1989,35 @@ fn corpus_search(question: String, state: State<'_, ApplicationState>) -> Corpus
     // holds the meeting-storage sequence, and the ask above is a worker round
     // trip — holding that sequence across it would make a question block
     // capture for as long as the model takes.
-    let handles: HashMap<String, String> = if outcome.answers.is_empty() {
-        HashMap::new()
+    let handles: Option<HashMap<String, String>> = if outcome.answers.is_empty() {
+        Some(HashMap::new())
     } else {
         let ids: Vec<String> = outcome
             .answers
             .iter()
             .map(|answer| answer.meeting_id.clone())
             .collect();
-        state.with_preview_library(HashMap::new, |reader, _active| {
-            ids.iter()
-                .filter_map(|id| {
-                    reader
-                        .retain_transcript_handle(id)
-                        .map(|handle| (id.clone(), handle))
-                })
-                .collect()
-        })
+        state.with_preview_library(
+            || None,
+            |reader, _active| {
+                Some(
+                    ids.iter()
+                        .filter_map(|id| {
+                            reader
+                                .retain_transcript_handle(id)
+                                .map(|handle| (id.clone(), handle))
+                        })
+                        .collect(),
+                )
+            },
+        )
     };
+    let handles_state = if handles.is_some() {
+        "minted"
+    } else {
+        "unavailable"
+    };
+    let handles = handles.unwrap_or_default();
 
     CorpusSearchResponse {
         state: state_name,
@@ -2007,6 +2039,7 @@ fn corpus_search(question: String, state: State<'_, ApplicationState>) -> Corpus
         windows,
         covered,
         near_ties: outcome.near_ties,
+        handles: handles_state,
         message,
     }
 }
