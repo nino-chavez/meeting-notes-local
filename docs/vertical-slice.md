@@ -41,7 +41,14 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the operator opening 0.5.1 against their own meetings, and
+**A session starting here builds US-15.4's measurement.** One sentence, because
+this heading owes one. Everything else on this page is why.
+
+The operator run below is the other thing outstanding, and it is not a build a
+session can take — it needs a person at the machine. Naming both without saying
+which is yours is how this heading stopped being an answer once before.
+
+**The operator's next step is opening 0.5.1 against their own meetings, and
 0.5.1 now exists.** It is at `~/Desktop/yawn-releases/Yawn-0.5.1-macos-arm64.dmg`,
 SHA-256 `c409ce7f…1e0e`, signed, notarized, stapled and Gatekeeper-accepted with a
 traced `verify-signed-release.sh … internal-alpha` PASS; the full record is in
@@ -54,10 +61,11 @@ That step is not code. Install it, press to prepare the passages, and ask it
 something. What comes back is the answer to the only open question — whether 7 of
 10 is useful — and nothing in this repository can produce it.
 
-**The next build that is code is US-15.4's measurement**, and it does not wait on
-the operator run above. Wave 1 item 6's fork was decided below; its first unit is
-a registered probe of passage-level retrieval, because the shipped 7 of 10 is a
-figure about meetings and item 6 changes the unit to the passage.
+**US-15.4's measurement is the build, and it does not wait on the operator run
+above.** Wave 1 item 6's fork was decided below; its first unit is a registered
+probe of passage-level retrieval, because the shipped 7 of 10 is a figure about
+meetings and item 6 changes the unit to the passage. Register the two-sided
+prediction and the score floor before running anything, as US-15.3 did.
 
 **Exact search stopped refusing a common word on 2026-08-08** (US-13.14). It
 returned `CapacityExceeded` for the whole query past a hundred matches — an
