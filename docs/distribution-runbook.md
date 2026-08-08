@@ -256,6 +256,32 @@ code:
 be at the machine to grant or deny them, and no build advances that. Producing the
 bundle was the builder-owned half and it is done.
 
+### The alpha runtime carries the embedding model from 2026-08-08
+
+`build-alpha` now stages `models/all-MiniLM-L6-v2` — 87 MB, four files at the
+pinned revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`, digest-checked on
+download and again in `verify` — and installs `tokenizers==0.22.2` from
+`worker/requirements-embedder.lock`, `--no-deps`, like `mlx-whisper` and
+`onnxruntime`. The manifest's `models[]` grows from two entries to six and
+`corpus.embed` joins `ALPHA_OPERATIONS`.
+
+Against a 2.1 GB stage the model is inside the rounding, so the bundle size in the
+2026-08-07 record above still reads the same to one decimal.
+
+**Not a mode of its own, unlike the encoder below.** That lane exists because the
+ECAPA encoder was a candidate under an admission check with alternatives. This
+model is chosen and measured; what is unjudged about it is whether its retrieval
+is useful, which no build mode settles. A second optional component would have
+taken three modes to four and then to eight.
+
+**Packaging is not admission.** `notes/SEMANTIC_RETRIEVAL.md` records 7 of 10 on a
+realistic corpus, and 3 of 5 on the questions exact search cannot answer.
+
+Verified on the 2026-08-08 build: `verify` ran 117 tests, `OK`, with **all 16
+`test_embedding` tests executing rather than skipping** — `verify` names
+`LMN_EMBEDDING_MODEL_DIR` for that reason, because a suite that skipped the only
+tests touching the model would report the same green as one that ran them.
+
 ## Encoder-candidate lane (admission evidence, not a release)
 
 `worker/build_runtime.sh build-alpha-encoder` builds the alpha runtime plus

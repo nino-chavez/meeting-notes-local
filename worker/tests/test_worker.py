@@ -267,16 +267,15 @@ class WorkerProtocolTests(unittest.TestCase):
                 "profile.build",
                 "profile.inspect",
                 "profile.discard",
+                # In every lane since 2026-08-08, when build-alpha began staging
+                # the embedding model. It spent one change boundary-only so the
+                # shipped worker would not advertise what it could only refuse.
+                "corpus.embed",
             }
             if self.admission != "internal-alpha":
                 expected_operations |= {
                     "profile.adopt",
                     "note.inspect",
-                    # Boundary lane only, and for a packaging reason rather than
-                    # an admission one: no lane carries the embedding model yet,
-                    # so the shipped internal-alpha set would advertise a
-                    # capability the worker can only refuse.
-                    "corpus.embed",
                 }
             self.assertEqual(set(worker.ready["operations"]), expected_operations)
             inspected = worker.request("capture.inspect", {"meeting_id": meeting_id})
