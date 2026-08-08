@@ -41,11 +41,18 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the operator opening 0.5.1 against their own meetings.** No
-code stands between here and the judgment this product has never had. Cut a
-build carrying the search fix below, install it, prepare the passages, and ask
-it something. What comes back is the answer to the only open question — whether
-7 of 10 is useful — and nothing in this repository can produce it.
+**The next build is the operator opening 0.5.1 against their own meetings, and
+0.5.1 now exists.** It is at `~/Desktop/yawn-releases/Yawn-0.5.1-macos-arm64.dmg`,
+SHA-256 `c409ce7f…1e0e`, signed, notarized, stapled and Gatekeeper-accepted with a
+traced `verify-signed-release.sh … internal-alpha` PASS; the full record is in
+[`docs/distribution-runbook.md`](./distribution-runbook.md). **Do not cut another
+build for this** — the one the queue was waiting on is on the desktop, and the
+0.5.0 image that carried the search defect was deleted so the wrong one cannot be
+installed.
+
+What is left is not code. Install it, press to prepare the passages, and ask it
+something. What comes back is the answer to the only open question — whether 7 of
+10 is useful — and nothing in this repository can produce it.
 
 **Exact search stopped refusing a common word on 2026-08-08** (US-13.14). It
 returned `CapacityExceeded` for the whole query past a hundred matches — an
@@ -96,11 +103,13 @@ cites resolvable words" would prefer. Neither is obviously right. Deciding it is
 the work, not a preliminary to it.
 
 **0.5.0 was cut 2026-08-08** at commit `e39f576`, the first release from `main`
-and the first that can answer a question. Signed, notarized, stapled,
+and the first that can answer a question — **and recalled the same day** for the
+search defect measured hours after it was cut. 0.5.1 (`d3468ea`) replaces it and
+its image is deleted. Both lanes ran clean: signed, notarized, stapled,
 Gatekeeper-accepted for app and image, `verify-signed-release.sh … internal-alpha`
-PASS; full record in `docs/distribution-runbook.md`. **It does not move the
+PASS; full record in `docs/distribution-runbook.md`. **Neither moves the
 retrieval figure — 7 of 10, and 3 of 5 on the questions exact search cannot
-answer — and nothing in a build can.** What it allows is the operator answering
+answer — and nothing in a build can.** What 0.5.1 allows is the operator answering
 whether that is useful, on their own meetings, which is the one gate this
 repository has never been able to close for itself.
 
