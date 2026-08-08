@@ -14,11 +14,18 @@
 //!
 //! Prints one JSON receipt on stdout. Progress goes to stderr so the receipt
 //! survives a pipe.
+//!
+//! **It measures both halves of a library open.** The projection rebuild was the
+//! only number here until 2026-08-08, and `LibraryReader::rebuild` also syncs the
+//! corpus index on the same path — so a launch cost quoted from the scan alone is
+//! the smaller half of an unknown sum. Both are reported, cold and warm.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;
 
+use local_meeting_notes_session_core::corpus_index::CorpusIndex;
+use local_meeting_notes_session_core::corpus_window::EmbedderIdentity;
 use local_meeting_notes_session_core::library_read::{LibraryProjection, ReadLimits};
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
@@ -214,6 +221,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (rare_milliseconds, rare_hits) = measure(&format!("marker{:06}", meetings / 2));
     let (common_milliseconds, common_hits) = measure("alpha");
 
+    // The index sync, which the scan number alone leaves out. `LibraryReader`
+    // runs both on every library open, so a launch cost is their sum and not
+    // either one — and until 2026-08-08 only the first had ever been measured.
+    //
+    // Cold is the whole corpus written: rows, turns, windows, segments. Warm is
+    // the same call against an unchanged corpus, which is what almost every open
+    // actually is — one digest over the projection's row identities and one
+    // SELECT, per `sync_if_changed`.
+    let mut index = CorpusIndex::open(&storage)?;
+    let cold_sync_started = Instant::now();
+    let synced = index.sync_if_changed(&projection)?;
+    let cold_sync_milliseconds = cold_sync_started.elapsed().as_secs_f64() * 1000.0;
+    let warm_sync_started = Instant::now();
+    let resynced = index.sync_if_changed(&projection)?;
+    let warm_sync_milliseconds = warm_sync_started.elapsed().as_secs_f64() * 1000.0;
+    let windows = index
+        .vector_coverage(&EmbedderIdentity::measured())?
+        .windows;
+
     let receipt = serde_json::json!({
         "schema": "corpus-scan-bench/1",
         "corpus": {
@@ -229,6 +255,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "warm_common_query_milliseconds": common_milliseconds,
         "warm_common_query_hits": common_hits,
         "search_result_cap": local_meeting_notes_session_core::library_read::MAX_SEARCH_RESULTS,
+        "cold_index_sync_milliseconds": (cold_sync_milliseconds * 100.0).round() / 100.0,
+        "cold_index_sync_wrote": synced.is_some(),
+        "warm_index_sync_milliseconds": (warm_sync_milliseconds * 100.0).round() / 100.0,
+        "warm_index_sync_wrote": resynced.is_some(),
+        "corpus_windows": windows,
     });
     println!("{}", serde_json::to_string_pretty(&receipt)?);
     Ok(())
