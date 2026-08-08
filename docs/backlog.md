@@ -122,7 +122,7 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6 D3** | 8 | **Landed 2026-08-07**, plus the vector store 2026-08-08; US-13.6 outstanding |
+| **E13** | **The corpus store** | **E6 D3 D2** | 9 | **Landed 2026-08-07**, plus the vector store and the tokenizer decision 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 and US-13.9 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
 | **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3 measured the same day and its store is the next build; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |

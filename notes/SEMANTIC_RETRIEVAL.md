@@ -670,6 +670,25 @@ and reported **206 mismatches in 810** that were entirely its own artifact — t
 short last window of each meeting, plus the questions. Anything reading
 `tokenizer.json` directly has to turn both off explicitly.
 
+#### The registration named a version that is not the version that ran
+
+It says `tokenizers==0.23.1`, which is what was installed. The receipt records
+**0.22.2**, because installing `transformers==4.57.1` for the isolating comparison
+downgraded it: that release constrains `tokenizers<=0.23.0,>=0.22.0`, confirmed
+from its own metadata rather than inferred from the version moving.
+
+The registration is left as written — rewriting a preregistration to match what
+happened is worse than the discrepancy it hides. Corrected here, where the other
+corrections are.
+
+**What the lock should pin is 0.22.2**, on the plain ground that it is the version
+the receipt was produced with and nothing in the shipping runtime needs a newer
+one — `transformers` is what forced the ceiling, and `transformers` is not
+shipping. The first parity run did use 0.23.1 and produced the same count and
+character of difference against the reference (29, all margins at 1 × 10⁻⁶), which
+is a reason to expect the two versions agree; it is not a 264-field comparison
+between them, and should not be quoted as one.
+
 #### The verdict, and what it does not cover
 
 **The `tokenizers` wheel is the shipping tokenizer.** Its digest is now inside
