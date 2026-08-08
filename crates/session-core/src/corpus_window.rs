@@ -97,6 +97,10 @@ pub struct EmbedderIdentity {
     pub revision: String,
     /// SHA-256 of the `tokenizer.json` the vectors were produced with.
     pub tokenizer_sha256: String,
+    /// SHA-256 of `model.safetensors`. `revision` names which weights these are
+    /// meant to be; this is the check that they are. Both stay — a label a human
+    /// reads and a digest a machine compares are different jobs.
+    pub weights_sha256: String,
     /// The mask-weighted mean over the last hidden state. Not `[CLS]`, and not
     /// the checkpoint's `pooler.dense` head, which sentence-transformers does
     /// not use for this model.
@@ -123,6 +127,8 @@ impl EmbedderIdentity {
             // recorded in `notes/packaged_tokenizer_receipt.json`.
             tokenizer_sha256: "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037"
                 .to_owned(),
+            weights_sha256: "53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db"
+                .to_owned(),
             pooling: "mask-weighted-mean".to_owned(),
             max_sequence_tokens: 256,
             activation: "erf-gelu".to_owned(),
@@ -130,15 +136,44 @@ impl EmbedderIdentity {
         }
     }
 
+    /// The manifest resource IDs this identity is about, and the fields each
+    /// one has to equal. `worker/build_manifest.py` writes these IDs.
+    pub const TOKENIZER_MODEL_ID: &'static str = "all-minilm-l6-v2-tokenizer";
+    pub const WEIGHTS_MODEL_ID: &'static str = "all-minilm-l6-v2-weights";
+
+    /// Is the model this runtime packaged the model these vectors describe?
+    ///
+    /// **This is the check the identity fields existed to make and did not.**
+    /// Until 2026-08-08 `tokenizer_sha256` was a literal in this file and the
+    /// manifest recorded the packaged tokenizer's digest, and nothing compared
+    /// them — so the field asserted a fact rather than testing one. Two
+    /// tokenizers turn the same sentence into different token IDs, and every
+    /// other identity field would still have matched.
+    ///
+    /// Absent resources are a mismatch, not an exemption: a runtime that
+    /// packages no embedding model must not be treated as packaging the right
+    /// one.
+    pub fn matches_manifest(&self, models: &[(&str, &str)]) -> bool {
+        let digest = |id: &str| {
+            models
+                .iter()
+                .find(|(name, _)| *name == id)
+                .map(|(_, digest)| *digest)
+        };
+        digest(Self::TOKENIZER_MODEL_ID) == Some(self.tokenizer_sha256.as_str())
+            && digest(Self::WEIGHTS_MODEL_ID) == Some(self.weights_sha256.as_str())
+    }
+
     /// One line, field order fixed, for the column a vector is keyed by. Any
     /// difference in any field is a different string and therefore a different
     /// embedder.
     pub fn canonical(&self) -> String {
         format!(
-            "{}@{} tokenizer={} pooling={} max_tokens={} activation={} dim={}",
+            "{}@{} tokenizer={} weights={} pooling={} max_tokens={} activation={} dim={}",
             self.model,
             self.revision,
             self.tokenizer_sha256,
+            self.weights_sha256,
             self.pooling,
             self.max_sequence_tokens,
             self.activation,
@@ -518,6 +553,10 @@ mod tests {
                 tokenizer_sha256: "0".repeat(64),
                 ..measured.clone()
             },
+            EmbedderIdentity {
+                weights_sha256: "0".repeat(64),
+                ..measured.clone()
+            },
         ] {
             assert_ne!(
                 altered.canonical(),
@@ -526,6 +565,47 @@ mod tests {
             );
         }
         assert!(measured.canonical().contains("all-MiniLM-L6-v2"));
+    }
+
+    #[test]
+    fn a_manifest_packaging_a_different_model_does_not_match() {
+        let measured = EmbedderIdentity::measured();
+        let packaged = [
+            (
+                EmbedderIdentity::TOKENIZER_MODEL_ID,
+                measured.tokenizer_sha256.as_str(),
+            ),
+            (
+                EmbedderIdentity::WEIGHTS_MODEL_ID,
+                measured.weights_sha256.as_str(),
+            ),
+            ("whisper-large-v3-turbo-weights", "irrelevant"),
+        ];
+        assert!(measured.matches_manifest(&packaged));
+
+        let other = "0".repeat(64);
+        for swapped in [
+            [
+                (EmbedderIdentity::TOKENIZER_MODEL_ID, other.as_str()),
+                (
+                    EmbedderIdentity::WEIGHTS_MODEL_ID,
+                    measured.weights_sha256.as_str(),
+                ),
+            ],
+            [
+                (
+                    EmbedderIdentity::TOKENIZER_MODEL_ID,
+                    measured.tokenizer_sha256.as_str(),
+                ),
+                (EmbedderIdentity::WEIGHTS_MODEL_ID, other.as_str()),
+            ],
+        ] {
+            assert!(!measured.matches_manifest(&swapped));
+        }
+        assert!(
+            !measured.matches_manifest(&[]),
+            "a runtime packaging no model must not read as packaging the right one"
+        );
     }
 
     #[test]

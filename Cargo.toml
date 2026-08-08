@@ -11,6 +11,10 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
+# Already in the tree transitively; declared here so the one place that needs
+# it — decoding the worker's vector replies — uses the same version rather
+# than adding a second.
+base64 = "0.22"
 core-foundation = "0.10"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
