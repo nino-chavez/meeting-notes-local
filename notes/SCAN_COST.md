@@ -64,7 +64,7 @@ That spread is the point — it is a signpost, not a threshold to test against.
 Re-run this harness before building it rather than re-reading this table; the
 hardware and the per-meeting work will both have moved.
 
-## What the same run found instead, and it is shipped
+## What the same run found instead, and what it shipped in
 
 **A common word refused at five meetings. Fixed the same day.**
 
@@ -99,10 +99,17 @@ holds open, and truncating to a hundred bounds that exactly as refusing did. Wha
 changed is what a person gets for a common word: a hundred results instead of
 none.
 
-This is not a scale problem a user reaches eventually. It is the first week. Any
-word that appears more than a hundred times across a library — a project name, a
-person's name, "invoice", "deadline" — returns nothing, in a build that shipped
-on 2026-08-08 as 0.5.0.
+It was never a scale problem a user reaches eventually; it was the first week.
+Any word appearing more than a hundred times across a library — a project name, a
+person's name, "invoice", "deadline" — returned nothing.
+
+**Be exact about which build.** Fixed on trunk in `ca07ca6`, and **0.5.0 carries
+the defect**: it was cut at `e39f576` hours before the measurement, so the image
+sitting on the operator's desktop is one where a common word returns nothing.
+That is what 0.5.1 exists for. A sentence in this file that read "and it is
+shipped" was true of the installed build and false of the source at the same
+time, which is the kind of ambiguity a release note has to resolve rather than
+inherit.
 
 **It was a known defect that was recorded and not tracked.** The build queue's
 Wave 1 row 1 has said since 2026-08-07 that file-walking search "does not survive
