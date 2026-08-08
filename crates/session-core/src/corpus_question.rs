@@ -621,6 +621,59 @@ mod tests {
         assert_eq!(outcome.answers[0].title, derived);
     }
 
+    /// The release verifier's model allowlist against the manifest builder's.
+    ///
+    /// Two independent statements of the same set, on purpose: a verifier that
+    /// read its expectations from the builder would assert the manifest equals
+    /// itself, which is the charitable-self-attestation shape this repository
+    /// keeps re-learning. Two statements can drift, and this one did — the four
+    /// MiniLM entries were added to `build_manifest.py` on 2026-08-08 and not to
+    /// `verify-release-bundle.py`, so the first build carrying the embedding
+    /// model was refused at the release lane rather than in a test run.
+    ///
+    /// Same shape as `the_alpha_operation_set_is_read_from_the_worker_itself`,
+    /// and for the same reason: the comment above the list was already correct
+    /// and did not help.
+    #[test]
+    fn the_release_verifier_expects_the_models_the_builder_stages() {
+        fn ids(source: &str, marker: &str) -> Vec<String> {
+            let block = source
+                .split_once(marker)
+                .unwrap_or_else(|| panic!("{marker} is still present"))
+                .1;
+            let mut found: Vec<String> = block
+                .match_indices("all-minilm-l6-v2-")
+                .chain(block.match_indices("whisper-large-v3-turbo-"))
+                .map(|(at, _)| {
+                    let rest = &block[at..];
+                    let end = rest
+                        .find('"')
+                        .expect("a model identifier is a quoted string");
+                    rest[..end].to_owned()
+                })
+                .collect();
+            found.sort();
+            found.dedup();
+            found
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let builder = std::fs::read_to_string(root.join("worker/build_manifest.py"))
+            .expect("the manifest builder is committed");
+        let verifier = std::fs::read_to_string(root.join("scripts/verify-release-bundle.py"))
+            .expect("the release verifier is committed");
+
+        let staged = ids(&builder, "\"models\": [");
+        let admitted = ids(&verifier, "expected_models = {");
+        assert!(!staged.is_empty(), "no models were read from the builder");
+        assert_eq!(
+            staged, admitted,
+            "the release verifier and the manifest builder disagree about which \
+             models an internal-alpha bundle carries; a build would be refused at \
+             the signing lane rather than here"
+        );
+    }
+
     /// Frozen artifact. `notes/packaged_question_receipt.json` records one run
     /// on 2026-08-09 through the staged runtime, and the numbers here are the
     /// literals it was produced with — deliberately not `PAIRS.len()` or a

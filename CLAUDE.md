@@ -194,6 +194,16 @@ with its own source looks identical to a clean one. Check it rather than assume:
     print(ops('worker/main.py') == ops('apps/desktop/runtime/worker/main.py'))
     EOF
 
+**The release verifier's model allowlist is a second, independent list, and it
+drifts.** `worker/build_manifest.py` says what a bundle carries and
+`scripts/verify-release-bundle.py` says what one may carry. The duplication is
+deliberate — a verifier that read the builder's list would assert the manifest
+equals itself — but on 2026-08-08 four models were added to the builder and not
+the verifier, and the first build carrying the embedding model was refused at the
+signing lane. `the_release_verifier_expects_the_models_the_builder_stages` now
+compares the two files in the ordinary test run. Same shape as
+`ALPHA_OPERATIONS`, same lesson: the correct comment above the list did not help.
+
 **A frozen artifact must never be asserted through a live constant.** Hit three
 times on 2026-08-07, each time while growing the registered fixture suite:
 `mlx_note_matrix_receipt.json` (a 2026-08-05 receipt) asserted its fixture count as
