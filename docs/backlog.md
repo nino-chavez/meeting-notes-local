@@ -122,7 +122,7 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6 D3 D2** | 11 | **Landed 2026-08-07**, plus the vector store, the tokenizer decision, `corpus.embed` and its packaging 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 through US-13.11 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
+| **E13** | **The corpus store** | **E6 D3 D2** | 12 | **Landed 2026-08-07**, plus the vector store, the tokenizer decision, `corpus.embed`, its packaging and the fill seam 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 through US-13.12 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
 | **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3 measured the same day and its store is the next build; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
@@ -1302,6 +1302,48 @@ componentwise equality, and says so rather than widening a tolerance quietly. An
 a vector leaves unnormalised, as `mlx_minilm.embed` returns it and as the probe
 normalises at comparison time — a unit-length vector here would mean the cosine
 gets computed twice.
+
+#### US-13.12: The store fills its own vector column
+**Feature D2 · J1 · §F · P0 · M · Landed 2026-08-08**
+
+As the Operator, I want the passages in my library to actually have the numbers
+search needs, produced by the model this build packages.
+
+**Acceptance criteria:**
+- Given windows with no vectors, When a pass runs, Then they are embedded in batches no larger than the worker accepts and stored against the digests they were computed from.
+- Given a runtime packaging a different model than the vectors describe, When a pass runs, Then nothing is asked and nothing is stored.
+- Given a reply that omits a window that was asked about, When it arrives, Then the pass stops and none of that batch is stored.
+- Given a budget, When it is reached, Then the pass stops and coverage does not read as complete.
+
+**Refusals:** no retry. `ProcessWorkerPort` drops the worker from application
+state on any error, so every later caller — transcription included — gets
+"worker is unavailable"; a retrying embedder would extend that outage to save a
+batch. And no skipping: a window asked about and not answered stops the pass,
+because carrying on leaves a store permanently short of windows nobody can name.
+
+**Validation:** **Pinned** — 16 tests. Ten drive `fill_vectors` against a real
+`CorpusIndex` and a fake embedder; six drive the transport against a fake worker
+port. The model-mismatch refusal asserts the embedder was never called, not just
+that nothing was stored.
+
+**The identity join finally exists.** `EmbedderIdentity::matches_manifest`
+compares the manifest's `all-minilm-l6-v2-tokenizer` and `-weights` digests
+against the identity's own. Until this change those fields asserted a fact and
+tested nothing, which is the failure the whole `tokenizer_sha256` argument was
+about. `weights_sha256` was added in the same change on the same reasoning:
+`revision` is a label a human reads, a digest is what a machine compares. Free
+because no vector exists yet.
+
+**Registered, not automatic.** `corpus_embed_pending` is a Tauri command nothing
+calls. Filling 800 windows is 34 round trips holding the worker mutex, which
+must not sit on a path a person waits on or ahead of capture — and no surface
+asks a semantic question yet. `shell_contract.rs` pins both halves: registered,
+and no control rendered.
+
+**Measured before designed.** 39 ms model load, 210 ms first batch, 32 ms warm.
+A 200-meeting corpus costs 2.4 s reloading the model every request against 1.1 s
+held open, so there is no cache and the difference is recorded rather than
+optimised away.
 
 #### US-13.11: The runtime carries the embedding model
 **Feature D2 · J1 · §F · P0 · M · Landed 2026-08-08**

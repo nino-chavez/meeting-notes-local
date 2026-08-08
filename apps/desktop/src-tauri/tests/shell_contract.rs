@@ -371,6 +371,21 @@ fn product_operation_facade_registers_restoration_but_not_regeneration() {
     assert!(source.contains("mod product_facade;"));
     assert!(handler.contains("product_facade::restore_withheld_turn"));
     assert!(!handler.contains("regenerate_note"));
+
+    // corpus_embed_pending joined the handler on 2026-08-08. It is registered
+    // rather than run automatically, and both halves of that are deliberate:
+    // filling the vector column is 34 worker round trips holding the worker
+    // mutex, which must not sit on a path a person waits on or ahead of
+    // capture — and no surface asks a semantic question yet, so there is
+    // nothing to keep warm for. A command exists so the chain is invocable;
+    // nothing renders a control for it.
+    assert!(handler.contains("corpus_embed_pending"));
+    assert!(source.contains("mod corpus_embedder;"));
+    let shell = include_str!("../../ui/main.js");
+    assert!(
+        !shell.contains("corpus_embed_pending"),
+        "a control was rendered for a capability with no surface to use it"
+    );
 }
 
 #[test]
@@ -644,7 +659,9 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     // The snapshot request now carries the filter the controls show, so Rust
     // applies it and reports both counts. The shell never trims a list itself
     // and then reports how many it trimmed.
-    assert!(script.contains("() => invoke(\"preview_library_snapshot\", { filter: libraryFilter })"));
+    assert!(
+        script.contains("() => invoke(\"preview_library_snapshot\", { filter: libraryFilter })")
+    );
     assert!(script.contains("filterClear.hidden = !snapshot.filterActive;"));
     // The capture-date range is built from *local* date parts. Built as
     // `${value}T00:00:00Z` it silently dropped meetings: filtering "to 8 August"
@@ -746,7 +763,9 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
     assert!(html.contains("id=\"profile-operating-points\""));
     assert!(html.contains("id=\"operating-points-rows\" disabled"));
     assert!(html.contains("id=\"operating-points-build\" type=\"submit\" disabled"));
-    assert!(html.contains("Nothing is chosen for you") || html.contains("nothing is chosen for you"));
+    assert!(
+        html.contains("Nothing is chosen for you") || html.contains("nothing is chosen for you")
+    );
     assert!(script.contains("invoke(\"preview_enrollment_operating_points\""));
     assert!(script.contains("invoke(\"preview_enrollment_build_profile\""));
     assert!(script.contains("choicesSha256: selection.choicesSha256"));
@@ -1052,13 +1071,17 @@ fn whole_meeting_deletion_is_a_separate_twice_confirmed_control() {
 
     // The copy must say what is destroyed. "Deletes this meeting" alone would
     // let an operator believe the transcript survives, as it does for audio.
-    assert!(html.contains("removes the transcript, the note, your own note, and any audio still held"));
+    assert!(
+        html.contains("removes the transcript, the note, your own note, and any audio still held")
+    );
     assert!(html.contains("cannot be recreated"));
 
     // Reveal, then confirm. The first click must not delete anything.
     assert!(script.contains("meetingDeleteReview.addEventListener(\"click\""));
     assert!(script.contains("meetingDeleteConfirm.addEventListener(\"click\", async () =>"));
-    assert!(script.contains("await invoke(\"preview_delete_meeting\", { handle, confirmed: true })"));
+    assert!(
+        script.contains("await invoke(\"preview_delete_meeting\", { handle, confirmed: true })")
+    );
 
     // A removed meeting must not leave its detail view open, which would render
     // a meeting that no longer exists.
@@ -1066,8 +1089,12 @@ fn whole_meeting_deletion_is_a_separate_twice_confirmed_control() {
         .find("meetingDeleteConfirm.addEventListener(\"click\", async () =>")
         .expect("meeting deletion confirm handler");
     let handler_body = &script[confirm_handler..];
-    let removed = handler_body.find("already-removed").expect("removed branch");
-    let navigate = handler_body.find("returnToProductHome()").expect("must leave the detail view");
+    let removed = handler_body
+        .find("already-removed")
+        .expect("removed branch");
+    let navigate = handler_body
+        .find("returnToProductHome()")
+        .expect("must leave the detail view");
     assert!(removed < navigate);
 }
 

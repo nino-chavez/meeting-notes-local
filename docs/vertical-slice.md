@@ -41,9 +41,34 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the Rust side of the seam: fill the vector column by handing
-`pending_windows` to `corpus.embed`, batch by batch, and then let a question be
-asked.** Everything under it now exists and runs.
+**The next build is asking a question: embed the question, rank with
+`nearest_windows`, and render the hit as a quoted passage with its locators.**
+Every piece under it now exists and runs.
+
+**The seam landed 2026-08-08** (US-13.12). `corpus_embedding::fill_vectors` walks
+unembedded windows through a [`WindowEmbedder`] in batches of 24 and into the
+store; `corpus_embedder.rs` is that trait over the worker port. A pass **refuses
+before its first request** unless the manifest's packaged model digests equal the
+ones `EmbedderIdentity` names — the check those fields existed for and did not
+make until now.
+
+**Three refusals are the design, not error handling.** A reply missing a digest
+it was asked about stops the pass rather than skipping a window nobody could
+later name. A failure is never retried, because `ProcessWorkerPort` drops the
+worker on any error and a retry would keep transcription down longer. And a
+budget bounds every pass.
+
+**It is registered, not automatic, and that is a decision.** `corpus_embed_pending`
+is a command nothing calls yet. Filling 800 windows is 34 round trips holding the
+worker mutex, which must not sit on a path a person waits on or ahead of capture —
+and no surface asks a semantic question yet, so there is nothing to keep warm for.
+`shell_contract.rs` pins both halves: the command is registered, and the shell
+renders no control for it.
+
+**Measured before it was designed**: 39 ms to load the model, 210 ms for a first
+24-window batch, 32 ms warm. A whole 200-meeting corpus is 2.4 seconds even
+reloading the model every request, against 1.1 s held open — so the seam holds no
+cache, and the 1.3-second difference is written down rather than optimised.
 
 **The runtime carries the embedding model as of 2026-08-08** (US-13.11).
 `build-alpha` stages all four MiniLM files at the pinned revision, digest-checked

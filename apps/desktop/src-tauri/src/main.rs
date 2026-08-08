@@ -20,6 +20,7 @@ mod manual_delete_facade;
 // First run's permission surface (§ H). Runs the manifest-verified permission
 // probe and parses its output as untrusted input; holds no storage authority and
 // reads no operator content.
+mod corpus_embedder;
 mod first_run;
 // § D. The operator's own note, typed during the meeting. Interpretation, not
 // evidence: a fixed path in the meeting directory, replaced atomically, with the
@@ -602,6 +603,13 @@ struct RuntimeIdentity {
     /// enrolment compares derived material against exactly this value, so a
     /// build without a real encoder truthfully refuses rather than guessing.
     encoder_sha256: String,
+    /// Every `models[]` entry the verified manifest records, as `(id, sha256)`.
+    ///
+    /// Carried so the embedding pass can ask whether the model this build
+    /// packages is the model its vectors describe. That comparison is the whole
+    /// reason `EmbedderIdentity` holds digests, and until 2026-08-08 nothing
+    /// made it — the identity asserted a fact instead of testing one.
+    packaged_models: Vec<(String, String)>,
     /// Whether the manifest names a real encoder resource at all.
     /// `worker/build_runtime.sh` deliberately records the
     /// `encoder-unavailable.identity` placeholder file when no speaker
@@ -1644,6 +1652,122 @@ fn with_library_organization(
         }
     }
     response
+}
+
+/// One invocation's ceiling. At the measured 32 ms per 24-window batch this is
+/// well under a second of work, and a corpus larger than it simply takes another
+/// call — which is the honest shape while nothing shows progress.
+const CORPUS_EMBED_BUDGET_WINDOWS: usize = 512;
+
+/// What one embedding pass did. Counts and a reason; never a meeting ID, never
+/// text.
+#[derive(serde::Serialize)]
+struct CorpusEmbedResponse {
+    requested: usize,
+    embedded: usize,
+    batches: usize,
+    /// Windows in the corpus, and how many this embedder has answered for.
+    windows: usize,
+    covered: usize,
+    /// Why the pass ended, in a fixed vocabulary.
+    stop: &'static str,
+}
+
+impl CorpusEmbedResponse {
+    fn unavailable(stop: &'static str) -> Self {
+        Self {
+            requested: 0,
+            embedded: 0,
+            batches: 0,
+            windows: 0,
+            covered: 0,
+            stop,
+        }
+    }
+}
+
+/// Fills the corpus's vector column from the packaged embedding model.
+///
+/// Registered rather than run automatically, and that is a decision rather than
+/// a stopgap: **no surface asks a semantic question yet**, so there is nothing to
+/// keep warm for. Wiring it into the library-read path would put 34 worker round
+/// trips on a path a person waits on, and `ProcessWorkerPort` holds the worker
+/// mutex for each one — capture would queue behind search-index work nobody
+/// asked for.
+///
+/// It refuses during a take for the same reason every mutating command does.
+#[tauri::command]
+fn corpus_embed_pending(state: State<'_, ApplicationState>) -> CorpusEmbedResponse {
+    use local_meeting_notes_session_core::corpus_embedding::{FillStop, fill_vectors};
+    use local_meeting_notes_session_core::corpus_index::CorpusIndex;
+    use local_meeting_notes_session_core::corpus_window::EmbedderIdentity;
+
+    let Ok(_command) = state.command_lock.lock() else {
+        return CorpusEmbedResponse::unavailable("unavailable");
+    };
+    if sitting_task_active(&state) {
+        return CorpusEmbedResponse::unavailable("busy");
+    }
+    let storage = {
+        let guard = state.storage.lock().expect("storage context lock");
+        match guard.as_ref().map(|context| context.storage.clone()) {
+            Some(storage) => storage,
+            None => return CorpusEmbedResponse::unavailable("unavailable"),
+        }
+    };
+    let packaged: Vec<(String, String)> = {
+        let guard = state.runtime.lock().expect("runtime identity lock");
+        match guard.as_ref() {
+            Some(runtime) => runtime.packaged_models.clone(),
+            None => return CorpusEmbedResponse::unavailable("unavailable"),
+        }
+    };
+    let borrowed: Vec<(&str, &str)> = packaged
+        .iter()
+        .map(|(id, digest)| (id.as_str(), digest.as_str()))
+        .collect();
+
+    let Ok(mut index) = CorpusIndex::open(&storage) else {
+        return CorpusEmbedResponse::unavailable("unavailable");
+    };
+    let identity = EmbedderIdentity::measured();
+    let embedder = corpus_embedder::WorkerWindowEmbedder::new(
+        Arc::new(product_coordinator::ProcessWorkerPort::new(
+            state.worker.clone(),
+        )),
+        identity.dimension,
+    );
+    let Ok(outcome) = fill_vectors(
+        &mut index,
+        &identity,
+        &embedder,
+        &borrowed,
+        CORPUS_EMBED_BUDGET_WINDOWS,
+    ) else {
+        return CorpusEmbedResponse::unavailable("unavailable");
+    };
+    let coverage = index.vector_coverage(&identity).unwrap_or(
+        local_meeting_notes_session_core::corpus_index::VectorCoverage {
+            windows: 0,
+            embedded: 0,
+        },
+    );
+    CorpusEmbedResponse {
+        requested: outcome.requested,
+        embedded: outcome.embedded,
+        batches: outcome.batches,
+        windows: coverage.windows,
+        covered: coverage.embedded,
+        // Deliberately not the error text. `EmbedderUnavailable` carries a
+        // transport message, and a transport message can name a path.
+        stop: match outcome.stop {
+            FillStop::Complete => "complete",
+            FillStop::BudgetReached => "budget",
+            FillStop::EmbedderUnavailable(_) => "worker-unavailable",
+            FillStop::ReplyIncomplete => "reply-incomplete",
+            FillStop::ModelMismatch => "model-mismatch",
+        },
+    }
 }
 
 #[tauri::command]
@@ -3636,6 +3760,7 @@ fn main() {
             library_delete_folder,
             library_assign_meeting_folder,
             library_set_meeting_title,
+            corpus_embed_pending,
             product_facade::restore_withheld_turn
         ])
         .setup(|app| {
@@ -3971,6 +4096,11 @@ fn initialize_application(app: AppHandle, retry: bool) {
         tap_build_sha256: manifest.tap.sha256.clone(),
         tap_path: storage_context.resource_root.join(&manifest.tap.path),
         encoder_sha256: manifest.encoder.sha256.clone(),
+        packaged_models: manifest
+            .models
+            .iter()
+            .map(|model| (model.id.clone(), model.sha256.clone()))
+            .collect(),
         encoder_available: manifest.encoder.path.file_name()
             != Some(std::ffi::OsStr::new("encoder-unavailable.identity")),
     };
@@ -5931,6 +6061,7 @@ mod tests {
             worker_executable_sha256: "worker-executable".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
+            packaged_models: Vec::new(),
             encoder_sha256: encoder.into(),
             encoder_available: false,
         });
@@ -6114,6 +6245,7 @@ mod tests {
             worker_executable_sha256: "worker-executable".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
+            packaged_models: Vec::new(),
             encoder_sha256: "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
                 .into(),
             encoder_available: true,
@@ -6269,6 +6401,7 @@ mod tests {
             worker_executable_sha256: "worker-executable".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
+            packaged_models: Vec::new(),
             encoder_sha256: "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
                 .into(),
             encoder_available: false,

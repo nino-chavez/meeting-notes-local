@@ -1093,7 +1093,9 @@ fn set_private_mode(path: &Path) -> Result<(), CorpusIndexError> {
 }
 
 #[cfg(test)]
-mod tests {
+// `pub(crate)` so `corpus_embedding`'s tests can build a real corpus through the
+// same fixture rather than growing a second one that drifts from it.
+pub(crate) mod tests {
     use std::collections::HashSet;
 
     use tempfile::TempDir;
@@ -1106,13 +1108,13 @@ mod tests {
     };
     use crate::storage::durable_create_new;
 
-    struct Fixture {
+    pub(crate) struct Fixture {
         _temp: TempDir,
-        storage: StorageRoot,
+        pub(crate) storage: StorageRoot,
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let temp = TempDir::new().unwrap();
             let repository = temp.path().join("repository");
             create_private_dir(&repository).unwrap();
@@ -1123,7 +1125,7 @@ mod tests {
             }
         }
 
-        fn meeting(&self, id: &str, created: u64, turns: &[&str]) {
+        pub(crate) fn meeting(&self, id: &str, created: u64, turns: &[&str]) {
             let gated: Vec<(&str, bool)> = turns.iter().map(|text| (*text, false)).collect();
             self.meeting_with_gates(id, created, &gated);
         }
@@ -1218,7 +1220,7 @@ mod tests {
             write_meeting(&directory, &record).unwrap();
         }
 
-        fn projection(&self) -> LibraryProjection {
+        pub(crate) fn projection(&self) -> LibraryProjection {
             LibraryProjection::rebuild_excluding(
                 &self.storage,
                 ReadLimits::default(),
@@ -1228,7 +1230,7 @@ mod tests {
         }
     }
 
-    fn synced(fixture: &Fixture) -> CorpusIndex {
+    pub(crate) fn synced(fixture: &Fixture) -> CorpusIndex {
         let mut index = CorpusIndex::open(&fixture.storage).unwrap();
         index
             .replace_from_projection(&fixture.projection())
