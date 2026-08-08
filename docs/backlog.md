@@ -1189,7 +1189,27 @@ that launch does not get slower every month I use the product.
 
 **Refusals:** incremental sync must not skip a meeting on any signal weaker than its canonical digest. A directory mtime is not a change signal.
 
-**Validation:** **Unproven** — not built. It needs a per-meeting entry point into `library_read`, which is an audited module; doing that in the same change that introduced a C dependency and a new storage surface would make the audit result unattributable. The store landed first deliberately, and the launch scan still runs in full.
+**Validation:** **Unproven** — not built, and **measured 2026-08-08 to have no
+current trigger** (`notes/SCAN_COST.md`). A library open is the projection
+rebuild plus the index sync; only the first had ever been timed, and the story
+was promoted to next on the untimed claim that it is "a wait that grows every
+month". Both numbers now exist: at 200 meetings, 179 ms and 0.26 ms. The sync was
+never the cost. The scan is linear and reaches 0.7-0.9 s at 800 meetings;
+run-to-run variance on one machine is about 20%, so read it as one significant
+figure.
+
+The acceptance criteria above stand and the growth is real. **The trigger is a
+corpus size, not a date** — between about 1,400 and 1,800 meetings the rebuild
+crosses 1.5 s
+on 2026-08-08 hardware. Re-run `corpus-scan-bench` before building this rather
+than quoting that figure.
+
+The original deferral reason has expired and is recorded rather than deleted: it
+needed a per-meeting entry point into `library_read`, an audited module, and
+doing that in the same change as a new C dependency would have made the audit
+result unattributable. That dependency landed 2026-08-08. Note for whoever does
+build it: the adversarial audit's conclusions are about that module **as
+reviewed**, and a new entry point is not covered by them.
 
 #### US-13.8: The vector store, bound to the words it describes
 **Feature D2 · J1 · §F · P0 · M · Landed 2026-08-08**

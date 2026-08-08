@@ -1,0 +1,95 @@
+{
+  "schema": "scan-cost/1",
+  "harness_sha256": "761ac50835b655c6183e36e358ab4c45373e22b71e3800d15724c8331784c97d",
+  "environment": {
+    "machine": "arm64",
+    "kernel": "25.5.0",
+    "profile": "release"
+  },
+  "runs": [
+    {
+      "cold_index_sync_milliseconds": 3.31,
+      "cold_index_sync_wrote": true,
+      "cold_rebuild_milliseconds": 4.27,
+      "corpus": {
+        "meetings": 5,
+        "transcript_bytes": 185820,
+        "turns_per_meeting": 200
+      },
+      "corpus_windows": 95,
+      "rows_projected": 5,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 4.64,
+      "warm_index_sync_milliseconds": 0.03,
+      "warm_index_sync_wrote": false,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 4.25,
+      "write_seconds": 0.375
+    },
+    {
+      "cold_index_sync_milliseconds": 11.56,
+      "cold_index_sync_wrote": true,
+      "cold_rebuild_milliseconds": 20.29,
+      "corpus": {
+        "meetings": 20,
+        "transcript_bytes": 743280,
+        "turns_per_meeting": 200
+      },
+      "corpus_windows": 380,
+      "rows_projected": 20,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 21.32,
+      "warm_index_sync_milliseconds": 0.04,
+      "warm_index_sync_wrote": false,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 19.24,
+      "write_seconds": 1.517
+    },
+    {
+      "cold_index_sync_milliseconds": 111.28,
+      "cold_index_sync_wrote": true,
+      "cold_rebuild_milliseconds": 179.05,
+      "corpus": {
+        "meetings": 200,
+        "transcript_bytes": 7432800,
+        "turns_per_meeting": 200
+      },
+      "corpus_windows": 3800,
+      "rows_projected": 200,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 185.09,
+      "warm_index_sync_milliseconds": 0.26,
+      "warm_index_sync_wrote": false,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 161.6,
+      "write_seconds": 15.471
+    },
+    {
+      "cold_index_sync_milliseconds": 443.11,
+      "cold_index_sync_wrote": true,
+      "cold_rebuild_milliseconds": 662.62,
+      "corpus": {
+        "meetings": 800,
+        "transcript_bytes": 29731200,
+        "turns_per_meeting": 200
+      },
+      "corpus_windows": 15200,
+      "rows_projected": 800,
+      "schema": "corpus-scan-bench/1",
+      "search_result_cap": 100,
+      "warm_common_query_hits": "library read capacity exceeded",
+      "warm_common_query_milliseconds": 718.61,
+      "warm_index_sync_milliseconds": 1.13,
+      "warm_index_sync_wrote": false,
+      "warm_rare_query_hits": 1,
+      "warm_rare_query_milliseconds": 626.59,
+      "write_seconds": 62.762
+    }
+  ]
+}

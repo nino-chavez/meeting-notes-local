@@ -41,17 +41,31 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is US-13.6, the launch scan that is paid twice** — and the
-reason it jumps the queue is the operator, not the code. 0.5.0 is cut and sits
-on this machine; the next thing that happens to this product is a person opening
-it against a real library and searching it. Every library open still re-reads
-every meeting from disk before the index is consulted, so the first thing they
-would meet is a wait that grows every month. `backlog.md` US-13.6 carries it and
-already names why it was deferred: skipping unchanged meetings needs a
-per-meeting entry point into `library_read`, which passed an independent
-adversarial audit, and changing it in the same breath as a new C dependency
-would have made that audit result unattributable. That dependency landed a day
-ago. The reason has expired.
+**The next build is moving exact search onto the corpus store, because the
+search that shipped in 0.5.0 refuses a common word at five meetings.**
+`LibraryProjection::search` collects every hit in memory and returns
+`CapacityExceeded` for the whole query past a hundred — not a truncated list, an
+error, rendered as "That search has too many matches." Measured 2026-08-08 at 5,
+20, 200 and 800 meetings: it refuses at every one (`notes/SCAN_COST.md`). Any
+word appearing more than a hundred times across a library — a project name, a
+person's name, "invoice" — returns nothing, in the build now sitting on this
+machine. The store holds turns in SQLite and can rank and `LIMIT` in the query,
+which is what search over a real corpus has to do. Row 1 below was justified by
+exactly this defect and then never finished:
+`library_reader.rs::search_current` still calls `projection.search_filtered`.
+
+**US-13.6 was named next on 2026-08-08 and that was wrong — measured the same
+day.** The claim was "a wait that grows every month", written without a number.
+A library open is the projection rebuild plus the index sync, and only the first
+had ever been timed. Both now are: at 200 meetings, 179 ms and 0.26 ms. The sync
+is three orders of magnitude under the scan and was never the problem; the scan
+is linear and reaches 0.7-0.9 s at 800 meetings — about three years of daily
+use. That is not a wait anyone notices.
+
+US-13.6 is not withdrawn and its acceptance criteria still hold. **Its trigger is
+a corpus size rather than a date**: between about 1,400 and 1,800 meetings the rebuild
+crosses 1.5 s on this hardware. Re-run `corpus-scan-bench` before building it
+rather than re-reading that number.
 
 **Wave 1 item 6 is the first unstruck row and it is not ready, which is a
 different problem.** "Ask across every meeting, answer with citations" is written
@@ -283,7 +297,7 @@ largest surface-area addition and says it has nothing to do with audio.
 
 | Order | Build | Feature | Why here |
 |---|---|---|---|
-| 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. What remains is US-13.6: the full scan still runs first, because skipping unchanged meetings needs a per-meeting entry point into an audited module | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and, measured, refuses a common word at one meeting |
+| 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. **Two things remain and their order flipped on 2026-08-08 when both were measured.** Exact search still runs over the projection and refuses a common word at five meetings, in shipped 0.5.0 — that is next. US-13.6's full scan costs 179 ms at 200 meetings and 663 ms at 800, so it has a trigger somewhere past 1,400 meetings rather than a date (`notes/SCAN_COST.md`) | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and this row's own justification is the defect still shipping |
 | 2 | ~~Auto-titling~~ **Landed 2026-08-07** as `meeting_title.rs` — the first non-gated turn's opening sentence, behind an operator title and above the capture time. The local-model half was **measured and refused** on 2026-08-08 at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`); the seam was not built, and re-running the committed harness against another candidate is a decision, not a pending task | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | ~~Folders, and the meeting object's sibling views~~ **Writer landed 2026-08-08** — `library-metadata/1` gained the five named commands, whole-meeting deletion now takes the organization row first, and naming a meeting is wired end to end. The folder surface is `backlog.md` US-14.4 and is deliberately unbuilt | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | ~~Filters — people, date range, keywords, titles~~ **Three of four landed 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search, plus the folder surface item 3 deferred. **People is blocked on A3** (Wave 3 item 11), because attribution is Me/Them and named participants are absent by contract | D3 | Gong documents all four. Free once the store exists |
