@@ -122,7 +122,7 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6 D3** | 7 | **Landed 2026-08-07**, except US-13.6 |
+| **E13** | **The corpus store** | **E6 D3** | 8 | **Landed 2026-08-07**, plus the vector store 2026-08-08; US-13.6 outstanding |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
 | **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3 measured the same day and its store is the next build; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
@@ -1106,9 +1106,11 @@ meetings live.
 - Given a populated index, When the database file is deleted, Then rebuilding from the files alone produces the same content digest.
 - Given a sync fails partway, When it aborts, Then the previous contents remain intact.
 
-**Data contract:** `corpus-index/1`.
+**Data contract:** `corpus-index/2` since 2026-08-08. `/1` had three tables; `/2` adds windows, their segments, and vectors. There is no stepwise migration — an older file is dropped and re-derived, which discards every vector and recomputes it.
 
 **Refusals:** no column may hold anything the canonical files did not produce. The index reaches its data only through `LibraryRow::derived`, so it cannot become a second parser of private bytes, and claims are deliberately excluded because they come from an out-of-process projector rather than from a file.
+
+**Amended 2026-08-08, and the amendment is narrow.** `corpus_window_vector` is the one table that breaks the refusal above: its numbers are a function of the files *and* a model, so no rebuild from files can reproduce them. `fingerprint()` therefore does not hash that table, and `the_rebuild_digest_covers_windows_and_deliberately_not_vectors` asserts both halves — a vector must not move the digest, and a window column must. The exemption costs recomputation and never information, and `corpus_window.text_sha256` is what stops a vector outliving the words it describes. Every other new table is inside the digest.
 
 **Validation:** **Pinned** — `corpus_index::tests::rebuild_from_files_equals_the_live_index` deletes the database and requires digest equality; `a_column_no_file_produced_breaks_the_rebuild_digest` proves that test can actually see a write-only column; `a_synced_index_holds_one_row_per_validated_meeting`; `a_removed_meeting_leaves_no_turn_behind`; `an_older_schema_is_dropped_and_re_derived_rather_than_read`.
 
@@ -1188,6 +1190,45 @@ that launch does not get slower every month I use the product.
 **Refusals:** incremental sync must not skip a meeting on any signal weaker than its canonical digest. A directory mtime is not a change signal.
 
 **Validation:** **Unproven** — not built. It needs a per-meeting entry point into `library_read`, which is an audited module; doing that in the same change that introduced a C dependency and a new storage surface would make the audit result unattributable. The store landed first deliberately, and the launch scan still runs in full.
+
+#### US-13.8: The vector store, bound to the words it describes
+**Feature D2 · J1 · §F · P0 · M · Landed 2026-08-08**
+
+As the Operator, I want the passages a search ranks to be the passages my meetings
+actually contain, so that a result is never a description of something I have since
+changed.
+
+**Acceptance criteria:**
+- Given a synced corpus, When the index is written, Then each meeting is cut into 128-word windows that cite the turns and character ranges they came from.
+- Given a vector and a window whose text has moved, When the corpus resyncs, Then the vector is deleted rather than kept.
+- Given a ranking, When it is returned, Then it states how many windows it searched out of how many exist.
+
+**Refusals:** a gated turn contributes no words to any window. Exact search can
+report a withheld match honestly because the word is literally there; a semantic
+hit on withheld speech would assert what it is *about* while citing nothing, and
+evidence is never decoration here. The probe's corpus has no gated turns, so this
+is a decision the measurement did not make.
+
+**Validation:** **Pinned** — `corpus_window.rs` and the vector half of
+`corpus_index.rs` carry 24 tests, including `with_no_embedder_a_ranking_is_empty_and_says_so`
+for the state the product is actually in. The load-bearing ones were confirmed by
+mutation: removing the prune fails
+`a_vector_does_not_survive_the_words_it_was_computed_from` and
+`a_removed_meeting_leaves_no_vector_behind`; an off-by-one in the window flush
+fails `the_measured_windowing_is_reproduced_exactly`.
+
+**Cross-language, not merely consistent.**
+`notes/window_equivalence_fixture.json` is generated by importing
+`semantic_scale_probe.chunk_units` — the function whose output the committed
+receipt describes — and it carries that harness's own SHA-256, which matches
+`semantic_scale_receipt.json`. So the Rust segmentation is held to the boundaries
+that were measured rather than to a restatement of them. It is a frozen artifact
+and pins literals.
+
+**Not built:** the embedder. Nothing in the app can turn text into a vector, so
+`pending_windows` returns the whole corpus and `nearest_windows` returns an empty
+ranking with `coverage.embedded` at zero. The store refuses to pretend otherwise,
+which is the reason coverage is two numbers and not a boolean.
 
 ---
 
@@ -1472,9 +1513,13 @@ search cannot answer**, against 10 of 10 and 5 of 5 on ten short fixtures. The
 degradation is in the half the feature exists for. Receipt:
 `semantic_scale_receipt.json`.
 
-**Not built:** the vector column and any surface. Whether 7 of 10 is good enough
-to build on is a judgment for the operator, not a measurement — it is well above
-exact search and well below what the first probe implied.
+**The store landed 2026-08-08** as US-13.8 — windows, segments, the vector
+table, the digest binding and best-window ranking. **What is not built is the
+embedder**, so no vector has ever been computed inside this app and the ranking
+path returns an empty result with `coverage.embedded` at zero. Whether 7 of 10 is
+good enough to build a surface on is a judgment for the operator, not a
+measurement — it is well above exact search and well below what the first probe
+implied.
 
 **Evidence:** the fixtures were hardened mid-registration. A word-overlap ranker
 with no model in it initially scored 8 of 10 and 3 of 5 on the hard half, because

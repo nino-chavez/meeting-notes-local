@@ -479,3 +479,36 @@ A fourth was caught by the implementation: the truncating arm cut at 200 *words*
 which is 266 tokens, and `encode` refused rather than truncating — the refusal
 added in the previous change. A run that silently truncated would have produced
 plausible numbers for a different experiment.
+
+## The measured windowing is now pinned in Rust — 2026-08-08
+
+The store built on this result does not restate the harness's segmentation; it is
+held to it. `notes/window_equivalence.py` imports
+`semantic_scale_probe.chunk_units` — the function whose boundaries the receipt
+above describes — and writes `notes/window_equivalence_fixture.json`: seven cases,
+eighteen windows, inputs and expected texts. Three cases are drawn from the real
+composed corpus at size 30, one per population, so the fixture carries realistic
+meeting length. Four are edge cases named for the property each isolates.
+
+The generator never edits the probe. It records the probe's own SHA-256, and that
+value matches `semantic_scale_receipt.json`'s `harness_sha256` — so the fixture is
+demonstrably derived from the harness that produced the result, not from a copy of
+it. `corpus_window::the_measured_windowing_is_reproduced_exactly` reads it as a
+**frozen artifact** and asserts literals.
+
+It found nothing on the first run, which is the honest report. What it protects
+against is later: an off-by-one in the window flush fails it with "window count
+differs from the measured harness", verified by making that change.
+
+**Three things the Rust side decides that this measurement did not.** Each is a
+choice, recorded rather than inherited:
+
+- **Gated turns contribute no words.** The probe's corpus has none. Exact search
+  can report a withheld match honestly because the word is literally there; a
+  semantic hit would assert what withheld speech is *about* while citing nothing.
+- **An empty meeting produces no windows**, where the probe's arm yields one empty
+  piece so it always has something to compare. A store must not hold a vector for
+  nothing.
+- **Words are split the way Python splits them.** `str.isspace()` counts U+001C
+  through U+001F and Rust's `char::is_whitespace` does not. Transcript text is not
+  filtered for control characters, so the difference is reachable.
