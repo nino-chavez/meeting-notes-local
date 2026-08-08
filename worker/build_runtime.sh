@@ -12,10 +12,6 @@ WHISPER_CONFIG_SHA256='b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660
 WHISPER_WEIGHTS_SHA256='951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6'
 WHISPER_DEFAULT="$HOME/.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/$WHISPER_REVISION"
 WHISPER_SOURCE="${LMN_WHISPER_MODEL_DIR:-$WHISPER_DEFAULT}"
-# The converted ECAPA encoder is a deterministic export from the pinned
-# checkpoint (spike/encoder-packaging/export_onnx.py); two independent exports
-# reproduce this digest byte-identically. build-alpha-encoder packages it as a
-# candidate for admission check 2 — packaging it admits nothing.
 # The corpus embedding model, at the immutable revision every measurement in
 # `notes/SEMANTIC_RETRIEVAL.md` was taken against. Downloaded if absent and
 # digest-checked either way, like the CPython archive above — the pins were
@@ -38,6 +34,10 @@ EMBEDDER_SHA256=(
   'be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037'
   '53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db'
 )
+# The converted ECAPA encoder is a deterministic export from the pinned
+# checkpoint (spike/encoder-packaging/export_onnx.py); two independent exports
+# reproduce this digest byte-identically. build-alpha-encoder packages it as a
+# candidate for admission check 2 — packaging it admits nothing.
 ENCODER_ONNX_SHA256='1d5e288b1037410fd0c98f618e94523a6b7ca8a99c7069f076efb40aa95759cd'
 ENCODER_DEFAULT="$VENDOR/downloads/ecapa-tdnn.onnx"
 ENCODER_SOURCE="${LMN_ENCODER_ONNX_SOURCE:-$ENCODER_DEFAULT}"
