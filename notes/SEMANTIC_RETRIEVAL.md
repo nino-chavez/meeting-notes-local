@@ -138,7 +138,82 @@ This changes no product runtime, adds no command, and admits nothing.
 
 ---
 
-## Result
+## Result — 2026-08-08 — the prediction holds, and the margins are the finding
 
-*Not yet run. Deliberately empty in the commit that registers the prediction
-above, so the two cannot be confused for having been written together.*
+Three runs from fresh processes against the pinned revision. The weights' SHA-256
+matched the digest taken from the metadata endpoint **before** the download.
+Receipts: `semantic_retrieval_receipt.json` and its `_run2` / `_run3` siblings.
+
+**10 of 10 overall, and 5 of 5 on the questions exact search cannot answer.** The
+registered range was 8–10 overall with at least 4 of the hard five, and the
+no-regression control required at least 4 of the easy five. All three hold.
+
+| Arm | Overall | Hard five | Easy five |
+|---|---|---|---|
+| `library_read::search` with the keyword | 5 / 10 | **0 / 5** | 5 / 5 |
+| Word-overlap ranker, no model | 5 / 10 | **0 / 5** | 5 / 5 |
+| **all-MiniLM-L6-v2, cosine over one vector per meeting** | **10 / 10** | **5 / 5** | 5 / 5 |
+
+Repeatability held: the three receipts are identical once the embedding time is
+excluded, including every similarity margin to six decimals.
+
+### The score is not the interesting number. The margins are.
+
+| Question class | Margin over the runner-up |
+|---|---|
+| The five exact search already answers | 0.101, 0.237, 0.323, 0.429, 0.461 |
+| The five it cannot | **0.013, 0.021, 0.038**, 0.117, 0.214 |
+
+**Three of the five questions this feature exists for were near-ties.**
+
+| Question | Chose | Runner-up |
+|---|---|---|
+| "Which meeting was about hiring problems?" | `meeting-h` 0.2426 | `meeting-d` 0.2299 |
+| "Did we talk about giving up some of our office space?" | `meeting-i` 0.3158 | `meeting-a` 0.2777 |
+| "What was the data retention problem?" | `meeting-j` 0.2719 | `meeting-d` 0.2505 |
+
+A 0.013 separation on a corpus of **ten** meetings is a coin landing the right way
+up, not a capability. The relevant number is not this run's accuracy; it is how
+many distractors sit within 0.013 of the right answer when there are a thousand
+meetings instead of nine. Nothing here measures that, and this section is not going
+to infer it.
+
+Read the two tables together and the honest statement is narrow: **on a
+ten-meeting corpus, this model separates the right meeting from nine wrong ones —
+comfortably where the words match and barely where they do not.** That is enough
+to justify building the store. It is not enough to predict behaviour at scale, and
+the next measurement on this path is a distractor-density one, not a bigger
+question list.
+
+### Everything else was uneventful, which is worth one line
+
+The corpus embedded in 0.11–0.92 s (the first run includes a cold model load).
+Nothing in the mechanical envelope is near a limit, and latency was registered as
+reported-not-rejecting because this is the reference implementation rather than
+the shipping one.
+
+### What is not claimed
+
+**Not usefulness.** Ten synthetic meetings written by the person grading them is a
+measurement of retrieval mechanics on a toy corpus. Whether semantic results help
+is the operator's gate, and it is unreachable from here.
+
+**Not a scale claim**, per the margins above.
+
+**Not a packaging decision.** These vectors came from the Apache-2.0 reference
+implementation. `mlx-embeddings` is GPL-3.0 and this repository is MIT, so the
+shipping path is a forward pass written against MLX — and its vectors can now be
+checked against this run's receipts, which is what makes that task verifiable
+rather than hopeful.
+
+### What this licenses
+
+Building the vector store: a column beside the corpus index, written when the
+index syncs, and an MLX forward pass to fill it. That is Wave 1 item 5's build,
+and it now has a measurement behind it rather than an assumption.
+
+**A falsifier for whoever does it.** If the MLX forward pass reproduces these ten
+rankings but its margins on the hard five differ by more than 0.01, the two
+implementations are not computing the same thing and the difference must be found
+before either is trusted — the rankings agreeing is a weaker check than it looks
+when three of them are decided by 0.013.

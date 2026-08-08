@@ -110,5 +110,82 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(PIN["rejected_dependency"]["license"], "GPL-3.0")
 
 
+def _receipt_paths() -> list[Path]:
+    here = Path(__file__).resolve().parent
+    return [
+        here / "semantic_retrieval_receipt.json",
+        here / "semantic_retrieval_receipt_run2.json",
+        here / "semantic_retrieval_receipt_run3.json",
+    ]
+
+
+class ReceiptTests(unittest.TestCase):
+    """Against the committed 2026-08-08 receipts.
+
+    Every number is a **literal**. CLAUDE.md records a frozen receipt asserted
+    through a live constant silently re-certifying itself against whatever the
+    suite later became, three times in one day. These describe a run that
+    happened once, over ten meetings and ten questions.
+    """
+
+    def test_the_committed_receipts_were_produced_by_this_harness_and_these_fixtures(self):
+        import json
+        from semantic_retrieval_probe import _sha256
+
+        here = Path(__file__).resolve().parent
+        harness = _sha256((here / "semantic_retrieval_probe.py").read_bytes())
+        fixtures = _sha256((here / "semantic_retrieval_fixtures.json").read_bytes())
+        for path in _receipt_paths():
+            receipt = json.loads(path.read_text())
+            self.assertEqual(receipt["harness_sha256"], harness, path.name)
+            self.assertEqual(receipt["fixtures_sha256"], fixtures, path.name)
+
+    def test_the_run_scored_ten_of_ten_and_five_of_five_on_the_hard_half(self):
+        import json
+
+        for path in _receipt_paths():
+            receipt = json.loads(path.read_text())
+            self.assertEqual(receipt["questions"], 10, path.name)
+            self.assertEqual(
+                receipt["model"], {"overall": 10, "on_hard": 5, "on_easy": 5}, path.name
+            )
+            self.assertEqual(receipt["control"], {"overall": 5, "on_hard": 0}, path.name)
+
+    def test_three_of_the_hard_five_were_decided_by_under_a_twentieth(self):
+        """The finding the score hides. Recorded as a literal so a later run that
+        widens these margins is visibly a different result rather than the same
+        one."""
+        import json
+
+        receipt = json.loads(_receipt_paths()[0].read_text())
+        hard = sorted(
+            row["model_margin"] for row in receipt["rows"] if not row["exact_helps"]
+        )
+        self.assertEqual([round(m, 4) for m in hard], [0.0127, 0.0214, 0.0381, 0.1172, 0.2143])
+        self.assertEqual(sum(1 for m in hard if m < 0.05), 3)
+
+    def test_the_three_runs_agree_to_the_last_recorded_decimal(self):
+        import json
+
+        stripped = []
+        for path in _receipt_paths():
+            receipt = json.loads(path.read_text())
+            receipt.pop("corpus_embed_elapsed_s", None)
+            stripped.append(receipt)
+        self.assertEqual(stripped[0], stripped[1])
+        self.assertEqual(stripped[1], stripped[2])
+
+    def test_the_receipts_bind_the_weights_that_were_pinned_before_download(self):
+        import json
+
+        for path in _receipt_paths():
+            receipt = json.loads(path.read_text())
+            self.assertEqual(
+                receipt["model_weights_sha256"],
+                PIN["model"]["expected_model_safetensors_sha256"],
+                path.name,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

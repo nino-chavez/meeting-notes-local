@@ -41,27 +41,27 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is Wave 1 item 5, semantic search over the corpus.** Items 1
-through 4 are finished, and item 4 finished three-quarters of what its row names.
+**The next build is the vector store for Wave 1 item 5.** The measurement that
+decides whether it was worth building ran on 2026-08-08 and passed:
+`notes/SEMANTIC_RETRIEVAL.md` registered a two-sided prediction of 8–10 of 10
+before anything was downloaded, and a pinned Apache-2.0 embedding model returned
+**10 of 10, including all five questions exact search cannot answer** — where
+exact search and a word-overlap control both score zero.
 
-Filters landed on 2026-08-08: folder, capture-date range and meeting-name, applied
-to the meetings list and to search from one `LibraryFilter`. The folder surface
-landed with them — create a folder, file a meeting into one, unfile it — which
-closes what item 3 deferred.
+**Read the margins before reading the score.** Three of those five were decided by
+less than 0.04 cosine, one by 0.013, on a corpus of ten meetings. That is enough to
+justify building the store and not enough to predict behaviour at a thousand. The
+next measurement on this path is distractor density, not a longer question list.
 
-**The people filter is blocked and is not a matter of effort.** Attribution is
-`channel` (Me/Them) or `none`, and the contract records in as many words that named
-participants, inferred counterparties, tags and generated subjects are absent.
-Filtering by person needs A3, named speakers, which is Wave 3 item 11. The row is
-struck through because three of its four legs are done and the fourth has a named
-dependency rather than an owner.
+**What the pass licenses**, and it is exactly this: a vector column beside the
+corpus index, written when the index syncs, and an MLX forward pass to fill it.
+The convenient MLX embedding wrapper is GPL-3.0 and this repository is MIT, so the
+forward pass is written here rather than imported — and its vectors can be checked
+against the committed receipts, which is what makes that task verifiable.
 
-**Two things worth carrying into item 5.** Filters are applied in memory over the
-validated projection, not in SQL: the app builds the full projection before anything
-else happens, so the corpus index would be a second walk over rows already in hand.
-**The index is still written on every library open and read by nothing** — it earns
-a reader when US-13.6 stops the scan from being the entry point, and that inversion,
-not a filter, is what makes it pay.
+It licenses nothing else. No command, no packaged model, and no claim that
+semantic results are useful; ten synthetic meetings graded by their author is
+retrieval mechanics on a toy corpus.
 
 A struck-through row is finished; the first row that is not struck through is the
 work. That rule is the whole resume protocol, and it holds whether the session
@@ -109,7 +109,7 @@ largest surface-area addition and says it has nothing to do with audio.
 | 2 | ~~Auto-titling~~ **Landed 2026-08-07** as `meeting_title.rs` — the first non-gated turn's opening sentence, behind an operator title and above the capture time. The local-model half was **measured and refused** on 2026-08-08 at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`); the seam was not built, and re-running the committed harness against another candidate is a decision, not a pending task | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | ~~Folders, and the meeting object's sibling views~~ **Writer landed 2026-08-08** — `library-metadata/1` gained the five named commands, whole-meeting deletion now takes the organization row first, and naming a meeting is wired end to end. The folder surface is `backlog.md` US-14.4 and is deliberately unbuilt | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | ~~Filters — people, date range, keywords, titles~~ **Three of four landed 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search, plus the folder surface item 3 deferred. **People is blocked on A3** (Wave 3 item 11), because attribution is Me/Them and named participants are absent by contract | D3 | Gong documents all four. Free once the store exists |
-| 5 | Semantic search over the corpus, beside exact | D2 | Exact is Registered; semantic is what a question needs |
+| 5 | Semantic search over the corpus, beside exact. **Measured 2026-08-08 and it passed** — 10 of 10 against a registered 8–10, and 5 of 5 where exact search scores 0 (`notes/SEMANTIC_RETRIEVAL.md`). Three of those five turned on margins under 0.04, so the result justifies the store and does not predict scale. What remains is the vector column and an MLX forward pass | D2 | Exact is Registered; semantic is what a question needs |
 | 6 | **Ask across every meeting, answer with citations** | D1 | The category headline. Depends on 1–5 and on B5's citation machinery |
 
 ### Wave 2 — the note becomes worth reading
@@ -1137,6 +1137,10 @@ registration, and cold review also remain.
 
 The first beta includes exact, non-generative search across the validated local
 library. It does not include conversational or semantic cross-meeting retrieval.
+**Amended 2026-08-08:** that sentence describes the first beta and is kept as the
+record of it, not as a boundary on the product. The parity decision made semantic
+retrieval a gap rather than a non-goal, and `notes/SEMANTIC_RETRIEVAL.md` measured
+it. Generated cross-meeting answers remain unbuilt and are Wave 1 item 6.
 The accepted 2026-07-31 encounter contained no cross-meeting search; the working
 library and search surface therefore needs its own cold review before command
 registration. Calling exact search and generated retrieval by one name obscures
@@ -1475,10 +1479,18 @@ validators must reject those sentinels wherever runtime content is required.
 Metadata and query examples use non-prose tokens that satisfy their runtime
 shape. No meeting or synthetic meeting prose is stored in the fixture.
 
-Note-to-note links, saved searches, tags, smart folders, inferred subjects,
-named-participant search, semantic/fuzzy search, generated answers, and any
-persisted search index remain deferred. Their absence is not silently filled by
-model inference.
+Note-to-note links, saved searches, tags, smart folders, inferred subjects and
+generated answers remain deferred. Their absence is not silently filled by model
+inference.
+
+**Two items left this list on 2026-08-08, for different reasons, and the
+difference matters.** *Semantic search* was deferred by scope, and the parity
+decision overturned that scope — D2 names it, and the probe above measured it.
+*Any persisted search index* was not overturned; it was **superseded by
+implementation**. `corpus_index` landed on 2026-08-07 and is a persisted index,
+written whenever the library is opened, so this sentence had been false rather
+than pending since that day. *Named-participant search* stays deferred and is the
+one clause here still true: attribution is Me/Them and A3 is Wave 3.
 
 No private output may be created inside the source repository. Running under
 `umask 000` must still yield `0700` directories and `0600` private files.

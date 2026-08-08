@@ -120,6 +120,21 @@ tell your microphone from the other side of the call and no more than that; it d
 not know who anyone is. Naming speakers is real work scheduled later, so rather than
 leave a gap where that control would sit, the screen says what is missing and why.
 
+**We checked whether the app could find a meeting from a description, and it
+can.** Today's search matches words: if you cannot remember what anyone actually
+said, it cannot help. So we wrote ten test meetings and ten questions, half of
+them phrased so that not one word overlaps with the meeting they are about — "was
+there a hiring problem?" against a transcript that only says two people resigned.
+We wrote down what would count as working before running anything. A small model
+that runs on the Mac found the right meeting every time, including all five of the
+ones word-matching cannot answer.
+
+**The score is not the honest part; the margins are.** Three of those five were
+close calls — the right meeting beat the runner-up by about one percent, with only
+nine wrong answers to choose from. With a thousand meetings that gap is not
+reassuring. It is enough to justify building the thing; it is not enough to
+promise how it behaves at scale, and the next measurement is exactly that.
+
 ## What shipped
 
 **Version 0.4.0, cut 2026-08-05**, signed and notarized, built at commit `331c9e9`.
