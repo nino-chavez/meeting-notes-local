@@ -293,3 +293,94 @@ for this model, so pooling is the mask-weighted mean and not that head.
 reference implementation truncates silently, which is how the ceiling above went
 unnoticed. Whatever the unit turns out to be, the decision about a long meeting
 should be made by something that knows it is making one.
+
+---
+
+## Preregistered amendment — 2026-08-08 — distractor density, and choosing the unit
+
+**Registered before the run. Nothing in this section reports a result.**
+
+The correction above left the unit undecided on purpose and named the measurement
+that should decide it. This is that measurement, and it answers both open
+questions at once, because they are the same question: **what happens when the
+meetings are long and there are many of them.**
+
+### The corpus
+
+`semantic_scale_corpus.json`. A meeting is an opening, a substantive block and a
+closing; the openings and closings are logistics and small talk, which is what
+really fills the first minutes of a call and which pushes the identifying content
+past the 256-token window. A corpus of short dense meetings would hide the
+property under test — which is precisely how the ceiling went unnoticed the first
+time.
+
+Three populations, **reported separately, because conflating them inflates the
+claim**:
+
+| Population | How made | Why |
+|---|---|---|
+| 10 targets | hand-written | what the questions are about |
+| 10 near misses | **hand-written, one per target** | another lease, another rollback, another renewal where usage fell. These cannot be generated: a bank-composed corpus is distinct by construction, and reporting accuracy against it as a scale result is the third fixture-shape trap this document would then have recorded |
+| filler | template + substituted entities | to reach a corpus size, and honestly labelled as distinct by construction |
+
+Corpora are **nested**: the corpus at 60 is the first 60 meetings of the corpus at
+200, so the density curve is measured over one growing corpus rather than four
+unrelated ones.
+
+### The metric is density, not accuracy
+
+Top-1 accuracy at 200 meetings can be 10 of 10 while three distractors sit within
+0.005, and those two facts point opposite ways for a product. So the headline is
+**how many meetings fall within 0.02 of the top hit**, per question, per unit.
+Accuracy is the summary; the distribution is the finding.
+
+`near_miss_rank` is reported per question as well — where the hand-written
+adjacent meeting lands. A near miss ranked second is the honest picture of this
+model's discrimination in a way an aggregate cannot be.
+
+### Three units, and one fixed aggregation
+
+- `meeting-truncated` — one vector per meeting, cut at the ceiling. What the
+  2026-08-08 probe measured, kept as an arm so the cost of that cut is a number
+  rather than an argument.
+- `turn` — one vector per turn. Natural boundaries, unbounded count.
+- `window` — one vector per 128 words. Bounded count, cuts land anywhere.
+
+**Aggregation is fixed at max chunk similarity, and that choice could carry the
+result.** Mean-of-top-k is untested; a per-turn arm winning under max might lose
+under mean. The comparison below is conditional on this aggregation and says so
+rather than being reported as a property of the units.
+
+### The prediction, stated before the answer is known
+
+**Registered prediction: `turn` and `window` each retrieve at least 3 more of the
+10 than `meeting-truncated` at the largest corpus size, and the two of them land
+within 1 of each other.**
+
+The comparison is the prediction, not the absolute numbers — the decision this
+measurement exists for is which unit, and an absolute score cannot make it.
+
+**The tie clause matters more than the gap clause.** If `turn` and `window` land
+within 1, the tiebreak is cost and shape rather than accuracy: turn count grows
+without bound and varies per meeting, window count is bounded and predictable.
+Saying that in advance stops a one-point difference from being read as a mandate.
+
+**Falsifiers.**
+
+- **If `meeting-truncated` is within 2 of the best unit**, truncation costs less
+  than the correction assumed, and that correction is overstated. It would not
+  make truncation correct — reading 2% of a meeting is still wrong — but the
+  argument for changing the unit would then rest on principle rather than on this
+  measurement, and it should be said that way.
+- **If density does not grow with corpus size**, the synthetic filler is too
+  distinct to be a distractor at all, and the result says nothing about a real
+  corpus. The near-miss ranks are the check: if the hand-written adjacent
+  meetings do not crowd the target while generated filler does not either, the
+  corpus is the problem.
+
+### What a result would and would not authorize
+
+It would decide the unit, and license building the vector store around it.
+
+It would **not** establish that retrieval is useful, that a synthetic corpus
+predicts a real one, or that the model is admitted. Those are unchanged.

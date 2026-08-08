@@ -1,0 +1,396 @@
+{
+  "schema": "semantic-scale-corpus/1",
+  "purpose": "Parts a deterministic corpus of realistically long meetings is composed from. Every word was invented for this file: no meeting recording, Preview datum, or product record appears in it.",
+  "shape": "A meeting is an opening, a substantive block, and a closing. Openings and closings are logistics and small talk, which is what really fills the first minutes of a call — and that is deliberate, because it pushes the identifying content past the 256-token window the model reads. A corpus of short, dense meetings would hide exactly the property under test.",
+  "near_misses": "Hand-written, one per target, on the adjacent subject rather than a different one: another lease, another rollback, another renewal where usage fell. Generated distractors are distinct by construction, which is the failure mode this file exists to avoid — accuracy against generated filler and accuracy against a hand-written near-miss are different numbers and are reported separately.",
+  "openings": [
+    ["Morning.", "Give me a second, my other window is still loading.", "No rush.", "Did you get the calendar invite for the thing on Thursday? I sent it twice by accident.", "I did, both of them.", "Sorry about that.", "How was the drive in?", "Slow. There is work on the bridge again and nobody seems to know how long for.", "It has been like that since spring.", "Right, I think we can start."],
+    ["Can you hear me?", "You are a bit quiet, let me turn you up.", "Better?", "Much better, yes.", "I have about forty minutes and then I have to go and collect my daughter.", "That is fine, this should not take long.", "Did you see the note that went round yesterday about the parking?", "I skimmed it. Something about the barrier being replaced.", "That is the one. Anyway.", "Yes, let us get into it."],
+    ["Hello, hello.", "There you are.", "Sorry, I was on mute and talking to myself for a good thirty seconds.", "We have all done it.", "Is anyone else joining?", "I asked, but I think it is just us two today.", "That is probably easier.", "Agreed. Shall I share my screen or do you have the document?", "I have it open.", "Good. Then let us go."],
+    ["Hi.", "Hi. Give me one moment, I want to close the other call properly.", "Take your time.", "Right. That is done.", "Busy morning?", "Back to back since half eight. This is the first gap I have had.", "Do you want to push this?", "No, no. It is fine. I would rather get it done.", "Understood.", "So."],
+    ["Are we recording?", "I think so. There is a little indicator.", "Good.", "Before we start, did the invoice thing get sorted?", "It did, finance pushed it through on Friday.", "One less thing.", "Definitely.", "Okay.", "Where do you want to begin?", "At the beginning, I suppose."],
+    ["Sorry I am late.", "You are two minutes late, it is fine.", "The last one overran.", "They always do.", "Have you eaten? I have been meaning to and keep not doing it.", "Not yet. I have a sandwich here going stale.", "Very glamorous.", "It is the life.", "Right, come on.", "Yes."],
+    ["Hey.", "Hey. Can you see the shared folder now?", "I can, that worked.", "Good, IT actually fixed something.", "Miracles happen.", "Do not let them hear you.", "I will keep it to myself.", "Okay, we have half an hour.", "That should be plenty.", "Let us see."],
+    ["Good afternoon.", "Afternoon. Sorry, my camera has decided not to work again.", "Audio is fine, do not worry about it.", "It did this last week too.", "Have you tried the obvious thing?", "I have restarted it twice.", "Then it is beyond me.", "Beyond me too.", "Never mind. Shall we?", "Please."],
+    ["Right, I think everyone is here.", "I am here.", "Just checking, is the document the one from Tuesday or the one from this morning?", "This morning. I sent it about an hour ago.", "Then I have the wrong one open.", "Give me a second and I will resend it.", "Got it. Thank you.", "No problem.", "Okay, ready when you are.", "Then let us make a start."],
+    ["Hi, sorry, one second.", "Take your time.", "There is a delivery downstairs and nobody else is in.", "Go and get it, I will wait.", "Back. Sorry about that.", "All fine.", "Right, where were we? Nowhere, we had not started.", "We had not.", "Good.", "Shall we get to it then?"],
+    ["Morning. Did you have a decent weekend?", "It was quiet, which was what I wanted.", "That sounds ideal.", "We did nothing at all and it was excellent.", "I painted a fence.", "That is the opposite of nothing.", "It really is.", "Anyway, I have a hard stop at eleven.", "Noted.", "So let us get going."],
+    ["Can everyone see my screen?", "Not yet.", "How about now?", "Yes, that is it.", "Sorry, it always takes a moment.", "It is the same for everyone.", "Small comfort.", "Right, I will scroll down.", "Whenever you are ready.", "Here we go."]
+  ],
+  "closings": [
+    ["I think that is everything.", "That covers it from my side.", "I will write it up and send it round this afternoon.", "Thank you.", "Anything else before we go?", "Nothing from me.", "Then I will let you get on.", "Speak soon.", "Bye.", "Bye."],
+    ["Are we done?", "I think so.", "I will put a follow-up in for the same time next week.", "That works.", "If anything changes I will let you know before then.", "Please do.", "Right.", "Thanks for your time.", "And yours.", "See you."],
+    ["Okay. I will pick that up.", "And I will chase the other thing.", "Between us it should be covered.", "It should.", "Have a good rest of your day.", "You too.", "Say hello to the team.", "I will.", "Take care.", "Bye now."],
+    ["Shall we leave it there?", "Yes, I think we have gone as far as we can today.", "I will need to check a couple of things before I can commit to anything.", "Understood, no rush.", "I will come back to you by Thursday.", "Thursday is fine.", "Good.", "Thanks.", "Cheers.", "Bye."],
+    ["That is my time, I am afraid.", "No, that is fine, we got through it.", "I will send the notes.", "Great.", "Sorry to cut it short.", "You did not, we were finished.", "Good.", "Speak later in the week.", "Will do.", "Bye."],
+    ["Anything I have missed?", "I do not think so.", "Then I will stop there.", "Thank you for going through it.", "Not at all.", "It was useful.", "Good, I am glad.", "Right, I will let you go.", "Thanks again.", "Bye."]
+  ],
+  "targets": [
+    {
+      "id": "target-warehouse",
+      "turns": [
+        "Right, the warehouse move. We are looking at the second week of April.",
+        "That gives the fulfilment team three weeks to run both sites in parallel.",
+        "Is three weeks enough? It felt tight when we drew it up.",
+        "It is tight but it is doable if the racking is in on time.",
+        "Ravi wants the racking installed before the first pallet arrives, which means the contractor has to start in March.",
+        "Have we got a date from them?",
+        "The fifteenth, provisionally. They will not commit until the survey is signed off.",
+        "Then that is the thing that decides it. If the survey slips, everything slips.",
+        "Agreed. I will chase the survey today.",
+        "And if it does slip, do we still try for April or do we go to May?",
+        "May. I would rather move once, properly, than twice in a panic."
+      ]
+    },
+    {
+      "id": "target-pricing",
+      "turns": [
+        "The pricing page conversion has dropped every week since the redesign.",
+        "By how much in total?",
+        "About a fifth, cumulatively. It is not one bad week, it is a trend.",
+        "We changed the annual toggle to be the default and it has not helped.",
+        "Was that the only change?",
+        "The only one on that page, yes. Everything else was copy.",
+        "So it is probably the toggle.",
+        "That is my reading. People land, see a number four times bigger than they expected, and leave.",
+        "I want to put the monthly option back on top and watch it for a fortnight.",
+        "Two weeks is enough to see it?",
+        "It was enough to see the drop, so it should be enough to see it come back."
+      ]
+    },
+    {
+      "id": "target-renewal",
+      "turns": [
+        "Halloway are up for renewal at the end of the quarter.",
+        "Where has their usage landed?",
+        "Their usage is down about a third, but they have added two new teams since January.",
+        "Those two things pull in opposite directions.",
+        "They do. The teams are new so they have not ramped yet, which probably explains the number.",
+        "Do they know their usage is down?",
+        "They will, they look at the same dashboard we do.",
+        "So they will ask for a discount.",
+        "I think we hold the price and offer the onboarding sessions instead.",
+        "That costs us time rather than revenue.",
+        "Exactly, and it fixes the thing that is actually wrong, which is that the new teams have not been trained."
+      ]
+    },
+    {
+      "id": "target-schema",
+      "turns": [
+        "The schema migration went out last night and nobody looked at the reporting jobs.",
+        "Which ones are affected?",
+        "Three of them are writing into a column that no longer exists.",
+        "So they are failing loudly, or failing quietly?",
+        "Quietly. They log a warning and carry on with a null.",
+        "That is worse.",
+        "It is much worse, because the numbers still come out and they look plausible.",
+        "How far back does that go?",
+        "Since about eleven last night, so one run of each.",
+        "I can roll the migration back but we lose the new audit fields.",
+        "Roll it back. We can add the audit fields again next week with the jobs updated first."
+      ]
+    },
+    {
+      "id": "target-onboarding",
+      "turns": [
+        "Dana is taking over onboarding from the first of next month.",
+        "Is she ready for that?",
+        "She wants two weeks of shadowing before she runs a session on her own.",
+        "That seems sensible.",
+        "It does, and it fits, because the first of next month is a Thursday and the first sessions are the week after.",
+        "What about the ones already in the calendar?",
+        "We should tell the customers who already have sessions booked, so they are not surprised by a different face.",
+        "Do we tell them before or after she starts?",
+        "Before. It is a two-line email and it avoids an awkward first minute.",
+        "Fine, I will draft it.",
+        "Thank you."
+      ]
+    },
+    {
+      "id": "target-pilot",
+      "turns": [
+        "The Bristol pilot ends in three weeks and they have not signed anything.",
+        "Have they said why?",
+        "Their finance team keeps asking for a breakdown we have already sent twice.",
+        "Twice?",
+        "Twice. I forwarded the second one with the first one attached, to make the point politely.",
+        "And nothing came back.",
+        "Nothing came back.",
+        "So either we extend it another month or we let it lapse quietly.",
+        "If we extend, do we get anything for it?",
+        "Probably not, but we keep the relationship.",
+        "Then extend once, say clearly that it is once, and put a date on it."
+      ]
+    },
+    {
+      "id": "target-atlas",
+      "turns": [
+        "We are not shipping the Atlas migration this quarter.",
+        "That is going to land badly.",
+        "The field team will be unhappy but the rollback plan is not written.",
+        "How long would writing it take?",
+        "A week of somebody's time, and we do not have a spare week before the quarter ends.",
+        "Could we ship without it?",
+        "We could, and if it goes wrong I would rather slip it than spend a weekend restoring from backups.",
+        "Has that happened before?",
+        "Once, and it took the whole weekend and most of the Monday.",
+        "Then it is settled.",
+        "It is settled. I will tell the field team myself rather than let them read it in a status update."
+      ]
+    },
+    {
+      "id": "target-rota",
+      "turns": [
+        "Two people have resigned from the support rota this month.",
+        "Both at once?",
+        "Within a week of each other, which I do not think is a coincidence.",
+        "Have you asked?",
+        "One was honest about it. The overnight window is the reason.",
+        "That leaves us with one person covering the overnight window.",
+        "One person, every night, for how long?",
+        "Until we backfill, which is at least six weeks even if we start today.",
+        "That is not sustainable and it is not fair.",
+        "We either pause overnight cover or we pay an agency to fill it.",
+        "Price the agency. If it is affordable we do that, and if it is not we pause and say so publicly."
+      ]
+    },
+    {
+      "id": "target-lease",
+      "turns": [
+        "The lease on this floor is up in September and the landlord wants a five year term.",
+        "Five years is a long time to promise.",
+        "It is, especially since half the team has not come in more than once a week since January.",
+        "Do we have the actual numbers on that?",
+        "The badge data says an average of eleven people a day against sixty desks.",
+        "Eleven.",
+        "Eleven. And the eleven are not the same eleven, so you cannot even shrink to a fixed group.",
+        "So what would you propose?",
+        "A smaller floor with better meeting rooms would suit us better than this one half empty.",
+        "The landlord will not like it.",
+        "The landlord has an empty building. He will like it more than he says he will."
+      ]
+    },
+    {
+      "id": "target-storage",
+      "turns": [
+        "The security review flagged the way we store the export files.",
+        "What exactly did they flag?",
+        "They are sitting in a bucket with no expiry and no access logging.",
+        "How long have they been accumulating?",
+        "Since we built the export feature, so about two years.",
+        "Is there anything sensitive in them?",
+        "Everything in them is customer data, so yes, by definition.",
+        "That is a finding I would like closed before the audit.",
+        "Adding a lifecycle rule is a day of work and closes the finding.",
+        "Only the expiry part, though.",
+        "The logging is another day. Two days total and both findings go away."
+      ]
+    }
+  ],
+  "near_misses": [
+    {
+      "id": "near-warehouse",
+      "of": "target-warehouse",
+      "turns": [
+        "The other site, the one in Leeds, needs a decision on shelving too.",
+        "Is that the same contractor?",
+        "A different one, but the same problem: they will not start until a survey is done.",
+        "When is that survey?",
+        "Nobody has booked it, which is the actual answer.",
+        "Then book it.",
+        "I will, but Leeds is not moving anything, it is just refitting what is there.",
+        "So there is no parallel running to worry about.",
+        "None. It closes for a weekend and reopens.",
+        "That is a much smaller problem.",
+        "It is, which is why it keeps getting pushed down the list."
+      ]
+    },
+    {
+      "id": "near-pricing",
+      "of": "target-pricing",
+      "turns": [
+        "The checkout page has a drop-off at the payment step.",
+        "How big?",
+        "Around one in six, which is high but not new.",
+        "Has anything changed there?",
+        "No, that page has not been touched in a year.",
+        "So it is not a regression, it is just bad.",
+        "It has always been bad. We keep meaning to look at it.",
+        "What do you think it is?",
+        "The card form asks for the billing address before the card number, which nobody expects.",
+        "That does sound irritating.",
+        "It is, and reordering two fields is not a big piece of work."
+      ]
+    },
+    {
+      "id": "near-renewal",
+      "of": "target-renewal",
+      "turns": [
+        "Kestrel are renewing in June and their usage has fallen too.",
+        "By a similar amount?",
+        "More, actually. Nearly half.",
+        "Do we know why?",
+        "They lost a team in a reorganisation. It is their change, not ours.",
+        "Then the drop is permanent.",
+        "It looks permanent, yes.",
+        "So the conversation is different from the usual one.",
+        "It is. Here I think we should propose a smaller plan rather than hold the price.",
+        "That reduces the number.",
+        "It does, but it reflects what they actually use, and they will renew rather than leave."
+      ]
+    },
+    {
+      "id": "near-schema",
+      "of": "target-schema",
+      "turns": [
+        "The index we added on Tuesday has made two queries slower rather than faster.",
+        "Which queries?",
+        "The two on the activity table that the dashboard runs on every load.",
+        "How much slower?",
+        "Four hundred milliseconds to about two seconds.",
+        "That is very noticeable.",
+        "People have noticed. There were three messages about it this morning.",
+        "Can we just drop the index?",
+        "We can, and I think we should, and then look properly at why the planner chose it.",
+        "Any risk in dropping it?",
+        "None that I can see. Nothing else is using it."
+      ]
+    },
+    {
+      "id": "near-onboarding",
+      "of": "target-onboarding",
+      "turns": [
+        "The training material for the new release has not been updated.",
+        "Who normally does that?",
+        "Whoever wrote the feature, which this time was a contractor who has left.",
+        "So nobody.",
+        "So nobody, and the first sessions using it are in two weeks.",
+        "Can the existing material be adapted?",
+        "Most of it. The screens have changed but the flow has not.",
+        "How long to adapt it?",
+        "Two days if somebody sits down and does it without interruptions.",
+        "Then I will find someone two days.",
+        "Thank you, that solves it."
+      ]
+    },
+    {
+      "id": "near-pilot",
+      "of": "target-pilot",
+      "turns": [
+        "The Cardiff trial finishes at the end of the month and they are keen.",
+        "That is a nicer conversation than the usual one.",
+        "It is. They asked us for a quote unprompted.",
+        "What do they want?",
+        "The same shape as the trial but for three more teams.",
+        "Any conditions?",
+        "They want the onboarding included rather than charged separately.",
+        "That is reasonable at that size.",
+        "I think so too. I will put a number together this week.",
+        "Do not undersell it because they are enthusiastic.",
+        "I will not."
+      ]
+    },
+    {
+      "id": "near-atlas",
+      "of": "target-atlas",
+      "turns": [
+        "The Meridian upgrade is ready and the rollback is written and tested.",
+        "Tested how?",
+        "We restored a copy of production into staging and rolled it back twice.",
+        "Then that one can go.",
+        "That was my conclusion too. It is the only one this quarter that is genuinely ready.",
+        "When would you do it?",
+        "A Tuesday morning, so there are four working days after it if anything is odd.",
+        "Not a Friday.",
+        "Never a Friday.",
+        "Agreed. Book it.",
+        "I will put it in for the Tuesday after next."
+      ]
+    },
+    {
+      "id": "near-rota",
+      "of": "target-rota",
+      "turns": [
+        "We are two people short on the weekend shift as well.",
+        "Is that the same cause?",
+        "Not really. Those two are on parental leave and both are coming back.",
+        "So it is temporary.",
+        "Temporary and known about, which makes it much easier to plan around.",
+        "How are we covering it?",
+        "People are taking one extra weekend each over three months.",
+        "Has anyone complained?",
+        "Nobody has, because they can see the end of it on a calendar.",
+        "That is the difference, then.",
+        "That is exactly the difference."
+      ]
+    },
+    {
+      "id": "near-lease",
+      "of": "target-lease",
+      "turns": [
+        "The storage unit contract renews automatically next month.",
+        "Do we still need it?",
+        "We need about a quarter of it. The rest is old hardware nobody will sign off on scrapping.",
+        "Can we downsize the unit?",
+        "The provider does smaller units, yes, but not at that site.",
+        "So it is move or keep paying.",
+        "Move or keep paying, and moving means someone spends a day with a van.",
+        "What does the smaller unit save?",
+        "About two thirds of the monthly cost.",
+        "Then a day with a van is obviously worth it.",
+        "I agree, I just need somebody to volunteer for the van."
+      ]
+    },
+    {
+      "id": "near-storage",
+      "of": "target-storage",
+      "turns": [
+        "The review also mentioned the logs we keep on the application servers.",
+        "What about them?",
+        "They rotate at thirty days, which is fine, but they are world readable on the box.",
+        "Who can get on the box?",
+        "Anyone in the engineering group, which is more people than it needs to be.",
+        "Is there anything in the logs worth protecting?",
+        "Request paths and account identifiers. Not payloads.",
+        "So low severity but embarrassing.",
+        "That is a fair summary. Changing the permissions is a one line change.",
+        "Then do the one line change.",
+        "It is already in a branch, I just wanted it mentioned so it is on the record."
+      ]
+    }
+  ],
+  "filler_subjects": [
+    ["The {company} invoice is still unpaid at {days} days.", "Have we chased it?", "Twice by email and once by phone.", "Who is the contact there?", "{person}, in their finance team.", "Try their operations side instead.", "I will do that today.", "If it passes ninety days it goes to collections and I would rather it did not.", "Understood.", "Keep me posted."],
+    ["We need a decision on the {system} licence before {month}.", "How many seats are we on?", "{count}, and we are using about two thirds.", "So we could drop a tier.", "We could, but the tier below caps the number of projects.", "Do we hit that cap?", "Not today. We would be close.", "Then it is a false saving.", "That was my instinct as well.", "Stay where we are and revisit in a year."],
+    ["The {system} outage on Tuesday lasted {count} minutes.", "What caused it?", "A configuration change that was applied to the wrong environment.", "By whom?", "It does not matter by whom, it matters that it was possible.", "Fair.", "The fix is to make the environments visually different in the console.", "That sounds trivial and effective.", "Most of them are.", "Then do it."],
+    ["{person} has asked to move to four days a week from {month}.", "Can we accommodate that?", "I think so, but it changes who covers {system} on Fridays.", "Who would pick that up?", "It would have to be shared, which nobody loves.", "Have you asked them?", "Not yet. I wanted to know if it was possible before raising it.", "It is possible. Go and ask.", "I will.", "Let me know what they say."],
+    ["The {company} contract has an auto-renewal clause we missed.", "When does it trigger?", "{days} days before the end date, so we have already passed it.", "So we are in for another term.", "Another term, yes.", "How much?", "The same as last year, so it is not a disaster, it is just not a choice.", "I dislike not having a choice.", "So do I. I have put a reminder in for next time.", "Good."],
+    ["We have {count} unassigned tickets in the {system} queue.", "How old is the oldest?", "{days} days.", "That is too old.", "It is, and most of them are duplicates of two real problems.", "Then consolidate them.", "I will merge them this afternoon and we will be left with about ten.", "Ten is manageable.", "Ten is manageable.", "Good, do that."],
+    ["{person} wants to run a trial of {system} with their team.", "How big is the team?", "{count} people.", "What is the cost of the trial?", "Nothing for sixty days, then it is per seat.", "And after sixty days somebody has to decide.", "Which is the part that never happens.", "Put a date in the calendar now for the decision.", "I will put it at day fifty.", "Day fifty is sensible."],
+    ["The {month} figures are ready and they are slightly ahead.", "By how much?", "About {count} per cent.", "Is that real or is it timing?", "Some of it is timing. Two invoices landed early.", "So the underlying number is flat.", "Flat but not falling, which given the quarter is fine.", "I will take flat.", "So will I.", "Send it round when you have the commentary."],
+    ["Somebody needs to own the {system} documentation.", "It has no owner at the moment?", "It has three, which is the same as none.", "Who would you give it to?", "{person}, if they will have it.", "Ask them.", "I will, but they will want the time to do it properly.", "How much time?", "Half a day a fortnight.", "That is affordable. Offer it."],
+    ["The {company} integration is failing about {count} times a day.", "Since when?", "Since they changed their API without telling anyone.", "Did they announce it?", "In a changelog nobody subscribes to.", "So no.", "So no. I have subscribed now.", "What is the fix?", "Two hours of work, it is a renamed field.", "Then it is annoying rather than serious."],
+    ["We should decide whether {month} is the right time for the offsite.", "What are the options?", "That month or the one after.", "Which is cheaper?", "The later one, by about a third, because it is out of season.", "And which is better for people?", "The earlier one, because the later one clashes with half term.", "Then it is the earlier one.", "That was my conclusion too.", "Book it before the price moves again."],
+    ["{person} raised a concern about the {system} rollout plan.", "What was the concern?", "That the training happens after the switch rather than before.", "Is that right?", "It is right, and it is the wrong way round.", "Can we swap them?", "We can, it just moves the switch back two weeks.", "Two weeks is nothing compared with a confused team.", "Agreed.", "Swap them."]
+  ],
+  "filler_banks": {
+    "company": ["Ashcroft", "Bellamy", "Corvin", "Delford", "Eastmoor", "Fenwick", "Granby", "Hallet", "Ivorly", "Jessop", "Kelbrook", "Lanmore", "Mowbray", "Netherby", "Oxholme", "Pentworth", "Quillon", "Radbourne", "Salcott", "Thurlow"],
+    "person": ["Amara", "Bennet", "Cyrus", "Delia", "Errol", "Farrah", "Gideon", "Hester", "Ivo", "Juno", "Kwame", "Lorna", "Magnus", "Nadia", "Osgood", "Perrin", "Quintus", "Rosalind", "Sefton", "Tamsin"],
+    "system": ["the billing portal", "the ticket queue", "the reporting stack", "the staging cluster", "the asset register", "the approvals tool", "the contact directory", "the release dashboard"],
+    "month": ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    "count": ["four", "seven", "twelve", "eighteen", "twenty-three", "thirty-one", "forty-five", "sixty"],
+    "days": ["thirty", "forty-five", "sixty", "seventy-five", "ninety"]
+  },
+  "questions": [
+    { "question": "When are we moving the warehouse?", "target": "target-warehouse" },
+    { "question": "What did we decide about the Halloway renewal?", "target": "target-renewal" },
+    { "question": "Who is taking over onboarding?", "target": "target-onboarding" },
+    { "question": "What is happening with the Bristol pilot?", "target": "target-pilot" },
+    { "question": "Are we still shipping the Atlas migration?", "target": "target-atlas" },
+    { "question": "Which meeting was about hiring problems?", "target": "target-rota" },
+    { "question": "Did we talk about giving up some of our office space?", "target": "target-lease" },
+    { "question": "What was the data retention problem?", "target": "target-storage" },
+    { "question": "Where did the database change break something?", "target": "target-schema" },
+    { "question": "Why are fewer people buying the subscription?", "target": "target-pricing" }
+  ]
+}
