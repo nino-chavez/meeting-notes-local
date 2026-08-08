@@ -178,6 +178,22 @@ worktree to hold ~2.6 GB until `git worktree remove` takes it away. That disposa
 is the point: the staged runtime is gitignored, so what lands in Git is the
 recipe, and the evidence that the recipe works is a run rather than a file.
 
+**Then rebuild the main checkout, because the worktree took the proof with it.**
+Building in a worktree leaves the main checkout's stage exactly as stale as
+before — and when the change moved `ALPHA_OPERATIONS`, stale means the app
+refuses its own worker on the very machine the operator uses. `git status` will
+never mention it: the stage is gitignored, so a checkout whose runtime disagrees
+with its own source looks identical to a clean one. Check it rather than assume:
+
+    python3 - <<'EOF'
+    import re, pathlib
+    def ops(path):
+        block = re.search(r'ALPHA_OPERATIONS = frozenset\(\s*\{(.*?)\}\s*\)',
+                          pathlib.Path(path).read_text(), re.S).group(1)
+        return sorted(re.findall(r'"([a-z]+\.[a-z]+)"', block))
+    print(ops('worker/main.py') == ops('apps/desktop/runtime/worker/main.py'))
+    EOF
+
 **A frozen artifact must never be asserted through a live constant.** Hit three
 times on 2026-08-07, each time while growing the registered fixture suite:
 `mlx_note_matrix_receipt.json` (a 2026-08-05 receipt) asserted its fixture count as
