@@ -1,0 +1,1133 @@
+{
+  "aggregation": "max-chunk-similarity",
+  "corpus_parts_sha256": "8508fc9f4f26f8b8cea0498c70e489f61573b31659b2e2f361af1d209d3cf948",
+  "density_band": 0.02,
+  "harness_sha256": "a7ff4005314ae368836096b6cf790c3c39e92e7d1ff345d1281eacd0de45460f",
+  "implementation_sha256": "2b71614b0e72ccdbb4d060e5c215eeeb66d13c5daab80414e426c1a81d28dfc4",
+  "meeting_tokens": {
+    "max": 638,
+    "median": 533,
+    "min": 497,
+    "over_ceiling": 200
+  },
+  "results": [
+    {
+      "correct": 1,
+      "embed_elapsed_s": 0.666,
+      "max_within_band": 5,
+      "median_margin": 0.0,
+      "median_within_band": 3,
+      "near_miss_beat_target": 1,
+      "pieces": 30,
+      "rows": [
+        {
+          "correct": false,
+          "margin": 0.045794,
+          "near_miss_rank": 26,
+          "target": "target-warehouse",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.011934,
+          "near_miss_rank": 21,
+          "target": "target-renewal",
+          "top1": "filler-0003",
+          "within_band": 3
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 1,
+          "target": "target-onboarding",
+          "top1": "near-onboarding",
+          "within_band": 1
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 14,
+          "target": "target-pilot",
+          "top1": "target-renewal",
+          "within_band": 5
+        },
+        {
+          "correct": true,
+          "margin": 0.201981,
+          "near_miss_rank": 30,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 15,
+          "target": "target-rota",
+          "top1": "filler-0000",
+          "within_band": 5
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 12,
+          "target": "target-lease",
+          "top1": "target-pricing",
+          "within_band": 5
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 7,
+          "target": "target-storage",
+          "top1": "target-schema",
+          "within_band": 2
+        },
+        {
+          "correct": false,
+          "margin": 0.007256,
+          "near_miss_rank": 13,
+          "target": "target-schema",
+          "top1": "filler-0003",
+          "within_band": 4
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 18,
+          "target": "target-pricing",
+          "top1": "filler-0001",
+          "within_band": 4
+        }
+      ],
+      "size": 30,
+      "unit": "meeting-truncated"
+    },
+    {
+      "correct": 1,
+      "embed_elapsed_s": 0.666,
+      "max_within_band": 11,
+      "median_margin": 0.009685,
+      "median_within_band": 6,
+      "near_miss_beat_target": 0,
+      "pieces": 60,
+      "rows": [
+        {
+          "correct": false,
+          "margin": 0.032726,
+          "near_miss_rank": 52,
+          "target": "target-warehouse",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.011934,
+          "near_miss_rank": 45,
+          "target": "target-renewal",
+          "top1": "filler-0003",
+          "within_band": 7
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 2,
+          "target": "target-onboarding",
+          "top1": "filler-0020",
+          "within_band": 3
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 27,
+          "target": "target-pilot",
+          "top1": "near-rota",
+          "within_band": 10
+        },
+        {
+          "correct": true,
+          "margin": 0.186866,
+          "near_miss_rank": 58,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 27,
+          "target": "target-rota",
+          "top1": "filler-0000",
+          "within_band": 11
+        },
+        {
+          "correct": false,
+          "margin": 0.010587,
+          "near_miss_rank": 21,
+          "target": "target-lease",
+          "top1": "filler-0015",
+          "within_band": 11
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 13,
+          "target": "target-storage",
+          "top1": "near-lease",
+          "within_band": 6
+        },
+        {
+          "correct": false,
+          "margin": 0.015704,
+          "near_miss_rank": 23,
+          "target": "target-schema",
+          "top1": "filler-0027",
+          "within_band": 1
+        },
+        {
+          "correct": false,
+          "margin": 0.008784,
+          "near_miss_rank": 39,
+          "target": "target-pricing",
+          "top1": "filler-0027",
+          "within_band": 8
+        }
+      ],
+      "size": 60,
+      "unit": "meeting-truncated"
+    },
+    {
+      "correct": 1,
+      "embed_elapsed_s": 0.666,
+      "max_within_band": 24,
+      "median_margin": 0.0,
+      "median_within_band": 13,
+      "near_miss_beat_target": 0,
+      "pieces": 120,
+      "rows": [
+        {
+          "correct": false,
+          "margin": 0.032726,
+          "near_miss_rank": 104,
+          "target": "target-warehouse",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 83,
+          "target": "target-renewal",
+          "top1": "filler-0003",
+          "within_band": 15
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 8,
+          "target": "target-onboarding",
+          "top1": "filler-0056",
+          "within_band": 8
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 49,
+          "target": "target-pilot",
+          "top1": "filler-0023",
+          "within_band": 21
+        },
+        {
+          "correct": true,
+          "margin": 0.186866,
+          "near_miss_rank": 117,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.006472,
+          "near_miss_rank": 52,
+          "target": "target-rota",
+          "top1": "filler-0051",
+          "within_band": 15
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 41,
+          "target": "target-lease",
+          "top1": "filler-0075",
+          "within_band": 24
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 26,
+          "target": "target-storage",
+          "top1": "filler-0096",
+          "within_band": 12
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 47,
+          "target": "target-schema",
+          "top1": "filler-0087",
+          "within_band": 3
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 72,
+          "target": "target-pricing",
+          "top1": "filler-0087",
+          "within_band": 16
+        }
+      ],
+      "size": 120,
+      "unit": "meeting-truncated"
+    },
+    {
+      "correct": 1,
+      "embed_elapsed_s": 0.666,
+      "max_within_band": 42,
+      "median_margin": 0.0,
+      "median_within_band": 22,
+      "near_miss_beat_target": 0,
+      "pieces": 200,
+      "rows": [
+        {
+          "correct": false,
+          "margin": 0.032726,
+          "near_miss_rank": 170,
+          "target": "target-warehouse",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 136,
+          "target": "target-renewal",
+          "top1": "filler-0003",
+          "within_band": 26
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 5,
+          "target": "target-onboarding",
+          "top1": "filler-0044",
+          "within_band": 15
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 86,
+          "target": "target-pilot",
+          "top1": "filler-0179",
+          "within_band": 36
+        },
+        {
+          "correct": true,
+          "margin": 0.186866,
+          "near_miss_rank": 192,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 98,
+          "target": "target-rota",
+          "top1": "filler-0171",
+          "within_band": 25
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 78,
+          "target": "target-lease",
+          "top1": "filler-0075",
+          "within_band": 42
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 37,
+          "target": "target-storage",
+          "top1": "filler-0156",
+          "within_band": 19
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 82,
+          "target": "target-schema",
+          "top1": "filler-0087",
+          "within_band": 5
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 121,
+          "target": "target-pricing",
+          "top1": "filler-0147",
+          "within_band": 25
+        }
+      ],
+      "size": 200,
+      "unit": "meeting-truncated"
+    },
+    {
+      "correct": 7,
+      "embed_elapsed_s": 2.265,
+      "max_within_band": 2,
+      "median_margin": 0.054942,
+      "median_within_band": 0,
+      "near_miss_beat_target": 0,
+      "pieces": 2420,
+      "rows": [
+        {
+          "correct": true,
+          "margin": 0.368963,
+          "near_miss_rank": 3,
+          "target": "target-warehouse",
+          "top1": "target-warehouse",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.302358,
+          "near_miss_rank": 4,
+          "target": "target-renewal",
+          "top1": "target-renewal",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.01597,
+          "near_miss_rank": 4,
+          "target": "target-onboarding",
+          "top1": "target-onboarding",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.236979,
+          "near_miss_rank": 2,
+          "target": "target-pilot",
+          "top1": "target-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.423263,
+          "near_miss_rank": 3,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.005066,
+          "near_miss_rank": 20,
+          "target": "target-rota",
+          "top1": "target-storage",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.080664,
+          "near_miss_rank": 13,
+          "target": "target-lease",
+          "top1": "target-lease",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.021747,
+          "near_miss_rank": 9,
+          "target": "target-storage",
+          "top1": "target-storage",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.029221,
+          "near_miss_rank": 21,
+          "target": "target-schema",
+          "top1": "filler-0002",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.000832,
+          "near_miss_rank": 17,
+          "target": "target-pricing",
+          "top1": "target-renewal",
+          "within_band": 2
+        }
+      ],
+      "size": 30,
+      "unit": "turn"
+    },
+    {
+      "correct": 7,
+      "embed_elapsed_s": 2.265,
+      "max_within_band": 6,
+      "median_margin": 0.051206,
+      "median_within_band": 0,
+      "near_miss_beat_target": 0,
+      "pieces": 4820,
+      "rows": [
+        {
+          "correct": true,
+          "margin": 0.368963,
+          "near_miss_rank": 3,
+          "target": "target-warehouse",
+          "top1": "target-warehouse",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.279519,
+          "near_miss_rank": 6,
+          "target": "target-renewal",
+          "top1": "target-renewal",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.01597,
+          "near_miss_rank": 13,
+          "target": "target-onboarding",
+          "top1": "target-onboarding",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.236979,
+          "near_miss_rank": 2,
+          "target": "target-pilot",
+          "top1": "target-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.423263,
+          "near_miss_rank": 3,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 48,
+          "target": "target-rota",
+          "top1": "filler-0023",
+          "within_band": 2
+        },
+        {
+          "correct": true,
+          "margin": 0.080664,
+          "near_miss_rank": 38,
+          "target": "target-lease",
+          "top1": "target-lease",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.021747,
+          "near_miss_rank": 8,
+          "target": "target-storage",
+          "top1": "target-storage",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 42,
+          "target": "target-schema",
+          "top1": "filler-0002",
+          "within_band": 3
+        },
+        {
+          "correct": false,
+          "margin": 0.000832,
+          "near_miss_rank": 40,
+          "target": "target-pricing",
+          "top1": "target-renewal",
+          "within_band": 6
+        }
+      ],
+      "size": 60,
+      "unit": "turn"
+    },
+    {
+      "correct": 7,
+      "embed_elapsed_s": 2.265,
+      "max_within_band": 16,
+      "median_margin": 0.051206,
+      "median_within_band": 0,
+      "near_miss_beat_target": 0,
+      "pieces": 9620,
+      "rows": [
+        {
+          "correct": true,
+          "margin": 0.368963,
+          "near_miss_rank": 3,
+          "target": "target-warehouse",
+          "top1": "target-warehouse",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.279519,
+          "near_miss_rank": 11,
+          "target": "target-renewal",
+          "top1": "target-renewal",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.01597,
+          "near_miss_rank": 34,
+          "target": "target-onboarding",
+          "top1": "target-onboarding",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.236979,
+          "near_miss_rank": 2,
+          "target": "target-pilot",
+          "top1": "target-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.423263,
+          "near_miss_rank": 3,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 97,
+          "target": "target-rota",
+          "top1": "filler-0071",
+          "within_band": 7
+        },
+        {
+          "correct": true,
+          "margin": 0.080664,
+          "near_miss_rank": 77,
+          "target": "target-lease",
+          "top1": "target-lease",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.021747,
+          "near_miss_rank": 42,
+          "target": "target-storage",
+          "top1": "target-storage",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 82,
+          "target": "target-schema",
+          "top1": "filler-0050",
+          "within_band": 8
+        },
+        {
+          "correct": false,
+          "margin": 0.000832,
+          "near_miss_rank": 85,
+          "target": "target-pricing",
+          "top1": "target-renewal",
+          "within_band": 16
+        }
+      ],
+      "size": 120,
+      "unit": "turn"
+    },
+    {
+      "correct": 7,
+      "embed_elapsed_s": 2.265,
+      "max_within_band": 30,
+      "median_margin": 0.051206,
+      "median_within_band": 0,
+      "near_miss_beat_target": 0,
+      "pieces": 16020,
+      "rows": [
+        {
+          "correct": true,
+          "margin": 0.368963,
+          "near_miss_rank": 3,
+          "target": "target-warehouse",
+          "top1": "target-warehouse",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.279519,
+          "near_miss_rank": 18,
+          "target": "target-renewal",
+          "top1": "target-renewal",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.01597,
+          "near_miss_rank": 48,
+          "target": "target-onboarding",
+          "top1": "target-onboarding",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.236979,
+          "near_miss_rank": 2,
+          "target": "target-pilot",
+          "top1": "target-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.423263,
+          "near_miss_rank": 3,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 162,
+          "target": "target-rota",
+          "top1": "filler-0179",
+          "within_band": 14
+        },
+        {
+          "correct": true,
+          "margin": 0.080664,
+          "near_miss_rank": 121,
+          "target": "target-lease",
+          "top1": "target-lease",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.021747,
+          "near_miss_rank": 57,
+          "target": "target-storage",
+          "top1": "target-storage",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 134,
+          "target": "target-schema",
+          "top1": "filler-0062",
+          "within_band": 14
+        },
+        {
+          "correct": false,
+          "margin": 0.000832,
+          "near_miss_rank": 145,
+          "target": "target-pricing",
+          "top1": "target-renewal",
+          "within_band": 30
+        }
+      ],
+      "size": 200,
+      "unit": "turn"
+    },
+    {
+      "correct": 7,
+      "embed_elapsed_s": 1.129,
+      "max_within_band": 15,
+      "median_margin": 0.067703,
+      "median_within_band": 0,
+      "near_miss_beat_target": 0,
+      "pieces": 120,
+      "rows": [
+        {
+          "correct": true,
+          "margin": 0.017299,
+          "near_miss_rank": 4,
+          "target": "target-warehouse",
+          "top1": "target-warehouse",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.209833,
+          "near_miss_rank": 3,
+          "target": "target-renewal",
+          "top1": "target-renewal",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.141584,
+          "near_miss_rank": 3,
+          "target": "target-onboarding",
+          "top1": "near-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.096198,
+          "near_miss_rank": 2,
+          "target": "target-pilot",
+          "top1": "target-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.330789,
+          "near_miss_rank": 2,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.002783,
+          "near_miss_rank": 21,
+          "target": "target-rota",
+          "top1": "near-onboarding",
+          "within_band": 15
+        },
+        {
+          "correct": true,
+          "margin": 0.052576,
+          "near_miss_rank": 2,
+          "target": "target-lease",
+          "top1": "target-lease",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.012685,
+          "near_miss_rank": 15,
+          "target": "target-storage",
+          "top1": "filler-0002",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.042222,
+          "near_miss_rank": 5,
+          "target": "target-schema",
+          "top1": "target-schema",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.08283,
+          "near_miss_rank": 11,
+          "target": "target-pricing",
+          "top1": "target-pricing",
+          "within_band": 0
+        }
+      ],
+      "size": 30,
+      "unit": "window"
+    },
+    {
+      "correct": 7,
+      "embed_elapsed_s": 1.129,
+      "max_within_band": 4,
+      "median_margin": 0.067703,
+      "median_within_band": 0,
+      "near_miss_beat_target": 0,
+      "pieces": 240,
+      "rows": [
+        {
+          "correct": true,
+          "margin": 0.017299,
+          "near_miss_rank": 5,
+          "target": "target-warehouse",
+          "top1": "target-warehouse",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.136928,
+          "near_miss_rank": 5,
+          "target": "target-renewal",
+          "top1": "target-renewal",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.141584,
+          "near_miss_rank": 3,
+          "target": "target-onboarding",
+          "top1": "near-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.096198,
+          "near_miss_rank": 2,
+          "target": "target-pilot",
+          "top1": "target-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.330789,
+          "near_miss_rank": 2,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 5.4e-05,
+          "near_miss_rank": 41,
+          "target": "target-rota",
+          "top1": "filler-0011",
+          "within_band": 2
+        },
+        {
+          "correct": true,
+          "margin": 0.052576,
+          "near_miss_rank": 2,
+          "target": "target-lease",
+          "top1": "target-lease",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 32,
+          "target": "target-storage",
+          "top1": "filler-0026",
+          "within_band": 4
+        },
+        {
+          "correct": true,
+          "margin": 0.042222,
+          "near_miss_rank": 8,
+          "target": "target-schema",
+          "top1": "target-schema",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.08283,
+          "near_miss_rank": 28,
+          "target": "target-pricing",
+          "top1": "target-pricing",
+          "within_band": 0
+        }
+      ],
+      "size": 60,
+      "unit": "window"
+    },
+    {
+      "correct": 7,
+      "embed_elapsed_s": 1.129,
+      "max_within_band": 9,
+      "median_margin": 0.067703,
+      "median_within_band": 0,
+      "near_miss_beat_target": 0,
+      "pieces": 480,
+      "rows": [
+        {
+          "correct": true,
+          "margin": 0.017299,
+          "near_miss_rank": 8,
+          "target": "target-warehouse",
+          "top1": "target-warehouse",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.136928,
+          "near_miss_rank": 10,
+          "target": "target-renewal",
+          "top1": "target-renewal",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.141584,
+          "near_miss_rank": 3,
+          "target": "target-onboarding",
+          "top1": "near-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.096198,
+          "near_miss_rank": 2,
+          "target": "target-pilot",
+          "top1": "target-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.330789,
+          "near_miss_rank": 2,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 81,
+          "target": "target-rota",
+          "top1": "filler-0011",
+          "within_band": 6
+        },
+        {
+          "correct": true,
+          "margin": 0.052576,
+          "near_miss_rank": 2,
+          "target": "target-lease",
+          "top1": "target-lease",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 63,
+          "target": "target-storage",
+          "top1": "filler-0086",
+          "within_band": 9
+        },
+        {
+          "correct": true,
+          "margin": 0.042222,
+          "near_miss_rank": 13,
+          "target": "target-schema",
+          "top1": "target-schema",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.08283,
+          "near_miss_rank": 63,
+          "target": "target-pricing",
+          "top1": "target-pricing",
+          "within_band": 0
+        }
+      ],
+      "size": 120,
+      "unit": "window"
+    },
+    {
+      "correct": 7,
+      "embed_elapsed_s": 1.129,
+      "max_within_band": 15,
+      "median_margin": 0.067703,
+      "median_within_band": 0,
+      "near_miss_beat_target": 0,
+      "pieces": 800,
+      "rows": [
+        {
+          "correct": true,
+          "margin": 0.017299,
+          "near_miss_rank": 12,
+          "target": "target-warehouse",
+          "top1": "target-warehouse",
+          "within_band": 1
+        },
+        {
+          "correct": true,
+          "margin": 0.136928,
+          "near_miss_rank": 17,
+          "target": "target-renewal",
+          "top1": "target-renewal",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.141584,
+          "near_miss_rank": 3,
+          "target": "target-onboarding",
+          "top1": "near-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.096198,
+          "near_miss_rank": 2,
+          "target": "target-pilot",
+          "top1": "target-pilot",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.330789,
+          "near_miss_rank": 2,
+          "target": "target-atlas",
+          "top1": "target-atlas",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 134,
+          "target": "target-rota",
+          "top1": "filler-0011",
+          "within_band": 11
+        },
+        {
+          "correct": true,
+          "margin": 0.052576,
+          "near_miss_rank": 2,
+          "target": "target-lease",
+          "top1": "target-lease",
+          "within_band": 0
+        },
+        {
+          "correct": false,
+          "margin": 0.0,
+          "near_miss_rank": 105,
+          "target": "target-storage",
+          "top1": "filler-0002",
+          "within_band": 15
+        },
+        {
+          "correct": true,
+          "margin": 0.042222,
+          "near_miss_rank": 19,
+          "target": "target-schema",
+          "top1": "target-schema",
+          "within_band": 0
+        },
+        {
+          "correct": true,
+          "margin": 0.08283,
+          "near_miss_rank": 110,
+          "target": "target-pricing",
+          "top1": "target-pricing",
+          "within_band": 0
+        }
+      ],
+      "size": 200,
+      "unit": "window"
+    }
+  ],
+  "schema": "semantic-scale/1",
+  "window_tokens": 128
+}

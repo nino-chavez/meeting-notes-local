@@ -41,33 +41,37 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the vector store for Wave 1 item 5 — and the unit it stores
-has to be decided first, because the measured one does not survive a real
-meeting.**
+**The next build is the vector store, and the unit is decided: one vector per
+128-word window.**
 
-The MLX forward pass the licence required is written and verified.
-`notes/mlx_minilm.py` reproduces the reference implementation's rankings 10 of 10
-with a worst margin difference of **0.000001**, against a tolerance of 0.01 that
-was registered before the file existed. That check exists because three of the
-five deciding comparisons turn on 0.013 cosine, so rankings agreeing would have
-been too weak on its own.
+The distractor-density measurement ran on 2026-08-08 against 200 realistic
+meetings — 497 to 638 tokens each, every one over the model's 256-token ceiling.
+Both registered clauses held. Per-turn and per-window each beat
+whole-meeting-truncated by 6 of 10 against a floor of 3, and tied with each other
+inside the registered margin of 1.
 
-**The correction that matters more than the pass.** `max_seq_length` is 256
-tokens, and `SentenceTransformer.encode` truncates to it silently. The probe's
-fixtures were 39 to 48 tokens, so nothing was ever cut and the ceiling could not
-appear in the result. An hour of speech is roughly twelve thousand tokens, of
-which this model reads the first two per cent — the opening small talk, and none
-of the decision. The numbers stand; **the unit does not.** "One vector per
-meeting" is what was measured and it is not what can ship.
+**The tie clause is what chose the unit**, exactly as registered: window stores
+800 pieces where turn stores 16,020 — twenty times fewer, bounded per meeting
+rather than varying with how much people interrupt each other. Had that tiebreak
+not been written down in advance, a one-question difference on the hard half would
+have been available to argue quality instead.
 
-`notes/SEMANTIC_RETRIEVAL.md` registers the two candidates — per turn, or per
-window — and chooses neither, because the distractor-density measurement already
-registered should run against whichever unit is proposed, on meetings long enough
-to truncate. Running it on 48-token fixtures would repeat the mistake.
+**Read this before building on it: the earlier headline does not survive.** On
+ten short fixtures this model scored 10 of 10 and 5 of 5 on the questions exact
+search cannot answer. On 200 realistic meetings it scores **7 of 10 and 3 of 5**.
+The degradation is in the half the feature exists for, and the two failures land
+on generated filler at a margin of exactly 0.0000 — matching nothing in
+particular rather than choosing wrongly between candidates.
 
-**Second fixture-shape failure on this path in two days**, after a word-overlap
-control passing the hard half. Both came from fixtures small and clean enough to
-hide a property of the real input, which is now the thing to distrust first here.
+That is a number the operator should see before a store is built on it. It is
+materially worse than yesterday's, it is still well above exact search, and
+whether it is good enough is a judgment rather than a measurement.
+
+**Density is the shape worth carrying.** Truncated meetings crowd together in
+proportion to the corpus — 3, 6, 13, 22 meetings within 0.02 of the top hit as it
+grows from 30 to 200. The chosen unit holds a clean separation on every question
+it answers, and concentrates all of its density on the ones it fails. A wrong
+answer arriving as a visible tie is something a surface can act on.
 
 A struck-through row is finished; the first row that is not struck through is the
 work. That rule is the whole resume protocol, and it holds whether the session

@@ -1460,14 +1460,21 @@ reproduces the reference rankings 10 of 10 with a worst margin difference of
 0.000001 against a 0.01 tolerance registered before it existed. Receipt:
 `mlx_minilm_verification_receipt.json`.
 
-**Not built:** the vector column and any surface — and the unit has to be decided
-before the column can be, because the measured one does not survive a real
-meeting. `max_seq_length` is 256 tokens and the reference implementation
-truncates silently; the fixtures were 39 to 48 tokens, so the ceiling could not
-appear in the result. An hour of speech is roughly 12,000 tokens. One vector per
-turn and one vector per window are both registered as candidates and neither is
-chosen; the distractor-density measurement should run against whichever is
-proposed, on meetings long enough to truncate.
+**The unit is decided and the number is worse than it was.** The
+distractor-density measurement ran on 200 realistic meetings, all over the
+truncation ceiling. Both registered clauses held: per-turn and per-window each
+beat whole-meeting-truncated by 6 of 10 against a floor of 3, and tied with each
+other. The registered tiebreak — cost and shape — chose **one vector per 128-word
+window**, which stores 800 pieces where per-turn stores 16,020.
+
+**On that corpus the model scores 7 of 10, and 3 of 5 on the questions exact
+search cannot answer**, against 10 of 10 and 5 of 5 on ten short fixtures. The
+degradation is in the half the feature exists for. Receipt:
+`semantic_scale_receipt.json`.
+
+**Not built:** the vector column and any surface. Whether 7 of 10 is good enough
+to build on is a judgment for the operator, not a measurement — it is well above
+exact search and well below what the first probe implied.
 
 **Evidence:** the fixtures were hardened mid-registration. A word-overlap ranker
 with no model in it initially scored 8 of 10 and 3 of 5 on the hard half, because
