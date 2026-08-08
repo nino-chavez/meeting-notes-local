@@ -2013,6 +2013,30 @@ mod tests {
         );
     }
 
+    /// The state this ships in, and will stay in until an embedder exists. It
+    /// is asserted in three documents, so it gets the test that fails if it
+    /// changes: an empty ranking that says it searched nothing, not an error
+    /// and not an empty ranking that reads like an answer.
+    #[test]
+    fn with_no_embedder_a_ranking_is_empty_and_says_so() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha"]);
+        fixture.meeting("meeting-b", 200, &["beta"]);
+        let index = synced(&fixture);
+
+        let found = index
+            .nearest_windows(&EmbedderIdentity::measured(), &axis(1), 0)
+            .expect("an unembedded corpus is a state, not a failure");
+        assert!(found.hits.is_empty());
+        assert_eq!(found.near_ties, 0);
+        assert_eq!(
+            (found.coverage.windows, found.coverage.embedded),
+            (2, 0),
+            "the store must be able to say how much it did not search"
+        );
+        assert!(!found.coverage.complete());
+    }
+
     #[test]
     fn a_ranking_says_what_it_did_not_search() {
         let fixture = Fixture::new();

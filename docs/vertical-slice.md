@@ -1132,12 +1132,20 @@ as a rebuildable cache after measured library size makes the scan a problem. It
 cannot become the sole copy of transcript, note, or evidence data.
 
 **The condition fired on 2026-08-07 and the index exists** —
-`crates/session-core/src/corpus_index.rs`, schema `corpus-index/1`. The second
-sentence of that rule is untouched and enforced by a test rather than by
-intention: `rebuild_from_files_equals_the_live_index` deletes the database,
-rebuilds it from the files alone, and requires an identical content digest, so a
-column holding anything a file did not produce fails the suite. Numbers under
-[Corpus scale, measured](#corpus-scale-measured).
+`crates/session-core/src/corpus_index.rs`, schema `corpus-index/2` since
+2026-08-08. The second sentence of that rule is untouched and enforced by a test
+rather than by intention: `rebuild_from_files_equals_the_live_index` deletes the
+database, rebuilds it from the files alone, and requires an identical content
+digest, so a column holding anything a file did not produce fails the suite.
+Numbers under [Corpus scale, measured](#corpus-scale-measured).
+
+**One table is outside that digest and it is named rather than quiet.**
+`corpus_window_vector` holds numbers a model produced, not a file, so a rebuild
+from files cannot reproduce them and `fingerprint()` does not hash them. The
+rule's own words still hold — no derived index may become the sole copy of a
+meeting, transcript, note, locator or label — because a vector is none of those
+and deleting it costs recomputation. Both halves are pinned:
+`the_rebuild_digest_covers_windows_and_deliberately_not_vectors`.
 
 ### Exact library retrieval
 

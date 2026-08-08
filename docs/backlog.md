@@ -1106,9 +1106,11 @@ meetings live.
 - Given a populated index, When the database file is deleted, Then rebuilding from the files alone produces the same content digest.
 - Given a sync fails partway, When it aborts, Then the previous contents remain intact.
 
-**Data contract:** `corpus-index/1`.
+**Data contract:** `corpus-index/2` since 2026-08-08. `/1` had three tables; `/2` adds windows, their segments, and vectors. There is no stepwise migration — an older file is dropped and re-derived, which discards every vector and recomputes it.
 
 **Refusals:** no column may hold anything the canonical files did not produce. The index reaches its data only through `LibraryRow::derived`, so it cannot become a second parser of private bytes, and claims are deliberately excluded because they come from an out-of-process projector rather than from a file.
+
+**Amended 2026-08-08, and the amendment is narrow.** `corpus_window_vector` is the one table that breaks the refusal above: its numbers are a function of the files *and* a model, so no rebuild from files can reproduce them. `fingerprint()` therefore does not hash that table, and `the_rebuild_digest_covers_windows_and_deliberately_not_vectors` asserts both halves — a vector must not move the digest, and a window column must. The exemption costs recomputation and never information, and `corpus_window.text_sha256` is what stops a vector outliving the words it describes. Every other new table is inside the digest.
 
 **Validation:** **Pinned** — `corpus_index::tests::rebuild_from_files_equals_the_live_index` deletes the database and requires digest equality; `a_column_no_file_produced_breaks_the_rebuild_digest` proves that test can actually see a write-only column; `a_synced_index_holds_one_row_per_validated_meeting`; `a_removed_meeting_leaves_no_turn_behind`; `an_older_schema_is_dropped_and_re_derived_rather_than_read`.
 
@@ -1208,7 +1210,8 @@ evidence is never decoration here. The probe's corpus has no gated turns, so thi
 is a decision the measurement did not make.
 
 **Validation:** **Pinned** — `corpus_window.rs` and the vector half of
-`corpus_index.rs` carry 23 tests. The load-bearing ones were confirmed by
+`corpus_index.rs` carry 24 tests, including `with_no_embedder_a_ranking_is_empty_and_says_so`
+for the state the product is actually in. The load-bearing ones were confirmed by
 mutation: removing the prune fails
 `a_vector_does_not_survive_the_words_it_was_computed_from` and
 `a_removed_meeting_leaves_no_vector_behind`; an off-by-one in the window flush
