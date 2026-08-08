@@ -1229,14 +1229,24 @@ pub fn internal_alpha_operations() -> HashSet<Operation> {
     // 2026-08-04 with the operator's guided-enrollment and correction-surface
     // registration decisions; the profile family (choices/build/inspect/
     // discard, never adopt) joined 2026-08-05 with the profile-build
-    // decision. parse_ready pins exact equality, so this list moves only
-    // with worker/main.py's.
+    // decision; CorpusEmbed joined 2026-08-08 when `build-alpha` began staging
+    // the embedding model.
+    //
+    // **`parse_ready` pins exact equality, so this list moves only with
+    // `worker/main.py`'s — and that sentence was here, correct, and not enough.**
+    // On 2026-08-08 `corpus.embed` was added to the worker's set and not to this
+    // one, which left the packaged app refusing its own worker at startup with
+    // `OperationMismatch`: no transcription, no capture, nothing. Every Rust
+    // test passed, because they all build their own fixture sets and none read
+    // the worker. `the_alpha_operation_set_is_read_from_the_worker_itself` now
+    // does, so the comment is no longer the mechanism.
     [
         CaptureFinalize,
         CaptureInspect,
         TranscriptCreate,
         SittingDerive,
         TranscriptRestore,
+        CorpusEmbed,
         ProfileChoices,
         ProfileBuild,
         ProfileInspect,
@@ -1273,6 +1283,60 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+
+    /// The list this crate expects and the list the worker advertises are one
+    /// contract in two languages, and `parse_ready` compares them for exact
+    /// equality — so a difference is not a warning, it is a worker the app
+    /// refuses to start.
+    ///
+    /// This reads `worker/main.py` rather than restating it. A second hand-kept
+    /// copy is what drifted on 2026-08-08, and the comment saying "this list
+    /// moves only with worker/main.py's" was already there and did not help.
+    ///
+    /// It follows the live constant on purpose: both sides are current
+    /// behaviour, not a frozen artifact, so the day the worker gains an
+    /// operation this must fail until Rust gains it too.
+    #[test]
+    fn the_alpha_operation_set_is_read_from_the_worker_itself() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../worker/main.py"),
+        )
+        .expect("worker/main.py is committed beside this crate");
+        let block = source
+            .split_once("ALPHA_OPERATIONS = frozenset(")
+            .expect("the worker still names ALPHA_OPERATIONS")
+            .1
+            .split_once(')')
+            .expect("the frozenset literal closes")
+            .0;
+        // Quoted pieces that look like `family.verb`. The block holds nothing
+        // else quoted, and a stray comment string would have to contain a dot
+        // and no spaces to be mistaken for one.
+        let advertised: HashSet<String> = block
+            .split('"')
+            .filter(|piece| piece.contains('.') && !piece.contains(char::is_whitespace))
+            .map(str::to_owned)
+            .collect();
+        assert!(
+            advertised.len() >= 9,
+            "parsed {} operations out of the worker; the literal's shape moved",
+            advertised.len()
+        );
+
+        let parsed: HashSet<Operation> = advertised
+            .iter()
+            .map(|name| {
+                serde_json::from_value(serde_json::Value::String(name.clone())).unwrap_or_else(
+                    |_| panic!("the worker advertises {name}, which this crate cannot name"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            parsed,
+            internal_alpha_operations(),
+            "the packaged app would refuse its own worker at startup"
+        );
+    }
 
     struct FakeInspector(HashMap<u32, ProcessInspection>);
     impl ProcessInspector for FakeInspector {
