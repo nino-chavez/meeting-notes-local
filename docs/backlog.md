@@ -122,7 +122,7 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6 D3** | 8 | **Landed 2026-08-07**, plus the vector store 2026-08-08; US-13.6 outstanding |
+| **E13** | **The corpus store** | **E6 D3 D2** | 9 | **Landed 2026-08-07**, plus the vector store and the tokenizer decision 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 and US-13.9 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
 | **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3 measured the same day and its store is the next build; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
@@ -1229,6 +1229,39 @@ and pins literals.
 `pending_windows` returns the whole corpus and `nearest_windows` returns an empty
 ranking with `coverage.embedded` at zero. The store refuses to pretend otherwise,
 which is the reason coverage is two numbers and not a boolean.
+
+**Amended 2026-08-08 — the identity was missing its most important field.** As
+shipped, `EmbedderIdentity` named pooling, the token ceiling and the activation and
+**did not name the tokenizer.** Text reaches the model as token IDs, so two
+tokenizers change every vector while every other field still matches, and the store
+would have compared them as the same embedder. `tokenizer_sha256` now carries the
+SHA-256 of `tokenizer.json` — a digest and not a name, because this checkpoint's own
+file bakes in truncation at 128 and fixed padding to 128 that have to be turned off,
+and a name would call both configurations the same tokenizer. Free to fix because no
+vector exists anywhere; a migration in a week.
+
+#### US-13.9: The tokenizer the app can actually ship
+**Feature D2 · J1 · §F · P0 · S · Measured 2026-08-08**
+
+As the Operator, I want the passages the app scores to be scored the way they were
+when the retrieval quality was measured, so that a number from a probe still means
+something in the product.
+
+**Validation:** **Receipted** — `notes/packaged_tokenizer_receipt.json`, registered
+two-sided in `SEMANTIC_RETRIEVAL.md` before the run. 0 token-ID mismatches over 810
+texts; 0 differences over 264 scored fields with only the tokenizer swapped in one
+environment. The harness edits neither `semantic_scale_probe.py` nor `mlx_minilm.py`
+and asserts both SHA-256s against the committed receipt before running.
+
+**The prediction as registered failed, and the failure was informative.** It asserted
+equality with a receipt from another environment, which records no environment. All
+29 differences are margins at 1 × 10⁻⁶ and the unmodified probe reproduces every one,
+so the tokenizer causes none of them. Recorded rather than relabelled: the isolating
+comparison is same-environment, and it is exact.
+
+**Not built:** the lock entry, the `app-runtime.json` `models[]` entries, the
+`build_runtime.sh` rebuild and the `corpus.embed` operation. They land together or
+the lock and the staged runtime disagree.
 
 ---
 

@@ -1,0 +1,242 @@
+{
+  "against_committed_receipt": {
+    "differences": [
+      {
+        "field": "margin",
+        "left": 0.209833,
+        "question": 1,
+        "right": 0.209832,
+        "size": 30
+      },
+      {
+        "field": "margin",
+        "left": 0.141584,
+        "question": 2,
+        "right": 0.141585,
+        "size": 30
+      },
+      {
+        "field": "margin",
+        "left": 0.096198,
+        "question": 3,
+        "right": 0.096199,
+        "size": 30
+      },
+      {
+        "field": "margin",
+        "left": 0.330789,
+        "question": 4,
+        "right": 0.330788,
+        "size": 30
+      },
+      {
+        "field": "margin",
+        "left": 0.052576,
+        "question": 6,
+        "right": 0.052577,
+        "size": 30
+      },
+      {
+        "field": "margin",
+        "left": 0.012685,
+        "question": 7,
+        "right": 0.012684,
+        "size": 30
+      },
+      {
+        "field": "margin",
+        "left": 0.042222,
+        "question": 8,
+        "right": 0.042223,
+        "size": 30
+      },
+      {
+        "field": "margin",
+        "left": 0.08283,
+        "question": 9,
+        "right": 0.082829,
+        "size": 30
+      },
+      {
+        "field": "margin",
+        "left": 0.136928,
+        "question": 1,
+        "right": 0.136927,
+        "size": 60
+      },
+      {
+        "field": "margin",
+        "left": 0.141584,
+        "question": 2,
+        "right": 0.141585,
+        "size": 60
+      },
+      {
+        "field": "margin",
+        "left": 0.096198,
+        "question": 3,
+        "right": 0.096199,
+        "size": 60
+      },
+      {
+        "field": "margin",
+        "left": 0.330789,
+        "question": 4,
+        "right": 0.330788,
+        "size": 60
+      },
+      {
+        "field": "margin",
+        "left": 0.052576,
+        "question": 6,
+        "right": 0.052577,
+        "size": 60
+      },
+      {
+        "field": "margin",
+        "left": 0.042222,
+        "question": 8,
+        "right": 0.042223,
+        "size": 60
+      },
+      {
+        "field": "margin",
+        "left": 0.08283,
+        "question": 9,
+        "right": 0.082829,
+        "size": 60
+      },
+      {
+        "field": "margin",
+        "left": 0.136928,
+        "question": 1,
+        "right": 0.136927,
+        "size": 120
+      },
+      {
+        "field": "margin",
+        "left": 0.141584,
+        "question": 2,
+        "right": 0.141585,
+        "size": 120
+      },
+      {
+        "field": "margin",
+        "left": 0.096198,
+        "question": 3,
+        "right": 0.096199,
+        "size": 120
+      },
+      {
+        "field": "margin",
+        "left": 0.330789,
+        "question": 4,
+        "right": 0.330788,
+        "size": 120
+      },
+      {
+        "field": "margin",
+        "left": 0.052576,
+        "question": 6,
+        "right": 0.052577,
+        "size": 120
+      },
+      {
+        "field": "margin",
+        "left": 0.042222,
+        "question": 8,
+        "right": 0.042223,
+        "size": 120
+      },
+      {
+        "field": "margin",
+        "left": 0.08283,
+        "question": 9,
+        "right": 0.082829,
+        "size": 120
+      },
+      {
+        "field": "margin",
+        "left": 0.136928,
+        "question": 1,
+        "right": 0.136927,
+        "size": 200
+      },
+      {
+        "field": "margin",
+        "left": 0.141584,
+        "question": 2,
+        "right": 0.141585,
+        "size": 200
+      },
+      {
+        "field": "margin",
+        "left": 0.096198,
+        "question": 3,
+        "right": 0.096199,
+        "size": 200
+      },
+      {
+        "field": "margin",
+        "left": 0.330789,
+        "question": 4,
+        "right": 0.330788,
+        "size": 200
+      },
+      {
+        "field": "margin",
+        "left": 0.052576,
+        "question": 6,
+        "right": 0.052577,
+        "size": 200
+      },
+      {
+        "field": "margin",
+        "left": 0.042222,
+        "question": 8,
+        "right": 0.042223,
+        "size": 200
+      },
+      {
+        "field": "margin",
+        "left": 0.08283,
+        "question": 9,
+        "right": 0.082829,
+        "size": 200
+      }
+    ],
+    "fields_compared": 264,
+    "ran": true
+  },
+  "compared_unit": "window",
+  "environment": {
+    "mlx": "0.29.3",
+    "numpy": "2.4.6",
+    "python": "3.12.13",
+    "tokenizers": "0.22.2",
+    "transformers": "4.57.1"
+  },
+  "harness_sha256": "55ab7a8e074c5f0e324029212becc4f8cbb8dc4ac42c9c4a6f28cbc3c5f59e67",
+  "reference_receipt_sha256": "3fab2d58ae265834c8ef794d8a3925b38a8fc0b9d9e14b390e3f351c4b57dc7c",
+  "same_environment_swap": {
+    "differences": [],
+    "fields_compared": 264,
+    "ran": true
+  },
+  "schema": "packaged-tokenizer-parity/2",
+  "token_identity": {
+    "mismatches": 0,
+    "ran": true,
+    "texts": 810
+  },
+  "tokenizer": {
+    "package": "tokenizers",
+    "sha256": "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037",
+    "source": "tokenizer.json"
+  },
+  "verdict": {
+    "identical_in_the_environment_that_isolates_it": true,
+    "tokenizer_is_the_cause": false
+  },
+  "weights_sha256": "53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db"
+}

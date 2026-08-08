@@ -512,3 +512,194 @@ choice, recorded rather than inherited:
 - **Words are split the way Python splits them.** `str.isspace()` counts U+001C
   through U+001F and Rust's `char::is_whitespace` does not. Transcript text is not
   filtered for control characters, so the difference is reachable.
+
+## Preregistered — 2026-08-08 — can the app ship this tokenizer?
+
+**Registered before the run. The result section below is written afterwards and
+does not edit this one.**
+
+### The dependency question, and why it is not close
+
+The scale run used `transformers.AutoTokenizer`. The packaged runtime
+(`apps/desktop/runtime/python-runtime`) has `mlx` 0.29.3 and `numpy` 2.4.6 and
+**does not have `transformers`** — verified by import, not by reading a lock file.
+
+Three options, and the canonical one wins on its merits rather than by default:
+
+| Option | Cost | Verdict |
+|---|---|---|
+| Add `transformers` to the runtime | A large tree for one class | Rejected — the runtime is deliberately minimal; `requirements-runtime.lock` is one package |
+| Hand-write WordPiece | ~100 lines, and a parity burden forever | **Rejected on a fact, not a preference: there is no `vocab.txt` at the pinned revision.** The published tokenizer is `tokenizer.json`, so a reimplementation would parse the same file the wheel reads, to arrive somewhere the wheel already is |
+| The `tokenizers` wheel | Apache-2.0, one wheel, reads `tokenizer.json` directly | Chosen. It is what the vendor publishes the file for |
+
+The sibling list at revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` was
+resolved from the Hugging Face metadata endpoint in-session; `vocab.txt` is
+absent and `tokenizer.json` is present.
+
+### What is being measured
+
+Not token parity — that is a proxy. The receipt from the scale run already holds
+the ground truth, so the check is whether the shippable tokenizer, driving the
+same weights through the same forward pass, **reproduces every field of the window
+arm**: pieces, correct, median margin, density counts, and per-question `top1`,
+`margin`, `within_band` and `near_miss_rank` at all four corpus sizes.
+
+`notes/packaged_tokenizer_parity.py` replaces exactly two names on `mlx_minilm` —
+`load_tokenizer` and `encode` — and calls `semantic_scale_probe.main()`. It edits
+neither file, and asserts both SHA-256s against the committed receipt before
+running, so a drifted file stops the run instead of producing a number nobody can
+attribute.
+
+### The environment is the shipping one, minus the one package under test
+
+The probe runs on a venv built from the packaged runtime's own
+`python3.12` with `--system-site-packages`, so `mlx` and `numpy` are the exact
+staged builds. Only `tokenizers==0.23.1` is installed, into the venv, leaving the
+staged runtime unmutated — checked by listing its `site-packages` afterwards.
+
+Weights were re-downloaded at the pinned revision and verified against the
+SHA-256 this document recorded before the first download:
+`53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db`, 90,868,376
+bytes. It matched.
+
+### The prediction, stated before the answer is known
+
+**Every compared field is identical, at all four sizes.** Not "close", not
+"7 of 10 either way" — identical, including margins to six decimal places.
+
+The reasoning: both paths read the same `tokenizer.json`, and `transformers`'
+fast tokenizer for this model *is* the `tokenizers` library behind a wrapper. If
+that is true, the numbers cannot differ at all. Predicting anything softer would
+make the result unfalsifiable.
+
+**What would falsify it, and what each failure would mean:**
+
+- **Any field differs.** The wrapper is doing something the wheel is not —
+  normalization, special tokens, padding — and the packaged path is a different
+  experiment. The vectors in the store would not be the vectors that were
+  measured, and no identity string would catch it.
+- **Margins differ in the last decimals only.** Non-determinism somewhere in the
+  path, which is worse than a clean difference: it would mean the scale receipt
+  is not reproducible either.
+
+**If it fails, the path is not "try harder".** `transformers` goes into the
+runtime and the size cost is paid, or the store waits for a different model.
+
+### What a pass would and would not authorize
+
+It **would** authorize the `tokenizers` wheel as the shipping tokenizer, and
+adding its digest to `EmbedderIdentity` — which currently names pooling, the
+token ceiling and the activation, and **does not name the tokenizer at all.**
+That is a real gap in what landed with the store: the tokenizer is the most
+likely thing a second implementation gets differently, and the identity string
+would compare two such vectors as equal. No vector exists anywhere yet, so fixing
+it now costs nothing and later costs a migration.
+
+It **would not** establish that the embedder ships. The lock entry, the manifest
+`models[]` entries, the runtime rebuild and the Rust wiring are all still ahead,
+and the runtime rebuild has to land in the same change as the lock or the two
+disagree.
+
+### Result — 2026-08-08 — the prediction failed, and it was the wrong prediction
+
+**As registered, it failed.** 29 of 264 compared fields differ from
+`semantic_scale_receipt.json`. Every one is a `margin`, every one by exactly
+1 × 10⁻⁶, and no `top1`, `correct`, `within_band`, `pieces` or density count moved.
+
+That is the outcome this registration named as *the worse one* — "non-determinism
+somewhere in the path". So it got the isolating experiment rather than an
+explanation.
+
+**The tokenizer accounts for none of it.** Three checks, in the order they were
+run:
+
+| Check | Result |
+|---|---|
+| Token IDs, wheel vs wrapper, over all 800 windows and 10 questions | **0 mismatches in 810** |
+| The **unmodified** probe with `transformers`, in this same environment, vs the committed receipt | the **same 29** differences, same questions, same direction |
+| Same environment, only the tokenizer swapped, all 264 fields | **0 differences** |
+
+The second line is what settles it. If the tokenizer were the cause, the
+unmodified probe could not have reproduced the difference exactly.
+
+**What was actually wrong was the registration.** It asserted equality with a
+receipt produced in a different environment, and
+`semantic_scale_receipt.json` records the corpus, harness and implementation
+digests **but not the environment that produced it**. "Identical to the receipt"
+was therefore never a statement about the tokenizer — it was a statement about
+cross-machine float reproducibility, which nothing here had ever established and
+which this run now shows is false at the sixth decimal. The comparison that
+isolates the variable is same-environment, and it is exact.
+
+The receipt gains an `environment` block for exactly this reason: python 3.12.13,
+mlx 0.29.3, numpy 2.4.6, tokenizers 0.22.2, transformers 4.57.1. A future
+difference against it is attributable.
+
+**Within one environment the original repeatability claim holds.** Two fresh runs
+of the unmodified probe produced identical receipts once `embed_elapsed_s` — a
+timing field — is set aside. The first comparison of raw file digests said
+otherwise and was wrong.
+
+#### The finding worth carrying into the product
+
+In the **turn** arm, `top1` changes across environments: `filler-0071` →
+`filler-0023` at n=120, `filler-0050` → `filler-0002`, `filler-0062` →
+`filler-0050` at n=200. The *answer* moves, not just the margin.
+
+Every one of those was already wrong — a filler meeting rather than the target —
+and sat at a margin of 0.0000. **At a tie, which wrong meeting is named is float
+noise, not a property of the model.** A surface that showed one of them as "the
+answer" would be presenting an arbitrary choice as a result. That is the concrete
+justification for `SemanticSearch::near_ties`, which was shipped on the shape of
+the density data rather than on this.
+
+`correct` did not move in any arm at any size. The headline numbers — 7 of 10 for
+window, 7 for turn, 1 for truncated — and the unit decision are stable across
+environments.
+
+#### Two silent defaults in `tokenizer.json`
+
+At this revision the file bakes in **truncation at 128 tokens** and **fixed
+padding to 128**. Both are wrong here and both are quiet: truncation would cut a
+128-word window roughly in half, and fixed padding would pad a nine-word question
+out to 128 positions. `transformers` overrides them from
+`sentence_bert_config.json`; a bare `Tokenizer.from_file` does not.
+
+The first version of the token comparison disabled truncation and left padding on,
+and reported **206 mismatches in 810** that were entirely its own artifact — the
+short last window of each meeting, plus the questions. Anything reading
+`tokenizer.json` directly has to turn both off explicitly.
+
+#### The registration named a version that is not the version that ran
+
+It says `tokenizers==0.23.1`, which is what was installed. The receipt records
+**0.22.2**, because installing `transformers==4.57.1` for the isolating comparison
+downgraded it: that release constrains `tokenizers<=0.23.0,>=0.22.0`, confirmed
+from its own metadata rather than inferred from the version moving.
+
+The registration is left as written — rewriting a preregistration to match what
+happened is worse than the discrepancy it hides. Corrected here, where the other
+corrections are.
+
+**What the lock should pin is 0.22.2**, on the plain ground that it is the version
+the receipt was produced with and nothing in the shipping runtime needs a newer
+one — `transformers` is what forced the ceiling, and `transformers` is not
+shipping. The first parity run did use 0.23.1 and produced the same count and
+character of difference against the reference (29, all margins at 1 × 10⁻⁶), which
+is a reason to expect the two versions agree; it is not a 264-field comparison
+between them, and should not be quoted as one.
+
+#### The verdict, and what it does not cover
+
+**The `tokenizers` wheel is the shipping tokenizer.** Its digest is now inside
+`EmbedderIdentity` — `be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037`
+— which it should have been when that type landed and was not. Text reaches the
+model as token IDs, so a tokenizer difference changes every vector while every
+other identity field still matches. Free to fix now because no vector exists;
+a migration later.
+
+Not covered, and all of it has to land together: the `requirements` lock entry,
+the `app-runtime.json` `models[]` entries for the weights and `tokenizer.json`,
+the `build_runtime.sh` rebuild, the `corpus.embed` operation, and the Rust
+wiring. Landing the lock without the rebuild puts the lock and the staged runtime
+in disagreement.
