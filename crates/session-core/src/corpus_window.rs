@@ -80,12 +80,23 @@ pub const DENSITY_BAND: f32 = 0.02;
 /// pool differently, truncate at a different length, or use the tanh gelu
 /// approximation, and each of those produces vectors that are the right shape
 /// and the wrong direction — a store that compared them would return confident
-/// nonsense with nothing to catch it. So the three choices `notes/mlx_minilm.py`
+/// nonsense with nothing to catch it. So the choices `notes/mlx_minilm.py`
 /// documents making are part of the identity.
+///
+/// **`tokenizer_sha256` was missing when this type landed on 2026-08-08**, and
+/// it is the field that most needed to be here: text reaches the model as token
+/// IDs, so two tokenizers disagreeing changes every vector while every other
+/// field still matches. It cost nothing to add because no vector existed yet.
+/// The digest, not a name — `bert-wordpiece` does not distinguish two
+/// configurations of the same algorithm, and this checkpoint's own
+/// `tokenizer.json` carries truncation at 128 and fixed padding to 128 that
+/// have to be turned off. A name would call that the same tokenizer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbedderIdentity {
     pub model: String,
     pub revision: String,
+    /// SHA-256 of the `tokenizer.json` the vectors were produced with.
+    pub tokenizer_sha256: String,
     /// The mask-weighted mean over the last hidden state. Not `[CLS]`, and not
     /// the checkpoint's `pooler.dense` head, which sentence-transformers does
     /// not use for this model.
@@ -108,6 +119,10 @@ impl EmbedderIdentity {
         Self {
             model: "sentence-transformers/all-MiniLM-L6-v2".to_owned(),
             revision: "1110a243fdf4706b3f48f1d95db1a4f5529b4d41".to_owned(),
+            // `tokenizer.json` at that revision, digested in-session and
+            // recorded in `notes/packaged_tokenizer_receipt.json`.
+            tokenizer_sha256: "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037"
+                .to_owned(),
             pooling: "mask-weighted-mean".to_owned(),
             max_sequence_tokens: 256,
             activation: "erf-gelu".to_owned(),
@@ -120,9 +135,10 @@ impl EmbedderIdentity {
     /// embedder.
     pub fn canonical(&self) -> String {
         format!(
-            "{}@{} pooling={} max_tokens={} activation={} dim={}",
+            "{}@{} tokenizer={} pooling={} max_tokens={} activation={} dim={}",
             self.model,
             self.revision,
+            self.tokenizer_sha256,
             self.pooling,
             self.max_sequence_tokens,
             self.activation,
@@ -493,6 +509,13 @@ mod tests {
             },
             EmbedderIdentity {
                 revision: "0000000000000000000000000000000000000000".to_owned(),
+                ..measured.clone()
+            },
+            // The one this type shipped without. Two tokenizers turn the same
+            // sentence into different token IDs, so every vector differs while
+            // every other field still matches.
+            EmbedderIdentity {
+                tokenizer_sha256: "0".repeat(64),
                 ..measured.clone()
             },
         ] {

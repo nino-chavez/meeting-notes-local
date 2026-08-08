@@ -41,8 +41,35 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the text embedder — the one piece that turns a passage into
-a vector. Everything on either side of it now exists.**
+**The next build is the runtime learning to embed: a lock entry, the manifest
+models, a `build_runtime.sh` rebuild and a `corpus.embed` operation — and all four
+land together or the lock disagrees with the staged runtime.**
+
+**The tokenizer question is closed** (2026-08-08, `notes/packaged_tokenizer_receipt.json`).
+The packaged runtime has `mlx` and `numpy` and not `transformers`, so the scale
+run's tokenizer cannot ship as it stands. The `tokenizers` wheel can: it reads the
+`tokenizer.json` the pinned revision publishes, and **there is no `vocab.txt` at
+that revision**, so hand-writing WordPiece would parse the same file to arrive
+where the wheel already is. Measured rather than assumed — 0 token-ID mismatches
+across all 810 windows and questions, and 0 differences across 264 scored fields
+with only the tokenizer swapped.
+
+**Read the registration before the verdict: the prediction as written failed.** It
+asserted equality with a receipt produced in another environment, and that receipt
+records no environment. The 29 differences are all margins at 1 × 10⁻⁶ and the
+*unmodified* probe reproduces every one of them, so the tokenizer causes none. The
+comparison that isolates a variable is same-environment; that one is exact.
+
+**One finding belongs in the product, not the notes.** Across environments the
+per-turn arm's `top1` changes — three questions name a different meeting. Each was
+already wrong and each sat at a margin of 0.0000. **At a tie, which wrong meeting
+is named is float noise.** `SemanticSearch::near_ties` exists for that, and it was
+shipped a day earlier on weaker evidence than this.
+
+**`EmbedderIdentity` gained `tokenizer_sha256`**, which it should have carried
+from the start. Text reaches the model as token IDs, so two tokenizers change
+every vector while every other field still matches. No vector exists yet, so the
+fix was free; it would have been a migration later.
 
 **The vector store landed 2026-08-08** (US-13.8). A synced corpus is cut into
 128-word windows, each carrying the turn indices and character ranges it came
