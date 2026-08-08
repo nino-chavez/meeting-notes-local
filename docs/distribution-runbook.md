@@ -1,20 +1,52 @@
 # Yawn distribution runbook
 
-**0.5.1 is being cut, 2026-08-08, and 0.5.0 must not be installed.** 0.5.0 was
-cut at `e39f576` hours before `corpus-scan-bench` was pointed at exact search,
-and it carries a defect that hour found: a word appearing more than a hundred
-times across a library returns **no results at all**, with "That search has too
-many matches." Measured at 5, 20, 200 and 800 meetings — it refused at every one,
-so it is a first-week failure rather than a scale limit. Fixed on trunk in
-`ca07ca6` (US-13.14); exact search now returns the hundred most recent matches
-and says how many it cut from.
+**0.5.1 was cut, 2026-08-08, and it is the only image on the operator's desktop.**
+It exists because 0.5.0 was cut at `e39f576` hours before `corpus-scan-bench` was
+pointed at exact search, and carries the defect that hour found: a word appearing
+more than a hundred times across a library returns **no results at all**, with
+"That search has too many matches." Measured at 5, 20, 200 and 800 meetings — it
+refused at every one, so it is a first-week failure rather than a scale limit.
+Fixed in `ca07ca6` (US-13.14); exact search now returns the hundred most recent
+matches and says how many it cut from.
 
-**Delete the 0.5.0 image once 0.5.1 verifies.** Two images in one folder, one of
-them broken, is how the wrong one gets installed — and this is the folder the
-operator is being pointed at.
+**0.5.1's record.** Built at commit `d3468ea` on `main`; DMG SHA-256
+`c409ce7fa1d215ae82b38d84408ef19662f5df99cac070528ebbd12420ab1e0e`,
+1,838,398,703 bytes, 169 arm64-compatible Mach-O files. Notarization submissions
+`7b2190e2-05c4-49c3-9313-536d94546a9e` (app) and
+`ed7fc15c-0b7a-48ec-ba6b-652dd2dd5cfb` (image), both **Accepted**; both stapled,
+both Gatekeeper-accepted with `source=Notarized Developer ID`, checked twice each.
+`verify-release-bundle.py` PASS (signed, 0.5.1, internal-alpha) and the lane exited
+0. Re-verified afterwards under `script`, the pty-backed form this file recommends:
+`verify-signed-release.sh … internal-alpha` PASS at exit 0, from a run written
+down, and that run recomputed the same DMG digest independently of the lane. Its
+interactive operator run is open, and it inherits the chain from 0.2.2, 0.3.0,
+0.3.1, 0.4.0 and 0.5.0 rather than clearing it.
+
+**The 0.5.0 image was deleted, 2026-08-08, after 0.5.1's copy verified.** Two
+images in one folder, one of them broken, is how the wrong one gets installed —
+and this is the folder the operator is being pointed at. The order was: copy in,
+re-digest the copy at its destination, compare to the source, and only then
+delete — so a truncated copy could never be the survivor. The `.sha256` sidecar
+went with it; an orphaned checksum naming a file that is gone is the same
+confusion in a smaller font. Nothing is lost by the deletion: 0.5.0 is
+reproducible from `e39f576`, and its digest stays recorded below.
+
+**Deleting the image does not uninstall the app.** If 0.5.0 was already dragged to
+Applications, the installed build still refuses common words until 0.5.1 is
+installed over it. The image being gone means nobody installs it *again*.
+
+**The image is 1.6 MB smaller than 0.5.0's** — 1,838,398,703 bytes against
+1,840,005,044 — carrying the same 169 Mach-O files and the same model set. Recorded
+because a smaller image after a fix invites the guess that something is missing,
+and the guess is checkable: `verify-release-bundle.py` digests every model against
+the manifest rather than taking the manifest's word, and it passed. What was not
+checked is the two images byte for byte, and this file does not claim it.
 
 **0.5.0 was cut, 2026-08-08 — the first build in which a person can ask the
-corpus a question.** Everything the feature needs landed across #45–#53 and none
+corpus a question — and recalled the same day.** Its image is deleted and it must
+not be installed; everything below is why it was cut and what its lane recorded,
+kept because 0.5.1 is the same build plus one fix and inherits every fact in it.
+Everything the feature needs landed across #45–#53 and none
 of it is in any image: the embedding model entered the runtime on 2026-08-08 and
 the search surface the day after. 0.4.0 cannot do any of this, so the standing
 question — is 7 of 10 useful — has had no build to be asked in.
