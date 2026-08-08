@@ -161,7 +161,7 @@ becoming the system of record.
 | # | Feature | Parity source | Status |
 |---|---|---|---|
 | D1 | **Ask a question across every meeting, get an answer with citations** | Granola ships this on the *free* tier; Circleback's headline | **Unbuilt** — one unproven story today |
-| D2 | Search: exact plus semantic, over transcript and metadata | Otter free vs Pro | **Registered** for exact. Semantic is **measured, not built** — a pinned Apache-2.0 embedding model retrieved 10 of 10 on a ten-meeting synthetic corpus (2026-08-08), three of them by margins under 0.04 |
+| D2 | Search: exact plus semantic, over transcript and metadata | Otter free vs Pro | **Registered** for exact. Semantic is **measured, not built** — 10 of 10 on a ten-meeting synthetic corpus (2026-08-08), three by margins under 0.04, and the MLX implementation reproduces it to 1e-6. The measured unit, one vector per meeting, does not survive a real transcript: the model reads 256 tokens and an hour of speech is ~12,000 |
 | D3 | Filters — people, date range, keywords, titles | Gong documents all four | **Three of four shipped 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search. **People is blocked on A3**: attribution is Me/Them and the contract records that named participants are absent |
 | D4 | Saved searches and streams that collect future matching meetings | Gong | **Unbuilt** |
 | D5 | Land on a claim, not a document | nobody does this | **Unbuilt**, needs B5 |

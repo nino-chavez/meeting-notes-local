@@ -129,6 +129,15 @@ We wrote down what would count as working before running anything. A small model
 that runs on the Mac found the right meeting every time, including all five of the
 ones word-matching cannot answer.
 
+**A follow-up the same day found the real limit, and it is not the model.** The
+version of the model we tested reads about the first 256 words of a meeting and
+silently ignores the rest. Our test meetings were three sentences long, so this
+never showed up — an hour-long meeting would have had roughly two per cent of it
+read, all of it the small talk at the start. The measurements still stand for what
+they measured. What does not stand is the plan to give each meeting a single
+fingerprint; it has to be one per section, and which sections is now the open
+question.
+
 **The score is not the honest part; the margins are.** Three of those five were
 close calls — the right meeting beat the runner-up by about one percent, with only
 nine wrong answers to choose from. With a thousand meetings that gap is not
