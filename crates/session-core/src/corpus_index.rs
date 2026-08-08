@@ -1375,11 +1375,17 @@ pub(crate) mod tests {
         assert_eq!(live, rebuilt);
     }
 
-    /// The corpus store exists to answer what the scan refuses. The scan caps
-    /// at `MAX_SEARCH_RESULTS` spans and returns `CapacityExceeded` beyond it;
-    /// a filtered count must instead answer with a number.
+    /// The corpus store answers a count the scan can only truncate.
+    ///
+    /// **Rewritten 2026-08-08.** This test used to assert that
+    /// `projection.search` returns `CapacityExceeded` past `MAX_SEARCH_RESULTS`,
+    /// and read that refusal as the reason the store exists. The refusal was a
+    /// defect rather than a design — a common word refused at five meetings —
+    /// and the scan now truncates and reports its total instead. What survives
+    /// is the real difference: a scan answers a *page* of spans, and a filtered
+    /// list answers a *count* of meetings without materialising anything.
     #[test]
-    fn a_filter_answers_where_the_scan_refuses() {
+    fn a_filter_counts_what_the_scan_can_only_page() {
         let fixture = Fixture::new();
         // Forty meetings of three turns each is 120 spans carrying the word,
         // past the hundred-hit cap and well inside a real corpus.
@@ -1391,10 +1397,9 @@ pub(crate) mod tests {
             );
         }
         let projection = fixture.projection();
-        assert!(matches!(
-            projection.search("common"),
-            Err(crate::library_read::LibraryReadError::CapacityExceeded)
-        ));
+        let scanned = projection.search("common").expect("the scan answers");
+        assert_eq!(scanned.hits.len(), 100, "the page is capped");
+        assert_eq!(scanned.total, 120, "and it says how many it cut from");
 
         let index = synced(&fixture);
         let page = index

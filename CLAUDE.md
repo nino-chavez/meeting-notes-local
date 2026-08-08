@@ -140,8 +140,11 @@ a branch whose name appears in another repo's config, grep `~/Workspace/dev` for
 the other two are behind `#[cfg(feature = ...)]`. Adding a field to a shared type
 — `LibrarySnapshot` has taken four — leaves the development lane's tests
 constructing it without that field, invisibly, because the default lane never
-parses them. This has happened twice: #38 broke it and #39 found it, then the
-filter work broke it again the same day. Before a PR touching a shared DTO:
+parses them. This has happened three times: #38 broke it and #39 found it, the
+filter work broke it again the same day, and on 2026-08-08 `LibrarySearchResponse`
+gained `total_matches` and broke the dev lane while all three other suites
+stayed green. The three-command check caught that one before it merged, which is
+the only reason it is a footnote rather than another #39. Before a PR touching a shared DTO:
 
     cargo test -p local-meeting-notes-desktop
     TAURI_CONFIG="$(cat apps/desktop/src-tauri/tauri.library-dev.conf.json)" \

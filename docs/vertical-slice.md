@@ -41,18 +41,35 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is moving exact search onto the corpus store, because the
-search that shipped in 0.5.0 refuses a common word at five meetings.**
-`LibraryProjection::search` collects every hit in memory and returns
-`CapacityExceeded` for the whole query past a hundred — not a truncated list, an
-error, rendered as "That search has too many matches." Measured 2026-08-08 at 5,
-20, 200 and 800 meetings: it refuses at every one (`notes/SCAN_COST.md`). Any
-word appearing more than a hundred times across a library — a project name, a
-person's name, "invoice" — returns nothing, in the build now sitting on this
-machine. The store holds turns in SQLite and can rank and `LIMIT` in the query,
-which is what search over a real corpus has to do. Row 1 below was justified by
-exactly this defect and then never finished:
-`library_reader.rs::search_current` still calls `projection.search_filtered`.
+**The next build is the operator opening 0.5.1 against their own meetings.** No
+code stands between here and the judgment this product has never had. Cut a
+build carrying the search fix below, install it, prepare the passages, and ask
+it something. What comes back is the answer to the only open question — whether
+7 of 10 is useful — and nothing in this repository can produce it.
+
+**Exact search stopped refusing a common word on 2026-08-08** (US-13.14). It
+returned `CapacityExceeded` for the whole query past a hundred matches — an
+error, not a short list, rendered as "That search has too many matches" — and
+measured at 5, 20, 200 and 800 meetings it refused at every one. Any word
+appearing more than a hundred times across a library returned nothing, in the
+0.5.0 build cut hours earlier. It now filters, cuts to the hundred most recent,
+and says what it cut from.
+
+**Filter first, then cut.** Cutting before filtering would answer a folder or
+date search with "the hundred most recent matches anywhere, minus the ones
+outside this filter" — nothing at all when the filter selects older meetings.
+The old code could not have that bug because it refused instead of answering, so
+truncation is what makes the order load-bearing. Pinned, and mutation-verified
+under exactly that inversion.
+
+**Moving matching into SQL was considered and rejected**, which is why row 1's
+"move search onto the store" is not what landed. `search-normalization/1` is
+pinned to `char::to_lowercase` in a named rustc release, enforced by a test that
+shells out to `rustc -Vv`, and the offsets it returns are what highlight a span.
+A second normalization in SQL would differ in what matches, not merely in speed.
+Matching stays in Rust; the fix is the cut. The scalable shape — a token table
+built at sync time by the same Rust normalizer — has a latency trigger rather
+than a date, and no size measured here reaches it.
 
 **US-13.6 was named next on 2026-08-08 and that was wrong — measured the same
 day.** The claim was "a wait that grows every month", written without a number.
@@ -297,7 +314,7 @@ largest surface-area addition and says it has nothing to do with audio.
 
 | Order | Build | Feature | Why here |
 |---|---|---|---|
-| 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. **Two things remain and their order flipped on 2026-08-08 when both were measured.** Exact search still runs over the projection and refuses a common word at five meetings, in shipped 0.5.0 — that is next. US-13.6's full scan costs 179 ms at 200 meetings and 663 ms at 800, so it has a trigger somewhere past 1,400 meetings rather than a date (`notes/SCAN_COST.md`) | E6 | Every D-group feature reads it. File-walking search does not survive a real corpus — and this row's own justification is the defect still shipping |
+| 1 | ~~A durable local store — SQLite over the meeting corpus, migrations, and the read model the Library already needs~~ **Landed 2026-08-07** as `corpus_index.rs`, synced whenever the library is read. **Two things remain and their order flipped on 2026-08-08 when both were measured.** ~~Exact search still runs over the projection and refuses a common word at five meetings~~ **Fixed 2026-08-08** as US-13.14 — it truncates and reports its total, and matching stayed in Rust because the normalization is version-pinned. US-13.6's full scan costs 171 ms at 200 meetings and 672 ms at 800, so it has a trigger somewhere past 1,400 meetings rather than a date (`notes/SCAN_COST.md`) | E6 | Every D-group feature reads it. This row's own justification — a common word refusing — is closed, and what the store still buys is sub-linear candidate selection nobody needs yet |
 | 2 | ~~Auto-titling~~ **Landed 2026-08-07** as `meeting_title.rs` — the first non-gated turn's opening sentence, behind an operator title and above the capture time. The local-model half was **measured and refused** on 2026-08-08 at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`); the seam was not built, and re-running the committed harness against another candidate is a decision, not a pending task | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | ~~Folders, and the meeting object's sibling views~~ **Writer landed 2026-08-08** — `library-metadata/1` gained the five named commands, whole-meeting deletion now takes the organization row first, and naming a meeting is wired end to end. The folder surface is `backlog.md` US-14.4 and is deliberately unbuilt | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | ~~Filters — people, date range, keywords, titles~~ **Three of four landed 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search, plus the folder surface item 3 deferred. **People is blocked on A3** (Wave 3 item 11), because attribution is Me/Them and named participants are absent by contract | D3 | Gong documents all four. Free once the store exists |

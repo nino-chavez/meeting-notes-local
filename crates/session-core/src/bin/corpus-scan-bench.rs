@@ -15,6 +15,10 @@
 //! Prints one JSON receipt on stdout. Progress goes to stderr so the receipt
 //! survives a pipe.
 //!
+//! The query figures report `{shown, matched}`. Before 2026-08-08 they reported
+//! the string `library read capacity exceeded` for a common word at every size
+//! this harness was ever run at, which is the defect the truncation fixed.
+//!
 //! **It measures both halves of a library open.** The projection rebuild was the
 //! only number here until 2026-08-08, and `LibraryReader::rebuild` also syncs the
 //! corpus index on the same path — so a launch cost quoted from the scan alone is
@@ -214,7 +218,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let outcome = projection.search(query);
         let milliseconds = (started.elapsed().as_secs_f64() * 100_000.0).round() / 100.0;
         match outcome {
-            Ok(hits) => (milliseconds, serde_json::json!(hits.len())),
+            // Two numbers since 2026-08-08: what a person is shown, and how many
+            // matched. Before that this field held the string
+            // "library read capacity exceeded" at every size measured, because a
+            // common word refused the whole query rather than answering it.
+            Ok(found) => (
+                milliseconds,
+                serde_json::json!({"shown": found.hits.len(), "matched": found.total}),
+            ),
             Err(error) => (milliseconds, serde_json::json!(format!("{error}"))),
         }
     };

@@ -1022,6 +1022,7 @@ mod tests {
                 claim_ordinal: None,
                 transcript_available: true,
             }],
+            total_matches: 1,
             unavailable_count: 0,
             message: "untrusted test response".into(),
         });

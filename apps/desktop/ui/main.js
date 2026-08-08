@@ -824,9 +824,14 @@ function renderLibrarySearch(response) {
     librarySearchResults.append(row);
   }
   const resultCount = (response.results || []).length;
-  const resultMessage = response.state === "results-incomplete"
-    ? response.message
+  const total = Number.isInteger(response.totalMatches) ? response.totalMatches : resultCount;
+  // The result is the rows. The total is a diagnostic, and it only earns a
+  // sentence when it changes what the reader should do — which is when the page
+  // was cut and narrowing the query would show them something else.
+  const cut = total > resultCount
+    ? `Showing the ${resultCount} most recent of ${total} matches. Add a word to narrow it.`
     : `${resultCount} exact ${resultCount === 1 ? "match" : "matches"} found.`;
+  const resultMessage = response.state === "results-incomplete" ? response.message : cut;
   setError(libraryNotice, resultMessage || "Exact results from your retained meetings.");
 }
 

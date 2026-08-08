@@ -428,6 +428,24 @@ fn product_operation_facade_registers_restoration_but_not_regeneration() {
         );
     }
 
+    // A broad exact query is answered rather than refused, and the shell says
+    // what it cut. Until 2026-08-08 more than a hundred matches returned
+    // "That search has too many matches" with no results, at five meetings.
+    let reader = include_str!("../src/library_reader.rs");
+    assert!(
+        !reader.contains("That search has too many matches"),
+        "the refusal copy survived the refusal"
+    );
+    assert!(
+        !reader.contains("state: \"bounded\""),
+        "a state nothing can produce is still constructible"
+    );
+    assert!(shell.contains("response.totalMatches"));
+    assert!(
+        shell.contains("most recent of"),
+        "the shell renders a cut page without saying it was cut"
+    );
+
     // A hit is a passage, not a percentage. Cosine similarity is not a
     // confidence, and printing one as a match rate would claim a number nobody
     // measured — the quoted words are what let a person judge the match.

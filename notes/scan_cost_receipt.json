@@ -1,6 +1,6 @@
 {
-  "schema": "scan-cost/1",
-  "harness_sha256": "761ac50835b655c6183e36e358ab4c45373e22b71e3800d15724c8331784c97d",
+  "schema": "scan-cost/2",
+  "harness_sha256": "6bc3f0a0065d9f1ae28546c5bf28ef6ea81bc16cc81813f3a338bf86f59ab6d4",
   "environment": {
     "machine": "arm64",
     "kernel": "25.5.0",
@@ -8,9 +8,9 @@
   },
   "runs": [
     {
-      "cold_index_sync_milliseconds": 3.31,
+      "cold_index_sync_milliseconds": 3.76,
       "cold_index_sync_wrote": true,
-      "cold_rebuild_milliseconds": 4.27,
+      "cold_rebuild_milliseconds": 5.2,
       "corpus": {
         "meetings": 5,
         "transcript_bytes": 185820,
@@ -20,18 +20,24 @@
       "rows_projected": 5,
       "schema": "corpus-scan-bench/1",
       "search_result_cap": 100,
-      "warm_common_query_hits": "library read capacity exceeded",
-      "warm_common_query_milliseconds": 4.64,
-      "warm_index_sync_milliseconds": 0.03,
+      "warm_common_query_hits": {
+        "matched": 1500,
+        "shown": 100
+      },
+      "warm_common_query_milliseconds": 5.16,
+      "warm_index_sync_milliseconds": 0.02,
       "warm_index_sync_wrote": false,
-      "warm_rare_query_hits": 1,
-      "warm_rare_query_milliseconds": 4.25,
-      "write_seconds": 0.375
+      "warm_rare_query_hits": {
+        "matched": 1,
+        "shown": 1
+      },
+      "warm_rare_query_milliseconds": 4.48,
+      "write_seconds": 0.413
     },
     {
-      "cold_index_sync_milliseconds": 11.56,
+      "cold_index_sync_milliseconds": 11.86,
       "cold_index_sync_wrote": true,
-      "cold_rebuild_milliseconds": 20.29,
+      "cold_rebuild_milliseconds": 18.32,
       "corpus": {
         "meetings": 20,
         "transcript_bytes": 743280,
@@ -41,18 +47,24 @@
       "rows_projected": 20,
       "schema": "corpus-scan-bench/1",
       "search_result_cap": 100,
-      "warm_common_query_hits": "library read capacity exceeded",
-      "warm_common_query_milliseconds": 21.32,
-      "warm_index_sync_milliseconds": 0.04,
+      "warm_common_query_hits": {
+        "matched": 6000,
+        "shown": 100
+      },
+      "warm_common_query_milliseconds": 18.99,
+      "warm_index_sync_milliseconds": 0.05,
       "warm_index_sync_wrote": false,
-      "warm_rare_query_hits": 1,
-      "warm_rare_query_milliseconds": 19.24,
-      "write_seconds": 1.517
+      "warm_rare_query_hits": {
+        "matched": 1,
+        "shown": 1
+      },
+      "warm_rare_query_milliseconds": 16.17,
+      "write_seconds": 1.622
     },
     {
-      "cold_index_sync_milliseconds": 111.28,
+      "cold_index_sync_milliseconds": 109.74,
       "cold_index_sync_wrote": true,
-      "cold_rebuild_milliseconds": 179.05,
+      "cold_rebuild_milliseconds": 171.24,
       "corpus": {
         "meetings": 200,
         "transcript_bytes": 7432800,
@@ -62,18 +74,24 @@
       "rows_projected": 200,
       "schema": "corpus-scan-bench/1",
       "search_result_cap": 100,
-      "warm_common_query_hits": "library read capacity exceeded",
-      "warm_common_query_milliseconds": 185.09,
-      "warm_index_sync_milliseconds": 0.26,
+      "warm_common_query_hits": {
+        "matched": 60000,
+        "shown": 100
+      },
+      "warm_common_query_milliseconds": 182.3,
+      "warm_index_sync_milliseconds": 0.27,
       "warm_index_sync_wrote": false,
-      "warm_rare_query_hits": 1,
-      "warm_rare_query_milliseconds": 161.6,
-      "write_seconds": 15.471
+      "warm_rare_query_hits": {
+        "matched": 1,
+        "shown": 1
+      },
+      "warm_rare_query_milliseconds": 168.89,
+      "write_seconds": 15.978
     },
     {
-      "cold_index_sync_milliseconds": 443.11,
+      "cold_index_sync_milliseconds": 434.76,
       "cold_index_sync_wrote": true,
-      "cold_rebuild_milliseconds": 662.62,
+      "cold_rebuild_milliseconds": 671.84,
       "corpus": {
         "meetings": 800,
         "transcript_bytes": 29731200,
@@ -83,13 +101,19 @@
       "rows_projected": 800,
       "schema": "corpus-scan-bench/1",
       "search_result_cap": 100,
-      "warm_common_query_hits": "library read capacity exceeded",
-      "warm_common_query_milliseconds": 718.61,
-      "warm_index_sync_milliseconds": 1.13,
+      "warm_common_query_hits": {
+        "matched": 240000,
+        "shown": 100
+      },
+      "warm_common_query_milliseconds": 731.66,
+      "warm_index_sync_milliseconds": 1.06,
       "warm_index_sync_wrote": false,
-      "warm_rare_query_hits": 1,
-      "warm_rare_query_milliseconds": 626.59,
-      "write_seconds": 62.762
+      "warm_rare_query_hits": {
+        "matched": 1,
+        "shown": 1
+      },
+      "warm_rare_query_milliseconds": 645.87,
+      "write_seconds": 64.196
     }
   ]
 }
