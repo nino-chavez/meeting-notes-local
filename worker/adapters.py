@@ -1476,6 +1476,31 @@ def note_create(
     return digests
 
 
+def corpus_embed(arguments: object, embedding_dir: Path | None) -> dict[str, str]:
+    """Window text to vector. Reads no file and writes none.
+
+    The odd one out in this module: every other adapter names artifacts under the
+    storage root and returns their digests. This is a pure function of its
+    arguments, because windowing is pinned in `corpus_window.rs` against the
+    boundaries the measurement produced and re-deriving it here would be a third
+    implementation of the same cut.
+
+    The reply is `{text_sha256: base64 little-endian float32}` — the byte layout
+    `corpus_window_vector` stores, so the store writes what the model produced
+    rather than a re-encoding of it.
+    """
+    values = _exact_arguments(arguments, {"windows"})
+    if embedding_dir is None:
+        raise AdapterRefused("no embedding model is packaged in this runtime")
+    from worker.embedding import EmbeddingRefused, embed_windows, load
+
+    try:
+        encoder, tokenizer = load(embedding_dir)
+        return embed_windows(encoder, tokenizer, values["windows"])
+    except EmbeddingRefused as exc:
+        raise AdapterRefused(str(exc)) from None
+
+
 def dispatch(
     root: Path,
     operation: str,
@@ -1485,6 +1510,7 @@ def dispatch(
     admission: str = "boundary-test",
     model_dir: Path | None = None,
     encoder_path: Path | None = None,
+    embedding_dir: Path | None = None,
 ) -> dict[str, str]:
     adapters = {
         "profile.inspect": lambda: profile_inspect(root, arguments, encoder_digest),
@@ -1510,6 +1536,7 @@ def dispatch(
             encoder_path=encoder_path,
         ),
         "note.inspect": lambda: note_inspect(root, arguments),
+        "corpus.embed": lambda: corpus_embed(arguments, embedding_dir),
         "capture.finalize": lambda: capture_finalize(root, arguments),
         "transcript.restore": lambda: transcript_restore(root, arguments),
     }

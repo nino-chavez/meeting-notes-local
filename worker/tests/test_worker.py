@@ -272,6 +272,11 @@ class WorkerProtocolTests(unittest.TestCase):
                 expected_operations |= {
                     "profile.adopt",
                     "note.inspect",
+                    # Boundary lane only, and for a packaging reason rather than
+                    # an admission one: no lane carries the embedding model yet,
+                    # so the shipped internal-alpha set would advertise a
+                    # capability the worker can only refuse.
+                    "corpus.embed",
                 }
             self.assertEqual(set(worker.ready["operations"]), expected_operations)
             inspected = worker.request("capture.inspect", {"meeting_id": meeting_id})
