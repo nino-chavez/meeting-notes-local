@@ -1455,10 +1455,19 @@ were decided by less than 0.04 cosine — one by 0.013 — on a corpus of ten
 meetings. That justifies building the store and says nothing about a thousand
 meetings. The next measurement here is distractor density.
 
-**Not built:** the vector column, the MLX forward pass, and any surface. The
-probe used the Apache-2.0 reference implementation because `mlx-embeddings` is
-GPL-3.0 and this repository is MIT — so the shipping path is a forward pass
-written here, checkable against the committed receipts.
+**The MLX forward pass is written and verified.** `notes/mlx_minilm.py`
+reproduces the reference rankings 10 of 10 with a worst margin difference of
+0.000001 against a 0.01 tolerance registered before it existed. Receipt:
+`mlx_minilm_verification_receipt.json`.
+
+**Not built:** the vector column and any surface — and the unit has to be decided
+before the column can be, because the measured one does not survive a real
+meeting. `max_seq_length` is 256 tokens and the reference implementation
+truncates silently; the fixtures were 39 to 48 tokens, so the ceiling could not
+appear in the result. An hour of speech is roughly 12,000 tokens. One vector per
+turn and one vector per window are both registered as candidates and neither is
+chosen; the distractor-density measurement should run against whichever is
+proposed, on meetings long enough to truncate.
 
 **Evidence:** the fixtures were hardened mid-registration. A word-overlap ranker
 with no model in it initially scored 8 of 10 and 3 of 5 on the hard half, because

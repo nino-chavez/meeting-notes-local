@@ -217,3 +217,79 @@ rankings but its margins on the hard five differ by more than 0.01, the two
 implementations are not computing the same thing and the difference must be found
 before either is trusted — the rankings agreeing is a weaker check than it looks
 when three of them are decided by 0.013.
+
+---
+
+## Correction — 2026-08-08 — the measured setup reads the first 256 tokens of a meeting
+
+Found while writing the MLX implementation, by reading
+`sentence_bert_config.json` rather than by anything failing.
+
+**`max_seq_length` is 256.** `SentenceTransformer.encode` truncates to it
+silently. The fixtures above are 39 to 48 tokens each, so nothing was ever cut
+and the ceiling could not appear in that result.
+
+A real meeting is not 48 tokens. An hour of speech is roughly twelve thousand,
+of which this model reads the first two per cent — the opening small talk, and
+none of the decision.
+
+**What this does and does not invalidate.** The measured numbers stand: those ten
+meetings were embedded whole, the rankings and margins are real, and the MLX
+implementation reproduces them. What does not survive is the *unit*. "One vector
+per meeting" is what was measured and it is not what can ship, because at real
+length it is one vector per meeting's first minute.
+
+**This is a fixture-shape failure, not a model failure**, and it is the second
+one this document records. The first was a word-overlap control passing the hard
+half; both come from fixtures small and clean enough to hide a property of the
+real input. Short synthetic meetings were chosen so the corpus could be read at a
+glance, and that choice is exactly what concealed this.
+
+### Registered follow-up, before it is built
+
+The unit has to change and the choice is not obvious, so it is registered rather
+than decided in code:
+
+- **One vector per turn** — natural boundaries, no arbitrary cuts, and the count
+  grows with the corpus. It also makes meeting-level retrieval an aggregation
+  question (best turn? mean? top-k?) that this probe has not measured.
+- **One vector per window of N tokens** — bounded count, but cuts land mid-sentence
+  and a window straddling two subjects embeds neither.
+
+**Neither is chosen here.** The next measurement on this path is the one already
+registered — distractor density at corpus scale — and it should be run against
+whichever unit is being proposed, on meetings long enough to truncate. Running it
+on 48-token fixtures would repeat the mistake this section is recording.
+
+## The MLX implementation agrees — 2026-08-08
+
+`mlx_minilm.py` is the forward pass this document said the licence required:
+BERT encoder, six layers, mean pooling, weights loaded from the pinned
+checkpoint. The tokenizer stays `transformers`, which is Apache-2.0 — tokenizing
+is not the licence problem, and whether that dependency belongs in the product
+runtime is a separate question this does not answer.
+
+The registered falsifier was that rankings agreeing is too weak a check when
+three of the deciding comparisons turn on 0.013, so the margins had to agree
+within 0.01.
+
+| Check | Result |
+|---|---|
+| Rankings agreeing with the committed receipt | **10 of 10** |
+| Worst margin difference | **0.000001**, against a 0.01 tolerance |
+| Compared against | the committed receipt, not a freshly computed reference |
+
+Receipt: `mlx_minilm_verification_receipt.json`. The comparison refuses outright
+if the fixtures have moved since the reference run, because a check that
+regenerates its own baseline cannot fail.
+
+Two implementation details worth naming, because each would have passed a ranking
+check and failed the margin one: `hidden_act` is `gelu`, meaning the erf
+formulation rather than the tanh approximation they differ by ~1e-3; and the
+checkpoint carries a `pooler.dense` head that sentence-transformers does not use
+for this model, so pooling is the mask-weighted mean and not that head.
+
+**`encode` refuses input over 256 tokens rather than truncating it.** The
+reference implementation truncates silently, which is how the ceiling above went
+unnoticed. Whatever the unit turns out to be, the decision about a long meeting
+should be made by something that knows it is making one.

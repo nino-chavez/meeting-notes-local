@@ -41,27 +41,33 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the vector store for Wave 1 item 5.** The measurement that
-decides whether it was worth building ran on 2026-08-08 and passed:
-`notes/SEMANTIC_RETRIEVAL.md` registered a two-sided prediction of 8–10 of 10
-before anything was downloaded, and a pinned Apache-2.0 embedding model returned
-**10 of 10, including all five questions exact search cannot answer** — where
-exact search and a word-overlap control both score zero.
+**The next build is the vector store for Wave 1 item 5 — and the unit it stores
+has to be decided first, because the measured one does not survive a real
+meeting.**
 
-**Read the margins before reading the score.** Three of those five were decided by
-less than 0.04 cosine, one by 0.013, on a corpus of ten meetings. That is enough to
-justify building the store and not enough to predict behaviour at a thousand. The
-next measurement on this path is distractor density, not a longer question list.
+The MLX forward pass the licence required is written and verified.
+`notes/mlx_minilm.py` reproduces the reference implementation's rankings 10 of 10
+with a worst margin difference of **0.000001**, against a tolerance of 0.01 that
+was registered before the file existed. That check exists because three of the
+five deciding comparisons turn on 0.013 cosine, so rankings agreeing would have
+been too weak on its own.
 
-**What the pass licenses**, and it is exactly this: a vector column beside the
-corpus index, written when the index syncs, and an MLX forward pass to fill it.
-The convenient MLX embedding wrapper is GPL-3.0 and this repository is MIT, so the
-forward pass is written here rather than imported — and its vectors can be checked
-against the committed receipts, which is what makes that task verifiable.
+**The correction that matters more than the pass.** `max_seq_length` is 256
+tokens, and `SentenceTransformer.encode` truncates to it silently. The probe's
+fixtures were 39 to 48 tokens, so nothing was ever cut and the ceiling could not
+appear in the result. An hour of speech is roughly twelve thousand tokens, of
+which this model reads the first two per cent — the opening small talk, and none
+of the decision. The numbers stand; **the unit does not.** "One vector per
+meeting" is what was measured and it is not what can ship.
 
-It licenses nothing else. No command, no packaged model, and no claim that
-semantic results are useful; ten synthetic meetings graded by their author is
-retrieval mechanics on a toy corpus.
+`notes/SEMANTIC_RETRIEVAL.md` registers the two candidates — per turn, or per
+window — and chooses neither, because the distractor-density measurement already
+registered should run against whichever unit is proposed, on meetings long enough
+to truncate. Running it on 48-token fixtures would repeat the mistake.
+
+**Second fixture-shape failure on this path in two days**, after a word-overlap
+control passing the hard half. Both came from fixtures small and clean enough to
+hide a property of the real input, which is now the thing to distrust first here.
 
 A struck-through row is finished; the first row that is not struck through is the
 work. That rule is the whole resume protocol, and it holds whether the session
