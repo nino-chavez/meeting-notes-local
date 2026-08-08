@@ -161,7 +161,7 @@ becoming the system of record.
 | # | Feature | Parity source | Status |
 |---|---|---|---|
 | D1 | **Ask a question across every meeting, get an answer with citations** | Granola ships this on the *free* tier; Circleback's headline | **Unbuilt** — one unproven story today |
-| D2 | Search: exact plus semantic, over transcript and metadata | Otter free vs Pro | **Registered** for exact. Semantic is **measured, not built** — **7 of 10 on 200 realistic meetings, 3 of 5 on the questions exact search cannot answer** (2026-08-08), down from 10 of 10 on ten short fixtures. Unit decided: one vector per 128-word window, chosen on a registered cost tiebreak after tying with per-turn on accuracy |
+| D2 | Search: exact plus semantic, over transcript and metadata | Otter free vs Pro | **Registered for exact and semantic.** The current Rust command and Find surface read prepared 128-word windows from the derived local index and return quoted passages. Semantic retrieval remains **measured, not product-adjudicated** — **7 of 10 on 200 realistic meetings, 3 of 5 on the questions exact search cannot answer** (2026-08-08), down from 10 of 10 on ten short fixtures. This is search, not D1's composed answer across meetings |
 | D3 | Filters — people, date range, keywords, titles | Gong documents all four | **Three of four shipped 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search. **People is blocked on A3**: attribution is Me/Them and the contract records that named participants are absent |
 | D4 | Saved searches and streams that collect future matching meetings | Gong | **Unbuilt** |
 | D5 | Land on a claim, not a document | nobody does this | **Unbuilt**, needs B5 |
@@ -181,7 +181,7 @@ four stories of exact search plus one unproven story for the actual headline.
 | E3 | Preparation brief before the meeting | Wispr's preread tab | **Unbuilt** |
 | E4 | A shell that never lies at menubar size | own | **Shipped** |
 | E5 | Retention with named auto-deletion periods | Granola enterprise vocabulary | **Shipped** automatic; periods **Unbuilt** |
-| E6 | Local store and retrieval at corpus scale | `teardown.md` names SQLite | **Partial** — the derived SQLite index landed 2026-08-07 and is written whenever the library is opened. **Nothing reads it yet**: the app builds the full projection first, so filters are answered from memory, and the index earns a reader when US-13.6 stops the scan being the entry point |
+| E6 | Local store and retrieval at corpus scale | `teardown.md` names SQLite | **Partial** — the derived SQLite index landed 2026-08-07 and is written whenever the library is opened. Meaning search now reads its prepared windows. The ordinary library and filter path still builds the full projection first, so US-13.6 remains the work that removes the scan as the entry point |
 
 ---
 

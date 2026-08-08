@@ -22,6 +22,10 @@ import {
   headerActionPolicy,
   transcriptPlainText,
   headerStatusPresentation,
+  quickControlPresentation,
+  commandMenuPresentation,
+  helpTopicPresentation,
+  shellStatePresentation,
   normalizedScrollPosition,
   prepareConsentTransition,
   refreshFindGeneration,
@@ -45,7 +49,7 @@ test("workflow routes advance only while they own the screen", () => {
 
   assert.equal(workflowScreenForSnapshot(recording), "recording-screen");
   assert.equal(workflowScreenForSnapshot(ready), "transcript-screen");
-  assert.equal(workflowScreenForSnapshot({ startup: "ready", capture: "idle" }), "find-screen");
+  assert.equal(workflowScreenForSnapshot({ startup: "ready", capture: "idle" }), "home-screen");
   assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", false), "meetings-screen");
   assert.equal(resolvedScreenForSnapshot(ready, "profile-screen", false), "profile-screen");
   assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", true), "recording-screen");
@@ -135,6 +139,115 @@ test("channel and header visual states use only the relevant snapshot facts", ()
   assert.equal(headerStatusPresentation({ startup: "ready", capture: "recording" }), "active");
   assert.equal(headerStatusPresentation({ startup: "ready", capture: "recording", degraded: true }), "attention");
   assert.equal(headerStatusPresentation({ startup: "runtime-missing", capture: "idle" }), "attention");
+});
+
+test("the desktop quick control names every admitted capture state and action", () => {
+  assert.deepEqual(
+    quickControlPresentation({ startup: "ready", capture: "idle" }),
+    {
+      state: "idle",
+      triggerLabel: "Ready",
+      title: "Ready to record",
+      detail: "Nothing is recording. Every attempt starts with consent and retention review.",
+      primaryLabel: "Record a meeting",
+      secondaryLabel: "",
+    },
+  );
+  assert.equal(
+    quickControlPresentation({ startup: "ready", capture: "recording" }).state,
+    "recording",
+  );
+  const degraded = quickControlPresentation({ startup: "ready", capture: "recording", degraded: true });
+  assert.equal(degraded.state, "degraded");
+  assert.equal(degraded.triggerLabel, "Recording issue");
+  assert.equal(degraded.secondaryLabel, "Stop recording");
+  assert.equal(
+    quickControlPresentation({ startup: "ready", capture: "transcribing" }).primaryLabel,
+    "View progress",
+  );
+  assert.equal(
+    quickControlPresentation({ startup: "ready", capture: "transcript-ready" }).secondaryLabel,
+    "Record another",
+  );
+  assert.equal(
+    quickControlPresentation({ startup: "runtime-missing", capture: "idle" }).state,
+    "error",
+  );
+});
+
+test("the command menu keeps routes stable and capture actions state-aware", () => {
+  const idle = commandMenuPresentation({ startup: "ready", capture: "idle" });
+  assert.deepEqual(
+    idle.slice(0, 4).map(({ id, shortcut }) => [id, shortcut]),
+    [["meetings", "⌘1"], ["ask", "⌘2"], ["actions", "⌘3"], ["settings", "⌘,"]],
+  );
+  assert.equal(idle.some((command) => command.id === "home"), false);
+  assert.equal(idle.find((command) => command.id === "actions").planned, true);
+  assert.equal(idle.find((command) => command.id === "setup").action, "setup");
+  assert.equal(idle.find((command) => command.id === "states").action, "states");
+  assert.equal(idle.find((command) => command.id === "help").action, "help");
+  assert.equal(idle.find((command) => command.id === "desktop").action, "desktop");
+  assert.deepEqual(
+    idle.find((command) => command.id === "workflow"),
+    {
+      id: "workflow",
+      label: "Record a meeting",
+      detail: "Open consent and retention review before recording",
+      shortcut: "",
+      action: "start",
+    },
+  );
+
+  const recording = commandMenuPresentation({ startup: "ready", capture: "recording" });
+  assert.equal(recording.find((command) => command.id === "workflow").label, "View recording");
+  assert.equal(recording.find((command) => command.id === "stop").action, "stop");
+
+  const processing = commandMenuPresentation({ startup: "ready", capture: "transcribing" });
+  assert.equal(processing.find((command) => command.id === "workflow").label, "View progress");
+  assert.equal(processing.some((command) => command.id === "stop"), false);
+});
+
+test("help topics keep diagnostics private and updates manual", () => {
+  const diagnostics = helpTopicPresentation("diagnostics");
+  assert.equal(diagnostics.primaryAction, "states");
+  assert.match(diagnostics.lede, /owner-only file on this Mac/);
+  assert.deepEqual(diagnostics.facts.map(([label, value]) => [label, value]), [
+    ["Included", "Error code and redacted detail"],
+    ["Redacted", "Paths, email-like tokens, and environment-style values"],
+    ["Not attached", "Audio, transcript files, or operator notes"],
+  ]);
+
+  const updates = helpTopicPresentation("updates");
+  assert.match(updates.title, /manual for the first release/);
+  assert.equal(updates.facts[0][1], "Unavailable");
+  assert.match(updates.facts[2][2], /still needs migration-failure and rollback proof/);
+  assert.equal(helpTopicPresentation("unknown").id, "overview");
+});
+
+test("system-state previews name what survived and never promote interruption to completion", () => {
+  const loading = shellStatePresentation("loading");
+  assert.equal(loading.primaryAction, "home");
+  assert.match(loading.lede, /Recording controls stay unavailable/);
+
+  const empty = shellStatePresentation("empty");
+  assert.equal(empty.title, "No retained meetings yet.");
+  assert.equal(empty.primaryAction, "start");
+
+  const failure = shellStatePresentation("failure");
+  assert.deepEqual(failure.facts.map(([label, value]) => [label, value]), [
+    ["Recording audio", "Retained for recovery"],
+    ["Operator note", "Retained"],
+    ["Transcript", "Unavailable"],
+  ]);
+
+  const recovery = shellStatePresentation("recovery");
+  assert.equal(recovery.facts[0][1], "Interrupted");
+  assert.match(recovery.lede, /rather than complete/);
+
+  const repair = shellStatePresentation("repair");
+  assert.equal(repair.primaryAction, "loading");
+  assert.match(repair.lede, /private diagnostic on this Mac/);
+  assert.equal(shellStatePresentation("unknown").id, "loading");
 });
 
 test("mutable actions match the admitted capture and startup states", () => {
@@ -568,6 +681,7 @@ test("idle start is direct and other capture states refuse consent", async () =>
 });
 
 test("nested routes keep their real product root", () => {
+  assert.equal(rootForDestination("home-screen", "find-screen"), "home-screen");
   assert.equal(rootForDestination("find-screen", "meetings-screen"), "find-screen");
   assert.equal(rootForDestination("meetings-screen", "find-screen"), "meetings-screen");
   assert.equal(rootForDestination("promises-screen", "find-screen"), "promises-screen");
@@ -575,7 +689,7 @@ test("nested routes keep their real product root", () => {
   assert.equal(rootForDestination("library-transcript-screen", "find-screen"), "find-screen");
   assert.equal(rootForDestination("library-transcript-screen", "promises-screen"), "promises-screen");
   assert.equal(rootForDestination("profile-screen", "meetings-screen"), "meetings-screen");
-  assert.equal(rootForDestination("profile-screen", "unknown"), "find-screen");
+  assert.equal(rootForDestination("profile-screen", "unknown"), "home-screen");
 });
 
 test("returning restores scroll while new content starts at the top", () => {
@@ -597,21 +711,26 @@ test("a fresh snapshot looks up a meeting by durable id, not an old handle", () 
 test("evidence opened from a meeting detail carries normalized scroll and a full claim identity", () => {
   const claim = { ordinal: 4, claimType: "action", claim: "Follow up with the customer." };
   assert.deepEqual(
-    transcriptReturnRoute("meeting-detail", "meeting-a", { claim, detailScrollTop: 184.5 }),
+    transcriptReturnRoute("meeting-detail", "meeting-a", { claim, detailScrollTop: 184.5, detailTab: "evidence" }),
     {
       destination: "meeting-detail",
       meetingId: "meeting-a",
       claim,
       detailScrollTop: 184.5,
+      detailTab: "evidence",
     },
   );
   assert.deepEqual(
     transcriptReturnRoute("find", "meeting-a", { claim, detailScrollTop: 184 }),
-    { destination: "product-root", meetingId: null, claim: null, detailScrollTop: 0 },
+    { destination: "product-root", meetingId: null, claim: null, detailScrollTop: 0, detailTab: "note" },
   );
   assert.deepEqual(
     transcriptReturnRoute("meeting-detail", "", { claim, detailScrollTop: 184 }),
-    { destination: "product-root", meetingId: null, claim: null, detailScrollTop: 0 },
+    { destination: "product-root", meetingId: null, claim: null, detailScrollTop: 0, detailTab: "note" },
+  );
+  assert.equal(
+    transcriptReturnRoute("meeting-detail", "meeting-a", { detailTab: "unknown" }).detailTab,
+    "note",
   );
   assert.equal(normalizedScrollPosition(-1), 0);
   assert.equal(normalizedScrollPosition(Number.NaN), 0);

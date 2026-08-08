@@ -1,15 +1,16 @@
 export const PRODUCT_ROOT_SCREENS = Object.freeze([
+  "home-screen",
   "find-screen",
   "meetings-screen",
   "promises-screen",
 ]);
 
-export function workflowScreenForSnapshot(snapshot, currentScreen = "find-screen") {
+export function workflowScreenForSnapshot(snapshot, currentScreen = "home-screen") {
   const startup = snapshot?.startup || "diagnostic-written";
   const capture = snapshot?.capture || "idle";
   if (startup !== "ready") return "startup-screen";
   if (capture === "idle") {
-    return currentScreen === "idle-screen" ? "idle-screen" : "find-screen";
+    return currentScreen === "idle-screen" ? "idle-screen" : "home-screen";
   }
   return {
     arming: "arming-screen",
@@ -51,7 +52,7 @@ export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
 export function headerActionPolicy(snapshot, {
   stopPending = false,
   workflowOwnsRoute = true,
-  currentScreen = "find-screen",
+  currentScreen = "home-screen",
 } = {}) {
   const capture = snapshot?.capture || "idle";
   const startup = snapshot?.startup || "diagnostic-written";
@@ -70,6 +71,7 @@ export function headerActionPolicy(snapshot, {
     showStart: actions.canStartMeeting
       && ((capture === "idle"
         && [
+          "home-screen",
           "find-screen",
           "meetings-screen",
           "promises-screen",
@@ -107,6 +109,334 @@ export function headerStatusPresentation(snapshot) {
   return "unknown";
 }
 
+export function quickControlPresentation(snapshot) {
+  const startup = snapshot?.startup || "diagnostic-written";
+  const capture = snapshot?.capture || "idle";
+  if (startup !== "ready") {
+    return {
+      state: "error",
+      triggerLabel: "Needs attention",
+      title: "Recording unavailable",
+      detail: "Open Yawn to review the local startup issue.",
+      primaryLabel: "View issue",
+      secondaryLabel: "",
+    };
+  }
+  if (capture === "idle") {
+    return {
+      state: "idle",
+      triggerLabel: "Ready",
+      title: "Ready to record",
+      detail: "Nothing is recording. Every attempt starts with consent and retention review.",
+      primaryLabel: "Record a meeting",
+      secondaryLabel: "",
+    };
+  }
+  if (capture === "arming") {
+    return {
+      state: "preparing",
+      triggerLabel: "Preparing",
+      title: "Preparing both channels",
+      detail: "Nothing is recording yet. Capture starts only after both channels are ready.",
+      primaryLabel: "View preparation",
+      secondaryLabel: "",
+    };
+  }
+  if (capture === "recording") {
+    const degraded = snapshot?.degraded === true;
+    return {
+      state: degraded ? "degraded" : "recording",
+      triggerLabel: degraded ? "Recording issue" : "Recording",
+      title: degraded ? "Recording with one channel at risk" : "Recording",
+      detail: degraded
+        ? "Recording continues. One local audio channel needs attention."
+        : "Microphone and system audio are both active on this Mac.",
+      primaryLabel: "View recording",
+      secondaryLabel: "Stop recording",
+    };
+  }
+  if (capture === "stopping") {
+    return {
+      state: "stopping",
+      triggerLabel: "Stopping",
+      title: "Securing the recording",
+      detail: "Both local audio files are being closed before transcription begins.",
+      primaryLabel: "View recording",
+      secondaryLabel: "",
+    };
+  }
+  if (capture === "captured" || capture === "transcribing") {
+    return {
+      state: "processing",
+      triggerLabel: "Processing",
+      title: "Transcribing on this Mac",
+      detail: "The recording has stopped. You may use the rest of Yawn while the transcript is prepared.",
+      primaryLabel: "View progress",
+      secondaryLabel: "",
+    };
+  }
+  if (capture === "transcript-ready") {
+    return {
+      state: "result",
+      triggerLabel: "Transcript ready",
+      title: "Transcript ready",
+      detail: "The retained transcript is ready to review on this Mac.",
+      primaryLabel: "View transcript",
+      secondaryLabel: "Record another",
+    };
+  }
+  return {
+    state: "error",
+    triggerLabel: "Needs attention",
+    title: "Capture needs attention",
+    detail: "Open Yawn to review what was retained and what did not complete.",
+    primaryLabel: "View issue",
+    secondaryLabel: "",
+  };
+}
+
+export function commandMenuPresentation(snapshot) {
+  const capture = snapshot?.capture || "idle";
+  const workflow = quickControlPresentation(snapshot);
+  const commands = [
+    {
+      id: "meetings",
+      label: "Meetings",
+      detail: "Open the local library with the newest note beside it",
+      shortcut: "⌘1",
+      action: "meetings",
+    },
+    {
+      id: "ask",
+      label: "Ask",
+      detail: "Search retained transcripts on this Mac",
+      shortcut: "⌘2",
+      action: "ask",
+    },
+    {
+      id: "actions",
+      label: "Actions",
+      detail: "Review proposed follow-ups · planned shell",
+      shortcut: "⌘3",
+      action: "actions",
+      planned: true,
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      detail: "Capture, privacy, and voice profile",
+      shortcut: "⌘,",
+      action: "settings",
+    },
+    {
+      id: "desktop",
+      label: "Desktop behavior",
+      detail: "Window, menubar, notifications, and accessibility",
+      shortcut: "",
+      action: "desktop",
+    },
+    {
+      id: "setup",
+      label: "Preview first-run setup",
+      detail: "Walk permission and recovery states · synthetic shell",
+      shortcut: "",
+      action: "setup",
+    },
+    {
+      id: "states",
+      label: "Preview system states",
+      detail: "Review loading, empty, failure, recovery, and repair",
+      shortcut: "",
+      action: "states",
+    },
+    {
+      id: "help",
+      label: "Help and diagnostics",
+      detail: "Recording help, privacy, diagnostics, and manual updates",
+      shortcut: "",
+      action: "help",
+    },
+    {
+      id: "workflow",
+      label: workflow.primaryLabel,
+      detail: capture === "idle"
+        ? "Open consent and retention review before recording"
+        : workflow.detail,
+      shortcut: "",
+      action: capture === "idle" ? "start" : "workflow",
+    },
+  ];
+  if (capture === "recording") {
+    commands.push({
+      id: "stop",
+      label: "Stop recording",
+      detail: "End capture and begin local transcription",
+      shortcut: "",
+      action: "stop",
+    });
+  }
+  return commands;
+}
+
+export function helpTopicPresentation(topicId) {
+  const topics = {
+    overview: {
+      id: "overview",
+      context: "Help",
+      title: "Find the right next step.",
+      lede: "Choose the problem that matches what you can see. Yawn keeps recovery steps specific so a permission refusal is never treated like a broken installation.",
+      facts: [
+        ["Cannot record", "Check both permissions", "Microphone and system audio are required"],
+        ["Meeting looks incomplete", "Review Meetings", "Interrupted and failed work stays labelled"],
+        ["Installation will not start", "Use the repair path", "Existing meetings stay separate from bundled components"],
+      ],
+      primaryLabel: "Check recording setup",
+      primaryAction: "setup",
+    },
+    recording: {
+      id: "recording",
+      context: "Record a meeting",
+      title: "Start with consent, headphones, and two audio channels.",
+      lede: "Every recording begins with a review. Yawn does not detect meetings automatically in the current product boundary.",
+      facts: [
+        ["Consent", "Confirm it yourself", "The app cannot decide consent or recording law"],
+        ["Headphones", "Required in Preview", "Speaker playback can make the transcript incomplete"],
+        ["Retention", "Choose for each meeting", "A global default is not built"],
+      ],
+      primaryLabel: "Prepare a recording",
+      primaryAction: "start",
+    },
+    permissions: {
+      id: "permissions",
+      context: "Permission problems",
+      title: "A refusal and a failed check need different fixes.",
+      lede: "If macOS already refused access, change it in Privacy & Security. If the check itself cannot run, retry once and then reinstall the signed app.",
+      facts: [
+        ["Microphone", "Privacy & Security → Microphone", "Switch Yawn on, then check again"],
+        ["System audio", "Privacy & Security → Screen & System Audio Recording", "macOS reports access only when capture is attempted"],
+        ["Check unavailable", "Possible incomplete installation", "This is not the same as saying no"],
+      ],
+      primaryLabel: "Preview setup recovery",
+      primaryAction: "setup",
+    },
+    privacy: {
+      id: "privacy",
+      context: "Privacy and retention",
+      title: "Meeting data stays on this Mac.",
+      lede: "Yawn has no account or upload path. Recording audio and its retained transcript have separate lifetimes.",
+      facts: [
+        ["Recording audio", "Deleted on its deadline", "If Yawn is closed, deletion runs when it next opens"],
+        ["Transcript and note", "Remain after audio deletion", "Playback and retranscription are then unavailable"],
+        ["Voice profile", "Stored separately", "Resetting it does not delete meetings"],
+      ],
+      primaryLabel: "Open privacy settings",
+      primaryAction: "privacy",
+    },
+    diagnostics: {
+      id: "diagnostics",
+      context: "Private diagnostics",
+      title: "A diagnostic explains a local failure without attaching a meeting.",
+      lede: "The current writer stores an error code and redacted detail in an owner-only file on this Mac. This browser shell cannot inspect or reveal that file.",
+      facts: [
+        ["Included", "Error code and redacted detail", "Each file is capped at 16 KB"],
+        ["Redacted", "Paths, email-like tokens, and environment-style values", "The file is created with owner-only permissions"],
+        ["Not attached", "Audio, transcript files, or operator notes", "No diagnostic upload or sharing action exists"],
+      ],
+      primaryLabel: "Preview installation repair",
+      primaryAction: "states",
+    },
+    updates: {
+      id: "updates",
+      context: "Updates",
+      title: "Updates are manual for the first release.",
+      lede: "Yawn has no automatic updater. A newer signed and notarized disk image is installed by dragging Yawn to Applications and replacing the current copy.",
+      facts: [
+        ["Check for updates", "Unavailable", "This build does not contact an update service"],
+        ["Install", "Replace the app manually", "Do not delete local app data or meetings"],
+        ["Upgrade safety", "Not yet release-proven", "A second version still needs migration-failure and rollback proof"],
+      ],
+      primaryLabel: "View build details",
+      primaryAction: "about",
+    },
+  };
+  return topics[topicId] || topics.overview;
+}
+
+export function shellStatePresentation(stateId) {
+  const states = {
+    loading: {
+      id: "loading",
+      context: "Opening Yawn",
+      tone: "loading",
+      title: "Checking this installation.",
+      lede: "The window is ready. Recording controls stay unavailable until the bundled local components answer.",
+      facts: [
+        ["Application window", "Ready", "Safe controls are visible"],
+        ["Bundled files", "Checking", "No meeting can start yet"],
+        ["Local worker", "Waiting", "Nothing has been sent anywhere"],
+      ],
+      primaryLabel: "Show ready state",
+      primaryAction: "home",
+    },
+    empty: {
+      id: "empty",
+      context: "Meetings",
+      tone: "empty",
+      title: "No retained meetings yet.",
+      lede: "Finish a recording to create the first local meeting. An empty library is not a search failure.",
+      facts: [
+        ["Meeting data", "Nothing stored", "No recording or transcript was opened"],
+        ["Search", "Nothing to search", "Search becomes useful after the first transcript"],
+      ],
+      primaryLabel: "Record a meeting",
+      primaryAction: "start",
+    },
+    failure: {
+      id: "failure",
+      context: "Local processing",
+      tone: "attention",
+      title: "A transcript was not created.",
+      lede: "The recording stopped safely, but local transcription did not finish. Yawn does not present this meeting as complete.",
+      facts: [
+        ["Recording audio", "Retained for recovery", "Still follows its original retention choice"],
+        ["Operator note", "Retained", "Your typed note remains separate"],
+        ["Transcript", "Unavailable", "No transcript or automatic note is claimed"],
+      ],
+      primaryLabel: "Review Meetings",
+      primaryAction: "meetings",
+    },
+    recovery: {
+      id: "recovery",
+      context: "Recovered after interruption",
+      tone: "recovery",
+      title: "Part of a recording was recovered.",
+      lede: "Yawn found local capture evidence during startup and kept the meeting marked interrupted rather than complete.",
+      facts: [
+        ["Completion", "Interrupted", "The meeting is never presented as uninterrupted"],
+        ["Recovered audio", "Kept locally", "It stays under the original retention choice"],
+        ["Transcript", "Not claimed", "Local processing must succeed before one appears"],
+      ],
+      primaryLabel: "Review Meetings",
+      primaryAction: "meetings",
+    },
+    repair: {
+      id: "repair",
+      context: "Installation needs repair",
+      tone: "attention",
+      title: "This build cannot start a meeting.",
+      lede: "The window opened safely, stopped partial local work, and saved a private diagnostic on this Mac.",
+      facts: [
+        ["Capture", "Unavailable", "No degraded recording was started"],
+        ["Retained meetings", "Still readable", "Existing local evidence remains separate"],
+        ["Diagnostic", "Saved locally", "It contains no meeting transcript in this preview"],
+      ],
+      primaryLabel: "Check again",
+      primaryAction: "loading",
+    },
+  };
+  return states[stateId] || states.loading;
+}
+
 export function workflowReturnPolicy(snapshot) {
   const startup = snapshot?.startup || "diagnostic-written";
   const capture = snapshot?.capture || "idle";
@@ -140,9 +470,9 @@ export function changedStatusText(previous, next) {
   return previous === next ? null : next;
 }
 
-export function rootForDestination(destination, currentRoot = "find-screen") {
+export function rootForDestination(destination, currentRoot = "home-screen") {
   if (PRODUCT_ROOT_SCREENS.includes(destination)) return destination;
-  return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "find-screen";
+  return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "home-screen";
 }
 
 export function restoredScrollPosition(storedPosition, reset = false) {
@@ -182,6 +512,7 @@ export function sameDisplayedClaim(left, right) {
 export function transcriptReturnRoute(origin, meetingId, {
   claim = null,
   detailScrollTop = 0,
+  detailTab = "note",
 } = {}) {
   if (origin === "meeting-detail" && meetingId) {
     return {
@@ -189,6 +520,9 @@ export function transcriptReturnRoute(origin, meetingId, {
       meetingId,
       claim: displayedClaimIdentity(claim),
       detailScrollTop: normalizedScrollPosition(detailScrollTop),
+      detailTab: ["note", "transcript", "actions", "evidence", "details"].includes(detailTab)
+        ? detailTab
+        : "note",
     };
   }
   return {
@@ -196,6 +530,7 @@ export function transcriptReturnRoute(origin, meetingId, {
     meetingId: null,
     claim: null,
     detailScrollTop: 0,
+    detailTab: "note",
   };
 }
 

@@ -1131,6 +1131,21 @@ them is not a boundary.
 
 ## What a review of this app may be built from
 
+### Amendment 2026-08-08 — the operator asked for the whole shell before native build-out
+
+The operator explicitly changed the review sequence: show the complete product shell
+first so the intended navigation, user journey, and feature ownership can be judged
+before more backing functions are built. This does not turn placeholders into product
+evidence. Every room without a live reader or writer is labelled `Planned`, `Partial`,
+or `Phase 2`; synthetic content is labelled at the screen; and the browser prototype
+does not register a native command or claim a local read.
+
+The previous paragraph below still governs a functionality encounter: an empty shell
+cannot prove that capture, search, recovery, or deletion works. It no longer forbids a
+separate architecture-and-direction encounter whose question is whether the product is
+shaped correctly. The browser shell stops at the visual-direction review before native
+wiring resumes.
+
 film-room served a shell with placeholder interiors for an operator review, and the
 operator "reasonably mistook the Ingest placeholder for a non-working folder
 chooser" — recorded in its Decision 0047, which concluded that "a shell fixture

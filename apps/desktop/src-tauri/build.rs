@@ -2,7 +2,7 @@ mod build_contract;
 
 use std::{env, fs};
 
-use build_contract::{BuildMode, plan, validate};
+use build_contract::{BuildMode, merge_config, plan, validate};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
@@ -11,12 +11,14 @@ fn main() {
         env::var_os("CARGO_FEATURE_PREVIEW_SURFACE").is_some(),
     )
     .expect("only one Local Meeting Notes surface feature may be enabled");
-    let config = env::var("TAURI_CONFIG")
-        .ok()
-        .map(Ok)
-        .unwrap_or_else(|| fs::read_to_string("tauri.conf.json"))
+    let mut config = fs::read_to_string("tauri.conf.json")
         .and_then(|value| serde_json::from_str(&value).map_err(Into::into))
         .expect("failed to read active Tauri configuration");
+    if let Ok(override_source) = env::var("TAURI_CONFIG") {
+        let override_value = serde_json::from_str(&override_source)
+            .expect("failed to read Tauri configuration override");
+        merge_config(&mut config, override_value);
+    }
     validate(mode, &config).expect("Tauri feature/config isolation failed");
     let plan = plan(mode);
     println!("cargo:rerun-if-changed=capabilities");

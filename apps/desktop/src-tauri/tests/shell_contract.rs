@@ -1,5 +1,22 @@
 use serde_json::Value;
 
+#[path = "../build_contract.rs"]
+mod build_contract;
+
+#[test]
+fn tauri_dev_override_preserves_the_frozen_production_config() {
+    let mut config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    build_contract::merge_config(
+        &mut config,
+        serde_json::json!({ "build": { "devUrl": "http://127.0.0.1:1430" } }),
+    );
+
+    assert_eq!(config["build"]["frontendDist"], "../ui");
+    assert_eq!(config["build"]["devUrl"], "http://127.0.0.1:1430");
+    assert_eq!(config["app"]["windows"][0]["titleBarStyle"], "Overlay");
+    assert!(build_contract::validate(build_contract::BuildMode::Production, &config).is_ok());
+}
+
 #[test]
 fn single_instance_is_the_first_plugin_and_precedes_app_setup() {
     let source = include_str!("../src/main.rs");
@@ -602,17 +619,17 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     let styles = include_str!("../../ui/styles.css");
 
     assert!(html.contains("id=\"product-nav\""));
-    assert!(html.contains("id=\"find-link\" type=\"button\">Find"));
+    assert!(html.contains("id=\"find-link\" type=\"button\"><span>Ask</span>"));
     assert!(html.contains("id=\"meetings-link\""));
-    assert!(html.contains("id=\"meetings-link\" type=\"button\">Meetings"));
-    assert!(html.contains("id=\"promises-link\" type=\"button\">Promises"));
-    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden>Settings"));
+    assert!(html.contains("id=\"meetings-link\" type=\"button\"><span>Meetings</span>"));
+    assert!(html.contains("id=\"promises-link\" type=\"button\"><span>Actions</span>"));
+    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden><span>Settings</span>"));
     assert!(html.contains("id=\"find-screen\""));
     assert!(html.contains("id=\"meetings-screen\""));
     assert!(html.contains("id=\"promises-screen\""));
-    assert!(html.contains("Automatic notes are not available yet."));
+    assert!(html.contains("Automatic notes and action extraction are not available yet."));
     assert!(
-        html.contains("this view stays empty instead of guessing promises from transcript words")
+        html.contains("Yawn will not infer promises from transcript words")
     );
     assert!(html.contains("id=\"library-transcript-screen\""));
     assert!(html.contains("id=\"meeting-detail-screen\""));
@@ -658,8 +675,8 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     let script = include_str!("../../ui/main.js");
     let navigation = include_str!("../../ui/navigation-state.mjs");
 
-    assert!(html.contains("id=\"product-nav\" aria-label=\"Meeting memory\" hidden"));
-    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden>Settings"));
+    assert!(html.contains("id=\"product-nav\" aria-label=\"Yawn\" hidden"));
+    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden><span>Settings</span>"));
     assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert_eq!(html.matches("id=\"stop-button\"").count(), 1);
     assert!(html.contains("id=\"header-state\" role=\"status\" aria-atomic=\"true\""));
@@ -708,7 +725,7 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(navigation.contains("export function resolvedScreenForSnapshot"));
     assert!(navigation.contains("export function mutableActionPolicy"));
     assert!(navigation.contains("export function headerActionPolicy"));
-    assert!(navigation.contains("currentScreen = \"find-screen\""));
+    assert!(navigation.contains("currentScreen = \"home-screen\""));
     assert!(navigation.contains("\"find-screen\","));
     assert!(navigation.contains("\"promises-screen\","));
     assert!(navigation.contains("export function captureChannelPresentation(state)"));
@@ -996,7 +1013,7 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     assert!(script.contains("navigator.clipboard.writeText(text)"));
     assert!(html.contains("id=\"recover-button\" type=\"button\">Return to Find"));
     assert!(!html.contains("Return to Start"));
-    assert!(script.contains("let productRootScreen = \"find-screen\";"));
+    assert!(script.contains("let productRootScreen = \"home-screen\";"));
     assert!(script.contains("productRootScreen = rootForDestination(id, productRootScreen);"));
     assert!(script.contains("screenScrollPositions.set(currentScreen, mainRegion.scrollTop)"));
     assert!(script.contains("heading.focus({ preventScroll: true })"));
@@ -1024,7 +1041,10 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     let open_end = script[open_start..].find("function renderProfile").unwrap() + open_start;
     let open = &script[open_start..open_end];
     let prepare = open.find("await prepareConsentTransition").unwrap();
-    let consent = open.find("showScreen(\"idle-screen\"").unwrap();
+    // The prototype branch opens its synthetic consent screen immediately. The
+    // installed path is the later occurrence and must still dismiss/settle the
+    // prior attempt before it exposes consent for a new one.
+    let consent = open.rfind("showScreen(\"idle-screen\"").unwrap();
     assert!(prepare < consent);
     assert!(open.contains("dismiss: () => dismissMeetingOperation.run()"));
     assert!(open.contains("clearHiddenAttempt: () => clearAttemptReview(true)"));

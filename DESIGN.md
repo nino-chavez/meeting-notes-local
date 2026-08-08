@@ -10,34 +10,38 @@
 schemaVersion: 1
 name: local-meeting-notes
 tagline: Meeting notes that never leave the machine
-mode: dark
+mode: light
 
 colors:
-  primary: "#333841"
-  secondary: "#7C828D"
-  accent: "#FFB020"
-  neutral-50: "#F5F6F7"
-  neutral-100: "#E3E5E8"
-  neutral-200: "#C7CAD0"
-  neutral-300: "#A2A7B0"
-  neutral-400: "#7C828D"
-  neutral-500: "#5C626D"
-  neutral-600: "#444A54"
-  neutral-700: "#333841"
-  neutral-800: "#24282F"
-  neutral-900: "#191C21"
-  neutral-950: "#0E1014"
-  surface-base: "#0E1014"
-  surface-raised: "#191C21"
-  surface-overlay: "#24282F"
-  semantic-success: "#4E9A6B"
-  semantic-error: "#C4553D"
-  semantic-info: "#5A7FA8"
-  semantic-warning: "#A2A7B0"
+  primary: "#425049"
+  secondary: "#66706A"
+  accent: "#843B31"
+  capture-live: "#146B4A"
+  neutral-50: "#FFFAF5"
+  neutral-100: "#F2F0E9"
+  neutral-200: "#EAE7DD"
+  neutral-300: "#D8D4CA"
+  neutral-400: "#AEB6B0"
+  neutral-500: "#7D8781"
+  neutral-600: "#66706A"
+  neutral-700: "#4F5B55"
+  neutral-800: "#425049"
+  neutral-900: "#29332E"
+  neutral-950: "#17201D"
+  surface-base: "#F2F0E9"
+  surface-raised: "#FFFAF5"
+  surface-muted: "#EAE7DD"
+  surface-overlay: "#FFFAF5"
+  semantic-success: "#146B4A"
+  semantic-error: "#9E3028"
+  semantic-info: "#486A73"
+  semantic-warning: "#8B5A2B"
 
 typography:
   ui:
     fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+  record:
+    fontFamily: "Iowan Old Style, Palatino Linotype, Book Antiqua, Palatino, Georgia, serif"
   mono:
     fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace"
   step-xs:
@@ -51,13 +55,13 @@ typography:
   step-xl:
     fontSize: "18px"
   step-2xl:
-    fontSize: "24px"
+    fontSize: "30px"
 
 rounded:
   none: "0px"
   sm: "2px"
-  md: "4px"
-  lg: "6px"
+  md: "5px"
+  lg: "8px"
 ---
 
 # DESIGN.md — local-meeting-notes
@@ -66,45 +70,68 @@ Visual rules and engineering rules together, so neither gets decided ad hoc
 surface by surface. Answers to [`DIRECTION.md`](./DIRECTION.md); the L5
 inventory it covers is [`docs/screens-and-states.md`](./docs/screens-and-states.md).
 
+**H1 status — adopted 2026-08-08:** Mac Split is the selected visual
+composition and the installed Tauri shell. It remains the default browser
+prototype; Paper Focus stays available as the complete planning wireframe at
+`?prototype=1&calibration=wireframe`, and Document and Native Reference remain
+comparison evidence. Native-window, VoiceOver, increased-contrast, and exact
+200% zoom checks remain release verification rather than a second composition
+decision.
+
 ---
 
 ## Color
 
-**The accent is reserved.** `#FFB020` means one thing: capture is running. It is
-forbidden in navigation, selection, links, focus rings, hover states, charts,
-and every empty state. This is the direction's central constraint expressed as a
-token rule, and it is the one rule here that a device can never buy its way out
-of.
+**System-first shell, paper record.** Native window chrome, toolbar, sidebar,
+active state, and controls come first. `surface-base` and `surface-muted` may
+separate structural panes. Warm `surface-raised` belongs to a selected meeting
+record or bounded input; it is not the global window identity.
 
-**`semantic-warning` has no hue on purpose.** It resolves to `neutral-300`. An
-amber warning would be indistinguishable from the live indicator at menubar
-size, which would destroy the single reading this product exists to make
-trustworthy. Warnings are carried by neutral foreground plus text. If a warning
-genuinely needs color, it is an error and takes `semantic-error`.
+**Brand and capture use different colors.** `accent` is Yawn terracotta. It may
+carry identity, selection, and deliberate product emphasis. `capture-live` is
+the dedicated healthy-recording color. It appears only when capture is active
+and is always paired with a state word and a mark. A terracotta button never
+means the microphone is open.
 
-**Dark-first, single mode.** No light theme. The ramp is graphite rather than
-pure grey so the panel reads as an object rather than as unstyled chrome.
+**Status semantics do not borrow the brand.** Success may share the live green
+only outside capture controls and only with explicit text. Error uses red;
+warning uses umber; information uses blue-green. Degraded capture changes its
+wording and icon shape, not merely its hue.
 
-**Contrast floors**, checked against `surface-base` and `surface-raised`:
-body text ≥ 4.5:1, large text and UI glyphs ≥ 3:1. `neutral-300` on
-`surface-raised` is the darkest permitted body pairing.
+**Contrast floors**, checked against `surface-base`, `surface-raised`, and
+`surface-muted`: body text ≥ 4.5:1; large text and UI glyphs ≥ 3:1. No essential
+state is conveyed by color alone.
+
+**Dark mode adapts the semantic tokens instead of reusing the light values.**
+Yawn terracotta becomes `#D48676`; healthy live capture becomes `#68C999`.
+Dark filled controls use dark ink (`#1C1B19` for brand, `#17201D` for live)
+rather than white text. Against the darkest record surface (`#302B27`), the
+brand is 4.98:1 and live capture is 6.93:1. Their filled-control text pairs are
+6.12:1 and 8.25:1. The dark shell separates toolbar `#24211E`, sidebar
+`#211F1C`, meeting list `#282521`, and record `#302B27` with dividers rather
+than shadows.
 
 ## Type
 
-Two families. `ui` for chrome, `mono` for transcript and any timestamp. A
-transcript in a proportional face stops being scannable as a record, which is
-the only reason to keep it on screen.
+Three roles, with a hard boundary between them. `record` is only for the title
+of a retained or synthetic meeting. `ui` owns navigation, buttons, labels,
+status, settings, instructions, and all operational copy. `mono` owns transcript
+turns, timestamps, locators, and machine-readable evidence.
 
-The scale is deliberately small and dense — `step-base` is 13px, matching macOS
-body rather than web defaults. Anything above `step-2xl` does not exist. There
-is no display scale, because there is no marketing surface inside this app.
+The functional wireframe used a 13px base, 11px labels, and 10px badges. The
+side-by-side review found that hierarchy too small and status-heavy beside a
+finished Mac app. Native calibration starts at the system 14px reading scale;
+smaller text is reserved for secondary metadata, not product-state taxonomy.
+The meeting title may reach 28–31px. A serif title can signal "you are reading
+the record"; serif workflow chrome remains a contract violation.
 
 ## Form
 
-- **No shadows.** They read as depth this interface does not have, and they cost
-  render time on a window that stays open for an hour.
-- **No radius above `lg` (6px).** Pills and heavily-rounded cards belong to the
-  soft-SaaS world the direction explicitly rejects.
+- **Structural panes have no shadows.** Adjacency, tone, and one-pixel borders
+  establish their hierarchy. Popovers, menus, and modals may use one restrained
+  shadow because they are real layers above the window.
+- **No radius above `lg` (8px)** on app surfaces. Full pills are reserved for
+  compact status or segmented controls whose shape carries grouping.
 - **No ambient motion.** No pulse, breath, shimmer, or looping gradient. The
   audio level meter is the sole exception, and only because it moves as a
   reading of arriving audio rather than as decoration.
@@ -128,13 +155,34 @@ is no display scale, because there is no marketing surface inside this app.
   job/library/project").
 - One action per surface. The consent notification is the strict case: record,
   decline, never-for-this-app — and nothing else competes with them.
-- Progressive disclosure. The note is the summary; the transcript is on demand.
+- Progressive disclosure. The note is the reading surface; transcript, actions,
+  evidence, and details stay available without competing in the first scan.
+- Mac Split keeps product navigation, meeting context, and the selected record
+  available at wide sizes. At the minimum desktop window, product navigation
+  becomes a 96px rail and the meeting list remains visible. The list yields only
+  below the desktop minimum.
+- Consent, arming, recording, degradation, processing, and transcript handoff
+  hide unrelated navigation. Capture truth remains in the integrated toolbar,
+  so focus does not make listening state ambiguous.
+- Settings expose every section without a hidden horizontal strip: a vertical
+  map at wide sizes and a compact three-column map at the minimum window.
+- Paper Focus's transition remains interaction evidence, not the approved
+  production composition. Document and Native Reference remain controls for
+  future regression review.
+- Record and Stop live in the integrated toolbar and the menubar state. A bottom
+  bar cannot be their primary or only home.
 - Empty states carry real content, never a title card. First run shows what a
   note will look like, not a welcome graphic.
 
 ---
 
-## Shell decision — Tauri, not SwiftUI
+## Shell decision — Tauri baseline, Mac Split selected
+
+**Current status:** Tauri remains the working implementation so the existing
+runtime and state contracts stay intact. Mac Split is the approved H1 visual
+composition. The SwiftUI reference remains a native-quality check for the
+implementation; switching stacks is not authorized merely because a later CSS
+detail misses the bar.
 
 Decided rather than defaulted, because it determines whether every artifact in
 this directory is enforceable or merely advisory.
@@ -161,12 +209,19 @@ three runtimes in the process tree (Swift tap, local Python worker, Rust/TS
 shell), and native menubar/notification behavior needs plugins rather than
 coming free.
 
-**Chosen: B.** The deciding factor is not aesthetics or binary size — it is that
+**Implementation choice: B remains.** The original deciding factor was not aesthetics or binary size — it was that
 every design artifact in this directory is inert under A. A design system nobody
 can check is the failure mode the workspace already documented twice, in
 `rally-hq` and `website-nc`, where narrative `DESIGN.md` files parse to zero and
 a gate over them would report clean while verifying nothing. Choosing A means
 choosing that outcome deliberately at the start.
+
+That rationale remains evidence for maintainability. The native-calibration run
+then supplied the missing product decision: Mac Split won the operator review.
+`apps/desktop/native-reference/` carries a thin SwiftUI comparison source. On
+this machine its syntax parses, but the active Command Line Tools compiler and
+SDK versions do not match and full Xcode is not installed, so it has not built
+or rendered. The browser system-reference mode remains geometry evidence only.
 
 The three-runtime cost is real and is the strongest argument for A. It is
 accepted because the Python capture and note logic already exists, and the
