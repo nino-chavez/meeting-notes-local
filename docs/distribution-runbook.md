@@ -1,5 +1,28 @@
 # Yawn distribution runbook
 
+**0.5.0 is being cut, 2026-08-08 — the first build in which a person can ask the
+corpus a question.** Everything the feature needs landed across #45–#53 and none
+of it is in any image: the embedding model entered the runtime on 2026-08-08 and
+the search surface the day after. 0.4.0 cannot do any of this, so the standing
+question — is 7 of 10 useful — has had no build to be asked in.
+
+That is what this cut is for, and it is worth being exact about what it does not
+settle. **The retrieval figure is unchanged and unjudged: 7 of 10, and 3 of 5 on
+the questions exact search cannot answer** (`notes/SEMANTIC_RETRIEVAL.md`). A
+build cannot move it. What a build allows is the operator answering it against
+their own meetings, which is the one gate this repository has never been able to
+close for itself.
+
+It also inherits, and does not clear, the open interactive operator runs from
+0.2.2, 0.3.0, 0.3.1 and 0.4.0 — and 0.4.0's speaker gate, whose threshold has
+still never been measured on live meeting audio.
+
+**Two things a first user of this build should be told.** Meaning search finds
+nothing until passages are prepared, which is a press on the Find screen and
+runs entirely on this Mac; the surface says so rather than reporting an empty
+result. And preparing is bounded per press, so a large library takes more than
+one.
+
 **0.4.0 is being cut, 2026-08-05 — the operator made the call.** The two
 user-visible changes that sat in the repo and in no image ship in it: the
 copy-transcript control (`f0302aa`) and the whole speaker gate, including the
