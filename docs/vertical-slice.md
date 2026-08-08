@@ -41,37 +41,52 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the vector store, and the unit is decided: one vector per
-128-word window.**
+**The next build is the text embedder — the one piece that turns a passage into
+a vector. Everything on either side of it now exists.**
 
-The distractor-density measurement ran on 2026-08-08 against 200 realistic
-meetings — 497 to 638 tokens each, every one over the model's 256-token ceiling.
-Both registered clauses held. Per-turn and per-window each beat
-whole-meeting-truncated by 6 of 10 against a floor of 3, and tied with each other
-inside the registered margin of 1.
+**The vector store landed 2026-08-08** (US-13.8). A synced corpus is cut into
+128-word windows, each carrying the turn indices and character ranges it came
+from, so a semantic hit can be quoted with the same machinery that quotes an
+exact one. `corpus-index/2` holds the windows, their segments and a vector table
+keyed by embedder identity. Ranking is by best window per meeting — the
+aggregation the measurement fixed — and every result states how much of the
+corpus it actually searched.
 
-**The tie clause is what chose the unit**, exactly as registered: window stores
-800 pieces where turn stores 16,020 — twenty times fewer, bounded per meeting
-rather than varying with how much people interrupt each other. Had that tiebreak
-not been written down in advance, a one-question difference on the hard half would
-have been available to argue quality instead.
+**One binding carries the whole design: a vector records the digest of the text
+it was computed from.** Change a meeting and the old vector matches no window and
+is deleted on the next sync. That is why the vector table is the one table
+outside the rebuild digest: it is a function of the files *and* a model, so
+`fingerprint()` deliberately does not hash it, and deleting the database now
+costs recomputation rather than nothing.
 
-**Read this before building on it: the earlier headline does not survive.** On
-ten short fixtures this model scored 10 of 10 and 5 of 5 on the questions exact
+**Why the embedder is not in this change, and what it is not blocked on.**
+Packaging a text encoder is its own build with its own runtime-dependency
+question, and this repository has already paid once for bundling a new dependency
+with an audited change — the reason US-13.6 was deferred. It is **not** waiting on
+the operator table's *encoder admission verdict*: that row is the ECAPA speaker
+encoder for the voice gate, a different model answering a different question.
+Recording it as blocked on a person would be the fifth instance of the failure
+that section says it keeps re-learning.
+
+**Read this before building the surface: the earlier headline does not survive.**
+On ten short fixtures this model scored 10 of 10 and 5 of 5 on the questions exact
 search cannot answer. On 200 realistic meetings it scores **7 of 10 and 3 of 5**.
 The degradation is in the half the feature exists for, and the two failures land
 on generated filler at a margin of exactly 0.0000 — matching nothing in
 particular rather than choosing wrongly between candidates.
 
-That is a number the operator should see before a store is built on it. It is
-materially worse than yesterday's, it is still well above exact search, and
-whether it is good enough is a judgment rather than a measurement.
+It is materially worse than the first probe implied, it is still well above exact
+search, and whether it is good enough is a judgment rather than a measurement.
+The store does not resolve that and does not hide it: with no embedder it reports
+zero windows searched instead of an empty ranking.
 
-**Density is the shape worth carrying.** Truncated meetings crowd together in
-proportion to the corpus — 3, 6, 13, 22 meetings within 0.02 of the top hit as it
-grows from 30 to 200. The chosen unit holds a clean separation on every question
-it answers, and concentrates all of its density on the ones it fails. A wrong
-answer arriving as a visible tie is something a surface can act on.
+**Density is the shape worth carrying, and it is now a field.** Truncated meetings
+crowd together in proportion to the corpus — 3, 6, 13, 22 meetings within 0.02 of
+the top hit as it grows from 30 to 200. The chosen unit holds a clean separation
+on every question it answers and concentrates all of its density on the ones it
+fails. `SemanticSearch::near_ties` counts the meetings inside that band before any
+limit truncates, because a wrong answer arriving as a visible tie is something a
+surface can act on and an accuracy figure hides it.
 
 A struck-through row is finished; the first row that is not struck through is the
 work. That rule is the whole resume protocol, and it holds whether the session
@@ -119,7 +134,7 @@ largest surface-area addition and says it has nothing to do with audio.
 | 2 | ~~Auto-titling~~ **Landed 2026-08-07** as `meeting_title.rs` — the first non-gated turn's opening sentence, behind an operator title and above the capture time. The local-model half was **measured and refused** on 2026-08-08 at 5 of 10 against a registered 6–9 (`notes/MLX_TITLE_SELECTION.md`); the seam was not built, and re-running the committed harness against another candidate is a decision, not a pending task | B4 | Cheapest possible test that the store and a local model are wired together end to end, and the corpus is unusable without titles |
 | 3 | ~~Folders, and the meeting object's sibling views~~ **Writer landed 2026-08-08** — `library-metadata/1` gained the five named commands, whole-meeting deletion now takes the organization row first, and naming a meeting is wired end to end. The folder surface is `backlog.md` US-14.4 and is deliberately unbuilt | E1 E2 | Gong's one call object; Granola and Otter both ship folders. Organisation before search, because unorganised search returns noise |
 | 4 | ~~Filters — people, date range, keywords, titles~~ **Three of four landed 2026-08-08** — folder, capture-date range and meeting-name, over the list and over search, plus the folder surface item 3 deferred. **People is blocked on A3** (Wave 3 item 11), because attribution is Me/Them and named participants are absent by contract | D3 | Gong documents all four. Free once the store exists |
-| 5 | Semantic search over the corpus, beside exact. **Measured 2026-08-08 and it passed** — 10 of 10 against a registered 8–10, and 5 of 5 where exact search scores 0 (`notes/SEMANTIC_RETRIEVAL.md`). Three of those five turned on margins under 0.04, so the result justifies the store and does not predict scale. What remains is the vector column and an MLX forward pass | D2 | Exact is Registered; semantic is what a question needs |
+| 5 | Semantic search over the corpus, beside exact. **Measured, then re-measured at scale: 7 of 10 and 3 of 5 on 200 realistic meetings** (`notes/SEMANTIC_RETRIEVAL.md`). **The store landed 2026-08-08** — 128-word windows citing their turns, a vector table bound to the text digest, best-window ranking with coverage and tie density (US-13.8). What remains is **the embedder itself**: nothing in the app turns text into a vector, so the store truthfully reports zero windows searched | D2 | Exact is Registered; semantic is what a question needs |
 | 6 | **Ask across every meeting, answer with citations** | D1 | The category headline. Depends on 1–5 and on B5's citation machinery |
 
 ### Wave 2 — the note becomes worth reading

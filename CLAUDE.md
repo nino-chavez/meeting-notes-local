@@ -143,6 +143,19 @@ filter work broke it again the same day. Before a PR touching a shared DTO:
 `cargo test --workspace` does not cover this either — the feature is off there
 too. The lanes are isolated on purpose and the isolation is what hides the break.
 
+**None of those three commands run in a fresh worktree until you stage the
+runtime.** `apps/desktop/runtime/` is gitignored in full, so a new worktree does
+not have it, and the Tauri build script panics before compiling anything:
+`resource path '../runtime/encoder-unavailable.identity' doesn't exist`. It reads
+as a code error and it is a missing directory. Symlink it from the main checkout:
+
+    ln -s <repo>/apps/desktop/runtime <repo>/.worktrees/<branch>/apps/desktop/runtime
+
+Then **remove the symlink before committing**. `.gitignore` matches
+`apps/desktop/runtime/` with a trailing slash, which does not match a symlink, so
+`git status` offers it as an untracked file and `git add -A` would commit a link
+to an absolute path on one machine.
+
 **A frozen artifact must never be asserted through a live constant.** Hit three
 times on 2026-08-07, each time while growing the registered fixture suite:
 `mlx_note_matrix_receipt.json` (a 2026-08-05 receipt) asserted its fixture count as

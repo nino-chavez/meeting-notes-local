@@ -1,4 +1,5 @@
 pub mod corpus_index;
+pub mod corpus_window;
 pub mod diagnostic;
 pub mod enrollment_guidance;
 pub mod library_metadata;

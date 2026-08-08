@@ -5,10 +5,25 @@
 //! It is not an authority. Every row here is derived from files that
 //! [`crate::library_read`] already validated against their content addresses,
 //! and it is reachable only through [`LibraryRow::derived`], which hands out
-//! exactly the fields a cache may hold. Deleting this database loses nothing:
-//! [`CorpusIndex::replace_from_projection`] rebuilds it from the files, and
-//! `rebuild_from_files_equals_the_live_index` pins that equality. A column with
-//! no canonical file behind it fails that test, which is the point of it.
+//! exactly the fields a cache may hold. Deleting this database costs time and
+//! never information: [`CorpusIndex::replace_from_projection`] rebuilds it from
+//! the files, and `rebuild_from_files_equals_the_live_index` pins that equality.
+//! A column with no canonical file behind it fails that test, which is the
+//! point of it.
+//!
+//! **One table is exempt and the exemption is the interesting part.**
+//! `corpus_window_vector` holds numbers no file determines: they are a function of the
+//! files *and a model*, so rebuilding from files alone cannot reproduce them and
+//! [`CorpusIndex::fingerprint`] deliberately does not hash them. That is the
+//! only sense in which deleting this file is not free — every vector would have
+//! to be recomputed, which is minutes of work rather than a lost meeting. The
+//! windows those vectors hang from *are* derived, are hashed, and do rebuild.
+//!
+//! The binding that keeps this safe is `corpus_window.text_sha256`. A vector records
+//! the digest it was computed from; a sync that re-derives a window with
+//! different text leaves the old vector matching nothing, and the prune inside
+//! `replace_from_projection` removes it. A stale vector is worse than no vector,
+//! because it answers with a meeting that no longer says what it said.
 //!
 //! `vertical-slice.md` permitted this on exactly those terms — "a rebuildable
 //! cache after measured library size makes the scan a problem", and "no derived
@@ -39,6 +54,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::corpus_window::{self, CorpusWindow, EmbedderIdentity, WindowSegment};
 use crate::library_read::{DerivedRow, LibraryProjection};
 use crate::meeting::MeetingLifecycle;
 use crate::storage::{StorageRoot, create_private_dir};
@@ -46,8 +62,8 @@ use crate::storage::{StorageRoot, create_private_dir};
 /// Bumped only when a migration changes what a row means. The identity row
 /// records the version that wrote the file, so an older binary meeting a newer
 /// file refuses instead of misreading it.
-pub const CORPUS_INDEX_SCHEMA: &str = "corpus-index/1";
-const APPLIED_MIGRATION: i64 = 1;
+pub const CORPUS_INDEX_SCHEMA: &str = "corpus-index/2";
+const APPLIED_MIGRATION: i64 = 2;
 const DATABASE_NAME: &str = "corpus.sqlite3";
 
 #[derive(Debug, Error)]
@@ -60,6 +76,8 @@ pub enum CorpusIndexError {
     SchemaAhead,
     #[error("corpus index rejected a row it cannot have derived")]
     UnderivableRow,
+    #[error("corpus index refused a vector it cannot bind to a window")]
+    VectorRejected,
     #[error("corpus index database error")]
     Database,
 }
@@ -77,6 +95,7 @@ impl From<rusqlite::Error> for CorpusIndexError {
 pub struct SyncOutcome {
     pub meetings: usize,
     pub turns: usize,
+    pub windows: usize,
 }
 
 /// A filter over the corpus. Every field is optional and they conjoin.
@@ -195,19 +214,25 @@ impl CorpusIndex {
             Some(version) if version > APPLIED_MIGRATION => {
                 return Err(CorpusIndexError::SchemaAhead);
             }
-            // No migration from a previous version exists yet, so the honest
-            // upgrade for `corpus-index/0` is to drop and re-derive. The files
-            // are the authority; nothing is lost.
+            // No stepwise migration exists, so the honest upgrade from any
+            // earlier version is to drop and re-derive. The files are the
+            // authority for everything except `window_vector`, which is
+            // discarded here and recomputed — stated rather than implied,
+            // because an upgrade silently throwing away every embedding is a
+            // cost worth being able to predict.
             Some(_) => {
                 self.connection.execute_batch(
-                    "DROP TABLE IF EXISTS turn;
+                    "DROP TABLE IF EXISTS corpus_window_vector;
+                     DROP TABLE IF EXISTS corpus_window_segment;
+                     DROP TABLE IF EXISTS corpus_window;
+                     DROP TABLE IF EXISTS turn;
                      DROP TABLE IF EXISTS meeting;
                      DROP TABLE IF EXISTS index_identity;",
                 )?;
             }
             None => {}
         }
-        self.connection.execute_batch(MIGRATION_1)?;
+        self.connection.execute_batch(SCHEMA_2)?;
         self.connection.execute(
             "INSERT OR REPLACE INTO index_identity (id, schema, sqlite_version, applied_migration)
              VALUES (0, ?1, ?2, ?3)",
@@ -243,10 +268,19 @@ impl CorpusIndex {
         projection: &LibraryProjection,
     ) -> Result<SyncOutcome, CorpusIndexError> {
         let transaction = self.connection.transaction()?;
+        // Explicit, in dependency order, rather than leaning on `ON DELETE
+        // CASCADE`: the cascade only fires while `PRAGMA foreign_keys` is on,
+        // and a table that quietly kept its rows because a pragma did not take
+        // is the failure this is avoiding. `corpus_window_vector` is not
+        // cleared — it survives a resync and is pruned below against the
+        // windows this call rebuilds.
+        transaction.execute("DELETE FROM corpus_window_segment", [])?;
+        transaction.execute("DELETE FROM corpus_window", [])?;
         transaction.execute("DELETE FROM turn", [])?;
         transaction.execute("DELETE FROM meeting", [])?;
         let mut meetings = 0;
         let mut turns = 0;
+        let mut windows = 0;
         {
             let mut insert_meeting = transaction.prepare(
                 "INSERT INTO meeting (
@@ -259,6 +293,16 @@ impl CorpusIndex {
             let mut insert_turn = transaction.prepare(
                 "INSERT INTO turn (meeting_id, turn_index, visible_index, gated, text)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            let mut insert_window = transaction.prepare(
+                "INSERT INTO corpus_window (meeting_id, window_index, word_count, text_sha256)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            let mut insert_segment = transaction.prepare(
+                "INSERT INTO corpus_window_segment (
+                    meeting_id, window_index, segment_index,
+                    source_turn_index, original_scalar_start, original_scalar_end
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
             for row in projection.rows() {
                 let derived: DerivedRow<'_> = row.derived();
@@ -286,8 +330,59 @@ impl CorpusIndex {
                     ])?;
                     turns += 1;
                 }
+                for window in corpus_window::windows(
+                    derived
+                        .turns
+                        .iter()
+                        .map(|turn| (u64::from(turn.index), turn.text, turn.gated)),
+                ) {
+                    // Reconstructed here rather than stored: the digest is what
+                    // a vector binds to, and deriving it from the same segments
+                    // a reader will use is what makes the binding mean
+                    // something. A window that cannot be rebuilt from its own
+                    // provenance is a bug, not a row to write.
+                    let text = corpus_window::window_text(&window, |index| {
+                        derived
+                            .turns
+                            .iter()
+                            .find(|turn| u64::from(turn.index) == index)
+                            .map(|turn| turn.text)
+                    })
+                    .ok_or(CorpusIndexError::UnderivableRow)?;
+                    insert_window.execute(params![
+                        derived.meeting_id,
+                        window.window_index,
+                        window.word_count,
+                        corpus_window::window_digest(&text),
+                    ])?;
+                    for (position, segment) in window.segments.iter().enumerate() {
+                        insert_segment.execute(params![
+                            derived.meeting_id,
+                            window.window_index,
+                            position as u64,
+                            segment.source_turn_index,
+                            segment.original_scalar_start,
+                            segment.original_scalar_end,
+                        ])?;
+                    }
+                    windows += 1;
+                }
             }
         }
+        // Every vector whose window no longer exists, or whose window now says
+        // something else, in one statement. It covers a removed meeting, an
+        // edited transcript and a re-segmented meeting identically, because
+        // they are the same question: is this vector still a description of
+        // what is there?
+        transaction.execute(
+            "DELETE FROM corpus_window_vector WHERE NOT EXISTS (
+                 SELECT 1 FROM corpus_window
+                 WHERE corpus_window.meeting_id = corpus_window_vector.meeting_id
+                   AND corpus_window.window_index = corpus_window_vector.window_index
+                   AND corpus_window.text_sha256 = corpus_window_vector.text_sha256
+             )",
+            [],
+        )?;
         // The recorded corpus digest describes contents this call just
         // replaced, so it stops being true here. `sync_if_changed` rewrites it
         // afterwards; a direct caller leaves it null and pays a full sync next
@@ -297,7 +392,11 @@ impl CorpusIndex {
             [],
         )?;
         transaction.commit()?;
-        Ok(SyncOutcome { meetings, turns })
+        Ok(SyncOutcome {
+            meetings,
+            turns,
+            windows,
+        })
     }
 
     pub fn meeting_count(&self) -> Result<usize, CorpusIndexError> {
@@ -408,9 +507,17 @@ impl CorpusIndex {
     pub fn fingerprint(&self) -> Result<String, CorpusIndexError> {
         let mut hasher = Sha256::new();
         hasher.update(CORPUS_INDEX_SCHEMA.as_bytes());
+        // `corpus_window_vector` is absent on purpose and it is the one
+        // exception this digest has. A vector is a function of the files *and*
+        // a model, so a rebuild from files alone cannot reproduce it and the
+        // equality this digest asserts would be false for an honest store. Any
+        // other new table belongs here.
         for statement in [
             "SELECT * FROM meeting ORDER BY meeting_id ASC",
             "SELECT * FROM turn ORDER BY meeting_id ASC, turn_index ASC",
+            "SELECT * FROM corpus_window ORDER BY meeting_id ASC, window_index ASC",
+            "SELECT * FROM corpus_window_segment
+             ORDER BY meeting_id ASC, window_index ASC, segment_index ASC",
         ] {
             let mut prepared = self.connection.prepare(statement)?;
             // Column names are hashed too, so renaming a column is a change.
@@ -503,9 +610,381 @@ impl CorpusIndex {
         )?;
         Ok(Some(outcome))
     }
+
+    /// Windows this embedder still owes a vector for, with the text to embed.
+    ///
+    /// A `limit` of zero means all of them. The text is rebuilt from the same
+    /// segments a hit will cite, and checked against the stored digest before
+    /// it is handed out — so a caller cannot embed a string the store would
+    /// then refuse to accept a vector for.
+    ///
+    /// Nothing in this crate can consume this yet: no text embedder ships. It
+    /// is the seam one would fill, and it is a read rather than a promise.
+    pub fn pending_windows(
+        &self,
+        identity: &EmbedderIdentity,
+        limit: usize,
+    ) -> Result<Vec<PendingWindow>, CorpusIndexError> {
+        let embedder = identity.canonical();
+        let mut prepared = self.connection.prepare(
+            "SELECT meeting_id, window_index, word_count, text_sha256
+             FROM corpus_window AS w
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM corpus_window_vector AS v
+                 WHERE v.meeting_id = w.meeting_id
+                   AND v.window_index = w.window_index
+                   AND v.embedder = ?1
+                   AND v.text_sha256 = w.text_sha256
+             )
+             ORDER BY meeting_id ASC, window_index ASC
+             LIMIT ?2",
+        )?;
+        let cap: i64 = if limit == 0 { -1 } else { limit as i64 };
+        let rows: Vec<(String, u64, u64, String)> = prepared
+            .query_map(params![embedder, cap], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, i64>(2)? as u64,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut pending = Vec::with_capacity(rows.len());
+        for (meeting_id, window_index, word_count, text_sha256) in rows {
+            let window = self.window_provenance(&meeting_id, window_index, word_count)?;
+            let text = self.window_text(&meeting_id, &window)?;
+            if corpus_window::window_digest(&text) != text_sha256 {
+                return Err(CorpusIndexError::UnderivableRow);
+            }
+            pending.push(PendingWindow {
+                meeting_id,
+                window_index,
+                text_sha256,
+                text,
+            });
+        }
+        Ok(pending)
+    }
+
+    /// Writes vectors, refusing the whole batch rather than any part of it.
+    ///
+    /// A vector is accepted only if a window with that exact `text_sha256` is
+    /// present. That is the check that makes a stale vector impossible to
+    /// introduce: the digest a caller supplies is the one it embedded, and if
+    /// the meeting has moved since, no window carries it any more.
+    pub fn store_window_vectors(
+        &mut self,
+        identity: &EmbedderIdentity,
+        vectors: &[WindowVector],
+    ) -> Result<usize, CorpusIndexError> {
+        let embedder = identity.canonical();
+        let dimension = identity.dimension as usize;
+        let transaction = self.connection.transaction()?;
+        let mut written = 0;
+        {
+            let mut bound = transaction.prepare(
+                "SELECT 1 FROM corpus_window
+                 WHERE meeting_id = ?1 AND window_index = ?2 AND text_sha256 = ?3",
+            )?;
+            let mut insert = transaction.prepare(
+                "INSERT OR REPLACE INTO corpus_window_vector
+                    (meeting_id, window_index, embedder, text_sha256, vector)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for vector in vectors {
+                if vector.values.len() != dimension {
+                    return Err(CorpusIndexError::VectorRejected);
+                }
+                let exists: Option<i64> = bound
+                    .query_row(
+                        params![vector.meeting_id, vector.window_index, vector.text_sha256],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if exists.is_none() {
+                    return Err(CorpusIndexError::VectorRejected);
+                }
+                let mut blob = Vec::with_capacity(dimension * 4);
+                for value in &vector.values {
+                    blob.extend_from_slice(&value.to_le_bytes());
+                }
+                insert.execute(params![
+                    vector.meeting_id,
+                    vector.window_index,
+                    embedder,
+                    vector.text_sha256,
+                    blob
+                ])?;
+                written += 1;
+            }
+        }
+        transaction.commit()?;
+        Ok(written)
+    }
+
+    /// How much of the corpus this embedder has actually answered for.
+    ///
+    /// Two numbers rather than a boolean, because the useful sentence for a
+    /// person is "searched 40 of 800 passages", and a store that cannot say
+    /// that will be asked to pretend it searched all of them.
+    pub fn vector_coverage(
+        &self,
+        identity: &EmbedderIdentity,
+    ) -> Result<VectorCoverage, CorpusIndexError> {
+        let windows: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM corpus_window", [], |row| row.get(0))?;
+        let embedded: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM corpus_window AS w
+             JOIN corpus_window_vector AS v
+               ON v.meeting_id = w.meeting_id
+              AND v.window_index = w.window_index
+              AND v.text_sha256 = w.text_sha256
+             WHERE v.embedder = ?1",
+            params![identity.canonical()],
+            |row| row.get(0),
+        )?;
+        Ok(VectorCoverage {
+            windows: windows as usize,
+            embedded: embedded as usize,
+        })
+    }
+
+    /// Rank meetings against an already-embedded question.
+    ///
+    /// The aggregation is [`corpus_window::AGGREGATION`] — one score per
+    /// meeting, the best of its windows — because that is the arm the
+    /// 2026-08-08 measurement ran. Cosine is computed with both norms rather
+    /// than assuming unit vectors: `notes/mlx_minilm.py` returns the raw
+    /// mean-pooled hidden state and the probe normalises at comparison time.
+    ///
+    /// The result carries [`VectorCoverage`] with it. A caller that reports a
+    /// ranking without reporting how much of the corpus it covered is making a
+    /// claim the store did not.
+    pub fn nearest_windows(
+        &self,
+        identity: &EmbedderIdentity,
+        question: &[f32],
+        limit: usize,
+    ) -> Result<SemanticSearch, CorpusIndexError> {
+        if question.len() != identity.dimension as usize {
+            return Err(CorpusIndexError::VectorRejected);
+        }
+        let coverage = self.vector_coverage(identity)?;
+        let question_norm = norm(question);
+
+        let mut prepared = self.connection.prepare(
+            "SELECT w.meeting_id, w.window_index, w.word_count, v.vector
+             FROM corpus_window AS w
+             JOIN corpus_window_vector AS v
+               ON v.meeting_id = w.meeting_id
+              AND v.window_index = w.window_index
+              AND v.text_sha256 = w.text_sha256
+             WHERE v.embedder = ?1
+             ORDER BY w.meeting_id ASC, w.window_index ASC",
+        )?;
+        let mut rows = prepared.query(params![identity.canonical()])?;
+        let mut best: Vec<(String, u64, u64, f32)> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let meeting_id: String = row.get(0)?;
+            let window_index = row.get::<_, i64>(1)? as u64;
+            let word_count = row.get::<_, i64>(2)? as u64;
+            let blob: Vec<u8> = row.get(3)?;
+            if blob.len() != question.len() * 4 {
+                return Err(CorpusIndexError::VectorRejected);
+            }
+            let values: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                .collect();
+            let scale = question_norm * norm(&values);
+            let similarity = if scale > 0.0 {
+                question
+                    .iter()
+                    .zip(&values)
+                    .map(|(left, right)| left * right)
+                    .sum::<f32>()
+                    / scale
+            } else {
+                0.0
+            };
+            match best
+                .iter_mut()
+                .find(|(existing, _, _, _)| existing == &meeting_id)
+            {
+                Some(entry) if similarity > entry.3 => {
+                    *entry = (meeting_id, window_index, word_count, similarity);
+                }
+                Some(_) => {}
+                None => best.push((meeting_id, window_index, word_count, similarity)),
+            }
+        }
+
+        // Ties are the measured failure mode, not an edge case, so the order
+        // among them is fixed rather than left to the sort's stability.
+        best.sort_by(|left, right| {
+            right
+                .3
+                .partial_cmp(&left.3)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.0.cmp(&right.0))
+                .then_with(|| left.1.cmp(&right.1))
+        });
+
+        let top = best.first().map(|entry| entry.3);
+        let near_ties = top.map_or(0, |top| {
+            best.iter()
+                .filter(|entry| top - entry.3 <= corpus_window::DENSITY_BAND)
+                .count()
+        });
+        if limit > 0 {
+            best.truncate(limit);
+        }
+
+        let mut hits = Vec::with_capacity(best.len());
+        for (meeting_id, window_index, word_count, similarity) in best {
+            let window = self.window_provenance(&meeting_id, window_index, word_count)?;
+            hits.push(SemanticHit {
+                meeting_id,
+                window_index,
+                similarity,
+                segments: window.segments,
+            });
+        }
+        Ok(SemanticSearch {
+            coverage,
+            near_ties,
+            hits,
+        })
+    }
+
+    fn window_provenance(
+        &self,
+        meeting_id: &str,
+        window_index: u64,
+        word_count: u64,
+    ) -> Result<CorpusWindow, CorpusIndexError> {
+        let mut prepared = self.connection.prepare(
+            "SELECT source_turn_index, original_scalar_start, original_scalar_end
+             FROM corpus_window_segment
+             WHERE meeting_id = ?1 AND window_index = ?2
+             ORDER BY segment_index ASC",
+        )?;
+        let segments = prepared
+            .query_map(params![meeting_id, window_index], |row| {
+                Ok(WindowSegment {
+                    source_turn_index: row.get::<_, i64>(0)? as u64,
+                    original_scalar_start: row.get::<_, i64>(1)? as u64,
+                    original_scalar_end: row.get::<_, i64>(2)? as u64,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        if segments.is_empty() {
+            return Err(CorpusIndexError::UnderivableRow);
+        }
+        Ok(CorpusWindow {
+            window_index,
+            word_count,
+            segments,
+        })
+    }
+
+    fn window_text(
+        &self,
+        meeting_id: &str,
+        window: &CorpusWindow,
+    ) -> Result<String, CorpusIndexError> {
+        let mut prepared = self
+            .connection
+            .prepare("SELECT text FROM turn WHERE meeting_id = ?1 AND turn_index = ?2")?;
+        let mut turns: Vec<(u64, String)> = Vec::new();
+        for segment in &window.segments {
+            if turns
+                .iter()
+                .any(|(index, _)| *index == segment.source_turn_index)
+            {
+                continue;
+            }
+            let text: Option<String> = prepared
+                .query_row(params![meeting_id, segment.source_turn_index], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            turns.push((
+                segment.source_turn_index,
+                text.ok_or(CorpusIndexError::UnderivableRow)?,
+            ));
+        }
+        corpus_window::window_text(window, |index| {
+            turns
+                .iter()
+                .find(|(stored, _)| *stored == index)
+                .map(|(_, text)| text.as_str())
+        })
+        .ok_or(CorpusIndexError::UnderivableRow)
+    }
 }
 
-const MIGRATION_1: &str = "
+fn norm(values: &[f32]) -> f32 {
+    values.iter().map(|value| value * value).sum::<f32>().sqrt()
+}
+
+/// A window with no vector yet, and the exact text to embed for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingWindow {
+    pub meeting_id: String,
+    pub window_index: u64,
+    pub text_sha256: String,
+    pub text: String,
+}
+
+/// A vector offered to the store, carrying the digest it was computed from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowVector {
+    pub meeting_id: String,
+    pub window_index: u64,
+    pub text_sha256: String,
+    pub values: Vec<f32>,
+}
+
+/// How much of the corpus an embedder has answered for. Counts only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VectorCoverage {
+    pub windows: usize,
+    pub embedded: usize,
+}
+
+impl VectorCoverage {
+    pub fn complete(&self) -> bool {
+        self.windows == self.embedded
+    }
+}
+
+/// One meeting's best window, with the provenance to quote it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticHit {
+    pub meeting_id: String,
+    pub window_index: u64,
+    pub similarity: f32,
+    pub segments: Vec<WindowSegment>,
+}
+
+/// A ranking that states what it searched and how crowded the answer was.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticSearch {
+    pub coverage: VectorCoverage,
+    /// Meetings within [`corpus_window::DENSITY_BAND`] of the top score,
+    /// counted before `limit` truncates. The 2026-08-08 measurement reported
+    /// this rather than accuracy alone, because both of its failures were ties
+    /// at a margin of 0.0000 — a wrong answer arriving as a visible tie is
+    /// something a surface can act on, and an accuracy figure hides it.
+    pub near_ties: usize,
+    pub hits: Vec<SemanticHit>,
+}
+
+const SCHEMA_2: &str = "
 CREATE TABLE IF NOT EXISTS index_identity (
     id INTEGER PRIMARY KEY CHECK (id = 0),
     schema TEXT NOT NULL,
@@ -539,6 +1018,33 @@ CREATE TABLE IF NOT EXISTS turn (
     gated INTEGER NOT NULL,
     text TEXT NOT NULL,
     PRIMARY KEY (meeting_id, turn_index)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS corpus_window (
+    meeting_id TEXT NOT NULL REFERENCES meeting (meeting_id) ON DELETE CASCADE,
+    window_index INTEGER NOT NULL,
+    word_count INTEGER NOT NULL,
+    text_sha256 TEXT NOT NULL,
+    PRIMARY KEY (meeting_id, window_index)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS corpus_window_segment (
+    meeting_id TEXT NOT NULL,
+    window_index INTEGER NOT NULL,
+    segment_index INTEGER NOT NULL,
+    source_turn_index INTEGER NOT NULL,
+    original_scalar_start INTEGER NOT NULL,
+    original_scalar_end INTEGER NOT NULL,
+    PRIMARY KEY (meeting_id, window_index, segment_index)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS corpus_window_vector (
+    meeting_id TEXT NOT NULL,
+    window_index INTEGER NOT NULL,
+    embedder TEXT NOT NULL,
+    text_sha256 TEXT NOT NULL,
+    vector BLOB NOT NULL,
+    PRIMARY KEY (meeting_id, window_index, embedder)
 ) WITHOUT ROWID;
 ";
 
@@ -618,6 +1124,11 @@ mod tests {
         }
 
         fn meeting(&self, id: &str, created: u64, turns: &[&str]) {
+            let gated: Vec<(&str, bool)> = turns.iter().map(|text| (*text, false)).collect();
+            self.meeting_with_gates(id, created, &gated);
+        }
+
+        fn meeting_with_gates(&self, id: &str, created: u64, turns: &[(&str, bool)]) {
             let directory = self.storage.path().join("meetings").join(id);
             for child in ["", "capture", "transcript", "deletion"] {
                 create_private_dir(&directory.join(child)).unwrap();
@@ -647,13 +1158,22 @@ mod tests {
             ] {
                 durable_create_new(&directory.join(path), b"{}\n").unwrap();
             }
+            self.transcribe(id, created, turns);
+        }
+
+        /// A new transcript for a meeting that already exists, through the same
+        /// path that wrote the first one.
+        fn transcribe(&self, id: &str, created: u64, turns: &[(&str, bool)]) {
+            let directory = self.storage.path().join("meetings").join(id);
+            let rule = AudioRetentionRule::DeleteAfter { seconds: 60 };
+            let policy = retention_policy_sha256(&rule);
             let turn_values: Vec<_> = turns
                 .iter()
                 .enumerate()
-                .map(|(index, text)| {
+                .map(|(index, (text, gated))| {
                     serde_json::json!({
                         "start": index as f64, "end": index as f64 + 0.5,
-                        "speaker": "Me", "text": text, "gated": false,
+                        "speaker": "Me", "text": text, "gated": gated,
                     })
                 })
                 .collect();
@@ -997,7 +1517,8 @@ mod tests {
             first,
             Some(SyncOutcome {
                 meetings: 1,
-                turns: 1
+                turns: 1,
+                windows: 1
             })
         );
         assert_eq!(index.sync_if_changed(&fixture.projection()).unwrap(), None);
@@ -1008,7 +1529,8 @@ mod tests {
             third,
             Some(SyncOutcome {
                 meetings: 2,
-                turns: 2
+                turns: 2,
+                windows: 2
             })
         );
         assert_eq!(index.meeting_count().unwrap(), 2);
@@ -1140,6 +1662,416 @@ mod tests {
                 .title
                 .as_deref(),
             Some("After")
+        );
+    }
+
+    // --- windows and vectors ---
+
+    fn words(count: usize, tag: &str) -> String {
+        (0..count)
+            .map(|index| format!("{tag}{index}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// A unit vector along one axis. Cosine between two of these is 1 when the
+    /// axes match and 0 when they do not, which makes a ranking assertion an
+    /// assertion about the ranking rather than about floating point.
+    fn axis(index: usize) -> Vec<f32> {
+        let mut values = vec![0.0_f32; EmbedderIdentity::measured().dimension as usize];
+        values[index] = 1.0;
+        values
+    }
+
+    fn blend(first: usize, second: usize, weight: f32) -> Vec<f32> {
+        let mut values = vec![0.0_f32; EmbedderIdentity::measured().dimension as usize];
+        values[first] = 1.0 - weight;
+        values[second] = weight;
+        values
+    }
+
+    fn offer(pending: &PendingWindow, values: Vec<f32>) -> WindowVector {
+        WindowVector {
+            meeting_id: pending.meeting_id.clone(),
+            window_index: pending.window_index,
+            text_sha256: pending.text_sha256.clone(),
+            values,
+        }
+    }
+
+    #[test]
+    fn a_sync_cuts_meetings_into_windows_that_cite_their_turns() {
+        let fixture = Fixture::new();
+        let long = words(crate::corpus_window::WINDOW_WORDS + 10, "w");
+        fixture.meeting("meeting-a", 100, &[&long]);
+        let index = synced(&fixture);
+
+        let counts: Vec<(u64, u64)> = index
+            .connection
+            .prepare("SELECT window_index, word_count FROM corpus_window ORDER BY window_index")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            counts,
+            vec![(0, crate::corpus_window::WINDOW_WORDS as u64), (1, 10)]
+        );
+        let segments: i64 = index
+            .connection
+            .query_row("SELECT COUNT(*) FROM corpus_window_segment", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(segments, 2, "each window cites the one turn it came from");
+    }
+
+    #[test]
+    fn a_gated_turn_reaches_no_window_and_no_vector() {
+        let fixture = Fixture::new();
+        fixture.meeting_with_gates(
+            "meeting-a",
+            100,
+            &[("alpha beta", false), ("withheld entirely", true)],
+        );
+        let index = synced(&fixture);
+
+        let pending = index
+            .pending_windows(&EmbedderIdentity::measured(), 0)
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].text, "alpha beta");
+        let cited: Vec<i64> = index
+            .connection
+            .prepare("SELECT DISTINCT source_turn_index FROM corpus_window_segment")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(cited, vec![0], "a withheld turn was cited by a window");
+    }
+
+    #[test]
+    fn pending_text_is_exactly_what_its_digest_names() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha beta", "gamma"]);
+        let index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].text, "alpha beta gamma");
+        assert_eq!(
+            pending[0].text_sha256,
+            crate::corpus_window::window_digest(&pending[0].text)
+        );
+    }
+
+    #[test]
+    fn storing_a_vector_empties_the_pending_list_for_that_embedder_only() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha beta"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        let written = index
+            .store_window_vectors(&identity, &[offer(&pending[0], axis(0))])
+            .unwrap();
+        assert_eq!(written, 1);
+        assert!(index.pending_windows(&identity, 0).unwrap().is_empty());
+        assert!(index.vector_coverage(&identity).unwrap().complete());
+
+        let other = EmbedderIdentity {
+            pooling: "cls".to_owned(),
+            ..identity.clone()
+        };
+        assert_eq!(index.pending_windows(&other, 0).unwrap().len(), 1);
+        assert_eq!(index.vector_coverage(&other).unwrap().embedded, 0);
+    }
+
+    #[test]
+    fn a_vector_the_store_cannot_bind_is_refused_and_nothing_is_written() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha beta"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+        let pending = index.pending_windows(&identity, 0).unwrap();
+
+        let wrong_digest = WindowVector {
+            text_sha256: "0".repeat(64),
+            ..offer(&pending[0], axis(0))
+        };
+        assert!(matches!(
+            index.store_window_vectors(&identity, &[wrong_digest]),
+            Err(CorpusIndexError::VectorRejected)
+        ));
+
+        let wrong_width = WindowVector {
+            values: vec![1.0, 0.0],
+            ..offer(&pending[0], axis(0))
+        };
+        assert!(matches!(
+            index.store_window_vectors(&identity, &[wrong_width]),
+            Err(CorpusIndexError::VectorRejected)
+        ));
+
+        let absent = WindowVector {
+            meeting_id: "meeting-nowhere".to_owned(),
+            ..offer(&pending[0], axis(0))
+        };
+        assert!(matches!(
+            index.store_window_vectors(&identity, &[absent]),
+            Err(CorpusIndexError::VectorRejected)
+        ));
+
+        assert_eq!(index.vector_coverage(&identity).unwrap().embedded, 0);
+    }
+
+    #[test]
+    fn a_refused_batch_writes_none_of_its_good_vectors() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha beta"]);
+        fixture.meeting("meeting-b", 200, &["gamma delta"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        assert_eq!(pending.len(), 2);
+
+        let batch = vec![
+            offer(&pending[0], axis(0)),
+            WindowVector {
+                text_sha256: "0".repeat(64),
+                ..offer(&pending[1], axis(1))
+            },
+        ];
+        assert!(index.store_window_vectors(&identity, &batch).is_err());
+        assert_eq!(
+            index.vector_coverage(&identity).unwrap().embedded,
+            0,
+            "a partial batch left the store half-answered"
+        );
+    }
+
+    /// The property the whole binding exists for: after the words change, the
+    /// old vector is gone rather than still answering for them.
+    #[test]
+    fn a_vector_does_not_survive_the_words_it_was_computed_from() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["the lease renews in March"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        index
+            .store_window_vectors(&identity, &[offer(&pending[0], axis(0))])
+            .unwrap();
+        assert_eq!(index.vector_coverage(&identity).unwrap().embedded, 1);
+
+        fixture.transcribe("meeting-a", 100, &[("the lease renews in April", false)]);
+        index.sync_if_changed(&fixture.projection()).unwrap();
+
+        assert_eq!(index.vector_coverage(&identity).unwrap().embedded, 0);
+        assert_eq!(index.pending_windows(&identity, 0).unwrap().len(), 1);
+        // Deliberately a row count and not a coverage figure. Coverage joins on
+        // the digest, so it reads zero whether the stale row was deleted or
+        // merely ignored — and a test that cannot tell those apart would pass
+        // with the prune removed. Verified by removing it.
+        let stranded: i64 = index
+            .connection
+            .query_row("SELECT COUNT(*) FROM corpus_window_vector", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            stranded, 0,
+            "the stale vector was hidden rather than deleted"
+        );
+    }
+
+    #[test]
+    fn a_vector_survives_a_resync_that_leaves_its_window_alone() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha beta"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        index
+            .store_window_vectors(&identity, &[offer(&pending[0], axis(0))])
+            .unwrap();
+
+        fixture.meeting("meeting-b", 200, &["gamma delta"]);
+        index.sync_if_changed(&fixture.projection()).unwrap();
+
+        let coverage = index.vector_coverage(&identity).unwrap();
+        assert_eq!(
+            (coverage.windows, coverage.embedded),
+            (2, 1),
+            "adding one meeting cost the other meeting its vector"
+        );
+    }
+
+    #[test]
+    fn a_removed_meeting_leaves_no_vector_behind() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha beta"]);
+        fixture.meeting("meeting-b", 200, &["gamma delta"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        let batch: Vec<_> = pending
+            .iter()
+            .enumerate()
+            .map(|(position, window)| offer(window, axis(position)))
+            .collect();
+        index.store_window_vectors(&identity, &batch).unwrap();
+
+        std::fs::remove_dir_all(fixture.storage.path().join("meetings").join("meeting-b")).unwrap();
+        index.sync_if_changed(&fixture.projection()).unwrap();
+
+        let coverage = index.vector_coverage(&identity).unwrap();
+        assert_eq!((coverage.windows, coverage.embedded), (1, 1));
+        let orphans: i64 = index
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM corpus_window_vector WHERE meeting_id = 'meeting-b'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0);
+    }
+
+    /// Live behaviour: the aggregation follows the constant that records it.
+    #[test]
+    fn a_meeting_is_ranked_by_its_best_window_not_its_first() {
+        assert_eq!(
+            crate::corpus_window::AGGREGATION,
+            "max-chunk-similarity",
+            "this test asserts the aggregation the store contracts to"
+        );
+        let fixture = Fixture::new();
+        let long = words(crate::corpus_window::WINDOW_WORDS + 5, "w");
+        fixture.meeting("meeting-a", 100, &[&long]);
+        fixture.meeting("meeting-b", 200, &["gamma delta"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        assert_eq!(pending.len(), 3);
+        let batch = vec![
+            // meeting-a's first window is orthogonal to the question and its
+            // second is the answer. A first-window ranker puts it last.
+            offer(&pending[0], axis(5)),
+            offer(&pending[1], axis(1)),
+            offer(&pending[2], blend(5, 1, 0.6)),
+        ];
+        index.store_window_vectors(&identity, &batch).unwrap();
+
+        let found = index.nearest_windows(&identity, &axis(1), 0).unwrap();
+        assert_eq!(found.coverage.windows, 3);
+        assert_eq!(found.coverage.embedded, 3);
+        assert_eq!(
+            found
+                .hits
+                .iter()
+                .map(|hit| hit.meeting_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["meeting-a", "meeting-b"]
+        );
+        assert_eq!(found.hits[0].window_index, 1);
+        assert!(found.hits[0].similarity > 0.99);
+        assert!(!found.hits[0].segments.is_empty(), "a hit must be quotable");
+    }
+
+    #[test]
+    fn a_ranking_reports_how_crowded_the_top_is() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha"]);
+        fixture.meeting("meeting-b", 200, &["beta"]);
+        fixture.meeting("meeting-c", 300, &["gamma"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+        let pending = index.pending_windows(&identity, 0).unwrap();
+
+        // Two meetings inside the registered band of the top, one far outside.
+        let batch = vec![
+            offer(&pending[0], axis(1)),
+            offer(&pending[1], blend(1, 2, 0.05)),
+            offer(&pending[2], axis(2)),
+        ];
+        index.store_window_vectors(&identity, &batch).unwrap();
+
+        let found = index.nearest_windows(&identity, &axis(1), 1).unwrap();
+        assert_eq!(found.hits.len(), 1, "limit truncates the hits");
+        assert_eq!(
+            found.near_ties, 2,
+            "the density count is taken before the limit, or it always reads 1"
+        );
+    }
+
+    #[test]
+    fn a_ranking_says_what_it_did_not_search() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha"]);
+        fixture.meeting("meeting-b", 200, &["beta"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        index
+            .store_window_vectors(&identity, &[offer(&pending[0], axis(1))])
+            .unwrap();
+
+        let found = index.nearest_windows(&identity, &axis(1), 0).unwrap();
+        assert_eq!(found.coverage.windows, 2);
+        assert_eq!(found.coverage.embedded, 1);
+        assert!(!found.coverage.complete());
+        assert_eq!(found.hits.len(), 1);
+    }
+
+    #[test]
+    fn a_question_of_the_wrong_width_is_refused_rather_than_scored() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha"]);
+        let index = synced(&fixture);
+        assert!(matches!(
+            index.nearest_windows(&EmbedderIdentity::measured(), &[1.0, 0.0], 0),
+            Err(CorpusIndexError::VectorRejected)
+        ));
+    }
+
+    /// Windows are derived from files, so they belong in the rebuild digest.
+    /// Vectors are not, so they must not — and both halves need a test, because
+    /// getting either backwards is silent.
+    #[test]
+    fn the_rebuild_digest_covers_windows_and_deliberately_not_vectors() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha beta"]);
+        let mut index = synced(&fixture);
+        let identity = EmbedderIdentity::measured();
+        let before = index.fingerprint().unwrap();
+
+        let pending = index.pending_windows(&identity, 0).unwrap();
+        index
+            .store_window_vectors(&identity, &[offer(&pending[0], axis(0))])
+            .unwrap();
+        assert_eq!(
+            index.fingerprint().unwrap(),
+            before,
+            "a vector moved the digest, so a rebuild from files can never match"
+        );
+
+        index
+            .connection
+            .execute("UPDATE corpus_window SET word_count = word_count + 1", [])
+            .unwrap();
+        assert_ne!(
+            index.fingerprint().unwrap(),
+            before,
+            "a window column is outside the digest, so nothing would catch it drifting"
         );
     }
 }
