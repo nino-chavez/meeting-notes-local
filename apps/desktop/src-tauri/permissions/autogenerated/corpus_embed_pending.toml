@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-corpus-embed-pending"
+description = "Enables the corpus_embed_pending command without any pre-configured scope."
+commands.allow = ["corpus_embed_pending"]
+
+[[permission]]
+identifier = "deny-corpus-embed-pending"
+description = "Denies the corpus_embed_pending command without any pre-configured scope."
+commands.deny = ["corpus_embed_pending"]

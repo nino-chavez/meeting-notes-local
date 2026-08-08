@@ -860,6 +860,66 @@ impl CorpusIndex {
         })
     }
 
+    /// The words a window holds, with the naming the last sync saw for its
+    /// meeting.
+    ///
+    /// Derived on demand and never stored. The store keeps a window's digest
+    /// and the turn ranges it came from — deliberately, per [`corpus_window`]'s
+    /// own note — so a quote costs one read of the turns it names and no
+    /// private sentence sits on disk twice.
+    ///
+    /// It rebuilds through [`corpus_window::window_text`], so what a surface
+    /// shows is the exact string the vector was computed from rather than a
+    /// slice that looks like it. A window whose turns no longer reconstruct it
+    /// is an error, not an empty quote: a hit nobody can quote is a claim with
+    /// no evidence behind it, and this repository does not ship those.
+    pub fn quote_window(
+        &self,
+        meeting_id: &str,
+        window_index: u64,
+    ) -> Result<QuotedWindow, CorpusIndexError> {
+        let (word_count, title, folder, created_at_epoch_seconds) = self
+            .connection
+            .query_row(
+                "SELECT w.word_count, m.title, m.folder, m.created_at_epoch_seconds
+                 FROM corpus_window AS w
+                 JOIN meeting AS m ON m.meeting_id = w.meeting_id
+                 WHERE w.meeting_id = ?1 AND w.window_index = ?2",
+                params![meeting_id, window_index as i64],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(CorpusIndexError::UnderivableRow)?;
+        let window = self.window_provenance(meeting_id, window_index, word_count as u64)?;
+        let quote = self.window_text(meeting_id, &window)?;
+        // `window_provenance` already refuses an empty segment list, so these
+        // are present. Asked for rather than indexed, because a panic here
+        // would be a worse answer than a refusal.
+        let first = window
+            .segments
+            .first()
+            .ok_or(CorpusIndexError::UnderivableRow)?;
+        let last = window
+            .segments
+            .last()
+            .ok_or(CorpusIndexError::UnderivableRow)?;
+        Ok(QuotedWindow {
+            quote,
+            title,
+            folder,
+            created_at_epoch_seconds: created_at_epoch_seconds as u64,
+            first_turn_index: first.source_turn_index,
+            last_turn_index: last.source_turn_index,
+        })
+    }
+
     fn window_provenance(
         &self,
         meeting_id: &str,
@@ -969,6 +1029,24 @@ pub struct SemanticHit {
     pub window_index: u64,
     pub similarity: f32,
     pub segments: Vec<WindowSegment>,
+}
+
+/// One window's words, and enough naming to say where they came from.
+///
+/// The turn indices are the store's own, counted from zero. A surface that
+/// numbers turns for a person adds one; this type does not, because the
+/// transcript reader and the exact-search path both index from zero and a type
+/// that quietly disagreed with them would be found by a reader, not a test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotedWindow {
+    pub quote: String,
+    pub title: Option<String>,
+    pub folder: Option<String>,
+    /// Carried because an untitled meeting is named by when it happened, and a
+    /// search result that cannot name its meeting is not a result.
+    pub created_at_epoch_seconds: u64,
+    pub first_turn_index: u64,
+    pub last_turn_index: u64,
 }
 
 /// A ranking that states what it searched and how crowded the answer was.
@@ -1130,7 +1208,7 @@ pub(crate) mod tests {
             self.meeting_with_gates(id, created, &gated);
         }
 
-        fn meeting_with_gates(&self, id: &str, created: u64, turns: &[(&str, bool)]) {
+        pub(crate) fn meeting_with_gates(&self, id: &str, created: u64, turns: &[(&str, bool)]) {
             let directory = self.storage.path().join("meetings").join(id);
             for child in ["", "capture", "transcript", "deletion"] {
                 create_private_dir(&directory.join(child)).unwrap();
@@ -1755,6 +1833,52 @@ pub(crate) mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(cited, vec![0], "a withheld turn was cited by a window");
+    }
+
+    /// The same invariant one layer out, where it becomes visible. A window
+    /// cannot cite a withheld turn, so a quote built from its segments cannot
+    /// contain one — but a quote is the first thing that puts transcript words
+    /// on screen from a search, and the cost of being wrong is a voice check
+    /// undone by the feature that reads around it.
+    #[test]
+    fn a_quote_cannot_contain_a_withheld_turn() {
+        let fixture = Fixture::new();
+        fixture.meeting_with_gates(
+            "meeting-a",
+            100,
+            &[
+                ("the lease renews in March", false),
+                ("withheld entirely", true),
+                ("and the landlord wants an answer", false),
+            ],
+        );
+        let index = synced(&fixture);
+
+        let quoted = index.quote_window("meeting-a", 0).unwrap();
+        assert_eq!(
+            quoted.quote,
+            "the lease renews in March and the landlord wants an answer"
+        );
+        assert!(!quoted.quote.contains("withheld"));
+        // The turn locators skip it too, so a surface pointing at the passage
+        // does not point at the gap.
+        assert_eq!((quoted.first_turn_index, quoted.last_turn_index), (0, 2));
+    }
+
+    #[test]
+    fn a_quote_is_refused_for_a_window_the_index_does_not_hold() {
+        let fixture = Fixture::new();
+        fixture.meeting("meeting-a", 100, &["alpha beta"]);
+        let index = synced(&fixture);
+
+        assert!(matches!(
+            index.quote_window("meeting-a", 7),
+            Err(CorpusIndexError::UnderivableRow)
+        ));
+        assert!(matches!(
+            index.quote_window("meeting-missing", 0),
+            Err(CorpusIndexError::UnderivableRow)
+        ));
     }
 
     #[test]

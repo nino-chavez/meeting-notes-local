@@ -1,5 +1,6 @@
 pub mod corpus_embedding;
 pub mod corpus_index;
+pub mod corpus_question;
 pub mod corpus_window;
 pub mod diagnostic;
 pub mod enrollment_guidance;

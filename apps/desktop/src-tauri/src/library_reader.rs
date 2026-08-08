@@ -1099,7 +1099,15 @@ impl LibraryReader {
         self.meeting_deletion_handles.clear();
     }
 
-    fn retain_transcript_handle(&mut self, meeting_id: &str) -> Option<String> {
+    /// A single-use transcript handle for a meeting named by ID rather than
+    /// found through this reader.
+    ///
+    /// Semantic search ranks in the corpus index, which knows meeting IDs and
+    /// nothing about handle generations. Minting here rather than letting that
+    /// path hand an ID to an open command is the point: the handle is checked
+    /// against *this* projection, dies with it, and a meeting with no
+    /// transcript gets `None` instead of a handle that opens nothing.
+    pub(crate) fn retain_transcript_handle(&mut self, meeting_id: &str) -> Option<String> {
         if !self.meeting_has_transcript(meeting_id) {
             return None;
         }

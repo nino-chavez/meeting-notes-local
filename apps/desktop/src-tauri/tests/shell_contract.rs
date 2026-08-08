@@ -121,6 +121,10 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "allow-preview-library-snapshot",
             "allow-preview-retention-overview",
             "allow-preview-library-search",
+            // Meaning search, and the pass that prepares the passages it reads.
+            // Both windows, because both render the Find screen from ui/main.js.
+            "allow-corpus-search",
+            "allow-corpus-embed-pending",
             "allow-preview-library-open-search-result",
             "allow-preview-library-open-note",
             "allow-preview-library-open-evidence",
@@ -318,6 +322,10 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
             "allow-preview-library-snapshot",
             "allow-preview-retention-overview",
             "allow-preview-library-search",
+            // Meaning search, and the pass that prepares the passages it reads.
+            // Both windows, because both render the Find screen from ui/main.js.
+            "allow-corpus-search",
+            "allow-corpus-embed-pending",
             "allow-preview-library-open-search-result",
             "allow-preview-library-open-note",
             "allow-preview-library-open-evidence",
@@ -372,19 +380,67 @@ fn product_operation_facade_registers_restoration_but_not_regeneration() {
     assert!(handler.contains("product_facade::restore_withheld_turn"));
     assert!(!handler.contains("regenerate_note"));
 
-    // corpus_embed_pending joined the handler on 2026-08-08. It is registered
-    // rather than run automatically, and both halves of that are deliberate:
+    // `corpus_embed_pending` was registered on 2026-08-08 with nothing calling
+    // it, and this test asserted that nothing did. The reason had two halves:
     // filling the vector column is 34 worker round trips holding the worker
     // mutex, which must not sit on a path a person waits on or ahead of
-    // capture — and no surface asks a semantic question yet, so there is
-    // nothing to keep warm for. A command exists so the chain is invocable;
-    // nothing renders a control for it.
+    // capture — and no surface asked a semantic question yet, so there was
+    // nothing to keep warm for.
+    //
+    // The second half stopped being true on 2026-08-09. Meaning search renders
+    // a control that runs it, and the assertion is inverted with the comment
+    // rather than deleted under it. The first half is unchanged and is what the
+    // rest of this block pins: preparing is a press, never a step on the way to
+    // an answer.
     assert!(handler.contains("corpus_embed_pending"));
+    assert!(handler.contains("corpus_search"));
     assert!(source.contains("mod corpus_embedder;"));
     let shell = include_str!("../../ui/main.js");
+    assert!(shell.contains("invoke(\"corpus_search\""));
     assert!(
-        !shell.contains("corpus_embed_pending"),
-        "a control was rendered for a capability with no surface to use it"
+        shell.contains("invoke(\"corpus_embed_pending\")"),
+        "preparing stayed a command with no way to reach it"
+    );
+
+    let search = shell
+        .split("async function searchCorpus")
+        .nth(1)
+        .expect("the meaning-search handler")
+        .split("\nasync function ")
+        .next()
+        .expect("its body");
+    assert!(
+        !search.contains("corpus_embed_pending"),
+        "asking a question filled the vector column on its way to answering, \
+         which puts the worker mutex on a path a person waits on"
+    );
+
+    // Both wait on a child process. The default execution context is `Blocking`,
+    // which runs a command body inline in the IPC handler, so either one left
+    // without `(async)` freezes the window while the worker answers — a whole
+    // preparing pass, in the case of the second.
+    for command in ["fn corpus_search(", "fn corpus_embed_pending("] {
+        let at = source.find(command).expect("the command");
+        let preceding = &source[..at];
+        assert!(
+            preceding.ends_with("#[tauri::command(async)]\n"),
+            "`{command}` waits on the worker from inside the IPC handler"
+        );
+    }
+
+    // A hit is a passage, not a percentage. Cosine similarity is not a
+    // confidence, and printing one as a match rate would claim a number nobody
+    // measured — the quoted words are what let a person judge the match.
+    assert!(shell.contains("answer.quote"));
+    assert!(
+        !shell.contains("answer.similarity"),
+        "a cosine similarity reached the surface as if it meant something to a reader"
+    );
+    // Both failures in the 200-meeting measurement arrived as ties. The count
+    // has to reach the DOM, not just the response.
+    assert!(
+        shell.contains("response.nearTies"),
+        "the tie count was carried across the boundary and then dropped"
     );
 }
 

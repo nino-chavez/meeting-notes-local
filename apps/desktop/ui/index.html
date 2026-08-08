@@ -344,8 +344,8 @@
 
       <section class="screen find-screen" id="find-screen" aria-labelledby="find-title">
         <p class="kicker">Meeting memory</p>
-        <h1 id="find-title">Find exact words.</h1>
-        <p class="lede">Search meeting titles, folders, and retained transcript words on this Mac. Every result opens the canonical transcript.</p>
+        <h1 id="find-title">Find a meeting.</h1>
+        <p class="lede">Two ways, both on this Mac. Search the exact words if you remember them. Describe what the meeting was about if you don't.</p>
         <form class="library-search" id="library-search">
           <label for="library-search-query">What do you remember?</label>
           <div class="library-search-field">
@@ -361,6 +361,21 @@
         </div>
         <div class="notice" id="library-notice" role="status" aria-live="polite" hidden></div>
         <div class="library-search-results" id="library-search-results"></div>
+
+        <form class="library-search corpus-search" id="corpus-search">
+          <label for="corpus-search-question">Or describe what it was about.</label>
+          <div class="library-search-field">
+            <input id="corpus-search-question" type="search" autocomplete="off" placeholder="In your own words — &ldquo;the call about the lease&rdquo;" />
+            <button class="secondary" type="submit">Search by meaning</button>
+          </div>
+          <small>This compares meaning rather than words, using a model inside this app. Nothing is sent anywhere. Every result quotes the passage that matched it, so you can see why it came back.</small>
+        </form>
+        <div class="notice" id="corpus-notice" role="status" aria-live="polite" hidden></div>
+        <div class="corpus-coverage" id="corpus-coverage" hidden>
+          <p id="corpus-coverage-copy"></p>
+          <button class="secondary" type="button" id="corpus-prepare">Prepare passages</button>
+        </div>
+        <div class="corpus-search-results" id="corpus-search-results"></div>
       </section>
 
       <section class="screen library-screen" id="meetings-screen" aria-labelledby="library-title">

@@ -108,6 +108,14 @@ const librarySearchQuery = document.querySelector("#library-search-query");
 const librarySearchSubmit = librarySearch.querySelector("button[type=\"submit\"]");
 const librarySearchResults = document.querySelector("#library-search-results");
 const findStart = document.querySelector("#find-start");
+const corpusSearch = document.querySelector("#corpus-search");
+const corpusSearchQuestion = document.querySelector("#corpus-search-question");
+const corpusSearchSubmit = corpusSearch.querySelector("button[type=\"submit\"]");
+const corpusSearchResults = document.querySelector("#corpus-search-results");
+const corpusNotice = document.querySelector("#corpus-notice");
+const corpusCoverage = document.querySelector("#corpus-coverage");
+const corpusCoverageCopy = document.querySelector("#corpus-coverage-copy");
+const corpusPrepare = document.querySelector("#corpus-prepare");
 const meetingDetailState = document.querySelector("#meeting-detail-state");
 const meetingDetailTitle = document.querySelector("#meeting-detail-title");
 const meetingDetailLede = document.querySelector("#meeting-detail-lede");
@@ -346,6 +354,10 @@ function initializeFindInBackground() {
 function invalidateLibraryHandles() {
   libraryList.replaceChildren();
   librarySearchResults.replaceChildren();
+  // Meaning results hold transcript handles minted against the same projection
+  // as every other row here, so they die at the same moment. Left standing they
+  // would be buttons that look live and open nothing.
+  corpusSearchResults.replaceChildren();
   meetingClaimList.replaceChildren();
   meetingNoNote.hidden = true;
   document.querySelector("#meeting-detail-transcript-handle").value = "";
@@ -816,6 +828,170 @@ function renderLibrarySearch(response) {
     ? response.message
     : `${resultCount} exact ${resultCount === 1 ? "match" : "matches"} found.`;
   setError(libraryNotice, resultMessage || "Exact results from your retained meetings.");
+}
+
+// One click's ceiling. Rust caps a single `corpus_embed_pending` call at 512
+// windows; this caps how many calls one click makes. Both bounds exist because
+// a pass that never converges should stop and say so rather than spin.
+const CORPUS_PREPARE_MAX_PASSES = 24;
+
+// Meaning search reports how much of the corpus it actually searched, in every
+// state including its failures. "Nothing matched" and "nothing has been
+// prepared" are different sentences and only one of them is about the question.
+function renderCorpusCoverage(response) {
+  const windows = Number.isInteger(response.windows) ? response.windows : 0;
+  const covered = Number.isInteger(response.covered) ? response.covered : 0;
+  if (windows === 0 || covered >= windows) {
+    corpusCoverage.hidden = true;
+    return;
+  }
+  corpusCoverageCopy.textContent = covered === 0
+    ? `None of your ${windows} passages are prepared yet. Preparing reads them through a model inside this app; nothing is sent anywhere.`
+    : `${covered} of ${windows} passages are prepared. The rest were not searched.`;
+  corpusPrepare.textContent = covered === 0 ? "Prepare passages" : "Prepare the rest";
+  corpusCoverage.hidden = false;
+}
+
+function corpusAnswerLabel(answer) {
+  if (answer.title) return answer.title;
+  return formatMeetingTime(answer.createdAtEpochSeconds);
+}
+
+function renderCorpusAnswers(response) {
+  corpusSearchResults.replaceChildren();
+  renderCorpusCoverage(response);
+  if (response.state !== "answered") {
+    setError(corpusNotice, response.message || "That description could not be searched.");
+    return;
+  }
+  for (const answer of response.answers || []) {
+    const openable = Boolean(answer.transcriptHandle);
+    const row = document.createElement(openable ? "button" : "div");
+    row.className = "corpus-answer";
+    if (openable) {
+      row.type = "button";
+      row.dataset.transcriptHandle = answer.transcriptHandle;
+      row.addEventListener("click", () => openCorpusAnswer(answer, row));
+    } else {
+      row.dataset.state = "unopenable";
+    }
+    const label = document.createElement("strong");
+    label.textContent = corpusAnswerLabel(answer);
+    const where = document.createElement("small");
+    // Turns are numbered for a person here and stored from zero, exactly as an
+    // exact hit is, so the two searches never number one transcript two ways.
+    const first = answer.firstTurnIndex + 1;
+    const last = answer.lastTurnIndex + 1;
+    const turns = first === last ? `turn ${first}` : `turns ${first}\u2013${last}`;
+    where.textContent = answer.folder ? `${answer.folder} \u00b7 ${turns}` : turns;
+    // The passage, not a score. A cosine similarity is not a probability and
+    // printing it as a percentage would claim a confidence nobody measured; the
+    // words are what lets a person judge whether the match is the right one.
+    const quote = document.createElement("blockquote");
+    quote.textContent = answer.quote;
+    const action = document.createElement("span");
+    action.textContent = openable ? "Open transcript" : "No transcript to open";
+    row.append(label, where, quote, action);
+    corpusSearchResults.append(row);
+  }
+  const ties = Number.isInteger(response.nearTies) ? response.nearTies : 0;
+  // Both failures in the 200-meeting measurement arrived as ties at a margin of
+  // 0.0000. A person who is told the top few are indistinguishable can pick the
+  // right one; an accuracy figure hides exactly that case.
+  const crowding = ties > 1
+    ? ` ${ties} meetings scored close enough together that the order between them means little \u2014 read the passages rather than the ranking.`
+    : "";
+  setError(corpusNotice, `${response.message || "Meetings that match that description."}${crowding}`);
+}
+
+async function searchCorpus(event) {
+  event.preventDefault();
+  if (!invoke) return false;
+  const revision = routeRevision;
+  const ownsRoute = () => currentScreen === "find-screen" && routeRevision === revision;
+  const question = corpusSearchQuestion.value.trim();
+  corpusSearchResults.replaceChildren();
+  corpusCoverage.hidden = true;
+  if (!question) {
+    setError(corpusNotice, "Describe what the meeting was about.");
+    return false;
+  }
+  corpusSearchSubmit.disabled = true;
+  setError(corpusNotice, "Searching by meaning on this Mac\u2026");
+  try {
+    // The library reader owns the corpus sync and the handles this answer will
+    // carry, so it is initialized before the question rather than after it.
+    await initializeLibraryReader();
+    const response = await invoke("corpus_search", { question });
+    if (!ownsRoute()) return false;
+    renderCorpusAnswers(response);
+    return response.state === "answered";
+  } catch {
+    if (ownsRoute()) {
+      setError(corpusNotice, "Meaning search is unavailable right now. Exact word search still works.");
+    }
+    return false;
+  } finally {
+    corpusSearchSubmit.disabled = false;
+  }
+}
+
+async function openCorpusAnswer(answer, control = null) {
+  if (!answer.transcriptHandle) return false;
+  claimExplicitRoute();
+  const transition = beginHandleTransition("open-transcript", control);
+  if (!transition) return false;
+  productRootScreen = "find-screen";
+  return await openLibraryTranscript(
+    answer.transcriptHandle,
+    // Land on the turn the passage starts at. The store cites character ranges
+    // too, and this does not carry them: the exact path uses them to highlight
+    // one matched phrase, and a passage is 128 words with no phrase to point at.
+    { sourceTurnIndex: answer.firstTurnIndex, start: null, end: null },
+    null,
+    transition,
+  );
+}
+
+async function prepareCorpusPassages() {
+  if (!invoke) return false;
+  const revision = routeRevision;
+  const ownsRoute = () => currentScreen === "find-screen" && routeRevision === revision;
+  corpusPrepare.disabled = true;
+  try {
+    for (let pass = 0; pass < CORPUS_PREPARE_MAX_PASSES; pass += 1) {
+      const result = await invoke("corpus_embed_pending");
+      if (!ownsRoute()) return false;
+      renderCorpusCoverage(result);
+      if (result.stop === "complete") {
+        setError(corpusNotice, `All ${result.windows} passages are prepared. Ask your question again.`);
+        return true;
+      }
+      if (result.stop !== "budget") {
+        setError(corpusNotice, corpusPrepareFailure(result.stop));
+        return false;
+      }
+      setError(corpusNotice, `Preparing on this Mac \u2014 ${result.covered} of ${result.windows} passages done\u2026`);
+    }
+    setError(corpusNotice, "Preparing stopped part-way. Run it again to continue where it left off.");
+    return false;
+  } catch {
+    if (ownsRoute()) setError(corpusNotice, "Preparing is unavailable right now. Try again.");
+    return false;
+  } finally {
+    corpusPrepare.disabled = false;
+  }
+}
+
+function corpusPrepareFailure(stop) {
+  if (stop === "busy") return "Finish the current recording before preparing passages.";
+  if (stop === "model-mismatch") {
+    return "This installation packages a different model than the stored passages were prepared with. Reinstall to search by meaning.";
+  }
+  if (stop === "worker-unavailable" || stop === "reply-incomplete") {
+    return "The local model stopped answering. Reopen the app and run this again.";
+  }
+  return "Passages could not be prepared right now. Try again.";
 }
 
 function renderStartup(state) {
@@ -2399,6 +2575,8 @@ document.querySelector("#start-transition-back").addEventListener(
   (event) => returnToFindAfterStartError(event.currentTarget),
 );
 librarySearch.addEventListener("submit", searchLibrary);
+corpusSearch.addEventListener("submit", searchCorpus);
+corpusPrepare.addEventListener("click", prepareCorpusPassages);
 document.querySelector("#profile-back").addEventListener("click", returnToProductHome);
 document.querySelector("#library-transcript-back").addEventListener("click", returnFromLibraryTranscript);
 document.querySelector("#meeting-detail-back").addEventListener("click", returnToProductHome);
