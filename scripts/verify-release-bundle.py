@@ -145,12 +145,33 @@ def verify_runtime(resources: Path, admission: str) -> None:
             (manifest.get("tap") or {}).get("path") == "bin/meeting-capture",
             "internal-alpha runtime is not bound to the product capture helper",
         )
+        # A closed allowlist, and deliberately a *second* statement of the set
+        # rather than a read of `worker/build_manifest.py`. A verifier that asked
+        # the builder what it had built would assert the manifest equals itself.
+        #
+        # Being a second statement means it can drift, and it did: the four
+        # MiniLM entries were added to the builder on 2026-08-08 and not here, so
+        # the first build carrying the embedding model was refused at the release
+        # lane on 2026-08-08 — correctly, and later than it should have been.
+        # `the_release_verifier_expects_the_models_the_builder_stages` now
+        # compares the two files and fails in the ordinary test run instead.
         expected_models = {
             "whisper-large-v3-turbo-config": (
                 "models/whisper-large-v3-turbo/config.json"
             ),
             "whisper-large-v3-turbo-weights": (
                 "models/whisper-large-v3-turbo/weights.safetensors"
+            ),
+            # All four or none — `worker.main.embedding_model_dir` requires the
+            # whole set before it names a directory, so a bundle carrying three
+            # of them would have an embedder that silently does not exist.
+            "all-minilm-l6-v2-config": "models/all-MiniLM-L6-v2/config.json",
+            "all-minilm-l6-v2-sentence-config": (
+                "models/all-MiniLM-L6-v2/sentence_bert_config.json"
+            ),
+            "all-minilm-l6-v2-tokenizer": "models/all-MiniLM-L6-v2/tokenizer.json",
+            "all-minilm-l6-v2-weights": (
+                "models/all-MiniLM-L6-v2/model.safetensors"
             ),
         }
         actual_models = {
