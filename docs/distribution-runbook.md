@@ -1,6 +1,19 @@
 # Yawn distribution runbook
 
-**0.5.0 is cut, 2026-08-08 — the first build in which a person can ask the
+**0.5.1 is being cut, 2026-08-08, and 0.5.0 must not be installed.** 0.5.0 was
+cut at `e39f576` hours before `corpus-scan-bench` was pointed at exact search,
+and it carries a defect that hour found: a word appearing more than a hundred
+times across a library returns **no results at all**, with "That search has too
+many matches." Measured at 5, 20, 200 and 800 meetings — it refused at every one,
+so it is a first-week failure rather than a scale limit. Fixed on trunk in
+`ca07ca6` (US-13.14); exact search now returns the hundred most recent matches
+and says how many it cut from.
+
+**Delete the 0.5.0 image once 0.5.1 verifies.** Two images in one folder, one of
+them broken, is how the wrong one gets installed — and this is the folder the
+operator is being pointed at.
+
+**0.5.0 was cut, 2026-08-08 — the first build in which a person can ask the
 corpus a question.** Everything the feature needs landed across #45–#53 and none
 of it is in any image: the embedding model entered the runtime on 2026-08-08 and
 the search surface the day after. 0.4.0 cannot do any of this, so the standing
