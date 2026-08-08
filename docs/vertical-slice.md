@@ -41,9 +41,35 @@ to prove a real meeting path.
 
 ### Start here
 
-**The next build is the runtime learning to embed: a lock entry, the manifest
-models, a `build_runtime.sh` rebuild and a `corpus.embed` operation — and all four
-land together or the lock disagrees with the staged runtime.**
+**The next build is packaging the model: a `tokenizers` lock entry, four
+manifest `models[]` rows, the staging lines in `build_runtime.sh`, and a rebuild.
+Those four land together — a lock without a rebuild leaves the recipe and the
+staged runtime disagreeing, and nothing detects that.**
+
+**`corpus.embed` landed 2026-08-08** (US-13.10) and cannot run yet, which is the
+point: it refuses on the manifest rather than failing on an import, because no
+lane carries the model. It takes `{text_sha256, text}` per window and returns
+`{text_sha256: base64 little-endian float32}` — the byte layout the store already
+holds, so what gets written is what the model produced. It reads no file and
+writes none. Windowing stays in `corpus_window.rs`, pinned to the measured
+boundaries; a second cut in Python would be a third implementation of it.
+
+**The forward pass is imported from `notes/mlx_minilm.py`, not restated**, and a
+test fails if that changes. That file produced every number in the receipts; a
+second copy would produce vectors nothing measured and they would look right.
+
+**The mode question is decided, so the next session does not have to reopen it.**
+The embedder stages in `build-alpha`, not a mode of its own. `build-alpha-encoder`
+exists because the ONNX speaker encoder is *a candidate under an admission check
+with alternatives* — the script says so, and packaging it admits nothing. The
+embedding model is not in that position: the model is chosen and measured, and
+what is unjudged is whether 7 of 10 is useful, which no build mode can settle. A
+second optional component would take three modes to four, and then to eight.
+
+**One thing to carry into that change: `corpus.embed` moves to `ALPHA_OPERATIONS`
+in it.** It sits in the boundary lane today so the shipped worker does not
+advertise a capability it can only refuse, and the moment the model is staged
+that reason expires.
 
 **The tokenizer question is closed** (2026-08-08, `notes/packaged_tokenizer_receipt.json`).
 The packaged runtime has `mlx` and `numpy` and not `transformers`, so the scale

@@ -38,6 +38,11 @@ pub enum Operation {
     NoteCreate,
     #[serde(rename = "note.inspect")]
     NoteInspect,
+    /// Window text to vector. Registered in the boundary lane only, because no
+    /// lane packages the embedding model yet — this variant exists so a
+    /// boundary worker's ready event still parses, not because the app calls it.
+    #[serde(rename = "corpus.embed")]
+    CorpusEmbed,
 }
 
 #[derive(Debug, Deserialize)]

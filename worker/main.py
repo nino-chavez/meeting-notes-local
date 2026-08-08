@@ -39,8 +39,13 @@ ALPHA_OPERATIONS = frozenset(
      "profile.choices", "profile.build", "profile.inspect", "profile.discard"}
 )
 # note.inspect stays boundary-lane only: no note generator is admitted.
+# corpus.embed is here for the same reason and not the same one: the generator
+# question is a judgment, but this is packaging — no lane carries the embedding
+# model or its tokenizer yet, so the internal-alpha set would advertise a
+# capability the shipped worker can only refuse. It moves to ALPHA_OPERATIONS in
+# the change that stages the model.
 BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
-    {"profile.adopt", "note.inspect"}
+    {"profile.adopt", "note.inspect", "corpus.embed"}
 )
 
 
@@ -157,6 +162,39 @@ def transcript_model_dir(manifest_path: Path, manifest: dict) -> Path | None:
     return parents.pop()
 
 
+# The four files a MiniLM directory needs. All four or none: a directory missing
+# `tokenizer.json` would load and then embed with whatever tokenizer happened to
+# be importable, which is the substitution `packaged_tokenizer_receipt.json`
+# exists to have measured rather than assumed.
+EMBEDDING_MODEL_IDS = frozenset(
+    {
+        "all-minilm-l6-v2-config",
+        "all-minilm-l6-v2-sentence-config",
+        "all-minilm-l6-v2-tokenizer",
+        "all-minilm-l6-v2-weights",
+    }
+)
+
+
+def embedding_model_dir(manifest_path: Path, manifest: dict) -> Path | None:
+    """The packaged embedding model, or `None` when no lane carries one.
+
+    `None` is the current answer in every lane and the adapter refuses on it.
+    That is the honest state: returning a directory that does not exist would
+    turn a packaging gap into an import error at request time.
+    """
+    resources = {model["id"]: model for model in manifest["models"]}
+    if not EMBEDDING_MODEL_IDS.issubset(resources):
+        return None
+    parents = {
+        (manifest_path.parent / resources[model_id]["path"]).resolve(strict=True).parent
+        for model_id in EMBEDDING_MODEL_IDS
+    }
+    if len(parents) != 1:
+        raise ValueError("packaged embedding model resources do not share one directory")
+    return parents.pop()
+
+
 def parse_command(
     frame: bytes, operations: frozenset[str]
 ) -> tuple[str, str, object]:
@@ -213,6 +251,7 @@ def dispatch_without_protocol_output(
     admission: str,
     model_dir: Path | None,
     encoder_path: Path | None = None,
+    embedding_dir: Path | None = None,
 ) -> dict:
     # The worker owns stdout as a newline-delimited JSON protocol. Research
     # adapters and model libraries may print progress on data-dependent paths;
@@ -229,6 +268,7 @@ def dispatch_without_protocol_output(
                 admission=admission,
                 model_dir=model_dir,
                 encoder_path=encoder_path,
+                embedding_dir=embedding_dir,
             )
 
 
@@ -236,6 +276,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
     root = require_private_root(root)
     manifest = load_manifest(manifest_path)
     model_dir = transcript_model_dir(manifest_path, manifest)
+    embedding_dir = embedding_model_dir(manifest_path, manifest)
     operations = operations_for(manifest["admission"])
     emit(
         {
@@ -276,6 +317,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                 admission=manifest["admission"],
                 model_dir=model_dir,
                 encoder_path=manifest_path.parent / manifest["encoder"]["path"],
+                embedding_dir=embedding_dir,
             )
             emit(
                 {

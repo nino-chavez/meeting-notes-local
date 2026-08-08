@@ -122,7 +122,7 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6 D3 D2** | 9 | **Landed 2026-08-07**, plus the vector store and the tokenizer decision 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 and US-13.9 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
+| **E13** | **The corpus store** | **E6 D3 D2** | 11 | **Landed 2026-08-07**, plus the vector store and the tokenizer decision 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 through US-13.11 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
 | **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3 measured the same day and its store is the next build; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
@@ -1259,9 +1259,76 @@ equality with a receipt from another environment, which records no environment. 
 so the tokenizer causes none of them. Recorded rather than relabelled: the isolating
 comparison is same-environment, and it is exact.
 
-**Not built:** the lock entry, the `app-runtime.json` `models[]` entries, the
-`build_runtime.sh` rebuild and the `corpus.embed` operation. They land together or
-the lock and the staged runtime disagree.
+**Not built:** the lock entry, the `app-runtime.json` `models[]` entries and the
+`build_runtime.sh` rebuild. They land together or the lock and the staged runtime
+disagree. `corpus.embed` landed separately as US-13.10.
+
+#### US-13.10: The operation that turns a window into a vector
+**Feature D2 · J1 · §F · P0 · M · Landed 2026-08-08**
+
+As the Operator, I want the passages the app scores to be scored by the code that
+was measured, so that a probe's number still describes the product.
+
+**Acceptance criteria:**
+- Given a window's text and the digest the store holds for it, When the worker embeds it, Then the reply is keyed by that digest and carries the exact bytes the store writes.
+- Given a runtime with no packaged embedding model, When the operation is called, Then it refuses on the manifest rather than failing on an import.
+- Given a window longer than the model reads, When the operation is called, Then it refuses rather than truncating.
+
+**Refusals:** the operation reads no file and writes none. Windowing stays in
+`corpus_window.rs`, pinned to the measured boundaries; re-deriving it in Python
+would be a third implementation of the same cut. The forward pass is imported from
+`notes/mlx_minilm.py` and not restated — a second copy would produce vectors
+nothing measured, and they would look right.
+
+**Validation:** **Pinned** for everything that does not need weights — 16 tests,
+of which 11 run with no model at all. Confirmed by mutation: leaving
+`tokenizer.json`'s two silent defaults on fails
+`the_two_silent_defaults_are_off` *and*
+`a_window_over_the_ceiling_refuses_rather_than_truncating`, because truncation at
+128 means an over-long window never reaches the ceiling to refuse at. The existing
+`test_capture_and_transcript_match_direct_validators` enumerates the boundary
+lane's operation set and had to be updated deliberately, which is that freeze
+working.
+
+**Not `Exercised` in the packaged runtime**, and stated because the distinction
+matters here: the five model-backed tests skip unless `LMN_EMBEDDING_MODEL_DIR`
+names the pinned directory. They were run against it — over a venv built from the
+packaged runtime's own `python3.12` with `--system-site-packages`, so `mlx` and
+`numpy` are the staged builds and only `tokenizers` is added — but the staged
+runtime itself carries neither the wheel nor the model, so `build_runtime.sh
+verify` skips them until US-13.11.
+
+**Two findings from running it.** Batching moves a vector: a 100-word window
+batched beside a two-word one differs from the same window alone in 3 of 384
+components by up to 1.4 × 10⁻⁶, because MLX's batched matmul is not bitwise the
+unbatched one. The test asserts cosine similarity to 1 within 1e-6 rather than
+componentwise equality, and says so rather than widening a tolerance quietly. And
+a vector leaves unnormalised, as `mlx_minilm.embed` returns it and as the probe
+normalises at comparison time — a unit-length vector here would mean the cosine
+gets computed twice.
+
+#### US-13.11: The runtime carries the embedding model
+**Feature D2 · J1 · §F · P0 · M · Next**
+
+As the Operator, I want the app to be able to embed without reaching outside its
+own bundle.
+
+**Acceptance criteria:**
+- Given a rebuilt runtime, When `build_runtime.sh verify` runs, Then the model-backed embedding tests execute rather than skip.
+- Given the staged model, When the manifest is written, Then all four MiniLM resources carry their digests and `corpus.embed` moves to `ALPHA_OPERATIONS`.
+
+**Refusals:** the lock entry and the rebuild land in one change. A lock that names
+a package the staged runtime does not carry is a disagreement nothing detects.
+
+**Validation:** **Unproven** — not built. The `tokenizers` pin is decided at
+**0.22.2**, the version `notes/packaged_tokenizer_receipt.json` was produced with;
+see that receipt's correction note for why the registration named 0.23.1.
+
+**The mode question is already decided:** the embedder stages in `build-alpha`,
+not a mode of its own. `build-alpha-encoder` exists because the ONNX speaker
+encoder is a candidate under an admission check with alternatives; the embedding
+model is chosen and measured, and what is unjudged about it is whether 7 of 10 is
+useful, which no build mode settles.
 
 ---
 
