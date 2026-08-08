@@ -16,6 +16,28 @@ WHISPER_SOURCE="${LMN_WHISPER_MODEL_DIR:-$WHISPER_DEFAULT}"
 # checkpoint (spike/encoder-packaging/export_onnx.py); two independent exports
 # reproduce this digest byte-identically. build-alpha-encoder packages it as a
 # candidate for admission check 2 — packaging it admits nothing.
+# The corpus embedding model, at the immutable revision every measurement in
+# `notes/SEMANTIC_RETRIEVAL.md` was taken against. Downloaded if absent and
+# digest-checked either way, like the CPython archive above — the pins were
+# recorded from the Hugging Face metadata endpoint before the first download and
+# have now been re-verified on three separate fetches.
+#
+# It stages in build-alpha rather than a mode of its own. build-alpha-encoder
+# exists because the ECAPA encoder is a candidate under an admission check with
+# alternatives; this model is chosen and measured, and what is unjudged about it
+# — whether 7 of 10 is useful — is not a question a build mode can settle.
+EMBEDDER_REVISION='1110a243fdf4706b3f48f1d95db1a4f5529b4d41'
+EMBEDDER_BASE="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/$EMBEDDER_REVISION"
+EMBEDDER_DEFAULT="$VENDOR/downloads/all-MiniLM-L6-v2"
+EMBEDDER_SOURCE="${LMN_EMBEDDER_MODEL_DIR:-$EMBEDDER_DEFAULT}"
+EMBEDDER_STAGE_RELATIVE='models/all-MiniLM-L6-v2'
+EMBEDDER_FILES=(config.json sentence_bert_config.json tokenizer.json model.safetensors)
+EMBEDDER_SHA256=(
+  '953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41'
+  'fc1993fde0a95c24ec6c022539d41cf6e2f7c9721e5415d6fb6897472a9cd4b7'
+  'be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037'
+  '53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db'
+)
 ENCODER_ONNX_SHA256='1d5e288b1037410fd0c98f618e94523a6b7ca8a99c7069f076efb40aa95759cd'
 ENCODER_DEFAULT="$VENDOR/downloads/ecapa-tdnn.onnx"
 ENCODER_SOURCE="${LMN_ENCODER_ONNX_SOURCE:-$ENCODER_DEFAULT}"
@@ -48,9 +70,19 @@ verify() {
     echo "$WHISPER_WEIGHTS_SHA256  $STAGE/models/whisper-large-v3-turbo/weights.safetensors" | shasum -a 256 -c - >/dev/null
     (cd "$STAGE" && "$STAGE/python-runtime/bin/python3.12" -E -s -B -c \
       'import mlx.core, mlx_whisper, worker.transcription' 1>/dev/null)
+    for index in "${!EMBEDDER_FILES[@]}"; do
+      echo "${EMBEDDER_SHA256[$index]}  $STAGE/$EMBEDDER_STAGE_RELATIVE/${EMBEDDER_FILES[$index]}" \
+        | shasum -a 256 -c - >/dev/null
+    done
+    (cd "$STAGE" && "$STAGE/python-runtime/bin/python3.12" -E -s -B -c \
+      'import tokenizers, worker.embedding' 1>/dev/null)
+    # Named, not defaulted. Without it the five model-backed embedding tests skip
+    # silently, and a suite that skips the only tests touching the model would
+    # report the same green as one that ran them.
     LMN_PACKAGED_RUNTIME_ROOT="$STAGE" \
       LMN_TAP_TEST_BINARY="$STAGE/bin/audiotee" \
       LMN_MEETING_CAPTURE_TEST_BINARY="$STAGE/bin/meeting-capture" \
+      LMN_EMBEDDING_MODEL_DIR="$STAGE/$EMBEDDER_STAGE_RELATIVE" \
       "$STAGE/python-runtime/bin/python3.12" -E -s -B -m unittest discover \
         -s "$REPO/worker/tests" -v
   else
@@ -107,6 +139,9 @@ if [[ "$mode" == build-alpha* ]]; then
   "$VENDOR/python-runtime/bin/python3" -m pip install --quiet --require-hashes \
     --only-binary=:all: --no-deps \
     -r "$REPO/worker/requirements-mlx-whisper.lock"
+  "$VENDOR/python-runtime/bin/python3" -m pip install --quiet --require-hashes \
+    --only-binary=:all: --no-deps \
+    -r "$REPO/worker/requirements-embedder.lock"
   if [[ "$mode" == "build-alpha-encoder" ]]; then
     "$VENDOR/python-runtime/bin/python3" -m pip install --quiet --require-hashes \
       --only-binary=:all: --no-deps \
@@ -122,12 +157,16 @@ cp -R "$VENDOR/python-runtime" "$STAGE/python-runtime"
 cp "$REPO/worker/__init__.py" "$REPO/worker/main.py" \
   "$REPO/worker/adapters.py" "$REPO/worker/product_contracts.py" \
   "$REPO/worker/storage.py" "$REPO/worker/fbank.py" \
-  "$REPO/worker/transcription.py" "$STAGE/worker/"
+  "$REPO/worker/transcription.py" "$REPO/worker/embedding.py" "$STAGE/worker/"
 cp "$REPO/worker/note_bridge.py" "$STAGE/note-bridge.py"
 cp "$REPO/spike/verify_capture.py" "$REPO/spike/capture_health.py" \
   "$REPO/spike/dual_capture.py" "$REPO/spike/speaker_gate.py" \
   "$REPO/spike/aec_bound.py" "$STAGE/spike/"
-cp "$REPO/notes/transcript.py" "$REPO/notes/summarize.py" "$STAGE/notes/"
+# mlx_minilm.py holds the forward pass every measured vector came from.
+# `worker/embedding.py` imports it rather than restating it, so it is staged
+# beside the other notes modules and not copied into the worker package.
+cp "$REPO/notes/transcript.py" "$REPO/notes/summarize.py" \
+  "$REPO/notes/mlx_minilm.py" "$STAGE/notes/"
 
 swift build -c release --product audiotee --package-path "$REPO/capture/audiotee"
 cp "$REPO/capture/audiotee/.build/arm64-apple-macosx/release/audiotee" \
@@ -154,6 +193,20 @@ if [[ "$mode" == build-alpha* ]]; then
   mkdir -p "$STAGE/models/whisper-large-v3-turbo"
   cp -L "$WHISPER_SOURCE/config.json" "$WHISPER_SOURCE/weights.safetensors" \
     "$STAGE/models/whisper-large-v3-turbo/"
+  mkdir -p "$EMBEDDER_SOURCE"
+  for index in "${!EMBEDDER_FILES[@]}"; do
+    name="${EMBEDDER_FILES[$index]}"
+    want="${EMBEDDER_SHA256[$index]}"
+    if [[ ! -f "$EMBEDDER_SOURCE/$name" ]] \
+      || ! echo "$want  $EMBEDDER_SOURCE/$name" | shasum -a 256 -c - >/dev/null 2>&1; then
+      curl -fL --max-time 600 -o "$EMBEDDER_SOURCE/$name" "$EMBEDDER_BASE/$name"
+    fi
+    echo "$want  $EMBEDDER_SOURCE/$name" | shasum -a 256 -c -
+  done
+  mkdir -p "$STAGE/$EMBEDDER_STAGE_RELATIVE"
+  for name in "${EMBEDDER_FILES[@]}"; do
+    cp -L "$EMBEDDER_SOURCE/$name" "$STAGE/$EMBEDDER_STAGE_RELATIVE/"
+  done
   swift build -c release --product meeting-capture --package-path "$REPO/capture/audiotee"
   cp "$REPO/capture/audiotee/.build/arm64-apple-macosx/release/meeting-capture" \
     "$STAGE/bin/meeting-capture"

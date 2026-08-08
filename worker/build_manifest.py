@@ -173,6 +173,28 @@ def main() -> int:
                 "id": "whisper-large-v3-turbo-weights",
                 "path": "models/whisper-large-v3-turbo/weights.safetensors",
             },
+            # All four or none. `worker.main.embedding_model_dir` requires the
+            # whole set before it will name a directory, because a model missing
+            # its `tokenizer.json` would load and then embed with whatever
+            # tokenizer happened to be importable — the substitution
+            # `packaged_tokenizer_receipt.json` exists to have measured rather
+            # than assumed.
+            {
+                "id": "all-minilm-l6-v2-config",
+                "path": "models/all-MiniLM-L6-v2/config.json",
+            },
+            {
+                "id": "all-minilm-l6-v2-sentence-config",
+                "path": "models/all-MiniLM-L6-v2/sentence_bert_config.json",
+            },
+            {
+                "id": "all-minilm-l6-v2-tokenizer",
+                "path": "models/all-MiniLM-L6-v2/tokenizer.json",
+            },
+            {
+                "id": "all-minilm-l6-v2-weights",
+                "path": "models/all-MiniLM-L6-v2/model.safetensors",
+            },
         ]
     manifest = {
         "schema": "app-runtime/1",

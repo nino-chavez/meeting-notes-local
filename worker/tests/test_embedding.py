@@ -1,13 +1,14 @@
-"""What `corpus.embed` must get right before any lane packages a model.
+"""What `corpus.embed` has to get right.
 
 Most of these run without weights, because most of what can go wrong here is
 argument handling and the two silent tokenizer defaults rather than the model.
 
-The three that need the model skip unless `LMN_EMBEDDING_MODEL_DIR` names a
-directory holding the pinned revision. **They are skipped in the packaged
-runtime today**, and will be until `build_runtime.sh` stages the model — which
-is the honest state and is why the story's Validation line does not claim
-`Exercised` for the model path.
+The rest need `LMN_EMBEDDING_MODEL_DIR` to name a directory holding the pinned
+revision. **`build_runtime.sh verify` sets it explicitly** to the staged model,
+so they run in the packaged runtime rather than skipping — a suite that skipped
+the only tests touching the model would report the same green as one that ran
+them. Outside that, they skip, which is why this file states the variable rather
+than defaulting to a path that happens to exist on one machine.
 """
 
 from __future__ import annotations
@@ -40,14 +41,17 @@ def window(text: str) -> dict:
 
 
 class RegistrationTests(unittest.TestCase):
-    def test_the_operation_is_boundary_lane_only(self) -> None:
-        self.assertIn("corpus.embed", main.operations_for("boundary-test"))
-        self.assertIn("corpus.embed", main.operations_for("product"))
-        self.assertNotIn(
-            "corpus.embed",
-            main.operations_for("internal-alpha"),
-            "the shipped lane would advertise a capability it can only refuse",
-        )
+    def test_the_operation_is_registered_in_every_lane(self) -> None:
+        """Replaced rather than deleted, and the note is the point.
+
+        Until 2026-08-08 this asserted the *opposite* for internal-alpha, on the
+        ground that the shipped worker must not advertise what it can only
+        refuse. `build-alpha` now stages the model, so the ground is gone. The
+        boundary lane keeps it too — a boundary runtime carries neither the wheel
+        nor the model, and `corpus_embed` refuses on the manifest there.
+        """
+        for admission in ("boundary-test", "product", "internal-alpha"):
+            self.assertIn("corpus.embed", main.operations_for(admission))
 
     def test_no_packaged_model_refuses_rather_than_failing_to_import(self) -> None:
         with self.assertRaises(adapters.AdapterRefused) as refused:
@@ -60,10 +64,10 @@ class RegistrationTests(unittest.TestCase):
             )
         self.assertIn("no embedding model is packaged", str(refused.exception))
 
-    def test_the_model_directory_is_absent_from_every_current_manifest(self) -> None:
-        """A statement of fact, and it fails the day the model is staged — which
-        is when this test should be replaced rather than deleted."""
-        manifest = {"admission": "internal-alpha", "models": []}
+    def test_a_manifest_without_the_model_names_no_directory(self) -> None:
+        """A boundary manifest lists no models at all, and that has to read as
+        absence rather than as an error at request time."""
+        manifest = {"admission": "boundary-test", "models": []}
         self.assertIsNone(main.embedding_model_dir(REPO / "app-runtime.json", manifest))
 
     def test_a_partial_model_directory_is_not_a_model_directory(self) -> None:

@@ -1,0 +1,18 @@
+# The tokenizer for the corpus embedding model, and nothing else.
+#
+# Installed --no-deps, like mlx-whisper and onnxruntime: this wheel is the whole
+# dependency. `transformers` is what the 2026-08-08 scale run used and it is not
+# here on purpose — a large tree for one class, into a runtime whose base lock is
+# one package.
+#
+# **The version is the one the parity receipt was produced with, not the one the
+# registration named.** `notes/SEMANTIC_RETRIEVAL.md` registered 0.23.1; installing
+# `transformers` for the isolating comparison downgraded it, because 4.57.1
+# constrains tokenizers<=0.23.0. `notes/packaged_tokenizer_receipt.json` records
+# 0.22.2, so 0.22.2 is what ships. Nothing here needs a newer one — transformers
+# is what forced the ceiling and transformers is not shipping.
+#
+# What this substitution cost was measured before it was written: 0 token-ID
+# mismatches over 810 windows and questions, and 0 differences across 264 scored
+# fields with only the tokenizer swapped in one environment.
+tokenizers==0.22.2

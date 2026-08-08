@@ -122,7 +122,7 @@ inference is what went wrong before.
 | E10 | Shell that never lies | E4 | 9 | Signed Preview bundle exists |
 | E11 | Operator-authored live note | B1 | 5 | Shipped 2026-08-06 |
 | E12 | Release, distribution, admission | — | 7 | Mixed |
-| **E13** | **The corpus store** | **E6 D3 D2** | 11 | **Landed 2026-08-07**, plus the vector store and the tokenizer decision 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 through US-13.11 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
+| **E13** | **The corpus store** | **E6 D3 D2** | 11 | **Landed 2026-08-07**, plus the vector store, the tokenizer decision, `corpus.embed` and its packaging 2026-08-08; US-13.6 outstanding. **D2 was added to this row 2026-08-08**: US-13.8 through US-13.11 are D2 work that is store plumbing rather than surface, so they sit here by number while E15 keeps D2's user-facing story |
 | **E14** | **Organisation: folders, channels, the meeting object** | **E1 E2** | 4 | **US-14.1–14.4 landed 2026-08-08**; folder rename and delete have commands and no surface; channels and E2's sibling views undecomposed |
 | **E15** | **Question answering across the corpus** | **D1 D2 D3 D4 D5** | 3 | **US-15.1 landed 2026-08-08**; US-15.3 measured the same day and its store is the next build; US-15.2 blocked on A3; cross-meeting answers are Wave 1 item 6 |
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
@@ -1259,9 +1259,8 @@ equality with a receipt from another environment, which records no environment. 
 so the tokenizer causes none of them. Recorded rather than relabelled: the isolating
 comparison is same-environment, and it is exact.
 
-**Not built:** the lock entry, the `app-runtime.json` `models[]` entries and the
-`build_runtime.sh` rebuild. They land together or the lock and the staged runtime
-disagree. `corpus.embed` landed separately as US-13.10.
+**Landed 2026-08-08** across US-13.10 (the operation) and US-13.11 (the
+packaging). The remaining D2 work is the Rust seam and a surface.
 
 #### US-13.10: The operation that turns a window into a vector
 **Feature D2 · J1 · §F · P0 · M · Landed 2026-08-08**
@@ -1290,13 +1289,10 @@ of which 11 run with no model at all. Confirmed by mutation: leaving
 lane's operation set and had to be updated deliberately, which is that freeze
 working.
 
-**Not `Exercised` in the packaged runtime**, and stated because the distinction
-matters here: the five model-backed tests skip unless `LMN_EMBEDDING_MODEL_DIR`
-names the pinned directory. They were run against it — over a venv built from the
-packaged runtime's own `python3.12` with `--system-site-packages`, so `mlx` and
-`numpy` are the staged builds and only `tokenizers` is added — but the staged
-runtime itself carries neither the wheel nor the model, so `build_runtime.sh
-verify` skips them until US-13.11.
+**Exercised in the packaged runtime as of US-13.11.** `build_runtime.sh verify`
+names `LMN_EMBEDDING_MODEL_DIR`, so the model-backed tests run there rather than
+skipping. Before that they ran only over a venv built from the packaged runtime's
+own `python3.12`, which was the honest state and was recorded as such.
 
 **Two findings from running it.** Batching moves a vector: a 100-word window
 batched beside a two-word one differs from the same window alone in 3 of 384
@@ -1308,7 +1304,7 @@ normalises at comparison time — a unit-length vector here would mean the cosin
 gets computed twice.
 
 #### US-13.11: The runtime carries the embedding model
-**Feature D2 · J1 · §F · P0 · M · Next**
+**Feature D2 · J1 · §F · P0 · M · Landed 2026-08-08**
 
 As the Operator, I want the app to be able to embed without reaching outside its
 own bundle.
@@ -1320,15 +1316,32 @@ own bundle.
 **Refusals:** the lock entry and the rebuild land in one change. A lock that names
 a package the staged runtime does not carry is a disagreement nothing detects.
 
-**Validation:** **Unproven** — not built. The `tokenizers` pin is decided at
-**0.22.2**, the version `notes/packaged_tokenizer_receipt.json` was produced with;
-see that receipt's correction note for why the registration named 0.23.1.
+**Validation:** **Exercised** — `worker/build_runtime.sh build-alpha` staged the
+model and `verify` passed with the model-backed tests running rather than
+skipping. Not `Receipted`: the staged runtime is gitignored build output, so what
+is in the repository is the recipe, and the evidence that the recipe works is a
+run rather than a file.
 
-**The mode question is already decided:** the embedder stages in `build-alpha`,
-not a mode of its own. `build-alpha-encoder` exists because the ONNX speaker
-encoder is a candidate under an admission check with alternatives; the embedding
-model is chosen and measured, and what is unjudged about it is whether 7 of 10 is
-useful, which no build mode settles.
+**The `tokenizers` pin is 0.22.2**, the version
+`notes/packaged_tokenizer_receipt.json` was produced with; see that receipt's
+correction note for why the registration named 0.23.1. Installed `--no-deps` from
+its own hash-pinned lock, like `mlx-whisper` and `onnxruntime`.
+
+**All four model files or none.** `worker.main.embedding_model_dir` requires the
+whole set before it names a directory, because a model missing its
+`tokenizer.json` would load and then embed with whatever tokenizer happened to be
+importable — the substitution the parity receipt exists to have measured rather
+than assumed. Digests are checked on download and again in `verify`.
+
+**The mode question was decided rather than deferred:** the embedder stages in
+`build-alpha`, not a mode of its own. `build-alpha-encoder` exists because the
+ONNX speaker encoder is a candidate under an admission check with alternatives;
+the embedding model is chosen and measured, and what is unjudged about it is
+whether 7 of 10 is useful, which no build mode settles.
+
+**Packaging is not admission.** The model being in the bundle says nothing about
+whether its retrieval is useful; that number is still 7 of 10, and 3 of 5 on the
+questions exact search cannot answer.
 
 ---
 

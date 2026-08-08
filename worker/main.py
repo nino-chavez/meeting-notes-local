@@ -33,19 +33,20 @@ MAX_FRAME_BYTES = 64 * 1024
 # strict-loader bridge. profile.adopt stays boundary-lane only — the
 # packaged publication path is Rust's enroll_profile_candidate, which
 # publishes the re-verified bytes itself.
+# corpus.embed joined this set on 2026-08-08, when `build-alpha` began staging
+# the embedding model and its tokenizer. It sat in the boundary lane for one
+# change so the shipped worker would not advertise a capability it could only
+# refuse; that reason expired the moment the model was in the bundle. Note what
+# it does *not* mean: the model is packaged and measured, and whether its
+# retrieval is useful is still the operator's judgment.
 ALPHA_OPERATIONS = frozenset(
     {"capture.finalize", "capture.inspect", "transcript.create",
-     "sitting.derive", "transcript.restore",
+     "sitting.derive", "transcript.restore", "corpus.embed",
      "profile.choices", "profile.build", "profile.inspect", "profile.discard"}
 )
 # note.inspect stays boundary-lane only: no note generator is admitted.
-# corpus.embed is here for the same reason and not the same one: the generator
-# question is a judgment, but this is packaging — no lane carries the embedding
-# model or its tokenizer yet, so the internal-alpha set would advertise a
-# capability the shipped worker can only refuse. It moves to ALPHA_OPERATIONS in
-# the change that stages the model.
 BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
-    {"profile.adopt", "note.inspect", "corpus.embed"}
+    {"profile.adopt", "note.inspect"}
 )
 
 

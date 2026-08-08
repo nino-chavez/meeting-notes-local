@@ -156,6 +156,19 @@ Then **remove the symlink before committing**. `.gitignore` matches
 `git status` offers it as an untracked file and `git add -A` would commit a link
 to an absolute path on one machine.
 
+**A worktree is the right place to test a runtime change, and the symlink is
+exactly what you must not have when you do.** `worker/build_runtime.sh` derives
+`VENDOR` and `STAGE` from its own path, so run from a worktree it builds *that*
+worktree's `apps/desktop/vendor` and `apps/desktop/runtime` and never touches the
+main checkout's 2 GB stage — which matters because the script's first act is
+`rm -rf "$STAGE"`. If the symlink is present it will delete through it.
+
+Seed `apps/desktop/vendor/downloads/` from the main checkout first (the CPython
+archive alone is 25 MB and re-downloading it is pure waste), and expect the
+worktree to hold ~2.6 GB until `git worktree remove` takes it away. That disposal
+is the point: the staged runtime is gitignored, so what lands in Git is the
+recipe, and the evidence that the recipe works is a run rather than a file.
+
 **A frozen artifact must never be asserted through a live constant.** Hit three
 times on 2026-08-07, each time while growing the registered fixture suite:
 `mlx_note_matrix_receipt.json` (a 2026-08-05 receipt) asserted its fixture count as
