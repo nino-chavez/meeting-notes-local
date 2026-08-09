@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-geometry="comfortable">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Yawn DS-3 reference surfaces</title>
+    <link rel="stylesheet" href="reference-surfaces.css" />
+    <script type="module" src="reference-surfaces.mjs"></script>
+  </head>
+  <body>
+    <header class="workbench-bar" aria-label="Reference surface controls">
+      <div>
+        <strong>DS-3 reference surfaces</strong>
+        <span>Webview specimen. Native window behavior remains an integration gate.</span>
+      </div>
+      <div class="workbench-controls">
+        <label>Surface
+          <select id="surface-select">
+            <option value="primary">Library + meeting</option>
+            <option value="capture">Capture utility</option>
+          </select>
+        </label>
+        <label>State <select id="state-select"></select></label>
+        <label>Appearance
+          <select id="appearance-select">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label>Geometry
+          <select id="geometry-select">
+            <option value="comfortable">Comfortable</option>
+            <option value="minimum">Declared minimum</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <main class="workbench-stage">
+      <section
+        class="reference-frame primary-reference"
+        id="primary-reference"
+        data-reference-surface="primary"
+        data-reference-state="ready"
+        aria-label="Library and selected meeting reference pattern"
+      >
+        <header class="ds-window-toolbar" data-tauri-drag-region>
+          <span class="window-title">Yawn</span>
+          <span class="toolbar-context">Meetings</span>
+          <span class="ds-status-indicator is-idle" aria-label="Recording status: Nothing is recording">
+            <span aria-hidden="true"></span> Nothing is recording
+          </span>
+          <button class="ds-button ds-button-primary" id="primary-record" type="button">Record</button>
+        </header>
+
+        <div class="primary-window-body">
+          <nav class="ds-product-sidebar" aria-label="Yawn" data-roving="vertical">
+            <button class="ds-product-sidebar-row is-selected" type="button" aria-current="page" tabindex="0">
+              <span class="sidebar-symbol" aria-hidden="true">M</span><span>Meetings</span>
+            </button>
+            <button class="ds-product-sidebar-row" type="button" tabindex="-1">
+              <span class="sidebar-symbol" aria-hidden="true">A</span><span>Ask</span>
+            </button>
+            <button class="ds-product-sidebar-row" type="button" tabindex="-1">
+              <span class="sidebar-symbol" aria-hidden="true">T</span><span>Actions</span>
+            </button>
+            <button class="ds-product-sidebar-row sidebar-settings" type="button" tabindex="-1">
+              <span class="sidebar-symbol" aria-hidden="true">S</span><span>Settings</span>
+            </button>
+          </nav>
+
+          <section class="meeting-list-pane" aria-labelledby="meeting-list-title">
+            <div class="pane-heading">
+              <div>
+                <p class="ds-eyebrow">Library</p>
+                <h1 id="meeting-list-title">Meetings</h1>
+              </div>
+              <button class="ds-icon-button" type="button" aria-label="More meeting filters">•••</button>
+            </div>
+            <label class="meeting-filter">
+              <span class="sr-only">Filter meetings</span>
+              <input type="search" placeholder="Filter meetings" />
+            </label>
+
+            <div class="primary-state primary-loading" data-primary-state="loading" role="status">
+              <strong>Opening meetings…</strong>
+              <span>Reading the retained meeting index on this Mac.</span>
+            </div>
+            <div class="primary-state primary-error ds-inline-notice is-error" data-primary-state="error" role="alert">
+              <strong>The meeting list did not open.</strong>
+              <span>Your meetings were not changed. Reopen Yawn to retry the local reader.</span>
+            </div>
+            <div class="primary-state primary-empty" data-primary-state="empty">
+              <strong>No meetings saved yet</strong>
+              <span>Record a meeting when you are ready. Consent is checked before any audio opens.</span>
+              <button class="ds-button" type="button">Record a meeting</button>
+            </div>
+
+            <div class="meeting-list" data-primary-state="ready" data-roving="vertical" aria-label="Recent meetings">
+              <button class="ds-meeting-list-row is-selected" type="button" aria-current="page" tabindex="0">
+                <span><strong>Weekly product check‑in</strong><small>Today · 10:04 AM</small></span>
+                <span>32 min</span>
+              </button>
+              <button class="ds-meeting-list-row" type="button" tabindex="-1">
+                <span><strong>Pilot handoff review</strong><small>Yesterday · 3:30 PM</small></span>
+                <span>48 min</span>
+              </button>
+              <button class="ds-meeting-list-row" type="button" tabindex="-1">
+                <span><strong>Research synthesis</strong><small>Friday · 11:15 AM</small></span>
+                <span>26 min</span>
+              </button>
+            </div>
+          </section>
+
+          <article class="meeting-record" aria-labelledby="meeting-title">
+            <div class="record-loading primary-state" data-primary-state="loading" role="status">
+              <strong>Opening the selected meeting…</strong>
+              <span>The library remains available while the retained record is read.</span>
+            </div>
+            <div class="record-empty primary-state" data-primary-state="empty">
+              <p class="ds-eyebrow">Your first record</p>
+              <h2>Notes stay beside their transcript.</h2>
+              <p>After a recording, Yawn keeps the transcript on this Mac and shows the note here. Recording audio follows the period you choose.</p>
+            </div>
+            <div class="record-error primary-state" data-primary-state="error">
+              <p class="ds-eyebrow">Meeting unavailable</p>
+              <h2>The selected meeting could not be read.</h2>
+              <p>The library is still available. No local meeting data was changed.</p>
+              <button class="ds-button" type="button">Try this meeting again</button>
+            </div>
+
+            <div class="record-ready" data-primary-state="ready">
+              <header class="meeting-record-heading">
+                <div>
+                  <p class="ds-eyebrow">Reference meeting · Today · 10:04 AM</p>
+                  <h2 id="meeting-title">Weekly product check‑in</h2>
+                  <p>32 minutes · transcript retained on this Mac</p>
+                </div>
+                <span class="ds-locality-badge">On this Mac</span>
+              </header>
+
+              <nav class="ds-text-tabs" aria-label="Meeting views" role="tablist" data-roving="horizontal">
+                <button id="note-tab" type="button" role="tab" aria-selected="true" aria-controls="note-panel" tabindex="0">Note</button>
+                <button id="transcript-tab" type="button" role="tab" aria-selected="false" aria-controls="transcript-panel" tabindex="-1">Transcript</button>
+                <button id="details-tab" type="button" role="tab" aria-selected="false" aria-controls="details-panel" tabindex="-1">Details</button>
+              </nav>
+
+              <section class="meeting-tab-panel" id="note-panel" role="tabpanel" aria-labelledby="note-tab">
+                <p class="operator-note"><strong>Your note</strong><span>Use the Friday handoff sample. Ask legal about the customer data.</span></p>
+                <section class="note-section" aria-labelledby="decisions-title">
+                  <h3 id="decisions-title">Decisions</h3>
+                  <p>The pilot stays limited to one customer for two weeks. The wider rollout remains undecided.</p>
+                  <button class="source-link" type="button" data-tab-target="transcript">Show exact words</button>
+                </section>
+                <section class="note-section" aria-labelledby="actions-title">
+                  <h3 id="actions-title">Action items</h3>
+                  <p>Bring completion time and missing-handoff notes to Friday’s review.</p>
+                  <button class="source-link" type="button" data-tab-target="transcript">Show exact words</button>
+                </section>
+              </section>
+
+              <section class="meeting-tab-panel" id="transcript-panel" role="tabpanel" aria-labelledby="transcript-tab" hidden>
+                <div class="panel-heading">
+                  <div><p class="ds-eyebrow">Source of record</p><h3>Transcript</h3></div>
+                  <button class="ds-button" type="button">Copy transcript</button>
+                </div>
+                <article class="transcript-turn">
+                  <div><strong>You</strong><time>12:08</time></div>
+                  <p>Let’s keep this to one customer for two weeks, then review the handoff data.</p>
+                </article>
+                <article class="transcript-turn">
+                  <div><strong>Other side</strong><time>12:21</time></div>
+                  <p>I can own the Friday review and bring back the completion time and anything that went missing.</p>
+                </article>
+              </section>
+
+              <section class="meeting-tab-panel" id="details-panel" role="tabpanel" aria-labelledby="details-tab" hidden>
+                <dl class="details-list">
+                  <div><dt>Stored</dt><dd>On this Mac</dd></div>
+                  <div><dt>Transcript</dt><dd>Retained</dd></div>
+                  <div><dt>Recording audio</dt><dd>Deletes after 7 days</dd></div>
+                </dl>
+              </section>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section
+        class="reference-frame capture-reference"
+        id="capture-reference"
+        data-reference-surface="capture"
+        data-reference-state="consent"
+        aria-label="Consent through processing reference pattern"
+        hidden
+      >
+        <header class="ds-window-toolbar capture-toolbar" data-tauri-drag-region>
+          <button class="ds-button ds-button-quiet" id="capture-cancel-toolbar" type="button">Cancel</button>
+          <span class="window-title">Yawn</span>
+          <span class="ds-status-indicator is-idle" id="capture-toolbar-status">
+            <span aria-hidden="true"></span><span>Not recording</span>
+          </span>
+          <button class="ds-button ds-button-stop" id="capture-stop-toolbar" type="button" hidden>Stop</button>
+        </header>
+
+        <div class="capture-body">
+          <section class="capture-state" data-capture-state="consent" aria-labelledby="consent-title">
+            <p class="ds-eyebrow">Before capture</p>
+            <h1 id="consent-title">Before you record</h1>
+            <p class="capture-lede">Yawn records from this Mac. It does not join the call or tell anyone else.</p>
+            <div class="ds-inline-notice is-information">
+              <strong>No notification is sent.</strong>
+              <span>You are responsible for telling everyone. In some places, recording without everyone’s agreement is illegal.</span>
+            </div>
+            <form id="consent-form">
+              <label class="ds-disclosure-row consent-attestation">
+                <input id="participant-attestation" type="checkbox" />
+                <span><strong>The other people on this call know they are being recorded.</strong><small>This confirmation applies only to this recording attempt.</small></span>
+              </label>
+              <label class="ds-field-row" for="reference-retention">
+                <span><strong>Delete recording audio after</strong><small>The transcript remains on this Mac.</small></span>
+                <select id="reference-retention" required>
+                  <option value="">Choose</option>
+                  <option value="1">1 day</option>
+                  <option value="7">7 days</option>
+                  <option value="30">30 days</option>
+                </select>
+              </label>
+              <div class="capture-actions">
+                <button class="ds-button" id="capture-cancel" type="button">Not this time</button>
+                <button class="ds-button ds-button-primary" id="capture-continue" type="submit" disabled>Start recording</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="capture-state" data-capture-state="recording" aria-labelledby="recording-reference-title" hidden>
+            <p class="capture-state-word is-live"><span aria-hidden="true"></span> Recording</p>
+            <h1 id="recording-reference-title"><time>12:48</time></h1>
+            <p class="capture-lede">Microphone and system audio are both arriving.</p>
+            <div class="capture-channel-list" aria-label="Capture channels">
+              <div class="capture-channel is-active"><span aria-hidden="true"></span><strong>Microphone</strong><small>Active</small></div>
+              <div class="capture-channel is-active"><span aria-hidden="true"></span><strong>System audio</strong><small>Active</small></div>
+            </div>
+            <label class="capture-note">
+              <span><strong>Your notes</strong><small>Saved on this Mac. Yawn does not use them to make the transcript.</small></span>
+              <textarea rows="5" placeholder="What matters to you about this meeting."></textarea>
+            </label>
+            <p class="capture-footnote">The transcript is made after the meeting ends, not while it runs.</p>
+          </section>
+
+          <section class="capture-state" data-capture-state="degraded" aria-labelledby="degraded-title" hidden>
+            <p class="capture-state-word is-degraded"><span aria-hidden="true">!</span> Recording · degraded</p>
+            <h1 id="degraded-title"><time>13:17</time></h1>
+            <p class="capture-lede">Recording continues with the microphone. System audio stopped arriving.</p>
+            <div class="ds-inline-notice is-warning" role="status">
+              <strong>The transcript may be incomplete.</strong>
+              <span>Keep the meeting going if the microphone is enough. Stop only when you intend to end this recording.</span>
+            </div>
+            <div class="capture-channel-list" aria-label="Capture channels">
+              <div class="capture-channel is-active"><span aria-hidden="true"></span><strong>Microphone</strong><small>Active</small></div>
+              <div class="capture-channel is-degraded"><span aria-hidden="true">!</span><strong>System audio</strong><small>Unavailable</small></div>
+            </div>
+            <button class="ds-button" id="retry-system-audio" type="button">Check system audio again</button>
+          </section>
+
+          <section class="capture-state" data-capture-state="processing" aria-labelledby="processing-reference-title" hidden>
+            <p class="ds-eyebrow">Recording stopped</p>
+            <h1 id="processing-reference-title">Making the transcript</h1>
+            <p class="capture-lede">The recording is secured. Yawn is making the transcript on this Mac.</p>
+            <div class="ds-progress-list" aria-label="Local processing progress">
+              <div class="ds-progress-row is-complete"><span aria-hidden="true">1</span><div><strong>Recording secured</strong><small>Both local audio files closed before processing began.</small></div></div>
+              <div class="ds-progress-row is-current" aria-current="step"><span aria-hidden="true">2</span><div><strong>Making the transcript</strong><small>Nothing is uploaded.</small></div></div>
+              <div class="ds-progress-row"><span aria-hidden="true">3</span><div><strong>Keep the transcript</strong><small>The transcript remains after recording audio is deleted.</small></div></div>
+            </div>
+          </section>
+
+          <section class="capture-state" data-capture-state="error" aria-labelledby="capture-error-title" hidden>
+            <p class="ds-eyebrow">Capture stopped</p>
+            <h1 id="capture-error-title">Yawn needs attention</h1>
+            <div class="ds-inline-notice is-error" role="alert">
+              <strong>The local worker did not answer.</strong>
+              <span>Any recording already secured stays on this Mac. Reopen Yawn to continue recovery.</span>
+            </div>
+            <button class="ds-button ds-button-primary" id="capture-error-return" type="button">Return to meetings</button>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
