@@ -43,6 +43,7 @@ test("Settings has a narrow native capability and main owns the opener", () => {
     "core:window:allow-set-title",
   ]);
   assert.ok(mainCapability.permissions.includes("allow-open-settings-window"));
+  assert.ok(mainCapability.permissions.includes("core:window:allow-start-dragging"));
   assert.match(rust, /accelerator\("CmdOrCtrl\+,"\)/);
   assert.match(rust, /window\.label\(\) == ACTIVE_WINDOW_LABEL/);
   assert.match(rust, /SETTINGS_WINDOW_LABEL/);

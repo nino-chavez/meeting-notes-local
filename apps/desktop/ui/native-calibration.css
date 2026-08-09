@@ -70,6 +70,176 @@ html[data-production-system="desktop-v1"][data-native-calibration] {
   --radius-panel: var(--ys-radius-lg);
 }
 
+/* The installed primary window already supplies the frame. Keep the shared
+   window-role contract, but do not draw a second rounded web window inside it. */
+html[data-production-system="desktop-v1"][data-native-calibration] .app-workspace.ys-window {
+  border: 0;
+  border-radius: 0;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meeting-detail-screen.screen.active {
+  width: 100%;
+  min-height: calc(100vh - var(--header-height));
+  margin: 0;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-split-view.ys-primary-split {
+  height: 100%;
+  min-height: calc(100vh - var(--header-height));
+  align-items: stretch;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-detail-content.ys-record {
+  padding: 32px clamp(28px, 4vw, 52px) 56px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-detail-content.ys-record > * {
+  max-width: 640px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-workspace-heading {
+  gap: 10px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-workspace-heading h1 {
+  max-width: 28ch;
+  font-size: var(--ys-type-record);
+  font-weight: 560;
+  letter-spacing: -0.022em;
+  line-height: 1.14;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-workspace-heading .lede {
+  max-width: 58ch;
+  font-size: var(--ys-type-sm);
+  line-height: 1.45;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-tabs.ys-tabs {
+  min-height: 34px;
+  margin-top: 22px;
+  gap: var(--ys-space-7);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-tabs .ys-tab {
+  min-height: 34px;
+  padding: 0;
+  font-size: var(--ys-type-sm);
+  font-weight: 500;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-tabs .ys-tab[aria-selected="true"] {
+  font-weight: 600;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-tab-panel {
+  padding-top: 24px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .panel-heading {
+  margin-bottom: 16px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .panel-heading h2 {
+  margin-top: 3px;
+  font-family: var(--ui-font);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .workspace-empty {
+  max-width: 52ch;
+  padding: 4px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .workspace-empty h3 {
+  font-family: var(--ui-font);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .workspace-empty p {
+  margin: 6px 0 14px;
+  font-size: var(--ys-type-sm);
+  line-height: 1.45;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .workspace-empty .secondary {
+  min-height: var(--ys-control-regular);
+  padding: 0 var(--ys-space-5);
+  font-size: var(--ys-type-sm);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .legacy-home-link {
+  display: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .product-nav button {
+  min-height: var(--ys-control-regular);
+  padding: 0 var(--ys-space-4);
+  border-radius: 6px;
+  font-size: var(--ys-type-sm);
+  font-weight: 500;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .nav-badge {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .sidebar-section-heading span {
+  display: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .sidebar-section .sidebar-subitem {
+  min-height: var(--ys-control-regular);
+  font-size: var(--ys-type-sm);
+  font-weight: 500;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .meeting-context-pane.ys-primary-list {
+  padding: 12px 8px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .meeting-detail-back {
+  min-height: var(--ys-control-regular);
+  margin: 0 4px 8px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: var(--ys-type-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .meeting-context-heading {
+  padding: 8px 8px 5px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .meeting-context-row.ys-meeting-row {
+  min-height: 56px;
+  padding: 8px;
+  border-radius: 6px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .meeting-context-row strong {
+  font-size: var(--ys-type-sm);
+  font-weight: 550;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] .meeting-context-row small {
+  margin-top: 3px;
+  font-size: var(--ys-type-xs);
+}
+
 html[data-production-system="desktop-v1"][data-native-calibration] .product-state.ys-status {
   display: inline-flex;
 }
@@ -200,6 +370,8 @@ html[data-native-calibration] .app-header {
   background: var(--surface-toolbar);
   backdrop-filter: blur(22px) saturate(1.1);
   -webkit-backdrop-filter: blur(22px) saturate(1.1);
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Browser-only traffic-light stand-in. A real Tauri window keeps native window

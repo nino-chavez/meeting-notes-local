@@ -199,7 +199,7 @@ test("the installed app adopts Mac Split without drawing browser traffic lights"
 
   assert.match(source, /const shellEnvironment = invoke \? "installed" : "browser"/);
   assert.match(source, /document\.documentElement\.dataset\.shellEnvironment = shellEnvironment/);
-  assert.match(html, /<header class="app-header ys-toolbar" data-tauri-drag-region>/);
+  assert.match(html, /<header class="app-header ys-toolbar" data-tauri-drag-region="deep">/);
   assert.match(calibration, /html\[data-shell-environment="browser"\]\[data-native-calibration\] \.app-header::before/);
   assert.equal((calibration.match(/\.app-header::before/g) || []).length, 1);
   for (const config of [tauri, preview]) {
@@ -232,7 +232,9 @@ test("native calibration keeps one status, adaptive semantic tokens, and quiet s
   assert.match(calibration, /--surface-record: #2d2c2a;/i);
   assert.match(calibration, /meeting-context-row\[aria-current="page"\][^}]*border-left: 2px solid var\(--brand-accent\)/s);
   assert.match(calibration, /settings-trust-statement[^}]*border-radius: 0;[^}]*background: transparent;/s);
-  assert.match(calibration, /\.meeting-workspace-heading h1[^}]*font-size: clamp\(34px, 3\.2vw, 38px\)/s);
+  assert.match(calibration, /data-production-system="desktop-v1"[^}]*\.meeting-workspace-heading h1[^}]*font-size: var\(--ys-type-record\)/s);
+  assert.match(calibration, /#meeting-detail-screen\.screen\.active[^}]*width: 100%/s);
+  assert.match(calibration, /\.app-workspace\.ys-window[^}]*border: 0;[^}]*border-radius: 0;/s);
   assert.match(calibration, /\.claim-evidence[^}]*background: transparent;[^}]*text-decoration: underline;/s);
 });
 

@@ -11,7 +11,7 @@
 - App: `target/release/bundle/macos/Yawn.app`
 - Bundle identifier: `com.ninochavez.local-meeting-notes`
 - Version: `0.5.1`
-- Executable SHA-256: `1607ad59c5dfe15482e413f6ca26a3011fd6ee474ced20d32d124ddb23526d49`
+- Executable SHA-256: `e6c0eebca1c02d58e8c52510c43b586903ab030123f2b336f5ebaedac6af69af`
 - Executable size: `15,066,400` bytes
 - Signature: local ad-hoc signature; `codesign --verify --deep --strict` passes
 
@@ -47,6 +47,19 @@ Retained native captures:
 - [Capture Settings — Light, 720×560](desktop-design-system-verification/installed-settings-720x560-light.jpg)
 - [Capture Settings — Dark, 720×560](desktop-design-system-verification/installed-settings-720x560-dark.jpg)
 
+### Operator correction: window movement and native fit
+
+The operator rejected the first integrated primary window after using it. The window resized but would not move, and the screen still read as a styled web dashboard rather than a Mac application. That direct evidence reopens the human Comparison gate even though the earlier automated appearance and geometry checks remain valid.
+
+The movement defect was mechanical: the overlay header declared a Tauri drag region, but the main-window capability did not grant the narrow `core:window:allow-start-dragging` permission. The corrected bundle grants that permission and uses the deep drag-region contract so noninteractive title-bar content participates while toolbar buttons remain clickable.
+
+The same correction removes the inner rounded web-window frame, makes the three panes fill the native window, restores desktop-scale record type, tightens sidebar and list density, neutralizes dark chrome, and replaces the dashed transcript card with a quiet content-unavailable treatment. Product behavior and the selected Mac Split composition are unchanged.
+
+- [Operator-rejected primary window](desktop-design-system-verification/operator-rejected-main-dark.jpg)
+- [Corrected installed primary window](desktop-design-system-verification/installed-main-native-correction-dark.jpg)
+
+The rebuilt, ad-hoc-signed bundle passed a Computer Use drag action on the corrected title bar and remained interactive with the retained Transcript selected. This is implementation evidence, not human approval of the corrected visual result.
+
 ## Browser interaction evidence
 
 These checks used the production DOM with the explicit synthetic prototype adapter. They did not open an audio device or prove native window behavior.
@@ -73,7 +86,7 @@ These checks used the production DOM with the explicit synthetic prototype adapt
 | States | Partial | Automated and browser references cover loading, empty, ready, disabled, selected, error, degraded, stopping, failure, and recovered presentations | Real-device capture and interrupted recovery were not run in this package |
 | Product truth | Pass | Tests, visible copy, and installed AX output keep Planned, synthetic, local-only, consent, and permission boundaries explicit | A cold operator has not reviewed the wording |
 | Consistency | Pass for migrated surfaces | Production imports foundations → components → patterns; migrated jobs use `ys-*`; remaining local jobs are listed in the migration ledger | The ledger must reach zero before the interim handoff retires |
-| Comparison | Partial | Primary structure follows the authorized Mac Split decision; Wispr and Granola roles and the SwiftUI reference were rechecked in the governing records | No new human side-by-side approval was performed on the final integrated bundle |
+| Comparison | Open after correction | The operator explicitly rejected the pre-correction installed screen; the corrected bundle now matches the SwiftUI reference's density and full-window pane behavior more closely | Human approval of the corrected installed bundle remains required |
 
 ## Decisive automated checks
 

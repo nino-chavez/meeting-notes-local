@@ -9,6 +9,7 @@
     "macOS"
   ],
   "permissions": [
+    "core:window:allow-start-dragging",
     "allow-app-snapshot",
     "allow-open-settings-window",
     "allow-start-meeting",

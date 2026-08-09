@@ -18,7 +18,7 @@
   --ys-type-body: 0.9375rem;
   --ys-type-emphasis: 1rem;
   --ys-type-section: 1.25rem;
-  --ys-type-record: clamp(2.125rem, 4vw, 2.25rem);
+  --ys-type-record: 1.75rem;
 
   --ys-leading-tight: 1.2;
   --ys-leading-ui: 1.35;
@@ -64,7 +64,7 @@
   --ys-surface-list: #f6f3ed;
   --ys-surface-content: #fffaf5;
   --ys-surface-control: #fffaf5;
-  --ys-surface-selected: #e5ded4;
+  --ys-surface-selected: #deddd8;
   --ys-surface-overlay: rgb(255 250 245 / 94%);
   --ys-brand: #843b31;
   --ys-brand-ink: #fffaf5;
@@ -79,18 +79,18 @@
 }
 
 :root[data-appearance="dark"] {
-  --ys-ink: #e6e7e2;
-  --ys-ink-strong: #f6f6f2;
-  --ys-ink-muted: #b7bbb5;
-  --ys-border: #484945;
-  --ys-border-strong: #666862;
-  --ys-surface-window: #1d1d1c;
-  --ys-surface-navigation: #222221;
-  --ys-surface-list: #282826;
-  --ys-surface-content: #2d2c2a;
-  --ys-surface-control: #373633;
-  --ys-surface-selected: #443a36;
-  --ys-surface-overlay: rgb(45 44 42 / 96%);
+  --ys-ink: #e9e9ed;
+  --ys-ink-strong: #f5f5f7;
+  --ys-ink-muted: #a6a6aa;
+  --ys-border: #3a3a3c;
+  --ys-border-strong: #545458;
+  --ys-surface-window: #1c1c1e;
+  --ys-surface-navigation: #242426;
+  --ys-surface-list: #202022;
+  --ys-surface-content: #262624;
+  --ys-surface-control: #2c2c2e;
+  --ys-surface-selected: #3a3a3c;
+  --ys-surface-overlay: rgb(44 44 46 / 96%);
   --ys-brand: #d98f80;
   --ys-brand-ink: #1c1b19;
   --ys-live: #68c999;
@@ -105,18 +105,18 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-appearance="light"]) {
-    --ys-ink: #e6e7e2;
-    --ys-ink-strong: #f6f6f2;
-    --ys-ink-muted: #b7bbb5;
-    --ys-border: #484945;
-    --ys-border-strong: #666862;
-    --ys-surface-window: #1d1d1c;
-    --ys-surface-navigation: #222221;
-    --ys-surface-list: #282826;
-    --ys-surface-content: #2d2c2a;
-    --ys-surface-control: #373633;
-    --ys-surface-selected: #443a36;
-    --ys-surface-overlay: rgb(45 44 42 / 96%);
+    --ys-ink: #e9e9ed;
+    --ys-ink-strong: #f5f5f7;
+    --ys-ink-muted: #a6a6aa;
+    --ys-border: #3a3a3c;
+    --ys-border-strong: #545458;
+    --ys-surface-window: #1c1c1e;
+    --ys-surface-navigation: #242426;
+    --ys-surface-list: #202022;
+    --ys-surface-content: #262624;
+    --ys-surface-control: #2c2c2e;
+    --ys-surface-selected: #3a3a3c;
+    --ys-surface-overlay: rgb(44 44 46 / 96%);
     --ys-brand: #d98f80;
     --ys-brand-ink: #1c1b19;
     --ys-live: #68c999;

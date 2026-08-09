@@ -109,10 +109,12 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
     // operator's enrollment-registration decision, and the measured
     // operating-point review with profile build/publication joined
     // 2026-08-05 with the profile-build decision. Note generation remains
-    // absent from both windows.
+    // absent from both windows. The one core permission is the narrow native
+    // window-drag primitive required by the overlay title bar.
     assert_eq!(
         capability["permissions"],
         serde_json::json!([
+            "core:window:allow-start-dragging",
             "allow-app-snapshot",
             "allow-open-settings-window",
             "allow-start-meeting",
