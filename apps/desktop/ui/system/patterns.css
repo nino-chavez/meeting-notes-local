@@ -70,6 +70,42 @@
   font-size: var(--ys-type-body);
 }
 
+/* Production composes the product sidebar outside this nested list/detail
+   split. These names keep the two jobs explicit instead of making a second
+   three-column window inside the primary window. */
+.ys-meeting-list-pane {
+  position: sticky;
+  inset-block-start: 0;
+  align-self: start;
+  overflow-y: auto;
+}
+
+.ys-meeting-record {
+  min-block-size: 100%;
+  background: var(--ys-surface-content);
+}
+
+.ys-meeting-record > * {
+  max-inline-size: 42.5rem;
+}
+
+.ys-meeting-record__heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--ys-space-7);
+}
+
+.ys-meeting-record__identity {
+  min-inline-size: 0;
+}
+
+.ys-meeting-record__locality {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .ys-window[data-role="settings"] {
   inline-size: min(42rem, 100%);
   margin-inline: auto;

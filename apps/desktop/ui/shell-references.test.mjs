@@ -239,6 +239,38 @@ test("native calibration keeps one status, adaptive semantic tokens, and quiet s
   assert.match(calibration, /\.claim-evidence[^}]*background: transparent;[^}]*text-decoration: underline;/s);
 });
 
+test("the production Library and selected meeting use one native split contract", () => {
+  const html = readFileSync(join(here, "index.html"), "utf8");
+  const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");
+  const patterns = readFileSync(join(here, "system/patterns.css"), "utf8");
+
+  assert.match(html, /class="meeting-context-pane ys-primary-list ys-meeting-list-pane"/);
+  assert.match(html, /class="meeting-detail-content ys-record ys-meeting-record"/);
+  assert.match(html, /class="meeting-workspace-heading ys-meeting-record__heading"/);
+  assert.match(html, /class="meeting-record-identity ys-meeting-record__identity"/);
+  assert.match(html, /class="meeting-heading-actions ys-meeting-record__locality"/);
+  assert.match(html, /id="meeting-detail-back"[^>]*aria-label="Show all meetings"/);
+  assert.match(html, /class="ys-visually-hidden">Open another meeting\.<\/p>/);
+
+  const meetingList = html.indexOf('id="library-list"');
+  const retention = html.indexOf('id="retention-overview"');
+  assert.ok(meetingList > 0 && retention > meetingList, "meeting rows must precede recording storage policy");
+
+  assert.match(patterns, /\.ys-meeting-list-pane\s*\{[^}]*position: sticky;[^}]*overflow-y: auto;/s);
+  assert.match(patterns, /\.ys-meeting-record__heading\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/s);
+  assert.match(calibration, /data-native-calibration="split"\] \.app-workspace\.ys-window\s*\{[^}]*grid-template-columns: 184px minmax\(0, 1fr\);/s);
+  assert.match(calibration, /\.meeting-split-view\.ys-primary-split\s*\{[^}]*grid-template-columns: 248px minmax\(22rem, 1fr\);/s);
+  assert.match(calibration, /\.meeting-context-pane\.ys-primary-list\s*\{[^}]*position: sticky;[^}]*height: calc\(100vh - var\(--header-height\)\);[^}]*overflow-y: auto;/s);
+  assert.match(calibration, /\.meeting-detail-content\.ys-record > \*\s*\{[^}]*max-width: 680px;[^}]*margin-left: 0;/s);
+  assert.match(calibration, /\.meeting-record-meta\.kicker\s*\{[^}]*letter-spacing: 0;[^}]*text-transform: none;/s);
+  assert.match(calibration, /\.local-badge::before\s*\{\s*content: none;/s);
+  assert.match(calibration, /\.product-state\.ys-status\s*\{\s*display: none;/s);
+  assert.match(calibration, /data-shell-environment="installed"\] \.product-state\.ys-status\s*\{\s*display: inline-flex;/s);
+  assert.match(calibration, /#meetings-screen \.library-filters\s*\{[^}]*display: grid;[^}]*grid-template-columns: minmax\(0, 0\.85fr\) minmax\(0, 1\.15fr\);/s);
+  assert.match(calibration, /#meetings-screen #filter-people-note\s*\{\s*display: none;/s);
+  assert.match(calibration, /@media \(max-width: 760px\)[\s\S]*?grid-template-columns: 96px minmax\(0, 1fr\);[\s\S]*?grid-template-columns: 204px minmax\(19rem, 1fr\);/);
+});
+
 test("Paper Focus makes the meeting transition and its return path explicit", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   const css = readFileSync(join(here, "styles.css"), "utf8");
