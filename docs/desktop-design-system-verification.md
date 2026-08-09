@@ -36,7 +36,16 @@ The first installed pass found two production-only layout defects: the retained-
 
 The current bundle also reopened Settings on the remembered About pane. Keyboard focus then moved to Capture with a visible blue ring. The 720×560 Capture window retained its measured permission copy and disabled device controls after the rebuild.
 
-DS-2 separately proved the isolated native Settings reference in both appearances, at 720×560, including App-menu entry, Command–Comma, focus, close, reopen, and pane restoration. That accepted reference supports the appearance row. It does not prove the current integrated bundle in light appearance.
+DS-2 separately proved the isolated native Settings reference in both appearances, at 720×560, including App-menu entry, Command–Comma, focus, close, reopen, and pane restoration.
+
+The current integrated bundle was then clamped to the declared 720×560 primary-window minimum and captured like-for-like in macOS Light and Dark appearances. The same installed process opened Capture Settings at its fixed 720×560 geometry in both appearances. The primary action, local meeting list, selected Transcript tab, locality label, Settings entry, permission truth, and disabled device controls remained present. No page-level horizontal scrollbar appeared. macOS was returned to its original Dark appearance after the check.
+
+Retained native captures:
+
+- [Primary window — Light, 720×560](desktop-design-system-verification/installed-main-720x560-light.jpg)
+- [Primary window — Dark, 720×560](desktop-design-system-verification/installed-main-720x560-dark.jpg)
+- [Capture Settings — Light, 720×560](desktop-design-system-verification/installed-settings-720x560-light.jpg)
+- [Capture Settings — Dark, 720×560](desktop-design-system-verification/installed-settings-720x560-dark.jpg)
 
 ## Browser interaction evidence
 
@@ -57,8 +66,8 @@ These checks used the production DOM with the explicit synthetic prototype adapt
 | Check | Result | Evidence | Still open |
 |---|---|---|---|
 | Installed Tauri app | Partial | The current bundle passed the main-window and Settings screenshot/interaction walk, including real retained data, Transcript selection, Command–Comma, keyboard focus, native close, and restoration | Recording, degraded recording, and processing were not driven with live audio in the installed app |
-| Appearance | Partial | Integrated production passed light/dark browser comparison; isolated Settings passed both appearances in Tauri | Current integrated bundle needs like-for-like installed light/dark captures |
-| Geometry | Partial | Post-fix browser passed 1120×720 and 720×560; current native Settings passed 720×560; the current primary window passed a resized installed inspection without hidden header action or horizontal scrollbar | The primary window was not measured at an exact installed 720×560 |
+| Appearance | Pass for migrated surfaces | The current integrated bundle passed like-for-like installed Light and Dark captures for the primary window and Capture Settings | Human visual approval remains separate under Comparison |
+| Geometry | Pass for migrated surfaces | The installed primary window passed at its declared 720×560 minimum; installed Capture Settings passed at its fixed 720×560 size; critical actions remained exposed without a page-level horizontal scrollbar | Larger production screens remain governed by the migration ledger |
 | Keyboard | Partial | Browser tab paths and installed Settings pane paths passed; Command–Comma passed | Space/Return and safe Escape need a current installed walk across all three migrated surfaces |
 | Accessibility | Partial | AX labels were present; browser focus, reduced motion, contrast tokens, transparency tokens, and zoom modes are test-covered | Spoken VoiceOver, current installed increased contrast, reduced transparency, and 200% zoom are unproven |
 | States | Partial | Automated and browser references cover loading, empty, ready, disabled, selected, error, degraded, stopping, failure, and recovered presentations | Real-device capture and interrupted recovery were not run in this package |
