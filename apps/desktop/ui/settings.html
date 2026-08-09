@@ -14,50 +14,88 @@
   <body>
     <main class="ys-window" data-role="settings" aria-label="Yawn Settings">
       <nav class="ys-settings-toolbar" aria-label="Settings panes" role="tablist">
-        <button class="ys-button" id="settings-tab-capture" type="button" role="tab" data-pane="capture" aria-controls="settings-pane-capture" aria-selected="true">Capture</button>
-        <button class="ys-button" id="settings-tab-privacy" type="button" role="tab" data-pane="privacy" aria-controls="settings-pane-privacy" aria-selected="false" tabindex="-1">Privacy</button>
-        <button class="ys-button" id="settings-tab-connections" type="button" role="tab" data-pane="connections" aria-controls="settings-pane-connections" aria-selected="false" tabindex="-1">Connections</button>
-        <button class="ys-button" id="settings-tab-voice" type="button" role="tab" data-pane="voice" aria-controls="settings-pane-voice" aria-selected="false" tabindex="-1">Voice</button>
-        <button class="ys-button" id="settings-tab-desktop" type="button" role="tab" data-pane="desktop" aria-controls="settings-pane-desktop" aria-selected="false" tabindex="-1">Desktop</button>
-        <button class="ys-button" id="settings-tab-shortcuts" type="button" role="tab" data-pane="shortcuts" aria-controls="settings-pane-shortcuts" aria-selected="false" tabindex="-1">Shortcuts</button>
-        <button class="ys-button" id="settings-tab-about" type="button" role="tab" data-pane="about" aria-controls="settings-pane-about" aria-selected="false" tabindex="-1">About</button>
+        <button class="ys-button" id="settings-tab-capture" type="button" role="tab" data-pane="capture" aria-controls="settings-pane-capture" aria-selected="true">
+          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V7a3.5 3.5 0 1 0-7 0v4a3.5 3.5 0 0 0 3.5 3.5Z"/><path d="M6.5 10.5v.5a5.5 5.5 0 0 0 11 0v-.5M12 16.5V20M9.5 20h5"/></svg>
+          <span>Capture</span>
+        </button>
+        <button class="ys-button" id="settings-tab-privacy" type="button" role="tab" data-pane="privacy" aria-controls="settings-pane-privacy" aria-selected="false" tabindex="-1">
+          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 19 6v5.2c0 4.4-2.8 7.7-7 9.3-4.2-1.6-7-4.9-7-9.3V6l7-2.5Z"/><path d="m9.3 11.8 1.8 1.8 3.8-4"/></svg>
+          <span>Privacy</span>
+        </button>
+        <button class="ys-button" id="settings-tab-connections" type="button" role="tab" data-pane="connections" aria-controls="settings-pane-connections" aria-selected="false" tabindex="-1">
+          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 14.5 14.5 9M8 17H6.5a3.5 3.5 0 0 1 0-7H10M14 7h3.5a3.5 3.5 0 0 1 0 7H14"/></svg>
+          <span>Connections</span>
+        </button>
+        <button class="ys-button" id="settings-tab-voice" type="button" role="tab" data-pane="voice" aria-controls="settings-pane-voice" aria-selected="false" tabindex="-1">
+          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h2l1.5-5 3 10 3-12 2.5 7H20"/></svg>
+          <span>Voice</span>
+        </button>
+        <button class="ys-button" id="settings-tab-desktop" type="button" role="tab" data-pane="desktop" aria-controls="settings-pane-desktop" aria-selected="false" tabindex="-1">
+          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="12" rx="1.5"/><path d="M9 20h6M12 16.5V20"/></svg>
+          <span>Desktop</span>
+        </button>
+        <button class="ys-button" id="settings-tab-shortcuts" type="button" role="tab" data-pane="shortcuts" aria-controls="settings-pane-shortcuts" aria-selected="false" tabindex="-1">
+          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6.5 10h1M10 10h1M13.5 10h1M17 10h1M6.5 14h1M10 14h7"/></svg>
+          <span>Shortcuts</span>
+        </button>
+        <button class="ys-button" id="settings-tab-about" type="button" role="tab" data-pane="about" aria-controls="settings-pane-about" aria-selected="false" tabindex="-1">
+          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 10.5V17M12 7.5v.2"/></svg>
+          <span>About</span>
+        </button>
       </nav>
 
       <section class="ys-settings-pane" id="settings-pane-capture" data-pane-panel="capture" role="tabpanel" aria-labelledby="settings-tab-capture" tabindex="0">
-        <header>
+        <header class="settings-pane-heading">
           <h1>Capture</h1>
-          <p>Review the local channels Yawn needs before a recording can begin.</p>
+          <p>Audio stays on this Mac.</p>
         </header>
 
-        <section class="ys-settings-section" aria-labelledby="capture-permissions-title">
-          <h2 class="ys-settings-section__title" id="capture-permissions-title">Permissions measured on this Mac</h2>
-          <div class="ys-settings-row">
-            <div><strong>Microphone</strong><p class="ys-help-text" id="microphone-help">Checking the signed permission probe.</p></div>
-            <span class="ys-status" id="microphone-status" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span>Checking</span></span>
+        <section class="settings-group" aria-labelledby="capture-permissions-title">
+          <div class="settings-group__heading">
+            <div>
+              <h2 id="capture-permissions-title">Permissions</h2>
+              <p>Checking reads current state only. It never asks for access.</p>
+            </div>
+            <button class="ys-button settings-refresh" id="refresh-permissions" type="button">Check Again</button>
           </div>
-          <div class="ys-settings-row">
-            <div><strong>System audio</strong><p class="ys-help-text" id="system-audio-help">Checking whether the platform can report this without asking.</p></div>
-            <span class="ys-status" id="system-audio-status" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span>Checking</span></span>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Refresh status</strong><p class="ys-help-text">Reads permission state only. It does not open an audio device or show a permission prompt.</p></div>
-            <button class="ys-button" id="refresh-permissions" type="button">Check again</button>
-          </div>
-        </section>
-
-        <section class="ys-settings-section" aria-labelledby="capture-devices-title">
-          <h2 class="ys-settings-section__title" id="capture-devices-title">Devices</h2>
-          <div class="ys-settings-row">
-            <div><strong>Microphone</strong><p class="ys-help-text">Device selection is not implemented. Yawn uses the system default.</p></div>
-            <select class="ys-select" disabled aria-label="Microphone"><option>System default</option></select>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Meeting audio</strong><p class="ys-help-text">Yawn records the system-audio channel supported by the signed capture helper.</p></div>
-            <select class="ys-select" disabled aria-label="Meeting audio"><option>System audio</option></select>
+          <div class="settings-group__rows">
+            <div class="settings-row">
+              <div class="settings-row__copy"><strong>Microphone</strong><p id="microphone-help">Checking the signed permission probe.</p></div>
+              <span class="ys-status" id="microphone-status" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span>Checking</span></span>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row__copy"><strong>System Audio</strong><p id="system-audio-help">Checking whether macOS can report this without asking.</p></div>
+              <span class="ys-status" id="system-audio-status" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span>Checking</span></span>
+            </div>
           </div>
         </section>
 
-        <p class="ys-inline-notice" data-tone="information"><strong>Consent review stays required.</strong> Everyone must agree before every recording. Yawn does not notify participants for you.</p>
+        <section class="settings-group" aria-labelledby="capture-devices-title">
+          <div class="settings-group__heading">
+            <div>
+              <h2 id="capture-devices-title">Devices</h2>
+              <p>Device selection is not available yet.</p>
+            </div>
+          </div>
+          <div class="settings-group__rows">
+            <div class="settings-row">
+              <div class="settings-row__copy"><strong>Microphone</strong><p id="microphone-device-help">Yawn uses the system default input.</p></div>
+              <select class="ys-select" disabled aria-label="Microphone" aria-describedby="microphone-device-help"><option>System Default</option></select>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row__copy"><strong>Meeting Audio</strong><p id="meeting-audio-device-help">Yawn uses the signed system-audio helper.</p></div>
+              <select class="ys-select" disabled aria-label="Meeting audio" aria-describedby="meeting-audio-device-help"><option>System Audio</option></select>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-consent" aria-labelledby="capture-consent-title">
+          <div>
+            <h2 id="capture-consent-title">Consent Review</h2>
+            <p>Required before every recording. Yawn does not notify participants for you.</p>
+          </div>
+          <span class="settings-required">Required</span>
+        </section>
       </section>
 
       <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-privacy" data-pane-panel="privacy" role="tabpanel" aria-labelledby="settings-tab-privacy" tabindex="0" hidden><header><h1>Privacy</h1><p>This pane has not moved into the native Settings window yet.</p></header></section>

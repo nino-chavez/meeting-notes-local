@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(new URL("./settings.html", import.meta.url), "utf8");
+const css = readFileSync(new URL("./settings-window.css", import.meta.url), "utf8");
 const script = readFileSync(new URL("./settings.js", import.meta.url), "utf8");
 const production = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const rust = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
@@ -30,10 +31,30 @@ test("native Settings exposes one complete measured Capture pane", () => {
   assert.match(html, /id="capture-permissions-title"/);
   assert.match(html, /id="microphone-status"/);
   assert.match(html, /id="system-audio-status"/);
+  assert.match(html, /id="refresh-permissions"/);
+  assert.equal((html.match(/<select class="ys-select" disabled/g) || []).length, 2);
   assert.match(script, /Settings did not ask/);
   assert.doesNotMatch(html, /data-setting=/);
   assert.match(script, /invoke\?\.\("first_run_permissions"\)/);
   assert.doesNotMatch(script, /first_run_request_/);
+});
+
+test("Capture uses compact Settings geometry instead of a scrollable report", () => {
+  assert.match(css, /grid-template-rows: 4\.75rem minmax\(0, 1fr\)/);
+  assert.match(css, /inline-size: min\(38\.5rem, 100%\)/);
+  assert.match(css, /\.ys-settings-pane \{[\s\S]*?gap: var\(--ys-space-6\);[\s\S]*?overflow: hidden;/);
+  assert.match(css, /\.settings-group__rows \{\s*border-block:/);
+  assert.doesNotMatch(css, /\.settings-group(?:__rows)? \{[\s\S]*?border-radius:/);
+  assert.doesNotMatch(css, /box-shadow:/);
+
+  assert.equal((html.match(/class="settings-group"/g) || []).length, 2);
+  assert.equal((html.match(/class="settings-row"/g) || []).length, 4);
+  assert.doesNotMatch(html, /ys-settings-section|ys-inline-notice/);
+  assert.doesNotMatch(html, /Refresh status|Permissions measured on this Mac/);
+
+  // Scrolling is an accessibility fallback for magnified or constrained
+  // webviews, not the standard 720 x 560 page composition.
+  assert.match(css, /@media \(max-width: 40rem\), \(max-height: 30rem\)[\s\S]*?overflow-y: auto;/);
 });
 
 test("Settings has a narrow native capability and main owns the opener", () => {
@@ -47,8 +68,25 @@ test("Settings has a narrow native capability and main owns the opener", () => {
   assert.match(rust, /accelerator\("CmdOrCtrl\+,"\)/);
   assert.match(rust, /window\.label\(\) == ACTIVE_WINDOW_LABEL/);
   assert.match(rust, /SETTINGS_WINDOW_LABEL/);
+  assert.match(rust, /\.inner_size\(720\.0, 560\.0\)/);
+  assert.match(rust, /\.min_inner_size\(720\.0, 560\.0\)/);
+  assert.match(rust, /\.max_inner_size\(720\.0, 560\.0\)/);
+  assert.match(rust, /\.resizable\(false\)/);
   assert.match(rust, /\.minimizable\(false\)/);
   assert.match(rust, /\.maximizable\(false\)/);
+  assert.match(rust, /\.closable\(true\)/);
+  assert.match(rust, /window\.set_focus\(\)\?/);
+});
+
+test("Settings restores pane, title, and keyboard focus without touching the main window", () => {
+  assert.match(script, /const storageKey = "yawn-settings:last-pane"/);
+  assert.match(script, /localStorage\.setItem\(storageKey, pane\)/);
+  assert.match(script, /localStorage\.getItem\(storageKey\)/);
+  assert.match(script, /panel\.hidden = panel\.dataset\.panePanel !== pane/);
+  assert.match(script, /if \(selected && focus\) tab\.focus\(\)/);
+  assert.match(script, /\["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"\]/);
+  assert.match(script, /getCurrentWindow\(\)\.setTitle\(title\)/);
+  assert.doesNotMatch(script, /getByLabel\(["']main|navigate|location\.(?:href|assign|replace)/);
 });
 
 test("capture completion hands the retained meeting to its Transcript tab", () => {

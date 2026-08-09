@@ -2,6 +2,12 @@
   background: var(--ys-surface-window);
 }
 
+html,
+body {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
 body {
   min-inline-size: 45rem;
   min-block-size: 35rem;
@@ -12,62 +18,203 @@ body {
 
 .ys-window[data-role="settings"] {
   inline-size: 100%;
-  block-size: 100vh;
+  block-size: 100%;
+  display: grid;
+  grid-template-rows: 4.75rem minmax(0, 1fr);
   border: 0;
   border-radius: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .ys-settings-toolbar {
-  position: sticky;
-  inset-block-start: 0;
-  z-index: 1;
-  padding-block-start: 1.75rem;
+  min-inline-size: 0;
+  align-items: stretch;
+  gap: var(--ys-space-3);
+  padding: var(--ys-space-5) var(--ys-space-6) var(--ys-space-4);
 }
 
 .ys-settings-toolbar .ys-button {
   min-inline-size: 4.75rem;
-  min-block-size: var(--ys-control-large);
-  padding-inline: var(--ys-space-3);
+  min-block-size: 3.25rem;
+  display: grid;
+  grid-template-rows: 1.5rem auto;
+  place-items: center;
+  align-content: center;
+  gap: var(--ys-space-1);
+  padding: var(--ys-space-2) var(--ys-space-3);
   border-color: transparent;
+  border-radius: var(--ys-radius-md);
   background: transparent;
-  font-size: var(--ys-type-sm);
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-ui);
+  font-weight: 500;
+  line-height: 1;
 }
 
 .ys-settings-toolbar .ys-button[aria-selected="true"] {
   border-color: var(--ys-border);
   background: var(--ys-surface-selected);
+  color: var(--ys-ink-strong);
+}
+
+.settings-tab__icon {
+  inline-size: 1.35rem;
+  block-size: 1.35rem;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
 }
 
 .ys-settings-pane {
-  max-inline-size: 42rem;
+  inline-size: min(38.5rem, 100%);
+  block-size: 100%;
+  box-sizing: border-box;
+  align-content: start;
+  gap: var(--ys-space-6);
   margin-inline: auto;
+  padding: var(--ys-space-7) 0 var(--ys-space-6);
+  overflow: hidden;
 }
 
 .ys-settings-pane > header h1 {
   margin: 0;
   color: var(--ys-ink-strong);
   font-size: var(--ys-type-section);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .ys-settings-pane > header p {
-  margin: var(--ys-space-2) 0 0;
+  margin: var(--ys-space-1) 0 0;
   color: var(--ys-ink-muted);
-  font-size: var(--ys-type-ui);
+  font-size: var(--ys-type-sm);
 }
 
-.ys-settings-row > .ys-status {
+.settings-group {
+  display: grid;
+  gap: var(--ys-space-3);
+}
+
+.settings-group__heading {
+  min-block-size: var(--ys-control-regular);
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--ys-space-6);
+  padding-inline: var(--ys-space-4);
+}
+
+.settings-group__heading h2,
+.settings-consent h2 {
+  margin: 0;
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-ui);
+  font-weight: 600;
+  line-height: var(--ys-leading-tight);
+}
+
+.settings-group__heading p,
+.settings-consent p,
+.settings-row__copy p {
+  margin: var(--ys-space-1) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+  line-height: var(--ys-leading-ui);
+}
+
+.settings-group__rows {
+  border-block: var(--ys-border-width) solid var(--ys-border);
+}
+
+.settings-row {
+  min-block-size: 3.15rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ys-space-7);
+  padding: var(--ys-space-3) var(--ys-space-4);
+}
+
+.settings-row + .settings-row {
+  border-block-start: var(--ys-border-width) solid var(--ys-border);
+}
+
+.settings-row__copy {
+  min-inline-size: 0;
+}
+
+.settings-row__copy strong {
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-ui);
+  font-weight: 500;
+}
+
+.settings-row > .ys-status {
+  min-inline-size: 6.5rem;
+  justify-content: flex-end;
   justify-self: end;
+  font-size: var(--ys-type-sm);
+}
+
+.settings-refresh {
+  flex: none;
+}
+
+.ys-select {
+  inline-size: 10.5rem;
+}
+
+.settings-consent {
+  min-block-size: 3.25rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ys-space-7);
+  padding: var(--ys-space-4);
+  border-block: var(--ys-border-width) solid var(--ys-border);
+}
+
+.settings-required {
+  color: var(--ys-information);
+  font-size: var(--ys-type-sm);
+  font-weight: 600;
 }
 
 .settings-ledger-pane {
-  min-block-size: 20rem;
+  min-block-size: 0;
   align-content: center;
+  padding-inline: var(--ys-space-8);
   text-align: center;
 }
 
 @media (prefers-reduced-transparency: reduce) {
   .ys-settings-toolbar {
     background: var(--ys-surface-navigation);
+  }
+}
+
+/* Keep every control reachable when the webview is magnified or constrained. */
+@media (max-width: 40rem), (max-height: 30rem) {
+  body {
+    min-inline-size: 0;
+    min-block-size: 0;
+  }
+
+  .ys-window[data-role="settings"] {
+    grid-template-rows: 4.75rem minmax(0, 1fr);
+  }
+
+  .ys-settings-toolbar {
+    justify-content: start;
+    overflow-x: auto;
+  }
+
+  .ys-settings-pane {
+    inline-size: 100%;
+    padding-inline: var(--ys-space-6);
+    overflow-y: auto;
   }
 }
