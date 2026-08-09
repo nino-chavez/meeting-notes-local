@@ -113,9 +113,9 @@
         <nav class="product-nav" id="product-nav" aria-label="Yawn" hidden>
           <div class="sidebar-primary">
             <button class="legacy-home-link" id="home-link" type="button"><span>Home</span></button>
-            <button id="meetings-link" type="button"><span>Meetings</span><kbd class="nav-shortcut" aria-hidden="true">⌘1</kbd></button>
-            <button id="find-link" type="button"><span>Ask</span><kbd class="nav-shortcut" aria-hidden="true">⌘2</kbd></button>
-            <button id="promises-link" type="button"><span>Actions</span><span class="nav-trailing"><span class="nav-badge">Planned</span><kbd class="nav-shortcut" aria-hidden="true">⌘3</kbd></span></button>
+            <button id="meetings-link" type="button"><svg class="nav-icon" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.25 4.25h11.5v10.5H3.25zM6 2.75v3M12 2.75v3M3.25 7.25h11.5" /></svg><span>Meetings</span><kbd class="nav-shortcut" aria-hidden="true">⌘1</kbd></button>
+            <button id="find-link" type="button"><svg class="nav-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3.25 3.25" /></svg><span>Ask</span><kbd class="nav-shortcut" aria-hidden="true">⌘2</kbd></button>
+            <button id="promises-link" type="button"><svg class="nav-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6" /><path d="m6.25 9 1.75 1.75 3.75-4" /></svg><span>Actions</span><span class="nav-trailing"><span class="nav-badge">Planned</span><kbd class="nav-shortcut" aria-hidden="true">⌘3</kbd></span></button>
           </div>
 
           <div class="sidebar-section" aria-labelledby="folders-heading">
@@ -141,7 +141,7 @@
 
           <div class="sidebar-footer">
             <p class="privacy-lockup"><strong>On this Mac</strong><span>No account or upload</span></p>
-            <button class="settings-link" id="profile-link" type="button" hidden><span>Settings</span><kbd class="nav-shortcut" aria-hidden="true">⌘,</kbd></button>
+            <button class="settings-link" id="profile-link" type="button" hidden><svg class="nav-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="2.25" /><path d="M9 2.5v2M9 13.5v2M2.5 9h2M13.5 9h2M4.4 4.4l1.4 1.4M12.2 12.2l1.4 1.4M13.6 4.4l-1.4 1.4M5.8 12.2l-1.4 1.4" /></svg><span>Settings</span><kbd class="nav-shortcut" aria-hidden="true">⌘,</kbd></button>
           </div>
         </nav>
       </aside>
@@ -348,7 +348,7 @@
       <section class="screen" id="idle-screen" aria-labelledby="idle-title">
         <p class="kicker">Start a meeting</p>
         <h1 id="idle-title">Before you record.</h1>
-        <p class="lede">This Preview keeps audio and transcripts on this Mac. It does not create an automatic note.</p>
+        <p class="lede">Audio and transcripts stay on this Mac. Confirm consent and choose when the recording audio is deleted.</p>
 
         <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
           <li aria-current="step"><span>1</span><strong>Check</strong><small>Consent and retention</small></li>
@@ -358,8 +358,8 @@
         </ol>
 
         <div class="prototype-only placeholder-boundary capture-shell-boundary" role="note">
-          <strong>Synthetic capture journey.</strong>
-          <span>The controls below demonstrate the intended flow. No microphone or system audio is opened in this browser shell.</span>
+          <strong>Browser preview.</strong>
+          <span>No microphone or system-audio device will open here.</span>
         </div>
 
         <div class="preflight-layout">
@@ -413,8 +413,8 @@
 
       <section class="screen profile-screen" id="profile-screen" aria-labelledby="profile-title">
         <p class="kicker" id="profile-kicker">Settings</p>
-        <h1 id="profile-title">Settings.</h1>
-        <p class="lede" id="profile-lede">See what Yawn can access, what stays on this Mac, and which controls are available.</p>
+        <h1 id="profile-title">Settings</h1>
+        <p class="lede" id="profile-lede">Control recording, privacy, local models, and desktop behavior.</p>
         <div class="settings-shell">
           <nav class="settings-map" aria-label="Settings sections" role="tablist" aria-orientation="vertical">
             <button class="prototype-only" type="button" id="settings-capture" data-settings-tab="capture" role="tab" aria-selected="true" aria-controls="settings-panel-capture"><strong>Capture</strong><span>Permissions, devices, and local models</span></button>
@@ -687,8 +687,8 @@
 
       <section class="screen" id="arming-screen" aria-labelledby="arming-title">
         <p class="kicker">Nothing is recording yet</p>
-        <h1 id="arming-title">Preparing both audio channels.</h1>
-        <p class="lede">macOS may ask for microphone and system-audio access. Recording starts only after both channels are ready.</p>
+        <h1 id="arming-title">Preparing audio.</h1>
+        <p class="lede">Recording begins when the microphone and system audio are both ready.</p>
         <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
           <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
           <li aria-current="step"><span>2</span><strong>Record</strong><small>Preparing channels</small></li>
@@ -704,7 +704,7 @@
           </div>
         </section>
         <div class="prototype-only prototype-scenario-controls" role="group" aria-label="Synthetic arming controls">
-          <p><strong>Shell control</strong><span>The installed app advances automatically when both channels are ready.</span></p>
+          <p><strong>Preview control</strong><span>The installed app advances automatically when both channels are ready.</span></p>
           <div class="screen-actions">
             <button class="primary" id="prototype-arming-ready" type="button">Simulate channels ready</button>
             <button class="secondary" id="prototype-arming-cancel" type="button">Cancel this attempt</button>
@@ -729,7 +729,7 @@
         <p class="form-error" id="stop-error" role="alert" hidden></p>
 
         <div class="prototype-only prototype-scenario-controls compact" role="group" aria-label="Synthetic recording controls">
-          <p><strong>Shell control</strong><span>Preview the persistent state shown when one channel needs attention.</span></p>
+          <p><strong>Preview control</strong><span>Show how the app responds when one channel needs attention.</span></p>
           <button class="secondary" id="prototype-recording-degrade" type="button">Simulate system-audio issue</button>
         </div>
 
@@ -756,8 +756,8 @@
 
       <section class="screen" id="processing-screen" aria-labelledby="processing-title">
         <p class="kicker">Recording stopped</p>
-        <h1 id="processing-title">Transcribing on this Mac.</h1>
-        <p class="lede">The fixed offline model is processing both channels. No meeting content is sent to a service.</p>
+        <h1 id="processing-title">Making the transcript.</h1>
+        <p class="lede">The local transcription model is processing both channels. Nothing is uploaded.</p>
         <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
           <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
           <li data-state="complete"><span>2</span><strong>Record</strong><small>Audio secured</small></li>
@@ -771,7 +771,7 @@
         </section>
         <p class="footnote">You may use the rest of the app while the transcript is prepared. The header keeps this progress available.</p>
         <div class="prototype-only prototype-scenario-controls" role="group" aria-label="Synthetic processing controls">
-          <p><strong>Shell control</strong><span>The installed app advances automatically. This button reveals the synthetic retained result.</span></p>
+          <p><strong>Preview control</strong><span>The installed app advances automatically when the transcript is ready.</span></p>
           <button class="primary" id="prototype-processing-complete" type="button">Finish synthetic transcript</button>
         </div>
       </section>
@@ -779,7 +779,7 @@
       <section class="screen transcript-screen" id="transcript-screen" aria-labelledby="transcript-title">
         <p class="kicker">Transcript ready</p>
         <h1 id="transcript-title">Transcript</h1>
-        <p class="lede">Review the words captured from this meeting. This Preview has not generated notes, decisions, or action items.</p>
+        <p class="lede">Review the captured words. Notes, decisions, and actions have not been generated.</p>
         <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
           <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
           <li data-state="complete"><span>2</span><strong>Record</strong><small>Audio secured</small></li>
@@ -787,8 +787,8 @@
           <li aria-current="step"><span>4</span><strong>Review</strong><small>Source record</small></li>
         </ol>
         <div class="prototype-only placeholder-boundary capture-shell-boundary" role="note">
-          <strong>Synthetic retained transcript.</strong>
-          <span>These words were written for the shell. They were not recorded, transcribed, saved, or checked against audio.</span>
+          <strong>Browser preview.</strong>
+          <span>These example words were not recorded, transcribed, saved, or checked against audio.</span>
         </div>
         <div class="notice" id="transcript-warning" hidden></div>
         <!-- The note the operator typed during the meeting, shown back rather
@@ -876,31 +876,31 @@
 
       <section class="screen find-screen" id="find-screen" aria-labelledby="find-title">
         <p class="kicker">Meeting memory</p>
-        <h1 id="find-title">Find what was said.</h1>
-        <p class="lede">Search exact words if you remember them. Describe the meeting if you do not. Both searches stay on this Mac and show the retained passage behind each result.</p>
+        <h1 id="find-title">Find a meeting or passage.</h1>
+        <p class="lede">Search words you remember, or describe what the meeting was about. Every result opens the retained source.</p>
         <form class="library-search" id="library-search">
-          <label for="library-search-query">What do you remember?</label>
+          <label for="library-search-query">Search exact words</label>
           <div class="library-search-field">
-            <input id="library-search-query" type="search" autocomplete="off" placeholder="A phrase, topic, title, or folder" />
-            <button class="secondary" type="submit">Find</button>
+            <input id="library-search-query" type="search" autocomplete="off" placeholder="Phrase, title, or folder" />
+            <button class="secondary" type="submit">Search</button>
           </div>
-          <small>This is exact local search, not an AI answer. It does not identify people or infer meaning.</small>
+          <small>Exact local search. No inference.</small>
         </form>
         <div class="find-start" id="find-start" aria-labelledby="find-start-title">
-          <p class="label">Start here</p>
-          <h2 id="find-start-title">Use the words you still have.</h2>
-          <p>Search results can locate transcript words or a meeting. Withheld or missing speech stays visibly unavailable rather than becoming a match.</p>
+          <p class="label">Source first</p>
+          <h2 id="find-start-title">Search the words you remember.</h2>
+          <p>Withheld or missing speech stays unavailable instead of becoming a match.</p>
         </div>
         <div class="notice" id="library-notice" role="status" aria-live="polite" hidden></div>
         <div class="library-search-results" id="library-search-results"></div>
 
         <form class="library-search corpus-search" id="corpus-search">
-          <label for="corpus-search-question">Or describe what it was about.</label>
+          <label for="corpus-search-question">Search by meaning</label>
           <div class="library-search-field">
             <input id="corpus-search-question" type="search" autocomplete="off" placeholder="In your own words — &ldquo;the call about the lease&rdquo;" />
-            <button class="secondary" type="submit">Search by meaning</button>
+            <button class="secondary" type="submit">Search</button>
           </div>
-          <small>This compares meaning rather than words, using a model inside this app. Nothing is sent anywhere. Every result quotes the passage that matched it, so you can see why it came back.</small>
+          <small>A local model compares meaning. Results quote the matching passage; nothing leaves this Mac.</small>
         </form>
         <div class="notice" id="corpus-notice" role="status" aria-live="polite" hidden></div>
         <div class="corpus-coverage" id="corpus-coverage" hidden>
@@ -989,7 +989,7 @@
           <div>
             <p class="kicker">Across your meetings</p>
             <h1 id="promises-title">Actions</h1>
-            <p class="lede">See what was promised, who owns it, and whether it is still open. Every generated action will point back to the words that support it.</p>
+            <p class="lede">Review follow-up across meetings. Every generated action will link back to the words that support it.</p>
           </div>
           <span class="planned-tag">Planned</span>
         </div>
@@ -1017,10 +1017,10 @@
           </div>
           <div class="action-empty" role="row">
             <div>
-              <strong>No generated actions</strong>
-              <p>When action extraction is connected, open work from every meeting will collect here. Until then, Yawn will not infer promises from transcript words.</p>
+              <strong>Actions are not available yet</strong>
+              <p>Yawn does not infer promises from transcript words. When action extraction is ready, follow-up will appear here with its source.</p>
             </div>
-            <button class="secondary" id="actions-workspace-preview" type="button">See an example</button>
+            <button class="secondary" id="actions-workspace-preview" type="button">Open example meeting</button>
           </div>
         </div>
       </section>
@@ -1122,8 +1122,8 @@
         <div class="meeting-split-view">
           <aside class="meeting-context-pane" aria-label="Meeting list">
             <div class="prototype-only context-utility-row">
-              <strong>Library</strong>
-              <button class="text-button meeting-detail-back" id="prototype-browse-all" type="button">Browse all</button>
+              <strong>Meetings</strong>
+              <button class="text-button meeting-detail-back" id="prototype-browse-all" type="button">View all</button>
             </div>
             <button class="text-button meeting-detail-back installed-only" id="meeting-detail-back" type="button">Back to Meetings</button>
             <section class="prototype-only preparation-brief" data-feature="E3 P1" aria-labelledby="preparation-brief-title">
@@ -1131,8 +1131,8 @@
               <p>A future brief will collect recent context and open actions here before the call.</p>
             </section>
             <div class="meeting-context-heading">
-              <p class="label">Recent meetings</p>
-              <p>Switch meetings without leaving the workspace.</p>
+              <p class="label">Recent</p>
+              <p>Open another meeting.</p>
             </div>
             <div class="meeting-context-list" id="meeting-context-list" aria-live="polite"></div>
           </aside>
@@ -1144,7 +1144,7 @@
           </div>
           <div class="meeting-workspace-heading">
           <div>
-            <p class="kicker">Retained meeting</p>
+            <p class="kicker" id="meeting-detail-meta">Retained meeting</p>
             <h1 id="meeting-detail-title">Meeting</h1>
             <p class="lede" id="meeting-detail-lede">Opening the retained note, transcript, and recording details.</p>
           </div>
@@ -1177,7 +1177,7 @@
           <section class="live-note" id="detail-note" data-state="empty" aria-labelledby="detail-note-title" hidden>
             <h2 id="detail-note-title">Your note</h2>
             <p class="transcript-note-text" id="detail-note-text"></p>
-            <p class="footnote">Written during the meeting and kept with its transcript. Yawn does not rewrite it.</p>
+            <p class="footnote">Written during the meeting. Never rewritten.</p>
           </section>
           <section class="meeting-no-note" id="meeting-no-note" hidden aria-labelledby="meeting-no-note-title">
             <h2 id="meeting-no-note-title">Transcript only</h2>
@@ -1200,16 +1200,16 @@
             <p>The transcript stays separate from any generated note. Withheld speech remains marked as unavailable.</p>
             <button class="secondary" id="meeting-open-transcript" type="button">Open retained transcript</button>
           </section>
-          <p class="footnote prototype-only">Current capture labels only you and the other side. Named speakers, correction, meeting-length transcription, and timing correction between audio channels remain planned or partial.</p>
+          <p class="footnote prototype-only">Current recordings distinguish only you and the other side. Speaker names and corrections are not available yet.</p>
         </div>
 
         <div class="meeting-tab-panel" id="retained-panel-actions" data-retained-meeting-panel="actions" role="tabpanel" aria-labelledby="retained-tab-actions" hidden>
           <div class="panel-heading">
-            <div><p class="label">Follow-through · Partial</p><h2>Actions from this meeting</h2></div>
+            <div><p class="label">Follow-through</p><h2>Actions from this meeting</h2></div>
           </div>
           <div class="placeholder-boundary" role="note">
-            <strong>Read-only in this build.</strong>
-            <span>Owner, status, due dates, and the cross-meeting task list are planned.</span>
+            <strong>Review only.</strong>
+            <span>Editing owners, due dates, and status is not available yet.</span>
           </div>
           <section id="meeting-action-list" class="meeting-action-list" aria-live="polite"></section>
           <section id="meeting-action-empty" class="workspace-empty" hidden>
@@ -1220,7 +1220,7 @@
 
         <div class="meeting-tab-panel" id="retained-panel-evidence" data-retained-meeting-panel="evidence" role="tabpanel" aria-labelledby="retained-tab-evidence" hidden>
           <div class="panel-heading">
-            <div><p class="label">Claim provenance · Partial</p><h2>Evidence behind the note</h2></div>
+            <div><p class="label">Source words</p><h2>Evidence behind the note</h2></div>
           </div>
           <p class="panel-intro">Each item below opens the exact retained transcript words behind that claim. The transcript remains the source of record.</p>
           <section id="meeting-evidence-list" class="meeting-evidence-list" aria-live="polite"></section>

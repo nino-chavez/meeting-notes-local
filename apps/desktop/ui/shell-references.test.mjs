@@ -130,7 +130,7 @@ test("the desktop shell exposes the library-first journey without presenting pla
     assert.match(html, new RegExp(`data-retained-meeting-(?:tab|panel)=["']${meetingView.toLowerCase()}["']`));
   }
   assert.match(html, /id="meeting-context-list"/);
-  assert.match(html, /Switch meetings without leaving the workspace\./);
+  assert.match(html, /Open another meeting\./);
   assert.match(html, /Shell preview · synthetic content/);
   assert.match(html, /No meeting was recorded and nothing on this screen is saved or quotable\./);
   assert.match(html, /Automatic notes and action extraction are not available yet\./);
@@ -224,14 +224,16 @@ test("native calibration keeps one status, adaptive semantic tokens, and quiet s
   assert.match(styles, /quick-control-glyph\[data-state="recording"\][^}]*var\(--capture-live\)/s);
   assert.match(styles, /prototype-evidence-preview[^}]*var\(--semantic-info\)/s);
   assert.match(calibration, /@media \(prefers-color-scheme: dark\)/);
-  assert.match(calibration, /--brand-accent: #d48676;/i);
+  assert.match(calibration, /--brand-accent: #d98f80;/i);
   assert.match(calibration, /--capture-live: #68c999;/i);
-  assert.match(calibration, /--surface-sidebar: #211f1c;/i);
-  assert.match(calibration, /--surface-list: #282521;/i);
-  assert.match(calibration, /--surface-toolbar: #24211e;/i);
-  assert.match(calibration, /--surface-record: #302b27;/i);
+  assert.match(calibration, /--surface-sidebar: #222221;/i);
+  assert.match(calibration, /--surface-list: #282826;/i);
+  assert.match(calibration, /--surface-toolbar: rgba\(37, 37, 35, 0\.9\);/i);
+  assert.match(calibration, /--surface-record: #2d2c2a;/i);
   assert.match(calibration, /meeting-context-row\[aria-current="page"\][^}]*border-left: 2px solid var\(--brand-accent\)/s);
   assert.match(calibration, /settings-trust-statement[^}]*border-radius: 0;[^}]*background: transparent;/s);
+  assert.match(calibration, /\.meeting-workspace-heading h1[^}]*font-size: clamp\(34px, 3\.2vw, 38px\)/s);
+  assert.match(calibration, /\.claim-evidence[^}]*background: transparent;[^}]*text-decoration: underline;/s);
 });
 
 test("Paper Focus makes the meeting transition and its return path explicit", () => {
@@ -262,7 +264,8 @@ test("synthetic claim evidence stays inside the selected meeting", () => {
   const renderer = source.slice(start, end);
 
   assert.match(renderer, /prototype-evidence-preview/);
-  assert.match(renderer, /expanded \? "Hide exact words" : "Show exact words"/);
+  assert.match(renderer, /expanded \? "Hide excerpt" : "Show excerpt"/);
+  assert.match(renderer, /sourceTab === "evidence" \? "Show excerpt" : "View source"/);
   assert.doesNotMatch(renderer, /selectProductScreen\("prototype-meeting-screen"/);
   assert.match(source, /evidenceText: "Let’s keep first run to three steps\./);
   assert.match(source, /Synthetic transcript ·/);
@@ -320,8 +323,8 @@ test("the shell exposes the complete synthetic capture journey without claiming 
   ]) {
     assert.match(html, new RegExp(`id=["']${control}["']`));
   }
-  assert.match(html, /No microphone or system audio is opened in this browser shell\./);
-  assert.match(html, /They were not recorded, transcribed, saved, or checked against audio\./);
+  assert.match(html, /No microphone or system-audio device will open here\./);
+  assert.match(html, /These example words were not recorded, transcribed, saved, or checked against audio\./);
   assert.match(source, /function prototypeCaptureSnapshot\(/);
   assert.match(source, /renderPrototypeCapture\("transcribing"\)/);
   assert.doesNotMatch(source, /Shell preview only\. The consent and retention review is complete/);

@@ -617,20 +617,24 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     let script = include_str!("../../ui/main.js");
     let navigation = include_str!("../../ui/navigation-state.mjs");
     let styles = include_str!("../../ui/styles.css");
+    let navigation_button_has_label = |id: &str, label: &str| {
+        let marker = format!("id=\"{id}\"");
+        html.split_once(&marker)
+            .and_then(|(_, rest)| rest.split_once("</button>"))
+            .is_some_and(|(button, _)| button.contains(&format!("<span>{label}</span>")))
+    };
 
     assert!(html.contains("id=\"product-nav\""));
-    assert!(html.contains("id=\"find-link\" type=\"button\"><span>Ask</span>"));
+    assert!(navigation_button_has_label("find-link", "Ask"));
     assert!(html.contains("id=\"meetings-link\""));
-    assert!(html.contains("id=\"meetings-link\" type=\"button\"><span>Meetings</span>"));
-    assert!(html.contains("id=\"promises-link\" type=\"button\"><span>Actions</span>"));
-    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden><span>Settings</span>"));
+    assert!(navigation_button_has_label("meetings-link", "Meetings"));
+    assert!(navigation_button_has_label("promises-link", "Actions"));
+    assert!(navigation_button_has_label("profile-link", "Settings"));
     assert!(html.contains("id=\"find-screen\""));
     assert!(html.contains("id=\"meetings-screen\""));
     assert!(html.contains("id=\"promises-screen\""));
     assert!(html.contains("Automatic notes and action extraction are not available yet."));
-    assert!(
-        html.contains("Yawn will not infer promises from transcript words")
-    );
+    assert!(html.contains("Yawn does not infer promises from transcript words"));
     assert!(html.contains("id=\"library-transcript-screen\""));
     assert!(html.contains("id=\"meeting-detail-screen\""));
     assert!(html.contains("id=\"library-search\""));
@@ -676,7 +680,11 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     let navigation = include_str!("../../ui/navigation-state.mjs");
 
     assert!(html.contains("id=\"product-nav\" aria-label=\"Yawn\" hidden"));
-    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden><span>Settings</span>"));
+    assert!(html.contains("id=\"profile-link\" type=\"button\" hidden"));
+    assert!(html
+        .split_once("id=\"profile-link\"")
+        .and_then(|(_, rest)| rest.split_once("</button>"))
+        .is_some_and(|(button, _)| button.contains("<span>Settings</span>")));
     assert!(html.contains("id=\"stop-button\" type=\"button\" hidden>Stop recording"));
     assert_eq!(html.matches("id=\"stop-button\"").count(), 1);
     assert!(html.contains("id=\"header-state\" role=\"status\" aria-atomic=\"true\""));

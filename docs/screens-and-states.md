@@ -718,6 +718,12 @@ that worker is what transcribes.
 | `device-selection` | Choosing input / output to capture |
 | `model-selection` | ASR and summarization model choice |
 
+**Window role:** auxiliary settings window. It opens from the Yawn app menu,
+supports Command–Comma, restores the most recently used pane, and closes without
+navigating the primary window. It may keep a secondary entry in the app chrome for
+discoverability, but it is not a peer destination beside Meetings, Ask, and
+Actions. A page-bottom Back button is therefore not part of this surface.
+
 `permissions-partial` is the state that actually occurs and the one most likely
 to be skipped in design. macOS attributes prompts to the launching binary, and
 under launchd there is no hosting terminal — `local-dictation`'s README already
@@ -1274,8 +1280,10 @@ defaulted to forever.
 
 Five, and no more until an L5 state demands a sixth:
 
-1. **Shell chrome** — window frame, sidebar, title treatment. Used by D, E, F, G, I,
-   J, K.
+1. **Window chrome** — native frame and toolbar with two owned variants: the
+   primary application window used by D, E, F, I, J, and K; and the bounded
+   auxiliary settings window used by G. The variants share foundations, not
+   composition.
 2. **List–detail** — F to E.
 3. **Transient overlay** — B and C. Positioned, non-modal, dismissible.
 4. **Form** — G, `choosing-operating-point` in I, and the retention period in K.

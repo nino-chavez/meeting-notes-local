@@ -47,15 +47,15 @@ typography:
   step-xs:
     fontSize: "11px"
   step-sm:
-    fontSize: "12px"
-  step-base:
     fontSize: "13px"
-  step-lg:
+  step-base:
     fontSize: "15px"
+  step-lg:
+    fontSize: "16px"
   step-xl:
-    fontSize: "18px"
+    fontSize: "20px"
   step-2xl:
-    fontSize: "30px"
+    fontSize: "36px"
 
 rounded:
   none: "0px"
@@ -70,13 +70,18 @@ Visual rules and engineering rules together, so neither gets decided ad hoc
 surface by surface. Answers to [`DIRECTION.md`](./DIRECTION.md); the L5
 inventory it covers is [`docs/screens-and-states.md`](./docs/screens-and-states.md).
 
-**H1 status — adopted 2026-08-08:** Mac Split is the selected visual
-composition and the installed Tauri shell. It remains the default browser
-prototype; Paper Focus stays available as the complete planning wireframe at
+**System status — rebaseline required 2026-08-09:** Mac Split remains the
+selected primary-window composition and installed Tauri baseline. Its persistent
+product sidebar, meeting list, and selected record remain authorized. The later
+claim that one visual grammar should also own Ask, Actions, Settings, consent,
+capture, processing, and transcript handoff is withdrawn. It turned operational
+surfaces into document pages and let page-level refinements drift without a shared
+pattern layer. The browser prototype remains useful interaction evidence, not
+native-quality approval. Paper Focus stays available as the complete planning wireframe at
 `?prototype=1&calibration=wireframe`, and Document and Native Reference remain
 comparison evidence. Native-window, VoiceOver, increased-contrast, and exact
-200% zoom checks remain release verification rather than a second composition
-decision.
+200% zoom checks remain release gates. The active execution plan is
+[`docs/desktop-design-system-handoff.md`](./docs/desktop-design-system-handoff.md).
 
 ---
 
@@ -103,27 +108,27 @@ wording and icon shape, not merely its hue.
 state is conveyed by color alone.
 
 **Dark mode adapts the semantic tokens instead of reusing the light values.**
-Yawn terracotta becomes `#D48676`; healthy live capture becomes `#68C999`.
+Yawn terracotta becomes `#D98F80`; healthy live capture becomes `#68C999`.
 Dark filled controls use dark ink (`#1C1B19` for brand, `#17201D` for live)
-rather than white text. Against the darkest record surface (`#302B27`), the
-brand is 4.98:1 and live capture is 6.93:1. Their filled-control text pairs are
-6.12:1 and 8.25:1. The dark shell separates toolbar `#24211E`, sidebar
-`#211F1C`, meeting list `#282521`, and record `#302B27` with dividers rather
+rather than white text. The dark shell separates window `#1D1D1C`, sidebar
+`#222221`, meeting list `#282826`, and record `#2D2C2A` with dividers rather
 than shadows.
 
 ## Type
 
 Three roles, with a hard boundary between them. `record` is only for the title
-of a retained or synthetic meeting. `ui` owns navigation, buttons, labels,
-status, settings, instructions, and all operational copy. `mono` owns transcript
-turns, timestamps, locators, and machine-readable evidence.
+of a retained or synthetic meeting or transcript artifact. `ui` owns navigation,
+buttons, labels, status, settings, instructions, transcript turns, and all
+operational copy. `mono` owns locators and machine-readable evidence; timestamps
+remain tabular UI text.
 
 The functional wireframe used a 13px base, 11px labels, and 10px badges. The
 side-by-side review found that hierarchy too small and status-heavy beside a
-finished Mac app. Native calibration starts at the system 14px reading scale;
-smaller text is reserved for secondary metadata, not product-state taxonomy.
-The meeting title may reach 28–31px. A serif title can signal "you are reading
-the record"; serif workflow chrome remains a contract violation.
+finished Mac app. Native calibration uses 15px for primary reading text and
+14px for navigation and controls; smaller text is reserved for secondary
+metadata, not product-state taxonomy. The meeting title may reach 34–36px. A
+serif title can signal "you are reading the record"; serif workflow chrome
+remains a contract violation.
 
 ## Form
 
@@ -132,6 +137,9 @@ the record"; serif workflow chrome remains a contract violation.
   shadow because they are real layers above the window.
 - **No radius above `lg` (8px)** on app surfaces. Full pills are reserved for
   compact status or segmented controls whose shape carries grouping.
+- **Control shape names the job.** Underlined text tabs change views within one
+  meeting. A compact segmented control filters one collection. Buttons perform
+  actions. These roles do not borrow one another's selected state.
 - **No ambient motion.** No pulse, breath, shimmer, or looping gradient. The
   audio level meter is the sole exception, and only because it moves as a
   reading of arriving audio rather than as decoration.
@@ -157,6 +165,10 @@ the record"; serif workflow chrome remains a contract violation.
   decline, never-for-this-app — and nothing else competes with them.
 - Progressive disclosure. The note is the reading surface; transcript, actions,
   evidence, and details stay available without competing in the first scan.
+- The retained-meeting heading contains identity and time, not an explanation of
+  the note model. Trust explanations belong beside the action or evidence they
+  qualify. Repeated source actions render as quiet links rather than a stack of
+  boxed buttons.
 - Mac Split keeps product navigation, meeting context, and the selected record
   available at wide sizes. At the minimum desktop window, product navigation
   becomes a 96px rail and the meeting list remains visible. The list yields only
@@ -164,8 +176,11 @@ the record"; serif workflow chrome remains a contract violation.
 - Consent, arming, recording, degradation, processing, and transcript handoff
   hide unrelated navigation. Capture truth remains in the integrated toolbar,
   so focus does not make listening state ambiguous.
-- Settings expose every section without a hidden horizontal strip: a vertical
-  map at wide sizes and a compact three-column map at the minimum window.
+- Capture screens name the current state in the heading and show progress in
+  place. They do not repeat a four-step wizard above every operational state.
+- Settings is an auxiliary Mac settings window, opened from the App menu and
+  Command–Comma. It keeps stable pane navigation and sizes to its current pane;
+  it is not a primary-window route with a page-bottom Back button.
 - Paper Focus's transition remains interaction evidence, not the approved
   production composition. Document and Native Reference remain controls for
   future regression review.
@@ -174,14 +189,45 @@ the record"; serif workflow chrome remains a contract violation.
 - Empty states carry real content, never a title card. First run shows what a
   note will look like, not a welcome graphic.
 
+## Surface roles and pattern ownership
+
+Window role is decided before page composition, typography, or material. Related
+surfaces share foundations and components; they do not share a universal layout.
+
+| Role | Owns | Required grammar | Must not become |
+|---|---|---|---|
+| Primary application window | Meetings, Ask, Actions | Native frame and toolbar; sidebar or split view where hierarchy requires it; flexible resizing | A centered responsive webpage inside a large canvas |
+| Meeting record | Note, Transcript, Actions, Evidence, Details | Calm reading measure, progressive disclosure, restrained record typography | The visual model for Settings or capture |
+| Auxiliary settings window | Capture, Privacy, Connections, Voice profile, Desktop behavior, Shortcuts, About | Bounded settings window, stable pane navigation, grouped controls, native close and keyboard behavior | A primary destination, modal web page, or long report |
+| Capture utility | Consent, arming, recording, degradation, processing handoff | Compact operational hierarchy, unmistakable state, no unrelated navigation | A document, dashboard, or blocking modal for recoverable degradation |
+| Transient layer | Menus, popovers, destructive confirmation, command launcher | One temporary task above retained context | Permanent navigation or decorative elevation |
+
+The design system has four owned layers:
+
+1. **Foundations:** typography, color and materials, spacing, density, iconography,
+   focus, motion, appearance, and accessibility.
+2. **Components:** toolbar actions, sidebar and list rows, tabs, segmented filters,
+   buttons, grouped settings rows, status indicators, menus, and progress.
+3. **Patterns:** the five roles above, including their window behavior and state
+   transitions.
+4. **Verification:** a rendered specimen plus the installed Tauri reference
+   surfaces in light and dark mode, minimum and comfortable sizes, keyboard-only,
+   reduced-motion, increased-contrast, and 200% zoom checks.
+
+`DESIGN.md` owns the decisions. Shared CSS and JavaScript own their implementation.
+A screen-specific override is permitted only when the screen has a documented
+state the shared pattern cannot express. The override must not silently redefine a
+shared control.
+
 ---
 
 ## Shell decision — Tauri baseline, Mac Split selected
 
 **Current status:** Tauri remains the working implementation so the existing
-runtime and state contracts stay intact. Mac Split is the approved H1 visual
-composition. The SwiftUI reference remains a native-quality check for the
-implementation; switching stacks is not authorized merely because a later CSS
+runtime and state contracts stay intact. Mac Split is the approved primary-window
+composition, not blanket approval of its current styling or of every secondary
+surface. The SwiftUI reference and Apple Human Interface Guidelines remain
+native-quality checks; switching stacks is not authorized merely because a CSS
 detail misses the bar.
 
 Decided rather than defaulted, because it determines whether every artifact in

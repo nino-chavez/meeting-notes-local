@@ -1,15 +1,42 @@
 # UI/UX shell audit and autonomous run
 
-**Status:** H1 adopted. Mac Split is the selected visual composition, the
-installed Tauri baseline, and the default prototype shell. Paper Focus remains
-the complete functional wireframe;
-Document and Native Reference remain comparison evidence. Cold-operator,
-native-window, and native accessibility review remain.
+**Status:** Mac Split remains the selected primary-window structure. Native
+fit-and-finish approval is reopened. The 2026-08-09 side-by-side comparison with
+Wispr showed that the current Settings route and shared operational surfaces
+still read as styled web pages. Paper Focus remains the complete functional
+wireframe; Document and Native Reference remain comparison evidence. The active
+correction is the desktop design-system rebaseline in
+[`desktop-design-system-handoff.md`](./desktop-design-system-handoff.md).
 
 **Snapshot:** 2026-08-08, branch `main`. This run preserved the workspace's
 existing uncommitted product-shell work and extended it.
 
 ## Recommendation
+
+Build the shared desktop pattern system before another page-level styling pass.
+Keep Mac Split for the primary window, preserve the meeting record's reading
+grammar, and give Settings and capture the auxiliary and utility patterns their
+jobs require. Approval now happens on the installed Tauri surfaces, with the
+browser prototype serving interaction review rather than native-quality proof.
+
+### 2026-08-09 comparison correction
+
+The direct Settings comparison exposed four defects that the previous wide and
+minimum-window browser checks could not detect:
+
+1. Settings replaced the app instead of opening as a bounded auxiliary window.
+2. Report-like rows and long explanatory copy made configuration read like a
+   document.
+3. A flat dark canvas and full-width rules supplied no functional surface
+   hierarchy.
+4. `native-calibration.css` adjusted individual screens without an executable
+   component and pattern owner, so consistency depended on repeating selectors.
+
+Browser chrome exaggerates the gap, but does not explain it. Wispr's containment,
+grouped controls, and persistent context remain visible advantages after that
+confound is removed. Glass or blur alone would decorate the same structural
+mistake. Apple platform behavior is the floor; comparator styling is evidence,
+not authority.
 
 Promote Mac Split as the visual shell. Keep Paper Focus's routes, state model,
 and complete journey coverage as the planning wireframe. Retain the other two
@@ -132,8 +159,12 @@ The primary navigation stays small:
 1. **Meetings** — default. Library and selected note share the first view.
 2. **Ask** — exact and meaning search now; cited answers and saved views later.
 3. **Actions** — the future cross-meeting follow-through view.
-4. **Settings** — Capture, Privacy, Connections, Voice profile, Desktop
-   behavior, Shortcuts, and About.
+
+Settings is auxiliary, not a fourth peer destination. It opens from the App menu
+and Command–Comma, and contains Capture, Privacy, Connections, Voice profile,
+Desktop behavior, Shortcuts, and About panes. A secondary discoverability entry
+may remain in the sidebar footer if it does not compete with the three primary
+destinations.
 
 Recording is global. It can begin while the operator is reading any meeting,
 so it does not become another sidebar destination.

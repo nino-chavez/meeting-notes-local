@@ -215,6 +215,7 @@ const corpusCoverageCopy = document.querySelector("#corpus-coverage-copy");
 const corpusPrepare = document.querySelector("#corpus-prepare");
 const meetingDetailState = document.querySelector("#meeting-detail-state");
 const meetingDetailTitle = document.querySelector("#meeting-detail-title");
+const meetingDetailMeta = document.querySelector("#meeting-detail-meta");
 const meetingDetailLede = document.querySelector("#meeting-detail-lede");
 const meetingFocusToggle = document.querySelector("#meeting-focus-toggle");
 const meetingDockRecord = document.querySelector("#meeting-dock-record");
@@ -2806,8 +2807,8 @@ function appendMeetingClaim(target, claim, response, index, sourceTab, variant =
   const meta = document.createElement("p");
   meta.className = "claim-meta";
   meta.textContent = variant === "action"
-    ? "Action · owner and status planned"
-    : `${claimTypeLabel(claim.claimType)} · words located`;
+    ? "Action"
+    : claimTypeLabel(claim.claimType);
   const text = document.createElement("p");
   text.className = "claim-text";
   text.textContent = claim.claim;
@@ -2817,8 +2818,8 @@ function appendMeetingClaim(target, claim, response, index, sourceTab, variant =
   open.dataset.claimOrdinal = String(claim.ordinal);
   open.dataset.claimIndex = String(index);
   open.textContent = shellPrototype
-    ? sourceTab === "evidence" ? "Show exact words" : "Show in Evidence"
-    : "Show exact words in transcript";
+    ? sourceTab === "evidence" ? "Show excerpt" : "View source"
+    : "View in transcript";
   let prototypeEvidencePreview = null;
   if (shellPrototype && sourceTab === "evidence") {
     prototypeEvidencePreview = document.createElement("blockquote");
@@ -2837,7 +2838,7 @@ function appendMeetingClaim(target, claim, response, index, sourceTab, variant =
         const expanded = prototypeEvidencePreview.hidden;
         prototypeEvidencePreview.hidden = !expanded;
         open.setAttribute("aria-expanded", String(expanded));
-        open.textContent = expanded ? "Hide exact words" : "Show exact words";
+        open.textContent = expanded ? "Hide excerpt" : "Show excerpt";
       } else {
         selectRetainedMeetingTab("evidence", { focus: true, reveal: true });
       }
@@ -2869,7 +2870,11 @@ function renderMeetingDetail(response) {
   meetingDetailTitle.textContent = selectedContext?.label
     || (selectedContext ? formatMeetingTime(selectedContext.createdAtEpochSeconds) : "")
     || presentation.title;
+  meetingDetailMeta.textContent = selectedContext
+    ? formatMeetingTime(selectedContext.createdAtEpochSeconds)
+    : "Retained meeting";
   meetingDetailLede.textContent = presentation.lede;
+  meetingDetailLede.hidden = presentation.kind === "note";
   meetingNoNoteTitle.textContent = presentation.fallbackTitle;
   meetingNoNoteCopy.textContent = presentation.fallbackCopy;
   const transcriptAvailable = Boolean(response?.transcriptHandle);
@@ -2931,7 +2936,9 @@ async function openMeetingDetail(handle, returnScreen = "meetings-screen", contr
   meetingRetention.hidden = true;
   selectRetainedMeetingTab("note");
   meetingDetailTitle.textContent = "Opening meeting";
+  meetingDetailMeta.textContent = "Retained meeting";
   meetingDetailLede.textContent = "Reading this meeting’s retained note, transcript status, and recording details.";
+  meetingDetailLede.hidden = false;
   message(meetingDetailState, "Opening this retained meeting…");
   showScreen("meeting-detail-screen", { resetScroll: true });
   const transition = beginHandleTransition("open-meeting-detail", control);

@@ -118,6 +118,18 @@ placeholder rooms to make the complete journey inspectable. The normal product
 encounter presents what works now and does not turn roadmap classifications into
 navigation, badges, or disabled controls.
 
+**Window role comes before visual grammar.** The primary window uses the selected
+Mac split. A retained meeting may read like a document inside it. Settings uses a
+bounded auxiliary settings window. Capture uses a compact operational utility.
+Menus, popovers, and confirmations are transient layers. Shared foundations make
+these surfaces feel related; forcing one page composition across them makes the
+app feel like a website with themed routes.
+
+**System materials are functional layers, not a theme.** Native or simulated
+materials may separate navigation and transient controls from content. They stay
+out of the meeting content layer unless a system control supplies them. Blur and
+translucency never substitute for window behavior, hierarchy, density, or focus.
+
 ---
 
 ## Ledger
@@ -139,6 +151,9 @@ this heading, rows shaped `| \`device-id\` | verdict | … |`.
 | `native-shell` | authorized | Integrated toolbar plus flexible sidebar, list, and record | Uses familiar Mac anatomy while keeping the selected meeting central | `apps/desktop/ui/native-calibration.css` |
 | `mac-split-shell` | authorized | Product sidebar, meeting list, and selected record at wide sizes; compact product rail at the desktop minimum; focused capture states hide unrelated navigation | Keeps switching context visible in the reading flow without weakening capture truth | operator selection and full-state pass 2026-08-08 |
 | `native-reference` | authorized | System-default comparison geometry, not a product treatment | Keeps platform familiarity as the quality floor for implementation review | `apps/desktop/native-reference/YawnNativeReference.swift` |
+| `surface-role-grammar` | authorized | Primary, record, settings, capture, and transient roles share foundations but keep distinct compositions | Makes platform behavior and the operator's task decide the layout before styling | `DESIGN.md` `Surface roles and pattern ownership` |
+| `universal-document-grammar` | condemned | Applying the retained-meeting reading layout to Settings, capture, Ask, and Actions | Produced centered page columns, report-like rows, and large unused canvases | operator comparison 2026-08-09 |
+| `settings-page-route` | condemned | Settings replaces the primary window and exits through a page-bottom Back button | Breaks the expected auxiliary Settings-window model and discards app context | `docs/desktop-design-system-handoff.md` |
 
 ---
 
@@ -154,11 +169,16 @@ suppressed there in favor of the native overlay titlebar.
 The ledger authorizes the record identity and rejects both the superseded dark
 atmosphere and the bottom critical-action dock. Paper Focus completed the same
 retrieval and source-check path with fewer visible controls and words, but the
-side-by-side review rescinded its visual approval. Mac Split then won the native
-calibration comparison. H1 is closed.
+side-by-side review rescinded its visual approval. Mac Split then won the
+primary-window composition comparison. That structural decision remains closed.
+The 2026-08-09 Wispr comparison reopened the shared visual-system and native
+fit-and-finish gate: Settings still rendered as a full primary-window page, and
+screen-level CSS loops had no owned pattern layer to converge on.
 
 Tauri remains the implementation baseline. Mac Split earned the composition
 decision through operator comparison, not because its CSS is testable. A thin
 SwiftUI reference source records the native comparison ceiling; it remains a
 platform check, not a requirement to reopen the selected composition. No stack
 migration is authorized without rendered evidence from both implementations.
+The rebaseline changes pattern ownership and native window behavior before it
+changes technology.
