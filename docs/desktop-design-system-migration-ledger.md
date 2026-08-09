@@ -15,9 +15,9 @@ receipts to these migration rows. The current review run is recorded below; a
 
 | Surface | Shared production owner | What changed |
 |---|---|---|
-| Library and selected meeting | `ys-toolbar`, `ys-sidebar-row`, `ys-meeting-row`, `ys-primary-split`, `ys-primary-list`, `ys-record`, `ys-tabs`, `ys-tab` | Mac Split remains the primary composition. Meeting rows are vertical at production breakpoints. Long titles keep the locality label below the heading. |
-| Settings → Capture | `ys-window`, `ys-settings-toolbar`, `ys-settings-pane`, `ys-settings-section`, `ys-settings-row`, `ys-select`, `ys-toggle`, `ys-status` | Capture moved to a separate native Settings window. The pane reads permission status only. It does not request access or invent device choice. |
-| Consent and arming | `ys-capture-utility`, `ys-disclosure-row`, `ys-select`, `ys-actions`, `ys-button`, `ys-inline-notice` | Existing consent, retention, and start behavior remains authoritative. |
+| Library and selected meeting | `ys-toolbar`, `ys-sidebar-row`, `ys-meeting-row`, `ys-primary-split`, `ys-primary-list`, `ys-meeting-list-pane`, `ys-record`, `ys-meeting-record`, `ys-tabs`, `ys-tab` | Mac Split remains the primary composition. The comfortable layout uses a compact product sidebar, independently scrolling meeting list, and anchored record. The 720-pixel minimum keeps all three jobs visible. Retention policy follows the meeting corpus instead of displacing it. |
+| Settings → Capture | `ys-window`, `ys-settings-toolbar`, `ys-settings-pane`, `ys-button`, `ys-select`, `ys-status`, with pane-local flat setting groups | Capture lives in a fixed 720×560 native Settings window. Flat divider rows replace the scrollable report-card composition. The pane reads permission status only. It does not request access or invent device choice. |
+| Consent and arming | `ys-capture-utility`, `ys-disclosure-row`, `ys-select`, `ys-actions`, `ys-button`, `ys-inline-notice` | Existing consent, retention, and start behavior remains authoritative. Route visibility now uses semantic `hidden` state so returning from Consent restores the selected meeting to the installed accessibility tree. |
 | Recording and degraded recording | `ys-capture-utility`, `ys-status`, `ys-button`, `ys-inline-notice` | Live green remains separate from the brand accent. Degraded capture keeps recording truth and the affected channel visible. |
 | Stopping and processing | `ys-capture-utility`, `ys-status`, `ys-progress-row`, `ys-inline-notice` | Processing remains local and does not imply completion before the reducer reports it. |
 | Transcript-ready handoff | selected-meeting record plus `ys-tabs` | Completion reopens the retained meeting by durable ID and selects Transcript. |
@@ -49,11 +49,12 @@ The accepted surfaces resolve shared jobs through `ys-*` components. Legacy sele
 
 | Surface ID | Current atomic standing | Latest run |
 |---|---|---|
-| `main.shell` | `unproven` — the operator rejected the prior executable; the rebuilt signed executable awaits visual review | `2026-08-09-4f3f458b` |
-| `main.library` | `unproven` — retained-meeting selection passed after rebuild; remaining states and actions are open | `2026-08-09-4f3f458b` |
-| `settings.capture` | `fail` — native window behavior exists, but the pane still reads as a scrollable web report | `2026-08-09-4f3f458b` |
-| `prototype.references` | `fail` — installed synthetic layout rendered, but the Consent return path lost the meeting subtree from the accessibility tree | `2026-08-09-ui-review-7515dc15` |
-| all other plan surfaces | `unproven` | `2026-08-09-e6c0eebc` |
+| `main.shell` | `unproven` — the combined signed executable rendered, but the desktop locked before movement, keyboard, light appearance, minimum geometry, and lifecycle checks could finish | `2026-08-09-7803cdb4` |
+| `main.library` | `unproven` — the compact selected-meeting workspace rendered with retained local content; the Library screen's complete state and action matrix remains open | `2026-08-09-7803cdb4` |
+| `meeting.record` | `unproven` — one dark comfortable transcript-only state rendered and remained present in the installed accessibility tree; other states, pointer/keyboard tabs, light appearance, minimum geometry, and human review remain open | `2026-08-09-7803cdb4` |
+| `settings.capture` | `unproven` — DHR-003's scrollable report composition was replaced and automated contracts pass; the exact combined executable still needs installed light/dark, geometry, keyboard, close/reopen, and human review | `2026-08-09-7803cdb4` |
+| `prototype.references` | `unproven` — DHR-004 passed in the producer's installed synthetic build and is pinned by an integrated regression test, but evidence does not transfer to the new combined review executable digest | `2026-08-09-ui-review-8383ae4a` |
+| all other plan surfaces | `unproven` | `2026-08-09-7803cdb4` |
 
 ## Legacy CSS removal ledger
 
