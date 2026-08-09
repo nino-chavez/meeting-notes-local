@@ -25,6 +25,26 @@ It does not prove native toolbar or Settings-window behavior, system materials,
 VoiceOver order, installed-app keyboard routing, exact native 200% zoom, real
 menubar state, or recording behavior.
 
+## DS-5 Meetings front-door comparison
+
+The specimen includes three bounded structures for the same admitted Meetings
+front door. It does not add a separate dashboard Home route.
+
+1. **Persistent split — recommended.** Product navigation, compact recents, and
+   the selected record remain visible. This preserves the approved Mac Split and
+   removes row-level editing, expanded filters, and retention reporting from the
+   first scan.
+2. **Recent shelf.** A two-pane shell gives the selected record more space and is
+   calmest with a short history. It truncates sooner and weakens long-library
+   scanning.
+3. **Library with inspector.** A collection-first table is strongest for bulk
+   scanning. It demotes the record and adds an Open step to the core reading path.
+
+Use the global appearance control for light and dark, and **Front-door geometry**
+for the comfortable and 720 × 560 comparison. These are browser composition
+proxies, not installed-window evidence. Production migration remains blocked on
+operator selection and an installed Tauri review.
+
 ## DS-4 integration contract
 
 1. Import `foundations.css`, then `components.css`, then `patterns.css` from the

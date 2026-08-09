@@ -24,6 +24,10 @@ document.querySelector("#zoom-control")?.addEventListener("change", (event) => {
   specimenMain.dataset.zoom = event.currentTarget.value;
 });
 
+document.querySelector("#ia-geometry-control")?.addEventListener("change", (event) => {
+  specimenMain.dataset.iaGeometry = event.currentTarget.value;
+});
+
 function selectTab(tab) {
   const tablist = tab.closest('[role="tablist"]');
   if (!tablist) return;

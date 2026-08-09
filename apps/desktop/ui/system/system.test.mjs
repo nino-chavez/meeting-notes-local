@@ -147,8 +147,32 @@ test("specimen exposes deterministic controls for required lifecycle and accessi
   }
   for (const control of [
     "appearance-control", "contrast-control", "motion-control",
-    "transparency-control", "zoom-control",
+    "transparency-control", "zoom-control", "ia-geometry-control",
   ]) assert.match(html, new RegExp(`id="${control}"`));
+});
+
+test("Meetings front-door comparison keeps one destination and three bounded structures", () => {
+  const section = html.match(/<section class="specimen-section" id="meetings-front-door-options"[\s\S]*?(?=\n\s*<section class="specimen-section")/)?.[0];
+  assert.ok(section, "Meetings comparison section is missing");
+
+  for (const option of ["persistent-split", "recent-shelf", "library-inspector"]) {
+    assert.match(section, new RegExp(`data-ia-option="${option}"`));
+  }
+  assert.equal([...section.matchAll(/data-ia-option="/g)].length, 3);
+  assert.equal([...section.matchAll(/<strong>Meetings<\/strong><span>Home<\/span>/g)].length, 3);
+  assert.match(section, /A · Recommended/);
+  assert.match(section, /none adds a dashboard-shaped Home route/);
+  assert.match(section, /title, date, and duration only/);
+  assert.match(section, /folder and date controls open from one disclosure/);
+  assert.match(section, /corpus-wide storage moves to Settings/);
+  assert.doesNotMatch(section, /Name this meeting|Recording audio held on this Mac|\bbytes\b/i);
+});
+
+test("Meetings comparison exposes deterministic comfortable and minimum geometry", () => {
+  assert.match(html, /id="specimen-main" data-zoom="100" data-ia-geometry="comfortable"/);
+  assert.match(html, /value="minimum">720 × 560 minimum/);
+  assert.match(specimenScript, /specimenMain\.dataset\.iaGeometry = event\.currentTarget\.value/);
+  assert.match(readFileSync(join(here, "specimen.css"), "utf8"), /data-ia-geometry="minimum"/);
 });
 
 test("ids are unique and local aria references resolve", () => {
