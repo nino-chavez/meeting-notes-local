@@ -1,0 +1,73 @@
+:root {
+  background: var(--ys-surface-window);
+}
+
+body {
+  min-inline-size: 45rem;
+  min-block-size: 35rem;
+  margin: 0;
+  overflow: hidden;
+  background: var(--ys-surface-window);
+}
+
+.ys-window[data-role="settings"] {
+  inline-size: 100%;
+  block-size: 100vh;
+  border: 0;
+  border-radius: 0;
+  overflow: auto;
+}
+
+.ys-settings-toolbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  padding-block-start: 1.75rem;
+}
+
+.ys-settings-toolbar .ys-button {
+  min-inline-size: 4.75rem;
+  min-block-size: var(--ys-control-large);
+  padding-inline: var(--ys-space-3);
+  border-color: transparent;
+  background: transparent;
+  font-size: var(--ys-type-sm);
+}
+
+.ys-settings-toolbar .ys-button[aria-selected="true"] {
+  border-color: var(--ys-border);
+  background: var(--ys-surface-selected);
+}
+
+.ys-settings-pane {
+  max-inline-size: 42rem;
+  margin-inline: auto;
+}
+
+.ys-settings-pane > header h1 {
+  margin: 0;
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-section);
+}
+
+.ys-settings-pane > header p {
+  margin: var(--ys-space-2) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-ui);
+}
+
+.ys-settings-row > .ys-status {
+  justify-self: end;
+}
+
+.settings-ledger-pane {
+  min-block-size: 20rem;
+  align-content: center;
+  text-align: center;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .ys-settings-toolbar {
+    background: var(--ys-surface-navigation);
+  }
+}

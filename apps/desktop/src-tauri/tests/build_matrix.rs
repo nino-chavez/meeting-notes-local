@@ -13,16 +13,18 @@ fn production_config_without_feature_is_production_only() {
     let production = config(include_str!("../tauri.conf.json"));
     let plan = plan(BuildMode::Production);
     assert!(validate(BuildMode::Production, &production).is_ok());
-    assert_eq!(plan.capabilities_path, "capabilities/main.json");
+    assert_eq!(plan.capabilities_path, "capabilities/product/*.json");
     assert_eq!(plan.permissions_path, "permissions/production/**/*");
     assert_eq!(
         plan.commands,
         [
             "app_snapshot",
+            "open_settings_window",
             "start_meeting",
             "stop_meeting",
             "dismiss_meeting",
             "retry_startup",
+            "first_run_permissions",
         ]
     );
 }
@@ -66,12 +68,13 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
     let preview = config(include_str!("../tauri.preview.conf.json"));
     let plan = plan(BuildMode::Preview);
     assert!(validate(BuildMode::Preview, &preview).is_ok());
-    assert_eq!(plan.capabilities_path, "capabilities/preview.json");
+    assert_eq!(plan.capabilities_path, "capabilities/product/*.json");
     assert_eq!(plan.permissions_path, "permissions/production/**/*");
     assert_eq!(
         plan.commands,
         [
             "app_snapshot",
+            "open_settings_window",
             "start_meeting",
             "stop_meeting",
             "dismiss_meeting",

@@ -97,7 +97,7 @@ use local_meeting_notes_session_core::transcript_restoration::resolve_stored_tra
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow};
 use uuid::Uuid;
 
 const CAPTURE_EVENT_MAX_BYTES: usize = 64 * 1024;
@@ -114,10 +114,42 @@ const SITTING_STREAM_MAX_BYTES: u64 = 16_000 * 2 * 60 * 60;
 const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
+const SETTINGS_WINDOW_LABEL: &str = "settings";
 #[cfg(feature = "preview-surface")]
 const ACTIVE_WINDOW_LABEL: &str = "preview";
 #[cfg(not(feature = "preview-surface"))]
 const ACTIVE_WINDOW_LABEL: &str = "main";
+
+fn show_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
+        window.show()?;
+        window.unminimize()?;
+        window.set_focus()?;
+        return Ok(window);
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        app,
+        SETTINGS_WINDOW_LABEL,
+        WebviewUrl::App("settings.html".into()),
+    )
+    .title("Capture — Yawn Settings")
+    .inner_size(720.0, 560.0)
+    .min_inner_size(720.0, 560.0)
+    .max_inner_size(720.0, 560.0)
+    .resizable(false)
+    .minimizable(false)
+    .maximizable(false)
+    .closable(true)
+    .center()
+    .focused(true)
+    .build()
+}
+
+#[tauri::command]
+fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    show_settings_window(&app).map(|_| ()).map_err(|error| error.to_string())
+}
 
 struct ApplicationState {
     model: Mutex<AppModel>,
@@ -3998,15 +4030,18 @@ fn main() {
         // destroying it — a destroyed last window exits the process and
         // takes the tray with it. Quit (⌘Q) still exits honestly.
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            if window.label() == ACTIVE_WINDOW_LABEL {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .manage(state)
         .manage(product_operations)
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
+            open_settings_window,
             start_meeting,
             stop_meeting,
             dismiss_meeting,
@@ -4044,6 +4079,31 @@ fn main() {
             product_facade::restore_withheld_turn
         ])
         .setup(|app| {
+            let settings = tauri::menu::MenuItemBuilder::with_id(
+                "open-settings",
+                "Settings…",
+            )
+            .accelerator("CmdOrCtrl+,")
+            .build(app)?;
+            let app_menu = tauri::menu::SubmenuBuilder::new(app, "Yawn")
+                .about(None)
+                .separator()
+                .item(&settings)
+                .separator()
+                .hide()
+                .hide_others()
+                .show_all()
+                .separator()
+                .quit()
+                .build()?;
+            let menu = tauri::menu::MenuBuilder::new(app).item(&app_menu).build()?;
+            app.set_menu(menu)?;
+            app.on_menu_event(|app, event| {
+                if event.id() == "open-settings" {
+                    let _ = show_settings_window(app);
+                }
+            });
+
             // § A: the menubar item is always present — most sessions never
             // open a window. Built before the startup thread so the first
             // rendered state is the honest hollow glyph, never a gap.

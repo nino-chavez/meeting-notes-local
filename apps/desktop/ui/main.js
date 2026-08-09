@@ -67,6 +67,7 @@ const screens = new Map(
   [...document.querySelectorAll(".screen")].map((screen) => [screen.id, screen]),
 );
 const headerState = document.querySelector("#header-state");
+const headerStatus = document.querySelector("#header-status");
 const headerStatusDot = document.querySelector("#header-status-dot");
 const releaseBadge = document.querySelector("#release-badge");
 const meetingLabel = document.querySelector("#meeting-id");
@@ -408,6 +409,14 @@ function setHeaderState(text) {
   if (next === null) return;
   announcedHeaderState = next;
   headerState.textContent = next;
+  const normalized = text.toLowerCase();
+  headerStatus.dataset.state = normalized.includes("recording")
+    ? normalized.includes("attention") ? "degraded" : "recording"
+    : normalized.includes("transcrib") || normalized.includes("preparing") || normalized.includes("opening")
+      ? "processing"
+      : normalized.includes("attention") || normalized.includes("could not")
+        ? "error"
+        : "ready";
 }
 
 function setMeetingFocus(focused) {
@@ -568,7 +577,7 @@ function renderMeetingContextList() {
   meetingContextList.replaceChildren();
   if (!meetingContextRows.length) {
     const empty = document.createElement("p");
-    empty.className = "meeting-context-empty";
+    empty.className = "meeting-context-empty ys-empty-row";
     empty.textContent = "No other retained meetings are available in this view.";
     meetingContextList.append(empty);
     return;
@@ -579,7 +588,7 @@ function renderMeetingContextList() {
     const selected = row.meetingId === activeMeetingId;
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "meeting-context-row";
+    button.className = "meeting-context-row ys-meeting-row";
     button.dataset.meetingId = row.meetingId;
     button.setAttribute("aria-current", selected ? "page" : "false");
     button.disabled = Boolean(meetingContextBusyId);
@@ -591,6 +600,7 @@ function renderMeetingContextList() {
       void openMeetingByIdFresh(row.meetingId, button);
     });
     const copy = document.createElement("span");
+    copy.className = "ys-row-copy";
     const label = document.createElement("strong");
     label.textContent = labelText;
     const meta = document.createElement("small");
@@ -995,7 +1005,7 @@ function renderLibrary(snapshot) {
   document.querySelector("#library-copy").textContent = snapshot.message || "Opening retained meetings on this Mac.";
   if (snapshot.state !== "populated" && snapshot.state !== "populated-incomplete") {
     const empty = document.createElement("p");
-    empty.className = "library-empty";
+    empty.className = "library-empty ys-empty-row";
     empty.textContent = snapshot.state === "empty"
       ? "No retained meetings yet. Finish a recording to see it here."
       : snapshot.state === "unavailable"
@@ -1007,7 +1017,7 @@ function renderLibrary(snapshot) {
   for (const row of snapshot.rows || []) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "library-row";
+    button.className = "library-row ys-meeting-row";
     button.dataset.meetingHandle = row.handle;
     button.dataset.meetingId = row.meetingId || "";
     // A meeting with no title is named by when it was recorded, which the row
@@ -1403,8 +1413,7 @@ function render(snapshot) {
       setHeaderState("Transcript ready");
       endElapsed();
       if (workflowOwnsRoute) {
-        renderTranscript(snapshot);
-        showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "transcript-screen" });
+        void handoffCompletedCapture(snapshot);
       }
       break;
     default:
@@ -1413,6 +1422,23 @@ function render(snapshot) {
       document.querySelector("#error-detail").textContent = snapshot.error || "The attempt stopped before a validated transcript was ready.";
       showWorkflowScreen(snapshot, { resetScroll: currentScreen !== "error-screen" });
   }
+}
+
+async function handoffCompletedCapture(snapshot) {
+  const meetingId = snapshot?.meeting_id || "";
+  if (!meetingId) {
+    renderTranscript(snapshot);
+    showScreen("transcript-screen", { resetScroll: true });
+    return;
+  }
+  const opened = await openMeetingByIdFresh(meetingId);
+  if (!opened) return;
+  selectRetainedMeetingTab("transcript", { focus: true, reveal: true });
+  message(
+    meetingDetailState,
+    "Transcript ready. This retained meeting is selected; open the source words below.",
+    "ready",
+  );
 }
 
 // The §K standing statement: what recording audio is held, how much, and
@@ -2239,6 +2265,13 @@ async function openProfile() {
     return;
   }
   if (!invoke) return;
+  try {
+    await invoke("open_settings_window");
+    return;
+  } catch {
+    // Preview builds that do not admit the production Settings command retain
+    // the existing measured voice-profile route instead of losing access.
+  }
   selectProductScreen("profile-screen", { resetScroll: true });
   selectSettingsPanel("voice");
   const revision = routeRevision;

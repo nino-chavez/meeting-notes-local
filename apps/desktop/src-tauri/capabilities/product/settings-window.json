@@ -1,0 +1,15 @@
+{
+  "$schema": "../../gen/schemas/desktop-schema.json",
+  "identifier": "settings-window",
+  "description": "The bounded Settings window may read the manifest-verified capture permission status and update only its own native title. It cannot request permission and has no capture, meeting, storage, profile, filesystem, shell, process, dialog, or remote-origin authority.",
+  "windows": [
+    "settings"
+  ],
+  "platforms": [
+    "macOS"
+  ],
+  "permissions": [
+    "allow-first-run-permissions",
+    "core:window:allow-set-title"
+  ]
+}

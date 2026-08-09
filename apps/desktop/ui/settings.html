@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Capture — Yawn Settings</title>
+    <link rel="stylesheet" href="system/foundations.css" />
+    <link rel="stylesheet" href="system/components.css" />
+    <link rel="stylesheet" href="system/patterns.css" />
+    <link rel="stylesheet" href="settings-window.css" />
+    <script type="module" src="settings.js"></script>
+  </head>
+  <body>
+    <main class="ys-window" data-role="settings" aria-label="Yawn Settings">
+      <nav class="ys-settings-toolbar" aria-label="Settings panes" role="tablist">
+        <button class="ys-button" id="settings-tab-capture" type="button" role="tab" data-pane="capture" aria-controls="settings-pane-capture" aria-selected="true">Capture</button>
+        <button class="ys-button" id="settings-tab-privacy" type="button" role="tab" data-pane="privacy" aria-controls="settings-pane-privacy" aria-selected="false" tabindex="-1">Privacy</button>
+        <button class="ys-button" id="settings-tab-connections" type="button" role="tab" data-pane="connections" aria-controls="settings-pane-connections" aria-selected="false" tabindex="-1">Connections</button>
+        <button class="ys-button" id="settings-tab-voice" type="button" role="tab" data-pane="voice" aria-controls="settings-pane-voice" aria-selected="false" tabindex="-1">Voice</button>
+        <button class="ys-button" id="settings-tab-desktop" type="button" role="tab" data-pane="desktop" aria-controls="settings-pane-desktop" aria-selected="false" tabindex="-1">Desktop</button>
+        <button class="ys-button" id="settings-tab-shortcuts" type="button" role="tab" data-pane="shortcuts" aria-controls="settings-pane-shortcuts" aria-selected="false" tabindex="-1">Shortcuts</button>
+        <button class="ys-button" id="settings-tab-about" type="button" role="tab" data-pane="about" aria-controls="settings-pane-about" aria-selected="false" tabindex="-1">About</button>
+      </nav>
+
+      <section class="ys-settings-pane" id="settings-pane-capture" data-pane-panel="capture" role="tabpanel" aria-labelledby="settings-tab-capture" tabindex="0">
+        <header>
+          <h1>Capture</h1>
+          <p>Review the local channels Yawn needs before a recording can begin.</p>
+        </header>
+
+        <section class="ys-settings-section" aria-labelledby="capture-permissions-title">
+          <h2 class="ys-settings-section__title" id="capture-permissions-title">Permissions measured on this Mac</h2>
+          <div class="ys-settings-row">
+            <div><strong>Microphone</strong><p class="ys-help-text" id="microphone-help">Checking the signed permission probe.</p></div>
+            <span class="ys-status" id="microphone-status" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span>Checking</span></span>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>System audio</strong><p class="ys-help-text" id="system-audio-help">Checking whether the platform can report this without asking.</p></div>
+            <span class="ys-status" id="system-audio-status" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span>Checking</span></span>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Refresh status</strong><p class="ys-help-text">Reads permission state only. It does not open an audio device or show a permission prompt.</p></div>
+            <button class="ys-button" id="refresh-permissions" type="button">Check again</button>
+          </div>
+        </section>
+
+        <section class="ys-settings-section" aria-labelledby="capture-devices-title">
+          <h2 class="ys-settings-section__title" id="capture-devices-title">Devices</h2>
+          <div class="ys-settings-row">
+            <div><strong>Microphone</strong><p class="ys-help-text">Device selection is not implemented. Yawn uses the system default.</p></div>
+            <select class="ys-select" disabled aria-label="Microphone"><option>System default</option></select>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Meeting audio</strong><p class="ys-help-text">Yawn records the system-audio channel supported by the signed capture helper.</p></div>
+            <select class="ys-select" disabled aria-label="Meeting audio"><option>System audio</option></select>
+          </div>
+        </section>
+
+        <p class="ys-inline-notice" data-tone="information"><strong>Consent review stays required.</strong> Everyone must agree before every recording. Yawn does not notify participants for you.</p>
+      </section>
+
+      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-privacy" data-pane-panel="privacy" role="tabpanel" aria-labelledby="settings-tab-privacy" tabindex="0" hidden><header><h1>Privacy</h1><p>This pane has not moved into the native Settings window yet.</p></header></section>
+      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-connections" data-pane-panel="connections" role="tabpanel" aria-labelledby="settings-tab-connections" tabindex="0" hidden><header><h1>Connections</h1><p>This pane has not moved into the native Settings window yet. No account or connection is active.</p></header></section>
+      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-voice" data-pane-panel="voice" role="tabpanel" aria-labelledby="settings-tab-voice" tabindex="0" hidden><header><h1>Voice profile</h1><p>The existing measured voice-profile workflow remains in the main app until its own migration is reviewed.</p></header></section>
+      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-desktop" data-pane-panel="desktop" role="tabpanel" aria-labelledby="settings-tab-desktop" tabindex="0" hidden><header><h1>Desktop behavior</h1><p>This pane has not moved into the native Settings window yet.</p></header></section>
+      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-shortcuts" data-pane-panel="shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" tabindex="0" hidden><header><h1>Shortcuts</h1><p>Open Settings from the Yawn menu or press Command–Comma.</p></header></section>
+      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-about" data-pane-panel="about" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" hidden><header><h1>About Yawn</h1><p>Meeting data stays on this Mac. No account or upload path is active.</p></header></section>
+    </main>
+  </body>
+</html>

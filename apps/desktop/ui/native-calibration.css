@@ -7,7 +7,7 @@
    &calibration=wireframe. */
 
 html[data-native-calibration] {
-  color-scheme: light;
+  color-scheme: light dark;
   color: #292a27;
   background: #f3f1ec;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
@@ -42,6 +42,129 @@ html[data-native-calibration] {
   --motion-fast: 140ms;
   --motion-enter: 180ms;
   --motion-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* DS-4 production ownership. The shared system now owns the accepted primary,
+   capture, and control jobs. Legacy selectors below remain only for screens in
+   the migration ledger and the explicit browser comparison modes. */
+html[data-production-system="desktop-v1"][data-native-calibration] {
+  --ink: var(--ys-ink);
+  --ink-strong: var(--ys-ink-strong);
+  --muted: var(--ys-ink-muted);
+  --line: var(--ys-border);
+  --line-strong: var(--ys-border-strong);
+  --paper: var(--ys-surface-content);
+  --paper-muted: var(--ys-surface-control);
+  --surface-window: var(--ys-surface-window);
+  --surface-toolbar: var(--ys-surface-navigation);
+  --surface-sidebar: var(--ys-surface-navigation);
+  --surface-list: var(--ys-surface-list);
+  --surface-record: var(--ys-surface-content);
+  --surface-selected: var(--ys-surface-selected);
+  --brand-accent: var(--ys-brand);
+  --brand-accent-ink: var(--ys-brand-ink);
+  --capture-live: var(--ys-live);
+  --capture-live-ink: var(--ys-live-ink);
+  --control-height: var(--ys-control-regular);
+  --radius-control: var(--ys-radius-md);
+  --radius-panel: var(--ys-radius-lg);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .product-state.ys-status {
+  display: inline-flex;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] :is(
+  #idle-screen,
+  #arming-screen,
+  #recording-screen,
+  #processing-screen
+).ys-capture-utility {
+  inline-size: min(34rem, calc(100% - 2rem));
+  max-inline-size: 34rem;
+  margin: var(--ys-space-8) auto;
+  padding: var(--ys-space-8);
+  border: var(--ys-border-width) solid var(--ys-border-strong);
+  border-radius: var(--ys-radius-lg);
+  background: var(--ys-surface-content);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .ys-disclosure-row {
+  min-block-size: var(--ys-row-regular);
+  border-block-end: var(--ys-border-width) solid var(--ys-border);
+  border-radius: 0;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .processing-card {
+  display: grid;
+  gap: var(--ys-space-3);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .processing-card .ys-progress-row {
+  min-block-size: 4.25rem;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .processing-spinner {
+  animation: none;
+  border-inline-end-color: transparent;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-split-view.ys-primary-split {
+  grid-template-columns: minmax(12rem, 0.9fr) minmax(22rem, 2.2fr);
+  min-block-size: 100%;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-context-pane.ys-primary-list,
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-detail-content.ys-record {
+  border-radius: 0;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-context-row.ys-meeting-row {
+  min-block-size: var(--ys-row-regular);
+  padding: var(--ys-space-4) var(--ys-space-5);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .product-nav {
+  overflow-x: hidden;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-context-list {
+  display: block;
+  overflow-x: hidden;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-context-row {
+  inline-size: 100%;
+  flex: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-workspace-heading {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-tabs.ys-tabs {
+  gap: var(--ys-space-6);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-tabs .ys-tab {
+  min-block-size: var(--ys-control-large);
+  padding: var(--ys-space-2) 0;
+  border-radius: 0;
+}
+
+@media (max-width: 760px) {
+  html[data-production-system="desktop-v1"][data-native-calibration] .meeting-split-view.ys-primary-split {
+    grid-template-columns: minmax(11.875rem, 0.75fr) minmax(19rem, 1.5fr);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html[data-production-system="desktop-v1"][data-native-calibration] .app-header {
+    background: var(--ys-surface-navigation);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 html[data-native-calibration] body {

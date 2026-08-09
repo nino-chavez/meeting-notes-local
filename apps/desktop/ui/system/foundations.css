@@ -207,11 +207,13 @@ textarea {
   font: inherit;
 }
 
-button,
-select,
-input,
-textarea,
-[tabindex]:not([tabindex="-1"]) {
+:where(
+  button,
+  select,
+  input,
+  textarea,
+  [tabindex]:not([tabindex="-1"])
+) {
   outline: none;
 }
 

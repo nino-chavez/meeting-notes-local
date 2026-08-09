@@ -1,22 +1,25 @@
 <!doctype html>
-<html lang="en" data-shell-rendered="true" data-startup-state="shell-rendered">
+<html lang="en" data-shell-rendered="true" data-startup-state="shell-rendered" data-production-system="desktop-v1">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>Yawn</title>
+    <link rel="stylesheet" href="system/foundations.css" />
+    <link rel="stylesheet" href="system/components.css" />
+    <link rel="stylesheet" href="system/patterns.css" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="native-calibration.css" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
-    <header class="app-header" data-tauri-drag-region>
+    <header class="app-header ys-toolbar" data-tauri-drag-region>
       <div class="header-identity" data-tauri-drag-region>
         <div class="product-mark">
           <p class="eyebrow">Yawn</p>
           <span class="release-badge" id="release-badge">Preview</span>
         </div>
-        <p class="product-state"><span class="status-dot" id="header-status-dot" aria-hidden="true"></span><span id="header-state" role="status" aria-atomic="true">Opening safely</span></p>
+        <p class="product-state ys-status" id="header-status" data-state="processing"><span class="status-dot ys-status__mark" id="header-status-dot" aria-hidden="true"></span><span id="header-state" role="status" aria-atomic="true">Opening safely</span></p>
       </div>
       <div class="header-actions">
         <button class="prototype-only command-menu-trigger" id="command-menu-trigger" type="button" aria-label="Open commands" aria-expanded="false" aria-controls="command-menu-dialog">
@@ -28,9 +31,9 @@
           <span id="quick-control-trigger-label">Ready</span>
         </button>
         <div class="workflow-actions">
-          <button class="secondary workflow-return" id="workflow-return" type="button" hidden>View progress</button>
-          <button class="stop header-stop" id="stop-button" type="button" hidden>Stop recording</button>
-          <button class="primary start-meeting-action" id="start-meeting-action" type="button" hidden>Record a meeting</button>
+          <button class="secondary ys-button workflow-return" id="workflow-return" type="button" hidden>View progress</button>
+          <button class="stop ys-button header-stop" data-variant="live" id="stop-button" type="button" hidden>Stop recording</button>
+          <button class="primary ys-button start-meeting-action" data-variant="primary" id="start-meeting-action" type="button" hidden>Record a meeting</button>
         </div>
       </div>
     </header>
@@ -108,14 +111,14 @@
       </section>
     </div>
 
-    <div class="app-workspace">
-      <aside class="app-sidebar">
+    <div class="app-workspace ys-window" data-role="primary">
+      <aside class="app-sidebar ys-primary-sidebar">
         <nav class="product-nav" id="product-nav" aria-label="Yawn" hidden>
           <div class="sidebar-primary">
-            <button class="legacy-home-link" id="home-link" type="button"><span>Home</span></button>
-            <button id="meetings-link" type="button"><svg class="nav-icon" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.25 4.25h11.5v10.5H3.25zM6 2.75v3M12 2.75v3M3.25 7.25h11.5" /></svg><span>Meetings</span><kbd class="nav-shortcut" aria-hidden="true">⌘1</kbd></button>
-            <button id="find-link" type="button"><svg class="nav-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3.25 3.25" /></svg><span>Ask</span><kbd class="nav-shortcut" aria-hidden="true">⌘2</kbd></button>
-            <button id="promises-link" type="button"><svg class="nav-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6" /><path d="m6.25 9 1.75 1.75 3.75-4" /></svg><span>Actions</span><span class="nav-trailing"><span class="nav-badge">Planned</span><kbd class="nav-shortcut" aria-hidden="true">⌘3</kbd></span></button>
+            <button class="legacy-home-link ys-sidebar-row" id="home-link" type="button"><span>Home</span></button>
+            <button class="ys-sidebar-row" id="meetings-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.25 4.25h11.5v10.5H3.25zM6 2.75v3M12 2.75v3M3.25 7.25h11.5" /></svg><span>Meetings</span><kbd class="nav-shortcut" aria-hidden="true">⌘1</kbd></button>
+            <button class="ys-sidebar-row" id="find-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3.25 3.25" /></svg><span>Ask</span><kbd class="nav-shortcut" aria-hidden="true">⌘2</kbd></button>
+            <button class="ys-sidebar-row" id="promises-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6" /><path d="m6.25 9 1.75 1.75 3.75-4" /></svg><span>Actions</span><span class="nav-trailing"><span class="nav-badge">Planned</span><kbd class="nav-shortcut" aria-hidden="true">⌘3</kbd></span></button>
           </div>
 
           <div class="sidebar-section" aria-labelledby="folders-heading">
@@ -141,7 +144,7 @@
 
           <div class="sidebar-footer">
             <p class="privacy-lockup"><strong>On this Mac</strong><span>No account or upload</span></p>
-            <button class="settings-link" id="profile-link" type="button" hidden><svg class="nav-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="2.25" /><path d="M9 2.5v2M9 13.5v2M2.5 9h2M13.5 9h2M4.4 4.4l1.4 1.4M12.2 12.2l1.4 1.4M13.6 4.4l-1.4 1.4M5.8 12.2l-1.4 1.4" /></svg><span>Settings</span><kbd class="nav-shortcut" aria-hidden="true">⌘,</kbd></button>
+            <button class="settings-link ys-sidebar-row" id="profile-link" type="button" hidden><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="2.25" /><path d="M9 2.5v2M9 13.5v2M2.5 9h2M13.5 9h2M4.4 4.4l1.4 1.4M12.2 12.2l1.4 1.4M13.6 4.4l-1.4 1.4M5.8 12.2l-1.4 1.4" /></svg><span>Settings</span><kbd class="nav-shortcut" aria-hidden="true">⌘,</kbd></button>
           </div>
         </nav>
       </aside>
@@ -345,7 +348,7 @@
         </div>
       </section>
 
-      <section class="screen" id="idle-screen" aria-labelledby="idle-title">
+      <section class="screen ys-capture-utility" id="idle-screen" aria-labelledby="idle-title">
         <p class="kicker">Start a meeting</p>
         <h1 id="idle-title">Before you record.</h1>
         <p class="lede">Audio and transcripts stay on this Mac. Confirm consent and choose when the recording audio is deleted.</p>
@@ -366,15 +369,15 @@
           <form id="start-form">
           <fieldset>
             <legend>Confirm before recording</legend>
-            <label class="check-row">
+            <label class="check-row ys-disclosure-row">
               <input type="checkbox" id="consent-check" />
               <span><strong>Everyone has agreed to be recorded.</strong><small>The app cannot decide consent or recording law for you.</small></span>
             </label>
-            <label class="check-row">
+            <label class="check-row ys-disclosure-row">
               <input type="checkbox" id="headphones-check" />
               <span><strong>I am wearing headphones.</strong><small>Speaker playback can make the transcript incomplete and misattribute words.</small></span>
             </label>
-            <label class="check-row">
+            <label class="check-row ys-disclosure-row">
               <input type="checkbox" id="room-check" />
               <span><strong>I am the only person near this microphone.</strong><small>This Preview does not identify voices in the room.</small></span>
             </label>
@@ -382,7 +385,7 @@
 
           <label class="retention-field" for="retention-days">
             <span>Delete meeting audio after</span>
-            <select id="retention-days" required>
+            <select class="ys-select" id="retention-days" required>
               <option value="" selected>Choose a retention period</option>
               <option value="1">1 day</option>
               <option value="7">7 days</option>
@@ -391,10 +394,10 @@
             <small>Audio is deleted only while the app is open. If the deadline passes while it is closed, deletion runs the next time it opens. The transcript remains.</small>
           </label>
 
-          <p class="form-error" id="start-error" role="alert" hidden></p>
-          <div class="screen-actions">
-            <button class="primary" id="start-button" type="submit" disabled>Start recording</button>
-            <button class="secondary" id="start-back" type="button">Back</button>
+          <p class="form-error ys-inline-notice" data-tone="error" id="start-error" role="alert" hidden></p>
+          <div class="screen-actions ys-actions">
+            <button class="primary ys-button" data-variant="live" id="start-button" type="submit" disabled>Start recording</button>
+            <button class="secondary ys-button" id="start-back" type="button">Back</button>
           </div>
           </form>
 
@@ -685,7 +688,7 @@
         </div>
       </section>
 
-      <section class="screen" id="arming-screen" aria-labelledby="arming-title">
+      <section class="screen ys-capture-utility" id="arming-screen" aria-labelledby="arming-title">
         <p class="kicker">Nothing is recording yet</p>
         <h1 id="arming-title">Preparing audio.</h1>
         <p class="lede">Recording begins when the microphone and system audio are both ready.</p>
@@ -712,7 +715,7 @@
         </div>
       </section>
 
-      <section class="screen recording-screen" id="recording-screen" aria-labelledby="recording-title">
+      <section class="screen recording-screen ys-capture-utility" id="recording-screen" aria-labelledby="recording-title">
         <p class="kicker live"><span class="live-dot" aria-hidden="true"></span>Recording</p>
         <h1 id="recording-title"><time id="elapsed-time">00:00</time></h1>
         <p class="lede" id="capture-health">Microphone and system audio are both arriving.</p>
@@ -726,7 +729,7 @@
           <div id="mic-channel" data-state="unknown"><span class="channel-mark" aria-hidden="true"></span><strong>Microphone</strong><small id="mic-state">Unknown</small></div>
           <div id="system-channel" data-state="unknown"><span class="channel-mark" aria-hidden="true"></span><strong>System audio</strong><small id="system-state">Unknown</small></div>
         </div>
-        <p class="form-error" id="stop-error" role="alert" hidden></p>
+        <p class="form-error ys-inline-notice" data-tone="error" id="stop-error" role="alert" hidden></p>
 
         <div class="prototype-only prototype-scenario-controls compact" role="group" aria-label="Synthetic recording controls">
           <p><strong>Preview control</strong><span>Show how the app responds when one channel needs attention.</span></p>
@@ -754,7 +757,7 @@
         <p class="footnote">Stopping flushes both audio files before transcription begins.</p>
       </section>
 
-      <section class="screen" id="processing-screen" aria-labelledby="processing-title">
+      <section class="screen ys-capture-utility" id="processing-screen" aria-labelledby="processing-title">
         <p class="kicker">Recording stopped</p>
         <h1 id="processing-title">Making the transcript.</h1>
         <p class="lede">The local transcription model is processing both channels. Nothing is uploaded.</p>
@@ -765,9 +768,9 @@
           <li><span>4</span><strong>Review</strong><small>Waiting</small></li>
         </ol>
         <section class="processing-card" aria-label="Local processing status">
-          <div data-state="complete"><span aria-hidden="true">✓</span><div><strong>Recording secured</strong><small>Both local audio files were closed before transcription began.</small></div></div>
-          <div aria-current="step"><span class="processing-spinner" aria-hidden="true"></span><div><strong>Making the transcript</strong><small>The fixed offline model is working on this Mac.</small></div></div>
-          <div><span aria-hidden="true">3</span><div><strong>Retain the result</strong><small>The transcript will remain after recording audio reaches its deletion date.</small></div></div>
+          <div class="ys-progress-row" data-state="complete"><span aria-hidden="true">✓</span><div><strong>Recording secured</strong><small>Both local audio files were closed before transcription began.</small></div></div>
+          <div class="ys-progress-row" aria-current="step"><span class="processing-spinner" aria-hidden="true"></span><div><strong>Making the transcript</strong><small>The fixed offline model is working on this Mac.</small></div></div>
+          <div class="ys-progress-row"><span aria-hidden="true">3</span><div><strong>Retain the result</strong><small>The transcript will remain after recording audio reaches its deletion date.</small></div></div>
         </section>
         <p class="footnote">You may use the rest of the app while the transcript is prepared. The header keeps this progress available.</p>
         <div class="prototype-only prototype-scenario-controls" role="group" aria-label="Synthetic processing controls">
@@ -1119,8 +1122,8 @@
       </section>
 
       <section class="screen" id="meeting-detail-screen" aria-labelledby="meeting-detail-title">
-        <div class="meeting-split-view">
-          <aside class="meeting-context-pane" aria-label="Meeting list">
+        <div class="meeting-split-view ys-primary-split">
+          <aside class="meeting-context-pane ys-primary-list" aria-label="Meeting list">
             <div class="prototype-only context-utility-row">
               <strong>Meetings</strong>
               <button class="text-button meeting-detail-back" id="prototype-browse-all" type="button">View all</button>
@@ -1137,7 +1140,7 @@
             <div class="meeting-context-list" id="meeting-context-list" aria-live="polite"></div>
           </aside>
 
-          <div class="meeting-detail-content">
+          <div class="meeting-detail-content ys-record">
           <div class="prototype-only placeholder-boundary prominent" role="note">
           <strong>Synthetic preview</strong>
           <span>These three meetings are examples. This browser does not read or save meetings on your Mac.</span>
@@ -1156,12 +1159,12 @@
         </div>
         <p class="notice" id="meeting-detail-state" role="status" aria-live="polite">Opening this retained meeting…</p>
 
-        <nav class="meeting-tabs retained-meeting-tabs" aria-label="Meeting views" role="tablist">
-          <button id="retained-tab-note" type="button" data-retained-meeting-tab="note" role="tab" aria-selected="true" aria-controls="retained-panel-note">Note</button>
-          <button id="retained-tab-transcript" type="button" data-retained-meeting-tab="transcript" role="tab" aria-selected="false" aria-controls="retained-panel-transcript" tabindex="-1">Transcript</button>
-          <button id="retained-tab-actions" type="button" data-retained-meeting-tab="actions" role="tab" aria-selected="false" aria-controls="retained-panel-actions" tabindex="-1">Actions <span class="planned-tag">Partial</span></button>
-          <button id="retained-tab-evidence" type="button" data-retained-meeting-tab="evidence" role="tab" aria-selected="false" aria-controls="retained-panel-evidence" tabindex="-1">Evidence <span class="planned-tag">Partial</span></button>
-          <button id="retained-tab-details" type="button" data-retained-meeting-tab="details" role="tab" aria-selected="false" aria-controls="retained-panel-details" tabindex="-1">Details</button>
+        <nav class="meeting-tabs retained-meeting-tabs ys-tabs" aria-label="Meeting views" role="tablist">
+          <button class="ys-tab" id="retained-tab-note" type="button" data-retained-meeting-tab="note" role="tab" aria-selected="true" aria-controls="retained-panel-note">Note</button>
+          <button class="ys-tab" id="retained-tab-transcript" type="button" data-retained-meeting-tab="transcript" role="tab" aria-selected="false" aria-controls="retained-panel-transcript" tabindex="-1">Transcript</button>
+          <button class="ys-tab" id="retained-tab-actions" type="button" data-retained-meeting-tab="actions" role="tab" aria-selected="false" aria-controls="retained-panel-actions" tabindex="-1">Actions <span class="planned-tag">Partial</span></button>
+          <button class="ys-tab" id="retained-tab-evidence" type="button" data-retained-meeting-tab="evidence" role="tab" aria-selected="false" aria-controls="retained-panel-evidence" tabindex="-1">Evidence <span class="planned-tag">Partial</span></button>
+          <button class="ys-tab" id="retained-tab-details" type="button" data-retained-meeting-tab="details" role="tab" aria-selected="false" aria-controls="retained-panel-details" tabindex="-1">Details</button>
         </nav>
 
         <div class="meeting-tab-panel active" id="retained-panel-note" data-retained-meeting-panel="note" role="tabpanel" aria-labelledby="retained-tab-note">

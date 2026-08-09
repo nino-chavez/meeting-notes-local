@@ -97,6 +97,11 @@ test("foundations define adaptive appearance and accessibility modes once", () =
   assert.match(foundations, /data-transparency="reduce"/);
   assert.match(foundations, /prefers-reduced-transparency: reduce/);
   assert.match(foundations, /forced-colors: active/);
+  assert.match(
+    foundations,
+    /:where\([\s\S]*?\[tabindex\]:not\(\[tabindex="-1"\]\)[\s\S]*?\)\s*\{\s*outline: none;/,
+    "the control reset must stay lower-specificity than :focus-visible",
+  );
 });
 
 test("the initial component set and its state hooks are executable", () => {

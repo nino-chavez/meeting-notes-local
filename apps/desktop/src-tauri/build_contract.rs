@@ -27,18 +27,22 @@ pub const PREVIEW_FRONTEND: &str = "../ui";
 pub const PRODUCTION_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes";
 pub const PRODUCTION_WINDOW: &str = "main";
 pub const PRODUCTION_CAPABILITY: &str = "main-window";
+pub const SETTINGS_CAPABILITY: &str = "settings-window";
 pub const PRODUCTION_FRONTEND: &str = "../ui";
 
 const PRODUCTION_COMMANDS: &[&str] = &[
     "app_snapshot",
+    "open_settings_window",
     "start_meeting",
     "stop_meeting",
     "dismiss_meeting",
     "retry_startup",
+    "first_run_permissions",
 ];
 
 const PREVIEW_COMMANDS: &[&str] = &[
     "app_snapshot",
+    "open_settings_window",
     "start_meeting",
     "stop_meeting",
     "dismiss_meeting",
@@ -110,7 +114,7 @@ pub fn plan(mode: BuildMode) -> BuildPlan {
     match mode {
         BuildMode::Production => BuildPlan {
             commands: PRODUCTION_COMMANDS,
-            capabilities_path: "capabilities/main.json",
+            capabilities_path: "capabilities/product/*.json",
             permissions_path: "permissions/production/**/*",
         },
         BuildMode::Development => BuildPlan {
@@ -120,7 +124,7 @@ pub fn plan(mode: BuildMode) -> BuildPlan {
         },
         BuildMode::Preview => BuildPlan {
             commands: PREVIEW_COMMANDS,
-            capabilities_path: "capabilities/preview.json",
+            capabilities_path: "capabilities/product/*.json",
             permissions_path: "permissions/production/**/*",
         },
     }
@@ -155,9 +159,9 @@ fn is_preview_config(config: &Value) -> bool {
             PREVIEW_WINDOW,
             "Local Meeting Notes — Preview",
         )
-        && has_single_string(
+        && has_exact_strings(
             config.pointer("/app/security/capabilities"),
-            PREVIEW_CAPABILITY,
+            &[PREVIEW_CAPABILITY, SETTINGS_CAPABILITY],
         )
         && config.pointer("/bundle/active").and_then(Value::as_bool) == Some(true)
         && config.pointer("/bundle/resources") == Some(&production_resources())
@@ -179,9 +183,9 @@ fn is_production_config(config: &Value) -> bool {
             .and_then(Value::as_str)
             == Some(PRODUCTION_FRONTEND)
         && has_single_window(config.pointer("/app/windows"), PRODUCTION_WINDOW, "Yawn")
-        && has_single_string(
+        && has_exact_strings(
             config.pointer("/app/security/capabilities"),
-            PRODUCTION_CAPABILITY,
+            &[PRODUCTION_CAPABILITY, SETTINGS_CAPABILITY],
         )
         && config.pointer("/bundle/active").and_then(Value::as_bool) == Some(true)
         && config.pointer("/bundle/resources") == Some(&production_resources())
@@ -219,6 +223,16 @@ fn has_single_string(value: Option<&Value>, expected: &str) -> bool {
     value
         .and_then(Value::as_array)
         .is_some_and(|entries| entries.len() == 1 && entries[0].as_str() == Some(expected))
+}
+
+fn has_exact_strings(value: Option<&Value>, expected: &[&str]) -> bool {
+    value.and_then(Value::as_array).is_some_and(|entries| {
+        entries.len() == expected.len()
+            && entries
+                .iter()
+                .zip(expected)
+                .all(|(entry, expected)| entry.as_str() == Some(*expected))
+    })
 }
 
 fn production_resources() -> Value {

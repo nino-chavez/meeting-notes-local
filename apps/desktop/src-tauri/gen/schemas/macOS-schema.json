@@ -249,6 +249,12 @@
           "markdownDescription": "Enables the library_set_meeting_title command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-settings-window",
+          "markdownDescription": "Enables the open_settings_window command without any pre-configured scope."
+        },
+        {
           "description": "Enables the operator_note command without any pre-configured scope.",
           "type": "string",
           "const": "allow-operator-note",
@@ -463,6 +469,12 @@
           "type": "string",
           "const": "deny-library-set-meeting-title",
           "markdownDescription": "Denies the library_set_meeting_title command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-settings-window",
+          "markdownDescription": "Denies the open_settings_window command without any pre-configured scope."
         },
         {
           "description": "Denies the operator_note command without any pre-configured scope.",

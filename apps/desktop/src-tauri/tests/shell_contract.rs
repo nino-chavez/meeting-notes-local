@@ -100,7 +100,7 @@ fn transcript_only_fallback_requires_a_current_transcript_handle() {
 #[test]
 fn main_window_has_only_named_commands_and_no_generic_capability() {
     let capability: Value =
-        serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
+        serde_json::from_str(include_str!("../capabilities/product/main.json")).unwrap();
     assert_eq!(capability["windows"], serde_json::json!(["main"]));
     // The shipped internal-alpha surface: the same reviewed command set the
     // Preview window carries, decided 2026-08-04 after the 0.2.0 cohort DMG
@@ -114,6 +114,7 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
         capability["permissions"],
         serde_json::json!([
             "allow-app-snapshot",
+            "allow-open-settings-window",
             "allow-start-meeting",
             "allow-stop-meeting",
             "allow-dismiss-meeting",
@@ -197,8 +198,8 @@ fn shipped_shell_is_permitted_every_command_it_invokes() {
         "the shipped shell no longer reaches Start recording at all"
     );
     for (name, source) in [
-        ("main", include_str!("../capabilities/main.json")),
-        ("preview", include_str!("../capabilities/preview.json")),
+        ("main", include_str!("../capabilities/product/main.json")),
+        ("preview", include_str!("../capabilities/product/preview.json")),
     ] {
         let capability: Value = serde_json::from_str(source).unwrap();
         let permissions: Vec<String> = capability["permissions"]
@@ -223,7 +224,7 @@ fn shipped_shell_is_permitted_every_command_it_invokes() {
 fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
     let preview: Value = serde_json::from_str(include_str!("../tauri.preview.conf.json")).unwrap();
     let capability: Value =
-        serde_json::from_str(include_str!("../capabilities/preview.json")).unwrap();
+        serde_json::from_str(include_str!("../capabilities/product/preview.json")).unwrap();
     let production: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
     let package: Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
 
@@ -245,7 +246,7 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
     assert_eq!(preview["app"]["windows"][0]["resizable"], true);
     assert_eq!(
         preview["app"]["security"]["capabilities"],
-        serde_json::json!(["preview-window"])
+        serde_json::json!(["preview-window", "settings-window"])
     );
     assert_eq!(
         preview["bundle"]["resources"],
@@ -315,6 +316,7 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
         capability["permissions"],
         serde_json::json!([
             "allow-app-snapshot",
+            "allow-open-settings-window",
             "allow-start-meeting",
             "allow-stop-meeting",
             "allow-dismiss-meeting",
@@ -524,7 +526,10 @@ fn product_operation_facade_uses_top_level_frozen_ui_arguments() {
 fn bundled_shell_uses_restrictive_local_csp() {
     let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
     let security = &config["app"]["security"];
-    assert_eq!(security["capabilities"], serde_json::json!(["main-window"]));
+    assert_eq!(
+        security["capabilities"],
+        serde_json::json!(["main-window", "settings-window"])
+    );
     assert_eq!(security["freezePrototype"], true);
     let csp = security["csp"].as_str().unwrap();
     assert!(csp.contains("default-src 'self'"));
@@ -1009,7 +1014,10 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     // Globbed rather than named, so a new shell test file runs by existing.
     // Widened 2026-08-07 when the reference check was added: a suite that lists
     // one file by name silently stops covering everything written after it.
-    assert_eq!(package["scripts"]["test:ui"], "node --test ui/*.test.mjs");
+    assert_eq!(
+        package["scripts"]["test:ui"],
+        "node --test ui/*.test.mjs ui/system/*.test.mjs ui/reference-surfaces/*.test.mjs settings-reference/*.test.mjs"
+    );
     assert!(html.contains("id=\"new-meeting\" type=\"button\">Return to Find"));
     // Copy is offered above each transcript, never only after it, and the
     // copied text keeps withheld turns rather than handing over a transcript
