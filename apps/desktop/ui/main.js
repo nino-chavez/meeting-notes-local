@@ -318,20 +318,38 @@ function showScreen(id, { resetScroll = false, focus = true } = {}) {
   productRootScreen = rootForDestination(id, productRootScreen);
   document.documentElement.dataset.screen = id;
   for (const [screenId, screen] of screens) {
-    screen.classList.toggle("active", screenId === id);
+    const active = screenId === id;
+    screen.classList.toggle("active", active);
+    // CSS-only route visibility left a visibly restored selected meeting out of
+    // the installed WKWebView accessibility tree after Consent → Back. Keep the
+    // DOM visibility state semantic so visual and assistive routes change together.
+    screen.hidden = !active;
   }
+  // WebKit retains the selected-meeting accessibility subtree when its route is
+  // already active, but can lose it after that screen was hidden for Consent.
+  // Moving the existing node (not cloning it) refreshes that native tree while
+  // preserving listeners, IDs, form state, and the screen registry.
+  if (routeChanged) destination.parentElement?.append(destination);
   if (resetScroll) screenScrollPositions.delete(id);
   mainRegion.scrollTop = restoredScrollPosition(screenScrollPositions.get(id), resetScroll);
   syncProductNavigation();
   if (lastSnapshot) renderCaptureAction(lastSnapshot);
   if ((routeChanged || resetScroll) && focus) {
-    const heading = destination.querySelector("h1, h2");
-    if (heading) {
-      heading.tabIndex = -1;
-      heading.focus({ preventScroll: true });
-    } else {
-      mainRegion.focus({ preventScroll: true });
-    }
+    const focusDestination = () => {
+      if (currentScreen !== id || destination.hidden) return;
+      const heading = destination.querySelector("h1, h2");
+      if (heading) {
+        heading.tabIndex = -1;
+        heading.focus({ preventScroll: true });
+      } else {
+        mainRegion.focus({ preventScroll: true });
+      }
+    };
+    focusDestination();
+    // WKWebView can retain a CSS-visible route outside its accessibility tree
+    // when focus moves in the same task that restores it. Reapply focus after
+    // layout, but only while this route still owns the destination.
+    window.requestAnimationFrame(focusDestination);
   }
 }
 

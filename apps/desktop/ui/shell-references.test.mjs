@@ -514,3 +514,16 @@ test("keyboard structure and visual state do not borrow the live-recording accen
     assert.doesNotMatch(rule, /var\(--accent\)/);
   }
 });
+
+test("screen changes keep the installed accessibility tree aligned with the visible route", () => {
+  const source = readFileSync(join(here, "main.js"), "utf8");
+
+  // DHR-004: WKWebView retained CSS-visible selected-meeting content outside
+  // its accessibility tree after Consent → Back. `hidden` is the semantic
+  // visibility boundary; the active class remains solely for layout.
+  assert.match(source, /const active = screenId === id;/);
+  assert.match(source, /screen\.classList\.toggle\("active", active\);/);
+  assert.match(source, /screen\.hidden = !active;/);
+  assert.match(source, /if \(routeChanged\) destination\.parentElement\?\.append\(destination\);/);
+  assert.match(source, /window\.requestAnimationFrame\(focusDestination\);/);
+});
