@@ -103,10 +103,26 @@ the host and Settings windows. It has no product runtime resources.
 The source and deterministic tests prove configuration isolation, menu and window
 intent, stable pane logic, system-derived appearance CSS, and the absence of product
 permissions. A successful `.app` build and code-signature check prove an installable
-native bundle was produced. They do not prove what the window looked like or how it
-behaved on screen.
+native bundle was produced.
 
-The 2026-08-09 native inspection attempt was blocked before the accessibility tree or
-a screenshot was available: **“The Mac is locked and automatic unlock could not
-unlock it.”** Do not replace that missing installed-window evidence with a browser
-render or source inspection.
+The first 2026-08-09 native inspection attempt stopped before the accessibility tree
+or a screenshot was available because the Mac was locked. A later installed-app retry
+cleared that blocker and verified these behaviors in the Tauri window:
+
+- the App menu exposes **Settings…**, and Command–Comma opens the auxiliary window;
+- the Settings window captures at exactly 720×560 pixels, exposes a native close
+  button, disables zoom, and does not expose a minimize control;
+- repeated Settings activation returns to the existing window;
+- clicking panes and using Right, Home, and End updates the selected tab, pane, and
+  native window title in the stable seven-pane sequence;
+- native close returns to the untouched host window, and reopening restores the most
+  recently selected pane;
+- system Light and Dark appearances both render, after which the Mac was restored to
+  its original Dark appearance;
+- Capture exposes the Device, Permission, and Recording behavior groups to the macOS
+  accessibility tree, follows the expected control tab order, and updates its local
+  reference toggle without requesting a product permission.
+
+The retry did not run spoken VoiceOver review, reduced motion, increased contrast,
+reduced transparency, 200% webview zoom, or multi-display focus checks. Those remain
+DS-4 installed-app acceptance gates; source inspection is not a substitute.
