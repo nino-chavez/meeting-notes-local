@@ -5,7 +5,7 @@ breaks the parity feature set into epics, epics into stories, and stories into
 acceptance criteria a person can build against and a machine can be checked against.
 
 ```
-product-definition.md   what the product is, the ten features, the non-goals
+product-definition.md   what the product is, the 28 Phase 1 features, the non-goals
 vertical-slice.md       what gets built next  <- Build queue owns ORDER and STATUS
 backlog.md              this file — how each feature decomposes, and what proves it
 screens-and-states.md   what each surface must and must not do
@@ -23,7 +23,7 @@ product's shape is decided.
 
 **On the missing PRD.** A separate PRD is deliberately not created.
 `product-definition.md` already does that job — what the product is, who the reader
-is, the ten features with their research grounding, and the non-goals with equal
+is, the 28 Phase 1 features with their research grounding, and the non-goals with equal
 authority. Minting a third document that also looks authoritative would add to the
 confusion this layer exists to reduce. If a single artifact named "BRD/PRD" is ever
 needed for an outside reader, the honest move is to concatenate these two, not to
@@ -97,8 +97,8 @@ using.
 ## 5. Epic catalog
 
 **Rewritten 2026-08-07 for category parity.** The previous catalog had twelve epics
-covering ten features. The north star is now 26 Phase 1 features
-(`product-definition.md`), so seven epics are new and the existing twelve keep their
+covering ten features. The north star is now 28 Phase 1 features
+(`product-definition.md`), so nine epics are new and the existing twelve keep their
 identifiers — renumbering would break every citation in this file and in the queue
 for no gain.
 
@@ -128,14 +128,21 @@ inference is what went wrong before.
 | **E16** | **Note shape: templates, auto-titling, enhanced summary** | **B2 B3 B4** | 2 | **US-16.1 landed 2026-08-07**; US-16.2 measured 2026-08-08 and **closed for this model** at 5/10 against a registered 6–9; B2 B3 undecomposed until Wave 2 |
 | **E17** | **Action items with owner and status** | **C1** | — | Wave 2 item 9 |
 | **E18** | **Named speakers** | **A3** | — | Wave 3 items 11–12 |
-| **E19** | **Long-form ASR at meeting length** | **A4 A5** | — | Wave 3 item 13 |
+| **E19** | **Meeting-length transcription and imported audio** | **A4 A5 A6** | — | Wave 3 items 13–14 |
 | **E20** | **Phase 2: calendar, directory, sync, push, workspaces** | **P1–P6** | — | Wave 4 |
+| **E21** | **Per-speaker meeting statistics** | **E7** | — | Wave 3 item 15; definitions and fixtures precede the surface |
 
 **Read the dependency, not the numbering.** E13 is upstream of E14, E15, E17 and the
 useful half of E7 — a corpus store is what makes organisation, cross-meeting
 questions and a commitment view possible at all. That single edge is why Wave 1 leads
 with it and why E7 shipped four stories of exact file search that will not survive a
 real corpus.
+
+E19 keeps capture and import on one transcription contract. A4 proves
+meeting-length processing before A6 adds another source. E21 waits on A3 for names
+and on explicit definitions of a turn, overlap, silence and the percentage
+denominator. Neither epic gets speculative stories before its queue position is
+active.
 
 **E7 is misnamed and the name is the finding.** It is exact search over transcripts
 and metadata. The category's headline — ask a question across every conversation and

@@ -120,7 +120,7 @@ exists. **Research** = mechanism not yet chosen.
 | A3 | **Named speakers**, not Me/Them | Wispr ships it; Granola/Otter name speakers | **Unbuilt** — was a non-goal, overturned |
 | A4 | Long-form ASR: chunked streaming, VAD, timestamp stitching at meeting length | category baseline | **Partial** — dictation-shaped loop, `teardown.md § What is genuinely new` calls this a rewrite |
 | A5 | Two-clock drift correction between mic and system legs | own measurement | **Shipped** as detection; correction **Unbuilt** |
-| A6 | Import existing audio — after-the-fact file upload, watched-folder ingest | Speakr ships both (upload endpoints in `src/api/recordings.py`, watched-folder importer in `src/file_monitor.py`; verified in source 2026-08-09) | **Unbuilt** — appeared in no prior planning doc; added 2026-08-09 as a definition gap found by the Speakr harvest |
+| A6 | Import existing audio — file selection and watched-folder ingest | Speakr ships upload and watched-folder paths through shared transcription settings; `teardown.md § Speakr proves several product patterns` | **Unbuilt** — appeared in no prior planning doc. A4 gates meeting-length import; this is another source for one local ingestion contract, not a second transcription path |
 
 **A3 is the reversal that matters.** The old non-goal said names require a bot, UI
 scraping or an extension, so Me/Them was "the honest ceiling of local audio." That
@@ -130,6 +130,12 @@ inference over address terms, and one-click human correction propagated across t
 transcript. Locally we can build the roster leg, the enrollment leg, and the
 correction leg today; the meeting-window leg is Phase 2 because it needs an
 accessibility grant, and the directory leg is Phase 2 because it needs OAuth.
+
+**A6 follows A4.** Every imported recording must become an immutable local source
+with its source kind and digest, then use the same transcription contract as a
+capture. A failed import or transcription carries a typed cause and only the
+recovery action that can work. That processing failure is not B6: B6 describes an
+incomplete note that cannot support a claim about what was never captured.
 
 ### B. The note
 
@@ -183,7 +189,7 @@ four stories of exact search plus one unproven story for the actual headline.
 | E4 | A shell that never lies at menubar size | own | **Shipped** |
 | E5 | Retention with named auto-deletion periods | Granola enterprise vocabulary | **Shipped** automatic; periods **Unbuilt** |
 | E6 | Local store and retrieval at corpus scale | `teardown.md` names SQLite | **Partial** — the derived SQLite index landed 2026-08-07 and is written whenever the library is opened. Meaning search now reads its prepared windows. The ordinary library and filter path still builds the full projection first, so US-13.6 remains the work that removes the scan as the entry point |
-| E7 | Per-speaker stats on a meeting — talk time, share, turns, words per minute | Speakr ships a per-recording stats tab (`templates/components/detail/desktop-stats-tab.html`, verified in source 2026-08-09) | **Unbuilt** — added 2026-08-09 from the Speakr harvest. A Me/Them version is buildable today; names wait on A3 |
+| E7 | Per-speaker stats on a meeting — talk time, share, turns, words per minute | Speakr ships a per-recording stats tab; `teardown.md § Speakr proves several product patterns` | **Research** — the surface exists, but its formulas do not define overlap, silence and turns consistently. Yawn needs those definitions and fixtures; names wait on A3 |
 
 ---
 
@@ -217,12 +223,12 @@ Not gates on scope. Both are the reasons to use this instead of Granola.
   Re-tested 2026-08-06 against a shipped Wispr binary: its meeting detail is six
   sibling tabs and a searchable transcript drawer, and an enumeration of its 411
   `hub_*` interface keys finds no key naming a jump from a claim to its source turn.
-  Adjacency is not citation. Re-verified 2026-08-09 against Speakr, the category's
-  open-source flank (3,605 stars, actively maintained, cloned at commit `074c490`):
-  a grep for citation or jump-to-transcript machinery across its UI and render
-  layer returns zero files, and its summaries render as markdown with no anchor
-  back to a transcript turn. Open source ships the same absence the commercial
-  products do.
+  Adjacency is not citation. Re-verified 2026-08-09 against Speakr at commit
+  `074c490`: `src/models/recording.py` stores transcription and summary as text,
+  and `templates/components/detail/desktop-summary-tab.html` renders the summary
+  without a typed claim-to-turn link. A bounded search across its source, UI and
+  tests found no citation or jump-to-transcript contract. A generated timestamp
+  inside markdown would still be model text, not a resolvable citation.
 - **Nothing leaves the Mac without the operator seeing it leave.** Phase 1 has no
   network path for meeting content. Phase 2 adds paths that are visible and
   refusable per destination.
@@ -267,7 +273,7 @@ re-fetched, so those claims age from those dates, not from this file's. The
 colleague survey remains n=2 and decides nothing.
 
 Checked 2026-08-09: Speakr (`github.com/murtaza-nasir/speakr`, commit `074c490`)
-cloned and read in source for the parity harvest. Rows A6 and E7 and the
-evidence-invariant re-verification carry that date; each claim above names the
-file it was verified against. Speakr is AGPL-3.0 — mechanisms were studied and
-no code was copied.
+was cloned and read for the source audit now owned by `teardown.md`. Rows A6 and
+E7 and the evidence-invariant re-verification carry that date. Speakr is offered
+under AGPL-3.0 or a separate commercial license. Yawn remains MIT; this audit
+uses mechanisms and test ideas only, with no copied code, prompt or UI text.

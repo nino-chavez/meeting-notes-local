@@ -476,6 +476,91 @@ audio.
   local ASR.
 - **Recall.ai's `cliff-notetaker`** — reference Electron app; useful as an
   architecture map even though it depends on their hosted API.
+- **Speakr** (`murtaza-nasir/speakr`) — a self-hosted web application under
+  AGPL-3.0, audited at commit `074c490` on 2026-08-09. It is useful evidence for
+  import, correction, long-recording recovery and failure UX. It is not a code
+  base for this MIT project.
+
+#### Speakr proves several product patterns, not an implementation
+
+The source was read at one pinned revision. Claims below describe that revision,
+not the project in general and not a running deployment.
+
+**Import should have one ingestion seam.** Speakr's watched-folder path waits for
+a stable file, claims it with a rename, and then uses the same transcription
+settings resolver as an ordinary upload (`src/file_monitor.py:202-251,285-307,
+519-534`). Yawn should carry the shared contract, not the server implementation:
+every capture, selected file or watched file becomes an immutable local source
+with a source kind and digest, then enters the same transcription path. A6 waits
+on A4 because meeting-length import is not useful while meeting-length ASR is
+still partial.
+
+**Speaker correction needs two explicit scopes.** Speakr stages a one-segment
+speaker reassignment after an older save path silently changed every segment
+with the same label (`static/js/modules/composables/speakers.js:1199-1223`). That
+failure is the useful evidence. Yawn needs separate actions for renaming one
+identity everywhere and correcting one turn. Candidate scores may support a
+human choice, but Speakr's 256-dimensional thresholds, five-point ambiguity
+margin and 30/70 moving average are not transferable to Yawn's encoder
+(`src/services/speaker_embedding_matcher.py:116-172,260-339`). An automatic
+match must not update a saved profile until the operator confirms it.
+
+**Long-form audio contributes tests, not a chunking algorithm.** Speakr's chunk
+creator says it makes overlaps, but the configured overlap is only logged; the
+step is derived from duration and chunk count (`src/audio_chunking.py:525-624`).
+Its diarized merge then assigns new speaker IDs to every later chunk even though
+the caller passes first-chunk speaker references (`src/tasks/processing.py:
+1375-1505,1508-1695`). Those two paths do not establish speaker continuity.
+The stronger prior art is its resumed-recording stitcher: it distinguishes
+fragments from independently valid segments, assembles each at the right level,
+remuxes, and probes the final duration (`src/services/recording_stitch.py:1-35`).
+Yawn's A4 tests should prove duration preservation, no dropped or duplicated
+seam words, retained speaker identity, and recovery of partial capture.
+
+**A meeting preset needs fields with named precedence.** Speakr mostly selects
+the first available summary instruction: per-run replacement, then tag, folder,
+user, administrator and fallback. Multiple tag prompts concatenate, and per-run
+context can append before variable substitution (`src/tasks/processing.py:
+618-729`). That is precedence with two composition exceptions, not a fully
+layered template. Its retention service also ignores retention fields present on
+folders (`src/services/retention.py:19-75`). B3 should keep note shape,
+transcription hints, retention and export as separate fields, with the winning
+source recorded for each. Tags remain classification, not hidden deletion
+policy.
+
+**Visible search phases transfer; query enrichment does not.** Speakr reports
+routing, enrichment, search and answer phases, but enrichment itself calls an
+LLM and merges raw similarity results from the generated queries
+(`src/api/inquire.py:230-405`). It is not a generator-free retrieval technique.
+Yawn can show the phases it actually performs — interpret, search, apply the
+measured floor, assemble evidence — without adopting Speakr's router or answer
+generator. Speakr stores and renders summaries as text, not typed links from a
+claim to a transcript turn.
+
+**Typed processing failures are reusable as a contract.** Speakr separates a
+failure category, operator message, recovery guidance and technical detail
+(`src/utils/error_formatting.py:13-159,217-308`) and lets the transcription panel
+offer the valid next action. Yawn already names capture and startup failures,
+but transcription failure still needs the same typed envelope and a visible
+reprocess or re-import action. This belongs to processing and shell truth. It is
+not B6's distinction between missing evidence and evidence that a speaker never
+said something.
+
+**Calendar extraction and statistics prove surfaces only.** Speakr's event model
+does not carry task owner, task status or transcript evidence, and its ICS export
+invents a one-hour end and placeholder attendee email addresses
+(`src/models/events.py:13-43`, `src/services/calendar.py:10-85`). It is not a C1
+task-list reference. Its statistics tab proves that users can be shown talk
+time, share, turns, words and silence, but the headline counts segments as turns
+while each speaker's turns count speaker changes
+(`static/js/app.modular.js:1439-1547`). Overlap and silence have no focused test.
+E7 therefore needs Yawn-owned definitions before it needs a surface.
+
+**License boundary.** Speakr is offered under AGPL-3.0 or a separate commercial
+license. AGPL permits use, modification and distribution under its terms; it is
+not an absolute ban on copying. Yawn's current MIT posture makes clean-room reuse
+of mechanisms and test ideas the practical boundary unless the project makes a
+separate licensing decision. No Speakr code, prompts or UI text enter this repo.
 
 ---
 
@@ -507,9 +592,13 @@ argument that someone else has already worked out the right shape.
 
 ---
 
-## Recommendation
+## Recommendation — amended after the product rebaseline
 
-Build the core; don't build the attribution.
+The 2026-07-28 recommendation was: build the core; do not build attribution.
+The operator expanded the product to category parity on 2026-08-07. What survives
+from the original recommendation is dependency order, not the old Me/Them ceiling.
+`product-definition.md` owns the current scope and `vertical-slice.md` owns its
+order.
 
 The high-value, low-risk slice is a direct extension of `local-dictation`:
 Core Audio tap helper → dual-stream chunked MLX Whisper → Me/Them transcript →
@@ -533,24 +622,18 @@ zero inference on the device. Every commercial notetaker examined here now needs
 the network to produce a word of text, and one of them cannot set a retention
 policy without cloud sync. The gap this project sits in is not closing.
 
-Named speaker attribution is where the effort curve turns vertical, and it is
-the one thing you cannot solve locally without either UI scraping or voice
-enrollment. Accept Me/Them, or fork anarlog, which has already paid the
-Swift/Tauri plumbing cost.
+Named speaker attribution is still where the effort curve rises. Local names need
+a roster plus voice enrollment; meeting-window and directory signals add
+Accessibility and OAuth. That dependency is why the current queue puts names in
+Wave 3 after the corpus, note and commitment work. It is not a reason to exclude
+the feature.
 
-**The transferable part of Wispr's fourth path is the repair, not the names.** Their
-correction surface exists to fix *named* speakers, which `product-definition.md` rules
-out as a non-goal and which their own implementation reaches only through UI scraping
-and a cloud directory grant — so the feature does not transfer and is not proposed
-here.
-
-What transfers is the shape underneath it: a machine decision the operator can
-overrule in one action, applied across the whole artifact rather than one turn at a
-time. This product has exactly one such decision — the voiceprint gate's Me/Not-me
-call — and it already keeps every gated turn with its score in `transcript.json`
-precisely so that call can be overruled (J4, feature 6). Restoration is Registered and
-reachable from 0.4.0; *apply this correction everywhere* is not. That is the borrowable
-idea, and it costs no model and no new permission.
+**The transferable correction has two scopes.** Renaming an identity changes every
+turn assigned to that identity. Reassigning one mistaken turn changes only that
+turn. Wispr established the global repair pattern; Speakr's source records the
+failure caused by using a global map for a local correction. Current A3 keeps both
+actions explicit. The existing Me/Not-me restoration remains a separate B7 repair
+for evidence withheld by the voiceprint gate.
 
 ---
 
@@ -682,6 +765,8 @@ machinery is built for.
 - https://developers.google.com/workspace/meet/media-api/guides/overview
 - https://github.com/FluidInference/FluidAudio
 - https://github.com/fastrepl/anarlog
+- https://github.com/murtaza-nasir/speakr/tree/074c490d0eb293535b78f1580ccf75f5989fc859 — source audit pinned 2026-08-09
+- https://github.com/murtaza-nasir/speakr/blob/074c490d0eb293535b78f1580ccf75f5989fc859/README.md#L365-L383 — AGPL-3.0 or commercial license
 - https://meetily.ai/
 - https://wisprflow.ai/notetaker — fetched 2026-08-06
 - Wispr Flow 1.6.399 application bundle, `/Applications/Wispr Flow.app`, installed
