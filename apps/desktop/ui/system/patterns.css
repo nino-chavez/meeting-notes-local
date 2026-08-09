@@ -1,0 +1,204 @@
+/* Window-role patterns. These are reference contracts, not production routes. */
+
+.ys-window {
+  overflow: hidden;
+  border: var(--ys-border-width) solid var(--ys-border-strong);
+  border-radius: var(--ys-radius-lg);
+  background: var(--ys-surface-window);
+  color: var(--ys-ink);
+}
+
+.ys-window[data-role="primary"] {
+  min-block-size: 31rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.ys-primary-split {
+  min-block-size: 0;
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.7fr) minmax(12rem, 1fr) minmax(22rem, 2.2fr);
+}
+
+.ys-primary-sidebar,
+.ys-primary-list,
+.ys-record {
+  min-inline-size: 0;
+  min-block-size: 0;
+}
+
+.ys-primary-sidebar {
+  padding: var(--ys-space-5);
+  border-inline-end: var(--ys-border-width) solid var(--ys-border);
+  background: var(--ys-surface-navigation);
+}
+
+.ys-primary-list {
+  padding: var(--ys-space-5);
+  border-inline-end: var(--ys-border-width) solid var(--ys-border);
+  background: var(--ys-surface-list);
+}
+
+.ys-pane-heading {
+  margin: 0 0 var(--ys-space-4);
+  padding-inline: var(--ys-space-3);
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ys-record {
+  padding: clamp(1.5rem, 4vw, 3rem);
+  background: var(--ys-surface-content);
+}
+
+.ys-record__measure {
+  max-inline-size: 44rem;
+  margin-inline: auto;
+}
+
+.ys-record__meta {
+  margin: 0 0 var(--ys-space-4);
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.ys-record__body {
+  margin-block-start: var(--ys-space-7);
+  font-size: var(--ys-type-body);
+}
+
+.ys-window[data-role="settings"] {
+  inline-size: min(42rem, 100%);
+  margin-inline: auto;
+  background: var(--ys-surface-window);
+}
+
+.ys-settings-toolbar {
+  display: flex;
+  justify-content: center;
+  gap: var(--ys-space-2);
+  padding: var(--ys-space-5);
+  border-block-end: var(--ys-border-width) solid var(--ys-border);
+  background: var(--ys-surface-navigation);
+}
+
+.ys-settings-pane {
+  display: grid;
+  gap: var(--ys-space-6);
+  padding: var(--ys-space-8);
+}
+
+.ys-settings-pane > header h2 {
+  margin: 0;
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-section);
+}
+
+.ys-settings-pane > header p {
+  margin: var(--ys-space-2) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-ui);
+}
+
+.ys-capture-utility {
+  inline-size: min(34rem, 100%);
+  margin-inline: auto;
+  padding: var(--ys-space-8);
+  border: var(--ys-border-width) solid var(--ys-border-strong);
+  border-radius: var(--ys-radius-lg);
+  background: var(--ys-surface-content);
+}
+
+.ys-capture-utility__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ys-space-6);
+  margin-block-end: var(--ys-space-6);
+}
+
+.ys-capture-utility__header h2 {
+  margin: 0;
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-section);
+}
+
+.ys-capture-utility__body {
+  display: grid;
+  gap: var(--ys-space-6);
+}
+
+.ys-capture-utility__body p {
+  margin: 0;
+  font-size: var(--ys-type-body);
+}
+
+.ys-meter {
+  block-size: 0.5rem;
+  overflow: hidden;
+  border-radius: var(--ys-radius-pill);
+  background: var(--ys-surface-navigation);
+}
+
+.ys-meter__value {
+  inline-size: 62%;
+  block-size: 100%;
+  background: var(--ys-live);
+}
+
+.ys-transient-stage {
+  min-block-size: 20rem;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: var(--ys-space-8);
+  border: var(--ys-border-width) solid var(--ys-border);
+  border-radius: var(--ys-radius-lg);
+  background: var(--ys-surface-list);
+}
+
+.ys-transient-context {
+  inline-size: min(32rem, 100%);
+  padding: var(--ys-space-7);
+  border: var(--ys-border-width) solid var(--ys-border);
+  border-radius: var(--ys-radius-lg);
+  background: var(--ys-surface-content);
+}
+
+.ys-transient-popover {
+  position: absolute;
+  inset-block-start: var(--ys-space-7);
+  inset-inline-end: var(--ys-space-7);
+}
+
+@media (max-width: 760px) {
+  .ys-primary-split {
+    grid-template-columns: 5.75rem minmax(10rem, 0.8fr) minmax(19rem, 1.5fr);
+  }
+
+  .ys-sidebar-row {
+    justify-content: center;
+  }
+
+  .ys-primary-sidebar .ys-row-copy {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+}
+
+@media (max-width: 560px) {
+  .ys-window[data-role="primary"] {
+    overflow: auto;
+  }
+
+  .ys-primary-split {
+    min-inline-size: 41rem;
+  }
+}

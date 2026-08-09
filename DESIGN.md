@@ -39,11 +39,11 @@ colors:
 
 typography:
   ui:
-    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
   record:
     fontFamily: "Iowan Old Style, Palatino Linotype, Book Antiqua, Palatino, Georgia, serif"
   mono:
-    fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace"
+    fontFamily: "'SF Mono', Menlo, ui-monospace, monospace"
   step-xs:
     fontSize: "11px"
   step-sm:
@@ -129,6 +129,10 @@ finished Mac app. Native calibration uses 15px for primary reading text and
 metadata, not product-state taxonomy. The meeting title may reach 34–36px. A
 serif title can signal "you are reading the record"; serif workflow chrome
 remains a contract violation.
+Apple's accessibility guidance gives custom macOS type a 13pt default and 10pt
+minimum. The 11px token is therefore metadata-only and never carries a control,
+instruction, or product-state distinction. The system stack comes before any
+bundled face so chrome follows the operator's Mac before it expresses Yawn.
 
 ## Form
 
@@ -140,6 +144,9 @@ remains a contract violation.
 - **Control shape names the job.** Underlined text tabs change views within one
   meeting. A compact segmented control filters one collection. Buttons perform
   actions. These roles do not borrow one another's selected state.
+- **Desktop controls default to 28×28pt or larger.** Apple's 20×20pt macOS
+  minimum is reserved for constrained, noncritical controls. Primary capture,
+  consent, recovery, and destructive actions never use the minimum.
 - **No ambient motion.** No pulse, breath, shimmer, or looping gradient. The
   audio level meter is the sole exception, and only because it moves as a
   reading of arriving audio rather than as decoration.
@@ -198,7 +205,7 @@ surfaces share foundations and components; they do not share a universal layout.
 |---|---|---|---|
 | Primary application window | Meetings, Ask, Actions | Native frame and toolbar; sidebar or split view where hierarchy requires it; flexible resizing | A centered responsive webpage inside a large canvas |
 | Meeting record | Note, Transcript, Actions, Evidence, Details | Calm reading measure, progressive disclosure, restrained record typography | The visual model for Settings or capture |
-| Auxiliary settings window | Capture, Privacy, Connections, Voice profile, Desktop behavior, Shortcuts, About | Bounded settings window, stable pane navigation, grouped controls, native close and keyboard behavior | A primary destination, modal web page, or long report |
+| Auxiliary settings window | Capture, Privacy, Connections, Voice profile, Desktop behavior, Shortcuts, About | Bounded settings window, stable noncustomizable pane toolbar, pane-specific title and size, restored pane, native close and keyboard behavior | A primary destination, modal web page, or long report |
 | Capture utility | Consent, arming, recording, degradation, processing handoff | Compact operational hierarchy, unmistakable state, no unrelated navigation | A document, dashboard, or blocking modal for recoverable degradation |
 | Transient layer | Menus, popovers, destructive confirmation, command launcher | One temporary task above retained context | Permanent navigation or decorative elevation |
 

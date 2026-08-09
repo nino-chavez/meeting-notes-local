@@ -1,7 +1,7 @@
 # Desktop design-system rebaseline — execution handoff
 
-**Status:** active interim plan  
-**Opened:** 2026-08-09  
+**Status:** active interim plan
+**Opened:** 2026-08-09
 **Retire when:** the three installed reference surfaces pass the acceptance matrix,
 the shared components own production use, and the migration ledger is empty.
 
@@ -38,12 +38,14 @@ screen-specific CSS. Those are system defects. More token tuning cannot close th
 
 Use the sources in this order when they disagree:
 
-1. Product behavior and safety: `product-definition.md`, `docs/screens-and-states.md`,
-   `docs/journeys.md`, and executable state tests.
-2. Art direction: `DIRECTION.md` and its ledger.
-3. Design-system decisions: `DESIGN.md`.
-4. This execution plan.
-5. Prior screenshots, comparison notes, and prototype modes.
+1. Product scope and behavior: `product-definition.md`.
+2. Admitted executable behavior: current state reducers and their tests.
+3. Surface and journey detail: `docs/screens-and-states.md` and
+   `docs/journeys.md`, subject to later product-definition amendments.
+4. Art direction: `DIRECTION.md` and its ledger.
+5. Design-system decisions: `DESIGN.md`.
+6. This execution plan.
+7. Prior screenshots, comparison notes, and prototype modes.
 
 Apple's Human Interface Guidelines set the behavior floor:
 
@@ -55,9 +57,10 @@ Apple's Human Interface Guidelines set the behavior floor:
 
 Comparator evidence supplies patterns, not authority. Use Wispr for containment,
 control density, hierarchy, and transient layering. Use Granola for the meeting as
-the organizing object, source inspection, and retrieval. Do not import cloud,
-sharing, calendar, generated-summary, or account assumptions that violate Yawn's
-product boundary.
+the organizing object, source inspection, and retrieval. Cloud, sharing, calendar,
+generated-summary, and account capabilities must not appear current or authorized in
+the DS-1 specimen. Some remain possible Phase 2 directions, but their visible,
+refusable egress and product contracts are outside this package.
 
 ## The system to build
 
@@ -67,7 +70,7 @@ product boundary.
 |---|---|---|
 | Primary application window | Library plus selected meeting | Native frame and toolbar, resizable split view, persistent context, remembered size and selection |
 | Meeting record | Selected meeting Note and Transcript | Reading measure, progressive disclosure, restrained record type, evidence one action away |
-| Auxiliary settings window | Capture pane | App-menu entry, Command–Comma, stable panes, most recent pane restored, bounded size, native close behavior |
+| Auxiliary settings window | Capture pane | App-menu entry, Command–Comma, stable noncustomizable pane toolbar, active-pane title, most recent pane restored, pane-specific size, dimmed minimize and maximize controls, native close behavior |
 | Capture utility | Consent through active capture | Compact hierarchy, unmistakable state, continued operation through recoverable degradation, no unrelated navigation |
 | Transient layer | Command menu and destructive confirmation | Temporary task, retained context, focus return, Escape dismissal where safe |
 
@@ -85,6 +88,9 @@ Define once and exercise in light and dark mode:
 
 Do not choose glass by appearance. Material is a functional navigation or control
 layer. It is not the meeting content background and cannot replace hierarchy.
+Desktop controls default to 28×28pt or larger; Apple's 20×20pt macOS minimum is
+reserved for constrained, noncritical controls. A web specimen can represent these
+contracts but cannot prove native material, window, toolbar, or accessibility behavior.
 
 ### 3. Shared components
 
@@ -105,11 +111,16 @@ production screen still carries a competing local implementation of the same job
 Build and approve these before broad migration:
 
 1. **Library plus selected meeting** — proves primary chrome, split view, list,
-   record, tabs, status, empty state, and resizing.
+   record, tabs, status, empty state, and resizing. The record exercises a
+   populated operator note, transcript-only, metadata-only/no-transcript,
+   summary-failed with a retained transcript, transcript-unavailable, and
+   meeting-unavailable states. Automatic notes remain unavailable.
 2. **Settings → Capture** — proves the auxiliary window, pane navigation, grouped
    controls, permission state, forms, and Command–Comma behavior.
-3. **Consent → recording → degraded → processing** — proves operational hierarchy,
-   live state, recovery, progress, and focus behavior.
+3. **Consent → arming → recording → degraded recording → stopping → processing →
+   transcript ready** — proves operational hierarchy, the non-recording countdown,
+   live and degraded state, safe file closure, progress, and focus behavior. Failure
+   and recovered interruption remain explicit and never read as complete.
 
 Ask, Actions, retained Transcript, remaining Settings panes, first run, and voice
 enrolment migrate only after these references pass.
@@ -126,8 +137,8 @@ change shared production files after reviewing producer commits.
 specimen and shared foundation/component assets under `apps/desktop/ui/system/`.
 
 **Deliver:** foundations, component states, window-role specimens, light/dark and
-accessibility controls, and deterministic UI tests. Do not restyle production
-screens in this package.
+accessibility controls, honest capture and record fallbacks, and deterministic UI
+tests. Do not restyle production screens in this package.
 
 ### DS-2 — native Settings-window proof
 
@@ -144,9 +155,10 @@ of platform behavior that the webview cannot supply by CSS.
 **Owns:** isolated primary-window and capture specimens built from the shared
 contract. Do not modify the Settings proof.
 
-**Deliver:** Library plus selected meeting; consent, recording, degraded, and
-processing states; minimum and comfortable geometry; keyboard paths; and a migration
-map from every current selector to a shared component or documented exception.
+**Deliver:** Library plus selected meeting; consent, arming, recording, degraded,
+stopping, processing, transcript-ready, failure, and recovered states; minimum and
+comfortable geometry; keyboard paths; and a migration map from every current selector
+to a shared component or documented exception.
 
 ### DS-4 — integration, migration, and verification
 

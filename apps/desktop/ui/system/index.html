@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en" data-appearance="system" data-contrast="system" data-motion="system" data-transparency="system">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Yawn desktop UI system specimen</title>
+    <link rel="stylesheet" href="./foundations.css" />
+    <link rel="stylesheet" href="./components.css" />
+    <link rel="stylesheet" href="./patterns.css" />
+    <link rel="stylesheet" href="./specimen.css" />
+    <script type="module" src="./specimen.js"></script>
+  </head>
+  <body class="specimen-body">
+    <svg class="ys-visually-hidden" aria-hidden="true">
+      <symbol id="ys-icon-meetings" viewBox="0 0 20 20"><path d="M4.5 5.5h11v10h-11zM7 3.5v4M13 3.5v4M4.5 8.5h11" /></symbol>
+      <symbol id="ys-icon-search" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="4.5" /><path d="m12 12 4 4" /></symbol>
+      <symbol id="ys-icon-actions" viewBox="0 0 20 20"><path d="m4 10 3 3 8-8M4 16h12" /></symbol>
+      <symbol id="ys-icon-settings" viewBox="0 0 20 20"><circle cx="10" cy="10" r="3" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4" /></symbol>
+      <symbol id="ys-icon-record" viewBox="0 0 20 20"><circle cx="10" cy="10" r="5" /><circle cx="10" cy="10" r="2" /></symbol>
+      <symbol id="ys-icon-more" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1" /><circle cx="10" cy="10" r="1" /><circle cx="16" cy="10" r="1" /></symbol>
+      <symbol id="ys-icon-chevron" viewBox="0 0 20 20"><path d="m7 4 6 6-6 6" /></symbol>
+      <symbol id="ys-icon-close" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15" /></symbol>
+    </svg>
+
+    <header class="specimen-header">
+      <div>
+        <h1>Yawn desktop UI system</h1>
+        <p>Executable browser specimen. Synthetic content. It does not prove native macOS behavior or product readiness.</p>
+      </div>
+      <div class="specimen-controls" aria-label="Specimen controls">
+        <div class="specimen-control">
+          <label for="appearance-control">Appearance</label>
+          <select class="ys-select" id="appearance-control">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+        <div class="specimen-control">
+          <label for="contrast-control">Contrast</label>
+          <select class="ys-select" id="contrast-control">
+            <option value="system">System</option>
+            <option value="standard">Standard</option>
+            <option value="more">Increased</option>
+          </select>
+        </div>
+        <div class="specimen-control">
+          <label for="motion-control">Motion</label>
+          <select class="ys-select" id="motion-control">
+            <option value="system">System</option>
+            <option value="standard">Standard</option>
+            <option value="reduce">Reduced</option>
+          </select>
+        </div>
+        <div class="specimen-control">
+          <label for="transparency-control">Transparency</label>
+          <select class="ys-select" id="transparency-control">
+            <option value="system">System</option>
+            <option value="standard">Standard</option>
+            <option value="reduce">Reduced</option>
+          </select>
+        </div>
+        <div class="specimen-control">
+          <label for="zoom-control">Specimen scale</label>
+          <select class="ys-select" id="zoom-control">
+            <option value="100">100%</option>
+            <option value="200">200%</option>
+          </select>
+        </div>
+      </div>
+    </header>
+
+    <main class="specimen-main" id="specimen-main" data-zoom="100">
+      <div class="specimen-canvas">
+        <section class="specimen-section" aria-labelledby="foundation-title">
+          <header>
+            <h2 id="foundation-title">Foundations</h2>
+            <p>System-first chrome, a bounded editorial record, exact capture semantics, and platform preferences represented as shared tokens.</p>
+          </header>
+          <div class="specimen-grid">
+            <article class="specimen-card">
+              <h3>Type roles</h3>
+              <div class="specimen-stack">
+                <p class="ys-record-title">Weekly product check-in</p>
+                <p>UI text names controls, navigation, status, and instructions.</p>
+                <p class="ys-evidence">00:18:42 Them: Keep the evidence one action away.</p>
+                <p class="ys-tabular ys-muted">Tuesday, 9:30–10:12 AM</p>
+              </div>
+            </article>
+            <article class="specimen-card">
+              <h3>Semantic color</h3>
+              <div class="specimen-stack">
+                <span class="ys-status" data-state="recording"><span class="ys-status__mark" aria-hidden="true"></span>Recording</span>
+                <span class="ys-status" data-state="degraded"><span class="ys-status__mark" aria-hidden="true"></span>Recording degraded</span>
+                <span class="ys-status" data-state="error"><span class="ys-status__mark" aria-hidden="true"></span>Could not finish</span>
+                <span class="ys-status" data-state="information"><span class="ys-status__mark" aria-hidden="true"></span>On this Mac</span>
+              </div>
+            </article>
+            <article class="specimen-card">
+              <h3>Control geometry</h3>
+              <div class="specimen-stack">
+                <p class="ys-muted">Regular controls use Apple’s 28-point desktop default. The 20-point minimum is reserved for constrained, noncritical controls.</p>
+                <div class="specimen-line">
+                  <button class="ys-button" type="button">Regular</button>
+                  <button class="ys-icon-button" type="button" aria-label="More options"><svg class="ys-icon"><use href="#ys-icon-more" /></svg></button>
+                  <span class="specimen-synthetic">Browser proxy</span>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="specimen-section" aria-labelledby="component-title">
+          <header>
+            <h2 id="component-title">Shared components and states</h2>
+            <p>Static state samples make hover, active, focus-visible, disabled, selected, error, and dark behavior reviewable without timing or pointer automation.</p>
+          </header>
+          <div class="specimen-grid">
+            <article class="specimen-card">
+              <h3>Buttons and toolbar actions</h3>
+              <div class="specimen-stack">
+                <div class="specimen-line">
+                  <button class="ys-button" type="button">Default</button>
+                  <button class="ys-button" type="button" data-demo-state="hover">Hover</button>
+                  <button class="ys-button" type="button" data-demo-state="active">Active</button>
+                  <button class="ys-button" type="button" data-demo-state="focus">Focus-visible</button>
+                  <button class="ys-button" type="button" disabled>Disabled</button>
+                </div>
+                <div class="specimen-line">
+                  <button class="ys-button" type="button" data-variant="primary">Primary action</button>
+                  <button class="ys-button" type="button" data-variant="live">Stop recording</button>
+                  <button class="ys-button" type="button" data-tone="error">Delete recording</button>
+                  <button class="ys-icon-button" type="button" aria-label="More actions" data-demo-state="focus"><svg class="ys-icon"><use href="#ys-icon-more" /></svg></button>
+                </div>
+              </div>
+            </article>
+
+            <article class="specimen-card">
+              <h3>Rows</h3>
+              <div class="specimen-stack">
+                <button class="ys-sidebar-row" type="button" aria-current="page"><svg class="ys-icon"><use href="#ys-icon-meetings" /></svg><span class="ys-row-copy"><strong>Meetings</strong><span>Selected product destination</span></span></button>
+                <button class="ys-meeting-row" type="button" data-demo-state="hover"><span class="ys-row-copy"><strong>Research review</strong><span>Yesterday · 42 min</span></span></button>
+                <button class="ys-meeting-row" type="button" aria-current="true"><span class="ys-row-copy"><strong>Weekly product check-in</strong><span>Today · 38 min</span></span></button>
+                <button class="ys-disclosure-row" type="button" aria-expanded="false" data-disclosure><svg class="ys-icon ys-disclosure-chevron"><use href="#ys-icon-chevron" /></svg><span class="ys-row-copy"><strong>Source details</strong><span>Transcript and retained audio</span></span></button>
+                <div class="ys-empty-row"><span class="ys-row-copy"><strong>No results</strong><span>Nothing matched these exact words. The library is unchanged.</span></span></div>
+              </div>
+            </article>
+
+            <article class="specimen-card">
+              <h3>Tabs, filter, and menu item</h3>
+              <div class="specimen-stack">
+                <div class="ys-tabs" role="tablist" aria-label="Specimen meeting views">
+                  <button class="ys-tab" id="component-tab-note" type="button" role="tab" aria-selected="true" aria-controls="component-panel-note">Note</button>
+                  <button class="ys-tab" id="component-tab-transcript" type="button" role="tab" aria-selected="false" aria-controls="component-panel-transcript" tabindex="-1">Transcript</button>
+                  <button class="ys-tab" id="component-tab-details" type="button" role="tab" aria-selected="false" aria-controls="component-panel-details" tabindex="-1">Details</button>
+                </div>
+                <p id="component-panel-note" role="tabpanel" aria-labelledby="component-tab-note">The record stays calm while source words remain nearby.</p>
+                <p id="component-panel-transcript" role="tabpanel" aria-labelledby="component-tab-transcript" hidden>Transcript evidence is exact source material.</p>
+                <p id="component-panel-details" role="tabpanel" aria-labelledby="component-tab-details" hidden>Local storage and retention details.</p>
+                <div class="ys-segmented" aria-label="Meeting filter">
+                  <button class="ys-segmented__item" type="button" aria-pressed="true">All</button>
+                  <button class="ys-segmented__item" type="button" aria-pressed="false">Today</button>
+                  <button class="ys-segmented__item" type="button" disabled>People</button>
+                </div>
+                <div class="ys-menu" role="menu" aria-label="Specimen menu">
+                  <button class="ys-menu-item" type="button" role="menuitem">Copy transcript <kbd>⌘C</kbd></button>
+                  <button class="ys-menu-item" type="button" role="menuitem" data-demo-state="focus">Open details</button>
+                  <button class="ys-menu-item" type="button" role="menuitem" disabled>Share note</button>
+                </div>
+              </div>
+            </article>
+
+            <article class="specimen-card">
+              <h3>Settings controls</h3>
+              <div class="ys-settings-section">
+                <h4 class="ys-settings-section__title">Capture</h4>
+                <div class="ys-settings-row">
+                  <div><label for="input-device">Microphone</label><p class="ys-help-text">Used only while a recording is active.</p></div>
+                  <select class="ys-select" id="input-device"><option>MacBook Microphone</option></select>
+                </div>
+                <div class="ys-settings-row">
+                  <div><strong>Show recording notice</strong><p class="ys-help-text">Keeps capture state visible.</p></div>
+                  <label class="ys-toggle"><span class="ys-visually-hidden">Show recording notice</span><input type="checkbox" checked /><span class="ys-toggle__track" aria-hidden="true"></span></label>
+                </div>
+                <div class="ys-settings-row">
+                  <fieldset style="border:0;padding:0;margin:0"><legend>Transcript language</legend><label class="ys-radio-choice"><input type="radio" name="language" checked />English</label><label class="ys-radio-choice"><input type="radio" name="language" />Detect automatically</label></fieldset>
+                </div>
+              </div>
+            </article>
+
+            <article class="specimen-card">
+              <h3>Status, notice, progress, and confirmation</h3>
+              <div class="specimen-stack">
+                <div class="ys-inline-notice" data-tone="information"><strong>On this Mac.</strong> No audio or transcript leaves this specimen.</div>
+                <div class="ys-inline-notice" data-tone="degraded"><strong>Recording degraded.</strong> System audio stopped; microphone capture continues.</div>
+                <div class="ys-inline-notice" data-tone="error"><strong>Transcript unavailable.</strong> Recording audio remains available for recovery.</div>
+                <div class="ys-progress-row"><strong>Making the transcript</strong><span class="ys-tabular">62%</span><progress max="100" value="62">62%</progress></div>
+                <div class="ys-confirmation"><h3>Delete recording audio?</h3><p>The transcript and operator note remain. The audio cannot be recovered.</p><div class="ys-actions"><button class="ys-button" type="button">Cancel</button><button class="ys-button" type="button" data-tone="error">Delete audio</button></div></div>
+              </div>
+            </article>
+
+            <article class="specimen-card">
+              <h3>Lifecycle coverage</h3>
+              <div class="specimen-state-grid">
+                <div class="specimen-state" data-state="loading"><strong>Loading</strong><p>Local components are answering.</p></div>
+                <div class="specimen-state" data-state="empty"><strong>Empty</strong><p>No retained meetings yet.</p></div>
+                <div class="specimen-state" data-state="ready"><strong>Ready</strong><p>Nothing is recording.</p></div>
+                <div class="specimen-state" data-state="disabled"><strong>Disabled</strong><p>Prerequisites are missing.</p></div>
+                <div class="specimen-state" data-state="selected"><strong>Selected</strong><p>Current meeting and pane.</p></div>
+                <div class="specimen-state" data-state="error"><strong>Error</strong><p>Recovery names what survived.</p></div>
+                <div class="specimen-state" data-state="degraded"><strong>Degraded</strong><p>Capture continues with a warning.</p></div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="specimen-section" aria-labelledby="role-title">
+          <header>
+            <h2 id="role-title">Window-role specimens</h2>
+            <p>Five roles share foundations and components. They do not share one page composition.</p>
+          </header>
+          <div class="specimen-role-stack">
+            <article id="role-primary" aria-labelledby="role-primary-label">
+              <h3 class="specimen-role-label" id="role-primary-label">Primary application window</h3>
+              <div class="ys-window" data-role="primary">
+                <div class="ys-toolbar">
+                  <strong class="ys-toolbar__title">Yawn</strong>
+                  <span class="ys-status" data-state="ready"><span class="ys-status__mark" aria-hidden="true"></span>Ready</span>
+                  <button class="ys-button" type="button"><svg class="ys-icon"><use href="#ys-icon-record" /></svg>Record</button>
+                  <button class="ys-icon-button" type="button" aria-label="More window actions"><svg class="ys-icon"><use href="#ys-icon-more" /></svg></button>
+                </div>
+                <div class="ys-primary-split">
+                  <nav class="ys-primary-sidebar" aria-label="Product">
+                    <button class="ys-sidebar-row" type="button" aria-current="page"><svg class="ys-icon"><use href="#ys-icon-meetings" /></svg><span class="ys-row-copy"><strong>Meetings</strong></span></button>
+                    <button class="ys-sidebar-row" type="button"><svg class="ys-icon"><use href="#ys-icon-search" /></svg><span class="ys-row-copy"><strong>Ask</strong><span>Exact and meaning search</span></span></button>
+                    <button class="ys-sidebar-row" type="button" disabled><svg class="ys-icon"><use href="#ys-icon-actions" /></svg><span class="ys-row-copy"><strong>Actions</strong><span>Not available</span></span></button>
+                  </nav>
+                  <aside class="ys-primary-list" aria-label="Recent meetings">
+                    <h4 class="ys-pane-heading">Recent</h4>
+                    <button class="ys-meeting-row" type="button" aria-current="true"><span class="ys-row-copy"><strong>Weekly product check-in</strong><span>Today · 38 min</span></span></button>
+                    <button class="ys-meeting-row" type="button"><span class="ys-row-copy"><strong>Research review</strong><span>Yesterday · 42 min</span></span></button>
+                    <button class="ys-meeting-row" type="button"><span class="ys-row-copy"><strong>Design-system handoff</strong><span>Friday · 31 min</span></span></button>
+                  </aside>
+                  <article class="ys-record">
+                    <div class="ys-record__measure">
+                      <p class="ys-record__meta">Today · 9:30–10:08 AM · Kept on this Mac</p>
+                      <h2 class="ys-record-title">Weekly product check-in</h2>
+                      <div class="ys-tabs" role="tablist" aria-label="Primary specimen meeting views">
+                        <button class="ys-tab" id="primary-tab-note" type="button" role="tab" aria-selected="true" aria-controls="primary-panel-note">Note</button>
+                        <button class="ys-tab" id="primary-tab-transcript" type="button" role="tab" aria-selected="false" aria-controls="primary-panel-transcript" tabindex="-1">Transcript</button>
+                        <button class="ys-tab" id="primary-tab-details" type="button" role="tab" aria-selected="false" aria-controls="primary-panel-details" tabindex="-1">Details</button>
+                      </div>
+                      <div class="ys-record__body" id="primary-panel-note" role="tabpanel" aria-labelledby="primary-tab-note"><p><strong>Decision.</strong> Keep meeting context visible while the selected record remains the reading surface.</p><p class="ys-muted">Synthetic record. No generated summary or product action is implied.</p></div>
+                      <div class="ys-record__body ys-evidence" id="primary-panel-transcript" role="tabpanel" aria-labelledby="primary-tab-transcript" hidden><p>00:18:42 Them: Keep the evidence one action away.</p></div>
+                      <div class="ys-record__body" id="primary-panel-details" role="tabpanel" aria-labelledby="primary-tab-details" hidden><p>Recording audio: not present in this specimen.</p></div>
+                    </div>
+                  </article>
+                </div>
+              </div>
+              <p class="specimen-note">Flexible split geometry is demonstrable here. Native frame, toolbar, remembered window size, and actual sidebar material remain DS-4 and installed-app gates.</p>
+            </article>
+
+            <article id="role-record" aria-labelledby="role-record-label">
+              <h3 class="specimen-role-label" id="role-record-label">Meeting record</h3>
+              <div class="specimen-line" role="group" aria-label="Meeting record state">
+                <button class="ys-button" type="button" data-record-state="note" aria-pressed="true">Note</button>
+                <button class="ys-button" type="button" data-record-state="transcript-only" aria-pressed="false">Transcript only</button>
+                <button class="ys-button" type="button" data-record-state="metadata-only" aria-pressed="false">Metadata only</button>
+                <button class="ys-button" type="button" data-record-state="summary-failed" aria-pressed="false">Summary failed</button>
+                <button class="ys-button" type="button" data-record-state="transcript-unavailable" aria-pressed="false">Transcript unavailable</button>
+                <button class="ys-button" type="button" data-record-state="meeting-unavailable" aria-pressed="false">Meeting unavailable</button>
+              </div>
+              <div class="ys-window"><article class="ys-record"><div class="ys-record__measure"><p class="ys-record__meta" id="record-specimen-meta">Friday · 31 minutes · Transcript retained</p><h2 class="ys-record-title" id="record-specimen-title">Design-system handoff</h2><div class="ys-inline-notice" id="record-specimen-notice" hidden></div><div class="ys-record__body"><p id="record-specimen-body">The operator note is retained. Automatic notes remain unavailable in this specimen.</p></div></div></article></div>
+            </article>
+
+            <article id="role-settings" aria-labelledby="role-settings-label">
+              <h3 class="specimen-role-label" id="role-settings-label">Auxiliary settings window</h3>
+              <div class="ys-window" data-role="settings">
+                <div class="ys-settings-toolbar" role="tablist" aria-label="Settings panes">
+                  <button class="ys-icon-button" id="settings-tab-capture" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-capture" aria-label="Capture settings"><svg class="ys-icon"><use href="#ys-icon-record" /></svg></button>
+                  <button class="ys-icon-button" id="settings-tab-privacy" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-privacy" aria-label="Privacy settings" tabindex="-1"><svg class="ys-icon"><use href="#ys-icon-settings" /></svg></button>
+                </div>
+                <section class="ys-settings-pane" id="settings-panel-capture" role="tabpanel" aria-labelledby="settings-tab-capture">
+                  <header><h2>Capture</h2><p>Permissions and devices used while recording.</p></header>
+                  <div class="ys-settings-section"><h3 class="ys-settings-section__title">Permissions</h3><div class="ys-settings-row"><div><strong>Microphone</strong><p class="ys-help-text">Required for supported capture.</p></div><span class="ys-status" data-state="ready"><span class="ys-status__mark" aria-hidden="true"></span>Allowed</span></div><div class="ys-settings-row"><div><strong>System audio</strong><p class="ys-help-text">Measured only by creating the macOS tap.</p></div><span class="ys-status" data-state="warning"><span class="ys-status__mark" aria-hidden="true"></span>Not measured</span></div></div>
+                </section>
+                <section class="ys-settings-pane" id="settings-panel-privacy" role="tabpanel" aria-labelledby="settings-tab-privacy" hidden><header><h2>Privacy</h2><p>Recording audio and local retention.</p></header><div class="ys-inline-notice" data-tone="information">The transcript is kept when recording audio is deleted.</div></section>
+              </div>
+              <p class="specimen-note">This bounded webview proves component composition only. App-menu entry, Command–Comma, pane-specific title and sizing, disabled minimize/maximize, pane restoration, and native close behavior require the DS-2/DS-4 window.</p>
+            </article>
+
+            <article id="role-capture" aria-labelledby="role-capture-label">
+              <h3 class="specimen-role-label" id="role-capture-label">Capture utility</h3>
+              <div class="specimen-line" role="group" aria-label="Capture specimen state">
+                <button class="ys-button" type="button" data-capture-state="consent" aria-pressed="true">Consent</button>
+                <button class="ys-button" type="button" data-capture-state="arming" aria-pressed="false">Arming</button>
+                <button class="ys-button" type="button" data-capture-state="recording" aria-pressed="false">Recording</button>
+                <button class="ys-button" type="button" data-capture-state="degraded" aria-pressed="false">Degraded</button>
+                <button class="ys-button" type="button" data-capture-state="stopping" aria-pressed="false">Stopping</button>
+                <button class="ys-button" type="button" data-capture-state="processing" aria-pressed="false">Processing</button>
+                <button class="ys-button" type="button" data-capture-state="ready" aria-pressed="false">Transcript ready</button>
+                <button class="ys-button" type="button" data-capture-state="failure" aria-pressed="false">Failure</button>
+                <button class="ys-button" type="button" data-capture-state="recovered" aria-pressed="false">Recovered</button>
+              </div>
+              <div class="ys-capture-utility" aria-live="polite">
+                <div class="ys-capture-utility__header"><h2 id="capture-title">Before you start</h2><span class="ys-status" id="capture-status" data-state="ready"><span class="ys-status__mark" aria-hidden="true"></span><span id="capture-status-label">Not recording</span></span></div>
+                <div class="ys-capture-utility__body" id="capture-body"><p id="capture-detail">The other people on this call must know they are being recorded. Yawn cannot tell them.</p><div class="ys-actions" id="capture-actions"><button class="ys-button" type="button">Cancel</button><button class="ys-button" type="button" data-variant="primary">Continue</button></div></div>
+              </div>
+              <p class="specimen-note">Degraded is an orthogonal live-capture condition, stopping remains live until files close, and processing returns the operator to the main window with persistent progress.</p>
+            </article>
+
+            <article id="role-transient" aria-labelledby="role-transient-label">
+              <h3 class="specimen-role-label" id="role-transient-label">Transient layer</h3>
+              <div class="ys-transient-stage">
+                <div class="ys-transient-context"><h3>Weekly product check-in</h3><p>Retained context stays visible under a temporary task.</p><div class="specimen-line"><button class="ys-button" id="popover-trigger" type="button" aria-expanded="true" aria-controls="specimen-popover">Show popover</button><button class="ys-button" id="dialog-trigger" type="button">Review deletion</button></div></div>
+                <div class="ys-popover ys-transient-popover" id="specimen-popover" role="dialog" aria-labelledby="popover-title"><h3 id="popover-title">Meeting actions</h3><p>Temporary actions stay attached to the current meeting.</p><button class="ys-button" id="popover-close" type="button">Done</button></div>
+              </div>
+              <dialog class="ys-dialog" id="specimen-dialog" aria-labelledby="dialog-title"><h2 id="dialog-title">Delete recording audio?</h2><p>The transcript and operator note remain. The recording cannot be recovered.</p><div class="ys-actions"><button class="ys-button" id="dialog-cancel" type="button">Cancel</button><button class="ys-button" type="button" data-tone="error" disabled>Delete audio</button></div></dialog>
+              <p class="specimen-note">Escape safely dismisses the popover and dialog, then returns focus to the control that opened it.</p>
+            </article>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

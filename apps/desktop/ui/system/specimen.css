@@ -1,0 +1,190 @@
+.specimen-body {
+  min-block-size: 100vh;
+  background: var(--ys-surface-window);
+}
+
+.specimen-header {
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(15rem, 1fr) auto;
+  align-items: center;
+  gap: var(--ys-space-6);
+  padding: var(--ys-space-5) clamp(1rem, 4vw, 2rem);
+  border-block-end: var(--ys-border-width) solid var(--ys-border);
+  background: var(--ys-surface-overlay);
+}
+
+.specimen-header h1 {
+  margin: 0;
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-section);
+}
+
+.specimen-header p {
+  margin: var(--ys-space-1) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+}
+
+.specimen-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--ys-space-4);
+}
+
+.specimen-control {
+  display: grid;
+  gap: var(--ys-space-1);
+}
+
+.specimen-control label {
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-xs);
+  font-weight: 600;
+}
+
+.specimen-control .ys-select {
+  min-inline-size: 8rem;
+}
+
+.specimen-main {
+  inline-size: min(92rem, 100%);
+  margin-inline: auto;
+  padding: clamp(1rem, 4vw, 2.5rem);
+}
+
+.specimen-main[data-zoom="200"] .specimen-canvas {
+  zoom: 2;
+}
+
+.specimen-canvas {
+  display: grid;
+  gap: 3rem;
+}
+
+.specimen-section {
+  min-inline-size: 0;
+}
+
+.specimen-section > header {
+  max-inline-size: 48rem;
+  margin-block-end: var(--ys-space-7);
+}
+
+.specimen-section > header h2 {
+  margin: 0;
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-section);
+}
+
+.specimen-section > header p {
+  margin: var(--ys-space-2) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-ui);
+}
+
+.specimen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: var(--ys-space-7);
+}
+
+.specimen-card {
+  min-inline-size: 0;
+  padding: var(--ys-space-7);
+  border: var(--ys-border-width) solid var(--ys-border);
+  border-radius: var(--ys-radius-lg);
+  background: var(--ys-surface-content);
+}
+
+.specimen-card > h3 {
+  margin: 0 0 var(--ys-space-5);
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-emphasis);
+}
+
+.specimen-stack {
+  display: grid;
+  gap: var(--ys-space-5);
+}
+
+.specimen-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ys-space-5);
+}
+
+.specimen-state-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: var(--ys-space-5);
+}
+
+.specimen-state {
+  min-block-size: 6rem;
+  padding: var(--ys-space-5);
+  border: var(--ys-border-width) solid var(--ys-border);
+  border-radius: var(--ys-radius-md);
+  background: var(--ys-surface-control);
+}
+
+.specimen-state strong {
+  display: block;
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-ui);
+  text-transform: capitalize;
+}
+
+.specimen-state p {
+  margin: var(--ys-space-2) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+}
+
+.specimen-state[data-state="selected"] { border-inline-start: 3px solid var(--ys-brand); }
+.specimen-state[data-state="error"] { border-inline-start: 3px solid var(--ys-error); }
+.specimen-state[data-state="degraded"] { border-inline-start: 3px solid var(--ys-warning); }
+.specimen-state[data-state="ready"] { border-inline-start: 3px solid var(--ys-success); }
+
+.specimen-role-stack {
+  display: grid;
+  gap: var(--ys-space-9);
+}
+
+.specimen-role-label {
+  margin: 0 0 var(--ys-space-4);
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.specimen-note {
+  margin: var(--ys-space-5) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+}
+
+.specimen-synthetic {
+  display: inline-flex;
+  padding: var(--ys-space-1) var(--ys-space-3);
+  border: var(--ys-border-width) solid var(--ys-border);
+  border-radius: var(--ys-radius-pill);
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-xs);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .specimen-header {
+    position: static;
+    grid-template-columns: 1fr;
+  }
+
+  .specimen-controls {
+    justify-content: flex-start;
+  }
+}
