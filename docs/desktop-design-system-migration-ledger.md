@@ -49,12 +49,12 @@ The accepted surfaces resolve shared jobs through `ys-*` components. Legacy sele
 
 | Surface ID | Current atomic standing | Latest run |
 |---|---|---|
-| `main.shell` | `unproven` — the combined signed executable rendered, but the desktop locked before movement, keyboard, light appearance, minimum geometry, and lifecycle checks could finish | `2026-08-09-7803cdb4` |
-| `main.library` | `unproven` — the compact selected-meeting workspace rendered with retained local content; the Library screen's complete state and action matrix remains open | `2026-08-09-7803cdb4` |
-| `meeting.record` | `unproven` — one dark comfortable transcript-only state rendered and remained present in the installed accessibility tree; other states, pointer/keyboard tabs, light appearance, minimum geometry, and human review remain open | `2026-08-09-7803cdb4` |
-| `settings.capture` | `unproven` — DHR-003's scrollable report composition was replaced and automated contracts pass; the exact combined executable still needs installed light/dark, geometry, keyboard, close/reopen, and human review | `2026-08-09-7803cdb4` |
-| `prototype.references` | `unproven` — DHR-004 passed in the producer's installed synthetic build and is pinned by an integrated regression test, but evidence does not transfer to the new combined review executable digest | `2026-08-09-ui-review-8383ae4a` |
-| all other plan surfaces | `unproven` | `2026-08-09-7803cdb4` |
+| `main.shell` | `unproven` — the ready selected-meeting shell rendered in Light and Dark; a title-bar drag completed, but resulting screen coordinates, declared minimum geometry, full lifecycle, and human review remain open | `2026-08-09-972ef3c9` |
+| `main.library` | `unproven` — the compact selected-meeting workspace rendered with retained local content; the Library screen's complete state and action matrix remains open | `2026-08-09-972ef3c9` |
+| `meeting.record` | `unproven` — Light/Dark rendering plus pointer focus, `End` tab selection, and focused Details passed; other record states, actions, minimum geometry, and human review remain open | `2026-08-09-972ef3c9` |
+| `settings.capture` | `unproven` — fixed geometry, native open/close/reopen, pane restoration, and keyboard tabs/focus pass in Light and Dark. The first installed pass found clipped Consent Review; the corrected 720×560 bundle keeps it visible. Remaining permission states, Check Again, VoiceOver, and human review stay open | `2026-08-09-972ef3c9` |
+| `prototype.references` | `pass` — the separately identified installed synthetic bundle preserves its watermark and Consent Back restores the selected meeting, tab group, and note subtree | `2026-08-09-ui-review-cf5f303c` |
+| all other plan surfaces | `unproven` | `2026-08-09-972ef3c9` |
 
 ## Legacy CSS removal ledger
 

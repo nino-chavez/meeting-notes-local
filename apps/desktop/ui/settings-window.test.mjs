@@ -40,9 +40,11 @@ test("native Settings exposes one complete measured Capture pane", () => {
 });
 
 test("Capture uses compact Settings geometry instead of a scrollable report", () => {
-  assert.match(css, /grid-template-rows: 4\.75rem minmax\(0, 1fr\)/);
+  assert.match(css, /grid-template-rows: 4\.5rem minmax\(0, 1fr\)/);
   assert.match(css, /inline-size: min\(38\.5rem, 100%\)/);
-  assert.match(css, /\.ys-settings-pane \{[\s\S]*?gap: var\(--ys-space-6\);[\s\S]*?overflow: hidden;/);
+  assert.match(css, /\.ys-settings-pane \{[\s\S]*?gap: var\(--ys-space-4\);[\s\S]*?padding: var\(--ys-space-5\) 0 var\(--ys-space-4\);[\s\S]*?overflow: hidden;/);
+  assert.match(css, /\.settings-row \{[\s\S]*?min-block-size: 2\.8rem;[\s\S]*?padding: var\(--ys-space-2\) var\(--ys-space-4\);/);
+  assert.match(css, /\.settings-consent \{[\s\S]*?min-block-size: 2\.8rem;[\s\S]*?padding: var\(--ys-space-3\) var\(--ys-space-4\);/);
   assert.match(css, /\.settings-group__rows \{\s*border-block:/);
   assert.doesNotMatch(css, /\.settings-group(?:__rows)? \{[\s\S]*?border-radius:/);
   assert.doesNotMatch(css, /box-shadow:/);
