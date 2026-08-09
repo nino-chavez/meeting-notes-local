@@ -61,28 +61,32 @@ projections:
   - id: decision
     output: beta-boundary
     artifact: docs/work-library-record.md
-    render_as: executive-decision
+    render_as: markdown-document
+    kind: decision
     label: The decision, and where the build stands
     route: /
 
   - id: product-definition
     output: product-reference
     artifact: docs/product-definition.md
-    render_as: strategy-memo
+    render_as: markdown-document
+    kind: brief
     label: What the product is, and the phase roadmap
     route: /strategy/product-definition
 
   - id: build-queue
     output: product-reference
     artifact: docs/vertical-slice.md
-    render_as: strategy-memo
+    render_as: markdown-document
+    kind: plan
     label: Build queue and evidence history
     route: /strategy/build-queue
 
   - id: journeys
     output: product-reference
     artifact: docs/journeys.md
-    render_as: strategy-memo
+    render_as: markdown-document
+    kind: specification
     label: Product journeys
     route: /strategy/journeys
 
@@ -90,36 +94,53 @@ projections:
   - id: backlog
     output: product-reference
     artifact: docs/backlog.md
-    render_as: reference-document
+    render_as: markdown-document
+    kind: specification
     label: Epics, stories, and acceptance criteria
     route: /reference/backlog
 
   - id: screens
     output: product-reference
     artifact: docs/screens-and-states.md
-    render_as: reference-document
+    render_as: markdown-document
+    kind: specification
     label: Screens and states
     route: /reference/screens-and-states
 
   - id: encounter-acceptance
     output: product-reference
     artifact: docs/encounter-acceptance.md
-    render_as: reference-document
+    render_as: markdown-document
+    kind: specification
     label: Encounter acceptance
     route: /reference/encounter-acceptance
 
+  # Reclassified from the proposed "procedure": the document is a competitor
+  # teardown that ends in an explicit recommendation ("Build the core; don't
+  # build the attribution"), not a checklist or runbook. Its own scope note —
+  # "this file compares mechanism... and what it takes to build the same
+  # thing" — plus the "Can we build this?" / "Recommendation" sections match
+  # the analysis test: say what data or observations mean.
   - id: teardown
     output: product-reference
     artifact: docs/teardown.md
-    render_as: reference-document
+    render_as: markdown-document
+    kind: analysis
     label: Teardown and recovery
     route: /reference/teardown
 
   # Implications — conditional on human gates that have not been passed.
+  # standing: conditional confirmed against the document's own "Human release
+  # gates" section: "Before an internal alpha is shared... Clean-machine
+  # transfer remains open" and "Before an internal beta meeting, the
+  # unchanged installed build must also have the private automatic-note
+  # admission receipt" — release steps wait on human gates not yet passed.
   - id: release-runbook
     output: product-reference
     artifact: docs/distribution-runbook.md
-    render_as: functional-guidance
+    render_as: markdown-document
+    kind: procedure
+    standing: conditional
     label: Release runbook and open human gates
     route: /guidance/release-runbook
 
@@ -127,14 +148,16 @@ projections:
   - id: capture-evidence
     output: capture-evidence
     artifact: spike/RESULTS.md
-    render_as: evidence-register
+    render_as: markdown-document
+    kind: evidence
     label: Capture and voice-gate evidence
     route: /evidence/capture
 
   - id: notes-evidence
     output: notes-evidence
     artifact: notes/EVAL.md
-    render_as: evidence-register
+    render_as: markdown-document
+    kind: evidence
     label: Note-generation evaluation
     route: /evidence/notes
 
