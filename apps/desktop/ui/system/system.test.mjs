@@ -151,20 +151,23 @@ test("specimen exposes deterministic controls for required lifecycle and accessi
   ]) assert.match(html, new RegExp(`id="${control}"`));
 });
 
-test("Meetings front-door comparison keeps one destination and three bounded structures", () => {
+test("primary-window comparison develops three structures before recommending one", () => {
   const section = html.match(/<section class="specimen-section" id="meetings-front-door-options"[\s\S]*?(?=\n\s*<section class="specimen-section")/)?.[0];
   assert.ok(section, "Meetings comparison section is missing");
 
-  for (const option of ["persistent-split", "recent-shelf", "library-inspector"]) {
+  for (const option of ["persistent-three-pane", "adaptive-two-pane", "single-pane-stack"]) {
     assert.match(section, new RegExp(`data-ia-option="${option}"`));
   }
   assert.equal([...section.matchAll(/data-ia-option="/g)].length, 3);
-  assert.equal([...section.matchAll(/<strong>Meetings<\/strong><span>Home<\/span>/g)].length, 3);
-  assert.match(section, /A · Recommended/);
-  assert.match(section, /none adds a dashboard-shaped Home route/);
-  assert.match(section, /title, date, and duration only/);
-  assert.match(section, /folder and date controls open from one disclosure/);
-  assert.match(section, /corpus-wide storage moves to Settings/);
+  const optionGrid = section.match(/<div class="ia-option-grid">[\s\S]*?<div class="ia-task-comparison"/)?.[0];
+  assert.ok(optionGrid, "Option grid is missing");
+  assert.doesNotMatch(optionGrid, /recommended|why it leads|approved mac split/i);
+  assert.match(section, /Blind research result/);
+  assert.match(section, /Prototype the adaptive two-pane structure/);
+  assert.match(section, /almost 40% of the 720-pixel minimum width/);
+  assert.match(section, /Active capture may take over the window/);
+  assert.match(section, /Search returns retained passages, not generated answers/);
+  assert.doesNotMatch(section, /<strong>Ask<\/strong>|<strong>Actions<\/strong>|<span>Home<\/span>/);
   assert.doesNotMatch(section, /Name this meeting|Recording audio held on this Mac|\bbytes\b/i);
 });
 
@@ -172,6 +175,8 @@ test("Meetings comparison exposes deterministic comfortable and minimum geometry
   assert.match(html, /id="specimen-main" data-zoom="100" data-ia-geometry="comfortable"/);
   assert.match(html, /value="minimum">720 × 560 minimum/);
   assert.match(specimenScript, /specimenMain\.dataset\.iaGeometry = event\.currentTarget\.value/);
+  assert.match(specimenScript, /adaptiveOption\.dataset\.compactView = "record"/);
+  assert.match(specimenScript, /stackOption\.dataset\.stackView = "record"/);
   assert.match(readFileSync(join(here, "specimen.css"), "utf8"), /data-ia-geometry="minimum"/);
 });
 

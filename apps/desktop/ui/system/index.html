@@ -13,6 +13,7 @@
   <body class="specimen-body">
     <svg class="ys-visually-hidden" aria-hidden="true">
       <symbol id="ys-icon-meetings" viewBox="0 0 20 20"><path d="M4.5 5.5h11v10h-11zM7 3.5v4M13 3.5v4M4.5 8.5h11" /></symbol>
+      <symbol id="ys-icon-folder" viewBox="0 0 20 20"><path d="M3.5 5.5h5l1.5 2h6.5v8h-13z" /></symbol>
       <symbol id="ys-icon-search" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="4.5" /><path d="m12 12 4 4" /></symbol>
       <symbol id="ys-icon-actions" viewBox="0 0 20 20"><path d="m4 10 3 3 8-8M4 16h12" /></symbol>
       <symbol id="ys-icon-settings" viewBox="0 0 20 20"><circle cx="10" cy="10" r="3" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4" /></symbol>
@@ -223,36 +224,44 @@
 
         <section class="specimen-section" id="meetings-front-door-options" aria-labelledby="meetings-front-door-title">
           <header>
-            <h2 id="meetings-front-door-title">Meetings as the front door</h2>
-            <p>Three bounded structures use the same content and product truth. Meetings remains the default and the return destination; none adds a dashboard-shaped Home route.</p>
+            <h2 id="meetings-front-door-title">Primary-window structures</h2>
+            <p>A blind review rebuilt the comparison from product tasks and minimum-window geometry. No option begins as the winner.</p>
           </header>
 
           <div class="ia-guardrail" role="note">
-            <strong>Fixed in every option:</strong>
-            <span>The newest retained meeting is selected at launch. Search and filters stay close to the list. Rename, filing, retention, and byte-level storage details move behind context or Details. Record stays in the window toolbar.</span>
+            <strong>Fixed product behavior</strong>
+            <span>Idle launch opens Meetings. Active capture may take over the window. Search returns retained passages, not generated answers. Transcript is a view of one retained meeting. Settings stays auxiliary. Unshipped Actions stays absent.</span>
+          </div>
+
+          <div class="ia-evidence-bar" role="note">
+            <span><strong>Observed pressure:</strong> current production navigation and record padding consume almost 40% of the 720-pixel minimum width.</span>
+            <span><strong>Question:</strong> when should meeting context collapse so the record remains usable?</span>
           </div>
 
           <div class="ia-option-grid">
-            <article class="ia-option" data-ia-option="persistent-split" aria-labelledby="ia-option-a-title">
+            <article class="ia-option" data-ia-option="persistent-three-pane" aria-labelledby="ia-option-one-title">
               <header class="ia-option__header">
-                <span class="specimen-synthetic">A · Recommended</span>
-                <h3 id="ia-option-a-title">Persistent split</h3>
-                <p>Product navigation, compact recents, and the selected record remain visible together.</p>
+                <span class="specimen-synthetic">Structure 1 · Constant hierarchy</span>
+                <h3 id="ia-option-one-title">Persistent three-pane</h3>
+                <p>Sources, meeting list, and selected record remain visible at every width.</p>
               </header>
-              <div class="ia-frame ia-frame--split">
+              <div class="ia-frame ia-frame--three-pane">
                 <div class="ia-toolbar">
-                  <strong>Yawn</strong>
+                  <strong>Meetings</strong>
                   <span class="ys-status" data-state="ready"><span class="ys-status__mark" aria-hidden="true"></span>Ready</span>
                   <button class="ys-button ia-toolbar__record" type="button"><svg class="ys-icon"><use href="#ys-icon-record" /></svg>Record</button>
                 </div>
-                <div class="ia-split-shell">
-                  <nav class="ia-product-sidebar" aria-label="Option A product navigation">
-                    <button class="ys-sidebar-row" type="button" aria-current="page"><svg class="ys-icon"><use href="#ys-icon-meetings" /></svg><span class="ys-row-copy"><strong>Meetings</strong><span>Home</span></span></button>
-                    <button class="ys-sidebar-row" type="button"><svg class="ys-icon"><use href="#ys-icon-search" /></svg><span class="ys-row-copy"><strong>Ask</strong></span></button>
+                <div class="ia-three-pane-shell">
+                  <nav class="ia-source-sidebar" aria-label="Structure 1 sources">
+                    <strong>Library</strong>
+                    <button type="button" aria-current="page">Recent</button>
+                    <button type="button">All meetings</button>
+                    <button type="button">Unfiled</button>
+                    <small>Folders</small>
+                    <button type="button">Product</button>
                   </nav>
-                  <aside class="ia-meeting-list" aria-label="Option A recent meetings">
+                  <aside class="ia-meeting-list" aria-label="Structure 1 recent meetings">
                     <div class="ia-pane-bar"><strong>Recent</strong><button class="ys-icon-button" type="button" aria-label="Search meetings"><svg class="ys-icon"><use href="#ys-icon-search" /></svg></button></div>
-                    <button class="ys-disclosure-row ia-filter-row" type="button" aria-expanded="false" data-disclosure><svg class="ys-icon ys-disclosure-chevron"><use href="#ys-icon-chevron" /></svg><span class="ys-row-copy"><strong>Filters</strong><span>Folder and date</span></span></button>
                     <button class="ys-meeting-row" type="button" aria-current="true"><span class="ys-row-copy"><strong>Weekly product check-in</strong><span>Today · 38 min</span></span></button>
                     <button class="ys-meeting-row" type="button"><span class="ys-row-copy"><strong>Research review</strong><span>Yesterday · 42 min</span></span></button>
                     <button class="ys-meeting-row" type="button"><span class="ys-row-copy"><strong>Design-system handoff</strong><span>Friday · 31 min</span></span></button>
@@ -260,99 +269,99 @@
                   <article class="ia-record-preview">
                     <p class="ys-record__meta">Today · 9:30 AM · On this Mac</p>
                     <h3 class="ys-record-title">Weekly product check-in</h3>
-                    <div class="ia-text-tabs" aria-label="Option A meeting views"><span aria-current="page">Note</span><span>Transcript</span><span>Details</span></div>
-                    <div class="ia-note-excerpt"><strong>Decision</strong><p>Keep the meeting list visible while the selected record stays calm.</p></div>
-                    <button class="ys-button ia-source-action" type="button">Open transcript</button>
+                    <div class="ia-text-tabs" aria-label="Structure 1 meeting views"><span aria-current="page">Note</span><span>Transcript</span><span>Details</span></div>
+                    <div class="ia-note-excerpt"><strong>Decision</strong><p>Keep source words one action away.</p></div>
                   </article>
                 </div>
               </div>
-              <p class="ia-option__verdict"><strong>Why it leads:</strong> It preserves the approved Mac Split, keeps the return path visible as Meetings, and removes the wall of controls without hiding switching context.</p>
+              <p class="ia-option__verdict"><strong>Tradeoff:</strong> fastest switching and clearest hierarchy at comfortable width; the record becomes cramped at 720 × 560.</p>
             </article>
 
-            <article class="ia-option" data-ia-option="recent-shelf" aria-labelledby="ia-option-b-title">
+            <article class="ia-option" data-ia-option="adaptive-two-pane" data-compact-view="collection" aria-labelledby="ia-option-two-title">
               <header class="ia-option__header">
-                <span class="specimen-synthetic">B · Calmest first scan</span>
-                <h3 id="ia-option-b-title">Recent shelf</h3>
-                <p>A two-pane shell puts a short recent strip above a larger selected-meeting preview.</p>
+                <span class="specimen-synthetic">Structure 2 · Width adaptive</span>
+                <h3 id="ia-option-two-title">Adaptive two-pane</h3>
+                <p>List and record stay adjacent when useful. At minimum width, one task owns the window.</p>
               </header>
-              <div class="ia-frame ia-frame--shelf">
+              <div class="ia-frame ia-frame--adaptive">
                 <div class="ia-toolbar">
-                  <strong>Yawn</strong>
+                  <strong>Meetings</strong>
                   <span class="ys-status" data-state="ready"><span class="ys-status__mark" aria-hidden="true"></span>Ready</span>
                   <button class="ys-button ia-toolbar__record" type="button"><svg class="ys-icon"><use href="#ys-icon-record" /></svg>Record</button>
                 </div>
-                <div class="ia-two-pane-shell">
-                  <nav class="ia-product-sidebar" aria-label="Option B product navigation">
-                    <button class="ys-sidebar-row" type="button" aria-current="page"><svg class="ys-icon"><use href="#ys-icon-meetings" /></svg><span class="ys-row-copy"><strong>Meetings</strong><span>Home</span></span></button>
-                    <button class="ys-sidebar-row" type="button"><svg class="ys-icon"><use href="#ys-icon-search" /></svg><span class="ys-row-copy"><strong>Ask</strong></span></button>
-                  </nav>
-                  <section class="ia-shelf-workspace" aria-label="Option B meetings workspace">
-                    <div class="ia-workspace-title"><div><span class="ia-eyebrow">Meetings</span><h3>Recent</h3></div><div class="ia-workspace-actions"><button class="ys-icon-button" type="button" aria-label="Search meetings"><svg class="ys-icon"><use href="#ys-icon-search" /></svg></button><button class="ys-button" type="button">Filters</button></div></div>
-                    <div class="ia-recent-shelf" aria-label="Recent meetings">
-                      <button class="ia-shelf-item" type="button" aria-current="true"><strong>Weekly product check-in</strong><span>Today · 38 min</span></button>
-                      <button class="ia-shelf-item" type="button"><strong>Research review</strong><span>Yesterday · 42 min</span></button>
-                      <button class="ia-shelf-item" type="button"><strong>Design-system handoff</strong><span>Friday · 31 min</span></button>
-                    </div>
-                    <article class="ia-shelf-preview">
-                      <div><p class="ys-record__meta">Today · 9:30 AM · On this Mac</p><h3 class="ys-record-title">Weekly product check-in</h3></div>
-                      <div class="ia-text-tabs" aria-label="Option B meeting views"><span aria-current="page">Note</span><span>Transcript</span><span>Details</span></div>
-                      <p><strong>Decision.</strong> Keep source words one action away.</p>
-                    </article>
+                <div class="ia-adaptive-shell">
+                  <section class="ia-adaptive-collection" aria-label="Structure 2 meeting list">
+                    <div class="ia-pane-bar"><strong>Recent</strong><div><button class="ys-icon-button" type="button" aria-label="Search meetings"><svg class="ys-icon"><use href="#ys-icon-search" /></svg></button><button class="ys-icon-button" type="button" aria-label="Folders"><svg class="ys-icon"><use href="#ys-icon-folder" /></svg></button></div></div>
+                    <button class="ys-disclosure-row ia-filter-row" type="button" aria-expanded="false" data-disclosure><svg class="ys-icon ys-disclosure-chevron"><use href="#ys-icon-chevron" /></svg><span class="ys-row-copy"><strong>Filters</strong><span>Folder and date</span></span></button>
+                    <button class="ys-meeting-row" type="button" aria-current="true" data-adaptive-open-record><span class="ys-row-copy"><strong>Weekly product check-in</strong><span>Today · 38 min</span></span></button>
+                    <button class="ys-meeting-row" type="button" data-adaptive-open-record><span class="ys-row-copy"><strong>Research review</strong><span>Yesterday · 42 min</span></span></button>
+                    <button class="ys-meeting-row" type="button" data-adaptive-open-record><span class="ys-row-copy"><strong>Design-system handoff</strong><span>Friday · 31 min</span></span></button>
+                    <p class="ia-retention-summary">3 recordings held · next deletion Tuesday</p>
                   </section>
+                  <article class="ia-record-preview ia-adaptive-record">
+                    <button class="ia-back-button" type="button" data-adaptive-back>‹ Meetings</button>
+                    <p class="ys-record__meta">Today · 9:30 AM · On this Mac</p>
+                    <h3 class="ys-record-title">Weekly product check-in</h3>
+                    <div class="ia-text-tabs" aria-label="Structure 2 meeting views"><span aria-current="page">Note</span><span>Transcript</span><span>Details</span></div>
+                    <div class="ia-note-excerpt"><strong>Decision</strong><p>Use adjacent context only while the record keeps a useful reading width.</p></div>
+                  </article>
                 </div>
               </div>
-              <p class="ia-option__verdict"><strong>Tradeoff:</strong> It is visually quieter, but the recent shelf truncates sooner and makes scanning a longer library less efficient.</p>
+              <p class="ia-option__verdict"><strong>Tradeoff:</strong> balanced at comfortable width; compact use adds one Back step but restores the same list position and selection.</p>
             </article>
 
-            <article class="ia-option" data-ia-option="library-inspector" aria-labelledby="ia-option-c-title">
+            <article class="ia-option" data-ia-option="single-pane-stack" data-stack-view="collection" aria-labelledby="ia-option-three-title">
               <header class="ia-option__header">
-                <span class="specimen-synthetic">C · Retrieval first</span>
-                <h3 id="ia-option-c-title">Library with inspector</h3>
-                <p>The meeting collection owns the window; a compact inspector previews the selection.</p>
+                <span class="specimen-synthetic">Structure 3 · One job at a time</span>
+                <h3 id="ia-option-three-title">Single-pane stack</h3>
+                <p>Meetings, Search, and the selected record replace one another at every width.</p>
               </header>
-              <div class="ia-frame ia-frame--inspector">
+              <div class="ia-frame ia-frame--stack">
                 <div class="ia-toolbar">
-                  <strong>Yawn</strong>
+                  <strong>Meetings</strong>
                   <span class="ys-status" data-state="ready"><span class="ys-status__mark" aria-hidden="true"></span>Ready</span>
                   <button class="ys-button ia-toolbar__record" type="button"><svg class="ys-icon"><use href="#ys-icon-record" /></svg>Record</button>
                 </div>
-                <div class="ia-two-pane-shell">
-                  <nav class="ia-product-sidebar" aria-label="Option C product navigation">
-                    <button class="ys-sidebar-row" type="button" aria-current="page"><svg class="ys-icon"><use href="#ys-icon-meetings" /></svg><span class="ys-row-copy"><strong>Meetings</strong><span>Home</span></span></button>
-                    <button class="ys-sidebar-row" type="button"><svg class="ys-icon"><use href="#ys-icon-search" /></svg><span class="ys-row-copy"><strong>Ask</strong></span></button>
-                  </nav>
-                  <section class="ia-inspector-workspace" aria-label="Option C meetings workspace">
-                    <div class="ia-library-pane">
-                      <div class="ia-workspace-title"><div><span class="ia-eyebrow">Meetings</span><h3>All meetings</h3></div><button class="ys-icon-button" type="button" aria-label="Search meetings"><svg class="ys-icon"><use href="#ys-icon-search" /></svg></button></div>
-                      <button class="ys-disclosure-row ia-filter-row" type="button" aria-expanded="false" data-disclosure><svg class="ys-icon ys-disclosure-chevron"><use href="#ys-icon-chevron" /></svg><span class="ys-row-copy"><strong>Filters</strong><span>Folder and date</span></span></button>
-                      <button class="ia-library-row" type="button" aria-current="true"><span><strong>Weekly product check-in</strong><small>Today · 38 min</small></span><small>Transcript</small></button>
-                      <button class="ia-library-row" type="button"><span><strong>Research review</strong><small>Yesterday · 42 min</small></span><small>Note</small></button>
-                      <button class="ia-library-row" type="button"><span><strong>Design-system handoff</strong><small>Friday · 31 min</small></span><small>Transcript</small></button>
-                    </div>
-                    <aside class="ia-inspector-pane" aria-label="Selected meeting preview">
-                      <p class="ys-record__meta">Today · On this Mac</p>
-                      <h3 class="ys-record-title">Weekly product check-in</h3>
-                      <p>Keep source words one action away.</p>
-                      <button class="ys-button" type="button">Open meeting</button>
-                    </aside>
+                <div class="ia-stack-shell">
+                  <section class="ia-stack-collection" aria-label="Structure 3 meeting list">
+                    <div class="ia-pane-bar"><strong>Recent meetings</strong><button class="ys-icon-button" type="button" aria-label="Search meetings"><svg class="ys-icon"><use href="#ys-icon-search" /></svg></button></div>
+                    <button class="ia-library-row" type="button" data-stack-open-record><span><strong>Weekly product check-in</strong><small>Today · 38 min</small></span><small>›</small></button>
+                    <button class="ia-library-row" type="button" data-stack-open-record><span><strong>Research review</strong><small>Yesterday · 42 min</small></span><small>›</small></button>
+                    <button class="ia-library-row" type="button" data-stack-open-record><span><strong>Design-system handoff</strong><small>Friday · 31 min</small></span><small>›</small></button>
                   </section>
+                  <article class="ia-record-preview ia-stack-record">
+                    <button class="ia-back-button" type="button" data-stack-back>‹ Meetings</button>
+                    <p class="ys-record__meta">Today · 9:30 AM · On this Mac</p>
+                    <h3 class="ys-record-title">Weekly product check-in</h3>
+                    <div class="ia-text-tabs" aria-label="Structure 3 meeting views"><span aria-current="page">Note</span><span>Transcript</span><span>Details</span></div>
+                    <div class="ia-note-excerpt"><strong>Decision</strong><p>Give the current job the full window.</p></div>
+                  </article>
                 </div>
               </div>
-              <p class="ia-option__verdict"><strong>Tradeoff:</strong> It makes finding and bulk scanning strongest, but demotes the meeting record and adds an Open step to the core reading path.</p>
+              <p class="ia-option__verdict"><strong>Tradeoff:</strong> clearest and calmest reading surface; repeated meeting comparison always requires Back and reopen.</p>
             </article>
+          </div>
+
+          <div class="ia-task-comparison" aria-labelledby="ia-task-comparison-title">
+            <h3 id="ia-task-comparison-title">Task comparison</h3>
+            <div class="ia-task-row ia-task-row--heading"><span>Task</span><span>Three-pane</span><span>Adaptive</span><span>Single pane</span></div>
+            <div class="ia-task-row"><strong>Switch meetings</strong><span>Fastest</span><span>Fast wide · one Back compact</span><span>Most navigation</span></div>
+            <div class="ia-task-row"><strong>Read at 720 × 560</strong><span>Cramped</span><span>Full-width record</span><span>Full-width record</span></div>
+            <div class="ia-task-row"><strong>Cold launch</strong><span>Dense hierarchy</span><span>List first compact</span><span>Clearest collection</span></div>
+            <div class="ia-task-row"><strong>Mac collection fit</strong><span>Strong</span><span>Strong and responsive</span><span>Familiar but less desktop-specific</span></div>
           </div>
 
           <div class="ia-recommendation" aria-labelledby="ia-recommendation-title">
             <div>
-              <span class="ia-eyebrow">Recommendation</span>
-              <h3 id="ia-recommendation-title">Use A, then remove work instead of removing context.</h3>
+              <span class="ia-eyebrow">Blind research result</span>
+              <h3 id="ia-recommendation-title">Prototype the adaptive two-pane structure.</h3>
             </div>
             <ul>
-              <li><strong>Default and return:</strong> Meetings is selected at launch and remains the visible way back from Ask or a focused record.</li>
-              <li><strong>Meeting rows:</strong> title, date, and duration only. Rename and filing belong in a row menu or selected-meeting inspector.</li>
-              <li><strong>Filters:</strong> search is immediate; folder and date controls open from one disclosure.</li>
-              <li><strong>Retention:</strong> per-meeting facts live in Details; corpus-wide storage moves to Settings. Neither fills the library.</li>
-              <li><strong>Transcript handoff:</strong> Open transcript selects the current meeting’s Transcript view and explicit navigation must not be overwritten by snapshot polling.</li>
+              <li><strong>Comfortable:</strong> keep the meeting list beside the selected record.</li>
+              <li><strong>Minimum:</strong> show the collection first; opening a meeting gives the record the full window.</li>
+              <li><strong>Search:</strong> use a toolbar search with Exact words and Describe the passage modes.</li>
+              <li><strong>Secondary work:</strong> move rename and filing to context menus; keep full retention facts in Details.</li>
+              <li><strong>Unproven:</strong> human testing must confirm that one compact Back step is preferable to a permanently narrow record.</li>
             </ul>
           </div>
         </section>
@@ -375,8 +384,7 @@
                 <div class="ys-primary-split">
                   <nav class="ys-primary-sidebar" aria-label="Product">
                     <button class="ys-sidebar-row" type="button" aria-current="page"><svg class="ys-icon"><use href="#ys-icon-meetings" /></svg><span class="ys-row-copy"><strong>Meetings</strong></span></button>
-                    <button class="ys-sidebar-row" type="button"><svg class="ys-icon"><use href="#ys-icon-search" /></svg><span class="ys-row-copy"><strong>Ask</strong><span>Exact and meaning search</span></span></button>
-                    <button class="ys-sidebar-row" type="button" disabled><svg class="ys-icon"><use href="#ys-icon-actions" /></svg><span class="ys-row-copy"><strong>Actions</strong><span>Not available</span></span></button>
+                    <button class="ys-sidebar-row" type="button"><svg class="ys-icon"><use href="#ys-icon-search" /></svg><span class="ys-row-copy"><strong>Search</strong><span>Exact words or describe a passage</span></span></button>
                   </nav>
                   <aside class="ys-primary-list" aria-label="Recent meetings">
                     <h4 class="ys-pane-heading">Recent</h4>

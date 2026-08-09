@@ -68,6 +68,28 @@ for (const disclosure of document.querySelectorAll("[data-disclosure]")) {
   });
 }
 
+const adaptiveOption = document.querySelector('[data-ia-option="adaptive-two-pane"]');
+for (const control of document.querySelectorAll("[data-adaptive-open-record]")) {
+  control.addEventListener("click", () => {
+    adaptiveOption.dataset.compactView = "record";
+  });
+}
+document.querySelector("[data-adaptive-back]")?.addEventListener("click", () => {
+  adaptiveOption.dataset.compactView = "collection";
+  document.querySelector("[data-adaptive-open-record]")?.focus();
+});
+
+const stackOption = document.querySelector('[data-ia-option="single-pane-stack"]');
+for (const control of document.querySelectorAll("[data-stack-open-record]")) {
+  control.addEventListener("click", () => {
+    stackOption.dataset.stackView = "record";
+  });
+}
+document.querySelector("[data-stack-back]")?.addEventListener("click", () => {
+  stackOption.dataset.stackView = "collection";
+  document.querySelector("[data-stack-open-record]")?.focus();
+});
+
 const captureTitle = document.querySelector("#capture-title");
 const captureStatus = document.querySelector("#capture-status");
 const captureStatusLabel = document.querySelector("#capture-status-label");

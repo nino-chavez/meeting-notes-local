@@ -25,20 +25,25 @@ It does not prove native toolbar or Settings-window behavior, system materials,
 VoiceOver order, installed-app keyboard routing, exact native 200% zoom, real
 menubar state, or recording behavior.
 
-## DS-5 Meetings front-door comparison
+## DS-5 primary-window comparison
 
-The specimen includes three bounded structures for the same admitted Meetings
-front door. It does not add a separate dashboard Home route.
+The specimen compares three structures derived from a blind review of product
+tasks, production behavior, Mac guidance, and the 720 × 560 width constraint. It
+does not treat the existing split or prior option labels as authority.
 
-1. **Persistent split — recommended.** Product navigation, compact recents, and
-   the selected record remain visible. This preserves the approved Mac Split and
-   removes row-level editing, expanded filters, and retention reporting from the
-   first scan.
-2. **Recent shelf.** A two-pane shell gives the selected record more space and is
-   calmest with a short history. It truncates sooner and weakens long-library
-   scanning.
-3. **Library with inspector.** A collection-first table is strongest for bulk
-   scanning. It demotes the record and adds an Open step to the core reading path.
+1. **Persistent three-pane.** Sources, meeting list, and selected record remain
+   visible. It switches fastest at comfortable width and compresses the record at
+   the minimum.
+2. **Adaptive two-pane.** Meeting list and selected record remain adjacent while
+   space supports them. At the minimum, the collection and full-width record
+   become two restorable navigation states.
+3. **Single-pane stack.** Meetings, Search, and a selected record replace one
+   another at every width. It reads most calmly and makes repeated switching
+   slower.
+
+The recommendation follows the comparison rather than appearing in an option
+label. The blind review selected the adaptive two-pane for prototyping. Human
+task evidence can still overturn it.
 
 Use the global appearance control for light and dark, and **Front-door geometry**
 for the comfortable and 720 × 560 comparison. These are browser composition
