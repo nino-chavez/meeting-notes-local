@@ -1190,6 +1190,9 @@ html[data-native-calibration="split"] #recording-screen .channel-mark { margin: 
 html[data-native-calibration="split"] #recording-screen .prototype-scenario-controls.compact {
   display: none !important;
 }
+html[data-synthetic-review="true"][data-native-calibration="split"] #recording-screen .prototype-scenario-controls.compact {
+  display: flex !important;
+}
 html[data-native-calibration="split"] #recording-screen .prototype-scenario-controls.compact button {
   min-height: 26px;
   padding: 0;
@@ -1702,4 +1705,26 @@ html[data-native-calibration="reference"] .local-badge { color: var(--muted); ba
     --brand-accent-hover: #8bddff;
     --brand-accent-ink: #1c1b19;
   }
+}
+/* A separately identified, backend-free Tauri review bundle uses the production
+   DOM and native frame. The watermark must survive every route and screenshot. */
+.ui-review-watermark {
+  display: none;
+}
+
+html[data-synthetic-review="true"] .ui-review-watermark {
+  display: block;
+  position: fixed;
+  z-index: 10000;
+  right: 10px;
+  bottom: 10px;
+  max-width: calc(100vw - 20px);
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--ys-warning) 55%, var(--ys-border));
+  border-radius: var(--ys-radius-md);
+  background: var(--ys-surface-overlay);
+  color: var(--ys-ink-strong);
+  font: 600 10px/1.2 var(--ys-font-ui);
+  letter-spacing: 0.08em;
+  pointer-events: none;
 }

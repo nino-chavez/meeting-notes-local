@@ -24,6 +24,10 @@ pub const PREVIEW_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.preview
 pub const PREVIEW_WINDOW: &str = "preview";
 pub const PREVIEW_CAPABILITY: &str = "preview-window";
 pub const PREVIEW_FRONTEND: &str = "../ui";
+pub const UI_REVIEW_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.ui-review";
+pub const UI_REVIEW_WINDOW: &str = "ui-review";
+pub const UI_REVIEW_CAPABILITY: &str = "ui-review-window";
+pub const UI_REVIEW_FRONTEND: &str = "../ui";
 pub const PRODUCTION_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes";
 pub const PRODUCTION_WINDOW: &str = "main";
 pub const PRODUCTION_CAPABILITY: &str = "main-window";
@@ -88,6 +92,7 @@ pub enum BuildMode {
     Production,
     Development,
     Preview,
+    UiReview,
 }
 
 pub struct BuildPlan {
@@ -100,12 +105,14 @@ impl BuildMode {
     pub fn from_enabled_features(
         library_development: bool,
         preview: bool,
+        ui_review: bool,
     ) -> Result<Self, &'static str> {
-        match (library_development, preview) {
-            (false, false) => Ok(Self::Production),
-            (true, false) => Ok(Self::Development),
-            (false, true) => Ok(Self::Preview),
-            (true, true) => Err("library development and preview are isolated build lanes"),
+        match (library_development, preview, ui_review) {
+            (false, false, false) => Ok(Self::Production),
+            (true, false, false) => Ok(Self::Development),
+            (false, true, false) => Ok(Self::Preview),
+            (false, false, true) => Ok(Self::UiReview),
+            _ => Err("development, preview, and UI review are isolated build lanes"),
         }
     }
 }
@@ -127,6 +134,11 @@ pub fn plan(mode: BuildMode) -> BuildPlan {
             capabilities_path: "capabilities/product/*.json",
             permissions_path: "permissions/production/**/*",
         },
+        BuildMode::UiReview => BuildPlan {
+            commands: &[],
+            capabilities_path: "capabilities/review/*.json",
+            permissions_path: "permissions/production/**/*",
+        },
     }
 }
 
@@ -144,7 +156,43 @@ pub fn validate(mode: BuildMode, config: &Value) -> Result<(), &'static str> {
         BuildMode::Preview => Err(
             "preview-surface requires tauri.preview.conf.json with its isolated identifier, product frontend, sole window/capability, ad-hoc signing, and the admitted runtime resource contract",
         ),
+        BuildMode::UiReview if is_ui_review_config(config) => Ok(()),
+        BuildMode::UiReview => Err(
+            "ui-review-surface requires tauri.ui-review.conf.json with its isolated identifier, synthetic URL, sole narrow capability, ad-hoc signing, and no runtime resources",
+        ),
     }
+}
+
+fn is_ui_review_config(config: &Value) -> bool {
+    config.get("productName").and_then(Value::as_str) == Some("Yawn UI Review")
+        && config.get("identifier").and_then(Value::as_str) == Some(UI_REVIEW_IDENTIFIER)
+        && config
+            .pointer("/build/frontendDist")
+            .and_then(Value::as_str)
+            == Some(UI_REVIEW_FRONTEND)
+        && has_single_window(
+            config.pointer("/app/windows"),
+            UI_REVIEW_WINDOW,
+            "Yawn UI Review — Synthetic",
+        )
+        && config.pointer("/app/windows/0/url").and_then(Value::as_str)
+            == Some("index.html?review=synthetic")
+        && has_single_string(
+            config.pointer("/app/security/capabilities"),
+            UI_REVIEW_CAPABILITY,
+        )
+        && config.pointer("/bundle/active").and_then(Value::as_bool) == Some(true)
+        && config
+            .pointer("/bundle/resources")
+            .is_some_and(Value::is_null)
+        && config
+            .pointer("/bundle/macOS/minimumSystemVersion")
+            .and_then(Value::as_str)
+            == Some("14.4")
+        && config
+            .pointer("/bundle/macOS/signingIdentity")
+            .and_then(Value::as_str)
+            == Some("-")
 }
 
 fn is_preview_config(config: &Value) -> bool {

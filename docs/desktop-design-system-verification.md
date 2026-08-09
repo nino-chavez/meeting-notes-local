@@ -6,6 +6,15 @@
 
 **Outcome:** the integrated system is buildable, the automated contracts pass, and the current signed bundle was relaunched and exercised in its Tauri windows. Human and platform-assistive gates remain open below.
 
+**Current standing:** historical DS-4 receipt. It does not close the current visual
+approval gate. New installed passes use
+[`desktop-installed-app-review.md`](desktop-installed-app-review.md) and live under
+`docs/desktop-installed-app-reviews/`, bound to the exact executable and review-plan
+digests.
+
+Latest signed product run: `2026-08-09-4f3f458b`. Latest backend-free installed
+state run: `2026-08-09-ui-review-7515dc15`.
+
 ## What is in the current bundle
 
 - App: `target/release/bundle/macos/Yawn.app`

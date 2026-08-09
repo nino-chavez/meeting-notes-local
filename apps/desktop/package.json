@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.2.0",
   "scripts": {
-    "test:ui": "node --test ui/*.test.mjs ui/system/*.test.mjs ui/reference-surfaces/*.test.mjs settings-reference/*.test.mjs",
+    "test:ui": "node --test ui/*.test.mjs ui/system/*.test.mjs ui/reference-surfaces/*.test.mjs ui/review/*.test.mjs settings-reference/*.test.mjs",
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
@@ -13,7 +13,12 @@
     "settings-reference": "tauri dev --config src-tauri/tauri.settings-reference.conf.json",
     "settings-reference-build": "tauri build --config src-tauri/tauri.settings-reference.conf.json",
     "library-dev": "tauri dev --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface",
-    "library-dev-build": "tauri build --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface"
+    "library-dev-build": "tauri build --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface",
+    "ui-review": "tauri dev --config src-tauri/tauri.ui-review.conf.json --features ui-review-surface",
+    "ui-review-build": "tauri build --config src-tauri/tauri.ui-review.conf.json --features ui-review-surface",
+    "ui-review-verify": "codesign --verify --deep --strict \"../../target/release/bundle/macos/Yawn UI Review.app\"",
+    "review:prepare": "node ui/review/installed-review.mjs prepare",
+    "review:validate": "node ui/review/installed-review.mjs validate"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.0"

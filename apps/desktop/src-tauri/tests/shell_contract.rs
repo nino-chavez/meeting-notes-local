@@ -1018,7 +1018,7 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     // one file by name silently stops covering everything written after it.
     assert_eq!(
         package["scripts"]["test:ui"],
-        "node --test ui/*.test.mjs ui/system/*.test.mjs ui/reference-surfaces/*.test.mjs settings-reference/*.test.mjs"
+        "node --test ui/*.test.mjs ui/system/*.test.mjs ui/reference-surfaces/*.test.mjs ui/review/*.test.mjs settings-reference/*.test.mjs"
     );
     assert!(html.contains("id=\"new-meeting\" type=\"button\">Return to Find"));
     // Copy is offered above each transcript, never only after it, and the

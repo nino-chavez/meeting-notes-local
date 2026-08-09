@@ -196,13 +196,14 @@ test("the installed app adopts Mac Split without drawing browser traffic lights"
   const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");
   const tauri = JSON.parse(readFileSync(join(here, "../src-tauri/tauri.conf.json"), "utf8"));
   const preview = JSON.parse(readFileSync(join(here, "../src-tauri/tauri.preview.conf.json"), "utf8"));
+  const uiReview = JSON.parse(readFileSync(join(here, "../src-tauri/tauri.ui-review.conf.json"), "utf8"));
 
-  assert.match(source, /const shellEnvironment = invoke \? "installed" : "browser"/);
+  assert.match(source, /const shellEnvironment = installedUiReview \? "installed-review" : invoke \? "installed" : "browser"/);
   assert.match(source, /document\.documentElement\.dataset\.shellEnvironment = shellEnvironment/);
   assert.match(html, /<header class="app-header ys-toolbar" data-tauri-drag-region="deep">/);
   assert.match(calibration, /html\[data-shell-environment="browser"\]\[data-native-calibration\] \.app-header::before/);
   assert.equal((calibration.match(/\.app-header::before/g) || []).length, 1);
-  for (const config of [tauri, preview]) {
+  for (const config of [tauri, preview, uiReview]) {
     const [window] = config.app.windows;
     assert.equal(window.titleBarStyle, "Overlay");
     assert.equal(window.hiddenTitle, true);

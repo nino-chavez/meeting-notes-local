@@ -1,10 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![cfg_attr(feature = "library-dev-surface", allow(dead_code))]
+#![cfg_attr(feature = "ui-review-surface", allow(dead_code))]
 
 #[cfg(feature = "library-dev-surface")]
 mod library_dev_surface;
 #[cfg(feature = "settings-reference")]
 mod settings_reference;
+#[cfg(feature = "ui-review-surface")]
+mod ui_review_surface;
 // The library reader is intentionally private and unregistered.  It maps an
 // already-built projection into closed DTOs, but does not create storage or
 // provide a Tauri command.
@@ -4002,7 +4005,8 @@ fn load_bound_preview_transcript_projection(
 
 #[cfg(all(
     not(feature = "library-dev-surface"),
-    not(feature = "settings-reference")
+    not(feature = "settings-reference"),
+    not(feature = "ui-review-surface")
 ))]
 fn main() {
     let state = ApplicationState::default();
@@ -4148,6 +4152,11 @@ fn main() {
 #[cfg(feature = "settings-reference")]
 fn main() {
     settings_reference::run();
+}
+
+#[cfg(feature = "ui-review-surface")]
+fn main() {
+    ui_review_surface::run();
 }
 
 fn initialize_application(app: AppHandle, retry: bool) {

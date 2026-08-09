@@ -140,18 +140,40 @@ fn production_and_preview_keep_their_intentional_window_sizes() {
 #[test]
 fn surface_features_select_exactly_one_build_lane() {
     assert!(matches!(
-        BuildMode::from_enabled_features(false, false),
+        BuildMode::from_enabled_features(false, false, false),
         Ok(BuildMode::Production)
     ));
     assert!(matches!(
-        BuildMode::from_enabled_features(true, false),
+        BuildMode::from_enabled_features(true, false, false),
         Ok(BuildMode::Development)
     ));
     assert!(matches!(
-        BuildMode::from_enabled_features(false, true),
+        BuildMode::from_enabled_features(false, true, false),
         Ok(BuildMode::Preview)
     ));
-    assert!(BuildMode::from_enabled_features(true, true).is_err());
+    assert!(matches!(
+        BuildMode::from_enabled_features(false, false, true),
+        Ok(BuildMode::UiReview)
+    ));
+    assert!(BuildMode::from_enabled_features(true, true, false).is_err());
+    assert!(BuildMode::from_enabled_features(false, true, true).is_err());
+}
+
+#[test]
+fn ui_review_config_is_backend_free_and_isolated() {
+    let review = config(include_str!("../tauri.ui-review.conf.json"));
+    let plan = plan(BuildMode::UiReview);
+    assert!(validate(BuildMode::UiReview, &review).is_ok());
+    assert!(plan.commands.is_empty());
+    assert_eq!(plan.capabilities_path, "capabilities/review/*.json");
+    assert_eq!(review["bundle"]["resources"], Value::Null);
+    assert_eq!(
+        review["app"]["windows"][0]["url"],
+        "index.html?review=synthetic"
+    );
+    assert!(validate(BuildMode::Production, &review).is_err());
+    assert!(validate(BuildMode::Preview, &review).is_err());
+    assert!(validate(BuildMode::Development, &review).is_err());
 }
 
 #[test]

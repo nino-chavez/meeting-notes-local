@@ -6,6 +6,11 @@
 
 **Retire this ledger when:** every row is migrated, removed, or recorded as a deliberate exception with its own acceptance evidence.
 
+**Review authority:** `docs/desktop-installed-app-review.md`. The stable
+`surface_id` values in `apps/desktop/ui/review/review-plan.json` bind future run
+receipts to these migration rows. The current review run is recorded below; a
+`fail` or `unproven` verdict keeps the row open.
+
 ## Migrated in DS-4
 
 | Surface | Shared production owner | What changed |
@@ -39,6 +44,16 @@ The accepted surfaces resolve shared jobs through `ys-*` components. Legacy sele
 | 13 | Desktop-behavior dialog | prototype-only dialog and local styles | Remove if the native Settings Desktop pane replaces it; otherwise document the distinct transient job |
 | 14 | Voice-profile reset, recording deletion, meeting deletion | local confirmation blocks | Shared confirmation/dialog pattern, destructive wording, separate confirmation, keyboard and VoiceOver |
 | 15 | Prototype meeting and retained comparison modes | `prototype-meeting-screen`, wireframe/document/reference calibrations | Keep as evidence-only until the production replacement has an equal or better deterministic harness; never expose them as shipped features |
+
+## Latest installed review
+
+| Surface ID | Current atomic standing | Latest run |
+|---|---|---|
+| `main.shell` | `unproven` — the operator rejected the prior executable; the rebuilt signed executable awaits visual review | `2026-08-09-4f3f458b` |
+| `main.library` | `unproven` — retained-meeting selection passed after rebuild; remaining states and actions are open | `2026-08-09-4f3f458b` |
+| `settings.capture` | `fail` — native window behavior exists, but the pane still reads as a scrollable web report | `2026-08-09-4f3f458b` |
+| `prototype.references` | `fail` — installed synthetic layout rendered, but the Consent return path lost the meeting subtree from the accessibility tree | `2026-08-09-ui-review-7515dc15` |
+| all other plan surfaces | `unproven` | `2026-08-09-e6c0eebc` |
 
 ## Legacy CSS removal ledger
 

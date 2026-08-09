@@ -37,11 +37,12 @@ import {
   resolvedScreenForSnapshot,
 } from "./navigation-state.mjs";
 
-const invoke = window.__TAURI__?.core?.invoke;
 const shellParams = new window.URLSearchParams(window.location.search);
-const shellEnvironment = invoke ? "installed" : "browser";
-const shellPrototype = !invoke
-  && shellParams.has("prototype");
+const rawInvoke = window.__TAURI__?.core?.invoke;
+const installedUiReview = Boolean(rawInvoke && shellParams.get("review") === "synthetic");
+const invoke = installedUiReview ? null : rawInvoke;
+const shellEnvironment = installedUiReview ? "installed-review" : invoke ? "installed" : "browser";
+const shellPrototype = installedUiReview || (!rawInvoke && shellParams.has("prototype"));
 const requestedNativeCalibration = shellPrototype
   ? shellParams.get("calibration") || "split"
   : "";
@@ -53,6 +54,7 @@ const nativeCalibration = requestedNativeCalibration === "wireframe"
       ? "split"
       : "";
 document.documentElement.dataset.shellEnvironment = shellEnvironment;
+if (installedUiReview) document.documentElement.dataset.syntheticReview = "true";
 if (nativeCalibration) {
   document.documentElement.dataset.nativeCalibration = nativeCalibration;
   const calibrationTitles = {
@@ -700,13 +702,13 @@ function formatElapsed(seconds) {
 function beginElapsed(epochSeconds) {
   startedAt = Number(epochSeconds) * 1000;
   const render = () => {
-    const elapsed = startedAt ? (Date.now() - startedAt) / 1000 : 0;
+    const elapsed = installedUiReview ? 18 : startedAt ? (Date.now() - startedAt) / 1000 : 0;
     const elapsedText = formatElapsed(elapsed);
     document.querySelector("#elapsed-time").textContent = elapsedText;
     quickControlElapsed.textContent = elapsedText;
   };
   render();
-  if (!elapsedTimer) elapsedTimer = window.setInterval(render, 1000);
+  if (!installedUiReview && !elapsedTimer) elapsedTimer = window.setInterval(render, 1000);
 }
 
 function endElapsed() {

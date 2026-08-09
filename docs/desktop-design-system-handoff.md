@@ -177,6 +177,11 @@ that placeholder behavior shipped.
 Every reference surface must pass all rows. A browser pass cannot substitute for an
 installed-app row.
 
+The durable execution and evidence contract is
+[`desktop-installed-app-review.md`](desktop-installed-app-review.md). Retirement
+requires a validated digest-bound run plus an explicit operator verdict. Historical
+screenshots or receipts for another executable cannot close the current matrix.
+
 | Check | Required evidence |
 |---|---|
 | Installed Tauri app | Screenshot and interaction walk in the actual window |

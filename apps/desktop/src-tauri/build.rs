@@ -9,11 +9,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
     let library_development = env::var_os("CARGO_FEATURE_LIBRARY_DEV_SURFACE").is_some();
     let preview = env::var_os("CARGO_FEATURE_PREVIEW_SURFACE").is_some();
+    let ui_review = env::var_os("CARGO_FEATURE_UI_REVIEW_SURFACE").is_some();
     let settings_reference = env::var_os("CARGO_FEATURE_SETTINGS_REFERENCE").is_some();
-    if settings_reference && (library_development || preview) {
+    if settings_reference && (library_development || preview || ui_review) {
         panic!("the Settings reference is isolated from the product and library surfaces");
     }
-    let mode = BuildMode::from_enabled_features(library_development, preview)
+    let mode = BuildMode::from_enabled_features(library_development, preview, ui_review)
         .expect("only one Local Meeting Notes surface feature may be enabled");
     let mut config = fs::read_to_string("tauri.conf.json")
         .and_then(|value| serde_json::from_str(&value).map_err(Into::into))

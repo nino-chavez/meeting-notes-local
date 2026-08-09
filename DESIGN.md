@@ -221,6 +221,10 @@ The design system has four owned layers:
    surfaces in light and dark mode, minimum and comfortable sizes, keyboard-only,
    reduced-motion, increased-contrast, and 200% zoom checks.
 
+The repeatable installed-app procedure, evidence classes, invalidation rules, and
+human-approval boundary live in `docs/desktop-installed-app-review.md`. A browser
+or synthetic pass cannot substitute for an installed or human gate.
+
 `DESIGN.md` owns the decisions. Shared CSS and JavaScript own their implementation.
 A screen-specific override is permitted only when the screen has a documented
 state the shared pattern cannot express. The override must not silently redefine a
