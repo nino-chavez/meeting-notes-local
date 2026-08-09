@@ -40,7 +40,7 @@ DS-2 separately proved the isolated native Settings reference in both appearance
 
 The current integrated bundle was then clamped to the declared 720×560 primary-window minimum and captured like-for-like in macOS Light and Dark appearances. The same installed process opened Capture Settings at its fixed 720×560 geometry in both appearances. The primary action, local meeting list, selected Transcript tab, locality label, Settings entry, permission truth, and disabled device controls remained present. No page-level horizontal scrollbar appeared. macOS was returned to its original Dark appearance after the check.
 
-Retained native captures:
+Pre-correction native captures retained for comparison:
 
 - [Primary window — Light, 720×560](desktop-design-system-verification/installed-main-720x560-light.jpg)
 - [Primary window — Dark, 720×560](desktop-design-system-verification/installed-main-720x560-dark.jpg)
@@ -59,6 +59,8 @@ The same correction removes the inner rounded web-window frame, makes the three 
 - [Corrected installed primary window](desktop-design-system-verification/installed-main-native-correction-dark.jpg)
 
 The rebuilt, ad-hoc-signed bundle passed a Computer Use drag action on the corrected title bar and remained interactive with the retained Transcript selected. This is implementation evidence, not human approval of the corrected visual result.
+
+Because this correction changes shared appearance tokens, record scale, and primary-window geometry, the earlier installed Light/Dark and exact-minimum captures no longer close those rows for the current bundle. Rerun them only after the corrected visual direction receives human approval.
 
 ## Browser interaction evidence
 
@@ -79,8 +81,8 @@ These checks used the production DOM with the explicit synthetic prototype adapt
 | Check | Result | Evidence | Still open |
 |---|---|---|---|
 | Installed Tauri app | Partial | The current bundle passed the main-window and Settings screenshot/interaction walk, including real retained data, Transcript selection, Command–Comma, keyboard focus, native close, and restoration | Recording, degraded recording, and processing were not driven with live audio in the installed app |
-| Appearance | Pass for migrated surfaces | The current integrated bundle passed like-for-like installed Light and Dark captures for the primary window and Capture Settings | Human visual approval remains separate under Comparison |
-| Geometry | Pass for migrated surfaces | The installed primary window passed at its declared 720×560 minimum; installed Capture Settings passed at its fixed 720×560 size; critical actions remained exposed without a page-level horizontal scrollbar | Larger production screens remain governed by the migration ledger |
+| Appearance | Partial after correction | The corrected integrated primary window was captured in installed Dark appearance; pre-correction Light/Dark captures remain as comparison evidence | Rerun current installed Light/Dark like-for-like after human approval |
+| Geometry | Partial after correction | The corrected primary window filled its native panes at comfortable size without hiding critical actions; Settings remains fixed at 720×560 | Rerun the corrected primary window at exact 720×560 after human approval |
 | Keyboard | Partial | Browser tab paths and installed Settings pane paths passed; Command–Comma passed | Space/Return and safe Escape need a current installed walk across all three migrated surfaces |
 | Accessibility | Partial | AX labels were present; browser focus, reduced motion, contrast tokens, transparency tokens, and zoom modes are test-covered | Spoken VoiceOver, current installed increased contrast, reduced transparency, and 200% zoom are unproven |
 | States | Partial | Automated and browser references cover loading, empty, ready, disabled, selected, error, degraded, stopping, failure, and recovered presentations | Real-device capture and interrupted recovery were not run in this package |
