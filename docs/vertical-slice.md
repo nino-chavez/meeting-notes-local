@@ -353,7 +353,7 @@ the mechanism. If the two ever disagree, trunk wins.
 
 **Rewritten 2026-08-07 after the north star expanded to category parity.** The
 previous queue sequenced ten features and reported itself empty of builder-owned
-work. That was true of those ten and false of the product: parity is 26 Phase 1
+work. That was true of those ten and false of the product: parity is 28 Phase 1
 features and most are Unbuilt. See
 [`product-definition.md`](./product-definition.md) for the feature set and the
 competitor each row comes from.
@@ -400,13 +400,15 @@ largest surface-area addition and says it has nothing to do with audio.
 | 9 | Action items with owner and status | C1 | Was refused as a non-goal; three of six colleagues asked for it and Wispr ships a `Todos` table |
 | 10 | Commitment view across meetings, export as the terminal action | C2 C3 | Needs 9 and the store |
 
-### Wave 3 — identity
+### Wave 3 — identity and meeting-length input
 
 | Order | Build | Feature | Why here |
 |---|---|---|---|
 | 11 | Named speakers from a local roster plus voice enrollment | A3 | Was refused as a non-goal. The enrollment leg already ships |
-| 12 | One-click name correction, propagated across the transcript | A3 | Wispr's actual mechanism, and the cheapest of its three signals |
-| 13 | Long-form ASR: chunked streaming, VAD, timestamp stitching | A4 | A rewrite of the recording loop, not a parameter change |
+| 12 | Speaker correction with explicit scope: rename one identity everywhere, or reassign one turn | A3 | Speakr's source records the failure when one control did both. Stage either change; only confirmed identity changes may update a saved profile |
+| 13 | Long-form ASR at meeting length: chunked streaming, VAD, timestamp stitching and a typed failure with the valid recovery | A4 | A rewrite of the recording loop, not a parameter change. Duration, seam words, speaker continuity and partial recovery are acceptance evidence; Speakr's current chunk merge is a counterexample, not code to copy |
+| 14 | Import existing audio through the same immutable-source and transcription contract as capture | A6 | Depends on 13. File selection and a future watched folder are sources, not separate pipelines; reprocess or re-import is offered only when the typed cause permits it |
+| 15 | Per-speaker meeting statistics after defining turn, overlap, silence and the percentage denominator | E7 | Speakr proves the surface exists but not its arithmetic. Names depend on 11; fixtures precede UI |
 
 ### Wave 4 — Phase 2 begins
 
