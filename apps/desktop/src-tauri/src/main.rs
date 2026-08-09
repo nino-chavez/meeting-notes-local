@@ -3,6 +3,8 @@
 
 #[cfg(feature = "library-dev-surface")]
 mod library_dev_surface;
+#[cfg(feature = "settings-reference")]
+mod settings_reference;
 // The library reader is intentionally private and unregistered.  It maps an
 // already-built projection into closed DTOs, but does not create storage or
 // provide a Tauri command.
@@ -3966,7 +3968,10 @@ fn load_bound_preview_transcript_projection(
     Ok((turns, warnings))
 }
 
-#[cfg(not(feature = "library-dev-surface"))]
+#[cfg(all(
+    not(feature = "library-dev-surface"),
+    not(feature = "settings-reference")
+))]
 fn main() {
     let state = ApplicationState::default();
     // Managed now so registering the facade commands later is one move; the
@@ -4078,6 +4083,11 @@ fn main() {
 #[cfg(feature = "library-dev-surface")]
 fn main() {
     library_dev_surface::run();
+}
+
+#[cfg(feature = "settings-reference")]
+fn main() {
+    settings_reference::run();
 }
 
 fn initialize_application(app: AppHandle, retry: bool) {

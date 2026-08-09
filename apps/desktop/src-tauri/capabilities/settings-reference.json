@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings-reference-window",
+  "description": "The isolated DS-2 host and Settings webview may update their own native window title. They have no product commands, storage, capture, filesystem, shell, process, dialog, or network authority.",
+  "windows": [
+    "settings-reference-host",
+    "settings-reference"
+  ],
+  "platforms": ["macOS"],
+  "permissions": [
+    "core:window:allow-set-title"
+  ]
+}

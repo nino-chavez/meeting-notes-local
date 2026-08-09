@@ -10,6 +10,8 @@
     "preview": "tauri dev --config src-tauri/tauri.preview.conf.json --features preview-surface",
     "preview-build": "tauri build --config src-tauri/tauri.preview.conf.json --features preview-surface && ../../scripts/prepare-preview-bundle.sh sign",
     "preview-verify": "../../scripts/prepare-preview-bundle.sh verify",
+    "settings-reference": "tauri dev --config src-tauri/tauri.settings-reference.conf.json",
+    "settings-reference-build": "tauri build --config src-tauri/tauri.settings-reference.conf.json",
     "library-dev": "tauri dev --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface",
     "library-dev-build": "tauri build --config src-tauri/tauri.library-dev.conf.json --features library-dev-surface"
   },
