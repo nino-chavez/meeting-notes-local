@@ -56,10 +56,11 @@ The accepted surfaces resolve shared jobs through `ys-*` components. Legacy sele
 ## Latest installed review
 
 The current prepared product run is `2026-08-10-8c341b16-signing`. It binds the
-clean source commit and strictly verified local bundle, but records no installed
-interaction or human evidence; all 127 checks are `unproven`. The table keeps the
-latest evidence-bearing run for each surface, which remains historical until that
-surface is rerun for the current executable.
+clean source commit and strictly verified local bundle. It records one
+agent-assisted Desktop Settings observation; all 127 checks remain `unproven`
+because the full state, appearance, geometry, interaction, and human requirements
+are still open. The table keeps the latest evidence-bearing run for each surface,
+which remains historical until that surface is rerun for the current executable.
 
 | Surface ID | Current atomic standing | Latest run |
 |---|---|---|

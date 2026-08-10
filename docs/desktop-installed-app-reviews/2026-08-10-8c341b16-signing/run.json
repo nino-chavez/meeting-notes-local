@@ -16,7 +16,38 @@
     "working_tree_clean": true,
     "review_plan_sha256": "009d60960046fd5ec8dd5c43656171c60c3eeec014f2cf2a857c8b61664678e1"
   },
-  "evidence": [],
+  "evidence": [
+    {
+      "id": "agent-desktop-settings-screenshot",
+      "environment": "installed-tauri",
+      "stimulus": "retained-local",
+      "observer": "agent-assisted",
+      "assistive_mode": "none",
+      "app_executable_sha256": "8c341b160937ce86371998a970ecf5cabded8ec593f3442441601685a91011d6",
+      "artifact": {
+        "privacy": "owner-only",
+        "sha256": "8a63288b3365435f047b249a02c31d0a2c04b0116cd8c3e7b1ff1c9e6a231f19",
+        "local_identifier": "Computer Use Desktop Settings screenshot retained outside Git"
+      },
+      "observed_at": "2026-08-10T06:02:47Z",
+      "notes": "The native Desktop pane rendered its close-hide, quit-exit, and no-notifications boundaries without meeting or transcript content."
+    },
+    {
+      "id": "agent-desktop-settings-window-trace",
+      "environment": "installed-tauri",
+      "stimulus": "retained-local",
+      "observer": "agent-assisted",
+      "assistive_mode": "accessibility-tree",
+      "app_executable_sha256": "8c341b160937ce86371998a970ecf5cabded8ec593f3442441601685a91011d6",
+      "artifact": {
+        "privacy": "owner-only",
+        "sha256": "9eefd9dab28f537e0d37b082bb9c2a172a1a248deff3faade1c0f58d30a88746",
+        "local_identifier": "Computer Use Desktop Settings close-reopen trace retained in the owning task"
+      },
+      "observed_at": "2026-08-10T06:02:47Z",
+      "notes": "Command-Comma opened Desktop Settings, the native close control returned to the primary window, and Command-Comma reopened Desktop Settings with Desktop selected."
+    }
+  ],
   "checks": [
     {
       "gate_id": "native.appearance",
@@ -589,9 +620,11 @@
       "appearance": "all-required",
       "geometry": "all-required",
       "verdict": "unproven",
-      "evidence_ids": [],
+      "evidence_ids": [
+        "agent-desktop-settings-screenshot"
+      ],
       "expected": "Complete native.appearance for settings.remaining under the canonical installed-app protocol.",
-      "observed": "No admissible evidence recorded.",
+      "observed": "The installed Desktop pane rendered its window boundary and no-notifications copy. Privacy, Connections, other appearances and geometries, and human review remain unproven.",
       "defect_id": null
     },
     {
@@ -613,9 +646,11 @@
       "appearance": "all-required",
       "geometry": "all-required",
       "verdict": "unproven",
-      "evidence_ids": [],
+      "evidence_ids": [
+        "agent-desktop-settings-window-trace"
+      ],
       "expected": "Complete native.window for settings.remaining under the canonical installed-app protocol.",
-      "observed": "No admissible evidence recorded.",
+      "observed": "The installed Desktop Settings window closed through its native close control and reopened through Command-Comma with Desktop selected. Other panes, geometries, appearances, and human review remain unproven.",
       "defect_id": null
     },
     {
@@ -637,9 +672,11 @@
       "appearance": "all-required",
       "geometry": "all-required",
       "verdict": "unproven",
-      "evidence_ids": [],
+      "evidence_ids": [
+        "agent-desktop-settings-screenshot"
+      ],
       "expected": "Complete product.truth for settings.remaining under the canonical installed-app protocol.",
-      "observed": "No admissible evidence recorded.",
+      "observed": "The installed Desktop pane stated that close hides Yawn, Quit exits, and system notifications are not active. Privacy and Connections remain unproven.",
       "defect_id": null
     },
     {
