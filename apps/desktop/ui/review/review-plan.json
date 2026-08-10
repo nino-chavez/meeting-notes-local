@@ -93,7 +93,7 @@
       "surface_id": "settings.remaining",
       "window_role": "settings",
       "screen_ids": [],
-      "settings_panes": ["privacy", "connections", "desktop", "shortcuts", "about"],
+      "settings_panes": ["privacy", "connections", "desktop"],
       "entry": "Select each remaining pane in the Settings window",
       "states": ["migration-placeholder"],
       "critical_actions": ["select-pane", "close", "reopen", "restore-pane"],
@@ -108,6 +108,16 @@
       "states": ["unavailable", "baseline-ready", "migration-review-required", "needs-attention", "choosing-operating-point"],
       "critical_actions": ["open", "select-pane", "start-sitting", "stop-sitting", "review-options", "build-profile", "preserve", "reset", "close", "reopen", "restore-pane"],
       "gates": ["native.appearance", "native.geometry", "native.window", "pointer.actions", "keyboard.tabs", "keyboard.focus", "states.truth", "product.truth", "human.visual"]
+    },
+    {
+      "surface_id": "settings.shortcuts-about",
+      "window_role": "settings",
+      "screen_ids": [],
+      "settings_panes": ["shortcuts", "about"],
+      "entry": "Select Shortcuts or About in Settings",
+      "states": ["ready", "unavailable"],
+      "critical_actions": ["open", "select-pane", "close", "reopen", "restore-pane"],
+      "gates": ["native.appearance", "native.geometry", "native.window", "pointer.actions", "keyboard.tabs", "keyboard.focus", "product.truth", "human.visual"]
     },
     {
       "surface_id": "onboarding.first-run",

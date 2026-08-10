@@ -125,9 +125,9 @@ Build and approve these before broad migration:
    and recovered interruption remain explicit and never read as complete.
 
 Ask, Actions, retained Transcript, remaining Settings panes, and first run migrate
-only after these references pass. Voice enrolment now has source integration in
-native Settings, but it still needs the installed acceptance matrix before it can
-count as an approved native migration.
+only after these references pass. Voice enrolment, Shortcuts, and About now have
+source integration in native Settings, but each still needs the installed acceptance
+matrix before it can count as an approved native migration.
 
 ## Work packages and ownership
 

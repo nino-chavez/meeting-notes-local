@@ -235,8 +235,63 @@
         <p class="layout-safety-note" id="layout-safety-note">Yawn collapses panes before the meeting becomes too narrow to read.</p>
         <p class="settings-inline-status" id="layout-choice-status" role="status" aria-live="polite"></p>
       </section>
-      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-shortcuts" data-pane-panel="shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" tabindex="0" hidden><header><h1>Shortcuts</h1><p>Open Settings from the Yawn menu or press Command–Comma.</p></header></section>
-      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-about" data-pane-panel="about" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" hidden><header><h1>About Yawn</h1><p>Meeting data stays on this Mac. No account or upload path is active.</p></header></section>
+      <section class="ys-settings-pane settings-static-pane" id="settings-pane-shortcuts" data-pane-panel="shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" tabindex="0" hidden>
+        <header class="settings-pane-heading">
+          <h1>Shortcuts</h1>
+          <p>Main-window routes and Settings-pane keys.</p>
+        </header>
+        <section class="ys-settings-section" aria-labelledby="shortcuts-navigation-title">
+          <h2 class="ys-settings-section__title" id="shortcuts-navigation-title">Navigation</h2>
+          <div class="ys-settings-row">
+            <div><strong>Meetings</strong><p class="ys-help-text">Show the retained meeting list from the main Yawn window.</p></div>
+            <kbd class="settings-shortcut-key" aria-label="Command 1">⌘1</kbd>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Search</strong><p class="ys-help-text">Find retained local passages from the main Yawn window.</p></div>
+            <kbd class="settings-shortcut-key" aria-label="Command 2">⌘2</kbd>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Settings</strong><p class="ys-help-text">Open or focus Settings from the main Yawn window.</p></div>
+            <kbd class="settings-shortcut-key" aria-label="Command Comma">⌘,</kbd>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Settings panes</strong><p class="ys-help-text">Use Left/Right, Home, or End after focusing the toolbar.</p></div>
+            <kbd class="settings-shortcut-key" aria-label="Arrow keys, Home, or End">← →</kbd>
+          </div>
+        </section>
+        <aside class="ys-inline-notice settings-static-notice" data-tone="information">
+          Actions is not listed because cross-meeting action follow-through is not available in the product yet.
+        </aside>
+      </section>
+
+      <section class="ys-settings-pane settings-static-pane" id="settings-pane-about" data-pane-panel="about" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" hidden>
+        <header class="settings-pane-heading">
+          <h1>About Yawn</h1>
+          <p>Local meeting notes, with the evidence kept close.</p>
+        </header>
+        <section class="ys-settings-section" aria-labelledby="about-product-title">
+          <h2 class="ys-settings-section__title" id="about-product-title">Product boundary</h2>
+          <div class="ys-settings-row">
+            <div><strong>Version</strong><p class="ys-help-text">Shown in Yawn → About Yawn from the native app menu.</p></div>
+            <span class="settings-static-value">Native menu</span>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Account</strong><p class="ys-help-text">No sign-in or cloud identity is active.</p></div>
+            <span class="settings-static-value">None</span>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Meeting data</strong><p class="ys-help-text">Stored on this Mac. No upload path is active.</p></div>
+            <span class="settings-static-value">On this Mac</span>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Automatic notes</strong><p class="ys-help-text">Yawn does not create notes or action items.</p></div>
+            <span class="settings-static-value">Unavailable</span>
+          </div>
+        </section>
+        <aside class="ys-inline-notice settings-static-notice" data-tone="information">
+          This pane reports the current product boundary. It does not open a sign-in, upload, or note-generation path.
+        </aside>
+      </section>
     </main>
   </body>
 </html>

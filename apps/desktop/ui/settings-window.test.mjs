@@ -51,7 +51,8 @@ test("Capture uses compact Settings geometry instead of a scrollable report", ()
   assert.match(css, /\.settings-row \{[\s\S]*?min-block-size: 2\.8rem;[\s\S]*?padding: var\(--ys-space-2\) var\(--ys-space-4\);/);
   assert.match(css, /\.settings-consent \{[\s\S]*?min-block-size: 2\.8rem;[\s\S]*?padding: var\(--ys-space-3\) var\(--ys-space-4\);/);
   assert.match(css, /\.settings-group__rows \{\s*border-block:/);
-  assert.doesNotMatch(css, /\.settings-group(?:__rows)? \{[\s\S]*?border-radius:/);
+  assert.doesNotMatch(css, /\.settings-group \{[^}]*border-radius:/);
+  assert.doesNotMatch(css, /\.settings-group__rows \{[^}]*border-radius:/);
   assert.doesNotMatch(css, /box-shadow:/);
 
   assert.equal((html.match(/class="settings-group"/g) || []).length, 2);
@@ -141,6 +142,34 @@ test("Voice owns the established local profile lifecycle in native Settings", ()
   assert.doesNotMatch(voiceWorkflow, /preview_profile_enroll/);
   assert.doesNotMatch(voiceWorkflow, /input\.checked = true/);
   assert.doesNotMatch(settingsCapability.permissions.join("\n"), /core:fs|shell|dialog/);
+});
+
+test("Shortcuts and About list only the installed app's current boundaries", () => {
+  const shortcutsPane = html.slice(
+    html.indexOf('id="settings-pane-shortcuts"'),
+    html.indexOf('id="settings-pane-about"'),
+  );
+  const aboutPane = html.slice(html.indexOf('id="settings-pane-about"'));
+  const main = readFileSync(new URL("./main.js", import.meta.url), "utf8");
+
+  assert.match(shortcutsPane, /id="shortcuts-navigation-title"/);
+  assert.match(shortcutsPane, /⌘1/);
+  assert.match(shortcutsPane, /⌘2/);
+  assert.match(shortcutsPane, /⌘,/);
+  assert.match(shortcutsPane, /Actions is not listed because cross-meeting action follow-through is not available/);
+  assert.doesNotMatch(shortcutsPane, /⌘K|⌘3/);
+  assert.match(main, /"1": "meetings"/);
+  assert.match(main, /"2": "search"/);
+  assert.match(main, /",": "settings"/);
+  assert.match(script, /\["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"\]/);
+  assert.match(css, /\.settings-shortcut-key,/);
+
+  assert.match(aboutPane, /Shown in Yawn → About Yawn from the native app menu/);
+  assert.match(aboutPane, /No sign-in or cloud identity is active/);
+  assert.match(aboutPane, /Stored on this Mac\. No upload path is active/);
+  assert.match(aboutPane, /Yawn does not create notes or action items/);
+  assert.doesNotMatch(aboutPane, /Click-through prototype|Uncommitted interface shell/);
+  assert.match(rust, /\.about\(None\)/);
 });
 
 test("Desktop behavior owns one persisted Meetings layout preference", () => {
