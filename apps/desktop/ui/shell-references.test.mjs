@@ -302,6 +302,54 @@ test("Ask uses the shared source-first search pattern and restores the initiatin
   assert.match(calibration, /#find-screen\.ys-search\.screen\.active/);
 });
 
+test("retained transcript routes use one source-reader pattern without exposing withheld speech", () => {
+  const html = readFileSync(join(here, "index.html"), "utf8");
+  const source = readFileSync(join(here, "main.js"), "utf8");
+  const styles = readFileSync(join(here, "styles.css"), "utf8");
+  const patterns = readFileSync(join(here, "system/patterns.css"), "utf8");
+  const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");
+
+  for (const id of ["transcript-screen", "library-transcript-screen"]) {
+    const start = html.indexOf('id="' + id + '"');
+    assert.ok(start > 0, id + " exists");
+    const section = html.slice(Math.max(0, start - 80), start + 240);
+    assert.match(section, /class="screen ys-record"/);
+    assert.match(section, /ys-record__measure ys-transcript/);
+  }
+  for (const id of ["transcript-warning", "library-transcript-warning"]) {
+    assert.match(html, new RegExp('class="ys-inline-notice ys-transcript__notice" id="' + id + '" data-tone="warning"'));
+  }
+  for (const id of ["transcript-copy", "library-transcript-copy", "new-meeting", "library-transcript-back"]) {
+    assert.match(html, new RegExp('class="secondary ys-button" id="' + id + '"'));
+  }
+  for (const selector of [
+    ".ys-transcript__header",
+    ".ys-transcript__turns",
+    ".ys-transcript__turn",
+    ".ys-transcript__turn--withheld",
+    ".ys-transcript__withheld-note",
+    ".ys-transcript__turn--match",
+    ".ys-transcript__match",
+  ]) assert.ok(patterns.includes(selector), selector + " is missing");
+
+  assert.match(source, /row\.className = "ys-transcript__turn"/);
+  assert.match(source, /row\.classList\.add\("ys-transcript__turn--withheld"\)/);
+  assert.match(source, /note\.className = "ys-transcript__withheld-note"/);
+  assert.match(source, /row\.classList\.add\("ys-transcript__turn--match"\)/);
+  assert.match(source, /matched\.className = "ys-transcript__match"/);
+  const withheldBranch = source
+    .split("if (turn.withheld) {")[1]
+    .split("continue;")[0];
+  assert.doesNotMatch(withheldBranch, /turn\.text|appendTurnText/);
+  assert.match(withheldBranch, /Restore this turn/);
+
+  assert.doesNotMatch(styles, /^\.transcript-screen/m);
+  assert.doesNotMatch(styles, /^#transcript-turns/m);
+  assert.match(styles, /\.example-transcript \.turn/);
+  assert.match(calibration, /#transcript-screen \.ys-transcript__header h1/);
+  assert.match(calibration, /#transcript-screen \.ys-transcript__turn/);
+});
+
 test("the production Library and selected meeting use one native split contract", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");

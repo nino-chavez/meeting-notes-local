@@ -157,10 +157,10 @@
       "reason": "Processing names complete, current, and pending work without an ambient spinner or wizard repeated across capture."
     },
     {
-      "sourcePattern": "transcript-screen|transcript-actions|transcript-copy|transcript-turns|(?:^|\\s)\\.turn|result-handoff",
+      "sourcePattern": "transcript-screen|ys-transcript|result-handoff",
       "target": "ds-meeting-record + ds-transcript-turn + ds-button",
-      "kind": "state-exception",
-      "reason": "Transcript handoff exits the capture utility into the retained meeting record; it is not another capture card."
+      "kind": "shared-component",
+      "reason": "Both transcript readers use one retained-record heading, source turn, copy, and restoration grammar without changing the transcript data contract."
     }
   ]
 }

@@ -658,20 +658,12 @@ html[data-prototype="true"] .prototype-only.result-handoff { display: flex; }
 
 .notice { margin: var(--space-6) 0; padding: var(--space-4); color: #3f4c46; font-size: 0.95rem; line-height: 1.5; }
 .notice.error { border-color: #d9aaa5; color: #75261f; background: #fff5f3; }
-/* Warnings are separate paragraphs so a serious one is not read as part of a
-   run of boilerplate. The first is the most serious; the producer orders them. */
-.notice .warning-line { margin: 0 0 var(--space-2); }
-.notice .warning-line:last-child { margin-bottom: 0; }
-.transcript-screen h1 { max-width: 18ch; }
-#transcript-turns, #library-transcript-turns { margin: var(--space-8) 0; border-top: 1px solid var(--line); }
-.turn { display: grid; grid-template-columns: 118px 1fr; gap: var(--space-6); padding: var(--space-4) 0; border-bottom: 1px solid var(--line); }
-.turn-meta { display: flex; flex-direction: column; gap: var(--space-1); font-size: 0.875rem; }
-.turn-meta time { color: var(--muted); font-variant-numeric: tabular-nums; }
-.turn p { margin: 0; line-height: 1.58; }
-.empty-transcript { padding: var(--space-6) 0; color: var(--muted); }
-.turn.withheld-turn .turn-meta strong { color: var(--muted); }
-.withheld-note { color: var(--muted); font-style: italic; }
-.restore-turn { margin-top: var(--space-2); }
+/* These rows remain only in the browser comparison fixture. Production
+   transcript rows use the shared ys-transcript pattern. */
+.example-transcript .turn { display: grid; grid-template-columns: 118px 1fr; gap: var(--space-6); padding: var(--space-4) 0; border-bottom: 1px solid var(--line); }
+.example-transcript .turn-meta { display: flex; flex-direction: column; gap: var(--space-1); font-size: 0.875rem; }
+.example-transcript .turn-meta time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.example-transcript .turn p { margin: 0; line-height: 1.58; }
 .retention-overview { max-width: 62ch; margin: var(--space-6) 0; }
 .retention-overview p { margin: var(--space-2) 0 0; color: var(--muted); line-height: 1.5; }
 #retention-overview-rows { margin: var(--space-2) 0 0; padding-left: 1.3em; line-height: 1.55; }
@@ -742,8 +734,6 @@ button.library-row:hover:not(:disabled) { border-color: var(--line); background:
   cursor: pointer;
 }
 button.library-rename:hover:not(:disabled) { color: var(--ink); background: transparent; text-decoration: underline; }
-.turn.matched-turn { margin: 0; padding-right: var(--space-3); padding-left: var(--space-3); border-left: 3px solid var(--muted); background: var(--paper-muted); }
-.matched-locator { padding: 0 0.12em; color: inherit; background: #cfe2d4; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 
 .meeting-claim-list { margin: var(--space-8) 0; border-top: 1px solid var(--line); }
 .availability-card {
@@ -1154,7 +1144,7 @@ footer {
   .command-menu-help { flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
   .nav-shortcut { display: none; }
   .quick-control-popover { top: 146px; right: 16px; }
-  .turn { grid-template-columns: 1fr; gap: var(--space-2); }
+  .example-transcript .turn { grid-template-columns: 1fr; gap: var(--space-2); }
   #profile-screen.active { width: min(100% - 32px, 800px); }
   .settings-field-grid { grid-template-columns: 1fr; }
   .settings-status-list div { grid-template-columns: 1fr; gap: var(--space-1); }
@@ -1221,8 +1211,6 @@ footer {
   .processing-card > div[data-state="complete"] > span { color: var(--ink); border-color: var(--line); background: var(--paper-muted); }
   .operator-note-card { background: #35301c; }
   .operator-note-card span { color: #c6b87c; }
-  .turn.matched-turn { background: var(--paper-muted); }
-  .matched-locator { background: #343c38; }
   .recording-delete-confirmation { background: #3a2622; }
   .quick-control-popover { box-shadow: 0 18px 48px rgba(0, 0, 0, 0.36), 0 2px 8px rgba(0, 0, 0, 0.28); }
   .command-menu-backdrop { background: rgba(0, 0, 0, 0.52); }
@@ -1235,18 +1223,6 @@ footer {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
-}
-
-.transcript-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-  flex-wrap: wrap;
-}
-.transcript-copy-status {
-  font-size: 0.85rem;
-  color: var(--muted);
 }
 
 /* § H. First run. One surface, one visible step; the panels carry their own

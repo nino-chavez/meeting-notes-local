@@ -124,10 +124,10 @@ Build and approve these before broad migration:
    live and degraded state, safe file closure, progress, and focus behavior. Failure
    and recovered interruption remain explicit and never read as complete.
 
-Ask, Actions, retained Transcript, remaining Settings panes, and first run migrate
-only after these references pass. Voice enrolment, Shortcuts, and About now have
-source integration in native Settings, but each still needs the installed acceptance
-matrix before it can count as an approved native migration.
+Ask, retained Transcript, Voice enrolment, Shortcuts, and About now have source
+integration. Each still needs the installed acceptance matrix before it can count as
+an approved native migration. Actions and the remaining Settings panes stay outside
+production navigation until product authority and real controls exist.
 
 ## Work packages and ownership
 

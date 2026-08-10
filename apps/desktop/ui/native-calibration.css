@@ -1537,28 +1537,28 @@ html[data-native-calibration="split"] main > #transcript-screen.screen.active {
   width: min(calc(100% - 64px), 760px);
   padding-top: 48px;
 }
-html[data-native-calibration="split"] #transcript-screen > h1 {
+html[data-native-calibration="split"] #transcript-screen .ys-transcript__header h1 {
   font-family: var(--record-font);
   font-size: 36px;
   font-weight: 520;
   letter-spacing: -0.03em;
 }
-html[data-native-calibration="split"] #transcript-screen .transcript-actions { margin: 24px 0 6px; }
-html[data-native-calibration="split"] #transcript-screen :is(#transcript-turns, #library-transcript-turns) {
+html[data-native-calibration="split"] #transcript-screen .ys-transcript__actions { margin: 24px 0 6px; }
+html[data-native-calibration="split"] #transcript-screen .ys-transcript__turns {
   margin: 0 0 30px;
 }
-html[data-native-calibration="split"] #transcript-screen .turn {
+html[data-native-calibration="split"] #transcript-screen .ys-transcript__turn {
   grid-template-columns: 94px minmax(0, 1fr);
   gap: 18px;
   padding: 18px 0;
   font-family: var(--ui-font);
   font-size: 14px;
 }
-html[data-native-calibration="split"] #transcript-screen .turn-meta {
+html[data-native-calibration="split"] #transcript-screen .ys-transcript__meta {
   gap: 3px;
   font-size: 12px;
 }
-html[data-native-calibration="split"] #transcript-screen .turn p {
+html[data-native-calibration="split"] #transcript-screen .ys-transcript__turn p {
   color: var(--ink);
   font-size: 15px;
   line-height: 1.58;

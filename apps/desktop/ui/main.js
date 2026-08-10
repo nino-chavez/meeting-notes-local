@@ -893,7 +893,7 @@ function appendTurnText(target, text, locator = null) {
   }
   target.append(document.createTextNode(characters.slice(0, locator.start).join("")));
   const matched = document.createElement("mark");
-  matched.className = "matched-locator";
+  matched.className = "ys-transcript__match";
   matched.textContent = characters.slice(locator.start, locator.end).join("");
   target.append(matched, document.createTextNode(characters.slice(locator.end).join("")));
 }
@@ -917,24 +917,24 @@ function renderTurns(container, warning, turns, warnings, match = null, restore 
   );
   for (const turn of turns || []) {
     const row = document.createElement("section");
-    row.className = "turn";
+    row.className = "ys-transcript__turn";
     if (turn.withheld) {
-      row.classList.add("withheld-turn");
+      row.classList.add("ys-transcript__turn--withheld");
       const meta = document.createElement("div");
-      meta.className = "turn-meta";
+      meta.className = "ys-transcript__meta";
       const speaker = document.createElement("strong");
       speaker.textContent = "Withheld";
       const time = document.createElement("time");
       time.textContent = formatElapsed(turn.start || 0);
       meta.append(speaker, time);
       const note = document.createElement("p");
-      note.className = "withheld-note";
+      note.className = "ys-transcript__withheld-note";
       note.textContent = "A voice check withheld this turn's text.";
       row.append(meta, note);
       if (restore) {
         const action = document.createElement("button");
         action.type = "button";
-        action.className = "secondary restore-turn";
+        action.className = "secondary ys-button ys-transcript__restore";
         action.textContent = "Restore this turn";
         action.addEventListener("click", () => restore(turn, action));
         row.append(action);
@@ -945,13 +945,13 @@ function renderTurns(container, warning, turns, warnings, match = null, restore 
     const matchesTurn = Number.isInteger(match?.sourceTurnIndex)
       && turn.sourceTurnIndex === match.sourceTurnIndex;
     if (matchesTurn) {
-      row.classList.add("matched-turn");
+      row.classList.add("ys-transcript__turn--match");
       row.dataset.sourceTurnIndex = String(match.sourceTurnIndex);
       row.tabIndex = -1;
       row.setAttribute("aria-label", `Exact transcript match in turn ${match.sourceTurnIndex + 1}`);
     }
     const meta = document.createElement("div");
-    meta.className = "turn-meta";
+    meta.className = "ys-transcript__meta";
     const speaker = document.createElement("strong");
     speaker.textContent = turn.speaker || "Unattributed";
     const time = document.createElement("time");
@@ -964,7 +964,7 @@ function renderTurns(container, warning, turns, warnings, match = null, restore 
   }
   if (!container.children.length) {
     const empty = document.createElement("p");
-    empty.className = "empty-transcript";
+    empty.className = "ys-transcript__empty";
     empty.textContent = "No speech was detected in this capture.";
     container.append(empty);
   }

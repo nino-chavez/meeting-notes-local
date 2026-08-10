@@ -339,6 +339,135 @@ button.ys-search__result:hover:not(:disabled) {
   font-size: var(--ys-type-ui);
 }
 
+/* A retained transcript is a record-reading pattern, not another capture
+   card. Both direct post-capture review and the retained-meeting reader use
+   these same rows; the renderer alone decides which words are available. */
+.ys-transcript {
+  min-inline-size: 0;
+}
+
+.ys-transcript__header {
+  display: grid;
+  gap: var(--ys-space-3);
+}
+
+.ys-transcript__header > * {
+  margin: 0;
+}
+
+.ys-transcript__header .ys-record__meta {
+  margin-block-end: var(--ys-space-1);
+}
+
+.ys-transcript__header h1 {
+  color: var(--ys-ink-strong);
+  font-family: var(--ys-font-record);
+  font-size: var(--ys-type-record);
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  line-height: var(--ys-leading-tight);
+}
+
+.ys-transcript__header p:last-child {
+  max-inline-size: 58ch;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-body);
+}
+
+.ys-transcript__notice {
+  margin-block: var(--ys-space-6);
+}
+
+.ys-transcript__notice .warning-line {
+  margin: 0 0 var(--ys-space-2);
+}
+
+.ys-transcript__notice .warning-line:last-child {
+  margin-block-end: 0;
+}
+
+.ys-transcript__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: var(--ys-space-4);
+  margin-block: var(--ys-space-5) var(--ys-space-3);
+}
+
+.ys-transcript__copy-status {
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+}
+
+.ys-transcript__turns {
+  margin-block: var(--ys-space-7);
+  border-block-start: var(--ys-border-width) solid var(--ys-border);
+}
+
+.ys-transcript__turn {
+  display: grid;
+  grid-template-columns: minmax(5.875rem, 7rem) minmax(0, 1fr);
+  gap: var(--ys-space-6);
+  padding-block: var(--ys-space-5);
+  border-block-end: var(--ys-border-width) solid var(--ys-border);
+  font-size: var(--ys-type-body);
+}
+
+.ys-transcript__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ys-space-1);
+  font-size: var(--ys-type-sm);
+}
+
+.ys-transcript__meta time {
+  color: var(--ys-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ys-transcript__turn p {
+  margin: 0;
+  line-height: var(--ys-leading-body);
+}
+
+.ys-transcript__empty {
+  padding-block: var(--ys-space-6);
+  color: var(--ys-ink-muted);
+}
+
+.ys-transcript__turn--withheld .ys-transcript__meta strong {
+  color: var(--ys-ink-muted);
+}
+
+.ys-transcript__withheld-note {
+  color: var(--ys-ink-muted);
+  font-style: italic;
+}
+
+.ys-transcript__restore {
+  margin-block-start: var(--ys-space-2);
+}
+
+.ys-transcript__turn--match {
+  margin-inline: 0;
+  padding-inline: var(--ys-space-4);
+  border-inline-start: 3px solid var(--ys-ink-muted);
+  background: var(--ys-surface-selected);
+}
+
+.ys-transcript__match {
+  padding-inline: 0.12em;
+  color: inherit;
+  background: color-mix(in srgb, var(--ys-success) 18%, transparent);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.ys-transcript__exit {
+  margin-block-end: var(--ys-space-8);
+}
+
 .ys-capture-utility {
   inline-size: min(34rem, 100%);
   margin-inline: auto;
@@ -450,5 +579,10 @@ button.ys-search__result:hover:not(:disabled) {
 
   .ys-search__result {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ys-transcript__turn {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ys-space-2);
   }
 }

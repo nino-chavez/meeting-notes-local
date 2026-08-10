@@ -570,7 +570,7 @@ fn shell_renders_safe_state_before_runtime_preflight() {
 #[test]
 fn withheld_turns_render_positionally_without_meeting_text() {
     let script = include_str!("../../ui/main.js");
-    let styles = include_str!("../../ui/styles.css");
+    let patterns = include_str!("../../ui/system/patterns.css");
     assert!(script.contains("turn.withheld"));
     assert!(script.contains("A voice check withheld this turn's text."));
     // The withheld branch renders its fixed note and never the turn's text
@@ -591,7 +591,7 @@ fn withheld_turns_render_positionally_without_meeting_text() {
     // operator-typed values.
     assert!(script.contains("sourceTranscriptSha256: context.currentTranscriptSha256"));
     assert!(script.contains("sourceTurnIndex: turn.sourceTurnIndex"));
-    assert!(styles.contains(".withheld-note"));
+    assert!(patterns.contains(".ys-transcript__withheld-note"));
 }
 
 #[test]
@@ -602,7 +602,7 @@ fn transcript_warnings_render_one_per_paragraph_and_keep_producer_order() {
     // this rendered until 2026-08-05 — that sentence arrives spliced to a
     // retention notice and a segment count, and reads as boilerplate.
     let script = include_str!("../../ui/main.js");
-    let styles = include_str!("../../ui/styles.css");
+    let patterns = include_str!("../../ui/system/patterns.css");
     let render = script
         .split("function renderTurns(")
         .nth(1)
@@ -619,7 +619,7 @@ fn transcript_warnings_render_one_per_paragraph_and_keep_producer_order() {
     assert!(!render.contains("safeWarnings.filter("));
     // Still hidden when there is nothing to say.
     assert!(render.contains("warning.hidden = safeWarnings.length === 0"));
-    assert!(styles.contains(".warning-line"));
+    assert!(patterns.contains(".ys-transcript__notice .warning-line"));
 }
 
 #[test]

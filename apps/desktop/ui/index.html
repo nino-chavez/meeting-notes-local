@@ -779,46 +779,50 @@
         </div>
       </section>
 
-      <section class="screen transcript-screen" id="transcript-screen" aria-labelledby="transcript-title">
-        <p class="kicker">Transcript ready</p>
-        <h1 id="transcript-title">Transcript</h1>
-        <p class="lede">Review the captured words. Notes, decisions, and actions have not been generated.</p>
-        <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
-          <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
-          <li data-state="complete"><span>2</span><strong>Record</strong><small>Audio secured</small></li>
-          <li data-state="complete"><span>3</span><strong>Process</strong><small>Transcript made</small></li>
-          <li aria-current="step"><span>4</span><strong>Review</strong><small>Source record</small></li>
-        </ol>
-        <div class="prototype-only placeholder-boundary capture-shell-boundary" role="note">
-          <strong>Browser preview.</strong>
-          <span>These example words were not recorded, transcribed, saved, or checked against audio.</span>
-        </div>
-        <div class="notice" id="transcript-warning" hidden></div>
-        <!-- The note the operator typed during the meeting, shown back rather
-             than left behind on a screen they cannot return to. Read-only here:
-             § D is about writing during the meeting, and an editor on this
-             screen would imply the note is still being taken. -->
-        <section class="live-note" id="transcript-note" data-state="empty" aria-labelledby="transcript-note-title" hidden>
-          <h2 id="transcript-note-title">Your notes from this meeting</h2>
-          <p class="transcript-note-text" id="transcript-note-text"></p>
-          <p class="footnote">Kept with the transcript, not with the audio, so the retention period does not remove it.</p>
-        </section>
-        <p class="form-error" id="transcript-restore-error" role="alert" hidden></p>
-        <div class="transcript-actions">
-          <button class="secondary" id="transcript-copy" type="button">Copy transcript</button>
-          <span class="transcript-copy-status" id="transcript-copy-status" role="status" aria-live="polite"></span>
-        </div>
-        <article id="transcript-turns" aria-label="Meeting transcript"></article>
-        <section class="prototype-only result-handoff" aria-labelledby="result-handoff-title">
-          <div>
-            <p class="label">Intended next step · synthetic</p>
-            <h2 id="result-handoff-title">Carry the meeting into its workspace</h2>
-            <p>The retained transcript remains the source record. The meeting workspace adds the operator note and evidence-linked reading aids.</p>
+      <section class="screen ys-record" id="transcript-screen" aria-labelledby="transcript-title">
+        <div class="ys-record__measure ys-transcript">
+          <header class="ys-transcript__header">
+            <p class="ys-record__meta">Transcript ready</p>
+            <h1 id="transcript-title">Transcript</h1>
+            <p>Review the captured words. Notes, decisions, and actions have not been generated.</p>
+          </header>
+          <ol class="prototype-only capture-progress" aria-label="Meeting capture progress">
+            <li data-state="complete"><span>1</span><strong>Check</strong><small>Confirmed</small></li>
+            <li data-state="complete"><span>2</span><strong>Record</strong><small>Audio secured</small></li>
+            <li data-state="complete"><span>3</span><strong>Process</strong><small>Transcript made</small></li>
+            <li aria-current="step"><span>4</span><strong>Review</strong><small>Source record</small></li>
+          </ol>
+          <div class="prototype-only placeholder-boundary capture-shell-boundary" role="note">
+            <strong>Browser preview.</strong>
+            <span>These example words were not recorded, transcribed, saved, or checked against audio.</span>
           </div>
-          <button class="primary" id="prototype-open-result" type="button">Open meeting workspace</button>
-        </section>
-        <div class="screen-actions transcript-exit-actions">
-        <button class="secondary" id="new-meeting" type="button">Return to Meetings</button>
+          <div class="ys-inline-notice ys-transcript__notice" id="transcript-warning" data-tone="warning" hidden></div>
+          <!-- The note the operator typed during the meeting, shown back rather
+               than left behind on a screen they cannot return to. Read-only here:
+               § D is about writing during the meeting, and an editor on this
+               screen would imply the note is still being taken. -->
+          <section class="live-note" id="transcript-note" data-state="empty" aria-labelledby="transcript-note-title" hidden>
+            <h2 id="transcript-note-title">Your notes from this meeting</h2>
+            <p class="transcript-note-text" id="transcript-note-text"></p>
+            <p class="footnote">Kept with the transcript, not with the audio, so the retention period does not remove it.</p>
+          </section>
+          <p class="form-error ys-inline-notice ys-transcript__notice" id="transcript-restore-error" data-tone="error" role="alert" hidden></p>
+          <div class="ys-actions ys-transcript__actions">
+            <button class="secondary ys-button" id="transcript-copy" type="button">Copy transcript</button>
+            <span class="ys-transcript__copy-status" id="transcript-copy-status" role="status" aria-live="polite"></span>
+          </div>
+          <article class="ys-transcript__turns" id="transcript-turns" aria-label="Meeting transcript"></article>
+          <section class="prototype-only result-handoff" aria-labelledby="result-handoff-title">
+            <div>
+              <p class="label">Intended next step · synthetic</p>
+              <h2 id="result-handoff-title">Carry the meeting into its workspace</h2>
+              <p>The retained transcript remains the source record. The meeting workspace adds the operator note and evidence-linked reading aids.</p>
+            </div>
+            <button class="primary" id="prototype-open-result" type="button">Open meeting workspace</button>
+          </section>
+          <div class="screen-actions ys-actions ys-transcript__actions ys-transcript__exit">
+            <button class="secondary ys-button" id="new-meeting" type="button">Return to Meetings</button>
+          </div>
         </div>
       </section>
 
@@ -1249,18 +1253,24 @@
         </div>
       </section>
 
-      <section class="screen transcript-screen" id="library-transcript-screen" aria-labelledby="library-transcript-title">
-        <p class="kicker">Retained meeting</p>
-        <h1 id="library-transcript-title">Transcript</h1>
-        <p class="lede">This retained transcript is available for review. It is not an automatic note.</p>
-        <div class="notice" id="library-transcript-warning" hidden></div>
-        <div class="transcript-actions">
-          <button class="secondary" id="library-transcript-copy" type="button">Copy transcript</button>
-          <span class="transcript-copy-status" id="library-transcript-copy-status" role="status" aria-live="polite"></span>
+      <section class="screen ys-record" id="library-transcript-screen" aria-labelledby="library-transcript-title">
+        <div class="ys-record__measure ys-transcript">
+          <header class="ys-transcript__header">
+            <p class="ys-record__meta">Retained meeting</p>
+            <h1 id="library-transcript-title">Transcript</h1>
+            <p>This retained transcript is available for review. It is not an automatic note.</p>
+          </header>
+          <div class="ys-inline-notice ys-transcript__notice" id="library-transcript-warning" data-tone="warning" hidden></div>
+          <div class="ys-actions ys-transcript__actions">
+            <button class="secondary ys-button" id="library-transcript-copy" type="button">Copy transcript</button>
+            <span class="ys-transcript__copy-status" id="library-transcript-copy-status" role="status" aria-live="polite"></span>
+          </div>
+          <article class="ys-transcript__turns" id="library-transcript-turns" aria-label="Retained meeting transcript"></article>
+          <p class="form-error ys-inline-notice ys-transcript__notice" id="library-restore-error" data-tone="error" role="alert" hidden></p>
+          <div class="ys-actions ys-transcript__actions ys-transcript__exit">
+            <button class="secondary ys-button" id="library-transcript-back" type="button">Back</button>
+          </div>
         </div>
-        <article id="library-transcript-turns" aria-label="Retained meeting transcript"></article>
-        <p class="form-error" id="library-restore-error" role="alert" hidden></p>
-        <button class="secondary" id="library-transcript-back" type="button">Back</button>
       </section>
 
       <section class="screen ys-capture-utility" id="start-meeting-error-screen" aria-labelledby="start-meeting-error-title">
