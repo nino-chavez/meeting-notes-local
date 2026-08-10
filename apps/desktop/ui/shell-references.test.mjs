@@ -250,6 +250,7 @@ test("the production Library and selected meeting use one native split contract"
   assert.match(html, /class="meeting-record-identity ys-meeting-record__identity"/);
   assert.match(html, /class="meeting-heading-actions ys-meeting-record__locality"/);
   assert.match(html, /id="meeting-detail-back"[^>]*aria-label="Show all meetings"/);
+  assert.match(html, /id="meeting-record-back"[^>]*aria-label="Show all meetings"[^>]*><span aria-hidden="true">‹<\/span> All meetings<\/button>/);
   assert.match(html, /class="ys-visually-hidden">Open another meeting\.<\/p>/);
 
   const meetingList = html.indexOf('id="library-list"');

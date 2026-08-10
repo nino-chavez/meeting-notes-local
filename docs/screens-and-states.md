@@ -518,10 +518,13 @@ discoverable.
 The fix exposed an existing path rather than inventing one. `canStartMeeting`
 already admitted the `transcript-ready` capture, and the record action already
 routed through the consent transition that dismisses a finished attempt first;
-only the header's visibility rule excluded that screen. So the record control
-now stays in the header while a finished transcript is open. Every other screen
-still requires a genuinely idle capture, and a mid-capture state still offers no
-record control anywhere.
+only the header's visibility rule excluded that screen. So a completed capture
+now presents **Record another meeting** as the product-shell action. The retained
+transcript remains reachable from Meetings and the transcript-ready status
+control; repeating **View transcript** globally while that same transcript is
+already open is redundant. A mid-capture state still offers no second record
+control anywhere. The label is not **Start recording**, because the action opens
+consent and capture checks before any audio begins.
 
 ---
 

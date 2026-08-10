@@ -64,6 +64,7 @@ test("header actions keep one recording control and offer a return to owned work
   const idle = headerActionPolicy({ startup: "ready", capture: "idle" });
   assert.equal(idle.showProductNavigation, true);
   assert.equal(idle.showStart, true);
+  assert.equal(idle.startLabel, "Record a meeting");
   assert.equal(idle.showStop, false);
   assert.equal(idle.showWorkflowReturn, false);
 
@@ -71,8 +72,9 @@ test("header actions keep one recording control and offer a return to owned work
     { startup: "ready", capture: "transcript-ready" },
     { workflowOwnsRoute: false },
   );
-  assert.equal(transcript.showStart, false);
-  assert.equal(transcript.showWorkflowReturn, true);
+  assert.equal(transcript.showStart, true);
+  assert.equal(transcript.startLabel, "Record another meeting");
+  assert.equal(transcript.showWorkflowReturn, false);
   assert.equal(transcript.workflowReturnLabel, "View transcript");
   assert.equal(transcript.workflowDestination, "transcript-screen");
 
@@ -83,15 +85,22 @@ test("header actions keep one recording control and offer a return to owned work
     { currentScreen: "transcript-screen" },
   );
   assert.equal(onTranscript.showStart, true);
-  // A transcript-ready capture still offers no record control anywhere else,
-  // and a mid-capture state offers none even on that screen.
+  // Product screens offer a next recording after a completed capture. A
+  // mid-capture state still offers no second record control.
   assert.equal(
     headerActionPolicy(
       { startup: "ready", capture: "transcript-ready" },
       { currentScreen: "meetings-screen" },
     ).showStart,
-    false,
+    true,
   );
+  const onMeeting = headerActionPolicy(
+    { startup: "ready", capture: "transcript-ready" },
+    { currentScreen: "meeting-detail-screen", workflowOwnsRoute: false },
+  );
+  assert.equal(onMeeting.showStart, true);
+  assert.equal(onMeeting.startLabel, "Record another meeting");
+  assert.equal(onMeeting.showWorkflowReturn, false);
   assert.equal(
     headerActionPolicy(
       { startup: "ready", capture: "recording" },

@@ -550,6 +550,7 @@ function renderCaptureAction(snapshot) {
   document.documentElement.dataset.productNavigation = String(policy.showProductNavigation);
   profileLink.hidden = !policy.showProductNavigation;
   startMeetingAction.hidden = !policy.showStart;
+  startMeetingAction.textContent = policy.startLabel;
   stopButton.hidden = !policy.showStop;
   stopButton.disabled = policy.stopDisabled;
   stopButton.textContent = policy.stopLabel;
@@ -1863,7 +1864,9 @@ async function openStartMeeting() {
     if (workflowRouteIsCurrent(routeToken)) showStartTransitionError();
   } finally {
     startMeetingAction.disabled = false;
-    startMeetingAction.textContent = "Record a meeting";
+    startMeetingAction.textContent = lastSnapshot?.capture === "transcript-ready"
+      ? "Record another meeting"
+      : "Record a meeting";
   }
 }
 

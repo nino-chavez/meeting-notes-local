@@ -58,32 +58,35 @@ export function headerActionPolicy(snapshot, {
   const startup = snapshot?.startup || "diagnostic-written";
   const actions = mutableActionPolicy(snapshot, { stopPending });
   const workflow = workflowReturnPolicy(snapshot);
+  const recordActionScreens = [
+    "home-screen",
+    "find-screen",
+    "meetings-screen",
+    "promises-screen",
+    "meeting-detail-screen",
+    "library-transcript-screen",
+    "profile-screen",
+    "transcript-screen",
+  ];
+  const showFinishedRecordAction = capture === "transcript-ready"
+    && recordActionScreens.includes(currentScreen);
   return {
     showProductNavigation: actions.showProductNavigation && startup === "ready",
-    // The finished-transcript screen carries the record action too. Its only
-    // exit used to be a control below the whole transcript, so on a long
-    // meeting the way out was hundreds of turns down and read as a bug
-    // (operator report, 2026-08-05). `canStartMeeting` already admits
-    // transcript-ready, and openStartMeeting routes through
-    // prepareConsentTransition, which dismisses the finished attempt before
-    // consent — so this exposes an existing supported path rather than a new
-    // one. Every other screen still requires a genuinely idle capture.
+    // A completed attempt is already retained in Meetings. Once its transcript
+    // has been handed into the product, repeating "View transcript" as the
+    // global primary action is redundant and can even point at the record the
+    // operator is already reading. `canStartMeeting` admits transcript-ready,
+    // and openStartMeeting dismisses that finished attempt before consent, so
+    // the useful next action is to record another meeting. The transcript stays
+    // reachable from Meetings and the transcript-ready status control.
     showStart: actions.canStartMeeting
-      && ((capture === "idle"
-        && [
-          "home-screen",
-          "find-screen",
-          "meetings-screen",
-          "promises-screen",
-          "meeting-detail-screen",
-          "library-transcript-screen",
-          "profile-screen",
-        ].includes(currentScreen))
-        || (capture === "transcript-ready" && currentScreen === "transcript-screen")),
+      && ((capture === "idle" && recordActionScreens.includes(currentScreen))
+        || showFinishedRecordAction),
+    startLabel: showFinishedRecordAction ? "Record another meeting" : "Record a meeting",
     showStop: actions.showStop,
     stopDisabled: actions.stopDisabled,
     stopLabel: actions.stopLabel,
-    showWorkflowReturn: !workflowOwnsRoute && workflow.show,
+    showWorkflowReturn: !workflowOwnsRoute && workflow.show && !showFinishedRecordAction,
     workflowReturnLabel: workflow.label,
     workflowDestination: workflow.destination,
     startupReady: startup === "ready",
