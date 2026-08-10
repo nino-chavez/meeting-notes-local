@@ -150,7 +150,7 @@ pub fn validate(mode: BuildMode, config: &Value) -> Result<(), &'static str> {
     match mode {
         BuildMode::Production if is_production_config(config) => Ok(()),
         BuildMode::Production => Err(
-            "the bundled shell requires the frozen production identifier, frontend, sole main window/capability, and runtime resource contract",
+            "the bundled shell requires the frozen production identifier, frontend, sole main window/capability, ad-hoc signing, and runtime resource contract",
         ),
         BuildMode::Development if is_development_config(config) => Ok(()),
         BuildMode::Development => Err(
@@ -241,6 +241,14 @@ fn is_production_config(config: &Value) -> bool {
         )
         && config.pointer("/bundle/active").and_then(Value::as_bool) == Some(true)
         && config.pointer("/bundle/resources") == Some(&production_resources())
+        && config
+            .pointer("/bundle/macOS/minimumSystemVersion")
+            .and_then(Value::as_str)
+            == Some("14.4")
+        && config
+            .pointer("/bundle/macOS/signingIdentity")
+            .and_then(Value::as_str)
+            == Some("-")
 }
 
 fn is_development_config(config: &Value) -> bool {

@@ -225,6 +225,10 @@ fn production_rejects_every_isolated_surface_or_hybrid_field() {
     empty_resources["bundle"]["resources"] = Value::Null;
     hybrids.push(empty_resources);
 
+    let mut non_adhoc = production.clone();
+    non_adhoc["bundle"]["macOS"]["signingIdentity"] = Value::String("not-ad-hoc".into());
+    hybrids.push(non_adhoc);
+
     let mut preview_identifier = production.clone();
     preview_identifier["identifier"] = Value::String(build_contract::PREVIEW_IDENTIFIER.into());
     hybrids.push(preview_identifier);

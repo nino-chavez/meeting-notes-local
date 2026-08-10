@@ -1436,6 +1436,7 @@ fn macos_bundle_declares_capture_purposes_and_common_resources() {
 
     let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
     assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "14.4");
+    assert_eq!(config["bundle"]["macOS"]["signingIdentity"], "-");
     assert_eq!(
         config["bundle"]["resources"]["../runtime/app-runtime.json"],
         "app-runtime.json"
