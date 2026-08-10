@@ -1216,6 +1216,10 @@ fn preview_meeting_detail_requires_two_explicit_steps_for_audio_deletion() {
     assert!(html.contains("id=\"recording-delete-review\""));
     assert!(html.contains("Delete recording now"));
     assert!(html.contains("id=\"recording-delete-confirm\""));
+    assert!(html.contains(
+        "class=\"ys-confirmation\" id=\"recording-delete-confirmation\""
+    ));
+    assert!(html.contains("id=\"recording-delete-confirmation-title\""));
     assert!(html.contains("Permanently delete recording"));
     assert!(html.contains("This deletes only this meeting’s local audio."));
     assert!(html.contains("The separate voice profile is unaffected."));
@@ -1237,6 +1241,10 @@ fn whole_meeting_deletion_is_a_separate_twice_confirmed_control() {
     // Two distinct controls with two distinct handles.
     assert!(html.contains("id=\"meeting-delete-review\""));
     assert!(html.contains("id=\"meeting-delete-confirm\""));
+    assert!(html.contains(
+        "class=\"ys-confirmation\" id=\"meeting-delete-confirmation\""
+    ));
+    assert!(html.contains("id=\"meeting-delete-confirmation-title\""));
     assert!(html.contains("Delete this meeting"));
     assert!(html.contains("Permanently delete meeting"));
     assert!(script.contains("meetingDeletionHandle"));

@@ -25,6 +25,7 @@ receipts to these migration rows. The current review run is recorded below; a
 | Stopping and processing | `ys-capture-utility`, `ys-status`, `ys-progress-row`, `ys-inline-notice` | Processing remains local and does not imply completion before the reducer reports it. |
 | Transcript-ready handoff | selected-meeting record plus `ys-tabs` | Completion reopens the retained meeting by durable ID and selects Transcript directly. The temporary workflow transcript no longer flashes before the stable record route. After handoff, the global action becomes **Record another meeting**; the retained transcript remains reachable from Meetings and the transcript-ready status control. |
 | Retained transcript reader | `ys-record`, `ys-transcript`, `ys-inline-notice`, `ys-actions`, and `ys-button` | The direct post-capture and retained-meeting readers now share one record heading, warning, copy, source-turn, match, and restoration grammar. The renderer still withholds text before it can reach the DOM, and restoration remains bound to the existing durable transcript identity. Source contracts cover that wiring; installed appearance, long-content behavior, keyboard order, VoiceOver, and human review remain open. |
+| Meeting and recording deletion confirmations | `ys-confirmation`, `ys-inline-notice`, `ys-actions`, and `ys-button` | The existing reveal, cancel, focus, and confirmed-command flow now uses the shared destructive confirmation grammar. It still distinguishes recording-only deletion from whole-meeting deletion, keeps the consequence text visible, and never relies on a browser confirmation dialog. Source contracts cover that wiring; installed appearance, keyboard order, VoiceOver, and human review remain open. |
 | Focus foundation | shared `:focus-visible` rule | The neutral control reset now uses `:where(...)`, so roving `tabindex` cannot suppress the focus ring. |
 
 The accepted surfaces resolve shared jobs through `ys-*` components. Legacy selectors remain only where an unmigrated screen or an explicit comparison mode still consumes them. They were not bulk-deleted because that would change inherited behavior outside DS-4.
@@ -49,7 +50,7 @@ The accepted surfaces resolve shared jobs through `ys-*` components. Legacy sele
 | 8 | Help and system-state review | `help-screen`, `state-review-screen` and local reference styles | Decide whether each remains an operator-only surface; migrate or remove before release |
 | 9 | Quick control and command menu | prototype-only popover/backdrop and local overlay styles | Admit product behavior first; then verify focus trap/return, Escape, status truth, and native layering |
 | 10 | Superseded desktop-behavior dialog | prototype-only dialog and local styles | Remove after the comparison harness points to the native Desktop Behavior pane. It no longer owns product behavior. |
-| 11 | Voice-profile reset, recording deletion, meeting deletion | local confirmation blocks | Shared confirmation/dialog pattern, destructive wording, separate confirmation, keyboard and VoiceOver |
+| 11 | Destructive-confirmation installed review | `ys-confirmation`, existing delete/reset commands, and the browser-only profile fallback | Separate confirmation, destructive wording, keyboard order, focus return, VoiceOver, and human review |
 | 12 | Prototype meeting and retained comparison modes | `prototype-meeting-screen`, wireframe/document/reference calibrations | Keep as evidence-only until the production replacement has an equal or better deterministic harness; never expose them as shipped features |
 
 ## Latest installed review
@@ -75,7 +76,7 @@ These local groups remain because the rows above still use them:
 - hidden Home and planned Actions reference layouts, plus browser comparison transcript rows
 - browser-only voice-profile enrollment, operating-point, preservation, and reset layouts for the evidence-only `profile-screen` fallback
 - browser-only Settings shortcut and About reference styles for the evidence-only `profile-screen` fallback
-- command menu, quick control, desktop preview, and destructive confirmations
+- command menu, quick control, desktop preview, and the browser-only profile-reset fallback
 - wireframe, document, native-reference, and synthetic prototype comparison rules
 
 For each future row, migrate behavior first, add installed evidence, then delete the now-unreferenced selector group. Do not replace the remaining stylesheet in one pass. The reducers, command allowlists, durable IDs, and retained-content truth stay authoritative throughout the migration.

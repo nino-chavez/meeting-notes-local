@@ -435,6 +435,43 @@ test("the shell makes deletion consequences reviewable without enabling deletion
   assert.match(source, /shellPrototype \? meetingDeleteCancel : meetingDeleteConfirm/);
 });
 
+test("live meeting deletion uses the shared confirmation grammar", () => {
+  const html = readFileSync(join(here, "index.html"), "utf8");
+  const styles = readFileSync(join(here, "styles.css"), "utf8");
+  const components = readFileSync(join(here, "system/components.css"), "utf8");
+
+  for (const [id, title] of [
+    ["recording-delete-confirmation", "recording-delete-confirmation-title"],
+    ["meeting-delete-confirmation", "meeting-delete-confirmation-title"],
+  ]) {
+    assert.match(
+      html,
+      new RegExp('section class="ys-confirmation" id="' + id + '" aria-labelledby="' + title + '" hidden'),
+    );
+  }
+  for (const id of [
+    "recording-delete-review",
+    "recording-delete-confirm",
+    "meeting-delete-review",
+    "meeting-delete-confirm",
+  ]) {
+    assert.match(html, new RegExp('class="ys-button" data-tone="error" id="' + id + '"'));
+  }
+  for (const id of ["recording-delete-cancel", "meeting-delete-cancel"]) {
+    assert.match(html, new RegExp('class="ys-button" id="' + id + '"'));
+  }
+  for (const id of ["recording-delete-status", "meeting-delete-status"]) {
+    assert.match(
+      html,
+      new RegExp('class="ys-inline-notice" data-tone="error" id="' + id + '" role="status"'),
+    );
+  }
+  assert.match(components, /\.ys-confirmation \.ys-actions/);
+  assert.match(components, /\.ys-inline-notice\[data-tone="error"\][\s\S]*?color: var\(--ys-error\)/);
+  assert.doesNotMatch(styles, /\.recording-delete-confirmation/);
+  assert.doesNotMatch(styles, /\.recording-delete-buttons/);
+});
+
 test("planned rooms name their feature boundary at the surface that will own it", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   for (const feature of ["D1", "D4", "D5", "B2", "B3", "B7", "A3", "A4", "A5", "E3", "P1", "P4", "P6"]) {

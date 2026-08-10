@@ -1206,32 +1206,32 @@
             <p id="meeting-retention-size"></p>
             <p id="meeting-retention-consequence"></p>
             <div class="recording-delete-action" id="recording-delete-action" hidden>
-              <button class="secondary danger-outline" id="recording-delete-review" type="button">Delete recording now</button>
-              <div class="recording-delete-confirmation" id="recording-delete-confirmation" hidden>
-                <p><strong>Permanently delete this recording?</strong></p>
+              <button class="ys-button" data-tone="error" id="recording-delete-review" type="button">Delete recording now</button>
+              <section class="ys-confirmation" id="recording-delete-confirmation" aria-labelledby="recording-delete-confirmation-title" hidden>
+                <h3 id="recording-delete-confirmation-title">Permanently delete this recording?</h3>
                 <p>This deletes only this meeting’s local audio. The transcript, note, evidence, and meeting details remain. The separate voice profile is unaffected.</p>
                 <p>You will no longer be able to listen to this recording, check its transcription against the audio, or transcribe it again.</p>
-                <p class="prototype-only deletion-preview-boundary" role="note">Shell preview only. You can review this consequence, but nothing can be deleted here.</p>
-                <div class="recording-delete-buttons">
-                  <button class="secondary" id="recording-delete-cancel" type="button">Cancel</button>
-                  <button class="danger" id="recording-delete-confirm" type="button">Permanently delete recording</button>
+                <p class="prototype-only ys-inline-notice deletion-preview-boundary" data-tone="information" role="note">Shell preview only. You can review this consequence, but nothing can be deleted here.</p>
+                <div class="ys-actions">
+                  <button class="ys-button" id="recording-delete-cancel" type="button">Cancel</button>
+                  <button class="ys-button" data-tone="error" id="recording-delete-confirm" type="button">Permanently delete recording</button>
                 </div>
-                <p class="notice error" id="recording-delete-status" role="status" aria-live="polite" hidden></p>
-              </div>
+                <p class="ys-inline-notice" data-tone="error" id="recording-delete-status" role="status" aria-live="polite" hidden></p>
+              </section>
             </div>
             <div class="recording-delete-action" id="meeting-delete-action" hidden>
-              <button class="secondary danger-outline" id="meeting-delete-review" type="button">Delete this meeting</button>
-              <div class="recording-delete-confirmation" id="meeting-delete-confirmation" hidden>
-                <p><strong>Permanently delete this whole meeting?</strong></p>
+              <button class="ys-button" data-tone="error" id="meeting-delete-review" type="button">Delete this meeting</button>
+              <section class="ys-confirmation" id="meeting-delete-confirmation" aria-labelledby="meeting-delete-confirmation-title" hidden>
+                <h3 id="meeting-delete-confirmation-title">Permanently delete this whole meeting?</h3>
                 <p>This removes the transcript, the note, your own note, and any audio still held. The transcript is the retained record of what was said, and it cannot be recreated from anything else on this Mac.</p>
                 <p>Other meetings and your voice profile are unaffected.</p>
-                <p class="prototype-only deletion-preview-boundary" role="note">Shell preview only. You can review this consequence, but nothing can be deleted here.</p>
-                <div class="recording-delete-buttons">
-                  <button class="secondary" id="meeting-delete-cancel" type="button">Cancel</button>
-                  <button class="danger" id="meeting-delete-confirm" type="button">Permanently delete meeting</button>
+                <p class="prototype-only ys-inline-notice deletion-preview-boundary" data-tone="information" role="note">Shell preview only. You can review this consequence, but nothing can be deleted here.</p>
+                <div class="ys-actions">
+                  <button class="ys-button" id="meeting-delete-cancel" type="button">Cancel</button>
+                  <button class="ys-button" data-tone="error" id="meeting-delete-confirm" type="button">Permanently delete meeting</button>
                 </div>
-                <p class="notice error" id="meeting-delete-status" role="status" aria-live="polite" hidden></p>
-              </div>
+                <p class="ys-inline-notice" data-tone="error" id="meeting-delete-status" role="status" aria-live="polite" hidden></p>
+              </section>
             </div>
           </section>
           <dl class="prototype-only details-list feature-status-list" data-feature="E1 E5 C3">
