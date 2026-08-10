@@ -257,6 +257,156 @@ body {
   text-align: center;
 }
 
+.voice-profile-pane {
+  display: grid;
+  min-block-size: 0;
+  align-content: start;
+  gap: var(--ys-space-4);
+  padding-inline: var(--ys-space-4);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.voice-profile-pane > .settings-pane-heading {
+  padding-inline: var(--ys-space-2);
+}
+
+.voice-profile-status__copy,
+.voice-profile-section__body {
+  display: grid;
+  gap: var(--ys-space-3);
+  padding: 0 var(--ys-space-6) var(--ys-space-6);
+}
+
+.voice-profile-status__copy {
+  border-block-start: var(--ys-border-width) solid var(--ys-border);
+}
+
+.voice-profile-status__copy strong {
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-emphasis);
+  font-weight: 600;
+}
+
+.voice-profile-status__copy p,
+.voice-profile-copy,
+.voice-profile-active p,
+.voice-profile-next-step,
+.voice-profile-footnote,
+.voice-profile-sittings,
+.voice-profile-error {
+  margin: 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+  line-height: var(--ys-leading-ui);
+}
+
+.voice-profile-section__body > form,
+.voice-profile-active {
+  display: grid;
+  gap: var(--ys-space-4);
+}
+
+.voice-profile-fieldset {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.voice-profile-fieldset + .voice-profile-fieldset {
+  margin-block-start: var(--ys-space-2);
+}
+
+.voice-profile-fieldset > legend {
+  padding: 0 0 var(--ys-space-2);
+  color: var(--ys-ink-strong);
+  font-size: var(--ys-type-ui);
+  font-weight: 600;
+}
+
+.voice-profile-choice {
+  padding: var(--ys-space-3) 0;
+  border-block-start: var(--ys-border-width) solid var(--ys-border);
+}
+
+.voice-profile-choice:last-of-type {
+  border-block-end: var(--ys-border-width) solid var(--ys-border);
+}
+
+.voice-profile-choice span,
+.voice-profile-choice strong,
+.voice-profile-choice small {
+  display: block;
+}
+
+.voice-profile-choice strong {
+  color: var(--ys-ink-strong);
+  font-weight: 600;
+}
+
+.voice-profile-choice small {
+  margin-block-start: var(--ys-space-1);
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+  line-height: var(--ys-leading-ui);
+}
+
+.setup-steps {
+  display: grid;
+  gap: var(--ys-space-2);
+  margin: 0;
+  padding-inline-start: var(--ys-space-6);
+  color: var(--ys-ink);
+  font-size: var(--ys-type-ui);
+  line-height: var(--ys-leading-ui);
+}
+
+.voice-profile-next-step {
+  color: var(--ys-ink-strong);
+  font-weight: 600;
+}
+
+.voice-profile-footnote {
+  color: var(--ys-ink-muted);
+}
+
+.voice-profile-error {
+  color: var(--ys-error);
+  font-weight: 600;
+}
+
+.voice-profile-sittings {
+  display: grid;
+  gap: var(--ys-space-2);
+  padding-inline-start: var(--ys-space-6);
+}
+
+.voice-profile-boundary {
+  margin: 0;
+}
+
+.voice-profile-eyebrow {
+  color: var(--ys-error) !important;
+  font-size: var(--ys-type-xs) !important;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.voice-profile-reset-confirmation .voice-profile-footnote {
+  margin-block-end: var(--ys-space-5);
+}
+
+.voice-profile-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.voice-profile-primary-action {
+  padding-block-end: var(--ys-space-4);
+}
+
 @media (prefers-reduced-transparency: reduce) {
   .ys-settings-toolbar {
     background: var(--ys-surface-navigation);

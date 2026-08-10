@@ -1,3 +1,5 @@
+import { createVoiceProfileController } from "./voice-profile-workflow.mjs";
+
 const invoke = window.__TAURI__?.core?.invoke;
 const panes = ["capture", "privacy", "connections", "voice", "desktop", "shortcuts", "about"];
 const tabs = [...document.querySelectorAll("[data-pane]")];
@@ -5,6 +7,11 @@ const panels = [...document.querySelectorAll("[data-pane-panel]")];
 const storageKey = "yawn-settings:last-pane";
 const layoutInputs = [...document.querySelectorAll('input[name="desktop-layout"]')];
 const layoutStatus = document.querySelector("#layout-choice-status");
+let activePane = "capture";
+const voiceProfile = createVoiceProfileController({
+  invoke,
+  isActive: () => activePane === "voice",
+});
 
 function validPane(value) {
   return panes.includes(value) ? value : "capture";
@@ -66,8 +73,9 @@ async function updateTitle(pane) {
   }
 }
 
-function activatePane(value, { focus = false } = {}) {
+function activatePane(value, { focus = false, persist = true } = {}) {
   const pane = validPane(value);
+  activePane = pane;
   tabs.forEach((tab) => {
     const selected = tab.dataset.pane === pane;
     tab.setAttribute("aria-selected", String(selected));
@@ -77,12 +85,16 @@ function activatePane(value, { focus = false } = {}) {
   panels.forEach((panel) => {
     panel.hidden = panel.dataset.panePanel !== pane;
   });
-  try {
-    localStorage.setItem(storageKey, pane);
-  } catch {
-    // Storage refusal does not block navigation.
+  if (persist) {
+    try {
+      localStorage.setItem(storageKey, pane);
+    } catch {
+      // Storage refusal does not block navigation.
+    }
   }
   void updateTitle(pane);
+  if (pane === "voice") void voiceProfile.activate();
+  else voiceProfile.deactivate();
 }
 
 function permissionPresentation(value, channel) {
@@ -136,6 +148,10 @@ layoutInputs.forEach((input) => {
 window.addEventListener("yawn:desktop-layout-changed", (event) => {
   renderDesktopLayout(event.detail);
   layoutStatus.textContent = "Saved. Open Meetings uses this layout immediately.";
+});
+window.addEventListener("storage", (event) => {
+  if (event.key !== storageKey || !event.newValue) return;
+  activatePane(validPane(event.newValue), { persist: false });
 });
 
 let savedPane = "capture";

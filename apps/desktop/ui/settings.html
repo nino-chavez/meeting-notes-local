@@ -100,7 +100,118 @@
 
       <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-privacy" data-pane-panel="privacy" role="tabpanel" aria-labelledby="settings-tab-privacy" tabindex="0" hidden><header><h1>Privacy</h1><p>This pane has not moved into the native Settings window yet.</p></header></section>
       <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-connections" data-pane-panel="connections" role="tabpanel" aria-labelledby="settings-tab-connections" tabindex="0" hidden><header><h1>Connections</h1><p>This pane has not moved into the native Settings window yet. No account or connection is active.</p></header></section>
-      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-voice" data-pane-panel="voice" role="tabpanel" aria-labelledby="settings-tab-voice" tabindex="0" hidden><header><h1>Voice profile</h1><p>The existing measured voice-profile workflow remains in the main app until its own migration is reviewed.</p></header></section>
+      <section class="ys-settings-pane voice-profile-pane" id="settings-pane-voice" data-pane-panel="voice" role="tabpanel" aria-labelledby="settings-tab-voice" tabindex="0" hidden>
+        <header class="settings-pane-heading">
+          <h1>Voice profile</h1>
+          <p id="profile-lede">Checking local setup status.</p>
+        </header>
+
+        <section class="ys-settings-section voice-profile-status" aria-labelledby="profile-status-heading">
+          <h2 class="ys-settings-section__title" id="profile-status-heading">Current status</h2>
+          <div class="voice-profile-status__copy">
+            <strong id="profile-status-title" tabindex="-1">Checking</strong>
+            <p id="profile-status-copy">Checking whether a private voice profile is available.</p>
+          </div>
+        </section>
+
+        <section class="ys-settings-section voice-profile-requirements" id="profile-requirements" aria-labelledby="profile-requirements-title">
+          <h2 class="ys-settings-section__title" id="profile-requirements-title">How setup works</h2>
+          <div class="voice-profile-section__body">
+            <ol class="setup-steps">
+              <li>Record two short sessions of you talking, at least an hour apart.</li>
+              <li>Play a stretch of speech that is not you — licensed or public audio — so the app can measure the difference.</li>
+              <li>Review the measured options and choose one. Nothing is chosen for you.</li>
+            </ol>
+            <p class="voice-profile-footnote">Setup recordings and their transcripts are deleted once the private profile is stored.</p>
+            <p class="voice-profile-next-step" id="profile-next-step" hidden></p>
+            <p class="voice-profile-footnote" id="profile-enrollment-gates" hidden></p>
+          </div>
+        </section>
+
+        <section class="ys-settings-section voice-profile-recorder" id="profile-recorder" aria-labelledby="profile-recorder-title">
+          <h2 class="ys-settings-section__title" id="profile-recorder-title">Setup recordings</h2>
+          <div class="voice-profile-section__body">
+            <p class="voice-profile-copy" id="profile-recorder-entry">Checking whether a setup recording can start.</p>
+            <form id="sitting-form" hidden>
+              <fieldset class="voice-profile-fieldset" id="sitting-kind">
+                <legend>What this recording is</legend>
+                <label class="ys-radio-choice voice-profile-choice">
+                  <input type="radio" name="sitting-kind" value="operator-sitting" checked />
+                  <span><strong>My voice.</strong><small>A short session of you talking naturally, wearing headphones, alone near the microphone.</small></span>
+                </label>
+                <label class="ys-radio-choice voice-profile-choice">
+                  <input type="radio" name="sitting-kind" value="negative-source" />
+                  <span><strong>Speech that is not me.</strong><small>Comparison material the app measures against your voice. It never counts as your speech.</small></span>
+                </label>
+              </fieldset>
+              <fieldset class="voice-profile-fieldset" id="sitting-source-class" hidden>
+                <legend>Where the comparison speech comes from</legend>
+                <label class="ys-radio-choice voice-profile-choice">
+                  <input type="radio" name="sitting-source-class" value="public-or-licensed" />
+                  <span><strong>Public-domain or licensed audio, played aloud.</strong><small>A recording you are allowed to use for this measurement.</small></span>
+                </label>
+                <label class="ys-radio-choice voice-profile-choice">
+                  <input type="radio" name="sitting-source-class" value="consenting-person" />
+                  <span><strong>A person who knowingly agreed.</strong><small>They agreed to make this calibration recording for this purpose.</small></span>
+                </label>
+                <p class="voice-profile-footnote">A comparison sample is never permission to record someone without their knowledge.</p>
+              </fieldset>
+              <p class="voice-profile-error" id="sitting-error" role="alert" hidden></p>
+              <div class="ys-actions voice-profile-actions">
+                <button class="ys-button" id="sitting-start" data-variant="primary" type="submit">Start setup recording</button>
+              </div>
+            </form>
+            <div class="voice-profile-active" id="sitting-active" hidden>
+              <p>Recording your setup session. Speak naturally, then stop when you are done.</p>
+              <div class="ys-actions voice-profile-actions">
+                <button class="ys-button" id="sitting-stop" data-variant="primary" type="button">Stop setup recording</button>
+              </div>
+            </div>
+            <p class="voice-profile-copy" id="sitting-outcome" role="status" hidden></p>
+            <ul class="voice-profile-sittings" id="profile-sittings" hidden></ul>
+          </div>
+        </section>
+
+        <section class="ys-settings-section voice-profile-operating-points" id="profile-operating-points" aria-labelledby="operating-points-title" hidden>
+          <h2 class="ys-settings-section__title" id="operating-points-title">Choose how the profile behaves</h2>
+          <div class="voice-profile-section__body">
+            <p class="voice-profile-copy">Your recordings hold enough measured evidence to review the options. Each option carries its own measured costs; nothing is chosen for you.</p>
+            <form id="operating-points-form">
+              <fieldset class="voice-profile-fieldset" id="operating-points-rows" disabled>
+                <legend>Measured options</legend>
+              </fieldset>
+              <p class="voice-profile-error" id="operating-points-error" role="alert" hidden></p>
+              <div class="ys-actions voice-profile-actions">
+                <button class="ys-button" id="operating-points-load" type="button">Review measured options</button>
+                <button class="ys-button" id="operating-points-build" data-variant="primary" type="submit" disabled>Build voice profile</button>
+              </div>
+            </form>
+            <p class="voice-profile-footnote">Building runs the app’s own final check again before anything is stored. The temporary setup recordings are already deleted; their derived voice material is what the profile is built from.</p>
+          </div>
+        </section>
+
+        <aside class="ys-inline-notice voice-profile-boundary" id="profile-boundary" data-tone="information">
+          Recording requires headphones and only you near the microphone, with or without a profile. A profile sets aside speech that is not yours; it does not name speakers, and speaker playback stays unsupported.
+        </aside>
+        <p class="voice-profile-footnote" id="profile-footnote">Opening this pane reads only the setup status. It never opens meetings or transcripts.</p>
+
+        <section class="ys-confirmation voice-profile-reset-confirmation" id="profile-reset-confirmation" aria-labelledby="profile-reset-title" hidden>
+          <p class="voice-profile-eyebrow">Separate confirmation</p>
+          <h3 id="profile-reset-title">Delete the stored voice profile?</h3>
+          <p>This removes the profile, calibrated threshold, and its enrolment provenance. Meetings, transcripts, notes, evidence, and meeting audio remain.</p>
+          <p>Any profile-required recording stays unavailable until setup completes again. Preview’s current one-operator, headphones-required recording limit is unchanged.</p>
+          <p class="voice-profile-footnote">This is logical app-storage deletion, not forensic erasure. The fixed empty slots, completion count, latest reset event, and filesystem metadata remain.</p>
+          <div class="ys-actions voice-profile-actions">
+            <button class="ys-button" id="profile-reset-confirm" data-tone="error" type="button">Delete voice profile</button>
+            <button class="ys-button" id="profile-reset-cancel" type="button">Keep profile</button>
+          </div>
+          <p class="voice-profile-error" id="profile-reset-status" role="alert" hidden></p>
+        </section>
+
+        <div class="ys-actions voice-profile-actions voice-profile-primary-action">
+          <button class="ys-button" id="profile-setup" data-variant="primary" type="button" disabled>Set up voice profile</button>
+        </div>
+      </section>
       <section class="ys-settings-pane" id="settings-pane-desktop" data-pane-panel="desktop" role="tabpanel" aria-labelledby="settings-tab-desktop" tabindex="0" hidden>
         <header class="settings-pane-heading">
           <h1>Desktop behavior</h1>

@@ -92,12 +92,22 @@
     {
       "surface_id": "settings.remaining",
       "window_role": "settings",
-      "screen_ids": ["profile-screen"],
-      "settings_panes": ["privacy", "connections", "voice", "desktop", "shortcuts", "about"],
+      "screen_ids": [],
+      "settings_panes": ["privacy", "connections", "desktop", "shortcuts", "about"],
       "entry": "Select each remaining pane in the Settings window",
-      "states": ["migration-placeholder", "legacy-voice-workflow"],
+      "states": ["migration-placeholder"],
       "critical_actions": ["select-pane", "close", "reopen", "restore-pane"],
       "gates": ["native.appearance", "native.geometry", "native.window", "keyboard.tabs", "product.truth", "migration.status", "human.visual"]
+    },
+    {
+      "surface_id": "settings.voice",
+      "window_role": "settings",
+      "screen_ids": [],
+      "settings_panes": ["voice"],
+      "entry": "Voice profile from Settings or the first-run voice-setup entry",
+      "states": ["unavailable", "baseline-ready", "migration-review-required", "needs-attention", "choosing-operating-point"],
+      "critical_actions": ["open", "select-pane", "start-sitting", "stop-sitting", "review-options", "build-profile", "preserve", "reset", "close", "reopen", "restore-pane"],
+      "gates": ["native.appearance", "native.geometry", "native.window", "pointer.actions", "keyboard.tabs", "keyboard.focus", "states.truth", "product.truth", "human.visual"]
     },
     {
       "surface_id": "onboarding.first-run",
@@ -165,7 +175,7 @@
     {
       "surface_id": "prototype.references",
       "window_role": "evidence-only",
-      "screen_ids": ["prototype-meeting-screen"],
+      "screen_ids": ["prototype-meeting-screen", "profile-screen"],
       "entry": "Explicit browser prototype or separately identified review build",
       "states": ["synthetic"],
       "critical_actions": ["exercise-reference-only"],

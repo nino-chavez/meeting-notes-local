@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const html = readFileSync(new URL("./settings.html", import.meta.url), "utf8");
 const css = readFileSync(new URL("./settings-window.css", import.meta.url), "utf8");
 const script = readFileSync(new URL("./settings.js", import.meta.url), "utf8");
+const voiceWorkflow = readFileSync(new URL("./voice-profile-workflow.mjs", import.meta.url), "utf8");
 const production = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const rust = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const mainCapability = JSON.parse(readFileSync(new URL("../src-tauri/capabilities/product/main.json", import.meta.url), "utf8"));
@@ -40,6 +41,10 @@ test("native Settings exposes one complete measured Capture pane", () => {
 });
 
 test("Capture uses compact Settings geometry instead of a scrollable report", () => {
+  const capturePane = html.slice(
+    html.indexOf('id="settings-pane-capture"'),
+    html.indexOf('id="settings-pane-privacy"'),
+  );
   assert.match(css, /grid-template-rows: 4\.5rem minmax\(0, 1fr\)/);
   assert.match(css, /inline-size: min\(38\.5rem, 100%\)/);
   assert.match(css, /\.ys-settings-pane \{[\s\S]*?gap: var\(--ys-space-4\);[\s\S]*?padding: var\(--ys-space-5\) 0 var\(--ys-space-4\);[\s\S]*?overflow: hidden;/);
@@ -51,8 +56,8 @@ test("Capture uses compact Settings geometry instead of a scrollable report", ()
 
   assert.equal((html.match(/class="settings-group"/g) || []).length, 2);
   assert.equal((html.match(/class="settings-row"/g) || []).length, 4);
-  assert.doesNotMatch(html, /ys-settings-section|ys-inline-notice/);
-  assert.doesNotMatch(html, /Refresh status|Permissions measured on this Mac/);
+  assert.doesNotMatch(capturePane, /ys-settings-section|ys-inline-notice/);
+  assert.doesNotMatch(capturePane, /Refresh status|Permissions measured on this Mac/);
 
   // Scrolling is an accessibility fallback for magnified or constrained
   // webviews, not the standard 720 x 560 page composition.
@@ -65,6 +70,14 @@ test("Settings has a narrow native capability and main owns the opener", () => {
     "allow-first-run-permissions",
     "allow-get-desktop-layout",
     "allow-set-desktop-layout",
+    "allow-preview-profile-snapshot",
+    "allow-preview-enrollment-surface",
+    "allow-preview-enrollment-start-sitting",
+    "allow-preview-enrollment-stop-sitting",
+    "allow-preview-enrollment-operating-points",
+    "allow-preview-enrollment-build-profile",
+    "allow-preview-profile-preserve-legacy",
+    "allow-preview-profile-reset",
     "core:window:allow-set-title",
   ]);
   assert.ok(mainCapability.permissions.includes("allow-open-settings-window"));
@@ -80,6 +93,54 @@ test("Settings has a narrow native capability and main owns the opener", () => {
   assert.match(rust, /\.maximizable\(false\)/);
   assert.match(rust, /\.closable\(true\)/);
   assert.match(rust, /window\.set_focus\(\)\?/);
+});
+
+test("Voice owns the established local profile lifecycle in native Settings", () => {
+  for (const id of [
+    "profile-lede",
+    "profile-status-title",
+    "profile-status-copy",
+    "profile-setup",
+    "sitting-form",
+    "sitting-start",
+    "sitting-stop",
+    "profile-operating-points",
+    "operating-points-rows",
+    "operating-points-build",
+    "profile-reset-confirmation",
+    "profile-reset-confirm",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /Record two short sessions of you talking, at least an hour apart/);
+  assert.match(html, /it does not name speakers/);
+  assert.match(html, /Meetings, transcripts, notes, evidence, and meeting audio remain/);
+  assert.match(html, /logical app-storage deletion, not forensic erasure/);
+  assert.match(html, /id="operating-points-rows" disabled/);
+  assert.match(html, /id="operating-points-build" data-variant="primary" type="submit" disabled/);
+  assert.doesNotMatch(html, /existing measured voice-profile workflow remains in the main app/);
+
+  assert.match(script, /import \{ createVoiceProfileController \} from "\.\/voice-profile-workflow\.mjs"/);
+  assert.match(script, /isActive: \(\) => activePane === "voice"/);
+  assert.match(script, /window\.addEventListener\("storage"/);
+  assert.match(css, /\.voice-profile-pane \{[\s\S]*?overflow-y: auto;/);
+  for (const command of [
+    "preview_profile_snapshot",
+    "preview_enrollment_surface",
+    "preview_enrollment_start_sitting",
+    "preview_enrollment_stop_sitting",
+    "preview_enrollment_operating_points",
+    "preview_enrollment_build_profile",
+    "preview_profile_preserve_legacy",
+    "preview_profile_reset",
+  ]) {
+    assert.match(voiceWorkflow, new RegExp(`"${command}"`));
+  }
+  assert.match(voiceWorkflow, /choicesSha256: selection\.choicesSha256/);
+  assert.match(voiceWorkflow, /className = "ys-radio-choice voice-profile-choice"/);
+  assert.doesNotMatch(voiceWorkflow, /preview_profile_enroll/);
+  assert.doesNotMatch(voiceWorkflow, /input\.checked = true/);
+  assert.doesNotMatch(settingsCapability.permissions.join("\n"), /core:fs|shell|dialog/);
 });
 
 test("Desktop behavior owns one persisted Meetings layout preference", () => {
@@ -106,6 +167,8 @@ test("Settings restores pane, title, and keyboard focus without touching the mai
   assert.match(script, /\["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"\]/);
   assert.match(script, /getCurrentWindow\(\)\.setTitle\(title\)/);
   assert.doesNotMatch(script, /getByLabel\(["']main|navigate|location\.(?:href|assign|replace)/);
+  const main = readFileSync(new URL("./main.js", import.meta.url), "utf8");
+  assert.match(main, /localStorage\.setItem\("yawn-settings:last-pane", requestedPane\)/);
 });
 
 test("capture completion hands the retained meeting to its Transcript tab", () => {

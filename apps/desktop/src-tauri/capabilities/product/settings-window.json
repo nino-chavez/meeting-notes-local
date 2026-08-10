@@ -1,7 +1,7 @@
 {
   "$schema": "../../gen/schemas/desktop-schema.json",
   "identifier": "settings-window",
-  "description": "The bounded Settings window may read the manifest-verified capture permission status, persist the closed desktop layout preference, and update only its own native title. It cannot request permission and has no capture, meeting, meeting-storage, profile, generic filesystem, shell, process, dialog, or remote-origin authority.",
+  "description": "The bounded Settings window may read the manifest-verified capture permission status, persist the closed desktop layout preference, run the existing local voice-profile setup lifecycle through its exact named commands, and update only its own native title. It cannot request general permission and has no meeting, meeting-storage, generic filesystem, shell, process, dialog, or remote-origin authority.",
   "windows": [
     "settings"
   ],
@@ -12,6 +12,14 @@
     "allow-first-run-permissions",
     "allow-get-desktop-layout",
     "allow-set-desktop-layout",
+    "allow-preview-profile-snapshot",
+    "allow-preview-enrollment-surface",
+    "allow-preview-enrollment-start-sitting",
+    "allow-preview-enrollment-stop-sitting",
+    "allow-preview-enrollment-operating-points",
+    "allow-preview-enrollment-build-profile",
+    "allow-preview-profile-preserve-legacy",
+    "allow-preview-profile-reset",
     "core:window:allow-set-title"
   ]
 }

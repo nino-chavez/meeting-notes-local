@@ -889,6 +889,63 @@ fn preview_voice_profile_surface_bounds_legacy_preservation_and_separate_reset()
 }
 
 #[test]
+fn settings_window_owns_the_existing_named_voice_profile_lifecycle() {
+    let settings = include_str!("../../ui/settings.html");
+    let script = include_str!("../../ui/settings.js");
+    let workflow = include_str!("../../ui/voice-profile-workflow.mjs");
+    let opener = include_str!("../../ui/main.js");
+    let capability: Value =
+        serde_json::from_str(include_str!("../capabilities/product/settings-window.json")).unwrap();
+
+    assert!(settings.contains("id=\"settings-pane-voice\""));
+    assert!(settings.contains("Record two short sessions of you talking, at least an hour apart"));
+    assert!(settings.contains("it does not name speakers"));
+    assert!(settings.contains("id=\"profile-setup\" data-variant=\"primary\" type=\"button\" disabled"));
+    assert!(settings.contains("id=\"operating-points-rows\" disabled"));
+    assert!(settings.contains("id=\"operating-points-build\" data-variant=\"primary\" type=\"submit\" disabled"));
+    assert!(settings.contains("Meetings, transcripts, notes, evidence, and meeting audio remain"));
+    assert!(!settings.contains("remains in the main app until its own migration"));
+    assert!(script.contains("createVoiceProfileController"));
+    assert!(script.contains("activePane === \"voice\""));
+    assert!(script.contains("window.addEventListener(\"storage\""));
+    assert!(opener.contains("localStorage.setItem(\"yawn-settings:last-pane\", requestedPane)"));
+
+    for command in [
+        "preview_profile_snapshot",
+        "preview_enrollment_surface",
+        "preview_enrollment_start_sitting",
+        "preview_enrollment_stop_sitting",
+        "preview_enrollment_operating_points",
+        "preview_enrollment_build_profile",
+        "preview_profile_preserve_legacy",
+        "preview_profile_reset",
+    ] {
+        assert!(workflow.contains(command));
+    }
+    assert!(workflow.contains("choicesSha256: selection.choicesSha256"));
+    assert!(workflow.contains("className = \"ys-radio-choice voice-profile-choice\""));
+    assert!(!workflow.contains("preview_profile_enroll"));
+    assert!(!workflow.contains("input.checked = true"));
+    assert_eq!(
+        capability["permissions"],
+        serde_json::json!([
+            "allow-first-run-permissions",
+            "allow-get-desktop-layout",
+            "allow-set-desktop-layout",
+            "allow-preview-profile-snapshot",
+            "allow-preview-enrollment-surface",
+            "allow-preview-enrollment-start-sitting",
+            "allow-preview-enrollment-stop-sitting",
+            "allow-preview-enrollment-operating-points",
+            "allow-preview-enrollment-build-profile",
+            "allow-preview-profile-preserve-legacy",
+            "allow-preview-profile-reset",
+            "core:window:allow-set-title",
+        ])
+    );
+}
+
+#[test]
 fn tauri_build_tracks_the_active_configuration() {
     let build = include_str!("../build.rs");
     assert!(build.contains("cargo:rerun-if-env-changed=TAURI_CONFIG"));

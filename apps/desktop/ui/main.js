@@ -2417,14 +2417,23 @@ function runProfileAction() {
   if (profileSetup.dataset.action === "reset") showProfileResetConfirmation();
 }
 
-async function openProfile() {
+async function openProfile({ pane } = {}) {
+  const requestedPane = pane === "voice" ? pane : null;
   if (shellPrototype) {
+    if (requestedPane) activeSettingsTab = requestedPane;
     restoreShellSnapshotStatus();
     selectProductScreen("profile-screen", { resetScroll: true });
     selectSettingsPanel(activeSettingsTab);
     return;
   }
   if (!invoke) return;
+  if (requestedPane) {
+    try {
+      localStorage.setItem("yawn-settings:last-pane", requestedPane);
+    } catch {
+      // Settings can safely use its own saved pane when storage is unavailable.
+    }
+  }
   try {
     await invoke("open_settings_window");
     return;
@@ -2433,7 +2442,7 @@ async function openProfile() {
     // the existing measured voice-profile route instead of losing access.
   }
   selectProductScreen("profile-screen", { resetScroll: true });
-  selectSettingsPanel("voice");
+  selectSettingsPanel(requestedPane || "voice");
   const revision = routeRevision;
   try {
     const snapshot = await invoke("preview_profile_snapshot");
@@ -4446,10 +4455,14 @@ document.querySelector("#prototype-first-run-deny-system-audio").addEventListene
 });
 document.querySelector("#first-run-exit").addEventListener("click", () => void openMeetings({ resetFind: true, browseAll: true }));
 document.querySelector("#first-run-enrol").addEventListener("click", () => {
-  // Routes to the enrolment surface that already exists rather than duplicating it.
   activeSettingsTab = "voice";
-  selectProductScreen("profile-screen", { resetScroll: true });
-  selectSettingsPanel("voice");
+  if (shellPrototype) {
+    // The browser prototype retains its reference-only profile surface.
+    selectProductScreen("profile-screen", { resetScroll: true });
+    selectSettingsPanel("voice");
+    return;
+  }
+  void openProfile({ pane: "voice" });
 });
 document.querySelector("#first-run-skip-enrol").addEventListener("click", () => {
   showFirstRunStep("ready");

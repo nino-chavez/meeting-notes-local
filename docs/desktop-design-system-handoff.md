@@ -124,8 +124,10 @@ Build and approve these before broad migration:
    live and degraded state, safe file closure, progress, and focus behavior. Failure
    and recovered interruption remain explicit and never read as complete.
 
-Ask, Actions, retained Transcript, remaining Settings panes, first run, and voice
-enrolment migrate only after these references pass.
+Ask, Actions, retained Transcript, remaining Settings panes, and first run migrate
+only after these references pass. Voice enrolment now has source integration in
+native Settings, but it still needs the installed acceptance matrix before it can
+count as an approved native migration.
 
 ## Work packages and ownership
 
