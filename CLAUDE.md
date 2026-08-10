@@ -102,6 +102,23 @@ An empty `git diff` says every line of the branch is in `main` however it got th
 rather than the branch having been empty all along. Both, because either alone
 passes for a branch that never carried anything.
 
+**The whole-tree diff also refuses a genuinely-merged branch the moment `main`
+advances with anyone else's merge** — hit 2026-08-09 on PR #64, when an unrelated
+`work-library.publication.yml` change landed while the PR was in flight. `git diff`
+is symmetric, so main's extra content makes it non-empty forever and the gate can
+never pass again. When the diff is non-empty, ask the narrower question — did *this
+branch's* content arrive:
+
+    [ -z "$(git cherry main <branch> | grep '^+')" ] \
+      && [ -z "$(git diff main <branch> -- $(git diff --name-only main...<branch>))" ] \
+      && [ "$(gh pr view <n> --json state -q .state)" = MERGED ] \
+      && git branch -D <branch>
+
+`git cherry` matches patch IDs (`-` means the commit's content is in main; a `+` is
+content that never landed), and the file-scoped diff confirms the files this branch
+touched read identically in main. Still keep the MERGED check, for the same reason
+as above.
+
 Work in `<repo>/.worktrees/<branch>`. Remove the worktree once the work has landed
 **or** the session is finished with it — it does not have to be merged first, and on
 2026-08-07 thirty-eight worktrees on unmerged branches were removed safely. Removing
