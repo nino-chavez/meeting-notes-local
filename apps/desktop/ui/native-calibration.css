@@ -1140,64 +1140,91 @@ html[data-native-calibration="split"]:is(
   }
 }
 
-/* The primary journey uses one native grammar: document hierarchy, compact
-   controls, and state communicated in place. Planning truth remains visible,
-   but it does not become a second layer of dashboard chrome. */
-html[data-native-calibration="split"] main > #find-screen.screen.active {
+/* Ask uses the shared source-first search pattern. The local retrieval commands
+   still decide which passages exist and whether a handle can open; this layer
+   only calibrates the pattern for the primary macOS window. */
+html[data-production-system="desktop-v1"][data-native-calibration="split"] main > #find-screen.ys-search.screen.active {
   width: min(calc(100% - 64px), 720px);
   padding-top: 48px;
 }
-html[data-native-calibration="split"] #find-screen > .kicker { display: none; }
-html[data-native-calibration="split"] #find-screen > h1 { font-size: 32px; }
-html[data-native-calibration="split"] #find-screen > .lede { max-width: 58ch; }
-html[data-native-calibration="split"] #find-screen .library-search { margin-top: 32px; }
-html[data-native-calibration="split"] #find-screen .library-search > label {
-  margin-bottom: 9px;
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__header > .kicker {
+  display: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__header h1 {
+  font-size: 32px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__header .lede {
+  max-width: 58ch;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__mode {
+  margin-top: 30px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__mode + .ys-search__mode {
+  padding-top: 28px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__form {
+  gap: 9px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__label {
   font-size: 13px;
   font-weight: 620;
 }
-html[data-native-calibration="split"] #find-screen .library-search-field { gap: 8px; }
-html[data-native-calibration="split"] #find-screen .library-search-field input {
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__controls {
+  gap: 8px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__input {
   min-height: 38px;
   padding: 0 12px;
-  border-color: var(--line-strong);
-  background: var(--surface-record);
+  border-color: var(--ys-border-strong);
+  background: var(--ys-surface-content);
   font-size: 14px;
 }
-html[data-native-calibration="split"] #find-screen .library-search-field button {
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__controls .ys-button {
   min-height: 38px;
   padding: 0 15px;
   font-size: 13px;
 }
-html[data-native-calibration="split"] #find-screen .library-search small {
-  margin-top: 7px;
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__help {
   font-size: 12px;
   line-height: 1.45;
 }
-html[data-native-calibration="split"] #find-screen .find-start {
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__empty {
   max-width: 58ch;
-  margin-top: 26px;
   padding: 0;
   border: 0;
 }
-html[data-native-calibration="split"] #find-screen .find-start .label { display: none; }
-html[data-native-calibration="split"] #find-screen .find-start h2 {
-  margin: 0;
-  font-family: var(--ui-font);
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__empty .label {
+  display: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__empty h2 {
   font-size: 14px;
   font-weight: 620;
   letter-spacing: -0.01em;
   line-height: 1.4;
 }
-html[data-native-calibration="split"] #find-screen .find-start p {
-  margin-top: 4px;
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__empty p {
   font-size: 13px;
   line-height: 1.48;
 }
-html[data-native-calibration="split"] #find-screen .corpus-search {
-  margin-top: 30px;
-  padding-top: 28px;
-  border-top: 1px solid var(--line);
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #find-screen .ys-search__result {
+  min-height: 56px;
+  padding: 10px 0;
 }
 
 html[data-native-calibration="split"] main > #promises-screen.screen.active {

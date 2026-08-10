@@ -122,6 +122,22 @@ test("the initial component set and its state hooks are executable", () => {
   assert.match(components, /aria-pressed/);
 });
 
+test("source-first search keeps a retained passage between the query and its action", () => {
+  for (const selector of [
+    ".ys-search", ".ys-search__form", ".ys-search__input", ".ys-search__results",
+    ".ys-search__result", ".ys-search__quote", ".ys-search__empty",
+  ]) assert.ok(patterns.includes(selector), `${selector} is missing`);
+
+  const searchStart = html.indexOf("<h3>Source-first search</h3>");
+  const searchEnd = html.indexOf("</article>", searchStart);
+  assert.ok(searchStart > -1 && searchEnd > searchStart, "Search pattern specimen is missing");
+  const searchPattern = html.slice(searchStart, searchEnd);
+  assert.match(searchPattern, /Exact local search\. No inference\./);
+  assert.match(searchPattern, /Transcript · turn 4/);
+  assert.match(searchPattern, /Open transcript/);
+  assert.doesNotMatch(searchPattern, /generated answer/i);
+});
+
 test("specimen includes all five window roles and explicit browser boundaries", () => {
   for (const role of ["primary", "record", "settings", "capture", "transient"]) {
     assert.match(html, new RegExp(`id="role-${role}"`));

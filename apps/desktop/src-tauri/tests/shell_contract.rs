@@ -915,7 +915,7 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(script.contains(
         "meeting-record-back\").addEventListener(\"click\", () => {"
     ));
-    assert!(script.contains("setError(libraryNotice, \"Searching your retained meetings…\")"));
+    assert!(script.contains("setSearchNotice(libraryNotice, \"Searching your retained meetings…\")"));
     assert!(navigation.contains("export async function refreshFindGeneration(query, actions)"));
     assert!(
         script.contains("const findRefreshOperation = createSingleFlight(performFindRefresh);")
@@ -1295,7 +1295,7 @@ fn preview_exact_search_lands_on_opened_unicode_scalar_span() {
     assert!(script.contains("start: Number.isInteger(result.start) ? result.start : null,"));
     assert!(script.contains("end: Number.isInteger(result.end) ? result.end : null,"));
     assert!(script.contains(
-        "await openLibraryTranscript(result.transcriptHandle, exactMatch, null, transition);"
+        "transcriptReturnRoute(\"find\", \"\", { findFocus: \"exact\" })"
     ));
     assert!(script.contains("row.setAttribute(\"aria-label\", `Exact transcript match in turn ${match.sourceTurnIndex + 1}`);"));
     assert!(script.contains("destination?.focus({ preventScroll: true });"));

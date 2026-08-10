@@ -516,6 +516,7 @@ export function transcriptReturnRoute(origin, meetingId, {
   claim = null,
   detailScrollTop = 0,
   detailTab = "note",
+  findFocus = "exact",
 } = {}) {
   if (origin === "meeting-detail" && meetingId) {
     return {
@@ -526,6 +527,19 @@ export function transcriptReturnRoute(origin, meetingId, {
       detailTab: ["note", "transcript", "actions", "evidence", "details"].includes(detailTab)
         ? detailTab
         : "note",
+    };
+  }
+  if (origin === "find") {
+    return {
+      destination: "find",
+      meetingId: null,
+      claim: null,
+      detailScrollTop: 0,
+      detailTab: "note",
+      // Exact search can rebuild its local result list on return. Meaning
+      // search must never invoke the worker merely because someone pressed
+      // Back, so the source field is restored instead.
+      findFocus: findFocus === "meaning" ? "meaning" : "exact",
     };
   }
   return {

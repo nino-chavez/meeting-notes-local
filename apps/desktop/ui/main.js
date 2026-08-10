@@ -685,6 +685,29 @@ function clearError(element) {
   element.hidden = true;
 }
 
+// Search uses the shared inline-notice grammar, but its states are not all
+// failures. A useful empty result, a partial corpus, and a failed local command
+// need different tones without changing the retrieval command's fixed state.
+function searchNoticeTone(state) {
+  if (["results-incomplete", "incomplete", "nothing-prepared", "busy"].includes(state)) {
+    return "warning";
+  }
+  if (["unavailable", "worker-unavailable", "model-mismatch", "reply-incomplete"].includes(state)) {
+    return "error";
+  }
+  return "information";
+}
+
+function setSearchNotice(element, messageText, tone = "information") {
+  element.dataset.tone = tone;
+  setError(element, messageText);
+}
+
+function clearSearchNotice(element) {
+  element.dataset.tone = "information";
+  clearError(element);
+}
+
 function message(target, text, state = "") {
   target.textContent = text;
   target.dataset.state = state;
@@ -1153,15 +1176,20 @@ function renderLibrary(snapshot) {
 function renderLibrarySearch(response) {
   librarySearchResults.replaceChildren();
   findStart.hidden = true;
-  clearError(libraryNotice);
+  clearSearchNotice(libraryNotice);
   if (response.state !== "results" && response.state !== "results-incomplete") {
-    setError(libraryNotice, response.message || "No retained text matched that search.");
+    setSearchNotice(
+      libraryNotice,
+      response.message || "No retained text matched that search.",
+      searchNoticeTone(response.state),
+    );
     return;
   }
   for (const result of response.results || []) {
     const metadataOnly = result.kind === "meeting" && result.transcriptAvailable !== true;
     const row = document.createElement(metadataOnly ? "div" : "button");
-    row.className = "library-search-result";
+    row.className = "ys-search__result";
+    row.dataset.kind = result.kind || "unknown";
     if (metadataOnly) {
       row.dataset.state = "metadata-only";
     } else {
@@ -1170,8 +1198,11 @@ function renderLibrarySearch(response) {
       row.addEventListener("click", () => openLibrarySearchResult(result.handle, row));
     }
     const summary = document.createElement("span");
+    summary.className = "ys-search__result-copy";
     const label = document.createElement("strong");
-    const detail = document.createElement("small");
+    label.className = "ys-search__result-title";
+    const detail = document.createElement("span");
+    detail.className = "ys-search__result-meta";
     if (result.kind === "withheld") {
       label.textContent = "Withheld turn";
       detail.textContent = "A voice check withheld matching text.";
@@ -1186,6 +1217,7 @@ function renderLibrarySearch(response) {
     }
     summary.append(label, detail);
     const action = document.createElement("span");
+    action.className = "ys-search__result-action";
     action.textContent = metadataOnly
       ? "No transcript was created"
       : result.kind === "withheld"
@@ -1203,7 +1235,11 @@ function renderLibrarySearch(response) {
     ? `Showing the ${resultCount} most recent of ${total} matches. Add a word to narrow it.`
     : `${resultCount} exact ${resultCount === 1 ? "match" : "matches"} found.`;
   const resultMessage = response.state === "results-incomplete" ? response.message : cut;
-  setError(libraryNotice, resultMessage || "Exact results from your retained meetings.");
+  setSearchNotice(
+    libraryNotice,
+    resultMessage || "Exact results from your retained meetings.",
+    searchNoticeTone(response.state),
+  );
 }
 
 // One click's ceiling. Rust caps a single `corpus_embed_pending` call at 512
@@ -1237,13 +1273,18 @@ function renderCorpusAnswers(response) {
   corpusSearchResults.replaceChildren();
   renderCorpusCoverage(response);
   if (response.state !== "answered") {
-    setError(corpusNotice, response.message || "That description could not be searched.");
+    setSearchNotice(
+      corpusNotice,
+      response.message || "That description could not be searched.",
+      searchNoticeTone(response.state),
+    );
     return;
   }
   for (const answer of response.answers || []) {
     const openable = Boolean(answer.transcriptHandle);
     const row = document.createElement(openable ? "button" : "div");
-    row.className = "corpus-answer";
+    row.className = "ys-search__result ys-search__result--passage";
+    row.dataset.kind = "passage";
     if (openable) {
       row.type = "button";
       row.dataset.transcriptHandle = answer.transcriptHandle;
@@ -1252,8 +1293,10 @@ function renderCorpusAnswers(response) {
       row.dataset.state = "unopenable";
     }
     const label = document.createElement("strong");
+    label.className = "ys-search__result-title";
     label.textContent = corpusAnswerLabel(answer);
     const where = document.createElement("small");
+    where.className = "ys-search__result-meta";
     // Turns are numbered for a person here and stored from zero, exactly as an
     // exact hit is, so the two searches never number one transcript two ways.
     const first = answer.firstTurnIndex + 1;
@@ -1264,8 +1307,10 @@ function renderCorpusAnswers(response) {
     // printing it as a percentage would claim a confidence nobody measured; the
     // words are what lets a person judge whether the match is the right one.
     const quote = document.createElement("blockquote");
+    quote.className = "ys-search__quote";
     quote.textContent = answer.quote;
     const action = document.createElement("span");
+    action.className = "ys-search__result-action";
     // Three sentences, not two. A row with no handle because the library reader
     // was gone must not tell the operator this meeting has no transcript.
     action.textContent = openable
@@ -1283,13 +1328,17 @@ function renderCorpusAnswers(response) {
   const crowding = ties > 1
     ? ` ${ties} meetings scored close enough together that the order between them means little \u2014 read the passages rather than the ranking.`
     : "";
-  setError(corpusNotice, `${response.message || "Meetings that match that description."}${crowding}`);
+  setSearchNotice(
+    corpusNotice,
+    `${response.message || "Meetings that match that description."}${crowding}`,
+    searchNoticeTone(response.state),
+  );
 }
 
 async function searchCorpus(event) {
   event.preventDefault();
   if (shellPrototype) {
-    setError(corpusNotice, "The browser shell has no retained passages to search. Nothing was queried or invented.");
+    setSearchNotice(corpusNotice, "The browser shell has no retained passages to search. Nothing was queried or invented.");
     return false;
   }
   if (!invoke) return false;
@@ -1299,11 +1348,11 @@ async function searchCorpus(event) {
   corpusSearchResults.replaceChildren();
   corpusCoverage.hidden = true;
   if (!question) {
-    setError(corpusNotice, "Describe what the meeting was about.");
+    setSearchNotice(corpusNotice, "Describe what the meeting was about.");
     return false;
   }
   corpusSearchSubmit.disabled = true;
-  setError(corpusNotice, "Searching by meaning on this Mac\u2026");
+  setSearchNotice(corpusNotice, "Searching by meaning on this Mac\u2026");
   try {
     // The library reader owns the corpus sync and the handles this answer will
     // carry, so it is initialized before the question rather than after it.
@@ -1314,7 +1363,7 @@ async function searchCorpus(event) {
     return response.state === "answered";
   } catch {
     if (ownsRoute()) {
-      setError(corpusNotice, "Meaning search is unavailable right now. Exact word search still works.");
+      setSearchNotice(corpusNotice, "Meaning search is unavailable right now. Exact word search still works.", "error");
     }
     return false;
   } finally {
@@ -1328,20 +1377,21 @@ async function openCorpusAnswer(answer, control = null) {
   const transition = beginHandleTransition("open-transcript", control);
   if (!transition) return false;
   productRootScreen = "find-screen";
+  const returnContext = transcriptReturnRoute("find", "", { findFocus: "meaning" });
   return await openLibraryTranscript(
     answer.transcriptHandle,
     // Land on the turn the passage starts at. The store cites character ranges
     // too, and this does not carry them: the exact path uses them to highlight
     // one matched phrase, and a passage is 128 words with no phrase to point at.
     { sourceTurnIndex: answer.firstTurnIndex, start: null, end: null },
-    null,
+    returnContext,
     transition,
   );
 }
 
 async function prepareCorpusPassages() {
   if (shellPrototype) {
-    setError(corpusNotice, "The browser shell has no retained meetings to prepare. The installed app performs this work locally.");
+    setSearchNotice(corpusNotice, "The browser shell has no retained meetings to prepare. The installed app performs this work locally.");
     return false;
   }
   if (!invoke) return false;
@@ -1354,19 +1404,19 @@ async function prepareCorpusPassages() {
       if (!ownsRoute()) return false;
       renderCorpusCoverage(result);
       if (result.stop === "complete") {
-        setError(corpusNotice, `All ${result.windows} passages are prepared. Ask your question again.`);
+        setSearchNotice(corpusNotice, `All ${result.windows} passages are prepared. Ask your question again.`, "success");
         return true;
       }
       if (result.stop !== "budget") {
-        setError(corpusNotice, corpusPrepareFailure(result.stop));
+        setSearchNotice(corpusNotice, corpusPrepareFailure(result.stop), result.stop === "busy" ? "warning" : "error");
         return false;
       }
-      setError(corpusNotice, `Preparing on this Mac \u2014 ${result.covered} of ${result.windows} passages done\u2026`);
+      setSearchNotice(corpusNotice, `Preparing on this Mac \u2014 ${result.covered} of ${result.windows} passages done\u2026`);
     }
-    setError(corpusNotice, "Preparing stopped part-way. Run it again to continue where it left off.");
+    setSearchNotice(corpusNotice, "Preparing stopped part-way. Run it again to continue where it left off.", "warning");
     return false;
   } catch {
-    if (ownsRoute()) setError(corpusNotice, "Preparing is unavailable right now. Try again.");
+    if (ownsRoute()) setSearchNotice(corpusNotice, "Preparing is unavailable right now. Try again.", "error");
     return false;
   } finally {
     corpusPrepare.disabled = false;
@@ -2779,7 +2829,7 @@ function reportLibraryOpenFailure(messageText) {
     message(meetingDetailState, messageText, "stale");
     return;
   }
-  setError(libraryNotice, messageText);
+  setSearchNotice(libraryNotice, messageText, "error");
 }
 
 // The frozen restore shape needs back exactly what this view was verified
@@ -3240,12 +3290,33 @@ async function returnFromLibraryTranscript() {
     if (context?.destination === "meeting-detail") {
       return await restoreMeetingDetailAfterTranscript(context, transition);
     }
+    if (context?.destination === "find") {
+      return await returnToFindAfterTranscript(context, transition);
+    }
     if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
     await returnToProductHome();
     return true;
   } finally {
     finishHandleTransition(transition);
   }
+}
+
+async function returnToFindAfterTranscript(context, transition) {
+  if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
+  productRootScreen = "find-screen";
+  selectProductScreen("find-screen", { focus: false });
+  if (context.findFocus === "exact") {
+    await refreshFindView();
+  } else {
+    // Handles are intentionally invalidated when the transcript opens. Do not
+    // rerun the model just because Back was pressed; keep the question and put
+    // focus there so the operator decides whether to ask again.
+    setSearchNotice(corpusNotice, "Your wording is still here. Search again to see current matching passages.");
+  }
+  if (currentScreen !== "find-screen") return false;
+  const focusTarget = context.findFocus === "meaning" ? corpusSearchQuestion : librarySearchQuery;
+  focusTarget.focus({ preventScroll: true });
+  return true;
 }
 
 async function openMeetingEvidence(handle, meetingId, claim, control, sourceTab = "note") {
@@ -3293,9 +3364,9 @@ async function performFindRefresh() {
   const query = librarySearchQuery.value.trim();
   findStart.hidden = Boolean(query);
   if (query) {
-    setError(libraryNotice, "Searching your retained meetings…");
+    setSearchNotice(libraryNotice, "Searching your retained meetings…");
   } else {
-    clearError(libraryNotice);
+    clearSearchNotice(libraryNotice);
     librarySearchResults.replaceChildren();
   }
   try {
@@ -3309,14 +3380,14 @@ async function performFindRefresh() {
       },
     });
     if (!query && ownsRoute()) {
-      clearError(libraryNotice);
+      clearSearchNotice(libraryNotice);
       findStart.hidden = false;
     }
     return { revision, ok: true };
   } catch {
     if (ownsRoute()) {
       invalidateLibraryHandles();
-      setError(libraryNotice, "Search is unavailable right now. Try Find again.");
+      setSearchNotice(libraryNotice, "Search is unavailable right now. Try Find again.", "error");
     }
     return { revision, ok: false };
   }
@@ -3342,7 +3413,7 @@ async function refreshFindView() {
 async function searchLibrary(event) {
   event.preventDefault();
   if (shellPrototype) {
-    setError(libraryNotice, "The browser shell has no retained meetings to search. Nothing was queried or invented.");
+    setSearchNotice(libraryNotice, "The browser shell has no retained meetings to search. Nothing was queried or invented.");
     return;
   }
   await refreshFindView();
@@ -3355,16 +3426,16 @@ async function openLibrarySearchResult(handle, control = null) {
   if (!transition) return false;
   productRootScreen = "find-screen";
   invalidateLibraryHandles();
-  setError(libraryNotice, "Opening the selected retained result…");
+  setSearchNotice(libraryNotice, "Opening the selected retained result…");
   try {
     const result = await invoke("preview_library_open_search_result", { handle });
     if (!currentTransitionOwnsRoute(transition, "find-screen")) return false;
     if (!result.transcriptHandle || result.state === "withheld") {
-      setError(libraryNotice, result.message || "That result cannot be opened as visible transcript text. Run the search again to continue.");
+      setSearchNotice(libraryNotice, result.message || "That result cannot be opened as visible transcript text. Run the search again to continue.", "warning");
       return false;
     }
     if (result.state !== "transcript" && result.state !== "meeting") {
-      setError(libraryNotice, result.message || "That search result is no longer current. Run the search again to continue.");
+      setSearchNotice(libraryNotice, result.message || "That search result is no longer current. Run the search again to continue.", "warning");
       return false;
     }
     const exactMatch = Number.isInteger(result.sourceTurnIndex)
@@ -3374,10 +3445,15 @@ async function openLibrarySearchResult(handle, control = null) {
           end: Number.isInteger(result.end) ? result.end : null,
         }
       : null;
-    return await openLibraryTranscript(result.transcriptHandle, exactMatch, null, transition);
+    return await openLibraryTranscript(
+      result.transcriptHandle,
+      exactMatch,
+      transcriptReturnRoute("find", "", { findFocus: "exact" }),
+      transition,
+    );
   } catch {
     if (!currentTransitionOwnsRoute(transition, "find-screen")) return false;
-    setError(libraryNotice, "That search result could not be opened. Run the search again to continue.");
+    setSearchNotice(libraryNotice, "That search result could not be opened. Run the search again to continue.", "error");
     return false;
   } finally {
     finishHandleTransition(transition);

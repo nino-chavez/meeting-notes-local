@@ -878,40 +878,47 @@
         </section>
       </section>
 
-      <section class="screen find-screen" id="find-screen" aria-labelledby="find-title">
-        <p class="kicker">Meeting memory</p>
-        <h1 id="find-title">Find a meeting or passage.</h1>
-        <p class="lede">Search words you remember, or describe what the meeting was about. Every result opens the retained source.</p>
-        <form class="library-search" id="library-search">
-          <label for="library-search-query">Search exact words</label>
-          <div class="library-search-field">
-            <input id="library-search-query" type="search" autocomplete="off" placeholder="Phrase, title, or folder" />
-            <button class="secondary" type="submit">Search</button>
-          </div>
-          <small>Exact local search. No inference.</small>
-        </form>
-        <div class="find-start" id="find-start" aria-labelledby="find-start-title">
-          <p class="label">Source first</p>
-          <h2 id="find-start-title">Search the words you remember.</h2>
-          <p>Withheld or missing speech stays unavailable instead of becoming a match.</p>
-        </div>
-        <div class="notice" id="library-notice" role="status" aria-live="polite" hidden></div>
-        <div class="library-search-results" id="library-search-results"></div>
+      <section class="screen find-screen ys-search" id="find-screen" aria-labelledby="find-title">
+        <header class="ys-search__header">
+          <p class="kicker">Meeting memory</p>
+          <h1 id="find-title">Find a meeting or passage.</h1>
+          <p class="lede">Search words you remember, or describe what the meeting was about. Every result opens the retained source.</p>
+        </header>
 
-        <form class="library-search corpus-search" id="corpus-search">
-          <label for="corpus-search-question">Search by meaning</label>
-          <div class="library-search-field">
-            <input id="corpus-search-question" type="search" autocomplete="off" placeholder="In your own words — &ldquo;the call about the lease&rdquo;" />
-            <button class="secondary" type="submit">Search</button>
+        <section class="ys-search__mode" aria-labelledby="library-search-label">
+          <form class="ys-search__form" id="library-search">
+            <label class="ys-search__label" id="library-search-label" for="library-search-query">Search exact words</label>
+            <div class="ys-search__controls">
+              <input class="ys-search__input" id="library-search-query" type="search" autocomplete="off" placeholder="Phrase, title, or folder" />
+              <button class="ys-button" type="submit">Search</button>
+            </div>
+            <small class="ys-search__help">Exact local search. No inference.</small>
+          </form>
+          <div class="ys-search__empty ys-empty-row" id="find-start" aria-labelledby="find-start-title">
+            <p class="label">Source first</p>
+            <h2 id="find-start-title">Search the words you remember.</h2>
+            <p>Withheld or missing speech stays unavailable instead of becoming a match.</p>
           </div>
-          <small>A local model compares meaning. Results quote the matching passage; nothing leaves this Mac.</small>
-        </form>
-        <div class="notice" id="corpus-notice" role="status" aria-live="polite" hidden></div>
-        <div class="corpus-coverage" id="corpus-coverage" hidden>
-          <p id="corpus-coverage-copy"></p>
-          <button class="secondary" type="button" id="corpus-prepare">Make older meetings searchable</button>
-        </div>
-        <div class="corpus-search-results" id="corpus-search-results"></div>
+          <div class="ys-search__notice ys-inline-notice" id="library-notice" data-tone="information" role="status" aria-live="polite" hidden></div>
+          <div class="ys-search__results" id="library-search-results"></div>
+        </section>
+
+        <section class="ys-search__mode" aria-labelledby="corpus-search-label">
+          <form class="ys-search__form" id="corpus-search">
+            <label class="ys-search__label" id="corpus-search-label" for="corpus-search-question">Search by meaning</label>
+            <div class="ys-search__controls">
+              <input class="ys-search__input" id="corpus-search-question" type="search" autocomplete="off" placeholder="In your own words — &ldquo;the call about the lease&rdquo;" />
+              <button class="ys-button" type="submit">Search</button>
+            </div>
+            <small class="ys-search__help">A local model compares meaning. Results quote the matching passage; nothing leaves this Mac.</small>
+          </form>
+          <div class="ys-search__notice ys-inline-notice" id="corpus-notice" data-tone="information" role="status" aria-live="polite" hidden></div>
+          <div class="ys-search__coverage ys-inline-notice" id="corpus-coverage" data-tone="information" hidden>
+            <p id="corpus-coverage-copy"></p>
+            <button class="ys-button" type="button" id="corpus-prepare">Make older meetings searchable</button>
+          </div>
+          <div class="ys-search__results" id="corpus-search-results"></div>
+        </section>
 
         <section class="prototype-only planned-answer-shell" data-feature="D1 D4 D5" aria-labelledby="planned-answer-title">
           <div class="section-heading">

@@ -677,39 +677,7 @@ html[data-prototype="true"] .prototype-only.result-handoff { display: flex; }
 #retention-overview-rows { margin: var(--space-2) 0 0; padding-left: 1.3em; line-height: 1.55; }
 #retention-overview-rows li { margin-top: var(--space-1); }
 
-.library-search { margin-top: var(--space-8); }
-.library-search > label { display: block; margin-bottom: var(--space-2); color: var(--ink); font-weight: 720; }
-.library-search-field { display: flex; align-items: stretch; gap: var(--space-2); }
-.library-search-field input {
-  min-width: 0;
-  flex: 1;
-  min-height: var(--control-height);
-  padding: 0 var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  color: var(--ink);
-  background: var(--paper);
-}
-.library-search small { display: block; margin-top: var(--space-2); color: var(--muted); font-size: 0.875rem; line-height: 1.42; }
-.library-search-results, .library-list { margin-top: var(--space-8); border-top: 1px solid var(--line); }
-.library-search-results:empty { display: none; }
-.find-start {
-  max-width: 62ch;
-  margin-top: var(--space-8);
-  padding: var(--space-6) 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-}
-.find-start h2, .availability-card h2 {
-  margin: var(--space-2) 0 var(--space-3);
-  font-family: ui-serif, Georgia, serif;
-  font-size: clamp(1.75rem, 3vw, 2.1rem);
-  font-weight: 500;
-  letter-spacing: -0.025em;
-  line-height: 1.08;
-}
-.find-start p, .availability-card p { margin: 0; color: var(--muted); line-height: 1.55; }
-.find-start .label, .availability-card .label { color: #49645a; }
+.library-list { margin-top: var(--space-8); border-top: 1px solid var(--line); }
 .section-heading {
   display: flex;
   align-items: baseline;
@@ -720,7 +688,7 @@ html[data-prototype="true"] .prototype-only.result-handoff { display: flex; }
 .section-heading h2 { margin: 0; font-size: 1rem; }
 .section-heading span { color: var(--muted); font-size: 0.8rem; }
 .section-heading + .library-list { margin-top: var(--space-2); }
-.library-search-result, .library-row {
+.library-row {
   width: 100%;
   min-height: 72px;
   padding: var(--space-4) 0;
@@ -735,53 +703,11 @@ html[data-prototype="true"] .prototype-only.result-handoff { display: flex; }
   background: transparent;
   text-align: left;
 }
-button.library-search-result:hover:not(:disabled), button.library-row:hover:not(:disabled) { border-color: var(--line); background: transparent; color: var(--ink); text-decoration: underline; }
-.library-search-result strong, .library-search-result small, .library-row strong, .library-row small { display: block; }
-.library-search-result small, .library-row small { margin-top: var(--space-1); color: var(--muted); }
-.library-search-result span:last-child, .library-row span:last-child { color: var(--muted); font-size: 0.875rem; white-space: nowrap; }
-.library-search-result[data-state="metadata-only"] span:last-child { color: var(--muted); }
+button.library-row:hover:not(:disabled) { border-color: var(--line); background: transparent; color: var(--ink); text-decoration: underline; }
+.library-row strong, .library-row small { display: block; }
+.library-row small { margin-top: var(--space-1); color: var(--muted); }
+.library-row span:last-child { color: var(--muted); font-size: 0.875rem; white-space: nowrap; }
 .library-empty { margin: 0; padding: var(--space-6) 0; border-bottom: 1px solid var(--line); color: var(--muted); line-height: 1.52; }
-/* Meaning search. A result is a stacked block rather than a row, because the
-   passage it quotes is the point and a passage does not fit beside a label. */
-.corpus-search { padding-top: var(--space-8); border-top: 1px solid var(--line); }
-.corpus-coverage {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  margin-top: var(--space-4);
-  padding: var(--space-4) 0;
-  border-bottom: 1px solid var(--line);
-}
-.corpus-coverage p { margin: 0; max-width: 62ch; color: var(--muted); line-height: 1.52; }
-.corpus-coverage button { white-space: nowrap; }
-.corpus-search-results { margin-top: var(--space-6); border-top: 1px solid var(--line); }
-.corpus-search-results:empty { display: none; }
-.corpus-answer {
-  display: block;
-  width: 100%;
-  padding: var(--space-4) 0;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  color: var(--ink);
-  background: transparent;
-  text-align: left;
-}
-button.corpus-answer:hover:not(:disabled) { background: transparent; color: var(--ink); text-decoration: underline; }
-.corpus-answer strong, .corpus-answer small { display: block; }
-.corpus-answer small { margin-top: var(--space-1); color: var(--muted); }
-.corpus-answer blockquote {
-  margin: var(--space-3) 0 0;
-  padding-left: var(--space-4);
-  border-left: 2px solid var(--line);
-  color: var(--ink);
-  font-family: ui-serif, Georgia, serif;
-  font-size: 1.0625rem;
-  line-height: 1.5;
-}
-.corpus-answer span:last-child { display: block; margin-top: var(--space-3); color: var(--muted); font-size: 0.875rem; }
-.corpus-answer[data-state="unopenable"] span:last-child { color: var(--muted); }
 /* Sits under its row, quiet by default. Naming a meeting is available rather
    than urged: the row already reads well without one. */
 /* The filter section's heading exists for a screen reader; the controls are
@@ -1253,7 +1179,6 @@ footer {
   .capture-progress li { flex: 0 0 156px; }
   .prototype-scenario-controls.compact, .result-handoff { align-items: flex-start; flex-direction: column; }
   html[data-prototype="true"] .prototype-only.result-handoff { display: flex; }
-  .library-search-field { flex-direction: column; }
   .product-nav button { padding: 0 var(--space-2); font-size: 0.8rem; }
   .nav-badge { display: none; }
   .settings-link { padding: 0 var(--space-2); font-size: 0.8rem; }
@@ -1552,7 +1477,6 @@ html[data-prototype="true"] .kicker,
 html[data-prototype="true"] .label { color: var(--muted); font-family: var(--ui-font); font-size: 11px; letter-spacing: 0.09em; }
 html[data-prototype="true"] .turn,
 html[data-prototype="true"] .example-transcript,
-html[data-prototype="true"] .corpus-answer blockquote,
 html[data-prototype="true"] .evidence-card blockquote {
   font-family: var(--mono-font);
   font-size: 12px;

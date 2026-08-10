@@ -735,7 +735,18 @@ test("evidence opened from a meeting detail carries normalized scroll and a full
   );
   assert.deepEqual(
     transcriptReturnRoute("find", "meeting-a", { claim, detailScrollTop: 184 }),
-    { destination: "product-root", meetingId: null, claim: null, detailScrollTop: 0, detailTab: "note" },
+    {
+      destination: "find",
+      meetingId: null,
+      claim: null,
+      detailScrollTop: 0,
+      detailTab: "note",
+      findFocus: "exact",
+    },
+  );
+  assert.equal(
+    transcriptReturnRoute("find", "", { findFocus: "meaning" }).findFocus,
+    "meaning",
   );
   assert.deepEqual(
     transcriptReturnRoute("meeting-detail", "", { claim, detailScrollTop: 184 }),

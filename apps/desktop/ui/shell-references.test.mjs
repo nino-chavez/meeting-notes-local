@@ -265,6 +265,41 @@ test("startup and recovery use the shared bounded operational utility", () => {
   assert.match(calibration, /#first-run-screen \.ys-actions\s*\{\s*justify-content: flex-start;/);
 });
 
+test("Ask uses the shared source-first search pattern and restores the initiating field", () => {
+  const html = readFileSync(join(here, "index.html"), "utf8");
+  const source = readFileSync(join(here, "main.js"), "utf8");
+  const styles = readFileSync(join(here, "styles.css"), "utf8");
+  const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");
+  const patterns = readFileSync(join(here, "system/patterns.css"), "utf8");
+
+  assert.match(html, /<section class="screen find-screen ys-search" id="find-screen"/);
+  assert.match(html, /class="ys-search__form" id="library-search"/);
+  assert.match(html, /class="ys-search__form" id="corpus-search"/);
+  assert.match(html, /class="ys-search__notice ys-inline-notice" id="library-notice" data-tone="information"/);
+  assert.match(html, /class="ys-search__coverage ys-inline-notice" id="corpus-coverage" data-tone="information"/);
+  assert.match(html, /Exact local search\. No inference\./);
+  assert.match(html, /Results quote the matching passage; nothing leaves this Mac\./);
+  assert.match(patterns, /\.ys-search__result--passage/);
+  assert.match(patterns, /\.ys-search__quote/);
+  assert.match(source, /row\.className = "ys-search__result"/);
+  assert.match(source, /row\.className = "ys-search__result ys-search__result--passage"/);
+  assert.match(source, /transcriptReturnRoute\("find", "", \{ findFocus: "exact" \}\)/);
+  assert.match(source, /transcriptReturnRoute\("find", "", \{ findFocus: "meaning" \}\)/);
+  assert.match(source, /if \(context\?\.destination === "find"\)/);
+  assert.match(source, /const focusTarget = context\.findFocus === "meaning" \? corpusSearchQuestion : librarySearchQuery/);
+
+  const returnToFind = source.slice(
+    source.indexOf("async function returnToFindAfterTranscript"),
+    source.indexOf("async function openMeetingEvidence"),
+  );
+  assert.doesNotMatch(returnToFind, /corpus_search|searchCorpus\(/);
+  assert.match(returnToFind, /await refreshFindView\(\)/);
+  assert.doesNotMatch(styles, /\.library-search(?:[\s.{:#])/);
+  assert.doesNotMatch(styles, /\.corpus-(?:search|coverage|answer)/);
+  assert.doesNotMatch(calibration, /\.library-search|\.find-start|\.corpus-search/);
+  assert.match(calibration, /#find-screen\.ys-search\.screen\.active/);
+});
+
 test("the production Library and selected meeting use one native split contract", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");

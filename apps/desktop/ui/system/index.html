@@ -208,6 +208,24 @@
             </article>
 
             <article class="specimen-card">
+              <h3>Source-first search</h3>
+              <section class="ys-search" aria-labelledby="search-pattern-title">
+                <h4 class="ys-visually-hidden" id="search-pattern-title">Search retained meeting passages</h4>
+                <form class="ys-search__form">
+                  <label class="ys-search__label" for="search-pattern-exact">Search exact words</label>
+                  <div class="ys-search__controls"><input class="ys-search__input" id="search-pattern-exact" type="search" placeholder="Phrase, title, or folder" /><button class="ys-button" type="submit">Search</button></div>
+                  <small class="ys-search__help">Exact local search. No inference.</small>
+                </form>
+                <div class="ys-search__notice ys-inline-notice" data-tone="information">One exact match from the retained source.</div>
+                <div class="ys-search__results">
+                  <button class="ys-search__result" type="button"><span class="ys-search__result-copy"><strong class="ys-search__result-title">Synthetic product review</strong><span class="ys-search__result-meta">Transcript · turn 4</span></span><span class="ys-search__result-action">Open transcript</span></button>
+                  <button class="ys-search__result ys-search__result--passage" type="button"><strong class="ys-search__result-title">Synthetic product review</strong><span class="ys-search__result-meta">turns 8–9</span><blockquote class="ys-search__quote">Example retained passage shown only to demonstrate the search pattern.</blockquote><span class="ys-search__result-action">Open transcript</span></button>
+                </div>
+              </section>
+              <p class="specimen-note">Results present retained meetings or quoted passages. This pattern does not compose an answer or score confidence.</p>
+            </article>
+
+            <article class="specimen-card">
               <h3>Lifecycle coverage</h3>
               <div class="specimen-state-grid">
                 <div class="specimen-state" data-state="loading"><strong>Loading</strong><p>Local components are answering.</p></div>
