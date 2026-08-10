@@ -118,8 +118,8 @@
           <div class="sidebar-primary">
             <button class="legacy-home-link ys-sidebar-row" id="home-link" type="button"><span>Home</span></button>
             <button class="ys-sidebar-row" id="meetings-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.25 4.25h11.5v10.5H3.25zM6 2.75v3M12 2.75v3M3.25 7.25h11.5" /></svg><span>Meetings</span><kbd class="nav-shortcut" aria-hidden="true">⌘1</kbd></button>
-            <button class="ys-sidebar-row" id="find-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3.25 3.25" /></svg><span>Ask</span><kbd class="nav-shortcut" aria-hidden="true">⌘2</kbd></button>
-            <button class="ys-sidebar-row" id="promises-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6" /><path d="m6.25 9 1.75 1.75 3.75-4" /></svg><span>Actions</span><span class="nav-trailing"><span class="nav-badge">Planned</span><kbd class="nav-shortcut" aria-hidden="true">⌘3</kbd></span></button>
+            <button class="ys-sidebar-row" id="find-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3.25 3.25" /></svg><span>Search</span><kbd class="nav-shortcut" aria-hidden="true">⌘2</kbd></button>
+            <button class="prototype-only ys-sidebar-row" id="promises-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6" /><path d="m6.25 9 1.75 1.75 3.75-4" /></svg><span>Actions</span><span class="nav-trailing"><span class="nav-badge">Planned</span><kbd class="nav-shortcut" aria-hidden="true">⌘3</kbd></span></button>
           </div>
 
           <div class="sidebar-section" aria-labelledby="folders-heading">
@@ -819,7 +819,7 @@
           <button class="primary" id="prototype-open-result" type="button">Open meeting workspace</button>
         </section>
         <div class="screen-actions transcript-exit-actions">
-          <button class="secondary" id="new-meeting" type="button">Return to Find</button>
+        <button class="secondary" id="new-meeting" type="button">Return to Meetings</button>
         </div>
       </section>
 
@@ -939,6 +939,8 @@
         <h1 id="library-title">Meetings</h1>
         <p class="lede" id="library-copy">Opening retained meetings on this Mac.</p>
         <div class="notice" id="library-organization-notice" role="status" aria-live="polite" hidden></div>
+        <details class="library-tools">
+          <summary>Filter meetings</summary>
         <section class="library-filters" id="library-filters" aria-labelledby="library-filters-title">
           <h2 id="library-filters-title" class="visually-hidden">Narrow this list</h2>
           <div class="filter-row">
@@ -964,6 +966,7 @@
             <p class="footnote" id="filter-people-note">Filtering by person needs named speakers, which are not built. Recordings label speech only as you or the other side.</p>
           </div>
         </section>
+        </details>
         <div class="section-heading">
           <h2>Recent meetings</h2>
           <span>Stored locally</span>
@@ -977,15 +980,14 @@
           </div>
         </div>
         <div class="library-list" id="library-list" aria-live="polite"></div>
-        <section class="retention-overview" id="retention-overview" aria-labelledby="retention-overview-title">
-          <div class="section-heading">
-            <h2 id="retention-overview-title">Recording audio held on this Mac</h2>
-            <span id="retention-overview-total"></span>
-          </div>
+        <details class="retention-overview" id="retention-overview">
+          <summary><span id="retention-overview-title">Recording storage</span><span id="retention-overview-total"></span></summary>
+          <div class="retention-overview-details" aria-labelledby="retention-overview-title">
           <p id="retention-overview-copy">Checking retained recording audio.</p>
           <ul id="retention-overview-rows" hidden></ul>
           <p class="footnote">Deleting a recording is reviewed inside its meeting. Each meeting keeps the auto-deletion period you chose when it was recorded; deletion runs while the app is open, or the next time it opens.</p>
-        </section>
+          </div>
+        </details>
       </section>
 
       <section class="screen actions-screen" id="promises-screen" aria-labelledby="promises-title">
@@ -1142,6 +1144,10 @@
           </aside>
 
           <div class="meeting-detail-content ys-record ys-meeting-record">
+          <div class="installed-only meeting-record-toolbar">
+            <button class="text-button" id="meeting-record-back" type="button">Meetings</button>
+            <button class="text-button" id="meeting-record-search" type="button">Search</button>
+          </div>
           <div class="prototype-only placeholder-boundary prominent" role="note">
           <strong>Synthetic preview</strong>
           <span>These three meetings are examples. This browser does not read or save meetings on your Mac.</span>
@@ -1311,7 +1317,7 @@
         <h1 id="start-meeting-error-title">A new meeting was not opened.</h1>
         <p class="lede">The existing meeting must close cleanly before a new consent and retention review can begin.</p>
         <div class="notice error" id="start-transition-error" role="alert"></div>
-        <button class="secondary" id="start-transition-back" type="button">Return to Find</button>
+        <button class="secondary" id="start-transition-back" type="button">Return to Meetings</button>
       </section>
 
       <section class="screen" id="error-screen" aria-labelledby="error-title">
@@ -1319,7 +1325,7 @@
         <h1 id="error-title">This attempt did not complete.</h1>
         <p class="lede" id="error-copy">The app kept any recoverable local evidence and did not mark the meeting complete.</p>
         <div class="notice error" id="error-detail"></div>
-        <button class="secondary" id="recover-button" type="button">Return to Find</button>
+        <button class="secondary" id="recover-button" type="button">Return to Meetings</button>
       </section>
       </main>
     </div>

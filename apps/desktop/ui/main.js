@@ -36,6 +36,11 @@ import {
   transcriptReturnRoute,
   resolvedScreenForSnapshot,
 } from "./navigation-state.mjs";
+import {
+  effectiveDesktopLayout,
+  normalizeDesktopLayout,
+  opensMeetingBesideList,
+} from "./layout-preference.mjs";
 
 const shellParams = new window.URLSearchParams(window.location.search);
 const rawInvoke = window.__TAURI__?.core?.invoke;
@@ -259,6 +264,7 @@ const checks = [
 ];
 
 let lastSnapshot = null;
+let lastRenderedCapture = null;
 let pollTimer = null;
 let startedAt = null;
 let elapsedTimer = null;
@@ -269,7 +275,8 @@ let meetingContextRows = [];
 let activeMeetingId = "";
 let meetingContextBusyId = "";
 let currentScreen = "startup-screen";
-let productRootScreen = "home-screen";
+let productRootScreen = "meetings-screen";
+let desktopLayoutPreference = "automatic";
 let transcriptReturnContext = null;
 let routeRevision = 0;
 let findNavigationBusy = false;
@@ -283,7 +290,7 @@ let prototypeCaptureDegraded = false;
 let activeSettingsTab = shellPrototype ? "capture" : "voice";
 let activeStateReviewId = "loading";
 let activeHelpTopicId = "overview";
-let helpReturnScreen = "home-screen";
+let helpReturnScreen = "meetings-screen";
 let desktopPreviewReturnFocus = null;
 let commandMenuReturnFocus = null;
 let commandMenuEntries = [];
@@ -307,6 +314,30 @@ const dismissMeetingOperation = createSingleFlight(async () => {
   return acceptCommandSnapshot(snapshot);
 });
 
+function applyDesktopLayout(value) {
+  desktopLayoutPreference = normalizeDesktopLayout(value);
+  document.documentElement.dataset.layoutPreference = desktopLayoutPreference;
+  document.documentElement.dataset.effectiveLayout = effectiveDesktopLayout(
+    desktopLayoutPreference,
+    window.innerWidth,
+  );
+}
+
+async function initializeDesktopLayout() {
+  if (!invoke) {
+    applyDesktopLayout("automatic");
+    return;
+  }
+  const saved = await invoke("get_desktop_layout").catch(() => "automatic");
+  applyDesktopLayout(saved);
+}
+
+function shouldOpenMeetingBesideList() {
+  return opensMeetingBesideList(desktopLayoutPreference, window.innerWidth);
+}
+
+applyDesktopLayout("automatic");
+
 function showScreen(id, { resetScroll = false, focus = true } = {}) {
   const destination = screens.get(id);
   if (!destination) return;
@@ -317,6 +348,7 @@ function showScreen(id, { resetScroll = false, focus = true } = {}) {
   currentScreen = id;
   productRootScreen = rootForDestination(id, productRootScreen);
   document.documentElement.dataset.screen = id;
+  applyDesktopLayout(desktopLayoutPreference);
   for (const [screenId, screen] of screens) {
     const active = screenId === id;
     screen.classList.toggle("active", active);
@@ -1035,6 +1067,8 @@ function renderLibrary(snapshot) {
     return;
   }
   for (const row of snapshot.rows || []) {
+    const item = document.createElement("article");
+    item.className = "library-item";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "library-row ys-meeting-row";
@@ -1068,20 +1102,26 @@ function renderLibrary(snapshot) {
     const action = document.createElement("span");
     action.textContent = row.transcriptAvailable ? "Open meeting" : "Open details";
     button.append(summary, action);
-    libraryList.append(button);
+    item.append(button);
 
     // Rename sits outside the row button rather than inside it: a button in a
     // button does not nest, and the whole row already means "open this".
     // A null revision means the record could not be read, and renaming is
     // withheld rather than attempted against a revision nobody knows.
     if (Number.isInteger(snapshot.metadataRevision)) {
+      const actions = document.createElement("details");
+      actions.className = "library-item-actions";
+      const actionsLabel = document.createElement("summary");
+      actionsLabel.textContent = "More";
+      actionsLabel.setAttribute("aria-label", `More actions for ${labelText}`);
+      const actionControls = document.createElement("div");
+      actionControls.className = "library-item-action-controls";
       const rename = document.createElement("button");
       rename.type = "button";
       rename.className = "library-rename";
       rename.dataset.meetingId = row.meetingId || "";
       rename.textContent = labelSource === "operator" ? "Rename" : "Name this meeting";
       rename.addEventListener("click", () => renameMeeting(row, snapshot.metadataRevision));
-      libraryList.append(rename);
 
       const move = document.createElement("select");
       move.className = "library-move";
@@ -1098,8 +1138,11 @@ function renderLibrary(snapshot) {
       }
       move.value = row.folderId || "";
       move.addEventListener("change", () => moveMeeting(row, move.value || null));
-      libraryList.append(move);
+      actionControls.append(rename, move);
+      actions.append(actionsLabel, actionControls);
+      item.append(actions);
     }
+    libraryList.append(item);
   }
 }
 
@@ -1362,6 +1405,8 @@ function render(snapshot) {
   lastSnapshot = snapshot;
   const startup = snapshot.startup || "diagnostic-written";
   const capture = snapshot.capture || "idle";
+  const previousCapture = lastRenderedCapture;
+  lastRenderedCapture = capture;
   document.documentElement.dataset.startupState = startup;
   document.documentElement.dataset.captureState = capture;
   document.documentElement.dataset.connectionState = "connected";
@@ -1392,7 +1437,8 @@ function render(snapshot) {
       // than carry one meeting's note into the next.
       resetLiveNote();
       if (workflowOwnsRoute && currentScreen !== "idle-screen") {
-        showWorkflowScreen(snapshot, { resetScroll: true });
+        const destination = showWorkflowScreen(snapshot, { resetScroll: true });
+        if (destination === "meetings-screen") void openMeetings();
         initializeFindInBackground();
       }
       if (!snapshot.retention_operational) {
@@ -1433,7 +1479,11 @@ function render(snapshot) {
       setHeaderState("Transcript ready");
       endElapsed();
       if (workflowOwnsRoute) {
-        void handoffCompletedCapture(snapshot);
+        if (["captured", "transcribing"].includes(previousCapture)) {
+          void handoffCompletedCapture(snapshot);
+        } else {
+          void openMeetings({ preferredMeetingId: snapshot.meeting_id || "" });
+        }
       }
       break;
     default:
@@ -1703,7 +1753,7 @@ async function renameMeeting(row, expectedRevision) {
   await rebuildMeetingsView();
 }
 
-async function rebuildMeetingsView() {
+async function rebuildMeetingsView({ selectDefault = false, preferredMeetingId = "" } = {}) {
   if (!invoke) return;
   document.querySelector("#library-copy").textContent = "Opening retained meetings on this Mac.";
   invalidateLibraryHandles();
@@ -1712,6 +1762,13 @@ async function rebuildMeetingsView() {
     const snapshot = await initializeLibraryReader();
     if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
     renderLibrary(snapshot);
+    if (selectDefault && Array.isArray(snapshot.rows) && snapshot.rows.length) {
+      const row = rowForMeetingId(snapshot, preferredMeetingId) || snapshot.rows[0];
+      const control = [...libraryList.querySelectorAll(".library-row")]
+        .find((candidate) => candidate.dataset.meetingId === row.meetingId) || null;
+      await openMeetingDetail(row.handle, "meetings-screen", control);
+      return;
+    }
     await refreshRetentionOverview(revision);
   } catch {
     if (currentScreen !== "meetings-screen" || routeRevision !== revision) return;
@@ -1728,7 +1785,7 @@ async function openFind({ resetQuery = false } = {}) {
   if (invoke) await refreshFindView();
 }
 
-async function openMeetings({ resetFind = false, browseAll = false } = {}) {
+async function openMeetings({ resetFind = false, browseAll = false, preferredMeetingId = "" } = {}) {
   if (!invoke && !shellPrototype) return;
   restoreShellSnapshotStatus();
   if (resetFind) librarySearchQuery.value = "";
@@ -1737,7 +1794,12 @@ async function openMeetings({ resetFind = false, browseAll = false } = {}) {
     return;
   }
   selectProductScreen("meetings-screen");
-  if (invoke) await rebuildMeetingsView();
+  if (invoke) {
+    await rebuildMeetingsView({
+      selectDefault: !browseAll && shouldOpenMeetingBesideList(),
+      preferredMeetingId,
+    });
+  }
 }
 
 function openHome() {
@@ -1746,7 +1808,7 @@ function openHome() {
     openPrototypeMeetingDetail(activeMeetingId || "prototype-meeting", { focus: true });
     return;
   }
-  selectProductScreen("home-screen", { resetScroll: true });
+  void openMeetings({ browseAll: true });
 }
 
 async function openPromises({ resetFind = false } = {}) {
@@ -1757,7 +1819,7 @@ async function openPromises({ resetFind = false } = {}) {
 }
 
 function showStartTransitionError() {
-  startTransitionError.textContent = "The current meeting could not be closed safely. A new consent form was not opened. Return to Find and try again.";
+  startTransitionError.textContent = "The current meeting could not be closed safely. A new consent form was not opened. Return to Meetings and try again.";
   showScreen("start-meeting-error-screen", { resetScroll: true });
 }
 
@@ -2484,11 +2546,14 @@ async function returnToProductHome() {
   await openFind();
 }
 
-function returnToWorkflow() {
+async function returnToWorkflow() {
   if (!lastSnapshot) return;
+  if (lastSnapshot.capture === "transcript-ready") {
+    await handoffCompletedCapture(lastSnapshot);
+    return;
+  }
   const routeToken = beginWorkflowRoute();
   if (!workflowRouteIsCurrent(routeToken)) return;
-  if (lastSnapshot.capture === "transcript-ready") renderTranscript(lastSnapshot);
   showWorkflowScreen(lastSnapshot, { resetScroll: true });
 }
 
@@ -3751,7 +3816,7 @@ operatingPointsForm.addEventListener("submit", buildVoiceProfile);
 operatingPointsForm.addEventListener("change", () => {
   operatingPointsBuild.disabled = !selectedOperatingPoint();
 });
-workflowReturn.addEventListener("click", returnToWorkflow);
+workflowReturn.addEventListener("click", () => void returnToWorkflow());
 startMeetingAction.addEventListener("click", openStartMeeting);
 commandMenuTrigger.addEventListener("click", () => {
   if (commandMenuBackdrop.hidden) openCommandMenu();
@@ -3791,28 +3856,36 @@ quickControlClose.addEventListener("click", () => closeQuickControl({ restoreFoc
 quickControlPrimary.addEventListener("click", runQuickControlPrimary);
 quickControlSecondary.addEventListener("click", runQuickControlSecondary);
 document.addEventListener("keydown", (event) => {
-  if (!shellPrototype) return;
-  if (event.key === "Escape" && !desktopBehaviorBackdrop.hidden) {
+  if (shellPrototype && event.key === "Escape" && !desktopBehaviorBackdrop.hidden) {
     event.preventDefault();
     closeDesktopBehaviorPreview();
     return;
   }
-  if (!desktopBehaviorBackdrop.hidden) return;
+  if (shellPrototype && !desktopBehaviorBackdrop.hidden) return;
   const commandKey = event.metaKey && !event.altKey && !event.ctrlKey;
-  if (commandKey && event.key.toLocaleLowerCase() === "k") {
+  if (shellPrototype && commandKey && event.key.toLocaleLowerCase() === "k") {
     event.preventDefault();
     if (commandMenuBackdrop.hidden) openCommandMenu();
     else closeCommandMenu();
     return;
   }
   if (commandKey && !event.shiftKey) {
-    const routeShortcut = { "1": "meetings", "2": "ask", "3": "actions", ",": "settings" }[event.key];
+    const routeShortcut = {
+      "1": "meetings",
+      "2": "search",
+      ...(shellPrototype ? { "3": "actions" } : {}),
+      ",": "settings",
+    }[event.key];
     if (routeShortcut) {
       event.preventDefault();
-      runShellCommandById(routeShortcut);
+      if (routeShortcut === "meetings") void openMeetings({ resetFind: true });
+      else if (routeShortcut === "search") void openFind({ resetQuery: true });
+      else if (routeShortcut === "settings") void openProfile();
+      else runShellCommandById(routeShortcut);
       return;
     }
   }
+  if (!shellPrototype) return;
   if (event.key === "Escape" && !commandMenuBackdrop.hidden) {
     event.preventDefault();
     closeCommandMenu();
@@ -3825,6 +3898,10 @@ document.addEventListener("click", (event) => {
   if (quickControlPopover.contains(event.target) || quickControlTrigger.contains(event.target)) return;
   closeQuickControl();
 });
+window.addEventListener("resize", () => applyDesktopLayout(desktopLayoutPreference));
+window.addEventListener("yawn:desktop-layout-changed", (event) => {
+  applyDesktopLayout(event.detail);
+});
 document.querySelector("#start-back").addEventListener("click", returnToProductHome);
 document.querySelector("#start-transition-back").addEventListener(
   "click",
@@ -3835,7 +3912,16 @@ corpusSearch.addEventListener("submit", searchCorpus);
 corpusPrepare.addEventListener("click", prepareCorpusPassages);
 document.querySelector("#profile-back").addEventListener("click", returnToProductHome);
 document.querySelector("#library-transcript-back").addEventListener("click", returnFromLibraryTranscript);
-document.querySelector("#meeting-detail-back").addEventListener("click", returnToProductHome);
+document.querySelector("#meeting-detail-back").addEventListener("click", () => {
+  if (shellPrototype) void returnToProductHome();
+  else void openMeetings({ browseAll: true });
+});
+document.querySelector("#meeting-record-back").addEventListener("click", () => {
+  void openMeetings({ browseAll: true });
+});
+document.querySelector("#meeting-record-search").addEventListener("click", () => {
+  void openFind({ resetQuery: true });
+});
 recordingDeleteReview.addEventListener("click", () => {
   if (!meetingAudioDeletionHandle) return;
   recordingDeleteConfirmation.hidden = false;
@@ -4347,5 +4433,5 @@ if (shellPrototype) {
   if (nativeCalibration === "document") setMeetingFocus(true);
 } else {
   renderStartup("shell-rendered");
-  refreshCurrent();
+  void initializeDesktopLayout().finally(refreshCurrent);
 }

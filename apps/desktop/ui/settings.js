@@ -3,9 +3,48 @@ const panes = ["capture", "privacy", "connections", "voice", "desktop", "shortcu
 const tabs = [...document.querySelectorAll("[data-pane]")];
 const panels = [...document.querySelectorAll("[data-pane-panel]")];
 const storageKey = "yawn-settings:last-pane";
+const layoutInputs = [...document.querySelectorAll('input[name="desktop-layout"]')];
+const layoutStatus = document.querySelector("#layout-choice-status");
 
 function validPane(value) {
   return panes.includes(value) ? value : "capture";
+}
+
+function validDesktopLayout(value) {
+  return ["automatic", "focus", "library"].includes(value) ? value : "automatic";
+}
+
+function renderDesktopLayout(value) {
+  const layout = validDesktopLayout(value);
+  layoutInputs.forEach((input) => {
+    input.checked = input.value === layout;
+  });
+}
+
+async function loadDesktopLayout() {
+  try {
+    const layout = await invoke?.("get_desktop_layout");
+    renderDesktopLayout(layout);
+  } catch {
+    renderDesktopLayout("automatic");
+    layoutStatus.textContent = "The saved layout could not be read. Automatic is shown for this window.";
+  }
+}
+
+async function saveDesktopLayout(value) {
+  const requested = validDesktopLayout(value);
+  layoutInputs.forEach((input) => { input.disabled = true; });
+  layoutStatus.textContent = "Saving layout…";
+  try {
+    const saved = await invoke?.("set_desktop_layout", { layout: requested });
+    renderDesktopLayout(saved || requested);
+    layoutStatus.textContent = "Saved. Open Meetings uses this layout immediately.";
+  } catch {
+    await loadDesktopLayout();
+    layoutStatus.textContent = "The layout could not be saved. The previous choice is still active.";
+  } finally {
+    layoutInputs.forEach((input) => { input.disabled = false; });
+  }
 }
 
 function adjacentPane(current, key) {
@@ -89,6 +128,15 @@ tabs.forEach((tab) => {
 });
 
 document.querySelector("#refresh-permissions").addEventListener("click", refreshPermissions);
+layoutInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    if (input.checked) void saveDesktopLayout(input.value);
+  });
+});
+window.addEventListener("yawn:desktop-layout-changed", (event) => {
+  renderDesktopLayout(event.detail);
+  layoutStatus.textContent = "Saved. Open Meetings uses this layout immediately.";
+});
 
 let savedPane = "capture";
 try {
@@ -98,3 +146,4 @@ try {
 }
 activatePane(savedPane);
 void refreshPermissions();
+void loadDesktopLayout();

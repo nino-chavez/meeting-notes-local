@@ -599,6 +599,49 @@
   font-size: var(--ys-type-section);
 }
 
+.ia-recommendation > div > p {
+  margin: var(--ys-space-3) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+}
+
+.ia-layout-contract {
+  display: grid;
+  gap: 0;
+  border-block-start: var(--ys-border-width) solid var(--ys-border);
+}
+
+.ia-layout-contract label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--ys-space-3);
+  align-items: start;
+  padding: var(--ys-space-3) 0;
+  border-block-end: var(--ys-border-width) solid var(--ys-border);
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-sm);
+}
+
+.ia-layout-contract input {
+  margin-block-start: 0.2rem;
+  accent-color: var(--ys-brand);
+}
+
+.ia-layout-contract span {
+  display: grid;
+  gap: var(--ys-space-1);
+}
+
+.ia-layout-contract strong {
+  color: var(--ys-ink-strong);
+}
+
+.ia-layout-contract p {
+  margin: var(--ys-space-3) 0 0;
+  color: var(--ys-ink-muted);
+  font-size: var(--ys-type-xs);
+}
+
 .ia-recommendation ul {
   display: grid;
   gap: var(--ys-space-3);

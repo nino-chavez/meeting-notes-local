@@ -151,7 +151,7 @@ test("specimen exposes deterministic controls for required lifecycle and accessi
   ]) assert.match(html, new RegExp(`id="${control}"`));
 });
 
-test("primary-window comparison develops three structures before recommending one", () => {
+test("primary-window comparison develops three structures before deriving one configurable contract", () => {
   const section = html.match(/<section class="specimen-section" id="meetings-front-door-options"[\s\S]*?(?=\n\s*<section class="specimen-section")/)?.[0];
   assert.ok(section, "Meetings comparison section is missing");
 
@@ -162,8 +162,12 @@ test("primary-window comparison develops three structures before recommending on
   const optionGrid = section.match(/<div class="ia-option-grid">[\s\S]*?<div class="ia-task-comparison"/)?.[0];
   assert.ok(optionGrid, "Option grid is missing");
   assert.doesNotMatch(optionGrid, /recommended|why it leads|approved mac split/i);
-  assert.match(section, /Blind research result/);
-  assert.match(section, /Prototype the adaptive two-pane structure/);
+  assert.match(section, /Production contract/);
+  assert.match(section, /Keep one model; make pane visibility configurable/);
+  assert.match(section, /value="automatic" checked/);
+  assert.match(section, /value="focus"/);
+  assert.match(section, /value="library"/);
+  assert.match(section, /View → Layout and Settings → Desktop Behavior/);
   assert.match(section, /almost 40% of the 720-pixel minimum width/);
   assert.match(section, /Active capture may take over the window/);
   assert.match(section, /Search returns retained passages, not generated answers/);

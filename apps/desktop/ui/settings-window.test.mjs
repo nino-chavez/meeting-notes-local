@@ -63,6 +63,8 @@ test("Settings has a narrow native capability and main owns the opener", () => {
   assert.deepEqual(settingsCapability.windows, ["settings"]);
   assert.deepEqual(settingsCapability.permissions, [
     "allow-first-run-permissions",
+    "allow-get-desktop-layout",
+    "allow-set-desktop-layout",
     "core:window:allow-set-title",
   ]);
   assert.ok(mainCapability.permissions.includes("allow-open-settings-window"));
@@ -78,6 +80,21 @@ test("Settings has a narrow native capability and main owns the opener", () => {
   assert.match(rust, /\.maximizable\(false\)/);
   assert.match(rust, /\.closable\(true\)/);
   assert.match(rust, /window\.set_focus\(\)\?/);
+});
+
+test("Desktop behavior owns one persisted Meetings layout preference", () => {
+  for (const value of ["automatic", "focus", "library"]) {
+    assert.match(html, new RegExp(`name="desktop-layout" value="${value}"`));
+  }
+  assert.match(html, /Yawn collapses panes before the meeting becomes too narrow to read/);
+  assert.match(script, /invoke\?\.\("get_desktop_layout"\)/);
+  assert.match(script, /invoke\?\.\("set_desktop_layout", \{ layout: requested \}\)/);
+  assert.match(script, /yawn:desktop-layout-changed/);
+  assert.match(css, /\.layout-choice\s*\{/);
+  assert.match(rust, /const LAYOUT_MENU_ID: &str = "view-layout"/);
+  assert.match(rust, /CheckMenuItemBuilder::with_id\(/);
+  assert.match(rust, /SubmenuBuilder::with_id\(app, LAYOUT_MENU_ID, "Layout"\)/);
+  assert.match(rust, /durable_replace\(&path, &bytes\)/);
 });
 
 test("Settings restores pane, title, and keyboard focus without touching the main window", () => {

@@ -142,7 +142,7 @@ test("the desktop shell exposes the library-first journey without presenting pla
   assert.doesNotMatch(source, /Synthetic (?:retention )?fixture/);
 });
 
-test("the approved direction has one Paper Focus shell and no comparison plumbing", () => {
+test("the production shell has one content model and no obsolete treatment plumbing", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   const css = readFileSync(join(here, "styles.css"), "utf8");
   const source = readFileSync(join(here, "main.js"), "utf8");
@@ -163,7 +163,7 @@ test("the approved direction has one Paper Focus shell and no comparison plumbin
   assert.match(css, /html\[data-prototype="true"\] \.app-workspace \{\s*grid-template-columns: minmax\(0, 1fr\);\s*grid-template-rows: 48px minmax\(0, 1fr\);/);
 });
 
-test("Mac Split is the selected prototype shell while comparisons and the wireframe remain available", () => {
+test("the split prototype calibration remains available beside document and wireframe references", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   const source = readFileSync(join(here, "main.js"), "utf8");
   const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");
@@ -179,7 +179,7 @@ test("Mac Split is the selected prototype shell while comparisons and the wirefr
   assert.match(calibration, /html\[data-native-calibration="split"\]/);
   assert.match(calibration, /html\[data-native-calibration="document"\]/);
   assert.match(calibration, /html\[data-native-calibration="reference"\]/);
-  assert.match(calibration, /Mac Split is the approved H1 composition/);
+  assert.match(calibration, /Mac Split remains the wide comparison calibration/);
   assert.match(calibration, /\[data-screen="recording-screen"\]/);
   assert.match(calibration, /\.settings-map button strong/);
   assert.match(calibration, /\.planned-answer-shell/);
@@ -190,7 +190,7 @@ test("Mac Split is the selected prototype shell while comparisons and the wirefr
   assert.doesNotMatch(calibration, /data-treatment/);
 });
 
-test("the installed app adopts Mac Split without drawing browser traffic lights", () => {
+test("the installed app uses native chrome while layout preference controls pane visibility", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   const source = readFileSync(join(here, "main.js"), "utf8");
   const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");
@@ -530,7 +530,9 @@ test("keyboard structure and visual state do not borrow the live-recording accen
   assert.match(source, /mainRegion\.focus\(\{ preventScroll: true \}\)/);
   assert.match(styles, /:where\(main, h1, h2\)\[tabindex="-1"\]:is\(:focus, :focus-visible\)[^{]*\{[^}]*outline: 0 !important;[^}]*box-shadow: none !important;/s);
   assert.match(source, /event\.key === "Home"/);
-  assert.match(source, /const routeShortcut = \{ "1": "meetings", "2": "ask", "3": "actions", ",": "settings" \}/);
+  assert.match(source, /"1": "meetings",\s*"2": "search",/);
+  assert.match(source, /\.\.\.\(shellPrototype \? \{ "3": "actions" \} : \{\}\)/);
+  assert.match(source, /routeShortcut === "search"\) void openFind\(\{ resetQuery: true \}\)/);
   assert.match(html, /<dt>Meetings<\/dt><dd><kbd>⌘1<\/kbd>/);
   assert.match(html, /<dt>Ask<\/dt><dd><kbd>⌘2<\/kbd>/);
   assert.match(html, /<dt>Actions<\/dt><dd><kbd>⌘3<\/kbd>/);

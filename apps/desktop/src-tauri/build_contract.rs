@@ -37,6 +37,8 @@ pub const PRODUCTION_FRONTEND: &str = "../ui";
 const PRODUCTION_COMMANDS: &[&str] = &[
     "app_snapshot",
     "open_settings_window",
+    "get_desktop_layout",
+    "set_desktop_layout",
     "start_meeting",
     "stop_meeting",
     "dismiss_meeting",
@@ -47,6 +49,8 @@ const PRODUCTION_COMMANDS: &[&str] = &[
 const PREVIEW_COMMANDS: &[&str] = &[
     "app_snapshot",
     "open_settings_window",
+    "get_desktop_layout",
+    "set_desktop_layout",
     "start_meeting",
     "stop_meeting",
     "dismiss_meeting",

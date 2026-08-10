@@ -117,6 +117,8 @@ fn main_window_has_only_named_commands_and_no_generic_capability() {
             "core:window:allow-start-dragging",
             "allow-app-snapshot",
             "allow-open-settings-window",
+            "allow-get-desktop-layout",
+            "allow-set-desktop-layout",
             "allow-start-meeting",
             "allow-stop-meeting",
             "allow-dismiss-meeting",
@@ -319,6 +321,8 @@ fn preview_window_is_a_separate_capture_shell_with_narrow_product_commands() {
         serde_json::json!([
             "allow-app-snapshot",
             "allow-open-settings-window",
+            "allow-get-desktop-layout",
+            "allow-set-desktop-layout",
             "allow-start-meeting",
             "allow-stop-meeting",
             "allow-dismiss-meeting",
@@ -632,7 +636,7 @@ fn preview_navigation_spine_keeps_idle_polling_and_safe_capture_actions() {
     };
 
     assert!(html.contains("id=\"product-nav\""));
-    assert!(navigation_button_has_label("find-link", "Ask"));
+    assert!(navigation_button_has_label("find-link", "Search"));
     assert!(html.contains("id=\"meetings-link\""));
     assert!(navigation_button_has_label("meetings-link", "Meetings"));
     assert!(navigation_button_has_label("promises-link", "Actions"));
@@ -740,7 +744,7 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(navigation.contains("export function resolvedScreenForSnapshot"));
     assert!(navigation.contains("export function mutableActionPolicy"));
     assert!(navigation.contains("export function headerActionPolicy"));
-    assert!(navigation.contains("currentScreen = \"home-screen\""));
+    assert!(navigation.contains("currentScreen = \"meetings-screen\""));
     assert!(navigation.contains("\"find-screen\","));
     assert!(navigation.contains("\"promises-screen\","));
     assert!(navigation.contains("export function captureChannelPresentation(state)"));
@@ -749,10 +753,10 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
     assert!(script.contains("renderChannelState(micChannel, snapshot.mic_state);"));
     assert!(script.contains("renderChannelState(systemChannel, snapshot.system_state);"));
     assert!(navigation.contains("export function workflowReturnPolicy"));
-    assert!(script.contains("workflowReturn.addEventListener(\"click\", returnToWorkflow);"));
     assert!(script.contains(
-        "if (lastSnapshot.capture === \"transcript-ready\") renderTranscript(lastSnapshot);"
+        "workflowReturn.addEventListener(\"click\", () => void returnToWorkflow());"
     ));
+    assert!(script.contains("await handoffCompletedCapture(lastSnapshot);"));
 
     let start = script.find("async function openMeetings(").unwrap();
     let end = script[start..]
@@ -760,7 +764,7 @@ fn preview_shell_keeps_navigation_persistent_and_library_navigation_content_free
         .unwrap()
         + start;
     let open_library = &script[start..end];
-    assert!(open_library.contains("await rebuildMeetingsView();"));
+    assert!(open_library.contains("await rebuildMeetingsView({"));
     assert!(!open_library.contains("preview_library_open_"));
     // The snapshot request now carries the filter the controls show, so Rust
     // applies it and reports both counts. The shell never trims a list itself
@@ -895,7 +899,7 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     let script = include_str!("../../ui/main.js");
     let navigation = include_str!("../../ui/navigation-state.mjs");
 
-    assert!(script.contains("async function rebuildMeetingsView()"));
+    assert!(script.contains("async function rebuildMeetingsView({ selectDefault = false"));
     assert!(script.contains("const snapshot = await initializeLibraryReader();"));
     assert!(!script.contains("latestLibrarySnapshot"));
     assert!(script.contains("async function openFind("));
@@ -908,9 +912,9 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(script.contains(
         "library-transcript-back\").addEventListener(\"click\", returnFromLibraryTranscript)"
     ));
-    assert!(
-        script.contains("meeting-detail-back\").addEventListener(\"click\", returnToProductHome)")
-    );
+    assert!(script.contains(
+        "meeting-record-back\").addEventListener(\"click\", () => {"
+    ));
     assert!(script.contains("setError(libraryNotice, \"Searching your retained meetings…\")"));
     assert!(navigation.contains("export async function refreshFindGeneration(query, actions)"));
     assert!(
@@ -1020,7 +1024,7 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
         package["scripts"]["test:ui"],
         "node --test ui/*.test.mjs ui/system/*.test.mjs ui/reference-surfaces/*.test.mjs ui/review/*.test.mjs settings-reference/*.test.mjs"
     );
-    assert!(html.contains("id=\"new-meeting\" type=\"button\">Return to Find"));
+    assert!(html.contains("id=\"new-meeting\" type=\"button\">Return to Meetings"));
     // Copy is offered above each transcript, never only after it, and the
     // copied text keeps withheld turns rather than handing over a transcript
     // that reads complete while the app knows it is not.
@@ -1029,9 +1033,9 @@ fn preview_routes_preserve_origin_focus_scroll_and_safe_start_ordering() {
     assert!(navigation.contains("export function transcriptPlainText"));
     assert!(navigation.contains("(withheld — a voice check set this turn aside)"));
     assert!(script.contains("navigator.clipboard.writeText(text)"));
-    assert!(html.contains("id=\"recover-button\" type=\"button\">Return to Find"));
+    assert!(html.contains("id=\"recover-button\" type=\"button\">Return to Meetings"));
     assert!(!html.contains("Return to Start"));
-    assert!(script.contains("let productRootScreen = \"home-screen\";"));
+    assert!(script.contains("let productRootScreen = \"meetings-screen\";"));
     assert!(script.contains("productRootScreen = rootForDestination(id, productRootScreen);"));
     assert!(script.contains("screenScrollPositions.set(currentScreen, mainRegion.scrollTop)"));
     assert!(script.contains("heading.focus({ preventScroll: true })"));

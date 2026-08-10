@@ -1,6 +1,7 @@
 /* Selected native shell and retained comparison candidates.
 
-   Mac Split is the approved H1 composition and the installed-shell baseline.
+   Mac Split remains the wide comparison calibration. Production chooses pane
+   visibility through data-effective-layout without forking routes or content.
    It also remains the default for ?prototype=1.
    Document and Native Reference remain available through
    &calibration=document|reference; the complete planning wireframe remains at
@@ -869,7 +870,7 @@ html[data-native-calibration="split"] .meeting-context-row small { margin-top: 4
 html[data-native-calibration="split"] .meeting-context-row > span:last-child { display: none; }
 html[data-native-calibration="split"] .meeting-focus-toggle { display: none !important; }
 
-/* Mac Split owns the complete app journey, not only the meeting record. */
+/* The split calibration covers the complete app journey, not only the record. */
 html[data-native-calibration="split"] .sidebar-section[aria-labelledby="saved-views-heading"],
 html[data-native-calibration="split"] .planned-answer-shell,
 html[data-native-calibration="split"] #promises-screen .action-toolbar > button:disabled {
@@ -1745,6 +1746,179 @@ html[data-native-calibration="reference"] .local-badge { color: var(--muted); ba
   html[data-native-calibration="document"][data-meeting-focus="false"] .meeting-split-view {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Desktop layout preference. One route and one record stay underneath these
+   visibility rules; the preference never creates a second Meetings workflow. */
+html[data-production-system="desktop-v1"][data-native-calibration][data-screen="meetings-screen"][data-effective-layout="split"] .app-workspace.ys-window,
+html[data-production-system="desktop-v1"][data-native-calibration][data-screen="meetings-screen"][data-effective-layout="focus"] .app-workspace.ys-window,
+html[data-production-system="desktop-v1"][data-native-calibration][data-screen="meeting-detail-screen"][data-effective-layout="split"] .app-workspace.ys-window,
+html[data-production-system="desktop-v1"][data-native-calibration][data-screen="meeting-detail-screen"][data-effective-layout="focus"] .app-workspace.ys-window {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration][data-screen="meetings-screen"][data-effective-layout="split"] .app-sidebar,
+html[data-production-system="desktop-v1"][data-native-calibration][data-screen="meetings-screen"][data-effective-layout="focus"] .app-sidebar,
+html[data-production-system="desktop-v1"][data-native-calibration][data-screen="meeting-detail-screen"][data-effective-layout="split"] .app-sidebar,
+html[data-production-system="desktop-v1"][data-native-calibration][data-screen="meeting-detail-screen"][data-effective-layout="focus"] .app-sidebar {
+  display: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration][data-effective-layout="split"] .meeting-split-view.ys-primary-split {
+  grid-template-columns: 238px minmax(22rem, 1fr);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration][data-effective-layout="focus"] .meeting-split-view.ys-primary-split {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration][data-effective-layout="focus"] .meeting-context-pane.ys-primary-list {
+  display: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-record-toolbar {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--ys-space-6);
+  margin-bottom: 22px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-record-toolbar .text-button {
+  min-height: 28px;
+  padding: 0;
+  color: var(--ys-ink-muted);
+  border: 0;
+  background: transparent;
+  font-size: var(--ys-type-sm);
+  font-weight: 500;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-record-toolbar .text-button:hover {
+  color: var(--ys-ink-strong);
+  text-decoration: underline;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] .meeting-workspace-heading h1 {
+  font-family: var(--ys-font-ui);
+  font-size: clamp(26px, 3vw, 32px);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #meetings-screen.screen.active {
+  width: min(760px, calc(100% - 48px));
+  padding-top: 34px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-tools {
+  margin-top: 18px;
+  border-block: var(--ys-border-width) solid var(--ys-border);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-tools > summary,
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .retention-overview > summary {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ys-space-5);
+  color: var(--ys-ink-muted);
+  cursor: default;
+  font-size: var(--ys-type-sm);
+  font-weight: 500;
+  list-style-position: inside;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-tools[open] > summary,
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .retention-overview[open] > summary {
+  color: var(--ys-ink-strong);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #meetings-screen .library-tools .library-filters {
+  margin-top: 0;
+  border-top: var(--ys-border-width) solid var(--ys-border);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-list {
+  border-top: var(--ys-border-width) solid var(--ys-border);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-item {
+  position: relative;
+  border-bottom: var(--ys-border-width) solid var(--ys-border);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-item .library-row {
+  padding-right: 68px;
+  border-bottom: 0;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-row > span:last-child {
+  font-size: 0;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-row > span:last-child::after {
+  content: "›";
+  font-size: 18px;
+  font-weight: 400;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-item-actions {
+  position: absolute;
+  z-index: 2;
+  top: 13px;
+  right: 8px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-item-actions > summary {
+  min-width: 48px;
+  min-height: 30px;
+  display: grid;
+  place-items: center;
+  color: var(--ys-ink-muted);
+  cursor: default;
+  font-size: var(--ys-type-xs);
+  list-style: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-item-actions > summary::-webkit-details-marker {
+  display: none;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-item-action-controls {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  min-width: 210px;
+  padding: var(--ys-space-3);
+  display: grid;
+  gap: var(--ys-space-2);
+  border: var(--ys-border-width) solid var(--ys-border-strong);
+  border-radius: var(--ys-radius-md);
+  background: var(--ys-surface-content);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .library-item-action-controls > * {
+  width: 100%;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration="split"] #meetings-screen .retention-overview {
+  margin-top: 22px;
+  padding-top: 0;
+  border-bottom: var(--ys-border-width) solid var(--ys-border);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .retention-overview-details {
+  padding-bottom: 18px;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .retention-overview-details > p,
+html[data-production-system="desktop-v1"][data-native-calibration] #meetings-screen .retention-overview-details > ul {
+  max-width: 62ch;
+  font-size: var(--ys-type-sm);
+  line-height: var(--ys-leading-body);
 }
 
 @media (prefers-color-scheme: dark) {

@@ -5,12 +5,12 @@ export const PRODUCT_ROOT_SCREENS = Object.freeze([
   "promises-screen",
 ]);
 
-export function workflowScreenForSnapshot(snapshot, currentScreen = "home-screen") {
+export function workflowScreenForSnapshot(snapshot, currentScreen = "meetings-screen") {
   const startup = snapshot?.startup || "diagnostic-written";
   const capture = snapshot?.capture || "idle";
   if (startup !== "ready") return "startup-screen";
   if (capture === "idle") {
-    return currentScreen === "idle-screen" ? "idle-screen" : "home-screen";
+    return currentScreen === "idle-screen" ? "idle-screen" : "meetings-screen";
   }
   return {
     arming: "arming-screen",
@@ -18,7 +18,7 @@ export function workflowScreenForSnapshot(snapshot, currentScreen = "home-screen
     stopping: "recording-screen",
     captured: "processing-screen",
     transcribing: "processing-screen",
-    "transcript-ready": "transcript-screen",
+    "transcript-ready": snapshot?.meeting_id ? "meeting-detail-screen" : "transcript-screen",
   }[capture] || "error-screen";
 }
 
@@ -52,7 +52,7 @@ export function mutableActionPolicy(snapshot, { stopPending = false } = {}) {
 export function headerActionPolicy(snapshot, {
   stopPending = false,
   workflowOwnsRoute = true,
-  currentScreen = "home-screen",
+  currentScreen = "meetings-screen",
 } = {}) {
   const capture = snapshot?.capture || "idle";
   const startup = snapshot?.startup || "diagnostic-written";
@@ -470,9 +470,9 @@ export function changedStatusText(previous, next) {
   return previous === next ? null : next;
 }
 
-export function rootForDestination(destination, currentRoot = "home-screen") {
+export function rootForDestination(destination, currentRoot = "meetings-screen") {
   if (PRODUCT_ROOT_SCREENS.includes(destination)) return destination;
-  return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "home-screen";
+  return PRODUCT_ROOT_SCREENS.includes(currentRoot) ? currentRoot : "meetings-screen";
 }
 
 export function restoredScrollPosition(storedPosition, reset = false) {

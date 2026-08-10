@@ -41,14 +41,24 @@ does not treat the existing split or prior option labels as authority.
    another at every width. It reads most calmly and makes repeated switching
    slower.
 
-The recommendation follows the comparison rather than appearing in an option
-label. The blind review selected the adaptive two-pane for prototyping. Human
-task evidence can still overturn it.
+The comparison did not justify freezing one structure for every operator and
+window. The production contract keeps one route, selection, and record model,
+then lets pane visibility vary through one persisted preference:
+
+- **Automatic** is the default: list plus record while the record stays useful,
+  then one pane below 800px.
+- **Focus** always uses one pane and preserves the Meetings return path.
+- **Library** shows sources, list, and record above 900px, then yields sources
+  before the record becomes cramped.
+
+The earlier adaptive result still informs Automatic. It no longer excludes the
+other two valid working styles. `View → Layout` and Settings → Desktop Behavior
+must edit the same closed preference; the route and content model do not change.
 
 Use the global appearance control for light and dark, and **Front-door geometry**
 for the comfortable and 720 × 560 comparison. These are browser composition
-proxies, not installed-window evidence. Production migration remains blocked on
-operator selection and an installed Tauri review.
+proxies, not installed-window evidence. Installed evidence belongs in a
+digest-bound run under `docs/desktop-installed-app-reviews/`.
 
 ## DS-4 integration contract
 

@@ -11,6 +11,8 @@
   "permissions": [
     "allow-app-snapshot",
     "allow-open-settings-window",
+    "allow-get-desktop-layout",
+    "allow-set-desktop-layout",
     "allow-start-meeting",
     "allow-stop-meeting",
     "allow-dismiss-meeting",

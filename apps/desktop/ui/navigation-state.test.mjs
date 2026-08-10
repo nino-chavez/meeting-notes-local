@@ -49,7 +49,11 @@ test("workflow routes advance only while they own the screen", () => {
 
   assert.equal(workflowScreenForSnapshot(recording), "recording-screen");
   assert.equal(workflowScreenForSnapshot(ready), "transcript-screen");
-  assert.equal(workflowScreenForSnapshot({ startup: "ready", capture: "idle" }), "home-screen");
+  assert.equal(
+    workflowScreenForSnapshot({ startup: "ready", capture: "transcript-ready", meeting_id: "meeting-1" }),
+    "meeting-detail-screen",
+  );
+  assert.equal(workflowScreenForSnapshot({ startup: "ready", capture: "idle" }), "meetings-screen");
   assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", false), "meetings-screen");
   assert.equal(resolvedScreenForSnapshot(ready, "profile-screen", false), "profile-screen");
   assert.equal(resolvedScreenForSnapshot(recording, "meetings-screen", true), "recording-screen");
@@ -689,7 +693,7 @@ test("nested routes keep their real product root", () => {
   assert.equal(rootForDestination("library-transcript-screen", "find-screen"), "find-screen");
   assert.equal(rootForDestination("library-transcript-screen", "promises-screen"), "promises-screen");
   assert.equal(rootForDestination("profile-screen", "meetings-screen"), "meetings-screen");
-  assert.equal(rootForDestination("profile-screen", "unknown"), "home-screen");
+  assert.equal(rootForDestination("profile-screen", "unknown"), "meetings-screen");
 });
 
 test("returning restores scroll while new content starts at the top", () => {

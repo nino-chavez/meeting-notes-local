@@ -89,7 +89,7 @@ use local_meeting_notes_session_core::retention::{
 };
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::{
-    StorageRoot, create_private_dir, durable_create_new, sync_directory,
+    StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
 };
 use local_meeting_notes_session_core::supervision::{
     OwnedChild, OwnershipReceipt, OwnershipSchema, ProcessIdentity, ProcessInspection,
@@ -118,6 +118,11 @@ const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 const SETTINGS_WINDOW_LABEL: &str = "settings";
+const DESKTOP_PREFERENCES_FILE: &str = "desktop-preferences.json";
+const LAYOUT_MENU_ID: &str = "view-layout";
+const LAYOUT_AUTOMATIC_MENU_ID: &str = "layout-automatic";
+const LAYOUT_FOCUS_MENU_ID: &str = "layout-focus";
+const LAYOUT_LIBRARY_MENU_ID: &str = "layout-library";
 #[cfg(feature = "preview-surface")]
 const ACTIVE_WINDOW_LABEL: &str = "preview";
 #[cfg(not(feature = "preview-surface"))]
@@ -152,6 +157,130 @@ fn show_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 #[tauri::command]
 fn open_settings_window(app: AppHandle) -> Result<(), String> {
     show_settings_window(&app).map(|_| ()).map_err(|error| error.to_string())
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum DesktopLayout {
+    #[default]
+    Automatic,
+    Focus,
+    Library,
+}
+
+impl DesktopLayout {
+    fn value(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Focus => "focus",
+            Self::Library => "library",
+        }
+    }
+
+    fn from_value(value: &str) -> Option<Self> {
+        match value {
+            "automatic" => Some(Self::Automatic),
+            "focus" => Some(Self::Focus),
+            "library" => Some(Self::Library),
+            _ => None,
+        }
+    }
+
+    fn from_menu_id(value: &str) -> Option<Self> {
+        match value {
+            LAYOUT_AUTOMATIC_MENU_ID => Some(Self::Automatic),
+            LAYOUT_FOCUS_MENU_ID => Some(Self::Focus),
+            LAYOUT_LIBRARY_MENU_ID => Some(Self::Library),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DesktopPreferences {
+    layout: DesktopLayout,
+}
+
+fn desktop_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join(DESKTOP_PREFERENCES_FILE))
+        .map_err(error_text)
+}
+
+fn read_desktop_layout(app: &AppHandle) -> DesktopLayout {
+    let Ok(path) = desktop_preferences_path(app) else {
+        return DesktopLayout::Automatic;
+    };
+    let Ok(bytes) = fs::read(path) else {
+        return DesktopLayout::Automatic;
+    };
+    if bytes.len() > 4 * 1024 {
+        return DesktopLayout::Automatic;
+    }
+    serde_json::from_slice::<DesktopPreferences>(&bytes)
+        .map(|preferences| preferences.layout)
+        .unwrap_or_default()
+}
+
+fn sync_desktop_layout_menu(app: &AppHandle, layout: DesktopLayout) {
+    let Some(menu) = app.menu() else {
+        return;
+    };
+    let Some(item) = menu.get(LAYOUT_MENU_ID) else {
+        return;
+    };
+    let Some(submenu) = item.as_submenu() else {
+        return;
+    };
+    for (id, candidate) in [
+        (LAYOUT_AUTOMATIC_MENU_ID, DesktopLayout::Automatic),
+        (LAYOUT_FOCUS_MENU_ID, DesktopLayout::Focus),
+        (LAYOUT_LIBRARY_MENU_ID, DesktopLayout::Library),
+    ] {
+        if let Some(item) = submenu.get(id).and_then(|item| item.as_check_menuitem().cloned()) {
+            let _ = item.set_checked(candidate == layout);
+        }
+    }
+}
+
+fn notify_desktop_layout(app: &AppHandle, layout: DesktopLayout) {
+    let payload = serde_json::to_string(layout.value()).unwrap_or_else(|_| "\"automatic\"".into());
+    let script = format!(
+        "window.dispatchEvent(new CustomEvent('yawn:desktop-layout-changed', {{ detail: {payload} }}));"
+    );
+    for label in [ACTIVE_WINDOW_LABEL, SETTINGS_WINDOW_LABEL] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.eval(&script);
+        }
+    }
+}
+
+fn persist_desktop_layout(app: &AppHandle, layout: DesktopLayout) -> Result<(), String> {
+    let path = desktop_preferences_path(app)?;
+    let bytes = serde_json::to_vec_pretty(&DesktopPreferences { layout }).map_err(error_text)?;
+    durable_replace(&path, &bytes).map_err(error_text)
+}
+
+fn apply_desktop_layout(app: &AppHandle, layout: DesktopLayout) -> Result<(), String> {
+    persist_desktop_layout(app, layout)?;
+    sync_desktop_layout_menu(app, layout);
+    notify_desktop_layout(app, layout);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_desktop_layout(app: AppHandle) -> String {
+    read_desktop_layout(&app).value().into()
+}
+
+#[tauri::command]
+fn set_desktop_layout(app: AppHandle, layout: String) -> Result<String, String> {
+    let layout = DesktopLayout::from_value(&layout)
+        .ok_or_else(|| "desktop layout must be automatic, focus, or library".to_string())?;
+    apply_desktop_layout(&app, layout)?;
+    Ok(layout.value().into())
 }
 
 struct ApplicationState {
@@ -4046,6 +4175,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
             open_settings_window,
+            get_desktop_layout,
+            set_desktop_layout,
             start_meeting,
             stop_meeting,
             dismiss_meeting,
@@ -4083,6 +4214,7 @@ fn main() {
             product_facade::restore_withheld_turn
         ])
         .setup(|app| {
+            let desktop_layout = read_desktop_layout(app.handle());
             let settings = tauri::menu::MenuItemBuilder::with_id(
                 "open-settings",
                 "Settings…",
@@ -4100,11 +4232,43 @@ fn main() {
                 .separator()
                 .quit()
                 .build()?;
-            let menu = tauri::menu::MenuBuilder::new(app).item(&app_menu).build()?;
+            let automatic = tauri::menu::CheckMenuItemBuilder::with_id(
+                LAYOUT_AUTOMATIC_MENU_ID,
+                "Automatic",
+            )
+            .checked(desktop_layout == DesktopLayout::Automatic)
+            .build(app)?;
+            let focus = tauri::menu::CheckMenuItemBuilder::with_id(
+                LAYOUT_FOCUS_MENU_ID,
+                "Focus",
+            )
+            .checked(desktop_layout == DesktopLayout::Focus)
+            .build(app)?;
+            let library = tauri::menu::CheckMenuItemBuilder::with_id(
+                LAYOUT_LIBRARY_MENU_ID,
+                "Library",
+            )
+            .checked(desktop_layout == DesktopLayout::Library)
+            .build(app)?;
+            let layout_menu = tauri::menu::SubmenuBuilder::with_id(app, LAYOUT_MENU_ID, "Layout")
+                .item(&automatic)
+                .item(&focus)
+                .item(&library)
+                .build()?;
+            let view_menu = tauri::menu::SubmenuBuilder::new(app, "View")
+                .item(&layout_menu)
+                .fullscreen()
+                .build()?;
+            let menu = tauri::menu::MenuBuilder::new(app)
+                .item(&app_menu)
+                .item(&view_menu)
+                .build()?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
                 if event.id() == "open-settings" {
                     let _ = show_settings_window(app);
+                } else if let Some(layout) = DesktopLayout::from_menu_id(event.id().as_ref()) {
+                    let _ = apply_desktop_layout(app, layout);
                 }
             });
 

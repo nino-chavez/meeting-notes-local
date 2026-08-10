@@ -20,6 +20,8 @@ fn production_config_without_feature_is_production_only() {
         [
             "app_snapshot",
             "open_settings_window",
+            "get_desktop_layout",
+            "set_desktop_layout",
             "start_meeting",
             "stop_meeting",
             "dismiss_meeting",
@@ -75,6 +77,8 @@ fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boun
         [
             "app_snapshot",
             "open_settings_window",
+            "get_desktop_layout",
+            "set_desktop_layout",
             "start_meeting",
             "stop_meeting",
             "dismiss_meeting",

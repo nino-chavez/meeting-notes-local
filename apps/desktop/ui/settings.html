@@ -101,7 +101,29 @@
       <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-privacy" data-pane-panel="privacy" role="tabpanel" aria-labelledby="settings-tab-privacy" tabindex="0" hidden><header><h1>Privacy</h1><p>This pane has not moved into the native Settings window yet.</p></header></section>
       <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-connections" data-pane-panel="connections" role="tabpanel" aria-labelledby="settings-tab-connections" tabindex="0" hidden><header><h1>Connections</h1><p>This pane has not moved into the native Settings window yet. No account or connection is active.</p></header></section>
       <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-voice" data-pane-panel="voice" role="tabpanel" aria-labelledby="settings-tab-voice" tabindex="0" hidden><header><h1>Voice profile</h1><p>The existing measured voice-profile workflow remains in the main app until its own migration is reviewed.</p></header></section>
-      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-desktop" data-pane-panel="desktop" role="tabpanel" aria-labelledby="settings-tab-desktop" tabindex="0" hidden><header><h1>Desktop behavior</h1><p>This pane has not moved into the native Settings window yet.</p></header></section>
+      <section class="ys-settings-pane" id="settings-pane-desktop" data-pane-panel="desktop" role="tabpanel" aria-labelledby="settings-tab-desktop" tabindex="0" hidden>
+        <header class="settings-pane-heading">
+          <h1>Desktop behavior</h1>
+          <p>Choose how Meetings uses the window.</p>
+        </header>
+        <fieldset class="layout-choice-group" aria-describedby="layout-safety-note layout-choice-status">
+          <legend>Meetings layout</legend>
+          <label class="layout-choice">
+            <input type="radio" name="desktop-layout" value="automatic" />
+            <span><strong>Automatic</strong><small>Shows the list beside a meeting when there is room. Uses one pane in a narrow window.</small></span>
+          </label>
+          <label class="layout-choice">
+            <input type="radio" name="desktop-layout" value="focus" />
+            <span><strong>Focus</strong><small>Shows one pane at a time. Opening a meeting replaces the list until you go back.</small></span>
+          </label>
+          <label class="layout-choice">
+            <input type="radio" name="desktop-layout" value="library" />
+            <span><strong>Library</strong><small>Keeps sources, the meeting list, and the selected meeting visible when the window is wide enough.</small></span>
+          </label>
+        </fieldset>
+        <p class="layout-safety-note" id="layout-safety-note">Yawn collapses panes before the meeting becomes too narrow to read.</p>
+        <p class="settings-inline-status" id="layout-choice-status" role="status" aria-live="polite"></p>
+      </section>
       <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-shortcuts" data-pane-panel="shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" tabindex="0" hidden><header><h1>Shortcuts</h1><p>Open Settings from the Yawn menu or press Command–Comma.</p></header></section>
       <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-about" data-pane-panel="about" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" hidden><header><h1>About Yawn</h1><p>Meeting data stays on this Mac. No account or upload path is active.</p></header></section>
     </main>

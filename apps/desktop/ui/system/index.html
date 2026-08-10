@@ -353,16 +353,16 @@
 
           <div class="ia-recommendation" aria-labelledby="ia-recommendation-title">
             <div>
-              <span class="ia-eyebrow">Blind research result</span>
-              <h3 id="ia-recommendation-title">Prototype the adaptive two-pane structure.</h3>
+              <span class="ia-eyebrow">Production contract</span>
+              <h3 id="ia-recommendation-title">Keep one model; make pane visibility configurable.</h3>
+              <p>Automatic carries the blind research result forward without forcing it on operators who prefer more context or less.</p>
             </div>
-            <ul>
-              <li><strong>Comfortable:</strong> keep the meeting list beside the selected record.</li>
-              <li><strong>Minimum:</strong> show the collection first; opening a meeting gives the record the full window.</li>
-              <li><strong>Search:</strong> use a toolbar search with Exact words and Describe the passage modes.</li>
-              <li><strong>Secondary work:</strong> move rename and filing to context menus; keep full retention facts in Details.</li>
-              <li><strong>Unproven:</strong> human testing must confirm that one compact Back step is preferable to a permanently narrow record.</li>
-            </ul>
+            <div class="ia-layout-contract" role="group" aria-label="Desktop Behavior layout contract">
+              <label><input type="radio" name="specimen-layout" value="automatic" checked><span><strong>Automatic</strong>List plus record above 800px; one pane below it.</span></label>
+              <label><input type="radio" name="specimen-layout" value="focus"><span><strong>Focus</strong>One pane at every width, with Meetings as the return path.</span></label>
+              <label><input type="radio" name="specimen-layout" value="library"><span><strong>Library</strong>Sources, list, and record above 900px; sources collapse first.</span></label>
+              <p><strong>One source of truth:</strong> View → Layout and Settings → Desktop Behavior persist this same value. Routes, selection, and retained content do not fork.</p>
+            </div>
           </div>
         </section>
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../../gen/schemas/desktop-schema.json",
   "identifier": "settings-window",
-  "description": "The bounded Settings window may read the manifest-verified capture permission status and update only its own native title. It cannot request permission and has no capture, meeting, storage, profile, filesystem, shell, process, dialog, or remote-origin authority.",
+  "description": "The bounded Settings window may read the manifest-verified capture permission status, persist the closed desktop layout preference, and update only its own native title. It cannot request permission and has no capture, meeting, meeting-storage, profile, generic filesystem, shell, process, dialog, or remote-origin authority.",
   "windows": [
     "settings"
   ],
@@ -10,6 +10,8 @@
   ],
   "permissions": [
     "allow-first-run-permissions",
+    "allow-get-desktop-layout",
+    "allow-set-desktop-layout",
     "core:window:allow-set-title"
   ]
 }

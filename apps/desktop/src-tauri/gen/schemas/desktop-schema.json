@@ -219,6 +219,12 @@
           "markdownDescription": "Enables the first_run_request_system_audio command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_desktop_layout command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-desktop-layout",
+          "markdownDescription": "Enables the get_desktop_layout command without any pre-configured scope."
+        },
+        {
           "description": "Enables the library_assign_meeting_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-library-assign-meeting-folder",
@@ -387,6 +393,12 @@
           "markdownDescription": "Enables the save_operator_note command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_desktop_layout command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-desktop-layout",
+          "markdownDescription": "Enables the set_desktop_layout command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_meeting command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-meeting",
@@ -439,6 +451,12 @@
           "type": "string",
           "const": "deny-first-run-request-system-audio",
           "markdownDescription": "Denies the first_run_request_system_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_desktop_layout command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-desktop-layout",
+          "markdownDescription": "Denies the get_desktop_layout command without any pre-configured scope."
         },
         {
           "description": "Denies the library_assign_meeting_folder command without any pre-configured scope.",
@@ -607,6 +625,12 @@
           "type": "string",
           "const": "deny-save-operator-note",
           "markdownDescription": "Denies the save_operator_note command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_desktop_layout command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-desktop-layout",
+          "markdownDescription": "Denies the set_desktop_layout command without any pre-configured scope."
         },
         {
           "description": "Denies the start_meeting command without any pre-configured scope.",
