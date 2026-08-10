@@ -217,6 +217,17 @@
           <h1>Desktop behavior</h1>
           <p>Choose how Meetings uses the window.</p>
         </header>
+        <section class="ys-settings-section" aria-labelledby="desktop-window-title">
+          <h2 class="ys-settings-section__title" id="desktop-window-title">Window</h2>
+          <div class="ys-settings-row">
+            <div><strong>Close the main window</strong><p class="ys-help-text">Closing hides Yawn. It stays available from the Yawn menu bar item.</p></div>
+            <span class="settings-static-value">Hide</span>
+          </div>
+          <div class="ys-settings-row">
+            <div><strong>Quit Yawn</strong><p class="ys-help-text">Quitting ends the app. Stop an active meeting before you quit.</p></div>
+            <span class="settings-static-value">Exit</span>
+          </div>
+        </section>
         <fieldset class="layout-choice-group" aria-describedby="layout-safety-note layout-choice-status">
           <legend>Meetings layout</legend>
           <label class="layout-choice">
@@ -234,6 +245,9 @@
         </fieldset>
         <p class="layout-safety-note" id="layout-safety-note">Yawn collapses panes before the meeting becomes too narrow to read.</p>
         <p class="settings-inline-status" id="layout-choice-status" role="status" aria-live="polite"></p>
+        <aside class="ys-inline-notice settings-static-notice" data-tone="information">
+          Yawn does not send system notifications today. Capture state remains visible in the window and menu bar.
+        </aside>
       </section>
       <section class="ys-settings-pane settings-static-pane" id="settings-pane-shortcuts" data-pane-panel="shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" tabindex="0" hidden>
         <header class="settings-pane-heading">

@@ -129,19 +129,6 @@ const settingsReviewAudio = document.querySelector("#settings-review-audio");
 const settingsPreviewFirstRun = document.querySelector("#settings-preview-first-run");
 const settingsPreviewStates = document.querySelector("#settings-preview-states");
 const settingsOpenHelp = document.querySelector("#settings-open-help");
-const settingsPreviewWindow = document.querySelector("#settings-preview-window");
-const desktopBehaviorBackdrop = document.querySelector("#desktop-behavior-backdrop");
-const desktopPreviewClose = document.querySelector("#desktop-preview-close");
-const desktopPreviewTitle = document.querySelector("#desktop-preview-title");
-const desktopPreviewOpen = document.querySelector("#desktop-preview-open");
-const desktopPreviewMenubarControl = document.querySelector("#desktop-preview-menubar-control");
-const desktopPreviewCapture = document.querySelector("#desktop-preview-capture");
-const desktopPreviewBackground = [
-  document.querySelector(".skip-link"),
-  document.querySelector(".app-header"),
-  document.querySelector(".app-workspace"),
-  document.querySelector("footer"),
-].filter(Boolean);
 const stateReviewTabs = [...document.querySelectorAll("[data-state-preview]")];
 const statePreviewCard = document.querySelector("#state-preview-card");
 const statePreviewContext = document.querySelector("#state-preview-context");
@@ -288,7 +275,6 @@ let activeSettingsTab = shellPrototype ? "capture" : "voice";
 let activeStateReviewId = "loading";
 let activeHelpTopicId = "overview";
 let helpReturnScreen = "meetings-screen";
-let desktopPreviewReturnFocus = null;
 let commandMenuReturnFocus = null;
 let commandMenuEntries = [];
 let commandMenuActiveIndex = 0;
@@ -2760,39 +2746,6 @@ function openQuickControl() {
   quickControlPrimary.focus();
 }
 
-function openDesktopBehaviorPreview() {
-  if (!shellPrototype) return;
-  closeQuickControl();
-  desktopPreviewReturnFocus = document.activeElement;
-  const presentation = quickControlPresentation(lastSnapshot);
-  desktopPreviewCapture.textContent = presentation.state === "recording" || presentation.state === "degraded"
-    ? presentation.detail
-    : "Nothing is recording";
-  for (const node of desktopPreviewBackground) {
-    node.inert = true;
-    node.setAttribute("aria-hidden", "true");
-  }
-  desktopBehaviorBackdrop.hidden = false;
-  settingsPreviewWindow.setAttribute("aria-expanded", "true");
-  desktopPreviewTitle.focus();
-}
-
-function closeDesktopBehaviorPreview({ restoreFocus = true } = {}) {
-  desktopBehaviorBackdrop.hidden = true;
-  for (const node of desktopPreviewBackground) {
-    node.inert = false;
-    node.removeAttribute("aria-hidden");
-  }
-  settingsPreviewWindow.setAttribute("aria-expanded", "false");
-  if (restoreFocus && desktopPreviewReturnFocus?.isConnected) desktopPreviewReturnFocus.focus();
-  desktopPreviewReturnFocus = null;
-}
-
-function showDesktopMenubarControl() {
-  closeDesktopBehaviorPreview({ restoreFocus: false });
-  openQuickControl();
-}
-
 function runQuickControlPrimary() {
   closeQuickControl();
   if ((lastSnapshot?.capture || "idle") === "idle") {
@@ -3785,31 +3738,10 @@ settingsReviewAudio.addEventListener("click", async () => {
 settingsPreviewFirstRun.addEventListener("click", openPrototypeFirstRun);
 settingsPreviewStates.addEventListener("click", openStateReview);
 settingsOpenHelp.addEventListener("click", openHelp);
-settingsPreviewWindow.addEventListener("click", openDesktopBehaviorPreview);
 skipLink.addEventListener("click", (event) => {
   event.preventDefault();
   mainRegion.scrollTop = 0;
   mainRegion.focus({ preventScroll: true });
-});
-desktopPreviewClose.addEventListener("click", () => closeDesktopBehaviorPreview());
-desktopPreviewOpen.addEventListener("click", () => closeDesktopBehaviorPreview());
-desktopPreviewMenubarControl.addEventListener("click", (event) => {
-  event.stopPropagation();
-  showDesktopMenubarControl();
-});
-desktopBehaviorBackdrop.addEventListener("click", (event) => {
-  if (event.target === desktopBehaviorBackdrop) closeDesktopBehaviorPreview();
-});
-desktopBehaviorBackdrop.addEventListener("keydown", (event) => {
-  if (event.key !== "Tab") return;
-  const focusable = [desktopPreviewClose, desktopPreviewOpen, desktopPreviewMenubarControl];
-  const currentIndex = focusable.indexOf(document.activeElement);
-  const direction = event.shiftKey ? -1 : 1;
-  const nextIndex = currentIndex < 0
-    ? event.shiftKey ? focusable.length - 1 : 0
-    : (currentIndex + direction + focusable.length) % focusable.length;
-  event.preventDefault();
-  focusable[nextIndex].focus();
 });
 for (const tab of helpTabs) {
   tab.addEventListener("click", () => renderHelpTopic(tab.dataset.helpTopic));
@@ -3958,12 +3890,6 @@ quickControlClose.addEventListener("click", () => closeQuickControl({ restoreFoc
 quickControlPrimary.addEventListener("click", runQuickControlPrimary);
 quickControlSecondary.addEventListener("click", runQuickControlSecondary);
 document.addEventListener("keydown", (event) => {
-  if (shellPrototype && event.key === "Escape" && !desktopBehaviorBackdrop.hidden) {
-    event.preventDefault();
-    closeDesktopBehaviorPreview();
-    return;
-  }
-  if (shellPrototype && !desktopBehaviorBackdrop.hidden) return;
   const commandKey = event.metaKey && !event.altKey && !event.ctrlKey;
   if (shellPrototype && commandKey && event.key.toLocaleLowerCase() === "k") {
     event.preventDefault();

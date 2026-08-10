@@ -173,9 +173,17 @@ test("Shortcuts and About list only the installed app's current boundaries", () 
 });
 
 test("Desktop behavior owns one persisted Meetings layout preference", () => {
+  const desktopPane = html.slice(
+    html.indexOf('id="settings-pane-desktop"'),
+    html.indexOf('id="settings-pane-shortcuts"'),
+  );
   for (const value of ["automatic", "focus", "library"]) {
     assert.match(html, new RegExp(`name="desktop-layout" value="${value}"`));
   }
+  assert.match(desktopPane, /id="desktop-window-title">Window/);
+  assert.match(desktopPane, /Closing hides Yawn\. It stays available from the Yawn menu bar item/);
+  assert.match(desktopPane, /Quitting ends the app\. Stop an active meeting before you quit/);
+  assert.match(desktopPane, /Yawn does not send system notifications today/);
   assert.match(html, /Yawn collapses panes before the meeting becomes too narrow to read/);
   assert.match(script, /invoke\?\.\("get_desktop_layout"\)/);
   assert.match(script, /invoke\?\.\("set_desktop_layout", \{ layout: requested \}\)/);
@@ -185,6 +193,9 @@ test("Desktop behavior owns one persisted Meetings layout preference", () => {
   assert.match(rust, /CheckMenuItemBuilder::with_id\(/);
   assert.match(rust, /SubmenuBuilder::with_id\(app, LAYOUT_MENU_ID, "Layout"\)/);
   assert.match(rust, /durable_replace\(&path, &bytes\)/);
+  assert.match(rust, /WindowEvent::CloseRequested[\s\S]*?api\.prevent_close\(\);[\s\S]*?window\.hide\(\)/);
+  assert.match(rust, /TrayIconBuilder::with_id\("menubar-item"\)/);
+  assert.doesNotMatch(production, /desktop-behavior-dialog|desktop-preview-/);
 });
 
 test("Settings restores pane, title, and keyboard focus without touching the main window", () => {

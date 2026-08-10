@@ -2096,7 +2096,6 @@ html[data-production-system="desktop-v1"][data-native-calibration] #meetings-scr
   }
   html[data-native-calibration] .quick-control-popover,
   html[data-native-calibration] .command-menu-dialog,
-  html[data-native-calibration] .desktop-behavior-dialog,
   html[data-native-calibration] .live-note,
   html[data-native-calibration] .workspace-empty,
   html[data-native-calibration] .operator-note-card,

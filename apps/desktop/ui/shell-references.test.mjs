@@ -646,22 +646,21 @@ test("Help stays outside product navigation and exposes honest diagnostics and u
   assert.match(source, /activeSettingsTab = "about"/);
 });
 
-test("desktop behavior mirrors the native window lifecycle without inventing notifications", () => {
+test("native Desktop Settings reports the verified window lifecycle without a synthetic dialog", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   const source = readFileSync(join(here, "main.js"), "utf8");
+  const settings = readFileSync(join(here, "settings.html"), "utf8");
+  const rust = readFileSync(join(here, "../src-tauri/src/main.rs"), "utf8");
   const cargo = readFileSync(join(here, "../src-tauri/Cargo.toml"), "utf8");
 
-  assert.match(html, /data-settings-tab="desktop"/);
-  assert.match(html, /Closing the window hides it; quitting the app ends it\./);
-  assert.match(html, /There is no background deletion daemon/);
-  assert.match(html, /Yawn does not send system notifications today\./);
-  assert.match(html, /No completion notification is implemented or specified\./);
-  assert.match(html, /role="dialog" aria-modal="true" aria-labelledby="desktop-preview-title"/);
-  assert.match(html, /id="desktop-preview-title" tabindex="-1"/);
-  assert.match(source, /function openDesktopBehaviorPreview\(/);
-  assert.match(source, /function closeDesktopBehaviorPreview\(/);
-  assert.match(source, /node\.inert = true/);
-  assert.match(source, /node\.inert = false/);
+  assert.match(settings, /id="settings-pane-desktop"/);
+  assert.match(settings, /Closing hides Yawn\. It stays available from the Yawn menu bar item\./);
+  assert.match(settings, /Quitting ends the app\. Stop an active meeting before you quit\./);
+  assert.match(settings, /Yawn does not send system notifications today\./);
+  assert.match(rust, /WindowEvent::CloseRequested[\s\S]*?api\.prevent_close\(\);[\s\S]*?window\.hide\(\)/);
+  assert.match(rust, /TrayIconBuilder::with_id\("menubar-item"\)/);
+  assert.doesNotMatch(html, /desktop-behavior-dialog|desktop-preview-/);
+  assert.doesNotMatch(source, /DesktopBehaviorPreview|desktopPreview|desktopBehaviorBackdrop/);
   assert.doesNotMatch(cargo, /tauri-plugin-notification/);
 });
 

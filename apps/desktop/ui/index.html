@@ -89,29 +89,6 @@
       </section>
     </div>
 
-    <div class="prototype-only desktop-behavior-backdrop" id="desktop-behavior-backdrop" hidden>
-      <section class="desktop-behavior-dialog" id="desktop-behavior-dialog" role="dialog" aria-modal="true" aria-labelledby="desktop-preview-title">
-        <div class="desktop-preview-menubar" aria-hidden="true"><span>○</span><strong>Yawn</strong></div>
-        <div class="desktop-preview-heading">
-          <div>
-            <p class="label">Window behavior · synthetic preview</p>
-            <h2 id="desktop-preview-title" tabindex="-1">The main window is hidden.</h2>
-          </div>
-          <button class="desktop-preview-close" id="desktop-preview-close" type="button" aria-label="Close window behavior preview">Close</button>
-        </div>
-        <p class="desktop-preview-lede">In the installed app, closing the window hides it. Yawn stays open in the menubar and keeps showing its current capture state.</p>
-        <dl class="desktop-preview-facts">
-          <div><dt>Capture</dt><dd><strong id="desktop-preview-capture">Nothing is recording</strong><span>The window does not own the recording process</span></dd></div>
-          <div><dt>Retention</dt><dd><strong>Still enforced while Yawn remains open</strong><span>Quitting pauses deletion until the next launch</span></dd></div>
-          <div><dt>Notifications</dt><dd><strong>None sent</strong><span>No notification plugin is installed</span></dd></div>
-        </dl>
-        <div class="screen-actions">
-          <button class="primary" id="desktop-preview-open" type="button">Open Yawn</button>
-          <button class="secondary" id="desktop-preview-menubar-control" type="button">Show menubar control</button>
-        </div>
-      </section>
-    </div>
-
     <div class="app-workspace ys-window" data-role="primary">
       <aside class="app-sidebar ys-primary-sidebar">
         <nav class="product-nav" id="product-nav" aria-label="Yawn" hidden>
@@ -619,10 +596,6 @@
                 <div><dt>Quit Yawn</dt><dd><strong>Exit with ⌘Q</strong><span>Use Stop before quitting an active meeting</span></dd></div>
                 <div><dt>Retention after quit</dt><dd><strong>Resume on next launch</strong><span>There is no background deletion daemon</span></dd></div>
               </dl>
-              <div class="settings-section-action">
-                <div><strong>Close and reopen</strong><span>Preview the installed window’s hide-to-menubar behavior.</span></div>
-                <button class="secondary" id="settings-preview-window" type="button" aria-expanded="false" aria-controls="desktop-behavior-dialog">Preview window behavior</button>
-              </div>
               <section class="settings-subsection" aria-labelledby="settings-notifications-title">
                 <p class="label">Notifications</p>
                 <h3 id="settings-notifications-title">Yawn does not send system notifications today.</h3>
