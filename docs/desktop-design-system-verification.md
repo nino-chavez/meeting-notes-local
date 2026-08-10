@@ -15,7 +15,8 @@ digests.
 Latest prepared product run: `2026-08-10-8c341b16-signing`, executable SHA-256
 `8c341b160937ce86371998a970ecf5cabded8ec593f3442441601685a91011d6`. It binds a
 clean commit to an ad-hoc bundle whose strict signature check passes. It includes
-one agent-assisted Desktop Settings observation; all 127 review checks remain
+three agent-assisted Settings-pane observations (Desktop, Shortcuts, and About).
+All 127 review checks remain
 `unproven` because the complete pane, appearance, geometry, interaction, and human
 requirements were not covered.
 

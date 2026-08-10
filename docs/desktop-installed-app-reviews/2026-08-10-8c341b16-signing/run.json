@@ -46,6 +46,51 @@
       },
       "observed_at": "2026-08-10T06:02:47Z",
       "notes": "Command-Comma opened Desktop Settings, the native close control returned to the primary window, and Command-Comma reopened Desktop Settings with Desktop selected."
+    },
+    {
+      "id": "agent-shortcuts-settings-screenshot",
+      "environment": "installed-tauri",
+      "stimulus": "retained-local",
+      "observer": "agent-assisted",
+      "assistive_mode": "none",
+      "app_executable_sha256": "8c341b160937ce86371998a970ecf5cabded8ec593f3442441601685a91011d6",
+      "artifact": {
+        "privacy": "owner-only",
+        "sha256": "2b6e0a785ed300b5658ab123a96d7c25cd73a69e5c35e0449477d9a432dbd9f4",
+        "local_identifier": "Computer Use Shortcuts Settings screenshot retained outside Git"
+      },
+      "observed_at": "2026-08-10T13:34:56.505Z",
+      "notes": "The native Shortcuts pane rendered the installed Meetings, Search, and Settings routes, their displayed Command shortcuts, toolbar navigation keys, and the unavailable Actions boundary without meeting or transcript content."
+    },
+    {
+      "id": "agent-about-settings-screenshot",
+      "environment": "installed-tauri",
+      "stimulus": "retained-local",
+      "observer": "agent-assisted",
+      "assistive_mode": "none",
+      "app_executable_sha256": "8c341b160937ce86371998a970ecf5cabded8ec593f3442441601685a91011d6",
+      "artifact": {
+        "privacy": "owner-only",
+        "sha256": "928904d6ebeffd64112e67f2c9f78872ee82e5ba0fa031370fbb041702235bdd",
+        "local_identifier": "Computer Use About Settings screenshot retained outside Git"
+      },
+      "observed_at": "2026-08-10T13:34:56.505Z",
+      "notes": "The native About pane rendered its local-only meeting-data, no-account-or-cloud-identity, and unavailable automatic-notes/action-items boundaries without meeting or transcript content."
+    },
+    {
+      "id": "agent-shortcuts-about-settings-window-trace",
+      "environment": "installed-tauri",
+      "stimulus": "retained-local",
+      "observer": "agent-assisted",
+      "assistive_mode": "accessibility-tree",
+      "app_executable_sha256": "8c341b160937ce86371998a970ecf5cabded8ec593f3442441601685a91011d6",
+      "artifact": {
+        "privacy": "owner-only",
+        "sha256": "61c37db6f29be7b8c89e2382346ee1e919f7d1766740f1bad4ecdbea8c7660ad",
+        "local_identifier": "Computer Use Shortcuts/About Settings close-reopen trace retained in the owning task"
+      },
+      "observed_at": "2026-08-10T13:34:56.505Z",
+      "notes": "Command-Comma opened Settings on Capture, Shortcuts and About were selected, the native close control returned to the primary window, and Command-Comma reopened Settings with About selected."
     }
   ],
   "checks": [
@@ -818,9 +863,12 @@
       "appearance": "all-required",
       "geometry": "all-required",
       "verdict": "unproven",
-      "evidence_ids": [],
+      "evidence_ids": [
+        "agent-shortcuts-settings-screenshot",
+        "agent-about-settings-screenshot"
+      ],
       "expected": "Complete native.appearance for settings.shortcuts-about under the canonical installed-app protocol.",
-      "observed": "No admissible evidence recorded.",
+      "observed": "Agent-assisted current-appearance captures show the installed Shortcuts and About panes. Other appearances, geometry, interaction, assistive, and human evidence remain unproven.",
       "defect_id": null
     },
     {
@@ -842,9 +890,11 @@
       "appearance": "all-required",
       "geometry": "all-required",
       "verdict": "unproven",
-      "evidence_ids": [],
+      "evidence_ids": [
+        "agent-shortcuts-about-settings-window-trace"
+      ],
       "expected": "Complete native.window for settings.shortcuts-about under the canonical installed-app protocol.",
-      "observed": "No admissible evidence recorded.",
+      "observed": "Agent-assisted trace selected Shortcuts then About, closed the native Settings window, and reopened Settings with About restored. Complete native.window evidence remains unproven.",
       "defect_id": null
     },
     {
@@ -890,9 +940,12 @@
       "appearance": "all-required",
       "geometry": "all-required",
       "verdict": "unproven",
-      "evidence_ids": [],
+      "evidence_ids": [
+        "agent-shortcuts-settings-screenshot",
+        "agent-about-settings-screenshot"
+      ],
       "expected": "Complete product.truth for settings.shortcuts-about under the canonical installed-app protocol.",
-      "observed": "No admissible evidence recorded.",
+      "observed": "Agent-assisted captures show the installed routes and unavailable Actions boundary in Shortcuts, plus local-only data, no account or cloud identity, and unavailable automatic notes/action items in About. Complete product.truth remains unproven.",
       "defect_id": null
     },
     {

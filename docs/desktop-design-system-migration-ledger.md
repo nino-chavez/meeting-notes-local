@@ -56,8 +56,8 @@ The accepted surfaces resolve shared jobs through `ys-*` components. Legacy sele
 ## Latest installed review
 
 The current prepared product run is `2026-08-10-8c341b16-signing`. It binds the
-clean source commit and strictly verified local bundle. It records one
-agent-assisted Desktop Settings observation; all 127 checks remain `unproven`
+clean source commit and strictly verified local bundle. It records three
+agent-assisted Settings-pane observations (Desktop, Shortcuts, and About). All 127 checks remain `unproven`
 because the full state, appearance, geometry, interaction, and human requirements
 are still open. The table keeps the latest evidence-bearing run for each surface,
 which remains historical until that surface is rerun for the current executable.
@@ -71,7 +71,7 @@ which remains historical until that surface is rerun for the current executable.
 | `settings.capture` | `unproven` — fixed geometry, native open/close/reopen, pane restoration, and keyboard tabs/focus pass in Light and Dark. The first installed pass found clipped Consent Review; the corrected 720×560 bundle keeps it visible. Remaining permission states, Check Again, VoiceOver, and human review stay open | `2026-08-09-972ef3c9` |
 | `settings.remaining` | `unproven` — the current signed app opened Desktop through Command–Comma, named the close-hide, quit-exit, and no-notifications boundaries, and closed/reopened on Desktop. Privacy, Connections, keyboard traversal, Light/Dark, minimum geometry, VoiceOver, and human review remain open | `2026-08-10-8c341b16-signing` |
 | `settings.voice` | `unproven` — source wiring moves the existing lifecycle into native Settings and routes first-run there. No installed run has checked the pane’s appearance, state transitions, storage-event pane handoff, destructive confirmation, keyboard order, VoiceOver, or human comprehension | not yet run after source migration |
-| `settings.shortcuts-about` | `unproven` — source wiring replaces the placeholders with the current installed routes and product boundary. No installed run has checked pane restoration, shortcut labels, keyboard traversal, VoiceOver, or human comprehension | not yet run after source migration |
+| `settings.shortcuts-about` | `unproven` — the current signed app opened Settings through Command–Comma; Shortcuts named Meetings, Search, Settings, its displayed Command shortcuts, toolbar navigation keys, and unavailable Actions; About named local-only meeting data, no account or cloud identity, and unavailable automatic notes/action items. Native close then reopened Settings with About restored. Other appearances, geometry, keyboard traversal, VoiceOver, and human comprehension remain open | `2026-08-10-8c341b16-signing` |
 | `prototype.references` | `pass` — the separately identified installed synthetic bundle preserves its watermark and Consent Back restores the selected meeting, tab group, and note subtree | `2026-08-09-ui-review-cf5f303c` |
 | all other plan surfaces | `unproven` | latest applicable historical run; not rerun for `74160b48` |
 
