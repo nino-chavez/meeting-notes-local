@@ -15,12 +15,13 @@ receipts to these migration rows. The current review run is recorded below; a
 
 | Surface | Shared production owner | What changed |
 |---|---|---|
-| Library and selected meeting | `ys-toolbar`, `ys-sidebar-row`, `ys-meeting-row`, `ys-primary-split`, `ys-primary-list`, `ys-meeting-list-pane`, `ys-record`, `ys-meeting-record`, `ys-tabs`, `ys-tab` | Mac Split remains the primary composition. The comfortable layout uses a compact product sidebar, independently scrolling meeting list, and anchored record. The 720-pixel minimum keeps all three jobs visible. Retention policy follows the meeting corpus instead of displacing it. |
+| Library and selected meeting | `ys-toolbar`, `ys-sidebar-row`, `ys-meeting-row`, `ys-primary-split`, `ys-primary-list`, `ys-meeting-list-pane`, `ys-record`, `ys-meeting-record`, `ys-tabs`, `ys-tab` | One route and record model now supports three visibility preferences. Automatic shows list plus record above 800px and one pane below it. Focus always uses one pane. Library shows sources, list, and record above 900px, then yields sources before the record becomes narrow. Meetings is the stable collection root. |
 | Settings → Capture | `ys-window`, `ys-settings-toolbar`, `ys-settings-pane`, `ys-button`, `ys-select`, `ys-status`, with pane-local flat setting groups | Capture lives in a fixed 720×560 native Settings window. Flat divider rows replace the scrollable report-card composition. The pane reads permission status only. It does not request access or invent device choice. |
+| Settings → Desktop Behavior | native View menu plus `ys-settings-pane` radio rows | Automatic, Focus, and Library share one persisted closed vocabulary. `View → Layout` and Settings update the same durable preference immediately. Pane collapse is a safety behavior, not a second preference. |
 | Consent and arming | `ys-capture-utility`, `ys-disclosure-row`, `ys-select`, `ys-actions`, `ys-button`, `ys-inline-notice` | Existing consent, retention, and start behavior remains authoritative. Route visibility now uses semantic `hidden` state so returning from Consent restores the selected meeting to the installed accessibility tree. |
 | Recording and degraded recording | `ys-capture-utility`, `ys-status`, `ys-button`, `ys-inline-notice` | Live green remains separate from the brand accent. Degraded capture keeps recording truth and the affected channel visible. |
 | Stopping and processing | `ys-capture-utility`, `ys-status`, `ys-progress-row`, `ys-inline-notice` | Processing remains local and does not imply completion before the reducer reports it. |
-| Transcript-ready handoff | selected-meeting record plus `ys-tabs` | Completion reopens the retained meeting by durable ID and selects Transcript. |
+| Transcript-ready handoff | selected-meeting record plus `ys-tabs` | Completion and the title-bar View transcript action reopen the retained meeting by durable ID and select Transcript directly. The temporary workflow transcript no longer flashes before the stable record route. |
 | Focus foundation | shared `:focus-visible` rule | The neutral control reset now uses `:where(...)`, so roving `tabindex` cannot suppress the focus ring. |
 
 The accepted surfaces resolve shared jobs through `ys-*` components. Legacy selectors remain only where an unmigrated screen or an explicit comparison mode still consumes them. They were not bulk-deleted because that would change inherited behavior outside DS-4.
@@ -30,18 +31,18 @@ The accepted surfaces resolve shared jobs through `ys-*` components. Legacy sele
 | Priority | Surface or state | Current owner | Required next evidence |
 |---|---|---|---|
 | 1 | Startup, installation check, first run, permission denied/unavailable, repair, fatal error | `startup-screen`, `first-run-screen`, `error-screen` and local startup styles | Installed cold launch, each permission branch, keyboard order, VoiceOver, recovery wording, minimum geometry |
-| 2 | Home | `home-screen` and local journey/card styles | Loading/empty/ready/error, primary-window geometry, keyboard and focus, product-truth review |
-| 3 | Ask and search results | `find-screen` and local search/result styles | Empty/query/results/error, result activation, return focus, retained-source truth |
-| 4 | Actions | `promises-screen` and local action-table styles | Empty/partial states, Planned labeling, keyboard table/list behavior, minimum geometry |
+| 2 | Ask/Search and search results | `find-screen` and local search/result styles | Empty/query/results/error, result activation, return focus, retained-source truth |
+| 3 | Legacy Home review markup | hidden `home-screen` and local journey/card styles | Remove after the reference harness no longer depends on it. Do not restore Home as a production destination; Meetings is the root. |
+| 4 | Planned Actions prototype | hidden `promises-screen` and local action-table styles | Keep out of production navigation until product authority exists; then admit and migrate it or remove it. |
 | 5 | Settings → Privacy | native placeholder plus legacy `settings-panel-privacy` | Real controls and authority boundary, native appearance/geometry, keyboard and VoiceOver |
 | 6 | Settings → Connections | native placeholder plus legacy `settings-panel-connections` | Keep all account, sync, sharing, and calendar paths unavailable until product authority exists |
 | 7 | Settings → Voice | native placeholder; measured workflow remains in `profile-screen` | Move enrollment, operating points, legacy preservation, and reset without changing reducer or confirmation behavior |
-| 8 | Settings → Desktop, Shortcuts, About | native placeholders plus legacy settings/prototype styles | Admit only implemented window behavior; verify shortcuts and version/data truth in Tauri |
+| 8 | Settings → Shortcuts and About | native placeholders plus legacy settings/prototype styles | Admit only implemented shortcuts and version/data truth; verify both in Tauri |
 | 9 | Full retained transcript and source inspection | `library-transcript-screen` and local transcript styles | Durable-ID reopen, withheld speech, copied text, keyboard return, minimum geometry |
 | 10 | Start-transition and interrupted recovery | `start-meeting-error-screen` plus local error styles | Installed command failure, retry, dismissal, focus return, no false completion |
 | 11 | Help and system-state review | `help-screen`, `state-review-screen` and local reference styles | Decide whether each remains an operator-only surface; migrate or remove before release |
 | 12 | Quick control and command menu | prototype-only popover/backdrop and local overlay styles | Admit product behavior first; then verify focus trap/return, Escape, status truth, and native layering |
-| 13 | Desktop-behavior dialog | prototype-only dialog and local styles | Remove if the native Settings Desktop pane replaces it; otherwise document the distinct transient job |
+| 13 | Superseded desktop-behavior dialog | prototype-only dialog and local styles | Remove after the comparison harness points to the native Desktop Behavior pane. It no longer owns product behavior. |
 | 14 | Voice-profile reset, recording deletion, meeting deletion | local confirmation blocks | Shared confirmation/dialog pattern, destructive wording, separate confirmation, keyboard and VoiceOver |
 | 15 | Prototype meeting and retained comparison modes | `prototype-meeting-screen`, wireframe/document/reference calibrations | Keep as evidence-only until the production replacement has an equal or better deterministic harness; never expose them as shipped features |
 
@@ -49,19 +50,21 @@ The accepted surfaces resolve shared jobs through `ys-*` components. Legacy sele
 
 | Surface ID | Current atomic standing | Latest run |
 |---|---|---|
-| `main.shell` | `unproven` — the ready selected-meeting shell rendered in Light and Dark; a title-bar drag completed, but resulting screen coordinates, declared minimum geometry, full lifecycle, and human review remain open | `2026-08-09-972ef3c9` |
-| `main.library` | `unproven` — the compact selected-meeting workspace rendered with retained local content; the Library screen's complete state and action matrix remains open | `2026-08-09-972ef3c9` |
-| `meeting.record` | `unproven` — Light/Dark rendering plus pointer focus, `End` tab selection, and focused Details passed; other record states, actions, minimum geometry, and human review remain open | `2026-08-09-972ef3c9` |
+| `main.shell` | `unproven` — the final executable cold-launched through installation checking to the retained Meetings root in Dark at comfortable geometry. Light, minimum, confirmed drag coordinates, minimize, other lifecycle states, and human review remain open. The broader `74160b48` run is historical evidence only | `2026-08-09-531ec638-layout` |
+| `main.library` | `unproven` — the final executable showed retained meeting context beside the selected record. Automatic/Focus/Library switching and pane thresholds passed on `74160b48` but must be rerun for the final digest | `2026-08-09-531ec638-layout` |
+| `meeting.record` | `unproven` — the final executable rendered one retained record and its Transcript tab in Dark. Light, minimum, remaining tabs, fallbacks, and human review stay open | `2026-08-09-531ec638-layout` |
+| `meeting.transcript` | `unproven` — the final View transcript action landed directly on the retained meeting Transcript tab and stayed there. The full reader, withheld restoration, search return, long content, and human review remain open | `2026-08-09-531ec638-layout` |
 | `settings.capture` | `unproven` — fixed geometry, native open/close/reopen, pane restoration, and keyboard tabs/focus pass in Light and Dark. The first installed pass found clipped Consent Review; the corrected 720×560 bundle keeps it visible. Remaining permission states, Check Again, VoiceOver, and human review stay open | `2026-08-09-972ef3c9` |
+| `settings.remaining` | `unproven` — Desktop Behavior rendered without clipping, saved all three layout choices, and stayed synchronized with View → Layout on `74160b48`. macOS locked before the final-digest rerun; Light appearance, keyboard traversal, other panes, VoiceOver, and human review remain open | `2026-08-09-74160b48-layout` |
 | `prototype.references` | `pass` — the separately identified installed synthetic bundle preserves its watermark and Consent Back restores the selected meeting, tab group, and note subtree | `2026-08-09-ui-review-cf5f303c` |
-| all other plan surfaces | `unproven` | `2026-08-09-972ef3c9` |
+| all other plan surfaces | `unproven` | latest applicable historical run; not rerun for `74160b48` |
 
 ## Legacy CSS removal ledger
 
 These local groups remain because the rows above still use them:
 
 - startup, first-run, help, state-review, and error layouts
-- Home, Ask, Actions, and full-transcript layouts
+- hidden Home and planned Actions reference layouts, Ask/Search, and full-transcript layouts
 - voice-profile enrollment, operating-point, preservation, and reset layouts
 - command menu, quick control, desktop preview, and destructive confirmations
 - wireframe, document, native-reference, and synthetic prototype comparison rules

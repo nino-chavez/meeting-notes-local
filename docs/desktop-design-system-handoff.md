@@ -7,11 +7,12 @@ the shared components own production use, and the migration ledger is empty.
 
 ## The next work is a system correction, not another styling pass
 
-Keep the Mac Split primary-window structure. Stop applying its meeting-record
-grammar to every route. Build one desktop UI system that distinguishes the main
-window, the meeting record, the Settings window, capture utilities, and transient
-layers. Prove the system in the installed Tauri app before migrating the remaining
-screens.
+Keep one Meetings route and retained-record model. Automatic, Focus, and Library
+may vary pane visibility, with Mac Split retained as the wide Library reference.
+Stop applying the meeting-record grammar to every route. Build one desktop UI
+system that distinguishes the main window, meeting record, Settings window,
+capture utilities, and transient layers. Prove it in installed Tauri before
+migrating the remaining screens.
 
 The current browser prototype is useful for journeys and state coverage. It is not
 evidence that Yawn feels native. The 2026-08-09 operator comparison found Settings
@@ -26,8 +27,9 @@ screen-specific CSS. Those are system defects. More token tuning cannot close th
 - **Assumed knowledge:** ordinary web, Tauri, CSS, JavaScript, Rust, and macOS app
   conventions; no knowledge of the prior session chronology.
 - **Plainness:** practitioner.
-- **Precision locks:** Mac Split remains the primary-window decision; Tauri remains
-  the implementation baseline; no native-quality claim comes from Chrome; Planned,
+- **Precision locks:** Tauri remains the implementation baseline; Meetings remains
+  the root; layout preference changes pane visibility, not routes or content; no
+  native-quality claim comes from Chrome; Planned,
   Partial, and synthetic evidence do not become shipped features; live capture green
   remains separate from brand terracotta.
 - **Copy sources:** `DIRECTION.md`, `DESIGN.md`, `docs/screens-and-states.md`,

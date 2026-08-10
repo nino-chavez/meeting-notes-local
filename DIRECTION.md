@@ -73,6 +73,13 @@ view, a document-first window, and a system-default reference. The operator
 selected the conventional Mac split on 2026-08-08: persistent meeting context
 won over the Document candidate's calmer but hidden library.
 
+A blind re-review on 2026-08-09 treated that selection as evidence rather than
+authority. It found three legitimate working styles, not one universal winner.
+The current direction keeps one content model and admits Automatic, Focus, and
+Library as pane-visibility preferences. Automatic carries the adaptive result;
+Mac Split remains the wide Library reference; Focus carries the calm single-pane
+transition. Meetings remains the stable root in every mode.
+
 ---
 
 ## Constraints this thesis generates
@@ -149,7 +156,8 @@ this heading, rows shaped `| \`device-id\` | verdict | … |`.
 | `focus-shell` | removed | Library shell with explicit document focus | Calmer record, but hides meeting context and adds a return action | not selected 2026-08-08 |
 | `bottom-capture-dock` | condemned | Critical Record and query controls fixed to the lower window edge | Detaches the primary action from Mac window anatomy and can disappear at the vulnerable edge | 2026-08-08 side-by-side review |
 | `native-shell` | authorized | Integrated toolbar plus flexible sidebar, list, and record | Uses familiar Mac anatomy while keeping the selected meeting central | `apps/desktop/ui/native-calibration.css` |
-| `mac-split-shell` | authorized | Product sidebar, meeting list, and selected record at wide sizes; compact product rail at the desktop minimum; focused capture states hide unrelated navigation | Keeps switching context visible in the reading flow without weakening capture truth | operator selection and full-state pass 2026-08-08 |
+| `mac-split-shell` | authorized reference | Product sidebar, meeting list, and selected record at wide sizes; narrower windows yield panes through the active layout preference; focused capture states hide unrelated navigation | Keeps switching context visible when useful without weakening record width or capture truth | operator selection 2026-08-08; configurable-layout amendment 2026-08-09 |
+| `desktop-layout-preference` | authorized | Automatic, Focus, and Library vary pane visibility over one Meetings route and retained-record model | Preserves operator choice without creating three products; safety thresholds yield panes before the record becomes cramped | blind comparison plus installed layout review 2026-08-09 |
 | `native-reference` | authorized | System-default comparison geometry, not a product treatment | Keeps platform familiarity as the quality floor for implementation review | `apps/desktop/native-reference/YawnNativeReference.swift` |
 | `surface-role-grammar` | authorized | Primary, record, settings, capture, and transient roles share foundations but keep distinct compositions | Makes platform behavior and the operator's task decide the layout before styling | `DESIGN.md` `Surface roles and pattern ownership` |
 | `universal-document-grammar` | condemned | Applying the retained-meeting reading layout to Settings, capture, Ask, and Actions | Produced centered page columns, report-like rows, and large unused canvases | operator comparison 2026-08-09 |
@@ -161,22 +169,25 @@ this heading, rows shaped `| \`device-id\` | verdict | … |`.
 
 The product surface now exists, and this record is no longer hypothetical.
 The complete Paper Focus shell is retained as a functional wireframe at
-`?prototype=1&calibration=wireframe`. Mac Split is the default prototype shell;
-Document and Native Reference remain comparison evidence. The installed Tauri
-window now adopts Mac Split by default; browser-only traffic-light geometry is
-suppressed there in favor of the native overlay titlebar.
+`?prototype=1&calibration=wireframe`. Mac Split remains the default comparison
+calibration; Document and Native Reference remain comparison evidence. The
+installed Tauri window defaults to Automatic and persists Automatic, Focus, or
+Library through the native View menu and Desktop Behavior Settings.
 
 The ledger authorizes the record identity and rejects both the superseded dark
 atmosphere and the bottom critical-action dock. Paper Focus completed the same
 retrieval and source-check path with fewer visible controls and words, but the
-side-by-side review rescinded its visual approval. Mac Split then won the
-primary-window composition comparison. That structural decision remains closed.
+side-by-side review rescinded its visual approval. Mac Split then won that
+primary-window composition comparison. The later blind review reopened only the
+claim that one composition must fit every operator and width; the native shell,
+route model, and surface roles remain closed.
 The 2026-08-09 Wispr comparison reopened the shared visual-system and native
 fit-and-finish gate: Settings still rendered as a full primary-window page, and
 screen-level CSS loops had no owned pattern layer to converge on.
 
-Tauri remains the implementation baseline. Mac Split earned the composition
-decision through operator comparison, not because its CSS is testable. A thin
+Tauri remains the implementation baseline. Mac Split earned its place as the
+wide Library reference through operator comparison, not because its CSS is
+testable. A thin
 SwiftUI reference source records the native comparison ceiling; it remains a
 platform check, not a requirement to reopen the selected composition. No stack
 migration is authorized without rendered evidence from both implementations.

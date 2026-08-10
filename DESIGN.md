@@ -70,17 +70,19 @@ Visual rules and engineering rules together, so neither gets decided ad hoc
 surface by surface. Answers to [`DIRECTION.md`](./DIRECTION.md); the L5
 inventory it covers is [`docs/screens-and-states.md`](./docs/screens-and-states.md).
 
-**System status — rebaseline required 2026-08-09:** Mac Split remains the
-selected primary-window composition and installed Tauri baseline. Its persistent
-product sidebar, meeting list, and selected record remain authorized. The later
-claim that one visual grammar should also own Ask, Actions, Settings, consent,
-capture, processing, and transcript handoff is withdrawn. It turned operational
-surfaces into document pages and let page-level refinements drift without a shared
-pattern layer. The browser prototype remains useful interaction evidence, not
-native-quality approval. Paper Focus stays available as the complete planning wireframe at
-`?prototype=1&calibration=wireframe`, and Document and Native Reference remain
-comparison evidence. Native-window, VoiceOver, increased-contrast, and exact
-200% zoom checks remain release gates. The active execution plan is
+**System status — configurable primary composition 2026-08-09:** Tauri remains
+the installed baseline. Meetings is the primary-window root. One route,
+selection, and retained-record model supports three pane-visibility preferences:
+Automatic is the default, Focus is always single-pane, and Library keeps sources
+plus list plus record while the window safely supports them. Mac Split remains
+the wide Library reference, not a mandatory composition at every width. The
+claim that one visual grammar should own Ask, Actions, Settings, consent, capture,
+processing, and transcript handoff remains withdrawn. The browser prototype is
+interaction evidence, not native-quality approval. Paper Focus stays available as
+the complete planning wireframe at `?prototype=1&calibration=wireframe`, and
+Document and Native Reference remain comparison evidence. Native-window,
+VoiceOver, increased-contrast, and exact 200% zoom checks remain release gates.
+The active execution plan is
 [`docs/desktop-design-system-handoff.md`](./docs/desktop-design-system-handoff.md).
 
 ---
@@ -176,10 +178,10 @@ bundled face so chrome follows the operator's Mac before it expresses Yawn.
   the note model. Trust explanations belong beside the action or evidence they
   qualify. Repeated source actions render as quiet links rather than a stack of
   boxed buttons.
-- Mac Split keeps product navigation, meeting context, and the selected record
-  available at wide sizes. At the minimum desktop window, product navigation
-  becomes a 96px rail and the meeting list remains visible. The list yields only
-  below the desktop minimum.
+- Automatic keeps meeting context beside the selected record above 800px and
+  yields to a single pane below it. Focus always uses one pane. Library adds
+  product sources above 900px and yields sources first. All three preserve the
+  Meetings return path and the same record state.
 - Consent, arming, recording, degradation, processing, and transcript handoff
   hide unrelated navigation. Capture truth remains in the integrated toolbar,
   so focus does not make listening state ambiguous.
@@ -188,9 +190,8 @@ bundled face so chrome follows the operator's Mac before it expresses Yawn.
 - Settings is an auxiliary Mac settings window, opened from the App menu and
   Command–Comma. It keeps stable pane navigation and sizes to its current pane;
   it is not a primary-window route with a page-bottom Back button.
-- Paper Focus's transition remains interaction evidence, not the approved
-  production composition. Document and Native Reference remain controls for
-  future regression review.
+- Paper Focus's transition now informs the admitted Focus preference. Document
+  and Native Reference remain controls for future regression review.
 - Record and Stop live in the integrated toolbar and the menubar state. A bottom
   bar cannot be their primary or only home.
 - Empty states carry real content, never a title card. First run shows what a
@@ -232,12 +233,12 @@ shared control.
 
 ---
 
-## Shell decision — Tauri baseline, Mac Split selected
+## Shell decision — Tauri baseline, configurable pane visibility
 
 **Current status:** Tauri remains the working implementation so the existing
-runtime and state contracts stay intact. Mac Split is the approved primary-window
-composition, not blanket approval of its current styling or of every secondary
-surface. The SwiftUI reference and Apple Human Interface Guidelines remain
+runtime and state contracts stay intact. Mac Split is the wide Library reference.
+Automatic, Focus, and Library vary only pane visibility over one route and content
+model. The SwiftUI reference and Apple Human Interface Guidelines remain
 native-quality checks; switching stacks is not authorized merely because a CSS
 detail misses the bar.
 
@@ -274,7 +275,10 @@ a gate over them would report clean while verifying nothing. Choosing A means
 choosing that outcome deliberately at the start.
 
 That rationale remains evidence for maintainability. The native-calibration run
-then supplied the missing product decision: Mac Split won the operator review.
+then supplied useful product evidence: Mac Split won one operator comparison.
+A later blind comparison and configuration review showed that it should inform
+Library and wide Automatic behavior rather than exclude Focus or narrow-window
+collection-first use.
 `apps/desktop/native-reference/` carries a thin SwiftUI comparison source. On
 this machine its syntax parses, but the active Command Line Tools compiler and
 SDK versions do not match and full Xcode is not installed, so it has not built

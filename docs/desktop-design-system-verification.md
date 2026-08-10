@@ -12,10 +12,21 @@ approval gate. New installed passes use
 `docs/desktop-installed-app-reviews/`, bound to the exact executable and review-plan
 digests.
 
-Latest signed product run: `2026-08-09-4f3f458b`. Latest backend-free installed
-state run: `2026-08-09-ui-review-7515dc15`.
+Latest digest-bound product run: `2026-08-09-531ec638-layout`, executable
+SHA-256 `531ec6389e5492e0460576a36e1dfaa4df0a241d25a6454bb551155c95008bbf`.
+It covers the configurable Automatic/Focus/Library slice, the Meetings root,
+and direct retained-transcript handoff. Its final installed smoke reached the
+retained Meetings root and selected Transcript directly. macOS locked before the
+final Desktop Behavior Settings rerun, so the broader Settings, Light/Dark, and
+minimum-geometry observations remain bound to the superseded `74160b48` binary
+and do not close gates for `531ec638`. All 110 rows remain formally unproven where
+the installed walk did not cover every required state or human gate. The validated
+machine-readable receipt is
+`docs/desktop-installed-app-reviews/2026-08-09-531ec638-layout/run.json`.
 
-## What is in the current bundle
+Latest backend-free installed state run: `2026-08-09-ui-review-7515dc15`.
+
+## What was in the historical DS-4 bundle
 
 - App: `target/release/bundle/macos/Yawn.app`
 - Bundle identifier: `com.ninochavez.local-meeting-notes`
