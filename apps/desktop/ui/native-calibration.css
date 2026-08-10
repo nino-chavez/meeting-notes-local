@@ -317,10 +317,6 @@ html[data-production-system="desktop-v1"][data-native-calibration="split"] #meet
   margin-top: 0;
 }
 
-html[data-production-system="desktop-v1"][data-native-calibration="split"] .legacy-home-link {
-  display: none;
-}
-
 html[data-production-system="desktop-v1"][data-native-calibration="split"] .product-nav button {
   min-height: var(--ys-control-regular);
   padding: 0 var(--ys-space-4);

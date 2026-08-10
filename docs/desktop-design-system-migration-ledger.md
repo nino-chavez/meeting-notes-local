@@ -26,23 +26,28 @@ receipts to these migration rows. The current review run is recorded below; a
 
 The accepted surfaces resolve shared jobs through `ys-*` components. Legacy selectors remain only where an unmigrated screen or an explicit comparison mode still consumes them. They were not bulk-deleted because that would change inherited behavior outside DS-4.
 
+## Retired from production
+
+| Surface | What changed |
+|---|---|
+| Legacy Home review markup | Removed the hidden `home-screen`, its local journey/card styles, and every Home return path. Meetings is now the product root in both installed and synthetic routes; the review plan names the explicit `prototype-meeting-screen` fixture instead. |
+
 ## Remaining production migrations and installed evidence
 
 | Priority | Surface or state | Current owner | Required next evidence |
 |---|---|---|---|
 | 1 | Startup, installation check, first run, permission denied/unavailable, repair, fatal error | `ys-capture-utility`, `ys-status`, `ys-inline-notice`, `ys-actions`, and the existing state reducers | The shared operational utility now owns the bounded panel and its state/status/action grammar. Installed cold launch, each permission branch, keyboard order, VoiceOver, recovery wording, and minimum geometry remain open. |
 | 2 | Ask/Search and search results | `ys-search`, `ys-inline-notice`, `ys-button`, and existing retrieval commands | The shared source-first pattern now owns empty, query, results, notices, passage quotes, preparation, and result controls. Exact-result return revalidates the current local query; meaning-result return focuses the original wording without rerunning the model. Installed light/dark and minimum geometry, pointer activation, keyboard order/return, VoiceOver, live retained-source truth, and human review remain open. |
-| 3 | Legacy Home review markup | hidden `home-screen` and local journey/card styles | Remove after the reference harness no longer depends on it. Do not restore Home as a production destination; Meetings is the root. |
-| 4 | Planned Actions prototype | hidden `promises-screen` and local action-table styles | Keep out of production navigation until product authority exists; then admit and migrate it or remove it. |
-| 5 | Settings → Privacy | native placeholder plus legacy `settings-panel-privacy` | Real controls and authority boundary, native appearance/geometry, keyboard and VoiceOver |
-| 6 | Settings → Connections | native placeholder plus legacy `settings-panel-connections` | Keep all account, sync, sharing, and calendar paths unavailable until product authority exists |
-| 7 | Settings → Voice | native placeholder; measured workflow remains in `profile-screen` | Move enrollment, operating points, legacy preservation, and reset without changing reducer or confirmation behavior |
-| 8 | Settings → Shortcuts and About | native placeholders plus legacy settings/prototype styles | Admit only implemented shortcuts and version/data truth; verify both in Tauri |
-| 9 | Full retained transcript and source inspection | `library-transcript-screen` and local transcript styles | Durable-ID reopen, withheld speech, copied text, keyboard return, minimum geometry |
-| 10 | Start-transition and interrupted recovery | `start-meeting-error-screen` plus local error styles | Installed command failure, retry, dismissal, focus return, no false completion |
-| 11 | Help and system-state review | `help-screen`, `state-review-screen` and local reference styles | Decide whether each remains an operator-only surface; migrate or remove before release |
-| 12 | Quick control and command menu | prototype-only popover/backdrop and local overlay styles | Admit product behavior first; then verify focus trap/return, Escape, status truth, and native layering |
-| 13 | Superseded desktop-behavior dialog | prototype-only dialog and local styles | Remove after the comparison harness points to the native Desktop Behavior pane. It no longer owns product behavior. |
+| 3 | Planned Actions prototype | hidden `promises-screen` and local action-table styles | Keep out of production navigation until product authority exists; then admit and migrate it or remove it. |
+| 4 | Settings → Privacy | native placeholder plus legacy `settings-panel-privacy` | Real controls and authority boundary, native appearance/geometry, keyboard and VoiceOver |
+| 5 | Settings → Connections | native placeholder plus legacy `settings-panel-connections` | Keep all account, sync, sharing, and calendar paths unavailable until product authority exists |
+| 6 | Settings → Voice | native placeholder; measured workflow remains in `profile-screen` | Move enrollment, operating points, legacy preservation, and reset without changing reducer or confirmation behavior |
+| 7 | Settings → Shortcuts and About | native placeholders plus legacy settings/prototype styles | Admit only implemented shortcuts and version/data truth; verify both in Tauri |
+| 8 | Full retained transcript and source inspection | `library-transcript-screen` and local transcript styles | Durable-ID reopen, withheld speech, copied text, keyboard return, minimum geometry |
+| 9 | Start-transition and interrupted recovery | `start-meeting-error-screen` plus local error styles | Installed command failure, retry, dismissal, focus return, no false completion |
+| 10 | Help and system-state review | `help-screen`, `state-review-screen` and local reference styles | Decide whether each remains an operator-only surface; migrate or remove before release |
+| 11 | Quick control and command menu | prototype-only popover/backdrop and local overlay styles | Admit product behavior first; then verify focus trap/return, Escape, status truth, and native layering |
+| 12 | Superseded desktop-behavior dialog | prototype-only dialog and local styles | Remove after the comparison harness points to the native Desktop Behavior pane. It no longer owns product behavior. |
 | 14 | Voice-profile reset, recording deletion, meeting deletion | local confirmation blocks | Shared confirmation/dialog pattern, destructive wording, separate confirmation, keyboard and VoiceOver |
 | 15 | Prototype meeting and retained comparison modes | `prototype-meeting-screen`, wireframe/document/reference calibrations | Keep as evidence-only until the production replacement has an equal or better deterministic harness; never expose them as shipped features |
 

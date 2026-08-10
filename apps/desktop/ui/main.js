@@ -107,7 +107,6 @@ const quickControlDetail = document.querySelector("#quick-control-detail");
 const quickControlPrimary = document.querySelector("#quick-control-primary");
 const quickControlSecondary = document.querySelector("#quick-control-secondary");
 const productNav = document.querySelector("#product-nav");
-const homeLink = document.querySelector("#home-link");
 const findLink = document.querySelector("#find-link");
 const meetingsLink = document.querySelector("#meetings-link");
 const promisesLink = document.querySelector("#promises-link");
@@ -118,11 +117,6 @@ const workflowReturn = document.querySelector("#workflow-return");
 const startMeetingAction = document.querySelector("#start-meeting-action");
 const newMeetingButton = document.querySelector("#new-meeting");
 const recoverButton = document.querySelector("#recover-button");
-const homeRecord = document.querySelector("#home-record");
-const homeMeetings = document.querySelector("#home-meetings");
-const homeAsk = document.querySelector("#home-ask");
-const homeActions = document.querySelector("#home-actions");
-const homeWorkspacePreview = document.querySelector("#home-workspace-preview");
 const actionsWorkspacePreview = document.querySelector("#actions-workspace-preview");
 const meetingsWorkspacePreview = document.querySelector("#meetings-workspace-preview");
 const meetingsRetainedPreview = document.querySelector("#meetings-retained-preview");
@@ -156,7 +150,7 @@ const statePreviewLede = document.querySelector("#state-preview-lede");
 const statePreviewFacts = document.querySelector("#state-preview-facts");
 const stateReviewPrimary = document.querySelector("#state-review-primary");
 const stateReviewExit = document.querySelector("#state-review-exit");
-const stateReviewHome = document.querySelector("#state-review-home");
+const stateReviewMeetings = document.querySelector("#state-review-meetings");
 const helpTabs = [...document.querySelectorAll("[data-help-topic]")];
 const helpTopicCard = document.querySelector("#help-topic-card");
 const helpTopicContext = document.querySelector("#help-topic-context");
@@ -165,7 +159,7 @@ const helpTopicLede = document.querySelector("#help-topic-lede");
 const helpTopicFacts = document.querySelector("#help-topic-facts");
 const helpTopicPrimary = document.querySelector("#help-topic-primary");
 const helpExit = document.querySelector("#help-exit");
-const helpHome = document.querySelector("#help-home");
+const helpMeetings = document.querySelector("#help-meetings");
 const startTransitionError = document.querySelector("#start-transition-error");
 const profileLede = document.querySelector("#profile-lede");
 const profileStatusTitle = document.querySelector("#profile-status-title");
@@ -390,11 +384,10 @@ function showScreen(id, { resetScroll = false, focus = true } = {}) {
 
 function syncProductNavigation() {
   const settingsActive = currentScreen === "profile-screen";
-  const directRoot = ["home-screen", "find-screen", "meetings-screen", "promises-screen"].includes(currentScreen)
+  const directRoot = ["find-screen", "meetings-screen", "promises-screen"].includes(currentScreen)
     ? currentScreen
     : productRootScreen;
   for (const [link, destination] of [
-    [homeLink, "home-screen"],
     [findLink, "find-screen"],
     [meetingsLink, "meetings-screen"],
     [promisesLink, "promises-screen"],
@@ -761,7 +754,7 @@ function finishPrototypeTranscript() {
   });
 }
 
-function leavePrototypeCapture(destination = "home-screen") {
+function leavePrototypeCapture(destination = "meetings-screen") {
   endElapsed();
   clearAttemptReview(true);
   resetLiveNote();
@@ -1894,15 +1887,6 @@ async function openMeetings({ resetFind = false, browseAll = false, preferredMee
   }
 }
 
-function openHome() {
-  restoreShellSnapshotStatus();
-  if (shellPrototype) {
-    openPrototypeMeetingDetail(activeMeetingId || "prototype-meeting", { focus: true });
-    return;
-  }
-  void openMeetings({ browseAll: true });
-}
-
 async function openPromises({ resetFind = false } = {}) {
   restoreShellSnapshotStatus();
   if (resetFind) librarySearchQuery.value = "";
@@ -2606,7 +2590,7 @@ function closeHelp() {
     void openProfile();
     return;
   }
-  void returnToProductHome();
+  void returnToProductRoot();
 }
 
 function moveStateReviewTab(currentTab, direction) {
@@ -2618,17 +2602,12 @@ function moveStateReviewTab(currentTab, direction) {
 
 function runStateReviewPrimary() {
   const action = stateReviewPrimary.dataset.action;
-  if (action === "home") openHome();
-  else if (action === "start") void openStartMeeting();
+  if (action === "start") void openStartMeeting();
   else if (action === "meetings") void openMeetings({ resetFind: true });
   else if (action === "loading") renderStateReview("loading");
 }
 
-async function returnToProductHome() {
-  if (productRootScreen === "home-screen") {
-    openHome();
-    return;
-  }
+async function returnToProductRoot() {
   if (productRootScreen === "meetings-screen") {
     await openMeetings();
     return;
@@ -2738,8 +2717,7 @@ function openCommandMenu() {
 
 function runShellCommand(command) {
   closeCommandMenu({ restoreFocus: false });
-  if (command.action === "home") openHome();
-  else if (command.action === "meetings") void openMeetings({ resetFind: true });
+  if (command.action === "meetings") void openMeetings({ resetFind: true });
   else if (command.action === "ask") void openFind({ resetQuery: true });
   else if (command.action === "actions") void openPromises({ resetFind: true });
   else if (command.action === "settings") void openProfile();
@@ -3294,7 +3272,7 @@ async function returnFromLibraryTranscript() {
       return await returnToFindAfterTranscript(context, transition);
     }
     if (!currentTransitionOwnsRoute(transition, "library-transcript-screen")) return false;
-    await returnToProductHome();
+    await returnToProductRoot();
     return true;
   } finally {
     finishHandleTransition(transition);
@@ -3684,7 +3662,6 @@ retryStartup.addEventListener("click", async () => {
 findLink.addEventListener("click", () => openFind({ resetQuery: true }));
 meetingsLink.addEventListener("click", () => openMeetings({ resetFind: true }));
 promisesLink.addEventListener("click", () => openPromises({ resetFind: true }));
-homeLink.addEventListener("click", openHome);
 allMeetingsLink.addEventListener("click", () => openMeetings({ resetFind: true, browseAll: true }));
 unfiledMeetingsLink.addEventListener("click", () => {
   filterFolder.value = "unfiled";
@@ -3697,13 +3674,9 @@ document.querySelector("#prototype-browse-all").addEventListener("click", () => 
 for (const folder of document.querySelectorAll("[data-prototype-folder]")) {
   folder.addEventListener("click", () => openPrototypeMeetingDetail());
 }
-homeRecord.addEventListener("click", openStartMeeting);
-homeMeetings.addEventListener("click", () => openMeetings({ resetFind: true }));
-homeAsk.addEventListener("click", () => openFind({ resetQuery: true }));
-homeActions.addEventListener("click", () => openPromises({ resetFind: true }));
-for (const control of [homeWorkspacePreview, actionsWorkspacePreview, meetingsWorkspacePreview]) {
+for (const control of [actionsWorkspacePreview, meetingsWorkspacePreview]) {
   control.addEventListener("click", () => {
-    productRootScreen = "home-screen";
+    productRootScreen = "meetings-screen";
     selectProductScreen("prototype-meeting-screen", { resetScroll: true });
   });
 }
@@ -3771,7 +3744,7 @@ function openPrototypeMeetingDetail(meetingId = "prototype-meeting", { focus = f
 meetingsRetainedPreview.addEventListener("click", () => {
   openPrototypeMeetingDetail();
 });
-prototypeMeetingBack.addEventListener("click", openHome);
+prototypeMeetingBack.addEventListener("click", () => void openMeetings({ resetFind: true, browseAll: true }));
 for (const tab of settingsTabs) {
   tab.addEventListener("click", () => selectSettingsPanel(tab.dataset.settingsTab));
   tab.addEventListener("keydown", (event) => {
@@ -3839,9 +3812,9 @@ for (const tab of helpTabs) {
 }
 helpTopicPrimary.addEventListener("click", () => runHelpAction(helpTopicPrimary.dataset.action));
 helpExit.addEventListener("click", closeHelp);
-helpHome.addEventListener("click", () => {
+helpMeetings.addEventListener("click", () => {
   restoreShellSnapshotStatus();
-  openHome();
+  void openMeetings({ resetFind: true, browseAll: true });
 });
 for (const tab of stateReviewTabs) {
   tab.addEventListener("click", () => renderStateReview(tab.dataset.statePreview));
@@ -3862,8 +3835,8 @@ for (const tab of stateReviewTabs) {
   });
 }
 stateReviewPrimary.addEventListener("click", runStateReviewPrimary);
-stateReviewExit.addEventListener("click", openHome);
-stateReviewHome.addEventListener("click", openHome);
+stateReviewExit.addEventListener("click", () => void openMeetings({ resetFind: true, browseAll: true }));
+stateReviewMeetings.addEventListener("click", () => void openMeetings({ resetFind: true, browseAll: true }));
 for (const control of document.querySelectorAll(".action-filter")) {
   control.addEventListener("click", () => {
     for (const peer of document.querySelectorAll(".action-filter")) {
@@ -4022,7 +3995,7 @@ window.addEventListener("resize", () => applyDesktopLayout(desktopLayoutPreferen
 window.addEventListener("yawn:desktop-layout-changed", (event) => {
   applyDesktopLayout(event.detail);
 });
-document.querySelector("#start-back").addEventListener("click", returnToProductHome);
+document.querySelector("#start-back").addEventListener("click", returnToProductRoot);
 document.querySelector("#start-transition-back").addEventListener(
   "click",
   (event) => returnToFindAfterStartError(event.currentTarget),
@@ -4030,10 +4003,10 @@ document.querySelector("#start-transition-back").addEventListener(
 librarySearch.addEventListener("submit", searchLibrary);
 corpusSearch.addEventListener("submit", searchCorpus);
 corpusPrepare.addEventListener("click", prepareCorpusPassages);
-document.querySelector("#profile-back").addEventListener("click", returnToProductHome);
+document.querySelector("#profile-back").addEventListener("click", returnToProductRoot);
 document.querySelector("#library-transcript-back").addEventListener("click", returnFromLibraryTranscript);
 document.querySelector("#meeting-detail-back").addEventListener("click", () => {
-  if (shellPrototype) void returnToProductHome();
+  if (shellPrototype) void returnToProductRoot();
   else void openMeetings({ browseAll: true });
 });
 document.querySelector("#meeting-record-back").addEventListener("click", () => {
@@ -4103,7 +4076,7 @@ meetingDeleteConfirm.addEventListener("click", async () => {
       // The meeting no longer exists, so its detail view must not remain open.
       // Staying here would render a meeting that is gone, which is the
       // tombstone this action exists to avoid.
-      returnToProductHome();
+      returnToProductRoot();
       return;
     }
     meetingDeleteStatus.textContent = response.message || "Meeting deletion could not complete. Return to Meetings and try again.";
@@ -4471,7 +4444,7 @@ document.querySelector("#prototype-first-run-deny-system-audio").addEventListene
   firstRunDeniedPane.textContent = "System Audio Recording";
   showFirstRunStep("denied-recovery");
 });
-document.querySelector("#first-run-exit").addEventListener("click", openHome);
+document.querySelector("#first-run-exit").addEventListener("click", () => void openMeetings({ resetFind: true, browseAll: true }));
 document.querySelector("#first-run-enrol").addEventListener("click", () => {
   // Routes to the enrolment surface that already exists rather than duplicating it.
   activeSettingsTab = "voice";
@@ -4482,7 +4455,7 @@ document.querySelector("#first-run-skip-enrol").addEventListener("click", () => 
   showFirstRunStep("ready");
 });
 document.querySelector("#first-run-done").addEventListener("click", () => {
-  if (shellPrototype) openHome();
+  if (shellPrototype) void openMeetings({ resetFind: true, browseAll: true });
   else selectProductScreen("idle-screen", { resetScroll: true });
 });
 // Narrowing the list. Folder and the two dates re-request on change; the name box
@@ -4507,7 +4480,7 @@ filterNewFolder.addEventListener("click", () => void createFolder());
 // without this the first thing a new operator meets is a screen they cannot leave.
 for (const id of ["#first-run-leave-denied", "#first-run-leave-unavailable"]) {
   document.querySelector(id).addEventListener("click", () => {
-    if (shellPrototype) openHome();
+    if (shellPrototype) void openMeetings({ resetFind: true, browseAll: true });
     else selectProductScreen("idle-screen", { resetScroll: true });
   });
 }
@@ -4549,7 +4522,7 @@ if (shellPrototype) {
   workflowOwnsRoute = false;
   renderCaptureAction(lastSnapshot);
   setHeaderState("Click-through prototype · nothing is recording");
-  openHome();
+  openPrototypeMeetingDetail(activeMeetingId || "prototype-meeting", { focus: true });
   if (nativeCalibration === "document") setMeetingFocus(true);
 } else {
   renderStartup("shell-rendered");

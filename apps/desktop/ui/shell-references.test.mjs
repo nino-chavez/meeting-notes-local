@@ -151,7 +151,9 @@ test("the production shell has one content model and no obsolete treatment plumb
   assert.doesNotMatch(html, /Paper (?:instrument|focus) ·/i);
   assert.doesNotMatch(source, /applyShellTreatment|dataset\.treatment|requestedTreatment|shellTreatment/);
   assert.doesNotMatch(css, /data-treatment|Paper Instrument|Candidate [AB]/);
-  assert.match(css, /html\[data-prototype="true"\] \.legacy-home-link,\s*html\[data-prototype="true"\] \.installed-only \{ display: none; \}/);
+  assert.doesNotMatch(html, /id=["']home-(?:screen|link|record|meetings|ask|actions|workspace-preview)["']/);
+  assert.doesNotMatch(source, /\bopenHome\b|\bhome-screen\b/);
+  assert.doesNotMatch(css, /legacy-home-link|\.journey-(?:grid|card)|\.workspace-preview|\.upcoming-preview/);
   assert.match(css, /--brand-accent: #843B31/);
   assert.match(css, /--capture-live: #146B4A/);
   assert.match(css, /--record-font:/);

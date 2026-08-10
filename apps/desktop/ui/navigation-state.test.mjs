@@ -239,7 +239,7 @@ test("help topics keep diagnostics private and updates manual", () => {
 
 test("system-state previews name what survived and never promote interruption to completion", () => {
   const loading = shellStatePresentation("loading");
-  assert.equal(loading.primaryAction, "home");
+  assert.equal(loading.primaryAction, "meetings");
   assert.match(loading.lede, /Recording controls stay unavailable/);
 
   const empty = shellStatePresentation("empty");
@@ -694,7 +694,6 @@ test("idle start is direct and other capture states refuse consent", async () =>
 });
 
 test("nested routes keep their real product root", () => {
-  assert.equal(rootForDestination("home-screen", "find-screen"), "home-screen");
   assert.equal(rootForDestination("find-screen", "meetings-screen"), "find-screen");
   assert.equal(rootForDestination("meetings-screen", "find-screen"), "meetings-screen");
   assert.equal(rootForDestination("promises-screen", "find-screen"), "promises-screen");

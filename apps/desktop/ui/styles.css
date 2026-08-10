@@ -809,8 +809,7 @@ button.library-rename:hover:not(:disabled) { color: var(--ink); background: tran
 .profile-reset-buttons { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
 #profile-reset-status { margin-top: var(--space-3); }
 
-/* Product shell. These components make the planned journeys reviewable without
-   claiming that their backing features exist. */
+/* Product shell. */
 .page-heading-row, .meeting-workspace-heading {
   display: flex;
   align-items: flex-start;
@@ -831,41 +830,8 @@ button.library-rename:hover:not(:disabled) { color: var(--ink); background: tran
   font-size: 0.75rem;
   font-weight: 720;
 }
-.journey-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-4);
-  margin-top: var(--space-12);
-}
-.journey-card {
-  min-width: 0;
-  min-height: 270px;
-  padding: var(--space-6);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-  background: var(--paper);
-}
-.journey-card.planned-capability { border-style: dashed; background: var(--paper-muted); }
-.journey-card h2 { margin: var(--space-3) 0 0; font-family: ui-serif, Georgia, serif; font-size: 1.55rem; font-weight: 520; line-height: 1.08; }
-.journey-card > p:not(.label) { margin: var(--space-3) 0 var(--space-6); color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
-.journey-card > button, .journey-card .card-actions { margin-top: auto; }
 .card-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .card-actions button { padding: 0 var(--space-3); }
-.workspace-preview, .upcoming-preview {
-  margin-top: var(--space-6);
-  padding: var(--space-6);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-}
-.workspace-preview { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); background: #e7eee9; }
-.workspace-preview h2, .upcoming-preview h2 { margin: var(--space-2) 0 0; font-family: ui-serif, Georgia, serif; font-size: 1.65rem; font-weight: 520; }
-.workspace-preview p:not(.label), .upcoming-preview > p { max-width: 62ch; margin: var(--space-2) 0 0; color: var(--muted); line-height: 1.5; }
-.upcoming-preview { border-style: dashed; background: var(--paper-muted); }
-.upcoming-preview .section-heading { margin: 0; align-items: center; }
-.upcoming-preview .section-heading .planned-tag { margin-left: 0; }
 
 .placeholder-boundary {
   margin-top: var(--space-6);
@@ -1119,8 +1085,6 @@ footer {
 }
 
 @media (max-width: 1120px) {
-  .journey-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .journey-card:last-child { grid-column: 1 / -1; min-height: 220px; }
   .note-layout { grid-template-columns: 1fr; }
   .operator-note-card { max-width: 58ch; }
   .preflight-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
@@ -1191,7 +1155,6 @@ footer {
   .nav-shortcut { display: none; }
   .quick-control-popover { top: 146px; right: 16px; }
   .turn { grid-template-columns: 1fr; gap: var(--space-2); }
-  .journey-grid { grid-template-columns: 1fr; }
   #profile-screen.active { width: min(100% - 32px, 800px); }
   .settings-field-grid { grid-template-columns: 1fr; }
   .settings-status-list div { grid-template-columns: 1fr; gap: var(--space-1); }
@@ -1202,8 +1165,7 @@ footer {
   #help-screen.active { width: min(100% - 32px, 800px); }
   .help-heading { flex-direction: column; }
   .help-topic-facts div { grid-template-columns: 1fr; gap: var(--space-1); }
-  .journey-card:last-child { grid-column: auto; }
-  .page-heading-row, .meeting-workspace-heading, .workspace-preview, .action-toolbar, .action-empty { align-items: flex-start; flex-direction: column; }
+  .page-heading-row, .meeting-workspace-heading, .action-toolbar, .action-empty { align-items: flex-start; flex-direction: column; }
   .local-badge { margin-top: var(--space-2); }
   .action-table-head { display: none; }
   .action-empty { min-height: 260px; }
@@ -1253,7 +1215,6 @@ footer {
   .settings-trust-statement { border-color: var(--line); background: var(--paper-muted); }
   .state-review-boundary { color: #eee4bd; border-color: #6d6240; background: #332f20; }
   .help-boundary { color: #eee4bd; border-color: #6d6240; background: #332f20; }
-  .workspace-preview { background: #1d3026; }
   .placeholder-boundary { color: #eee4bd; border-color: #6d6240; background: #332f20; }
   .meeting-context-row[aria-current="page"] { background: #252c28; }
   .capture-progress li[data-state="complete"] > span,
@@ -1637,7 +1598,6 @@ html[data-prototype="true"] .product-nav {
   overflow-x: auto;
 }
 html[data-prototype="true"] .sidebar-primary { display: flex; gap: 4px; }
-html[data-prototype="true"] .legacy-home-link,
 html[data-prototype="true"] .installed-only { display: none; }
 html[data-prototype="true"] .sidebar-section,
 html[data-prototype="true"] .privacy-lockup { display: none; }

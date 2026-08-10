@@ -165,7 +165,7 @@
     {
       "surface_id": "prototype.references",
       "window_role": "evidence-only",
-      "screen_ids": ["home-screen", "prototype-meeting-screen"],
+      "screen_ids": ["prototype-meeting-screen"],
       "entry": "Explicit browser prototype or separately identified review build",
       "states": ["synthetic"],
       "critical_actions": ["exercise-reference-only"],

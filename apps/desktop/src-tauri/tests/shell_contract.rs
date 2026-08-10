@@ -905,7 +905,7 @@ fn preview_library_navigation_refreshes_response_scoped_handle_generations() {
     assert!(script.contains("async function openFind("));
     assert!(script.contains("async function openMeetings("));
     assert!(script.contains("async function openPromises("));
-    assert!(script.contains("async function returnToProductHome()"));
+    assert!(script.contains("async function returnToProductRoot()"));
     assert!(script.contains("await openMeetings();"));
     assert!(script.contains("await openFind();"));
     assert!(script.contains("await openPromises();"));
@@ -1209,7 +1209,7 @@ fn whole_meeting_deletion_is_a_separate_twice_confirmed_control() {
         .find("already-removed")
         .expect("removed branch");
     let navigate = handler_body
-        .find("returnToProductHome()")
+        .find("returnToProductRoot()")
         .expect("must leave the detail view");
     assert!(removed < navigate);
 }

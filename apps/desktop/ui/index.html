@@ -116,7 +116,6 @@
       <aside class="app-sidebar ys-primary-sidebar">
         <nav class="product-nav" id="product-nav" aria-label="Yawn" hidden>
           <div class="sidebar-primary">
-            <button class="legacy-home-link ys-sidebar-row" id="home-link" type="button"><span>Home</span></button>
             <button class="ys-sidebar-row" id="meetings-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.25 4.25h11.5v10.5H3.25zM6 2.75v3M12 2.75v3M3.25 7.25h11.5" /></svg><span>Meetings</span><kbd class="nav-shortcut" aria-hidden="true">⌘1</kbd></button>
             <button class="ys-sidebar-row" id="find-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3.25 3.25" /></svg><span>Search</span><kbd class="nav-shortcut" aria-hidden="true">⌘2</kbd></button>
             <button class="prototype-only ys-sidebar-row" id="promises-link" type="button"><svg class="nav-icon ys-icon" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6" /><path d="m6.25 9 1.75 1.75 3.75-4" /></svg><span>Actions</span><span class="nav-trailing"><span class="nav-badge">Planned</span><kbd class="nav-shortcut" aria-hidden="true">⌘3</kbd></span></button>
@@ -194,7 +193,7 @@
             <dl class="state-preview-facts" id="state-preview-facts"></dl>
             <div class="screen-actions">
               <button class="primary" id="state-review-primary" type="button">Show ready state</button>
-              <button class="secondary" id="state-review-home" type="button">Return Home</button>
+              <button class="secondary" id="state-review-meetings" type="button">Return to Meetings</button>
             </div>
           </article>
         </div>
@@ -229,7 +228,7 @@
             <dl class="help-topic-facts" id="help-topic-facts"></dl>
             <div class="screen-actions">
               <button class="primary" id="help-topic-primary" type="button">Check recording setup</button>
-              <button class="secondary" id="help-home" type="button">Return Home</button>
+              <button class="secondary" id="help-meetings" type="button">Return to Meetings</button>
             </div>
           </article>
         </div>
@@ -821,61 +820,6 @@
         <div class="screen-actions transcript-exit-actions">
         <button class="secondary" id="new-meeting" type="button">Return to Meetings</button>
         </div>
-      </section>
-
-      <section class="screen home-screen" id="home-screen" aria-labelledby="home-title">
-        <div class="page-heading-row">
-          <div>
-            <p class="kicker">Your meeting memory</p>
-            <h1 id="home-title">Pick up where the meeting left off.</h1>
-            <p class="lede">Record locally, review what was captured, and carry the work forward without sending meeting content to a service.</p>
-          </div>
-          <span class="local-badge">On this Mac</span>
-        </div>
-
-        <section class="journey-grid" aria-label="Primary meeting journey">
-          <article class="journey-card current-capability">
-            <p class="label">1 · Capture</p>
-            <h2>Record a meeting</h2>
-            <p>Confirm consent and retention, then keep your own live notes while both sides are recorded.</p>
-            <button class="primary" id="home-record" type="button">Record a meeting</button>
-          </article>
-          <article class="journey-card current-capability">
-            <p class="label">2 · Remember</p>
-            <h2>Review or find what was said</h2>
-            <p>Open a retained transcript, search exact words, or describe the passage you remember.</p>
-            <div class="card-actions">
-              <button class="secondary" id="home-meetings" type="button">Browse meetings</button>
-              <button class="secondary" id="home-ask" type="button">Ask</button>
-            </div>
-          </article>
-          <article class="journey-card planned-capability">
-            <p class="label">3 · Follow through <span class="planned-tag">Planned</span></p>
-            <h2>Turn decisions into action</h2>
-            <p>Review evidence-linked actions across meetings, assign an owner, and mark the work open or done.</p>
-            <button class="secondary" id="home-actions" type="button">Preview Actions</button>
-          </article>
-        </section>
-
-        <section class="workspace-preview" aria-labelledby="workspace-preview-title">
-          <div>
-            <p class="label">Click-through shell</p>
-            <h2 id="workspace-preview-title">See the intended meeting workspace.</h2>
-            <p>Walk through Notes, Transcript, Actions, Evidence, and Details using clearly marked synthetic content. Nothing is saved.</p>
-          </div>
-          <button class="secondary" id="home-workspace-preview" type="button">Open example workspace</button>
-        </section>
-
-        <section class="upcoming-preview" aria-labelledby="upcoming-preview-title">
-          <div class="section-heading">
-            <div>
-              <p class="label">Before the meeting</p>
-              <h2 id="upcoming-preview-title">Preparation brief</h2>
-            </div>
-            <span class="planned-tag">Planned</span>
-          </div>
-          <p>A future calendar connection can place the next meeting, recent context, and unresolved actions here. No calendar is connected in this build.</p>
-        </section>
       </section>
 
       <section class="screen find-screen ys-search" id="find-screen" aria-labelledby="find-title">

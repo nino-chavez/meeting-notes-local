@@ -1,5 +1,4 @@
 export const PRODUCT_ROOT_SCREENS = Object.freeze([
-  "home-screen",
   "find-screen",
   "meetings-screen",
   "promises-screen",
@@ -59,7 +58,6 @@ export function headerActionPolicy(snapshot, {
   const actions = mutableActionPolicy(snapshot, { stopPending });
   const workflow = workflowReturnPolicy(snapshot);
   const recordActionScreens = [
-    "home-screen",
     "find-screen",
     "meetings-screen",
     "promises-screen",
@@ -378,8 +376,8 @@ export function shellStatePresentation(stateId) {
         ["Bundled files", "Checking", "No meeting can start yet"],
         ["Local worker", "Waiting", "Nothing has been sent anywhere"],
       ],
-      primaryLabel: "Show ready state",
-      primaryAction: "home",
+      primaryLabel: "Open Meetings",
+      primaryAction: "meetings",
     },
     empty: {
       id: "empty",
