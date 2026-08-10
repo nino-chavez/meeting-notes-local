@@ -151,18 +151,18 @@
       </aside>
 
       <main id="main-content" tabindex="-1">
-      <section class="screen active" id="startup-screen" aria-labelledby="startup-title">
+      <section class="screen active ys-capture-utility" id="startup-screen" aria-labelledby="startup-title">
         <p class="kicker">Nothing is recording</p>
         <h1 id="startup-title">Checking this installation.</h1>
         <p class="lede" id="startup-copy">The window opens before any audio or model process starts.</p>
-        <div class="status-card">
+        <div class="status-card ys-inline-notice" id="startup-status-card" data-tone="information" role="status">
           <div>
             <p class="label">Runtime status</p>
             <h2 id="runtime-status">Checking bundled files</h2>
           </div>
-          <span class="pill" id="runtime-pill">Checking</span>
+          <span class="ys-status" id="runtime-status-indicator" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span id="runtime-pill">Checking</span></span>
         </div>
-        <button class="secondary" id="retry-startup" type="button" hidden>Check again</button>
+        <button class="secondary ys-button" id="retry-startup" type="button" hidden>Check again</button>
       </section>
 
       <section class="screen state-review-screen" id="state-review-screen" aria-labelledby="state-review-title">
@@ -241,13 +241,13 @@
            gate, and offer-calendar crosses the supported envelope. Neither is
            stubbed here, because a step that asks a question the app cannot honour
            is worse than a step that does not exist. -->
-      <section class="screen first-run-screen" id="first-run-screen" data-step="welcome" aria-labelledby="first-run-title">
+      <section class="screen first-run-screen ys-capture-utility" id="first-run-screen" data-step="welcome" aria-labelledby="first-run-title">
         <div class="first-run-heading">
           <div>
             <p class="kicker">Setting up</p>
             <h1 id="first-run-title">Yawn records meetings on this Mac only.</h1>
           </div>
-          <button class="prototype-only secondary first-run-exit" id="first-run-exit" type="button">Exit setup</button>
+          <button class="prototype-only secondary ys-button first-run-exit" id="first-run-exit" type="button">Exit setup</button>
         </div>
         <ol class="prototype-only first-run-progress" aria-label="Setup progress">
           <li data-first-run-progress="welcome"><span>1</span><strong>Welcome</strong></li>
@@ -264,9 +264,9 @@
         <div class="first-run-step" data-step-panel="welcome">
           <p class="lede">Audio, transcripts and search stay on this machine. There is no account, no server, and nothing is uploaded.</p>
           <p>Two permissions are needed before a meeting can be recorded: your microphone, and the meeting audio your Mac plays. macOS asks for each one separately.</p>
-          <div class="screen-actions">
-            <button class="primary" id="first-run-begin" type="button">Continue</button>
-            <button class="prototype-only secondary" id="prototype-first-run-unavailable" type="button">Preview installation issue</button>
+          <div class="screen-actions ys-actions">
+            <button class="primary ys-button" data-variant="primary" id="first-run-begin" type="button">Continue</button>
+            <button class="prototype-only secondary ys-button" id="prototype-first-run-unavailable" type="button">Preview installation issue</button>
           </div>
         </div>
 
@@ -274,9 +274,9 @@
           <p class="lede">First, your microphone.</p>
           <p>This is the half of the meeting you speak. Without it a recording holds only the other people.</p>
           <p class="first-run-state" id="first-run-microphone-state" role="status"></p>
-          <div class="screen-actions">
-            <button class="primary" id="first-run-ask-microphone" type="button">Allow microphone</button>
-            <button class="prototype-only secondary" id="prototype-first-run-deny-microphone" type="button">Simulate earlier refusal</button>
+          <div class="screen-actions ys-actions">
+            <button class="primary ys-button" data-variant="primary" id="first-run-ask-microphone" type="button">Allow microphone</button>
+            <button class="prototype-only secondary ys-button" id="prototype-first-run-deny-microphone" type="button">Simulate earlier refusal</button>
           </div>
         </div>
 
@@ -285,9 +285,9 @@
           <p>This is the other people on the call. macOS calls it system audio recording.</p>
           <p class="footnote">There is no way to check this one without asking: macOS reports it only when a recording is actually attempted, so pressing the button below is the check.</p>
           <p class="first-run-state" id="first-run-system-audio-state" role="status"></p>
-          <div class="screen-actions">
-            <button class="primary" id="first-run-ask-system-audio" type="button">Allow system audio</button>
-            <button class="prototype-only secondary" id="prototype-first-run-deny-system-audio" type="button">Simulate unavailable prompt</button>
+          <div class="screen-actions ys-actions">
+            <button class="primary ys-button" data-variant="primary" id="first-run-ask-system-audio" type="button">Allow system audio</button>
+            <button class="prototype-only secondary ys-button" id="prototype-first-run-deny-system-audio" type="button">Simulate unavailable prompt</button>
           </div>
         </div>
 
@@ -297,12 +297,12 @@
           <p>Open System Settings, then Privacy &amp; Security, then <strong id="first-run-denied-pane">Microphone</strong>, and switch Yawn on. Then come back here and check again.</p>
           <p class="footnote">This screen does not open System Settings for you. Doing that would need a permission to launch other applications, which this window deliberately does not have.</p>
           <p class="first-run-state" id="first-run-denied-state" role="status"></p>
-          <div class="screen-actions">
-            <button class="primary" id="first-run-recheck" type="button">Check again</button>
+          <div class="screen-actions ys-actions">
+            <button class="primary ys-button" data-variant="primary" id="first-run-recheck" type="button">Check again</button>
             <!-- An exit is not optional. A setup screen whose only control retries a
                  thing the operator cannot fix from here is a lockout, and this one is
                  reachable on a first launch where nothing else has been seen yet. -->
-            <button class="secondary" id="first-run-leave-denied" type="button">Continue without recording</button>
+            <button class="secondary ys-button" id="first-run-leave-denied" type="button">Continue without recording</button>
           </div>
           <p class="footnote">Leaving opens the rest of the app. Recording will not work until the permission is granted, and it will say so when a meeting is started.</p>
         </div>
@@ -310,9 +310,9 @@
         <div class="first-run-step" data-step-panel="enrol-voice" hidden>
           <p class="lede">Both permissions are granted.</p>
           <p>Setting up a voice profile is what lets a transcript mark which speech was not yours. It is optional, and recording works without it.</p>
-          <div class="screen-actions">
-            <button class="primary" id="first-run-enrol" type="button">Set up voice</button>
-            <button class="secondary" id="first-run-skip-enrol" type="button">Skip for now</button>
+          <div class="screen-actions ys-actions">
+            <button class="primary ys-button" data-variant="primary" id="first-run-enrol" type="button">Set up voice</button>
+            <button class="secondary ys-button" id="first-run-skip-enrol" type="button">Skip for now</button>
           </div>
         </div>
 
@@ -329,8 +329,8 @@
             <span>A global default is still unbuilt. The next recording will ask again.</span>
           </div>
           <p class="first-run-state" id="first-run-ready-state" role="status"></p>
-          <div class="screen-actions">
-            <button class="primary" id="first-run-done" type="button">Done</button>
+          <div class="screen-actions ys-actions">
+            <button class="primary ys-button" data-variant="primary" id="first-run-done" type="button">Done</button>
           </div>
         </div>
 
@@ -341,9 +341,9 @@
                that was never the problem is the failure this panel prevents. -->
           <p>This is not the same as a permission being refused — nothing has been asked yet. The check itself is unavailable, which usually means the installed app is incomplete.</p>
           <p class="first-run-state" id="first-run-unavailable-state" role="status"></p>
-          <div class="screen-actions">
-            <button class="primary" id="first-run-retry-probe" type="button">Try again</button>
-            <button class="secondary" id="first-run-leave-unavailable" type="button">Continue without recording</button>
+          <div class="screen-actions ys-actions">
+            <button class="primary ys-button" data-variant="primary" id="first-run-retry-probe" type="button">Try again</button>
+            <button class="secondary ys-button" id="first-run-leave-unavailable" type="button">Continue without recording</button>
           </div>
           <p class="footnote">Leaving opens the rest of the app. Nothing here can repair an incomplete installation; reinstalling is what fixes it.</p>
         </div>
@@ -1312,20 +1312,24 @@
         <button class="secondary" id="library-transcript-back" type="button">Back</button>
       </section>
 
-      <section class="screen" id="start-meeting-error-screen" aria-labelledby="start-meeting-error-title">
+      <section class="screen ys-capture-utility" id="start-meeting-error-screen" aria-labelledby="start-meeting-error-title">
         <p class="kicker">Record a meeting</p>
         <h1 id="start-meeting-error-title">A new meeting was not opened.</h1>
         <p class="lede">The existing meeting must close cleanly before a new consent and retention review can begin.</p>
-        <div class="notice error" id="start-transition-error" role="alert"></div>
-        <button class="secondary" id="start-transition-back" type="button">Return to Meetings</button>
+        <div class="notice error ys-inline-notice" data-tone="error" id="start-transition-error" role="alert"></div>
+        <div class="screen-actions ys-actions">
+          <button class="secondary ys-button" id="start-transition-back" type="button">Return to Meetings</button>
+        </div>
       </section>
 
-      <section class="screen" id="error-screen" aria-labelledby="error-title">
+      <section class="screen ys-capture-utility" id="error-screen" aria-labelledby="error-title">
         <p class="kicker">Nothing is recording</p>
         <h1 id="error-title">This attempt did not complete.</h1>
         <p class="lede" id="error-copy">The app kept any recoverable local evidence and did not mark the meeting complete.</p>
-        <div class="notice error" id="error-detail"></div>
-        <button class="secondary" id="recover-button" type="button">Return to Meetings</button>
+        <div class="notice error ys-inline-notice" data-tone="error" id="error-detail"></div>
+        <div class="screen-actions ys-actions">
+          <button class="secondary ys-button" id="recover-button" type="button">Return to Meetings</button>
+        </div>
       </section>
       </main>
     </div>

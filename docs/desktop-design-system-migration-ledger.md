@@ -26,11 +26,11 @@ receipts to these migration rows. The current review run is recorded below; a
 
 The accepted surfaces resolve shared jobs through `ys-*` components. Legacy selectors remain only where an unmigrated screen or an explicit comparison mode still consumes them. They were not bulk-deleted because that would change inherited behavior outside DS-4.
 
-## Remaining production migrations
+## Remaining production migrations and installed evidence
 
 | Priority | Surface or state | Current owner | Required next evidence |
 |---|---|---|---|
-| 1 | Startup, installation check, first run, permission denied/unavailable, repair, fatal error | `startup-screen`, `first-run-screen`, `error-screen` and local startup styles | Installed cold launch, each permission branch, keyboard order, VoiceOver, recovery wording, minimum geometry |
+| 1 | Startup, installation check, first run, permission denied/unavailable, repair, fatal error | `ys-capture-utility`, `ys-status`, `ys-inline-notice`, `ys-actions`, and the existing state reducers | The shared operational utility now owns the bounded panel and its state/status/action grammar. Installed cold launch, each permission branch, keyboard order, VoiceOver, recovery wording, and minimum geometry remain open. |
 | 2 | Ask/Search and search results | `find-screen` and local search/result styles | Empty/query/results/error, result activation, return focus, retained-source truth |
 | 3 | Legacy Home review markup | hidden `home-screen` and local journey/card styles | Remove after the reference harness no longer depends on it. Do not restore Home as a production destination; Meetings is the root. |
 | 4 | Planned Actions prototype | hidden `promises-screen` and local action-table styles | Keep out of production navigation until product authority exists; then admit and migrate it or remove it. |

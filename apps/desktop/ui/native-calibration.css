@@ -909,6 +909,43 @@ html[data-native-calibration="split"] main > .screen.active .page-heading-row .l
   font-size: 14px;
   line-height: 1.5;
 }
+
+/* Startup, setup, and recoverable errors use the same bounded operational
+   utility as consent and capture. Their route may differ, but the operator's
+   job is equally narrow: understand the current state, then take one safe
+   next action without the primary-window navigation competing for attention. */
+html[data-production-system="desktop-v1"][data-native-calibration] main > :is(
+  #startup-screen,
+  #first-run-screen,
+  #start-meeting-error-screen,
+  #error-screen
+).ys-capture-utility.active {
+  width: min(34rem, calc(100% - 2rem));
+  min-height: auto;
+  margin: var(--ys-space-8) auto;
+  padding: var(--ys-space-8);
+  border: var(--ys-border-width) solid var(--ys-border-strong);
+  border-radius: var(--ys-radius-lg);
+  background: var(--ys-surface-content);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] :is(
+  #startup-screen,
+  #first-run-screen,
+  #start-meeting-error-screen,
+  #error-screen
+).ys-capture-utility .ys-inline-notice {
+  margin: 0;
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #startup-screen .status-card {
+  align-items: flex-start;
+  margin-top: var(--ys-space-7);
+}
+
+html[data-production-system="desktop-v1"][data-native-calibration] #first-run-screen .ys-actions {
+  justify-content: flex-start;
+}
 html[data-native-calibration="split"] .recording-screen > h1 {
   font-size: 40px;
   font-variant-numeric: tabular-nums;
@@ -1035,6 +1072,7 @@ html[data-native-calibration="split"] .preflight-summary h2 {
 html[data-native-calibration="split"] .preflight-summary { display: none; }
 
 html[data-native-calibration="split"]:is(
+  [data-screen="startup-screen"],
   [data-screen="first-run-screen"],
   [data-screen="idle-screen"],
   [data-screen="arming-screen"],
@@ -1047,6 +1085,7 @@ html[data-native-calibration="split"]:is(
   grid-template-columns: minmax(0, 1fr);
 }
 html[data-native-calibration="split"]:is(
+  [data-screen="startup-screen"],
   [data-screen="first-run-screen"],
   [data-screen="idle-screen"],
   [data-screen="arming-screen"],

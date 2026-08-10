@@ -239,6 +239,32 @@ test("native calibration keeps one status, adaptive semantic tokens, and quiet s
   assert.match(calibration, /\.claim-evidence[^}]*background: transparent;[^}]*text-decoration: underline;/s);
 });
 
+test("startup and recovery use the shared bounded operational utility", () => {
+  const html = readFileSync(join(here, "index.html"), "utf8");
+  const source = readFileSync(join(here, "main.js"), "utf8");
+  const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");
+
+  for (const id of ["startup-screen", "first-run-screen", "start-meeting-error-screen", "error-screen"]) {
+    const start = html.indexOf(`id="${id}"`);
+    assert.ok(start > 0, `${id} exists`);
+    const section = html.slice(Math.max(0, start - 160), start + 160);
+    assert.match(section, /ys-capture-utility/);
+  }
+  assert.match(html, /id="startup-status-card" data-tone="information" role="status"/);
+  assert.match(html, /class="ys-status" id="runtime-status-indicator" data-state="processing"/);
+  assert.match(html, /class="ys-status__mark" aria-hidden="true"/);
+  assert.match(html, /id="start-transition-error" role="alert"/);
+  assert.match(html, /id="error-detail"/);
+  assert.equal((html.match(/class="screen-actions ys-actions"/g) || []).length >= 7, true);
+  assert.match(source, /runtimeStatusIndicator\.dataset\.state = tone;/);
+  assert.match(source, /startupStatusCard\.dataset\.tone = tone;/);
+  assert.match(source, /startupCopy\.textContent = copy;/);
+  assert.match(source, /Check again to rerun the local startup check\./);
+  assert.match(calibration, /#startup-screen,[\s\S]*?#first-run-screen,[\s\S]*?#start-meeting-error-screen,[\s\S]*?#error-screen/);
+  assert.match(calibration, /\[data-screen="startup-screen"\],[\s\S]*?\[data-screen="first-run-screen"\]/);
+  assert.match(calibration, /#first-run-screen \.ys-actions\s*\{\s*justify-content: flex-start;/);
+});
+
 test("the production Library and selected meeting use one native split contract", () => {
   const html = readFileSync(join(here, "index.html"), "utf8");
   const calibration = readFileSync(join(here, "native-calibration.css"), "utf8");

@@ -86,6 +86,9 @@ const startError = document.querySelector("#start-error");
 const stopButton = document.querySelector("#stop-button");
 const stopError = document.querySelector("#stop-error");
 const retryStartup = document.querySelector("#retry-startup");
+const startupCopy = document.querySelector("#startup-copy");
+const startupStatusCard = document.querySelector("#startup-status-card");
+const runtimeStatusIndicator = document.querySelector("#runtime-status-indicator");
 const commandMenuTrigger = document.querySelector("#command-menu-trigger");
 const commandMenuBackdrop = document.querySelector("#command-menu-backdrop");
 const commandMenuClose = document.querySelector("#command-menu-close");
@@ -1383,17 +1386,55 @@ function corpusPrepareFailure(stop) {
 
 function renderStartup(state) {
   const labels = {
-    "shell-rendered": ["Opening the local shell", "Opening"],
-    checking: ["Checking bundled files", "Checking"],
-    "runtime-missing": ["This installation is incomplete", "Reinstall required"],
-    "service-timeout": ["The local worker did not answer", "Check again"],
-    "diagnostic-written": ["A private diagnostic was saved", "Needs attention"],
-    retrying: ["Checking bundled files again", "Checking"],
-    "reinstall-required": ["This installation must be repaired", "Reinstall required"],
+    "shell-rendered": {
+      heading: "Opening the local shell",
+      badge: "Opening",
+      tone: "processing",
+      copy: "The window opens before any audio or model process starts.",
+    },
+    checking: {
+      heading: "Checking bundled files",
+      badge: "Checking",
+      tone: "processing",
+      copy: "Recording stays unavailable until the local components answer.",
+    },
+    "runtime-missing": {
+      heading: "This installation is incomplete",
+      badge: "Reinstall required",
+      tone: "error",
+      copy: "A bundled local component is missing. Nothing is recording; restore this installation, then check again.",
+    },
+    "service-timeout": {
+      heading: "The local worker did not answer",
+      badge: "Check again",
+      tone: "warning",
+      copy: "Nothing is recording. Checking again reruns the local startup check without opening a meeting.",
+    },
+    "diagnostic-written": {
+      heading: "A private diagnostic was saved",
+      badge: "Needs attention",
+      tone: "error",
+      copy: "Yawn stopped before opening a meeting and did not mark anything complete. Check again to rerun the local startup check.",
+    },
+    retrying: {
+      heading: "Checking bundled files again",
+      badge: "Checking",
+      tone: "processing",
+      copy: "The same local installation is being checked again. Recording stays unavailable until it finishes.",
+    },
+    "reinstall-required": {
+      heading: "This installation must be repaired",
+      badge: "Reinstall required",
+      tone: "error",
+      copy: "The local check could not repair this installation. Reinstall Yawn, then open it again; nothing is recording.",
+    },
   };
-  const [heading, badge] = labels[state] || labels["diagnostic-written"];
+  const { heading, badge, tone, copy } = labels[state] || labels["diagnostic-written"];
   document.querySelector("#runtime-status").textContent = heading;
   document.querySelector("#runtime-pill").textContent = badge;
+  runtimeStatusIndicator.dataset.state = tone;
+  startupStatusCard.dataset.tone = tone;
+  startupCopy.textContent = copy;
   document.querySelector("#startup-title").textContent =
     state === "runtime-missing" || state === "reinstall-required"
       ? "This build cannot start a meeting."
