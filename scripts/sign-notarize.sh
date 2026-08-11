@@ -130,14 +130,14 @@ codesign --verify --deep --strict "$APP"
 # operator re-run signing and create duplicate Apple submissions. A real
 # runtime defect still fails after the bounded retries below.
 verified=0
-for attempt in 1 2 3; do
+for attempt in 1 2 3 4 5 6; do
   if "$ROOT/scripts/verify-release-bundle.py" "$APP" --signed --admission "$ADMISSION"; then
     verified=1
     break
   fi
-  if [[ "$attempt" -lt 3 ]]; then
-    echo "signed runtime is not ready for verification; retrying in 10 seconds"
-    sleep 10
+  if [[ "$attempt" -lt 6 ]]; then
+    echo "signed runtime is not ready for verification; retrying in 15 seconds"
+    sleep 15
   fi
 done
 [[ "$verified" == "1" ]] || die "signed app failed release verification"
