@@ -148,12 +148,13 @@ working public link.
 
 ## Push and hand off source
 
-Check `gh auth status` before a remote Git operation. If authentication is
-invalid, do not claim the branch was pushed, the pull request exists, or `main`
-contains the fix. Restore GitHub authentication, push the reviewed branch, and
-merge the exact source commit that produced the artifact. Keep release-document
-updates in a separate, clearly labeled commit when they are recorded after the
-artifact is made.
+Check the configured Git remote before pushing. Check `gh auth status` before
+creating or merging a pull request with the GitHub CLI. If either authentication
+path is invalid, do not claim the branch was pushed, the pull request exists, or
+`main` contains the fix. Restore the needed authentication, push the reviewed
+branch, and merge the exact source commit that produced the artifact. Keep
+release-document updates in a separate, clearly labeled commit when they are
+recorded after the artifact is made.
 
 ## Final receipt
 
