@@ -196,6 +196,7 @@ pub enum ProgressEvent {
 #[serde(rename_all = "kebab-case")]
 pub enum CaptureProgressState {
     Recording,
+    Transcribing,
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,15 +261,16 @@ impl RequestTracker {
         if self.last_terminal == Some(command.request_id) {
             return Err(ProtocolError::DuplicateRequest);
         }
-        let meeting_id = if command.operation == Operation::CaptureStart {
-            let value = command
-                .arguments
-                .get("meeting_id")
-                .and_then(Value::as_str)
-                .ok_or(ProtocolError::Malformed)?;
-            Some(Uuid::parse_str(value).map_err(|_| ProtocolError::Malformed)?)
-        } else {
-            None
+        let meeting_id = match command.operation {
+            Operation::CaptureStart | Operation::TranscriptCreate => {
+                let value = command
+                    .arguments
+                    .get("meeting_id")
+                    .and_then(Value::as_str)
+                    .ok_or(ProtocolError::Malformed)?;
+                Some(Uuid::parse_str(value).map_err(|_| ProtocolError::Malformed)?)
+            }
+            _ => None,
         };
         self.pending = Some(PendingRequest {
             request_id: command.request_id,
@@ -287,18 +289,27 @@ impl RequestTracker {
         if pending.request_id != progress.request_id {
             return Err(ProtocolError::UnknownRequest);
         }
-        if pending.operation != Operation::CaptureStart
-            || pending.meeting_id != Some(progress.meeting_id)
+        if pending.meeting_id != Some(progress.meeting_id)
             || progress.event != ProgressEvent::CaptureState
-            || progress.state != CaptureProgressState::Recording
         {
             return Err(ProtocolError::InvalidEvent);
         }
-        if pending.saw_recording {
-            return Err(ProtocolError::DuplicateProgress);
+        match pending.operation {
+            Operation::CaptureStart if progress.state == CaptureProgressState::Recording => {
+                if pending.saw_recording {
+                    return Err(ProtocolError::DuplicateProgress);
+                }
+                pending.saw_recording = true;
+                Ok(())
+            }
+            Operation::TranscriptCreate if progress.state == CaptureProgressState::Transcribing => {
+                // A transcription heartbeat confirms the worker still owns the
+                // request. It is intentionally repeatable and carries no
+                // fabricated completion estimate.
+                Ok(())
+            }
+            _ => Err(ProtocolError::InvalidEvent),
         }
-        pending.saw_recording = true;
-        Ok(())
     }
 
     pub fn terminal(&mut self, result: &WorkerResult) -> Result<(), ProtocolError> {
@@ -425,6 +436,39 @@ mod tests {
             tracker.progress(&progress),
             Err(ProtocolError::DuplicateProgress)
         );
+        tracker.terminal(&result).unwrap();
+    }
+
+    #[test]
+    fn transcription_heartbeats_are_repeatable_for_the_active_request() {
+        let request_id = Uuid::new_v4();
+        let meeting_id = Uuid::new_v4();
+        let command = WorkerCommand {
+            schema: "worker-command/2",
+            request_id,
+            operation: Operation::TranscriptCreate,
+            arguments: serde_json::json!({"meeting_id": meeting_id}),
+        };
+        let result = WorkerResult {
+            schema: ResultSchema::V2,
+            request_id,
+            ok: true,
+            code: None,
+            recoverable: None,
+            artifact_digests: HashMap::new(),
+        };
+        let heartbeat = WorkerProgress {
+            schema: WorkerEventSchema::V2,
+            request_id,
+            event: ProgressEvent::CaptureState,
+            state: CaptureProgressState::Transcribing,
+            meeting_id,
+        };
+
+        let mut tracker = RequestTracker::default();
+        tracker.register(&command).unwrap();
+        tracker.progress(&heartbeat).unwrap();
+        tracker.progress(&heartbeat).unwrap();
         tracker.terminal(&result).unwrap();
     }
 

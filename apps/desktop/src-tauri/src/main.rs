@@ -1,13 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-#![cfg_attr(feature = "library-dev-surface", allow(dead_code))]
-#![cfg_attr(feature = "ui-review-surface", allow(dead_code))]
 
-#[cfg(feature = "library-dev-surface")]
-mod library_dev_surface;
-#[cfg(feature = "settings-reference")]
-mod settings_reference;
-#[cfg(feature = "ui-review-surface")]
-mod ui_review_surface;
 // The library reader is intentionally private and unregistered.  It maps an
 // already-built projection into closed DTOs, but does not create storage or
 // provide a Tauri command.
@@ -71,7 +63,9 @@ use local_meeting_notes_session_core::meeting::{
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::profile_lifecycle::ProfileLifecycleError;
-use local_meeting_notes_session_core::protocol::{Operation, WorkerResult};
+use local_meeting_notes_session_core::protocol::{
+    CaptureProgressState, Operation, ProgressEvent, ProtocolError, WorkerProgress, WorkerResult,
+};
 use local_meeting_notes_session_core::recovery::{
     RecoveryCode, RecoveryDisposition, scan_and_recover,
 };
@@ -89,7 +83,7 @@ use local_meeting_notes_session_core::retention::{
 };
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::{
-    StorageRoot, create_private_dir, durable_create_new, durable_replace, sync_directory,
+    StorageRoot, create_private_dir, durable_create_new, sync_directory,
 };
 use local_meeting_notes_session_core::supervision::{
     OwnedChild, OwnershipReceipt, OwnershipSchema, ProcessIdentity, ProcessInspection,
@@ -118,11 +112,6 @@ const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 const SETTINGS_WINDOW_LABEL: &str = "settings";
-const DESKTOP_PREFERENCES_FILE: &str = "desktop-preferences.json";
-const LAYOUT_MENU_ID: &str = "view-layout";
-const LAYOUT_AUTOMATIC_MENU_ID: &str = "layout-automatic";
-const LAYOUT_FOCUS_MENU_ID: &str = "layout-focus";
-const LAYOUT_LIBRARY_MENU_ID: &str = "layout-library";
 #[cfg(feature = "preview-surface")]
 const ACTIVE_WINDOW_LABEL: &str = "preview";
 #[cfg(not(feature = "preview-surface"))]
@@ -141,7 +130,7 @@ fn show_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         SETTINGS_WINDOW_LABEL,
         WebviewUrl::App("settings.html".into()),
     )
-    .title("Capture — Yawn Settings")
+    .title("Yawn Settings")
     .inner_size(720.0, 560.0)
     .min_inner_size(720.0, 560.0)
     .max_inner_size(720.0, 560.0)
@@ -157,130 +146,6 @@ fn show_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 #[tauri::command]
 fn open_settings_window(app: AppHandle) -> Result<(), String> {
     show_settings_window(&app).map(|_| ()).map_err(|error| error.to_string())
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-enum DesktopLayout {
-    #[default]
-    Automatic,
-    Focus,
-    Library,
-}
-
-impl DesktopLayout {
-    fn value(self) -> &'static str {
-        match self {
-            Self::Automatic => "automatic",
-            Self::Focus => "focus",
-            Self::Library => "library",
-        }
-    }
-
-    fn from_value(value: &str) -> Option<Self> {
-        match value {
-            "automatic" => Some(Self::Automatic),
-            "focus" => Some(Self::Focus),
-            "library" => Some(Self::Library),
-            _ => None,
-        }
-    }
-
-    fn from_menu_id(value: &str) -> Option<Self> {
-        match value {
-            LAYOUT_AUTOMATIC_MENU_ID => Some(Self::Automatic),
-            LAYOUT_FOCUS_MENU_ID => Some(Self::Focus),
-            LAYOUT_LIBRARY_MENU_ID => Some(Self::Library),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DesktopPreferences {
-    layout: DesktopLayout,
-}
-
-fn desktop_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|path| path.join(DESKTOP_PREFERENCES_FILE))
-        .map_err(error_text)
-}
-
-fn read_desktop_layout(app: &AppHandle) -> DesktopLayout {
-    let Ok(path) = desktop_preferences_path(app) else {
-        return DesktopLayout::Automatic;
-    };
-    let Ok(bytes) = fs::read(path) else {
-        return DesktopLayout::Automatic;
-    };
-    if bytes.len() > 4 * 1024 {
-        return DesktopLayout::Automatic;
-    }
-    serde_json::from_slice::<DesktopPreferences>(&bytes)
-        .map(|preferences| preferences.layout)
-        .unwrap_or_default()
-}
-
-fn sync_desktop_layout_menu(app: &AppHandle, layout: DesktopLayout) {
-    let Some(menu) = app.menu() else {
-        return;
-    };
-    let Some(item) = menu.get(LAYOUT_MENU_ID) else {
-        return;
-    };
-    let Some(submenu) = item.as_submenu() else {
-        return;
-    };
-    for (id, candidate) in [
-        (LAYOUT_AUTOMATIC_MENU_ID, DesktopLayout::Automatic),
-        (LAYOUT_FOCUS_MENU_ID, DesktopLayout::Focus),
-        (LAYOUT_LIBRARY_MENU_ID, DesktopLayout::Library),
-    ] {
-        if let Some(item) = submenu.get(id).and_then(|item| item.as_check_menuitem().cloned()) {
-            let _ = item.set_checked(candidate == layout);
-        }
-    }
-}
-
-fn notify_desktop_layout(app: &AppHandle, layout: DesktopLayout) {
-    let payload = serde_json::to_string(layout.value()).unwrap_or_else(|_| "\"automatic\"".into());
-    let script = format!(
-        "window.dispatchEvent(new CustomEvent('yawn:desktop-layout-changed', {{ detail: {payload} }}));"
-    );
-    for label in [ACTIVE_WINDOW_LABEL, SETTINGS_WINDOW_LABEL] {
-        if let Some(window) = app.get_webview_window(label) {
-            let _ = window.eval(&script);
-        }
-    }
-}
-
-fn persist_desktop_layout(app: &AppHandle, layout: DesktopLayout) -> Result<(), String> {
-    let path = desktop_preferences_path(app)?;
-    let bytes = serde_json::to_vec_pretty(&DesktopPreferences { layout }).map_err(error_text)?;
-    durable_replace(&path, &bytes).map_err(error_text)
-}
-
-fn apply_desktop_layout(app: &AppHandle, layout: DesktopLayout) -> Result<(), String> {
-    persist_desktop_layout(app, layout)?;
-    sync_desktop_layout_menu(app, layout);
-    notify_desktop_layout(app, layout);
-    Ok(())
-}
-
-#[tauri::command]
-fn get_desktop_layout(app: AppHandle) -> String {
-    read_desktop_layout(&app).value().into()
-}
-
-#[tauri::command]
-fn set_desktop_layout(app: AppHandle, layout: String) -> Result<String, String> {
-    let layout = DesktopLayout::from_value(&layout)
-        .ok_or_else(|| "desktop layout must be automatic, focus, or library".to_string())?;
-    apply_desktop_layout(&app, layout)?;
-    Ok(layout.value().into())
 }
 
 struct ApplicationState {
@@ -301,6 +166,7 @@ struct ApplicationState {
     // itself (the owner-only flock), not this mutex.
     app_data_writer_lock: Arc<Mutex<Option<Arc<AppDataWriterLock>>>>,
     retention_started: AtomicBool,
+    permission_observation: Mutex<Option<first_run::FirstRunPermissions>>,
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
     preview_profile: Mutex<PreviewProfileSnapshot>,
     preview_enrollment: Mutex<PreviewEnrollmentSurface>,
@@ -318,6 +184,7 @@ impl Default for ApplicationState {
             command_lock: Mutex::new(()),
             app_data_writer_lock: Arc::new(Mutex::new(None)),
             retention_started: AtomicBool::new(false),
+            permission_observation: Mutex::new(None),
             preview_library: Mutex::new(None),
             preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
             preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
@@ -329,8 +196,11 @@ struct AppModel {
     reducer: Reducer,
     admission: String,
     retention_operational: bool,
+    startup_message: String,
     meeting_id: Option<String>,
     started_at_epoch_seconds: Option<u64>,
+    capture_state_started_at_epoch_seconds: Option<u64>,
+    transcription_last_worker_heartbeat_at_epoch_seconds: Option<u64>,
     degraded: bool,
     mic_state: Option<String>,
     system_state: Option<String>,
@@ -352,8 +222,11 @@ impl Default for AppModel {
             reducer: Reducer::default(),
             admission: "internal-alpha".into(),
             retention_operational: false,
+            startup_message: "Preparing your private workspace.".into(),
             meeting_id: None,
             started_at_epoch_seconds: None,
+            capture_state_started_at_epoch_seconds: None,
+            transcription_last_worker_heartbeat_at_epoch_seconds: None,
             degraded: false,
             mic_state: None,
             system_state: None,
@@ -371,9 +244,13 @@ impl AppModel {
             startup: self.reducer.startup(),
             admission: self.admission.clone(),
             retention_operational: self.retention_operational,
+            startup_message: self.startup_message.clone(),
             capture: self.reducer.capture(),
             meeting_id: self.meeting_id.clone(),
             started_at_epoch_seconds: self.started_at_epoch_seconds,
+            capture_state_started_at_epoch_seconds: self.capture_state_started_at_epoch_seconds,
+            transcription_last_worker_heartbeat_at_epoch_seconds: self
+                .transcription_last_worker_heartbeat_at_epoch_seconds,
             degraded: self.degraded,
             mic_state: self.mic_state.clone(),
             system_state: self.system_state.clone(),
@@ -387,6 +264,8 @@ impl AppModel {
     fn clear_meeting_projection(&mut self) {
         self.meeting_id = None;
         self.started_at_epoch_seconds = None;
+        self.capture_state_started_at_epoch_seconds = None;
+        self.transcription_last_worker_heartbeat_at_epoch_seconds = None;
         self.degraded = false;
         self.mic_state = None;
         self.system_state = None;
@@ -402,9 +281,12 @@ struct AppSnapshot {
     startup: StartupState,
     admission: String,
     retention_operational: bool,
+    startup_message: String,
     capture: CaptureState,
     meeting_id: Option<String>,
     started_at_epoch_seconds: Option<u64>,
+    capture_state_started_at_epoch_seconds: Option<u64>,
+    transcription_last_worker_heartbeat_at_epoch_seconds: Option<u64>,
     degraded: bool,
     mic_state: Option<String>,
     system_state: Option<String>,
@@ -714,6 +596,22 @@ fn with_preview_library_invalidated<T>(
 }
 
 impl ApplicationState {
+    fn remember_permissions(
+        &self,
+        received: first_run::FirstRunPermissions,
+    ) -> first_run::FirstRunPermissions {
+        if received.probe_unavailable {
+            return received;
+        }
+        let mut observation = self
+            .permission_observation
+            .lock()
+            .expect("permission observation lock");
+        let merged = first_run::merge_permissions(observation.as_ref(), received);
+        *observation = Some(merged.clone());
+        merged
+    }
+
     #[allow(dead_code)]
     fn manual_audio_deletion_facade(&self) -> manual_delete_facade::ManualAudioDeletionFacade<'_> {
         manual_delete_facade::ManualAudioDeletionFacade::new(&self.app_data_writer_lock)
@@ -1716,6 +1614,7 @@ fn spawn_tray_updater(app: AppHandle, tray: tauri::tray::TrayIcon) {
 
 fn prepare_startup_retry(model: &mut AppModel) -> Result<(), String> {
     transition_startup(model, StartupState::Retrying)?;
+    model.startup_message = "Restarting local checks.".into();
     if model.reducer.capture() == CaptureState::Idle {
         model.error = None;
     }
@@ -2270,18 +2169,18 @@ fn library_set_meeting_title(
 }
 
 #[tauri::command]
-fn preview_library_snapshot(
+fn library_snapshot(
     filter: Option<library_reader::LibraryFilterArgs>,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibrarySnapshot {
-    preview_library_snapshot_with(filter.unwrap_or_default(), &state)
+    library_snapshot_with(filter.unwrap_or_default(), &state)
 }
 
-fn preview_library_snapshot_for(state: &ApplicationState) -> library_reader::LibrarySnapshot {
-    preview_library_snapshot_with(library_reader::LibraryFilterArgs::default(), state)
+fn library_snapshot_for(state: &ApplicationState) -> library_reader::LibrarySnapshot {
+    library_snapshot_with(library_reader::LibraryFilterArgs::default(), state)
 }
 
-fn preview_library_snapshot_with(
+fn library_snapshot_with(
     filter: library_reader::LibraryFilterArgs,
     state: &ApplicationState,
 ) -> library_reader::LibrarySnapshot {
@@ -2380,21 +2279,27 @@ fn first_run_manifest_path(state: &ApplicationState) -> Option<std::path::PathBu
 // file has no precedent for the attribute.
 #[tauri::command(async)]
 fn first_run_permissions(state: State<'_, ApplicationState>) -> first_run::FirstRunPermissions {
-    first_run::permissions_status(&first_run_manifest_path(&state).unwrap_or_default())
+    state.remember_permissions(first_run::permissions_status(
+        &first_run_manifest_path(&state).unwrap_or_default(),
+    ))
 }
 
 #[tauri::command(async)]
 fn first_run_request_microphone(
     state: State<'_, ApplicationState>,
 ) -> first_run::FirstRunPermissions {
-    first_run::request_microphone(&first_run_manifest_path(&state).unwrap_or_default())
+    state.remember_permissions(first_run::request_microphone(
+        &first_run_manifest_path(&state).unwrap_or_default(),
+    ))
 }
 
 #[tauri::command(async)]
 fn first_run_request_system_audio(
     state: State<'_, ApplicationState>,
 ) -> first_run::FirstRunPermissions {
-    first_run::request_system_audio(&first_run_manifest_path(&state).unwrap_or_default())
+    state.remember_permissions(first_run::request_system_audio(
+        &first_run_manifest_path(&state).unwrap_or_default(),
+    ))
 }
 
 /// Rebuild the live model's transcript projection from storage.
@@ -3689,7 +3594,7 @@ fn preview_library_open_search_result(
 }
 
 #[tauri::command]
-fn preview_library_open_note(
+fn library_open_note(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibraryNoteResponse {
@@ -4044,7 +3949,7 @@ fn preview_library_open_evidence(
 }
 
 #[tauri::command]
-fn preview_library_open_transcript(
+fn library_open_transcript(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> PreviewLibraryTranscript {
@@ -4132,11 +4037,6 @@ fn load_bound_preview_transcript_projection(
     Ok((turns, warnings))
 }
 
-#[cfg(all(
-    not(feature = "library-dev-surface"),
-    not(feature = "settings-reference"),
-    not(feature = "ui-review-surface")
-))]
 fn main() {
     let state = ApplicationState::default();
     // Managed now so registering the facade commands later is one move; the
@@ -4175,8 +4075,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
             open_settings_window,
-            get_desktop_layout,
-            set_desktop_layout,
             start_meeting,
             stop_meeting,
             dismiss_meeting,
@@ -4184,37 +4082,14 @@ fn main() {
             first_run_permissions,
             first_run_request_microphone,
             first_run_request_system_audio,
-            refresh_current_transcript,
             operator_note,
             save_operator_note,
-            preview_library_snapshot,
-            preview_retention_overview,
-            preview_profile_snapshot,
-            preview_enrollment_surface,
-            preview_enrollment_start_sitting,
-            preview_enrollment_stop_sitting,
-            preview_enrollment_operating_points,
-            preview_enrollment_build_profile,
-            preview_profile_preserve_legacy,
-            preview_profile_reset,
-            preview_library_search,
-            preview_library_open_search_result,
-            preview_library_open_note,
-            preview_library_open_evidence,
-            preview_library_open_transcript,
-            preview_delete_meeting_audio,
-            preview_delete_meeting,
-            library_create_folder,
-            library_rename_folder,
-            library_delete_folder,
-            library_assign_meeting_folder,
-            library_set_meeting_title,
-            corpus_embed_pending,
-            corpus_search,
-            product_facade::restore_withheld_turn
+            library_snapshot,
+            library_open_note,
+            library_open_transcript,
+            preview_library_open_evidence
         ])
         .setup(|app| {
-            let desktop_layout = read_desktop_layout(app.handle());
             let settings = tauri::menu::MenuItemBuilder::with_id(
                 "open-settings",
                 "Settings…",
@@ -4232,43 +4107,11 @@ fn main() {
                 .separator()
                 .quit()
                 .build()?;
-            let automatic = tauri::menu::CheckMenuItemBuilder::with_id(
-                LAYOUT_AUTOMATIC_MENU_ID,
-                "Automatic",
-            )
-            .checked(desktop_layout == DesktopLayout::Automatic)
-            .build(app)?;
-            let focus = tauri::menu::CheckMenuItemBuilder::with_id(
-                LAYOUT_FOCUS_MENU_ID,
-                "Focus",
-            )
-            .checked(desktop_layout == DesktopLayout::Focus)
-            .build(app)?;
-            let library = tauri::menu::CheckMenuItemBuilder::with_id(
-                LAYOUT_LIBRARY_MENU_ID,
-                "Library",
-            )
-            .checked(desktop_layout == DesktopLayout::Library)
-            .build(app)?;
-            let layout_menu = tauri::menu::SubmenuBuilder::with_id(app, LAYOUT_MENU_ID, "Layout")
-                .item(&automatic)
-                .item(&focus)
-                .item(&library)
-                .build()?;
-            let view_menu = tauri::menu::SubmenuBuilder::new(app, "View")
-                .item(&layout_menu)
-                .fullscreen()
-                .build()?;
-            let menu = tauri::menu::MenuBuilder::new(app)
-                .item(&app_menu)
-                .item(&view_menu)
-                .build()?;
+            let menu = tauri::menu::MenuBuilder::new(app).item(&app_menu).build()?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
                 if event.id() == "open-settings" {
                     let _ = show_settings_window(app);
-                } else if let Some(layout) = DesktopLayout::from_menu_id(event.id().as_ref()) {
-                    let _ = apply_desktop_layout(app, layout);
                 }
             });
 
@@ -4308,21 +4151,6 @@ fn main() {
         .expect("Local Meeting Notes shell failed");
 }
 
-#[cfg(feature = "library-dev-surface")]
-fn main() {
-    library_dev_surface::run();
-}
-
-#[cfg(feature = "settings-reference")]
-fn main() {
-    settings_reference::run();
-}
-
-#[cfg(feature = "ui-review-surface")]
-fn main() {
-    ui_review_surface::run();
-}
-
 fn initialize_application(app: AppHandle, retry: bool) {
     let state = app.state::<ApplicationState>();
     if let Ok(mut profile) = state.preview_profile.lock() {
@@ -4331,6 +4159,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
     {
         let mut model = state.model.lock().expect("application model lock");
         model.retention_operational = false;
+        model.startup_message = "Checking your private workspace.".into();
         if !retry && transition_startup(&mut model, StartupState::Checking).is_err() {
             return;
         }
@@ -4365,12 +4194,8 @@ fn initialize_application(app: AppHandle, retry: bool) {
         finish_startup_failure(&state, retry, StartupFailure::Diagnostic, &error);
         return;
     }
-    #[cfg(target_os = "macos")]
-    if let Err(error) = reconcile_preview_profile_lifecycle(&state) {
-        finish_startup_failure(&state, retry, StartupFailure::Diagnostic, error);
-        return;
-    }
     *state.storage.lock().expect("storage context lock") = Some(storage_context.clone());
+    set_startup_message(&state, "Checking saved meetings on this Mac.");
 
     let coordination = match state.meeting_storage_coordination() {
         Ok(coordination) => coordination,
@@ -4487,6 +4312,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
     }
     start_retention_executor(&app, &storage_context);
 
+    set_startup_message(&state, "Verifying on-device speech models.");
     let manifest = match RuntimeManifest::load_and_verify(&storage_context.manifest_path) {
         Ok(manifest) if manifest.is_internal_alpha() => manifest,
         _ => {
@@ -4499,6 +4325,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
             return;
         }
     };
+    set_startup_message(&state, "Starting the local transcription engine.");
     let worker_path = storage_context.resource_root.join(&manifest.runtime.path);
     let mut command = Command::new(worker_path);
     command
@@ -4624,14 +4451,9 @@ fn initialize_application(app: AppHandle, retry: bool) {
     };
     *state.worker.lock().expect("worker process lock") = Some(worker);
     *state.runtime.lock().expect("runtime identity lock") = Some(runtime.clone());
-    // The startup profile reconcile ran before the runtime identity existed,
-    // so its snapshot could not name the manifest's encoder digest. Refresh
-    // once the digest is known; on failure the reconcile itself has already
-    // reset the cached snapshot to `unavailable`, which is the honest surface.
-    #[cfg(target_os = "macos")]
-    let _ = reconcile_preview_profile_lifecycle(&state);
     let mut model = state.model.lock().expect("application model lock");
     model.admission = runtime.admission;
+    model.startup_message = "Finishing your private workspace.".into();
     if let Some(projection) = restored_transcript
         && let Err(error) = apply_restored_transcript_projection(&mut model, projection)
     {
@@ -4641,6 +4463,8 @@ fn initialize_application(app: AppHandle, retry: bool) {
     }
     if let Err(error) = transition_startup(&mut model, StartupState::Ready) {
         model.error = Some(error);
+    } else {
+        model.startup_message = "Yawn is ready.".into();
     }
 }
 
@@ -4664,11 +4488,20 @@ fn finish_startup_failure(
         (true, StartupFailure::Diagnostic) => StartupState::DiagnosticWritten,
     };
     let mut model = state.model.lock().expect("application model lock");
+    model.startup_message = "Startup needs attention.".into();
     if transition_startup(&mut model, target).is_err() {
         model.error = Some("The installation check stopped in an invalid state.".into());
     } else {
         model.error = Some(detail.into());
     }
+}
+
+fn set_startup_message(state: &ApplicationState, message: &'static str) {
+    state
+        .model
+        .lock()
+        .expect("application model lock")
+        .startup_message = message.into();
 }
 
 fn create_storage_context(app: &AppHandle) -> Result<StorageContext, String> {
@@ -5634,15 +5467,39 @@ fn request_worker(
     arguments: Value,
     timeout: Duration,
 ) -> Result<HashMap<String, String>, WorkerCallError> {
-    use product_coordinator::WorkerPort;
     let port = product_coordinator::ProcessWorkerPort::new(state.worker.clone());
     let result: WorkerResult = port
-        .request(operation, arguments, timeout)
+        .request_with_progress(operation, arguments, timeout, |progress| {
+            record_transcription_heartbeat(state, progress)
+        })
         .map_err(|unavailable| WorkerCallError::Supervisor(unavailable.0))?;
     if !result.ok {
         return Err(WorkerCallError::Rejected);
     }
     Ok(result.artifact_digests)
+}
+
+fn record_transcription_heartbeat(
+    state: &ApplicationState,
+    progress: &WorkerProgress,
+) -> Result<(), ProtocolError> {
+    if progress.event != ProgressEvent::CaptureState
+        || progress.state != CaptureProgressState::Transcribing
+    {
+        return Err(ProtocolError::InvalidEvent);
+    }
+    let progress_meeting_id = progress.meeting_id.to_string();
+    let mut model = state
+        .model
+        .lock()
+        .map_err(|_| ProtocolError::InvalidEvent)?;
+    if model.reducer.capture() != CaptureState::Transcribing
+        || model.meeting_id.as_deref() != Some(progress_meeting_id.as_str())
+    {
+        return Err(ProtocolError::InvalidEvent);
+    }
+    model.transcription_last_worker_heartbeat_at_epoch_seconds = Some(now_epoch_seconds());
+    Ok(())
 }
 
 fn exact_digests(
@@ -5706,8 +5563,8 @@ fn verified_artifact(
 
 /// What the microphone gate did, as the capture recorded it.
 ///
-/// Read rather than discarded because two of these fields are obligations
-/// `docs/screens-and-states.md` places on this screen, and until 2026-08-05 the
+/// Read rather than discarded because two of these fields are operator-facing
+/// obligations, and until 2026-08-05 the
 /// whole block was parsed into `_voiceprint` and dropped. The gate could
 /// therefore delete a colleague's speech from a meeting that cannot be re-run
 /// and tell nobody: the alert's only route to a human ran through a note, and no
@@ -6131,6 +5988,23 @@ fn transition_capture(model: &mut AppModel, target: CaptureState) -> Result<(), 
         .begin(ExclusiveOperation::CaptureTransition)
         .map_err(error_text)?;
     let result = model.reducer.transition_capture(target).map_err(error_text);
+    if result.is_ok() {
+        model.transcription_last_worker_heartbeat_at_epoch_seconds = None;
+        model.capture_state_started_at_epoch_seconds = match target {
+            CaptureState::Arming
+            | CaptureState::Recording
+            | CaptureState::Stopping
+            | CaptureState::Captured
+            | CaptureState::Transcribing
+            | CaptureState::Summarizing => Some(now_epoch_seconds()),
+            CaptureState::Idle
+            | CaptureState::TranscriptReady
+            | CaptureState::Ready
+            | CaptureState::TranscriptionFailed
+            | CaptureState::SummaryFailed
+            | CaptureState::RecoveredInterrupted => None,
+        };
+    }
     model.reducer.finish(ExclusiveOperation::CaptureTransition);
     result
 }
@@ -7349,7 +7223,7 @@ mod tests {
             .is_err()
         );
 
-        let snapshot = preview_library_snapshot_for(&state);
+        let snapshot = library_snapshot_for(&state);
         let deletion = preview_delete_meeting_audio_for("synthetic-handle".into(), &state);
 
         assert_eq!(snapshot.state, "unavailable");
@@ -8346,6 +8220,65 @@ mod tests {
         model.clear_meeting_projection();
         assert!(model.snapshot().current_transcript_sha256.is_none());
         assert!(model.snapshot().turns.is_empty());
+    }
+
+    #[test]
+    fn snapshot_marks_when_an_active_capture_phase_began() {
+        let mut model = AppModel::default();
+        transition_capture(&mut model, CaptureState::Arming).unwrap();
+        assert!(
+            model
+                .snapshot()
+                .capture_state_started_at_epoch_seconds
+                .is_some()
+        );
+        assert!(
+            model
+                .snapshot()
+                .transcription_last_worker_heartbeat_at_epoch_seconds
+                .is_none()
+        );
+
+        transition_capture(&mut model, CaptureState::RecoveredInterrupted).unwrap();
+        assert!(
+            model
+                .snapshot()
+                .capture_state_started_at_epoch_seconds
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn transcription_heartbeat_marks_the_matching_active_meeting() {
+        let state = ApplicationState::default();
+        let meeting_id = Uuid::new_v4();
+        {
+            let mut model = state.model.lock().unwrap();
+            model.meeting_id = Some(meeting_id.to_string());
+            transition_capture(&mut model, CaptureState::Arming).unwrap();
+            transition_capture(&mut model, CaptureState::Recording).unwrap();
+            transition_capture(&mut model, CaptureState::Stopping).unwrap();
+            transition_capture(&mut model, CaptureState::Captured).unwrap();
+            transition_capture(&mut model, CaptureState::Transcribing).unwrap();
+        }
+        let heartbeat = WorkerProgress {
+            schema: local_meeting_notes_session_core::protocol::WorkerEventSchema::V2,
+            request_id: Uuid::new_v4(),
+            event: ProgressEvent::CaptureState,
+            state: CaptureProgressState::Transcribing,
+            meeting_id,
+        };
+
+        record_transcription_heartbeat(&state, &heartbeat).unwrap();
+        assert!(
+            state
+                .model
+                .lock()
+                .unwrap()
+                .snapshot()
+                .transcription_last_worker_heartbeat_at_epoch_seconds
+                .is_some()
+        );
     }
 
     fn view_current_transcript_resolves_with_restored_turn_visible() {

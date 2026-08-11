@@ -1006,8 +1006,8 @@ def drop_offprint(segs, mic, voiceprint, b, label, embed=None):
     **This returns a report as well as the segments**, which the other two filters
     do not, and the asymmetry is deliberate. `drop_unvoiced` discards
     confabulations and `drop_bled` discards the far end; neither is a person. This
-    one can discard a colleague, and `docs/screens-and-states.md` requires that
-    warning to survive to the post-meeting note rather than living only in a HUD
+    one can discard a colleague, and that warning must survive to the post-meeting
+    note rather than living only in a HUD
     nobody had open. A printed line does not survive a closed terminal, so
     printing was not enough: the counts, the close calls and the co-located alert
     go into `transcript.json` where the notes half can find them.
@@ -1917,8 +1917,7 @@ def voiceprint_provenance(voiceprint, outcome):
     a segment count, which meant the artifact recorded what the gate was *expected*
     to do — and it recorded nothing at all about what it actually did. Every
     rejection, every close call and the co-located-speaker alert were printed to a
-    terminal and then discarded, in direct contradiction of
-    `docs/screens-and-states.md`, which requires that alert to reach the note.
+    terminal and then discarded, even though that alert must reach the note.
 
     Several states rather than a boolean, because a reader six months later cannot
     otherwise tell "no profile was supplied" from "a profile was supplied and the

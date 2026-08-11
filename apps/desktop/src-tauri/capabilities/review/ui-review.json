@@ -1,8 +1,0 @@
-{
-  "$schema": "../../gen/schemas/desktop-schema.json",
-  "identifier": "ui-review-window",
-  "description": "The separately identified synthetic UI review window may move its native frame. It has no product, capture, permission, storage, filesystem, shell, process, dialog, or remote-origin authority.",
-  "windows": ["ui-review"],
-  "platforms": ["macOS"],
-  "permissions": ["core:window:allow-start-dragging"]
-}

@@ -16,87 +16,38 @@ pub fn merge_config(base: &mut Value, override_value: Value) {
     }
 }
 
-pub const DEV_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.library-dev";
-pub const DEV_WINDOW: &str = "library-dev";
-pub const DEV_CAPABILITY: &str = "library-dev-window";
-pub const DEV_FRONTEND: &str = "../library-dev-ui";
 pub const PREVIEW_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.preview";
 pub const PREVIEW_WINDOW: &str = "preview";
 pub const PREVIEW_CAPABILITY: &str = "preview-window";
 pub const PREVIEW_FRONTEND: &str = "../ui";
-pub const UI_REVIEW_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.ui-review";
-pub const UI_REVIEW_WINDOW: &str = "ui-review";
-pub const UI_REVIEW_CAPABILITY: &str = "ui-review-window";
-pub const UI_REVIEW_FRONTEND: &str = "../ui";
 pub const PRODUCTION_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes";
 pub const PRODUCTION_WINDOW: &str = "main";
 pub const PRODUCTION_CAPABILITY: &str = "main-window";
 pub const SETTINGS_CAPABILITY: &str = "settings-window";
 pub const PRODUCTION_FRONTEND: &str = "../ui";
+pub const CAPTURE_ENTITLEMENTS: &str = "capture-entitlements.plist";
 
-const PRODUCTION_COMMANDS: &[&str] = &[
+const PRODUCT_COMMANDS: &[&str] = &[
     "app_snapshot",
     "open_settings_window",
-    "get_desktop_layout",
-    "set_desktop_layout",
     "start_meeting",
     "stop_meeting",
     "dismiss_meeting",
     "retry_startup",
     "first_run_permissions",
-];
-
-const PREVIEW_COMMANDS: &[&str] = &[
-    "app_snapshot",
-    "open_settings_window",
-    "get_desktop_layout",
-    "set_desktop_layout",
-    "start_meeting",
-    "stop_meeting",
-    "dismiss_meeting",
-    "retry_startup",
-    "preview_profile_snapshot",
-    "preview_enrollment_surface",
-    "preview_enrollment_start_sitting",
-    "preview_enrollment_stop_sitting",
-    "preview_enrollment_operating_points",
-    "preview_enrollment_build_profile",
-    "preview_profile_preserve_legacy",
-    "preview_profile_reset",
-    "preview_library_snapshot",
-    "preview_retention_overview",
-    "preview_library_search",
-    "preview_library_open_search_result",
-    "preview_library_open_note",
-    "preview_library_open_evidence",
-    "preview_library_open_transcript",
-    "preview_delete_meeting_audio",
-    "preview_delete_meeting",
-    "library_create_folder",
-    "library_rename_folder",
-    "library_delete_folder",
-    "library_assign_meeting_folder",
-    "library_set_meeting_title",
-    "restore_withheld_turn",
-    "refresh_current_transcript",
-    // § D, 2026-08-06. The operator's own note: read and replace, for the open
-    // meeting only. Neither command takes a meeting identifier.
+    "first_run_request_microphone",
+    "first_run_request_system_audio",
+    "library_snapshot",
+    "library_open_note",
+    "library_open_transcript",
     "operator_note",
     "save_operator_note",
-    // § D2, 2026-08-09. Meaning search and the pass that prepares it. Both
-    // reach the worker; neither takes or returns a meeting identifier the
-    // caller did not already hold, and `corpus_search` answers with passages
-    // from meetings this projection can already open.
-    "corpus_search",
-    "corpus_embed_pending",
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildMode {
     Production,
-    Development,
     Preview,
-    UiReview,
 }
 
 pub struct BuildPlan {
@@ -106,43 +57,20 @@ pub struct BuildPlan {
 }
 
 impl BuildMode {
-    pub fn from_enabled_features(
-        library_development: bool,
-        preview: bool,
-        ui_review: bool,
-    ) -> Result<Self, &'static str> {
-        match (library_development, preview, ui_review) {
-            (false, false, false) => Ok(Self::Production),
-            (true, false, false) => Ok(Self::Development),
-            (false, true, false) => Ok(Self::Preview),
-            (false, false, true) => Ok(Self::UiReview),
-            _ => Err("development, preview, and UI review are isolated build lanes"),
+    pub fn from_enabled_features(preview: bool) -> Self {
+        if preview {
+            Self::Preview
+        } else {
+            Self::Production
         }
     }
 }
 
-pub fn plan(mode: BuildMode) -> BuildPlan {
-    match mode {
-        BuildMode::Production => BuildPlan {
-            commands: PRODUCTION_COMMANDS,
-            capabilities_path: "capabilities/product/*.json",
-            permissions_path: "permissions/production/**/*",
-        },
-        BuildMode::Development => BuildPlan {
-            commands: &[],
-            capabilities_path: "capabilities/development/library-dev.json",
-            permissions_path: "permissions/development/**/*",
-        },
-        BuildMode::Preview => BuildPlan {
-            commands: PREVIEW_COMMANDS,
-            capabilities_path: "capabilities/product/*.json",
-            permissions_path: "permissions/production/**/*",
-        },
-        BuildMode::UiReview => BuildPlan {
-            commands: &[],
-            capabilities_path: "capabilities/review/*.json",
-            permissions_path: "permissions/production/**/*",
-        },
+pub fn plan(_: BuildMode) -> BuildPlan {
+    BuildPlan {
+        commands: PRODUCT_COMMANDS,
+        capabilities_path: "capabilities/product/*.json",
+        permissions_path: "permissions/production/**/*",
     }
 }
 
@@ -150,66 +78,23 @@ pub fn validate(mode: BuildMode, config: &Value) -> Result<(), &'static str> {
     match mode {
         BuildMode::Production if is_production_config(config) => Ok(()),
         BuildMode::Production => Err(
-            "the bundled shell requires the frozen production identifier, frontend, sole main window/capability, ad-hoc signing, and runtime resource contract",
-        ),
-        BuildMode::Development if is_development_config(config) => Ok(()),
-        BuildMode::Development => Err(
-            "library-dev-surface requires tauri.library-dev.conf.json with the isolated identifier, frontend, sole window/capability, and no-bundle resources",
+            "the bundled shell requires the production identifier, product frontend, main and Settings capabilities, ad-hoc signing, and local runtime resources",
         ),
         BuildMode::Preview if is_preview_config(config) => Ok(()),
         BuildMode::Preview => Err(
-            "preview-surface requires tauri.preview.conf.json with its isolated identifier, product frontend, sole window/capability, ad-hoc signing, and the admitted runtime resource contract",
-        ),
-        BuildMode::UiReview if is_ui_review_config(config) => Ok(()),
-        BuildMode::UiReview => Err(
-            "ui-review-surface requires tauri.ui-review.conf.json with its isolated identifier, synthetic URL, sole narrow capability, ad-hoc signing, and no runtime resources",
+            "preview-surface requires the preview identifier, product frontend, product capabilities, ad-hoc signing, and the local runtime resource contract",
         ),
     }
 }
 
-fn is_ui_review_config(config: &Value) -> bool {
-    config.get("productName").and_then(Value::as_str) == Some("Yawn UI Review")
-        && config.get("identifier").and_then(Value::as_str) == Some(UI_REVIEW_IDENTIFIER)
-        && config
-            .pointer("/build/frontendDist")
-            .and_then(Value::as_str)
-            == Some(UI_REVIEW_FRONTEND)
-        && has_single_window(
-            config.pointer("/app/windows"),
-            UI_REVIEW_WINDOW,
-            "Yawn UI Review — Synthetic",
-        )
-        && config.pointer("/app/windows/0/url").and_then(Value::as_str)
-            == Some("index.html?review=synthetic")
-        && has_single_string(
-            config.pointer("/app/security/capabilities"),
-            UI_REVIEW_CAPABILITY,
-        )
-        && config.pointer("/bundle/active").and_then(Value::as_bool) == Some(true)
-        && config
-            .pointer("/bundle/resources")
-            .is_some_and(Value::is_null)
-        && config
-            .pointer("/bundle/macOS/minimumSystemVersion")
-            .and_then(Value::as_str)
-            == Some("14.4")
-        && config
-            .pointer("/bundle/macOS/signingIdentity")
-            .and_then(Value::as_str)
-            == Some("-")
-}
-
 fn is_preview_config(config: &Value) -> bool {
-    config.get("productName").and_then(Value::as_str) == Some("Local Meeting Notes Preview")
+    config.get("productName").and_then(Value::as_str) == Some("Yawn Preview")
         && config.get("identifier").and_then(Value::as_str) == Some(PREVIEW_IDENTIFIER)
-        && config
-            .pointer("/build/frontendDist")
-            .and_then(Value::as_str)
-            == Some(PREVIEW_FRONTEND)
+        && config.pointer("/build/frontendDist").and_then(Value::as_str) == Some(PREVIEW_FRONTEND)
         && has_single_window(
             config.pointer("/app/windows"),
             PREVIEW_WINDOW,
-            "Local Meeting Notes — Preview",
+            "Yawn — Preview",
         )
         && has_exact_strings(
             config.pointer("/app/security/capabilities"),
@@ -225,15 +110,16 @@ fn is_preview_config(config: &Value) -> bool {
             .pointer("/bundle/macOS/signingIdentity")
             .and_then(Value::as_str)
             == Some("-")
+        && config
+            .pointer("/bundle/macOS/entitlements")
+            .and_then(Value::as_str)
+            == Some(CAPTURE_ENTITLEMENTS)
 }
 
 fn is_production_config(config: &Value) -> bool {
     config.get("productName").and_then(Value::as_str) == Some("Yawn")
         && config.get("identifier").and_then(Value::as_str) == Some(PRODUCTION_IDENTIFIER)
-        && config
-            .pointer("/build/frontendDist")
-            .and_then(Value::as_str)
-            == Some(PRODUCTION_FRONTEND)
+        && config.pointer("/build/frontendDist").and_then(Value::as_str) == Some(PRODUCTION_FRONTEND)
         && has_single_window(config.pointer("/app/windows"), PRODUCTION_WINDOW, "Yawn")
         && has_exact_strings(
             config.pointer("/app/security/capabilities"),
@@ -249,26 +135,10 @@ fn is_production_config(config: &Value) -> bool {
             .pointer("/bundle/macOS/signingIdentity")
             .and_then(Value::as_str)
             == Some("-")
-}
-
-fn is_development_config(config: &Value) -> bool {
-    config.get("productName").and_then(Value::as_str)
-        == Some("Local Meeting Notes Library Development Surface")
-        && config.get("identifier").and_then(Value::as_str) == Some(DEV_IDENTIFIER)
         && config
-            .pointer("/build/frontendDist")
+            .pointer("/bundle/macOS/entitlements")
             .and_then(Value::as_str)
-            == Some(DEV_FRONTEND)
-        && has_single_window(
-            config.pointer("/app/windows"),
-            DEV_WINDOW,
-            "Local Meeting Notes — Library Development Surface",
-        )
-        && has_single_string(config.pointer("/app/security/capabilities"), DEV_CAPABILITY)
-        && config.pointer("/bundle/active").and_then(Value::as_bool) == Some(false)
-        && config
-            .pointer("/bundle/resources")
-            .is_some_and(Value::is_null)
+            == Some(CAPTURE_ENTITLEMENTS)
 }
 
 fn has_single_window(value: Option<&Value>, expected_label: &str, expected_title: &str) -> bool {
@@ -277,12 +147,6 @@ fn has_single_window(value: Option<&Value>, expected_label: &str, expected_title
             && windows[0].get("label").and_then(Value::as_str) == Some(expected_label)
             && windows[0].get("title").and_then(Value::as_str) == Some(expected_title)
     })
-}
-
-fn has_single_string(value: Option<&Value>, expected: &str) -> bool {
-    value
-        .and_then(Value::as_array)
-        .is_some_and(|entries| entries.len() == 1 && entries[0].as_str() == Some(expected))
 }
 
 fn has_exact_strings(value: Option<&Value>, expected: &[&str]) -> bool {

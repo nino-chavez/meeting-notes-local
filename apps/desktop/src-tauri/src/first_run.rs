@@ -1,16 +1,16 @@
 //! First run's permission surface (§ H): report the two capture permissions, and
 //! ask for them, without ever claiming a state that was not measured.
 //!
-//! The measurement itself lives in `capture/permission-probe`, a separate signed
-//! binary — see its README for why the two permissions are not symmetric and why
-//! system audio has no check-without-asking mode. This module is the boundary
-//! between that binary and the shell: it resolves the probe through the runtime
-//! manifest so an unverified one is never spawned, runs exactly one mode, and
-//! parses the result as untrusted input.
+//! An internal-alpha build measures through its signed `meeting-capture` helper,
+//! because that is the executable that later starts audio. Other admissions use
+//! the standalone permission probe because they do not ship the recorder. This
+//! module resolves the right requester through the runtime manifest so an
+//! unverified one is never spawned, runs exactly one mode, and parses the result
+//! as untrusted input.
 //!
-//! **The probe's stdout is untrusted.** It is a child process reading platform
-//! state, and `screens-and-states.md § Rendered transcript text is untrusted
-//! input` applies to it as much as to a transcript. Every field is matched against
+//! **The requester's stdout is untrusted.** It is a child process reading platform
+//! state, and rendered transcript text is untrusted input just as this requester
+//! output is. Every field is matched against
 //! a closed set here; an unrecognised value becomes `Unknown` rather than being
 //! passed through to a surface that would render it. The shell therefore cannot be
 //! made to display a string the probe invented.
@@ -21,7 +21,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use local_meeting_notes_session_core::runtime::RuntimeManifest;
+use local_meeting_notes_session_core::runtime::{PermissionRequester, RuntimeManifest};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -124,23 +124,67 @@ impl FirstRunPermissions {
     }
 }
 
-/// One probe run, or `None` if anything at all went wrong.
+/// Combines one fresh, bounded permission observation with the last observation
+/// made by this running app. System-audio status is deliberately `Unmeasured` on
+/// a non-prompting check, so that value must not erase an authorization that the
+/// Settings window just measured by creating its one private tap.
+///
+/// This is process-local rather than persisted. A fresh app process has no right
+/// to claim system-audio access until the operator asks it to check again.
+pub(crate) fn merge_permissions(
+    previous: Option<&FirstRunPermissions>,
+    received: FirstRunPermissions,
+) -> FirstRunPermissions {
+    if received.probe_unavailable {
+        return received;
+    }
+    let microphone = match (received.microphone, previous.map(|value| value.microphone)) {
+        (MicrophonePermission::Unmeasured, Some(previous)) => previous,
+        (received, _) => received,
+    };
+    let system_audio = match (
+        received.system_audio,
+        previous.map(|value| value.system_audio),
+    ) {
+        (SystemAudioPermission::Unmeasured, Some(previous)) => previous,
+        (received, _) => received,
+    };
+    FirstRunPermissions {
+        microphone,
+        system_audio,
+        probe_unavailable: false,
+        prompted: received.prompted,
+    }
+}
+
+/// One verified permission-requester run, or `None` if anything went wrong.
 ///
 /// A non-zero exit is not automatically a failure: the probe exits 0 for a denied
 /// permission because a denial is an answer. Exit 2 means it could not answer, and
 /// that is the only status treated as unavailable.
-fn run_probe(manifest_path: &PathBuf, mode: &str) -> Option<Value> {
-    let probe = RuntimeManifest::verified_permission_probe(manifest_path).ok()?;
-    let output = Command::new(probe).arg(mode).output().ok()?;
+fn run_permission_requester(manifest_path: &PathBuf, mode: &str) -> Option<Value> {
+    let requester = RuntimeManifest::verified_permission_requester(manifest_path).ok()?;
+    let mut command = match requester {
+        PermissionRequester::CaptureHelper(path) => {
+            let mut command = Command::new(path);
+            command.arg("--permission-preflight").arg(mode);
+            command
+        }
+        PermissionRequester::StandaloneProbe(path) => {
+            let mut command = Command::new(path);
+            command.arg(mode);
+            command
+        }
+    };
+    let output = command.output().ok()?;
     if output.status.code() != Some(0) {
         return None;
     }
-    // Bounded by construction rather than by measurement: the probe caps its own
-    // microphone wait at 120 s and the tap create returns immediately, so this
-    // cannot block a command thread forever. Stated from the probe's source — as of
-    // 2026-08-06 neither request mode has been executed in any context, because
-    // running one outside the signed bundle mutates the calling app's TCC state and
-    // answers about the wrong binary. Only `status` has been exercised.
+    // Bounded by construction rather than by measurement: either requester caps
+    // its microphone wait at 120 s and the system-audio setup returns promptly.
+    // The internal-alpha path is deliberately the capture helper itself: a
+    // separate requester can clear its own TCC state while leaving the recorder to
+    // raise a second prompt after the operator has already confirmed the meeting.
     let parsed: Value = serde_json::from_slice(&output.stdout).ok()?;
     if parsed.get("schema").and_then(Value::as_str) != Some("permission-probe/1") {
         return None;
@@ -153,7 +197,7 @@ fn read(parsed: &Value, key: &str) -> Option<String> {
 }
 
 pub fn permissions_status(manifest_path: &PathBuf) -> FirstRunPermissions {
-    let Some(parsed) = run_probe(manifest_path, "status") else {
+    let Some(parsed) = run_permission_requester(manifest_path, "status") else {
         return FirstRunPermissions::unavailable();
     };
     FirstRunPermissions {
@@ -165,7 +209,7 @@ pub fn permissions_status(manifest_path: &PathBuf) -> FirstRunPermissions {
 }
 
 pub fn request_microphone(manifest_path: &PathBuf) -> FirstRunPermissions {
-    let Some(parsed) = run_probe(manifest_path, "request-microphone") else {
+    let Some(parsed) = run_permission_requester(manifest_path, "request-microphone") else {
         return FirstRunPermissions::unavailable();
     };
     FirstRunPermissions {
@@ -182,7 +226,7 @@ pub fn request_microphone(manifest_path: &PathBuf) -> FirstRunPermissions {
 }
 
 pub fn request_system_audio(manifest_path: &PathBuf) -> FirstRunPermissions {
-    let Some(parsed) = run_probe(manifest_path, "request-system-audio") else {
+    let Some(parsed) = run_permission_requester(manifest_path, "request-system-audio") else {
         return FirstRunPermissions::unavailable();
     };
     FirstRunPermissions {
@@ -271,6 +315,48 @@ mod tests {
         assert_eq!(
             MicrophonePermission::parse(Some("unmeasured")),
             MicrophonePermission::Unknown
+        );
+    }
+
+    #[test]
+    fn a_status_check_keeps_the_system_audio_result_measured_in_settings() {
+        let initial = FirstRunPermissions {
+            microphone: MicrophonePermission::Authorized,
+            system_audio: SystemAudioPermission::Unmeasured,
+            probe_unavailable: false,
+            prompted: false,
+        };
+        let system_audio_request = merge_permissions(
+            Some(&initial),
+            FirstRunPermissions {
+                microphone: MicrophonePermission::Unmeasured,
+                system_audio: SystemAudioPermission::Authorized,
+                probe_unavailable: false,
+                prompted: false,
+            },
+        );
+        assert_eq!(
+            system_audio_request.microphone,
+            MicrophonePermission::Authorized
+        );
+        assert_eq!(
+            system_audio_request.system_audio,
+            SystemAudioPermission::Authorized
+        );
+
+        let parent_status = merge_permissions(
+            Some(&system_audio_request),
+            FirstRunPermissions {
+                microphone: MicrophonePermission::Authorized,
+                system_audio: SystemAudioPermission::Unmeasured,
+                probe_unavailable: false,
+                prompted: false,
+            },
+        );
+        assert_eq!(parent_status.microphone, MicrophonePermission::Authorized);
+        assert_eq!(
+            parent_status.system_audio,
+            SystemAudioPermission::Authorized
         );
     }
 

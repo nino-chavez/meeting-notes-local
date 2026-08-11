@@ -99,9 +99,8 @@ notes came out **at full coverage** — 4/5 topics, same as the clean run, with 
 correct and complete decision list. Summarization is compression, and the first
 thing compression discards is repetition.
 
-That means the `bleed-detected` state in
-[`docs/screens-and-states.md`](../docs/screens-and-states.md) should degrade
-**attribution only**, not the whole artifact. The honest product behaviour on
+That means a `bleed-detected` result should degrade **attribution only**, not
+the whole artifact. The honest product behaviour on
 speakers is a complete set of notes with no speaker labels — not a warning
 banner over a degraded one, and not a refusal.
 
@@ -1034,8 +1033,8 @@ ACTION or QUESTION; the consolidator turns the label into a markdown heading; by
 a `note/1` artifact existed the label survived only as *which section a claim sat under*.
 Every claim now carries `type`, recovered from its heading, with an unrecognised heading
 keeping its own words rather than being forced into one of the three. Nothing new is
-asked of the model — this is a discard that stopped. `docs/journeys.md` records the three
-candidate structures and why sections became a rendering.
+asked of the model — this is a discard that stopped. Sections are a rendering of
+typed claims, not a model decision.
 
 ---
 
@@ -1109,8 +1108,8 @@ format author were the same person.
 
 **Sample is 19 entries across 3 meetings and one judge.** It bounds a claim about this
 taxonomy; it does not establish a rate. What it is sufficient for is the conclusion
-`docs/journeys.md` draws — that a section named Decisions collects things the meeting did
-not decide — and that conclusion no longer rests on a reading.
+that a section named Decisions can collect things the meeting did not decide —
+and that conclusion no longer rests on a reading.
 
 ---
 

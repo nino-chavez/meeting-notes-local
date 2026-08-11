@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Give the locally packaged Preview the same microphone entitlement boundary as
-# the installed alpha, without notarizing or promoting it as a release.
+# Give a locally packaged capture app the same microphone entitlement boundary
+# as the installed alpha, without notarizing or promoting it as a release. The
+# historical LMN_PREVIEW_APP override remains accepted for existing callers.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="${LMN_PREVIEW_APP:-$ROOT/target/release/bundle/macos/Local Meeting Notes Preview.app}"
+APP="${LMN_BUNDLE_APP:-${LMN_PREVIEW_APP:-$ROOT/target/release/bundle/macos/Yawn Preview.app}}"
 RESOURCES="$APP/Contents/Resources"
 MAIN="$APP/Contents/MacOS/local-meeting-notes-desktop"
 CAPTURE="$RESOURCES/bin/meeting-capture"

@@ -142,7 +142,12 @@ def main() -> int:
     elapsed = time.monotonic() - t0
 
     turns = [
-        {"start": round(s["start"], 2), "speaker": None, "text": s["text"].strip()}
+        {
+            "start": round(s["start"], 2),
+            "end": round(s["end"], 2),
+            "speaker": None,
+            "text": s["text"].strip(),
+        }
         for s in result.get("segments", [])
         if s.get("text", "").strip()
     ]

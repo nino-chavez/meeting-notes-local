@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
 import wave
@@ -163,9 +164,19 @@ class WorkerProcess:
         }
         self.process.stdin.write(json.dumps(command) + "\n")
         self.process.stdin.flush()
-        result = json.loads(self.process.stdout.readline())
-        self.assert_result_id(result, request_id)
-        return result
+        while True:
+            result = json.loads(self.process.stdout.readline())
+            if result.get("schema") == "worker-result/2":
+                self.assert_result_id(result, request_id)
+                return result
+            if (
+                result.get("schema") != "worker-event/2"
+                or result.get("event") != "capture.state"
+                or result.get("request_id") != request_id
+                or result.get("meeting_id") != arguments.get("meeting_id")
+                or result.get("state") not in {"recording", "transcribing"}
+            ):
+                raise AssertionError("worker emitted an unexpected protocol frame")
 
     @staticmethod
     def assert_result_id(result: dict, request_id: str) -> None:
@@ -790,8 +801,48 @@ while True:
                 "meeting_id": meeting_id,
             },
         )
+        output = io.StringIO()
+        with mock.patch("worker.main.sys.stdout", output):
+            emit_progress(request_id, meeting_id, "transcribing")
+        self.assertEqual(json.loads(output.getvalue())["state"], "transcribing")
         with self.assertRaises(ValueError):
             emit_progress(request_id, meeting_id, "arming")
+
+    def test_transcription_heartbeat_uses_the_protocol_stream(self) -> None:
+        from worker.main import start_transcription_heartbeat
+
+        request_id = str(uuid.uuid4())
+        meeting_id = str(uuid.uuid4())
+        protocol = io.StringIO()
+        with mock.patch("worker.main.TRANSCRIPTION_HEARTBEAT_SECONDS", 0.01):
+            heartbeat = start_transcription_heartbeat(
+                request_id,
+                "transcript.create",
+                {"meeting_id": meeting_id},
+                protocol_output=protocol,
+            )
+            self.assertIsNotNone(heartbeat)
+            stopped, thread = heartbeat
+            try:
+                for _ in range(100):
+                    if protocol.getvalue():
+                        break
+                    threading.Event().wait(0.01)
+                self.assertTrue(protocol.getvalue())
+            finally:
+                stopped.set()
+                thread.join()
+
+        self.assertEqual(
+            json.loads(protocol.getvalue().splitlines()[0]),
+            {
+                "schema": "worker-event/2",
+                "request_id": request_id,
+                "event": "capture.state",
+                "state": "transcribing",
+                "meeting_id": meeting_id,
+            },
+        )
 
     def test_operation_stdout_cannot_enter_protocol(self) -> None:
         from worker.main import dispatch_without_protocol_output

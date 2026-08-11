@@ -182,7 +182,7 @@ not make a product-readiness claim.
 
 **Registered before any install, download, or inference call.** Nothing in this
 section reports a result. This is the single bounded decoding repair
-`docs/vertical-slice.md` wave D requires before any new model search, and it is
+requires before any new model search, and it is
 registered rather than run first because the measurement protocol above states
 "no schema-constraining decoder" in as many words. That sentence is what is
 being amended, and amending it silently would make every later number
@@ -929,7 +929,7 @@ same message, should not move a token-level copy preference much.
 
 It would authorize running the second intervention against a harness that no longer
 grades unstated rules. It would **not** admit a note generator, wire anything into
-Preview, or satisfy the human semantic gate in `vertical-slice.md` wave D. Those are
+Preview, or satisfy the human semantic gate. Those are
 unchanged and unaffected by anything in this amendment.
 
 ### Result — 2026-08-06 — the defect is closed and the measurement got worse
@@ -1398,7 +1398,7 @@ compares a claim's polarity to its evidence's.
 
 **So the identifier fix must not ship alone.** The next intervention registered
 in this file is the fourth attempt at the identifier truncation, and
-`vertical-slice.md`'s build queue lists it as buildable-now. Landing it by
+the then-current build queue listed it as buildable-now. Landing it by
 itself would remove the only thing currently refusing this claim, and a
 semantically inverted claim would become an accepted research candidate. The
 mechanical picture would improve — 9 of 12 to 12 of 12 — while the product got
@@ -2154,3 +2154,114 @@ unsatisfiable by anyone else — it would have converted every harness edit into
 blocked change rather than a four-minute one. The pin fix is what makes the
 discipline payable, which is a better argument for it than any of the ones written
 when it landed.
+
+### Preregistration — intervention nine, short model-facing locators
+
+The two remaining graded failures are not bad citations. In both responses the
+model emits the exact cited sentence and the known candidate ID. It reproduces
+the full 64-character transcript-view digest inside `source_fragment_id`, then
+drops the turn and character suffix. The emitted prefix identifies the transcript,
+not the fragment, so accepting it as a unique prefix would weaken the locator gate.
+
+The candidate is a request-local alias. Each offered source fragment receives a
+short locator such as `s0001`. The model sees and returns that alias. The parser
+maps it back to the full canonical `source_fragment_id` before building `note/2`.
+The map never enters the model-facing request, and every durable evidence record
+continues to carry the full canonical locator.
+
+**Prediction.** `ordinary-question` and `name-number-action` stop refusing on
+`citation-locator`. Every previously passing graded fixture remains passing, and
+the returned note rows contain canonical source fragment IDs rather than aliases.
+
+**Falsifiers.** Withdraw the candidate if any previously passing graded fixture
+regresses, if an alias survives into durable evidence, if the hidden map reaches
+the provider-visible request, or if an unknown or cross-candidate alias resolves.
+All request digests are expected to move because the offered locators change; a
+full matrix run is required.
+
+Even a clean 12-of-12 graded matrix would not admit note generation. The two
+conditional fixtures still show that a correctly cited sentence can support the
+wrong settled/contingent interpretation, and human usefulness review remains open.
+
+### Result — intervention nine passes its registered mechanical gates
+
+Receipt: `notes/mlx_note_matrix_receipt_short_locators.json`.
+
+The prediction held. All 12 graded fixtures passed. `ordinary-question` and
+`name-number-action` now return accepted research candidates instead of refusing
+on `citation-locator`, and no previously passing fixture regressed. The two
+abstention fixtures still return transcript-only. Both ungraded conditional
+fixtures were recorded without being counted as passes.
+
+The falsifier checks also held. Unit tests prove that the provider-visible request
+does not contain the private alias map or its canonical locator values. The parser
+restores canonical IDs before `note/2` validation and refuses unknown,
+cross-candidate, and tampered mappings.
+
+The complete 14-fixture run repeated each cold call three times and each warm call
+twice. Every mechanical matrix gate passed. Median cold inference was 2.365 seconds,
+median warm inference was 1.880 seconds, and peak RSS was 1,191,067,648 bytes. The
+model tree was unchanged across the run.
+
+This closes the mechanical citation-locator failure only. The receipt explicitly
+keeps `admits` false. Conditional meaning and human usefulness remain open, so note
+generation is still not a product feature.
+
+### Preregistration — intervention ten, classify modality on its own axis
+
+The next experiment separates two questions the current note response fuses.
+`label` answers what kind of record this is: decision, action, proposal, or
+question. A new research-only classifier answers how the statement is framed:
+`DIRECT`, `CONDITIONAL`, or `HYPOTHETICAL`.
+
+- `DIRECT` means the speaker states the record without a condition.
+- `CONDITIONAL` means the speaker states a real record whose outcome depends on
+  a condition or precondition.
+- `HYPOTHETICAL` means the would-be record is imagined or counterfactual rather
+  than made.
+
+This is a separate classifier call. Its result cannot suppress, relabel, render,
+or persist a note item in this experiment. That keeps a semantic failure from
+silently deleting meeting evidence and lets the distinction be measured before it
+becomes product behavior.
+
+The probe uses ten synthetic fixtures. Four are direct records. Three are
+conditional records, including a settled decision with a precondition. Three are
+hypotheticals. Two controls avoid the marker words used by the earlier failed gate:
+one expresses a pending condition without `if`, `unless`, or `barring`; one frames
+a hypothetical without `if` or `would`.
+
+**Prediction.** The pinned local model returns the exact modality for all ten
+fixtures on three consecutive calls, with byte-identical responses. In particular,
+it distinguishes a decision made subject to QA approval from an imagined decision.
+
+**Falsifiers.** Withdraw the classifier if it misses either marker-free control,
+if any response is malformed or changes across repeats, or if its expected labels
+enter the model-facing request. A passing probe admits only the classifier candidate.
+It does not admit note generation or authorize a `note/2` schema change.
+
+### Result — intervention ten is withdrawn
+
+Receipt: `notes/mlx_note_modality_probe_receipt.json`.
+
+The classifier returned the same response on all three calls, but the response was
+not valid. It returned a bare ten-item array containing only `modality`, rather than
+the required root object and ordered candidate IDs. Strict decoding refused all
+three calls with `response-contract`.
+
+Repairing only that envelope would not rescue the candidate. The content-free
+diagnostic reads the ten categorical values without accepting them. Six match the
+registered answers. The model marks the direct question as hypothetical and marks
+all three conditional records as hypothetical. That includes the marker-free
+`pending QA approval` control and the decision made subject to QA approval. The
+model therefore does not distinguish a conditioned real decision from an imagined
+decision.
+
+The expected per-fixture labels stayed out of the model-facing candidates, and the
+response was byte-identical across repeats. Those controls held. The structural and
+semantic falsifiers did not, so the classifier is withdrawn and remains disconnected
+from note construction. No note was suppressed, relabeled, rendered, or persisted.
+
+This closes the small-model classifier direction for the current prompt and model.
+Adding a constrained envelope would address only the malformed JSON shape, not the
+four semantic misses. Note generation remains unadmitted.

@@ -14,6 +14,35 @@ private enum CaptureMode {
   case sitting(audioFD: Int32)
 }
 
+/// The only permission modes the real capture executable supports. They are
+/// deliberately separate from the four-descriptor capture contract: preflight
+/// never receives a capture directory, never starts an audio engine, and never
+/// writes a product record.
+private enum PermissionPreflightMode: String {
+  case status
+  case requestMicrophone = "request-microphone"
+  case requestSystemAudio = "request-system-audio"
+}
+
+private enum Invocation {
+  case capture(Options)
+  case permissionPreflight(PermissionPreflightMode)
+
+  static func parse(_ arguments: [String]) throws -> Self {
+    if arguments.first == "--permission-preflight" {
+      guard arguments.count == 2,
+        let mode = PermissionPreflightMode(rawValue: arguments[1])
+      else {
+        throw MeetingCaptureFault(
+          code: "invalid_arguments",
+          detail: "meeting-capture permission preflight expects status, request-microphone, or request-system-audio")
+      }
+      return .permissionPreflight(mode)
+    }
+    return .capture(try Options.parse(arguments))
+  }
+}
+
 private struct Options {
   let mode: CaptureMode
   let controlFD: Int32
@@ -66,6 +95,96 @@ private struct Options {
       controlFD: values["--control-fd"]!,
       eventFD: values["--event-fd"]!,
       parentLivenessFD: values["--parent-liveness-fd"]!)
+  }
+}
+
+private let permissionSchema = "permission-probe/1"
+
+private func microphonePermissionStatus() -> String {
+  switch AVCaptureDevice.authorizationStatus(for: .audio) {
+  case .authorized: return "authorized"
+  case .denied: return "denied"
+  case .restricted: return "restricted"
+  case .notDetermined: return "not-determined"
+  @unknown default: return "unknown"
+  }
+}
+
+private func emitPermissionResult(_ payload: [String: Any]) throws -> Int32 {
+  var complete = payload
+  complete["schema"] = permissionSchema
+  guard
+    let data = try? JSONSerialization.data(
+      withJSONObject: complete, options: [.sortedKeys]),
+    let line = String(data: data, encoding: .utf8)
+  else {
+    throw MeetingCaptureFault(
+      code: "permission_preflight_encode_failed",
+      detail: "could not encode the capture permission result")
+  }
+  print(line)
+  return 0
+}
+
+private func requestMicrophonePermission() throws -> (status: String, prompted: Bool) {
+  let before = microphonePermissionStatus()
+  guard before == "not-determined" else { return (before, false) }
+  let settled = DispatchSemaphore(value: 0)
+  AVCaptureDevice.requestAccess(for: .audio) { _ in settled.signal() }
+  guard settled.wait(timeout: .now() + 120) != .timedOut else {
+    throw MeetingCaptureFault(
+      code: "microphone_permission_timeout",
+      detail: "the microphone prompt was not answered within 120 seconds")
+  }
+  return (microphonePermissionStatus(), true)
+}
+
+/// The single configuration the real meeting recorder uses for system audio.
+/// Preflight calls the same `AudioTapManager` setup with this exact value so a
+/// green setup state means the helper that will record was the thing measured.
+private func meetingSystemTapConfiguration() -> TapConfiguration {
+  TapConfiguration(
+    processes: [], muteBehavior: .unmuted, isExclusive: true, isMono: true)
+}
+
+private func requestSystemAudioPermission() -> String {
+  guard #available(macOS 14.4, *) else { return "unsupported" }
+  let manager = AudioTapManager()
+  do {
+    try manager.setupAudioTap(with: meetingSystemTapConfiguration())
+    manager.teardown()
+    return "authorized"
+  } catch {
+    manager.teardown()
+    return "unavailable"
+  }
+}
+
+/// Checks permission from the same signed helper and through the same system-audio
+/// setup path that a meeting will use. It never constructs an `AudioRecorder`,
+/// starts an audio device, reads a buffer, opens a capture directory, or writes a
+/// file.
+private func runPermissionPreflight(_ mode: PermissionPreflightMode) throws -> Int32 {
+  switch mode {
+  case .status:
+    return try emitPermissionResult([
+      "action": "status",
+      "microphone": microphonePermissionStatus(),
+      "system_audio": "unmeasured",
+      "system_audio_detail": "run request-system-audio; setup uses the real capture helper",
+    ])
+  case .requestMicrophone:
+    let result = try requestMicrophonePermission()
+    return try emitPermissionResult([
+      "action": "request-microphone",
+      "microphone": result.status,
+      "prompted": result.prompted,
+    ])
+  case .requestSystemAudio:
+    return try emitPermissionResult([
+      "action": "request-system-audio",
+      "system_audio": requestSystemAudioPermission(),
+    ])
   }
 }
 
@@ -131,9 +250,7 @@ private final class SystemMeetingAudioSource: MeetingAudioSource, @unchecked Sen
   ) throws {
     let manager = AudioTapManager()
     do {
-      try manager.setupAudioTap(
-        with: TapConfiguration(
-          processes: [], muteBehavior: .unmuted, isExclusive: true, isMono: true))
+      try manager.setupAudioTap(with: meetingSystemTapConfiguration())
     } catch {
       throw MeetingCaptureFault(
         code: "system_tap_setup_failed", leg: .system, detail: String(describing: error))
@@ -442,7 +559,14 @@ extension NSLock {
 
 private func run() throws -> Int32 {
   signal(SIGPIPE, SIG_IGN)
-  let options = try Options.parse(Array(CommandLine.arguments.dropFirst()))
+  let invocation = try Invocation.parse(Array(CommandLine.arguments.dropFirst()))
+  if case let .permissionPreflight(mode) = invocation {
+    return try runPermissionPreflight(mode)
+  }
+  guard case let .capture(options) = invocation else {
+    throw MeetingCaptureFault(
+      code: "invalid_arguments", detail: "meeting-capture could not determine its invocation mode")
+  }
   for descriptor in [
     options.controlFD, options.eventFD, options.parentLivenessFD,
   ] where fcntl(descriptor, F_GETFD) == -1 {

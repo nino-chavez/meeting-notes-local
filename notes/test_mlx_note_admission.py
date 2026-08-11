@@ -11,10 +11,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "notes"))
 
 from mlx_note_admission import (
+    AdmissionRefused,
     MLX_RUNTIME,
     POLARITY_TERMS,
     _admission_candidates,
     _decode_response,
+    _provider_user_request,
     _refusal_category,
     _sha256,
     dropped_polarity_terms,
@@ -53,7 +55,7 @@ def advertised_response(request: dict, *, empty: bool = False) -> str:
 
 
 def observed_identity(request: dict) -> dict:
-    user_request = {key: value for key, value in request.items() if key != "system"}
+    user_request = _provider_user_request(request)
     return {
         "model_tree_sha256": MLX_RUNTIME["model"]["expected_tree_sha256"],
         "runtime_identity": deepcopy(MLX_RUNTIME["runtime_identity"]),
@@ -86,8 +88,55 @@ class MlxNoteAdmissionTests(unittest.TestCase):
             request["response_contract"]["root"]["properties"]["items"]["item"]["ordered_fields"],
             ["candidate_id", "source_fragment_ids", "citation", "label", "claim"],
         )
-        self.assertEqual(len(_decode_response(advertised_response(request), request, transcript)), 1)
+        decoded = _decode_response(advertised_response(request), request, transcript)
+        alias = request["candidates"][0]["source_fragments"][0]["source_fragment_id"]
+        self.assertEqual(len(decoded), 1)
+        self.assertEqual(decoded[0]["source_fragment_ids"], [request["_source_locator_map"][alias]])
+        self.assertNotEqual(decoded[0]["source_fragment_ids"], [alias])
         self.assertEqual(_decode_response(advertised_response(request, empty=True), request, transcript), [])
+
+    def test_provider_request_hides_canonical_locator_map(self) -> None:
+        transcript = synthetic_transcript()
+        request = model_request(transcript, generate_manifest(transcript, STRATEGY_CUE))
+        provider_request = _provider_user_request(request)
+        rendered = json.dumps(provider_request, sort_keys=True)
+
+        self.assertNotIn("_source_locator_map", provider_request)
+        self.assertTrue(request["_source_locator_map"])
+        for canonical_source_id in request["_source_locator_map"].values():
+            self.assertNotIn(canonical_source_id, rendered)
+
+    def test_unknown_and_cross_candidate_locators_are_refused(self) -> None:
+        transcript = synthetic_transcript()
+        request = model_request(transcript, generate_manifest(transcript, STRATEGY_CUE))
+        self.assertGreaterEqual(len(request["candidates"]), 2)
+
+        for locator in (
+            "s9999",
+            request["candidates"][1]["source_fragments"][0]["source_fragment_id"],
+        ):
+            with self.subTest(locator=locator):
+                response = json.loads(advertised_response(request))
+                response["items"][0]["source_fragment_ids"] = [locator]
+                with self.assertRaises(AdmissionRefused) as refusal:
+                    _decode_response(
+                        json.dumps(response, separators=(",", ":")),
+                        request,
+                        transcript,
+                    )
+                self.assertEqual(refusal.exception.code, "citation-locator")
+
+    def test_private_locator_map_tampering_is_refused(self) -> None:
+        transcript = synthetic_transcript()
+        request = model_request(transcript, generate_manifest(transcript, STRATEGY_CUE))
+        response = advertised_response(request)
+        tampered = deepcopy(request)
+        alias = next(iter(tampered["_source_locator_map"]))
+        tampered["_source_locator_map"][alias] = "not-a-canonical-fragment"
+
+        with self.assertRaises(AdmissionRefused) as refusal:
+            _decode_response(response, tampered, transcript)
+        self.assertEqual(refusal.exception.code, "response-contract")
 
     def test_synthetic_measurement_plan_has_registered_coverage(self) -> None:
         fixtures = synthetic_measurement_fixtures()
@@ -497,7 +546,7 @@ class MlxNoteAdmissionTests(unittest.TestCase):
         """
         transcript = synthetic_transcript()
         request = model_request(transcript, generate_manifest(transcript, STRATEGY_CUE))
-        user_request = {key: value for key, value in request.items() if key != "system"}
+        user_request = _provider_user_request(request)
         digest = _sha256(json.dumps(
             {"system": request["system"], "user": user_request},
             ensure_ascii=False, sort_keys=True, separators=(",", ":"),

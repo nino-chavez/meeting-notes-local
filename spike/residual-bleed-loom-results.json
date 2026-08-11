@@ -1,0 +1,61 @@
+{
+  "schema": "residual-bleed-measurement/1",
+  "sources": {
+    "mic_wav_sha256": "3e18d07c0dbf4a9257181884af6d063b0ae1961bc410e6ae4501a2d2a9904b4e",
+    "system_wav_sha256": "c37a36b51c094f83f8d4c387895313828e1315c6eb49bba4d8534374b5cb8821",
+    "mic_transcript_sha256": "00f65e07f392131792cc0b3902b91827b133198aca7e6aae2178eb62e37ef570",
+    "system_transcript_sha256": "3b2fe64c80eaa6930ae4d84b6d95a74ab1753f76687c30204aa5f54807aa6de5",
+    "reference_sha256": "3814789c6b90dee99e7b1b7d89cdc5fee807f204c145345f2ce66c07982280af",
+    "canonical_transcript_sha256": "ed693389ca51ed1580c662586e663edcc1d752b64cae8f74da34cfb95ed0039f"
+  },
+  "bleed": {
+    "peak_r": 0.8558294131470373,
+    "positive_r": 0.8558294131470373,
+    "positive_lag_ms": -50.0,
+    "analysed_s": 487.13
+  },
+  "candidate": {
+    "strategy": "time-aligned-ordered-words/1",
+    "time_pad_s": 1.0,
+    "min_matched_words": 4,
+    "min_ordered_coverage": 0.75,
+    "removed_segments": 20,
+    "removed_seconds": 30.54,
+    "removed_words": 193
+  },
+  "comparison": {
+    "reference_words": 3303,
+    "canonical": {
+      "turns": 299,
+      "words": 3745,
+      "edits": 1228,
+      "wer": 0.37178322736905844
+    },
+    "baseline": {
+      "turns": 286,
+      "words": 3711,
+      "edits": 1197,
+      "wer": 0.36239782016348776
+    },
+    "candidate": {
+      "turns": 266,
+      "words": 3518,
+      "edits": 1015,
+      "wer": 0.30729639721465335
+    }
+  },
+  "safety_controls": {
+    "long_same_phrase": true,
+    "unrelated_double_talk": true,
+    "short_confirmation": true,
+    "same_phrase_outside_window": true,
+    "clean_capture_unchanged": true
+  },
+  "production_admitted": false,
+  "blockers": [
+    "no retained real double-talk control",
+    "a longer same-phrase overlap is indistinguishable from bleed and is removed",
+    "candidate transcript error remains above the note-generation input bar",
+    "the same local ASR model did not reproduce the canonical segment count"
+  ]
+}

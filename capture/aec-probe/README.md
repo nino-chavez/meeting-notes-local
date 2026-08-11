@@ -27,7 +27,7 @@ Also measured, and load-bearing: enabling voice processing suppressed the room
 floor by 4.5 dB while leaving the far end untouched, so the bleed came out
 *relatively louder*. Switching it on naively would make the Me/Them split worse.
 
-Full write-up in [`docs/teardown.md`](../../docs/teardown.md).
+The measured limits are recorded in this probe's result artifacts.
 
 ## Use
 

@@ -18,14 +18,14 @@ pub struct RuntimeManifest {
     pub worker: RuntimeResource,
     pub tap: RuntimeResource,
     pub encoder: RuntimeResource,
-    /// The first-run permission probe (`capture/permission-probe`).
+    /// The fallback first-run permission probe (`capture/permission-probe`).
     ///
     /// Added to `app-runtime/1` on 2026-08-06 rather than left out, because the
-    /// app executes it. Every other child this application runs is digest-verified
-    /// through this manifest before it is spawned, and there is no precedent here
-    /// for running an unverified one. Shipping the binary needs only staging —
-    /// `production_resources()` copies `bin` wholesale — but *running* it to the
-    /// same standard as the tap needs this entry.
+    /// non-recording admissions execute it. Every child this application runs is
+    /// digest-verified through this manifest before it is spawned, and there is no
+    /// precedent here for running an unverified one. Shipping the binary needs only
+    /// staging — `production_resources()` copies `bin` wholesale — but *running* it
+    /// to the same standard as the tap needs this entry.
     ///
     /// Widening the required set is a lockstep change: `worker/main.py` compares
     /// `set(document) != required` and this struct is `deny_unknown_fields`, so a
@@ -55,6 +55,17 @@ pub enum RuntimeSchema {
 pub struct RuntimeResource {
     pub path: PathBuf,
     pub sha256: String,
+}
+
+/// The signed executable that must make a first-run permission request.
+///
+/// An internal-alpha meeting uses `meeting-capture`, so its preflight has to run
+/// that same executable. Other admissions do not ship the meeting helper and use
+/// the standalone probe only for their bounded first-run surface.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PermissionRequester {
+    CaptureHelper(PathBuf),
+    StandaloneProbe(PathBuf),
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,6 +171,41 @@ impl RuntimeManifest {
             .canonicalize()?;
         verify_resource(&root, &manifest.permission_probe)?;
         Ok(root.join(&manifest.permission_probe.path))
+    }
+
+    /// Resolves and verifies the executable that is allowed to request first-run
+    /// permissions without hashing every packaged model.
+    ///
+    /// The recorder itself owns access in an internal-alpha build. Asking a
+    /// different helper can produce a prompt that does not clear the executable
+    /// which later starts the meeting, so this selection intentionally follows the
+    /// admission rather than treating every bundle as equivalent.
+    pub fn verified_permission_requester(
+        manifest_path: &Path,
+    ) -> Result<PermissionRequester, RuntimeError> {
+        if manifest_path.is_symlink() || !manifest_path.is_file() {
+            return Err(RuntimeError::Malformed);
+        }
+        let manifest: Self = serde_json::from_slice(&fs::read(manifest_path)?)
+            .map_err(|_| RuntimeError::Malformed)?;
+        let root = manifest_path
+            .parent()
+            .ok_or(RuntimeError::UnsafePath)?
+            .canonicalize()?;
+        match manifest.admission {
+            RuntimeAdmission::InternalAlpha => {
+                verify_resource(&root, &manifest.tap)?;
+                Ok(PermissionRequester::CaptureHelper(
+                    root.join(&manifest.tap.path),
+                ))
+            }
+            RuntimeAdmission::BoundaryTest | RuntimeAdmission::Product => {
+                verify_resource(&root, &manifest.permission_probe)?;
+                Ok(PermissionRequester::StandaloneProbe(
+                    root.join(&manifest.permission_probe.path),
+                ))
+            }
+        }
     }
 
     pub fn permits_application_start(&self) -> bool {
@@ -270,6 +316,10 @@ mod tests {
         // The probe resolves and verifies on its own, without hashing the models.
         let probe_path = RuntimeManifest::verified_permission_probe(&manifest).unwrap();
         assert!(probe_path.ends_with("permission-probe"));
+        assert!(matches!(
+            RuntimeManifest::verified_permission_requester(&manifest),
+            Ok(PermissionRequester::StandaloneProbe(path)) if path.ends_with("permission-probe")
+        ));
         // And a tampered probe is refused, which is the whole reason it is in the
         // manifest rather than merely staged into the bundle.
         fs::write(temp.path().join("permission-probe"), b"swapped").unwrap();
@@ -315,6 +365,10 @@ mod tests {
         let alpha = RuntimeManifest::load_and_verify(&manifest).unwrap();
         assert!(alpha.permits_application_start());
         assert!(alpha.is_internal_alpha());
+        assert!(matches!(
+            RuntimeManifest::verified_permission_requester(&manifest),
+            Ok(PermissionRequester::CaptureHelper(path)) if path.ends_with("tap")
+        ));
         fs::write(temp.path().join("tap"), b"changed").unwrap();
         assert!(matches!(
             RuntimeManifest::load_and_verify(&manifest),

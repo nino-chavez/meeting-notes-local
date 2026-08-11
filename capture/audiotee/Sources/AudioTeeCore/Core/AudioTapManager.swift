@@ -10,6 +10,13 @@ public class AudioTapManager {
   public init() {}
 
   deinit {
+    teardown()
+  }
+
+  /// Releases the private tap and aggregate device without reading or writing
+  /// audio. Permission preflight uses this immediately after it has exercised
+  /// the same setup path as a real meeting capture.
+  public func teardown() {
     AudioTeeLogging.logger.debug("Cleaning up audio tap manager")
 
     if let tapID = tapID {

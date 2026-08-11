@@ -146,6 +146,23 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+_SOURCE_LOCATOR_MAP = "_source_locator_map"
+
+
+def _source_locator(index: int) -> str:
+    """A request-local model locator, never a durable evidence identifier."""
+    return f"s{index + 1:04d}"
+
+
+def _provider_user_request(request: dict) -> dict:
+    """Only the request fields the local model is allowed to observe."""
+    return {
+        key: value
+        for key, value in request.items()
+        if key != "system" and not key.startswith("_")
+    }
+
+
 def _strict_json(raw: str) -> object:
     def pairs(items: list[tuple[str, object]]) -> tuple[tuple[str, object], ...]:
         names = [name for name, _ in items]
@@ -254,9 +271,10 @@ def response_contract(manifest: dict) -> dict:
                                 "item": {
                                     "type": "string",
                                     "enum": [
-                                        fragment["source_fragment_id"]
-                                        for row in _admission_candidates(manifest)
-                                        for fragment in [{"source_fragment_id": row["anchor_fragment_id"]}]
+                                        _source_locator(index)
+                                        for index, _row in enumerate(
+                                            _admission_candidates(manifest)
+                                        )
                                     ],
                                 },
                             },
@@ -313,14 +331,17 @@ def model_request(transcript: Transcript, manifest: dict) -> dict:
         for row in build_fragment_map(transcript)["fragments"]
     }
     candidates = []
-    for row in _admission_candidates(manifest):
+    locator_map = {}
+    for index, row in enumerate(_admission_candidates(manifest)):
         fragment_id = row["anchor_fragment_id"]
         fragment = fragments[fragment_id]
+        locator = _source_locator(index)
+        locator_map[locator] = fragment_id
         candidates.append({
             "candidate_id": row["candidate_id"],
             "cue_type": row["cue_type"],
             "source_fragments": [{
-                "source_fragment_id": fragment_id,
+                "source_fragment_id": locator,
                 "text": transcript.turns[fragment["turn"]].text[
                     fragment["char_start"]:fragment["char_end"]
                 ],
@@ -331,6 +352,10 @@ def model_request(transcript: Transcript, manifest: dict) -> dict:
         "system": SYSTEM_PROMPT,
         "response_contract": response_contract(manifest),
         "candidates": candidates,
+        # Parser-only. `_provider_user_request` removes this before prompt
+        # rendering and request hashing. Durable note rows receive its canonical
+        # values after the response passes the alias membership checks below.
+        _SOURCE_LOCATOR_MAP: locator_map,
     }
 
 
@@ -345,6 +370,24 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
     fragments = {
         row["source_fragment_id"]: row for row in fragment_map["fragments"]
     }
+    locator_map = request.get(_SOURCE_LOCATOR_MAP)
+    offered_locators = {
+        fragment["source_fragment_id"]
+        for candidate in candidate_rows
+        for fragment in candidate["source_fragments"]
+    }
+    if (
+        not isinstance(locator_map, dict)
+        or set(locator_map) != offered_locators
+        or any(
+            not isinstance(locator, str)
+            or not isinstance(canonical, str)
+            or canonical not in fragments
+            for locator, canonical in locator_map.items()
+        )
+        or len(set(locator_map.values())) != len(locator_map)
+    ):
+        raise AdmissionRefused("response-contract")
     selected: list[dict] = []
     seen: set[str] = set()
     last_candidate_position = -1
@@ -376,18 +419,19 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
             fragment["source_fragment_id"]
             for fragment in candidates[candidate_id]["source_fragments"]
         ]
-        if any(value not in allowed or value not in fragments for value in source_ids):
+        if any(value not in allowed or value not in locator_map for value in source_ids):
             raise AdmissionRefused("citation-locator")
+        canonical_source_ids = [locator_map[value] for value in source_ids]
         positions = [allowed.index(value) for value in source_ids]
         if positions != sorted(positions):
             raise AdmissionRefused("citation-locator")
         citation = row["citation"]
         if not isinstance(citation, str):
             raise AdmissionRefused("response-contract")
-        primary = fragments[source_ids[0]]
-        if source_ids[0] in used_primary_fragments:
+        primary = fragments[canonical_source_ids[0]]
+        if canonical_source_ids[0] in used_primary_fragments:
             raise AdmissionRefused("citation-locator")
-        used_primary_fragments.add(source_ids[0])
+        used_primary_fragments.add(canonical_source_ids[0])
         canonical_citation = transcript.turns[primary["turn"]].text[
             primary["char_start"]:primary["char_end"]
         ]
@@ -411,7 +455,7 @@ def _decode_response(raw: str, request: dict, transcript: Transcript) -> list[di
         if dropped_polarity_terms(canonical_citation, claim):
             raise AdmissionRefused("claim-polarity")
         selected.append({
-            "source_fragment_ids": source_ids,
+            "source_fragment_ids": canonical_source_ids,
             "label": label,
             "claim": claim.strip(),
         })
@@ -699,7 +743,7 @@ def run_model_arm(
         }
         expected_request_sha256 = _sha256(_canonical_json({
             "system": request["system"],
-            "user": {key: value for key, value in request.items() if key != "system"},
+            "user": _provider_user_request(request),
         }))
         runtime = _runtime_receipt(observed, expected_request_sha256)
         response_receipt["identity"] = {
@@ -873,7 +917,7 @@ def local_mlx_provider(
         # The selected model's documented chat template receives the instruction separately;
         # keep it out of the canonical user payload so an instruction-like
         # string inside transcript material cannot alter its role.
-        user_request = {key: value for key, value in request.items() if key != "system"}
+        user_request = _provider_user_request(request)
         messages = [
             {"role": "system", "content": request["system"]},
             {"role": "user", "content": _canonical_json(user_request)},

@@ -1,7 +1,6 @@
 //! Crash-safe evidence store for guided voice-enrolment sittings.
 //!
-//! The deletion-ordering contract from `docs/screens-and-states.md` § I is the
-//! reason this module exists: a sitting counts as **saved** only when its
+//! A sitting counts as **saved** only when its
 //! derived voice material (embeddings plus encoder identity) is durably
 //! stored, the dedicated raw recording is deleted under a digest-bound
 //! cleanup receipt, and the temporary work directory is gone. Raw audio

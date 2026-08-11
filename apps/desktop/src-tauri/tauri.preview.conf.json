@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Local Meeting Notes Preview",
+  "productName": "Yawn Preview",
   "version": "0.1.0",
   "identifier": "com.ninochavez.local-meeting-notes.preview",
   "build": {
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "preview",
-        "title": "Local Meeting Notes — Preview",
+        "title": "Yawn — Preview",
         "width": 1080,
         "height": 900,
         "minWidth": 800,
@@ -43,7 +43,8 @@
     },
     "macOS": {
       "minimumSystemVersion": "14.4",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "capture-entitlements.plist"
     }
   }
 }

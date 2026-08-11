@@ -123,6 +123,36 @@ fn main() {
                 io::stdout().flush().unwrap();
             }
         }
+        "transcription-heartbeats" => {
+            ready();
+            for line in io::stdin().lock().lines() {
+                let command: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+                for _ in 0..2 {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "schema": "worker-event/2",
+                            "request_id": command["request_id"],
+                            "event": "capture.state",
+                            "state": "transcribing",
+                            "meeting_id": command["arguments"]["meeting_id"]
+                        })
+                    );
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema": "worker-result/2",
+                        "request_id": command["request_id"],
+                        "ok": true,
+                        "code": null,
+                        "recoverable": null,
+                        "artifact_digests": {"fixture": "digest"}
+                    })
+                );
+                io::stdout().flush().unwrap();
+            }
+        }
         "wrong-progress" => {
             ready();
             let line = io::stdin().lock().lines().next().unwrap().unwrap();

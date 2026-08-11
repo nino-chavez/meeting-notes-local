@@ -1,7 +1,6 @@
 //! Deterministic, content-free guidance for guided multi-session enrolment.
 //!
-//! `docs/screens-and-states.md` § I states the load-bearing rule for this
-//! surface: the accumulating states must name the shortfall **in the terms the
+//! The accumulating states must name the shortfall **in the terms the
 //! code enforces**, never as a progress bar. A bar at "80%" tells the operator
 //! to keep going; "return at least one hour after the first sitting, then
 //! supply a permitted negative sample" tells them what to do.
@@ -155,8 +154,8 @@ pub struct EnrollmentEvidence {
     pub negative_sources: Vec<NegativeSourceEvidence>,
 }
 
-/// The reachable states of `docs/screens-and-states.md` § I that a deterministic
-/// evaluation over accumulated evidence can decide.
+/// The reachable states that a deterministic evaluation over accumulated
+/// evidence can decide.
 ///
 /// The states this deliberately cannot reach are named in
 /// [`GuidedEnrollmentStatus::gates`]: every sitting state needs real dedicated

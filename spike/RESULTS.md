@@ -66,8 +66,8 @@ and the room contains the far end. Three ways out, in order of cost:
    Core Audio taps nor WASAPI loopback provide it; it would have to be
    implemented against the tap signal as the reference.
 
-Option 2 is now a required product behaviour, not a nice-to-have — see the
-`bleed-detected` state added to `docs/screens-and-states.md`.
+Option 2 is now a required product behaviour, not a nice-to-have: a
+`bleed-detected` result must stay visible in the finished record.
 
 **Narrowed since, by [`notes/EVAL.md`](../notes/EVAL.md).** "Worse than degraded
 output" is true of the *transcript* and false of the *notes*. Feeding a

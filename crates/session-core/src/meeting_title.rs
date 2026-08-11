@@ -4,8 +4,8 @@
 //! placeholder waiting on a feature: [`crate::library_metadata`] states in its
 //! first line that it "deliberately has no writer", so the operator title it
 //! reads is a field nothing in this product can set. Forty meetings are forty
-//! identical rows, and `vertical-slice.md` already says they should not be —
-//! twice, at "meetings remain readable under generated date-based labels" and
+//! identical rows. Meetings must remain readable under generated date-based labels
+//! and
 //! at "title is nullable to restore the generated date label". Neither
 //! sentence had an implementation behind it.
 //!
@@ -63,8 +63,8 @@
 /// thing to move, and moving it changes no contract.
 pub const MIN_TITLE_WORDS: usize = 6;
 
-/// Matches the 120-scalar ceiling `vertical-slice.md` sets for an operator
-/// title, so a derived label and a typed one occupy the same width.
+/// The 120-scalar ceiling keeps a derived label and a typed title within the same
+/// practical reading width.
 pub const MAX_TITLE_SCALARS: usize = 120;
 
 /// The first thing said in this meeting that is long enough to identify it.

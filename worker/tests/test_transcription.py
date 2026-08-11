@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 import unittest.mock
 import wave
@@ -17,7 +18,11 @@ from capture_health import build as build_capture_health
 from dual_capture import finalize_session, open_private_binary
 from transcript import load
 from worker import adapters
-from worker.transcription import TranscriptionRefused, create_transcript_revision
+from worker.transcription import (
+    TranscriptionRefused,
+    _release_mlx_whisper_runtime,
+    create_transcript_revision,
+)
 
 
 def write_wav(path: Path, value: int, samples: int = 3_200) -> None:
@@ -201,6 +206,71 @@ class TranscriptionTests(unittest.TestCase):
         raw = json.loads(path.read_text(encoding="utf-8"))
         self.assertIsNone(raw["voiceprint"])
         self.assertTrue(all("gated" not in turn for turn in raw["turns"]))
+
+    def test_default_transcriber_releases_its_mlx_runtime(self) -> None:
+        with (
+            unittest.mock.patch("dual_capture.transcribe", self.fake_transcribe),
+            unittest.mock.patch(
+                "worker.transcription._release_mlx_whisper_runtime"
+            ) as release,
+        ):
+            create_transcript_revision(
+                self.capture,
+                self.root / "transcript",
+                self.model,
+                voicing_filter=self.keep,
+                bleed_filter=self.keep,
+            )
+
+        release.assert_called_once_with()
+
+    def test_default_transcriber_releases_its_mlx_runtime_after_failure(self) -> None:
+        def refuse(*_arguments):
+            raise RuntimeError("inference failed")
+
+        with (
+            unittest.mock.patch("dual_capture.transcribe", refuse),
+            unittest.mock.patch(
+                "worker.transcription._release_mlx_whisper_runtime"
+            ) as release,
+            self.assertRaisesRegex(RuntimeError, "inference failed"),
+        ):
+            create_transcript_revision(
+                self.capture,
+                self.root / "transcript",
+                self.model,
+                voicing_filter=self.keep,
+                bleed_filter=self.keep,
+            )
+
+        release.assert_called_once_with()
+
+    def test_mlx_runtime_release_drops_the_model_and_clears_metal_cache(self) -> None:
+        holder = types.SimpleNamespace(model=object(), model_path="model")
+        whisper_package = types.ModuleType("mlx_whisper")
+        whisper_package.__path__ = []
+        whisper_transcribe = types.ModuleType("mlx_whisper.transcribe")
+        whisper_transcribe.ModelHolder = holder
+        mlx_package = types.ModuleType("mlx")
+        mlx_package.__path__ = []
+        mlx_core = types.ModuleType("mlx.core")
+        mlx_core.clear_cache = unittest.mock.Mock()
+        mlx_package.core = mlx_core
+
+        with unittest.mock.patch.dict(
+            sys.modules,
+            {
+                "mlx_whisper": whisper_package,
+                "mlx_whisper.transcribe": whisper_transcribe,
+                "mlx": mlx_package,
+                "mlx.core": mlx_core,
+            },
+        ):
+            _release_mlx_whisper_runtime()
+
+        self.assertIsNone(holder.model)
+        self.assertIsNone(holder.model_path)
+        mlx_core.clear_cache.assert_called_once_with()
 
     def test_refuses_symlinked_model_file(self) -> None:
         (self.model / "weights.safetensors").unlink()

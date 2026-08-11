@@ -629,8 +629,7 @@ def _claim_type(section: str | None) -> str | None:
     become a second authority on what a section means.
 
     Recovering it here makes the note's *sections* a rendering choice rather than the
-    model's structural decision — which is what `docs/journeys.md` settles on, and what
-    film-room's DP-4 already argues in general: analysis is the substrate and outputs
+    model's structural decision. Analysis is the substrate and outputs
     are renderers. A flat list of typed claims can be grouped by kind, filtered to
     commitments for J2, or read in order for J1, with no further model call.
     """
@@ -832,9 +831,9 @@ def check_citations(note: str, transcript: Transcript) -> dict:
     position is derived here by finding them. A citation therefore cannot carry a
     wrong timestamp; it can only fail to be found at all.
 
-    Deriving the position is not decoration. `journeys.md` J1 turns on tracing a
-    claim back to the words behind it, and `DESIGN.md` retains the transcript
-    rather than the audio precisely so that path survives deletion. A verified
+    Deriving the position is not decoration. A claim must trace back to the words
+    behind it, and the transcript is retained rather than the audio precisely so
+    that path survives deletion. A verified
     quote with a turn index is that path.
     """
     turns = [(i, t) for i, t in enumerate(transcript.turns)]
@@ -3771,8 +3770,8 @@ NOTE_SCHEMAS = {LEGACY_NOTE_SCHEMA, STRUCTURED_NOTE_SCHEMA}
 NOTE_RENDER_SCHEMA = "note-render/1"
 
 # The four states a claim can be in, and every one of them has to be renderable.
-# `docs/journeys.md` J1 beat 3 is the operator deciding whether to trust a claim, and
-# a format showing only the good case would hide the majority of what the runs produce:
+# The operator decides whether to trust a claim, and a format showing only the
+# good case would hide the majority of what the runs produce:
 # across three real meetings roughly a third of claims carried locatable evidence, and
 # on the longest, composed quotes outnumbered located ones. Both halves are common.
 #

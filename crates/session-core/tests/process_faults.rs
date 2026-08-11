@@ -65,6 +65,41 @@ fn supervised_worker_dispatches_progress_before_result() {
 }
 
 #[test]
+fn supervised_worker_dispatches_repeatable_transcription_heartbeats() {
+    let mut command = Command::new(FAKE_WORKER);
+    command.args(["--mode", "transcription-heartbeats"]);
+    let mut child = OwnedChild::spawn(&mut command).unwrap();
+    child
+        .wait_ready(Duration::from_secs(1), &protocol_fixture_operations())
+        .unwrap();
+    let meeting_id = uuid::Uuid::new_v4();
+    let request = WorkerCommand::new(
+        Operation::TranscriptCreate,
+        serde_json::json!({"meeting_id": meeting_id}),
+    );
+    let mut states = Vec::new();
+    let result = child
+        .request_until(
+            &request,
+            Instant::now() + Duration::from_secs(1),
+            |progress| {
+                states.push((progress.state, progress.meeting_id));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        states,
+        vec![
+            (CaptureProgressState::Transcribing, meeting_id),
+            (CaptureProgressState::Transcribing, meeting_id),
+        ]
+    );
+    assert!(result.ok);
+}
+
+#[test]
 fn unknown_progress_request_stops_and_reaps_worker() {
     let mut command = Command::new(FAKE_WORKER);
     command.args(["--mode", "wrong-progress"]);

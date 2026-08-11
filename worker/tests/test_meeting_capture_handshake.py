@@ -15,6 +15,30 @@ class MeetingCaptureHandshakeTests(unittest.TestCase):
             self.skipTest("LMN_MEETING_CAPTURE_TEST_BINARY is not set")
         return sidecar
 
+    def test_permission_status_runs_without_capture_descriptors(self) -> None:
+        sidecar = self.sidecar_binary()
+        result = subprocess.run(
+            [sidecar, "--permission-preflight", "status"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads(result.stdout)
+        self.assertEqual(
+            {key: value for key, value in document.items() if key != "microphone"},
+            {
+                "action": "status",
+                "schema": "permission-probe/1",
+                "system_audio": "unmeasured",
+                "system_audio_detail": "run request-system-audio; setup uses the real capture helper",
+            },
+        )
+        self.assertIn(
+            document["microphone"],
+            {"authorized", "denied", "restricted", "not-determined", "unknown"},
+        )
+
     def test_paused_and_parent_eof_do_not_open_capture_hardware_or_files(self) -> None:
         sidecar = self.sidecar_binary()
         with tempfile.TemporaryDirectory(prefix="meeting-capture-handshake-") as temporary:

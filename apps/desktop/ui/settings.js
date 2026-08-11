@@ -1,165 +1,86 @@
-import { createVoiceProfileController } from "./voice-profile-workflow.mjs";
+import { mergePermissions } from "./view-model.mjs";
 
 const invoke = window.__TAURI__?.core?.invoke;
-const panes = ["capture", "privacy", "connections", "voice", "desktop", "shortcuts", "about"];
-const tabs = [...document.querySelectorAll("[data-pane]")];
-const panels = [...document.querySelectorAll("[data-pane-panel]")];
-const storageKey = "yawn-settings:last-pane";
-const layoutInputs = [...document.querySelectorAll('input[name="desktop-layout"]')];
-const layoutStatus = document.querySelector("#layout-choice-status");
-let activePane = "capture";
-const voiceProfile = createVoiceProfileController({
-  invoke,
-  isActive: () => activePane === "voice",
-});
+const permissionsRoot = document.querySelector("#permissions");
+const message = document.querySelector("#message");
 
-function validPane(value) {
-  return panes.includes(value) ? value : "capture";
+let permissions = null;
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
-function validDesktopLayout(value) {
-  return ["automatic", "focus", "library"].includes(value) ? value : "automatic";
+function humanize(value) {
+  return String(value || "unknown").replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function renderDesktopLayout(value) {
-  const layout = validDesktopLayout(value);
-  layoutInputs.forEach((input) => {
-    input.checked = input.value === layout;
-  });
+function tone(value) {
+  return value === "authorized" ? "ready" : ["denied", "restricted", "unavailable", "unsupported", "unknown"].includes(value) ? "attention" : "neutral";
 }
 
-async function loadDesktopLayout() {
+function row(title, value, detail, action = "") {
+  return `
+    <div class="permission-line">
+      <div class="permission-copy"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(detail)}</p></div>
+      ${action || `<span class="state" data-tone="${tone(value)}">${escapeHtml(humanize(value))}</span>`}
+    </div>
+  `;
+}
+
+function render() {
+  if (!permissions) {
+    permissionsRoot.innerHTML = row("Checking access", "checking", "Yawn is checking the permissions this Mac reports.");
+    return;
+  }
+  const microphoneAction = permissions.microphone === "not-determined"
+    ? `<button class="allow-button" type="button" data-action="microphone">Allow microphone</button>`
+    : "";
+  const systemAction = permissions.systemAudio === "unmeasured"
+    ? `<button class="allow-button" type="button" data-action="system-audio">Allow system audio</button>`
+    : "";
+  permissionsRoot.innerHTML = [
+    row("Microphone", permissions.microphone, "Yawn uses this to capture your voice.", microphoneAction),
+    row("System audio", permissions.systemAudio, "Yawn verifies that its capture helper can access meeting audio. This check does not save audio.", systemAction),
+  ].join("");
+}
+
+async function refresh() {
+  if (!invoke) {
+    message.textContent = "Open Settings from the Yawn desktop app.";
+    return;
+  }
+  message.textContent = "Checking audio access…";
   try {
-    const layout = await invoke?.("get_desktop_layout");
-    renderDesktopLayout(layout);
+    permissions = mergePermissions(permissions, await invoke("first_run_permissions"));
+    message.textContent = permissions.probeUnavailable ? "Yawn could not check audio access. Reopen the app and try again." : "";
   } catch {
-    renderDesktopLayout("automatic");
-    layoutStatus.textContent = "The saved layout could not be read. Automatic is shown for this window.";
+    message.textContent = "Yawn could not check audio access.";
   }
+  render();
 }
 
-async function saveDesktopLayout(value) {
-  const requested = validDesktopLayout(value);
-  layoutInputs.forEach((input) => { input.disabled = true; });
-  layoutStatus.textContent = "Saving layout…";
+async function request(kind) {
+  if (!invoke) return;
+  const command = kind === "microphone" ? "first_run_request_microphone" : "first_run_request_system_audio";
+  message.textContent = kind === "microphone" ? "Waiting for macOS…" : "Checking system audio…";
   try {
-    const saved = await invoke?.("set_desktop_layout", { layout: requested });
-    renderDesktopLayout(saved || requested);
-    layoutStatus.textContent = "Saved. Open Meetings uses this layout immediately.";
+    permissions = mergePermissions(permissions, await invoke(command));
+    message.textContent = "";
   } catch {
-    await loadDesktopLayout();
-    layoutStatus.textContent = "The layout could not be saved. The previous choice is still active.";
-  } finally {
-    layoutInputs.forEach((input) => { input.disabled = false; });
+    message.textContent = "Yawn could not update this permission.";
   }
+  render();
 }
 
-function adjacentPane(current, key) {
-  if (key === "Home") return panes[0];
-  if (key === "End") return panes.at(-1);
-  const index = Math.max(0, panes.indexOf(current));
-  const delta = key === "ArrowLeft" || key === "ArrowUp" ? -1 : 1;
-  return panes[(index + delta + panes.length) % panes.length];
-}
-
-async function updateTitle(pane) {
-  const label = tabs.find((tab) => tab.dataset.pane === pane)?.textContent.trim() || "Settings";
-  const title = `${label} — Yawn Settings`;
-  document.title = title;
-  try {
-    await window.__TAURI__?.window?.getCurrentWindow().setTitle(title);
-  } catch {
-    // The document title remains the truthful fallback outside Tauri.
-  }
-}
-
-function activatePane(value, { focus = false, persist = true } = {}) {
-  const pane = validPane(value);
-  activePane = pane;
-  tabs.forEach((tab) => {
-    const selected = tab.dataset.pane === pane;
-    tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-    if (selected && focus) tab.focus();
-  });
-  panels.forEach((panel) => {
-    panel.hidden = panel.dataset.panePanel !== pane;
-  });
-  if (persist) {
-    try {
-      localStorage.setItem(storageKey, pane);
-    } catch {
-      // Storage refusal does not block navigation.
-    }
-  }
-  void updateTitle(pane);
-  if (pane === "voice") void voiceProfile.activate();
-  else voiceProfile.deactivate();
-}
-
-function permissionPresentation(value, channel) {
-  if (value === "authorized") return { label: "Allowed", state: "ready", help: `${channel} access is allowed for this signed app.` };
-  if (value === "denied" || value === "restricted") return { label: "Not allowed", state: "error", help: `macOS is not allowing ${channel.toLowerCase()} access. Change it in System Settings.` };
-  if (value === "not-determined") return { label: "Not asked", state: "information", help: `${channel} access has not been requested on this Mac.` };
-  if (value === "unavailable" || value === "unsupported") return { label: "Unavailable", state: "error", help: `${channel} capture is unavailable on this Mac.` };
-  if (value === "unmeasured") return { label: "Not checked", state: "information", help: `${channel} cannot be checked without attempting access. Settings did not ask.` };
-  return { label: "Unknown", state: "warning", help: `${channel} status could not be determined.` };
-}
-
-function renderPermission(statusId, helpId, value, channel) {
-  const presentation = permissionPresentation(value, channel);
-  const status = document.querySelector(statusId);
-  status.dataset.state = presentation.state;
-  status.querySelector("span:last-child").textContent = presentation.label;
-  document.querySelector(helpId).textContent = presentation.help;
-}
-
-async function refreshPermissions() {
-  const control = document.querySelector("#refresh-permissions");
-  control.disabled = true;
-  try {
-    const result = await invoke?.("first_run_permissions");
-    if (!result || result.probeUnavailable) throw new Error("permission probe unavailable");
-    renderPermission("#microphone-status", "#microphone-help", result.microphone, "Microphone");
-    renderPermission("#system-audio-status", "#system-audio-help", result.systemAudio, "System audio");
-  } catch {
-    renderPermission("#microphone-status", "#microphone-help", "unknown", "Microphone");
-    renderPermission("#system-audio-status", "#system-audio-help", "unknown", "System audio");
-  } finally {
-    control.disabled = false;
-  }
-}
-
-tabs.forEach((tab) => {
-  tab.addEventListener("click", () => activatePane(tab.dataset.pane));
-  tab.addEventListener("keydown", (event) => {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    activatePane(adjacentPane(tab.dataset.pane, event.key), { focus: true });
-  });
+document.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-action]")?.dataset.action;
+  if (action === "refresh") void refresh();
+  if (action === "microphone" || action === "system-audio") void request(action);
 });
 
-document.querySelector("#refresh-permissions").addEventListener("click", refreshPermissions);
-layoutInputs.forEach((input) => {
-  input.addEventListener("change", () => {
-    if (input.checked) void saveDesktopLayout(input.value);
-  });
-});
-window.addEventListener("yawn:desktop-layout-changed", (event) => {
-  renderDesktopLayout(event.detail);
-  layoutStatus.textContent = "Saved. Open Meetings uses this layout immediately.";
-});
-window.addEventListener("storage", (event) => {
-  if (event.key !== storageKey || !event.newValue) return;
-  activatePane(validPane(event.newValue), { persist: false });
-});
-
-let savedPane = "capture";
-try {
-  savedPane = validPane(localStorage.getItem(storageKey));
-} catch {
-  // Capture remains the safe default.
-}
-activatePane(savedPane);
-void refreshPermissions();
-void loadDesktopLayout();
+void refresh();

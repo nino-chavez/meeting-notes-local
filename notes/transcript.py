@@ -11,8 +11,8 @@ claim depends entirely on how the audio was captured:
              operator) and one is the system (everyone else). Notes may say
              "you agreed to X", but nobody on the far side can be named.
 
-    none     Speaker identity is not recoverable. This is what `bleed-detected`
-             means in docs/screens-and-states.md: the microphone was hearing the
+    none     Speaker identity is not recoverable. In a `bleed-detected` result,
+             the microphone was hearing the
              speakers, both legs carry the same words, and the split is fiction.
              Notes must be written without actors.
 
@@ -78,8 +78,7 @@ class Transcript:
     gated_turns: list[Turn] = field(default_factory=list)
     # What the capture's voiceprint gate did, when there was one. Carried through
     # rather than dropped at the loader because the gate can delete a co-located
-    # participant, and `docs/screens-and-states.md` requires that warning to reach
-    # the post-meeting note. It never influences the prompt — a summarizer must not
+    # participant, and that warning must reach the post-meeting note. It never influences the prompt — a summarizer must not
     # be told that words are missing, only the human reading the result.
     gate: dict | None = None
     # Whether the capture itself met its integrity floor. This is separate from

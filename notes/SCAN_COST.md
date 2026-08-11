@@ -13,8 +13,8 @@ meeting.
 
 ## Why it was run
 
-`docs/vertical-slice.md` named US-13.6 — the launch scan that re-reads every
-meeting — as the next build on 2026-08-08, on the stated ground that it is "a wait
+The launch scan that re-reads every meeting was selected as the next build on
+2026-08-08, on the stated ground that it is "a wait
 that grows every month." **Nobody had measured it.** The scan number existed from
 2026-08-07; the index sync that runs beside it on the same path never did, so the
 figure being reasoned from was the smaller half of an unknown sum.

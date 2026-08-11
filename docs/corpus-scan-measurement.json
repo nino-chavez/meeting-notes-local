@@ -1,7 +1,7 @@
 {
   "schema": "corpus-scan-measurement/1",
   "measured_on": "2026-08-07",
-  "what": "Cold rebuild and warm query latency of the file-scan library projection against a synthetic corpus. Fires the deferral clause in vertical-slice.md that permitted a SQLite index once a measured corpus exceeded the bounded scan envelope.",
+  "what": "Cold rebuild and warm query latency of the file-scan library projection against a synthetic corpus. Measures whether a SQLite index is warranted once the bounded scan envelope is exceeded.",
   "producer": "crates/session-core/src/bin/corpus-scan-bench.rs",
   "private_material": "none - every transcript byte is generated from a counter",
   "machine": {

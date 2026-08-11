@@ -1,5 +1,5 @@
-# Three runtimes per DESIGN.md's shell decision: Rust/TS shell, Python ASR
-# daemon, Swift capture sidecar.
+# Build output and the local runtime. The runtime is recreated on each test
+# machine and never belongs in source control.
 node_modules/
 dist/
 target/
@@ -23,13 +23,12 @@ spike/out/
 notes/corpus/
 notes/out/
 
-# Colleague survey responses. The registered analysis plan in docs/journeys.md
-# states that this public repository retains no respondent-level rows, free text,
-# timestamps, or answer combinations — and in a three-person cohort at a named
-# employer, a role plus an answer set names a person. Only aggregates ship.
-# The export stays local; notes/verify_survey.py re-derives every published
-# figure from it, the same way fetch_corpus.py stands in for notes/corpus/.
+# Colleague survey responses do not belong in the public repository. In a small
+# cohort, a role plus an answer set can identify a person. Only aggregates ship.
 docs/survey/
+
+# Temporary private source material, including meeting exports and screenshots.
+tmp/
 
 # Built C++ binary; the library it links is not vendored (see spike/aec3/README.md).
 spike/aec3/aec3_offline

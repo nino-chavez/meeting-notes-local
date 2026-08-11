@@ -1,8 +1,7 @@
 //! Measures the file-scan library rebuild against a synthetic corpus.
 //!
-//! `vertical-slice.md` deferred any persistent index "until a measured corpus
-//! exceeds the bounded scan envelope" and named a synthetic no-private-text
-//! benchmark as the thing that would measure it. This is that benchmark.
+//! A persistent index is deferred until a measured corpus exceeds the bounded
+//! scan envelope. This synthetic, no-private-text benchmark measures that boundary.
 //!
 //! Every byte it writes is generated here from a counter. It reads no real
 //! meeting, and it must never be pointed at a live storage root: it creates the

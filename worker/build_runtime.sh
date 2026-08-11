@@ -173,11 +173,10 @@ cp "$REPO/capture/audiotee/.build/arm64-apple-macosx/release/audiotee" \
   "$STAGE/bin/audiotee"
 chmod 0755 "$STAGE/bin/audiotee"
 
-# First run has to report the two capture permissions without recording, and this
-# is the only thing that can measure them. Staged in every mode, unlike
-# meeting-capture, because first run exists in every mode — a boundary build that
-# cannot answer "is the microphone allowed" has the same lying surface the
-# internal-alpha one would.
+# The fallback requester is staged in every mode. Internal-alpha uses
+# meeting-capture's exact preflight path so it clears the executable that records;
+# boundary and product admissions still need this smaller helper for microphone
+# status because they do not package meeting-capture.
 swift build -c release --product permission-probe \
   --package-path "$REPO/capture/permission-probe"
 cp "$REPO/capture/permission-probe/.build/arm64-apple-macosx/release/permission-probe" \

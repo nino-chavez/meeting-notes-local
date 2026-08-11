@@ -157,8 +157,8 @@ def main() -> int:
             else "bin/audiotee"
         ),
         "encoder": arguments.encoder,
-        # Executed by first run to report the two capture permissions. Carried
-        # here because the app runs it, and every child this app runs is
+        # Fallback requester for admissions without meeting-capture. Carried here
+        # because the app can run it, and every child this app runs is
         # digest-verified from this manifest before it is spawned.
         "permission_probe": Path("bin/permission-probe"),
     }

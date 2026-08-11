@@ -46,8 +46,7 @@ on the same machine at the same volume.
 
 AEC3 lands within about 6 dB of the platform canceller on identical audio, and
 within 1.2 dB once the gain controllers are on. Both push the echo below the room
-noise. The macOS row is there as a reference point only — it cannot be used, for
-the reason in [`../../docs/teardown.md`](../../docs/teardown.md): it cancels audio
+noise. The macOS row is there as a reference point only — it cannot be used: it cancels audio
 the enabling process rendered itself and nothing of Zoom's.
 
 **And it discriminates.** Handed a reference unrelated to the microphone's content,

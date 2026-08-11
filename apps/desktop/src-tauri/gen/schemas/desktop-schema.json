@@ -243,6 +243,18 @@
           "markdownDescription": "Enables the library_delete_folder command without any pre-configured scope."
         },
         {
+          "description": "Enables the library_open_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-open-note",
+          "markdownDescription": "Enables the library_open_note command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_open_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-open-transcript",
+          "markdownDescription": "Enables the library_open_transcript command without any pre-configured scope."
+        },
+        {
           "description": "Enables the library_rename_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-library-rename-folder",
@@ -253,6 +265,12 @@
           "type": "string",
           "const": "allow-library-set-meeting-title",
           "markdownDescription": "Enables the library_set_meeting_title command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-snapshot",
+          "markdownDescription": "Enables the library_snapshot command without any pre-configured scope."
         },
         {
           "description": "Enables the open_settings_window command without any pre-configured scope.",
@@ -477,6 +495,18 @@
           "markdownDescription": "Denies the library_delete_folder command without any pre-configured scope."
         },
         {
+          "description": "Denies the library_open_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-open-note",
+          "markdownDescription": "Denies the library_open_note command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_open_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-open-transcript",
+          "markdownDescription": "Denies the library_open_transcript command without any pre-configured scope."
+        },
+        {
           "description": "Denies the library_rename_folder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-library-rename-folder",
@@ -487,6 +517,12 @@
           "type": "string",
           "const": "deny-library-set-meeting-title",
           "markdownDescription": "Denies the library_set_meeting_title command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-snapshot",
+          "markdownDescription": "Denies the library_snapshot command without any pre-configured scope."
         },
         {
           "description": "Denies the open_settings_window command without any pre-configured scope.",

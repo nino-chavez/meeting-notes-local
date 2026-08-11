@@ -25,7 +25,7 @@ use local_meeting_notes_session_core::meeting::load_meeting;
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 use local_meeting_notes_session_core::operations::TranscriptRestoreWorkerArgs;
 use local_meeting_notes_session_core::protocol::{
-    Operation, ProtocolError, WorkerCommand, WorkerResult,
+    Operation, ProtocolError, WorkerCommand, WorkerProgress, WorkerResult,
 };
 use local_meeting_notes_session_core::retention::AppDataWriterLock;
 use local_meeting_notes_session_core::storage::StorageRoot;
@@ -67,6 +67,33 @@ impl ProcessWorkerPort {
     pub(crate) fn new(worker: Arc<Mutex<Option<OwnedChild>>>) -> Self {
         Self { worker }
     }
+
+    pub(crate) fn request_with_progress<F>(
+        &self,
+        operation: Operation,
+        arguments: Value,
+        timeout: Duration,
+        on_progress: F,
+    ) -> Result<WorkerResult, WorkerPortUnavailable>
+    where
+        F: FnMut(&WorkerProgress) -> Result<(), ProtocolError>,
+    {
+        let command = WorkerCommand::new(operation, arguments);
+        let mut guard = self
+            .worker
+            .lock()
+            .map_err(|_| WorkerPortUnavailable("worker process lock is poisoned".into()))?;
+        let Some(worker) = guard.as_mut() else {
+            return Err(WorkerPortUnavailable("worker is unavailable".into()));
+        };
+        match worker.request_until(&command, Instant::now() + timeout, on_progress) {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                guard.take();
+                Err(WorkerPortUnavailable(error.to_string()))
+            }
+        }
+    }
 }
 
 impl WorkerPort for ProcessWorkerPort {
@@ -76,23 +103,9 @@ impl WorkerPort for ProcessWorkerPort {
         arguments: Value,
         timeout: Duration,
     ) -> Result<WorkerResult, WorkerPortUnavailable> {
-        let command = WorkerCommand::new(operation, arguments);
-        let mut guard = self
-            .worker
-            .lock()
-            .map_err(|_| WorkerPortUnavailable("worker process lock is poisoned".into()))?;
-        let Some(worker) = guard.as_mut() else {
-            return Err(WorkerPortUnavailable("worker is unavailable".into()));
-        };
-        match worker.request_until(&command, Instant::now() + timeout, |_| {
+        self.request_with_progress(operation, arguments, timeout, |_| {
             Err(ProtocolError::InvalidEvent)
-        }) {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                guard.take();
-                Err(WorkerPortUnavailable(error.to_string()))
-            }
-        }
+        })
     }
 }
 

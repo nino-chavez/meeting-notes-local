@@ -1,19 +1,14 @@
 // What are this application's two capture permissions, right now?
 //
-// First run (§H in screens-and-states.md) has to reach a `ready` state that means
-// "permissions exist". Feature 10 says the shell never lies at menubar size, so a
-// surface may not claim readiness it cannot measure. Nothing in the app could
-// measure it: the microphone check lives inside MeetingCaptureCLI's start path
-// (`AVCaptureDevice.authorizationStatus` at the point of opening the engine), and
-// the system-audio check is the OSStatus of `AudioHardwareCreateProcessTap`. Both
-// are discovered by trying to record. A first-run screen cannot record.
+// This is the fallback requester for builds that do not package the actual meeting
+// recorder. Internal-alpha Yawn uses MeetingCaptureCLI's
+// `--permission-preflight` mode instead: access follows the executable that asks,
+// so a standalone helper cannot establish that the eventual recorder is cleared.
 //
-// This is a separate executable rather than a mode on MeetingCaptureCLI on purpose.
-// That CLI's argument contract is exactly four inherited file descriptors and it is
-// frozen (vertical-slice.md Wave B); widening it to answer a question that has
-// nothing to do with capture would spend a frozen contract on a convenience. The
-// precedent in this directory is `aec-probe`: a standalone package that answers one
-// question and writes no product record. This follows it.
+// The fallback still has a bounded job. A first-run surface exists in
+// non-recording admissions too, where the capture helper is absent but microphone
+// status remains useful. It writes no product record and never opens a capture
+// directory.
 //
 // The two permissions are not symmetric, and the asymmetry is the honest part.
 //
@@ -100,10 +95,10 @@ func requestMicrophone() -> Never {
 
 /// Create one system-audio tap and destroy it, to learn whether we are allowed to.
 ///
-/// Mirrors `AudioTapManager`'s description for the system default output so the
-/// answer is about the same permission the real capture needs — mixdown of the
-/// default output device's first stream — and not about some narrower tap that
-/// might be permitted when the real one is not. Nothing is read from the tap.
+/// This is a fallback measurement only. The internal-alpha path uses the real
+/// helper's exact `AudioTapManager` setup; this standalone executable must not be
+/// treated as evidence that the meeting recorder has access. Nothing is read from
+/// the tap.
 func requestSystemAudio() -> Never {
   guard #available(macOS 14.4, *) else {
     emit([

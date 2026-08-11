@@ -3,22 +3,13 @@ case_id: local-meeting-notes
 adapter: git-manifest
 canonical_output: beta-boundary
 
-# Restored on trunk 2026-08-07. This manifest previously lived only on the
-# branch `codex/work-library-publication`, which the 85-to-1 branch
-# reconciliation removed. The work library still pins that deleted branch
-# (`sources.yml` id `local-meeting-notes`), so its next import blocks at
-# `scripts/lib/blueprint-adapter.mjs:143` with `revision-mismatch`. Keeping the
-# manifest on `main` means the pin can follow trunk instead of a branch that
-# any future cleanup will delete again. The prior version is preserved at the
-# tag `archive/work-library-publication` (commit aca9fa4).
-
 catalog:
-  title: Local Meeting Notes
-  subtitle: A local-first meeting notetaker · Category parity, phase one
-  question: Can a Mac run everything Granola, Wispr Flow and Circleback do in the cloud—and what is still missing?
-  summary: "A macOS app that records, transcribes, and writes up a meeting entirely on your own machine. The goal is the working surface of a modern notetaker—a searchable corpus, shaped notes, action items, named speakers—with remote and cloud features as a stated next phase. Six of twenty-six phase-one capabilities ship today. Two commitments are the reason to choose it: a claim cites the words it came from, which nobody in the category does, and nothing leaves the Mac without the operator seeing it leave."
+  title: Yawn
+  subtitle: A private macOS meeting notepad
+  question: Can one person keep a useful private meeting record without turning it into a cloud workspace?
+  summary: "Yawn records a consented meeting on one Mac, preserves the operator's own notes, and keeps generated claims visibly separate from transcript evidence. It does not claim accounts, cloud sync, sharing, bots, calendar connections, or task automation."
 
-collection_candidates: [commerce, product-research, local-ai]
+collection_candidates: [local-ai, product-research]
 
 publication:
   status: draft
@@ -30,7 +21,7 @@ outputs:
   - id: beta-boundary
     type: decision-record
     status: draft
-    artifact: docs/work-library-record.md
+    artifact: docs/product-brief.md
     clearance: internal
     assurance:
       human_validation: pending
@@ -48,126 +39,45 @@ outputs:
     clearance: internal
     assurance:
       human_validation: pending
-  - id: product-reference
+  - id: release-reference
     type: reference-library
     status: draft
-    artifact: docs/
+    artifact: docs/distribution-runbook.md
     clearance: internal
     assurance:
       human_validation: pending
 
 projections:
-  # Decide — the front door and the three documents that carry the argument.
   - id: decision
     output: beta-boundary
-    artifact: docs/work-library-record.md
-    render_as: markdown-document
-    kind: decision
-    label: The decision, and where the build stands
-    route: /
-
-  - id: product-definition
-    output: product-reference
-    artifact: docs/product-definition.md
+    artifact: docs/product-brief.md
     render_as: markdown-document
     kind: brief
-    label: What the product is, and the phase roadmap
-    route: /strategy/product-definition
-
-  - id: build-queue
-    output: product-reference
-    artifact: docs/vertical-slice.md
-    render_as: markdown-document
-    kind: plan
-    label: Build queue and evidence history
-    route: /strategy/build-queue
-
-  - id: journeys
-    output: product-reference
-    artifact: docs/journeys.md
-    render_as: markdown-document
-    kind: specification
-    label: Product journeys
-    route: /strategy/journeys
-
-  # Reference — requirements and surface detail, read by a practitioner.
-  - id: backlog
-    output: product-reference
-    artifact: docs/backlog.md
-    render_as: markdown-document
-    kind: specification
-    label: Epics, stories, and acceptance criteria
-    route: /reference/backlog
-
-  - id: screens
-    output: product-reference
-    artifact: docs/screens-and-states.md
-    render_as: markdown-document
-    kind: specification
-    label: Screens and states
-    route: /reference/screens-and-states
-
-  - id: encounter-acceptance
-    output: product-reference
-    artifact: docs/encounter-acceptance.md
-    render_as: markdown-document
-    kind: specification
-    label: Encounter acceptance
-    route: /reference/encounter-acceptance
-
-  # Reclassified from the proposed "procedure": the document is a competitor
-  # teardown that ends in an explicit recommendation ("Build the core; don't
-  # build the attribution"), not a checklist or runbook. Its own scope note —
-  # "this file compares mechanism... and what it takes to build the same
-  # thing" — plus the "Can we build this?" / "Recommendation" sections match
-  # the analysis test: say what data or observations mean.
-  - id: teardown
-    output: product-reference
-    artifact: docs/teardown.md
-    render_as: markdown-document
-    kind: analysis
-    label: Teardown and recovery
-    route: /reference/teardown
-
-  # Implications — conditional on human gates that have not been passed.
-  # standing: conditional confirmed against the document's own "Human release
-  # gates" section: "Before an internal alpha is shared... Clean-machine
-  # transfer remains open" and "Before an internal beta meeting, the
-  # unchanged installed build must also have the private automatic-note
-  # admission receipt" — release steps wait on human gates not yet passed.
-  - id: release-runbook
-    output: product-reference
-    artifact: docs/distribution-runbook.md
-    render_as: markdown-document
-    kind: procedure
-    standing: conditional
-    label: Release runbook and open human gates
-    route: /guidance/release-runbook
-
-  # Proof — the measured evidence the decision rests on.
+    label: Product brief
+    route: /
   - id: capture-evidence
     output: capture-evidence
     artifact: spike/RESULTS.md
     render_as: markdown-document
     kind: evidence
-    label: Capture and voice-gate evidence
+    label: Capture and voice-isolation evidence
     route: /evidence/capture
-
   - id: notes-evidence
     output: notes-evidence
     artifact: notes/EVAL.md
     render_as: markdown-document
     kind: evidence
-    label: Note-generation evaluation
+    label: Note-generation evidence
     route: /evidence/notes
+  - id: release-runbook
+    output: release-reference
+    artifact: docs/distribution-runbook.md
+    render_as: markdown-document
+    kind: procedure
+    standing: conditional
+    label: Release procedure and open human gates
+    route: /guidance/release-runbook
 
-# The output id `beta-boundary` and `canonical_output` above are deliberately
-# unchanged. They are structural keys the portal resolves by name, so renaming
-# them is a registry migration rather than a wording fix. Only the reader-facing
-# label moved when the north star did.
-
-# Meeting content never enters this repository, so nothing below is a redaction
-# step — it keeps machine-generated and fixture material out of the reader's way.
 exclude:
   - assets/**
   - capture/**

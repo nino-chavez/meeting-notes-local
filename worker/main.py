@@ -18,6 +18,8 @@ from worker.adapters import AdapterRefused, dispatch
 from worker.storage import StorageRefused, require_private_root
 
 MAX_FRAME_BYTES = 64 * 1024
+TRANSCRIPTION_HEARTBEAT_SECONDS = 3
+_PROTOCOL_WRITE_LOCK = threading.Lock()
 # sitting.derive joined the packaged alpha set on 2026-08-04 by the operator's
 # guided-enrollment registration decision, following the same-day encoder
 # admission verdict (spike/encoder-packaging/RESULTS.md): the shipped recorder
@@ -66,18 +68,26 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def emit(value: dict) -> None:
+def emit(value: dict, *, protocol_output=None) -> None:
     encoded = json.dumps(value, separators=(",", ":"), sort_keys=True)
     if len(encoded.encode("utf-8")) > MAX_FRAME_BYTES:
         raise RuntimeError("outbound protocol frame exceeds limit")
-    sys.stdout.write(encoded + "\n")
-    sys.stdout.flush()
+    output = protocol_output if protocol_output is not None else sys.stdout
+    with _PROTOCOL_WRITE_LOCK:
+        output.write(encoded + "\n")
+        output.flush()
 
 
-def emit_progress(request_id: str, meeting_id: str, state: str) -> None:
+def emit_progress(
+    request_id: str,
+    meeting_id: str,
+    state: str,
+    *,
+    protocol_output=None,
+) -> None:
     uuid.UUID(request_id)
     uuid.UUID(meeting_id)
-    if state != "recording":
+    if state not in {"recording", "transcribing"}:
         raise ValueError("progress state is outside the closed protocol")
     emit(
         {
@@ -86,8 +96,48 @@ def emit_progress(request_id: str, meeting_id: str, state: str) -> None:
             "event": "capture.state",
             "state": state,
             "meeting_id": meeting_id,
-        }
+        },
+        protocol_output=protocol_output,
     )
+
+
+def start_transcription_heartbeat(
+    request_id: str,
+    operation: str,
+    arguments: object,
+    *,
+    protocol_output,
+) -> tuple[threading.Event, threading.Thread] | None:
+    if operation != "transcript.create" or not isinstance(arguments, dict):
+        return None
+    meeting_id = arguments.get("meeting_id")
+    if not isinstance(meeting_id, str):
+        return None
+
+    stopped = threading.Event()
+
+    def emit_heartbeat() -> None:
+        while not stopped.wait(TRANSCRIPTION_HEARTBEAT_SECONDS):
+            try:
+                emit_progress(
+                    request_id,
+                    meeting_id,
+                    "transcribing",
+                    protocol_output=protocol_output,
+                )
+            except Exception:
+                # The terminal result path remains authoritative. A broken
+                # protocol stream or malformed local input must not leave a
+                # background thread running after its request ends.
+                return
+
+    thread = threading.Thread(
+        target=emit_heartbeat,
+        name="transcription-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return stopped, thread
 
 
 def load_manifest(path: Path) -> dict:
@@ -257,8 +307,8 @@ def dispatch_without_protocol_output(
     # The worker owns stdout as a newline-delimited JSON protocol. Research
     # adapters and model libraries may print progress on data-dependent paths;
     # letting one such line escape makes a valid operation look like a malformed
-    # protocol frame. Discard operation stdout at the boundary. emit() runs
-    # outside this context and remains the only writer to the protocol stream.
+    # protocol frame. Discard operation stdout at the boundary. Protocol emits
+    # carry the original stream explicitly, so a heartbeat remains visible.
     with open(os.devnull, "w", encoding="utf-8") as discarded:
         with contextlib.redirect_stdout(discarded):
             return dispatch(
@@ -274,6 +324,10 @@ def dispatch_without_protocol_output(
 
 
 def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
+    # dispatch_without_protocol_output redirects sys.stdout while model adapters
+    # run. Capture the actual protocol stream before that redirect so a
+    # background heartbeat cannot be discarded alongside adapter noise.
+    protocol_output = sys.stdout
     root = require_private_root(root)
     manifest = load_manifest(manifest_path)
     model_dir = transcript_model_dir(manifest_path, manifest)
@@ -297,7 +351,8 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                 for model in manifest["models"]
             ],
             "operations": sorted(operations),
-        }
+        },
+        protocol_output=protocol_output,
     )
     while parent_is_alive(parent_fd):
         ready, _, _ = select.select([sys.stdin.buffer, parent_fd], [], [])
@@ -310,16 +365,28 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
             return 0
         try:
             request_id, operation, arguments = parse_command(frame, operations)
-            digests = dispatch_without_protocol_output(
-                root,
+            heartbeat = start_transcription_heartbeat(
+                request_id,
                 operation,
                 arguments,
-                encoder_digest=manifest["encoder"]["sha256"],
-                admission=manifest["admission"],
-                model_dir=model_dir,
-                encoder_path=manifest_path.parent / manifest["encoder"]["path"],
-                embedding_dir=embedding_dir,
+                protocol_output=protocol_output,
             )
+            try:
+                digests = dispatch_without_protocol_output(
+                    root,
+                    operation,
+                    arguments,
+                    encoder_digest=manifest["encoder"]["sha256"],
+                    admission=manifest["admission"],
+                    model_dir=model_dir,
+                    encoder_path=manifest_path.parent / manifest["encoder"]["path"],
+                    embedding_dir=embedding_dir,
+                )
+            finally:
+                if heartbeat is not None:
+                    stopped, heartbeat_thread = heartbeat
+                    stopped.set()
+                    heartbeat_thread.join()
             emit(
                 {
                     "schema": "worker-result/2",
@@ -328,7 +395,8 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                     "code": None,
                     "recoverable": None,
                     "artifact_digests": digests,
-                }
+                },
+                protocol_output=protocol_output,
             )
         except (AdapterRefused, UnicodeDecodeError, ValueError, json.JSONDecodeError):
             known_request = None
@@ -346,7 +414,8 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                     "code": "protocol_failure",
                     "recoverable": False,
                     "artifact_digests": {},
-                }
+                },
+                protocol_output=protocol_output,
             )
     return 0
 

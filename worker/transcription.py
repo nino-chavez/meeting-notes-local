@@ -81,6 +81,35 @@ def require_whisper_model(model_dir: Path) -> Path:
     return resolved
 
 
+def _release_mlx_whisper_runtime() -> None:
+    """Drop mlx-whisper's process-global model and reclaim its Metal cache.
+
+    The application worker serves more than one request, while mlx-whisper's
+    ``ModelHolder`` intentionally keeps the last model alive for reuse. Yawn
+    has no transcript request to reuse it for once both capture legs finish,
+    so retaining that cache would make a completed transcript keep several
+    gigabytes of unified memory until the whole application exits.
+    """
+    import gc
+
+    try:
+        from mlx_whisper.transcribe import ModelHolder
+    except ImportError:
+        return
+
+    ModelHolder.model = None
+    ModelHolder.model_path = None
+    gc.collect()
+    try:
+        import mlx.core as mx
+
+        mx.clear_cache()
+    except (AttributeError, ImportError, RuntimeError):
+        # The model reference is the important release. Cache cleanup is an
+        # optimization and must not turn a valid transcript into a refusal.
+        pass
+
+
 def create_transcript_revision(
     capture_dir: Path,
     transcript_dir: Path,
@@ -122,27 +151,36 @@ def create_transcript_revision(
     system = _read_leg(capture_dir / "system.wav")
     acoustic = bleed(mic, system)
 
+    owns_mlx_runtime = transcribe_audio is None
     transcribe_audio = transcribe_audio or transcribe
     voicing_filter = voicing_filter or drop_unvoiced
     bleed_filter = bleed_filter or drop_bled
-    mic_segments = voicing_filter(
-        transcribe_audio(mic, str(model_dir), "en"), mic, "mic"
-    )
-    filtered_mic_segments = bleed_filter(mic_segments, mic, system, acoustic, "mic")
-    partial_bleed_detected = len(filtered_mic_segments) < len(mic_segments)
-    mic_segments = filtered_mic_segments
-    # The third and last question asked of the microphone leg, and the only one
-    # asked of a person rather than of the audio: is this the operator at all.
-    # Mic leg only — the system leg is by definition not the operator, and a
-    # voiceprint has nothing to say about it. `gating` is what the artifact
-    # carries about whether the gate ran; None means no profile was installed,
-    # which is a different claim from a gate that was installed and declined.
-    gating = None
-    if gate_filter is not None:
-        mic_segments, gating = gate_filter(mic_segments, mic, acoustic, "mic")
-    system_segments = voicing_filter(
-        transcribe_audio(system, str(model_dir), "en"), system, "system"
-    )
+    try:
+        mic_segments = voicing_filter(
+            transcribe_audio(mic, str(model_dir), "en"), mic, "mic"
+        )
+        filtered_mic_segments = bleed_filter(
+            mic_segments, mic, system, acoustic, "mic"
+        )
+        partial_bleed_detected = len(filtered_mic_segments) < len(mic_segments)
+        mic_segments = filtered_mic_segments
+        # The third and last question asked of the microphone leg, and the only one
+        # asked of a person rather than of the audio: is this the operator at all.
+        # Mic leg only — the system leg is by definition not the operator, and a
+        # voiceprint has nothing to say about it. `gating` is what the artifact
+        # carries about whether the gate ran; None means no profile was installed,
+        # which is a different claim from a gate that was installed and declined.
+        gating = None
+        if gate_filter is not None:
+            mic_segments, gating = gate_filter(mic_segments, mic, acoustic, "mic")
+        del mic
+        system_segments = voicing_filter(
+            transcribe_audio(system, str(model_dir), "en"), system, "system"
+        )
+        del system
+    finally:
+        if owns_mlx_runtime:
+            _release_mlx_whisper_runtime()
 
     merged = [
         MergedTurn(

@@ -1,7 +1,6 @@
 //! § D. The operator's own note, typed during the meeting.
 //!
-//! Brought into v1 by operator decision on 2026-08-06; the scope amendment is in
-//! `docs/product-definition.md`. What a person chooses to write down while
+//! What a person chooses to write down while
 //! listening is not recoverable from the recording afterwards, which is the whole
 //! argument for the surface.
 //!

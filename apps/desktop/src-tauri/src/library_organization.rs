@@ -1,8 +1,8 @@
 //! The shell boundary for folders and operator titles.
 //!
 //! Five named commands, not one `organize` command taking an operation name.
-//! `vertical-slice.md` fixes that shape and the reason is legible from the
-//! capability list a window is granted: a surface allowed to rename a meeting
+//! The reason is legible from the capability list a window is granted: a surface
+//! allowed to rename a meeting
 //! is not thereby allowed to delete a folder.
 //!
 //! **Every mutation carries `expected_revision` and refuses on mismatch rather

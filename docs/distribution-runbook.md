@@ -279,7 +279,7 @@ explicit alpha command.
 real code that appeared in no document, so which runtime feeds them had to be
 recovered from the script's own header.
 
-This lane produces a locally signed `Local Meeting Notes Preview.app`. It is **not
+This lane produces a locally signed `Yawn Preview.app`. It is **not
 notarized, not stapled, and not a release.** Its purpose is narrow: §H's two
 first-run permission paths cannot execute at all outside a signed bundle, because
 running the probe's request modes from an unsigned binary mutates the calling
@@ -321,7 +321,7 @@ this lane.
 a run that did nothing look identical. Check the properties directly:
 
 ```bash
-APP="target/release/bundle/macos/Local Meeting Notes Preview.app"
+APP="target/release/bundle/macos/Yawn Preview.app"
 codesign -dvv "$APP" 2>&1 | grep -E '^Authority=Developer ID|^TeamIdentifier='
 codesign -d --entitlements :- "$APP/Contents/Resources/bin/permission-probe" \
   | plutil -extract 'com\.apple\.security\.device\.audio-input' raw -o - -
@@ -339,7 +339,7 @@ code:
 
 | target | authority | audio-input |
 |---|---|---|
-| `Local Meeting Notes Preview.app` | Developer ID Application: Abelino Chavez (34VZ63G58M) | — |
+| `Yawn Preview.app` | Developer ID Application: Abelino Chavez (34VZ63G58M) | — |
 | `local-meeting-notes-desktop` | same | true |
 | `meeting-capture` | same | true |
 | `permission-probe` | same | true |
@@ -657,8 +657,7 @@ digest-matched; its text was not inspected or emitted. Clean-machine transfer re
 open. This receipt is mechanical evidence only and is not a release verdict.
 
 Before an internal beta meeting, the unchanged installed build must also have
-the private automatic-note admission receipt required by
-`docs/vertical-slice.md`. The operator records that receipt against the exact
+the private automatic-note admission receipt required by the release policy. The operator records that receipt against the exact
 build and model digests. The private canary and its content stay outside Git.
 
 The first release may use manual replacement. Before distributing a second

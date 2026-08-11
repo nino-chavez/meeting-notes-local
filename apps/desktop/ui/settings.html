@@ -2,310 +2,34 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>Capture — Yawn Settings</title>
-    <link rel="stylesheet" href="system/foundations.css" />
-    <link rel="stylesheet" href="system/components.css" />
-    <link rel="stylesheet" href="system/patterns.css" />
+    <title>Yawn Settings</title>
     <link rel="stylesheet" href="settings-window.css" />
-    <script type="module" src="settings.js"></script>
   </head>
   <body>
-    <main class="ys-window" data-role="settings" aria-label="Yawn Settings">
-      <nav class="ys-settings-toolbar" aria-label="Settings panes" role="tablist">
-        <button class="ys-button" id="settings-tab-capture" type="button" role="tab" data-pane="capture" aria-controls="settings-pane-capture" aria-selected="true">
-          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V7a3.5 3.5 0 1 0-7 0v4a3.5 3.5 0 0 0 3.5 3.5Z"/><path d="M6.5 10.5v.5a5.5 5.5 0 0 0 11 0v-.5M12 16.5V20M9.5 20h5"/></svg>
-          <span>Capture</span>
-        </button>
-        <button class="ys-button" id="settings-tab-privacy" type="button" role="tab" data-pane="privacy" aria-controls="settings-pane-privacy" aria-selected="false" tabindex="-1">
-          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 19 6v5.2c0 4.4-2.8 7.7-7 9.3-4.2-1.6-7-4.9-7-9.3V6l7-2.5Z"/><path d="m9.3 11.8 1.8 1.8 3.8-4"/></svg>
-          <span>Privacy</span>
-        </button>
-        <button class="ys-button" id="settings-tab-connections" type="button" role="tab" data-pane="connections" aria-controls="settings-pane-connections" aria-selected="false" tabindex="-1">
-          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 14.5 14.5 9M8 17H6.5a3.5 3.5 0 0 1 0-7H10M14 7h3.5a3.5 3.5 0 0 1 0 7H14"/></svg>
-          <span>Connections</span>
-        </button>
-        <button class="ys-button" id="settings-tab-voice" type="button" role="tab" data-pane="voice" aria-controls="settings-pane-voice" aria-selected="false" tabindex="-1">
-          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h2l1.5-5 3 10 3-12 2.5 7H20"/></svg>
-          <span>Voice</span>
-        </button>
-        <button class="ys-button" id="settings-tab-desktop" type="button" role="tab" data-pane="desktop" aria-controls="settings-pane-desktop" aria-selected="false" tabindex="-1">
-          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="12" rx="1.5"/><path d="M9 20h6M12 16.5V20"/></svg>
-          <span>Desktop</span>
-        </button>
-        <button class="ys-button" id="settings-tab-shortcuts" type="button" role="tab" data-pane="shortcuts" aria-controls="settings-pane-shortcuts" aria-selected="false" tabindex="-1">
-          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6.5 10h1M10 10h1M13.5 10h1M17 10h1M6.5 14h1M10 14h7"/></svg>
-          <span>Shortcuts</span>
-        </button>
-        <button class="ys-button" id="settings-tab-about" type="button" role="tab" data-pane="about" aria-controls="settings-pane-about" aria-selected="false" tabindex="-1">
-          <svg class="settings-tab__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 10.5V17M12 7.5v.2"/></svg>
-          <span>About</span>
-        </button>
-      </nav>
-
-      <section class="ys-settings-pane" id="settings-pane-capture" data-pane-panel="capture" role="tabpanel" aria-labelledby="settings-tab-capture" tabindex="0">
-        <header class="settings-pane-heading">
-          <h1>Capture</h1>
-          <p>Audio stays on this Mac.</p>
-        </header>
-
-        <section class="settings-group" aria-labelledby="capture-permissions-title">
-          <div class="settings-group__heading">
-            <div>
-              <h2 id="capture-permissions-title">Permissions</h2>
-              <p>Checking reads current state only. It never asks for access.</p>
-            </div>
-            <button class="ys-button settings-refresh" id="refresh-permissions" type="button">Check Again</button>
-          </div>
-          <div class="settings-group__rows">
-            <div class="settings-row">
-              <div class="settings-row__copy"><strong>Microphone</strong><p id="microphone-help">Checking the signed permission probe.</p></div>
-              <span class="ys-status" id="microphone-status" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span>Checking</span></span>
-            </div>
-            <div class="settings-row">
-              <div class="settings-row__copy"><strong>System Audio</strong><p id="system-audio-help">Checking whether macOS can report this without asking.</p></div>
-              <span class="ys-status" id="system-audio-status" data-state="processing"><span class="ys-status__mark" aria-hidden="true"></span><span>Checking</span></span>
-            </div>
-          </div>
-        </section>
-
-        <section class="settings-group" aria-labelledby="capture-devices-title">
-          <div class="settings-group__heading">
-            <div>
-              <h2 id="capture-devices-title">Devices</h2>
-              <p>Device selection is not available yet.</p>
-            </div>
-          </div>
-          <div class="settings-group__rows">
-            <div class="settings-row">
-              <div class="settings-row__copy"><strong>Microphone</strong><p id="microphone-device-help">Yawn uses the system default input.</p></div>
-              <select class="ys-select" disabled aria-label="Microphone" aria-describedby="microphone-device-help"><option>System Default</option></select>
-            </div>
-            <div class="settings-row">
-              <div class="settings-row__copy"><strong>Meeting Audio</strong><p id="meeting-audio-device-help">Yawn uses the signed system-audio helper.</p></div>
-              <select class="ys-select" disabled aria-label="Meeting audio" aria-describedby="meeting-audio-device-help"><option>System Audio</option></select>
-            </div>
-          </div>
-        </section>
-
-        <section class="settings-consent" aria-labelledby="capture-consent-title">
-          <div>
-            <h2 id="capture-consent-title">Consent Review</h2>
-            <p>Required before every recording. Yawn does not notify participants for you.</p>
-          </div>
-          <span class="settings-required">Required</span>
-        </section>
-      </section>
-
-      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-privacy" data-pane-panel="privacy" role="tabpanel" aria-labelledby="settings-tab-privacy" tabindex="0" hidden><header><h1>Privacy</h1><p>This pane has not moved into the native Settings window yet.</p></header></section>
-      <section class="ys-settings-pane settings-ledger-pane" id="settings-pane-connections" data-pane-panel="connections" role="tabpanel" aria-labelledby="settings-tab-connections" tabindex="0" hidden><header><h1>Connections</h1><p>This pane has not moved into the native Settings window yet. No account or connection is active.</p></header></section>
-      <section class="ys-settings-pane voice-profile-pane" id="settings-pane-voice" data-pane-panel="voice" role="tabpanel" aria-labelledby="settings-tab-voice" tabindex="0" hidden>
-        <header class="settings-pane-heading">
-          <h1>Voice profile</h1>
-          <p id="profile-lede">Checking local setup status.</p>
-        </header>
-
-        <section class="ys-settings-section voice-profile-status" aria-labelledby="profile-status-heading">
-          <h2 class="ys-settings-section__title" id="profile-status-heading">Current status</h2>
-          <div class="voice-profile-status__copy">
-            <strong id="profile-status-title" tabindex="-1">Checking</strong>
-            <p id="profile-status-copy">Checking whether a private voice profile is available.</p>
-          </div>
-        </section>
-
-        <section class="ys-settings-section voice-profile-requirements" id="profile-requirements" aria-labelledby="profile-requirements-title">
-          <h2 class="ys-settings-section__title" id="profile-requirements-title">How setup works</h2>
-          <div class="voice-profile-section__body">
-            <ol class="setup-steps">
-              <li>Record two short sessions of you talking, at least an hour apart.</li>
-              <li>Play a stretch of speech that is not you — licensed or public audio — so the app can measure the difference.</li>
-              <li>Review the measured options and choose one. Nothing is chosen for you.</li>
-            </ol>
-            <p class="voice-profile-footnote">Setup recordings and their transcripts are deleted once the private profile is stored.</p>
-            <p class="voice-profile-next-step" id="profile-next-step" hidden></p>
-            <p class="voice-profile-footnote" id="profile-enrollment-gates" hidden></p>
-          </div>
-        </section>
-
-        <section class="ys-settings-section voice-profile-recorder" id="profile-recorder" aria-labelledby="profile-recorder-title">
-          <h2 class="ys-settings-section__title" id="profile-recorder-title">Setup recordings</h2>
-          <div class="voice-profile-section__body">
-            <p class="voice-profile-copy" id="profile-recorder-entry">Checking whether a setup recording can start.</p>
-            <form id="sitting-form" hidden>
-              <fieldset class="voice-profile-fieldset" id="sitting-kind">
-                <legend>What this recording is</legend>
-                <label class="ys-radio-choice voice-profile-choice">
-                  <input type="radio" name="sitting-kind" value="operator-sitting" checked />
-                  <span><strong>My voice.</strong><small>A short session of you talking naturally, wearing headphones, alone near the microphone.</small></span>
-                </label>
-                <label class="ys-radio-choice voice-profile-choice">
-                  <input type="radio" name="sitting-kind" value="negative-source" />
-                  <span><strong>Speech that is not me.</strong><small>Comparison material the app measures against your voice. It never counts as your speech.</small></span>
-                </label>
-              </fieldset>
-              <fieldset class="voice-profile-fieldset" id="sitting-source-class" hidden>
-                <legend>Where the comparison speech comes from</legend>
-                <label class="ys-radio-choice voice-profile-choice">
-                  <input type="radio" name="sitting-source-class" value="public-or-licensed" />
-                  <span><strong>Public-domain or licensed audio, played aloud.</strong><small>A recording you are allowed to use for this measurement.</small></span>
-                </label>
-                <label class="ys-radio-choice voice-profile-choice">
-                  <input type="radio" name="sitting-source-class" value="consenting-person" />
-                  <span><strong>A person who knowingly agreed.</strong><small>They agreed to make this calibration recording for this purpose.</small></span>
-                </label>
-                <p class="voice-profile-footnote">A comparison sample is never permission to record someone without their knowledge.</p>
-              </fieldset>
-              <p class="voice-profile-error" id="sitting-error" role="alert" hidden></p>
-              <div class="ys-actions voice-profile-actions">
-                <button class="ys-button" id="sitting-start" data-variant="primary" type="submit">Start setup recording</button>
-              </div>
-            </form>
-            <div class="voice-profile-active" id="sitting-active" hidden>
-              <p>Recording your setup session. Speak naturally, then stop when you are done.</p>
-              <div class="ys-actions voice-profile-actions">
-                <button class="ys-button" id="sitting-stop" data-variant="primary" type="button">Stop setup recording</button>
-              </div>
-            </div>
-            <p class="voice-profile-copy" id="sitting-outcome" role="status" hidden></p>
-            <ul class="voice-profile-sittings" id="profile-sittings" hidden></ul>
-          </div>
-        </section>
-
-        <section class="ys-settings-section voice-profile-operating-points" id="profile-operating-points" aria-labelledby="operating-points-title" hidden>
-          <h2 class="ys-settings-section__title" id="operating-points-title">Choose how the profile behaves</h2>
-          <div class="voice-profile-section__body">
-            <p class="voice-profile-copy">Your recordings hold enough measured evidence to review the options. Each option carries its own measured costs; nothing is chosen for you.</p>
-            <form id="operating-points-form">
-              <fieldset class="voice-profile-fieldset" id="operating-points-rows" disabled>
-                <legend>Measured options</legend>
-              </fieldset>
-              <p class="voice-profile-error" id="operating-points-error" role="alert" hidden></p>
-              <div class="ys-actions voice-profile-actions">
-                <button class="ys-button" id="operating-points-load" type="button">Review measured options</button>
-                <button class="ys-button" id="operating-points-build" data-variant="primary" type="submit" disabled>Build voice profile</button>
-              </div>
-            </form>
-            <p class="voice-profile-footnote">Building runs the app’s own final check again before anything is stored. The temporary setup recordings are already deleted; their derived voice material is what the profile is built from.</p>
-          </div>
-        </section>
-
-        <aside class="ys-inline-notice voice-profile-boundary" id="profile-boundary" data-tone="information">
-          Recording requires headphones and only you near the microphone, with or without a profile. A profile sets aside speech that is not yours; it does not name speakers, and speaker playback stays unsupported.
-        </aside>
-        <p class="voice-profile-footnote" id="profile-footnote">Opening this pane reads only the setup status. It never opens meetings or transcripts.</p>
-
-        <section class="ys-confirmation voice-profile-reset-confirmation" id="profile-reset-confirmation" aria-labelledby="profile-reset-title" hidden>
-          <p class="voice-profile-eyebrow">Separate confirmation</p>
-          <h3 id="profile-reset-title">Delete the stored voice profile?</h3>
-          <p>This removes the profile, calibrated threshold, and its enrolment provenance. Meetings, transcripts, notes, evidence, and meeting audio remain.</p>
-          <p>Any profile-required recording stays unavailable until setup completes again. Preview’s current one-operator, headphones-required recording limit is unchanged.</p>
-          <p class="voice-profile-footnote">This is logical app-storage deletion, not forensic erasure. The fixed empty slots, completion count, latest reset event, and filesystem metadata remain.</p>
-          <div class="ys-actions voice-profile-actions">
-            <button class="ys-button" id="profile-reset-confirm" data-tone="error" type="button">Delete voice profile</button>
-            <button class="ys-button" id="profile-reset-cancel" type="button">Keep profile</button>
-          </div>
-          <p class="voice-profile-error" id="profile-reset-status" role="alert" hidden></p>
-        </section>
-
-        <div class="ys-actions voice-profile-actions voice-profile-primary-action">
-          <button class="ys-button" id="profile-setup" data-variant="primary" type="button" disabled>Set up voice profile</button>
+    <main class="settings-shell">
+      <header>
+        <p class="eyebrow">Yawn</p>
+        <h1>Settings</h1>
+        <p>Only the things that affect a private recording belong here.</p>
+      </header>
+      <section class="privacy-card" aria-labelledby="privacy-title">
+        <span aria-hidden="true">⌂</span>
+        <div>
+          <h2 id="privacy-title">Kept on this Mac</h2>
+          <p>Yawn does not use an account, cloud sync, a meeting bot, or automatic sharing.</p>
         </div>
       </section>
-      <section class="ys-settings-pane" id="settings-pane-desktop" data-pane-panel="desktop" role="tabpanel" aria-labelledby="settings-tab-desktop" tabindex="0" hidden>
-        <header class="settings-pane-heading">
-          <h1>Desktop behavior</h1>
-          <p>Choose how Meetings uses the window.</p>
-        </header>
-        <section class="ys-settings-section" aria-labelledby="desktop-window-title">
-          <h2 class="ys-settings-section__title" id="desktop-window-title">Window</h2>
-          <div class="ys-settings-row">
-            <div><strong>Close the main window</strong><p class="ys-help-text">Closing hides Yawn. It stays available from the Yawn menu bar item.</p></div>
-            <span class="settings-static-value">Hide</span>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Quit Yawn</strong><p class="ys-help-text">Quitting ends the app. Stop an active meeting before you quit.</p></div>
-            <span class="settings-static-value">Exit</span>
-          </div>
-        </section>
-        <fieldset class="layout-choice-group" aria-describedby="layout-safety-note layout-choice-status">
-          <legend>Meetings layout</legend>
-          <label class="layout-choice">
-            <input type="radio" name="desktop-layout" value="automatic" />
-            <span><strong>Automatic</strong><small>Shows the list beside a meeting when there is room. Uses one pane in a narrow window.</small></span>
-          </label>
-          <label class="layout-choice">
-            <input type="radio" name="desktop-layout" value="focus" />
-            <span><strong>Focus</strong><small>Shows one pane at a time. Opening a meeting replaces the list until you go back.</small></span>
-          </label>
-          <label class="layout-choice">
-            <input type="radio" name="desktop-layout" value="library" />
-            <span><strong>Library</strong><small>Keeps sources, the meeting list, and the selected meeting visible when the window is wide enough.</small></span>
-          </label>
-        </fieldset>
-        <p class="layout-safety-note" id="layout-safety-note">Yawn collapses panes before the meeting becomes too narrow to read.</p>
-        <p class="settings-inline-status" id="layout-choice-status" role="status" aria-live="polite"></p>
-        <aside class="ys-inline-notice settings-static-notice" data-tone="information">
-          Yawn does not send system notifications today. Capture state remains visible in the window and menu bar.
-        </aside>
+      <section class="settings-card" aria-labelledby="audio-title">
+        <div class="section-heading">
+          <div><h2 id="audio-title">Audio access</h2><p>Yawn needs both sources before it can record a meeting.</p></div>
+          <button class="quiet-button" type="button" data-action="refresh">Check again</button>
+        </div>
+        <div id="permissions" class="permission-list" aria-live="polite"></div>
       </section>
-      <section class="ys-settings-pane settings-static-pane" id="settings-pane-shortcuts" data-pane-panel="shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" tabindex="0" hidden>
-        <header class="settings-pane-heading">
-          <h1>Shortcuts</h1>
-          <p>Main-window routes and Settings-pane keys.</p>
-        </header>
-        <section class="ys-settings-section" aria-labelledby="shortcuts-navigation-title">
-          <h2 class="ys-settings-section__title" id="shortcuts-navigation-title">Navigation</h2>
-          <div class="ys-settings-row">
-            <div><strong>Meetings</strong><p class="ys-help-text">Show the retained meeting list from the main Yawn window.</p></div>
-            <kbd class="settings-shortcut-key" aria-label="Command 1">⌘1</kbd>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Search</strong><p class="ys-help-text">Find retained local passages from the main Yawn window.</p></div>
-            <kbd class="settings-shortcut-key" aria-label="Command 2">⌘2</kbd>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Settings</strong><p class="ys-help-text">Open or focus Settings from the main Yawn window.</p></div>
-            <kbd class="settings-shortcut-key" aria-label="Command Comma">⌘,</kbd>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Settings panes</strong><p class="ys-help-text">Use Left/Right, Home, or End after focusing the toolbar.</p></div>
-            <kbd class="settings-shortcut-key" aria-label="Arrow keys, Home, or End">← →</kbd>
-          </div>
-        </section>
-        <aside class="ys-inline-notice settings-static-notice" data-tone="information">
-          Actions is not listed because cross-meeting action follow-through is not available in the product yet.
-        </aside>
-      </section>
-
-      <section class="ys-settings-pane settings-static-pane" id="settings-pane-about" data-pane-panel="about" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" hidden>
-        <header class="settings-pane-heading">
-          <h1>About Yawn</h1>
-          <p>Local meeting notes, with the evidence kept close.</p>
-        </header>
-        <section class="ys-settings-section" aria-labelledby="about-product-title">
-          <h2 class="ys-settings-section__title" id="about-product-title">Product boundary</h2>
-          <div class="ys-settings-row">
-            <div><strong>Version</strong><p class="ys-help-text">Shown in Yawn → About Yawn from the native app menu.</p></div>
-            <span class="settings-static-value">Native menu</span>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Account</strong><p class="ys-help-text">No sign-in or cloud identity is active.</p></div>
-            <span class="settings-static-value">None</span>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Meeting data</strong><p class="ys-help-text">Stored on this Mac. No upload path is active.</p></div>
-            <span class="settings-static-value">On this Mac</span>
-          </div>
-          <div class="ys-settings-row">
-            <div><strong>Automatic notes</strong><p class="ys-help-text">Yawn does not create notes or action items.</p></div>
-            <span class="settings-static-value">Unavailable</span>
-          </div>
-        </section>
-        <aside class="ys-inline-notice settings-static-notice" data-tone="information">
-          This pane reports the current product boundary. It does not open a sign-in, upload, or note-generation path.
-        </aside>
-      </section>
+      <p id="message" class="message" role="status"></p>
     </main>
+    <script type="module" src="settings.js"></script>
   </body>
 </html>

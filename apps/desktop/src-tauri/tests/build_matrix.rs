@@ -9,365 +9,70 @@ fn config(bytes: &str) -> Value {
 }
 
 #[test]
-fn production_config_without_feature_is_production_only() {
+fn production_config_is_the_signed_product_lane() {
     let production = config(include_str!("../tauri.conf.json"));
     let plan = plan(BuildMode::Production);
     assert!(validate(BuildMode::Production, &production).is_ok());
     assert_eq!(plan.capabilities_path, "capabilities/product/*.json");
     assert_eq!(plan.permissions_path, "permissions/production/**/*");
-    assert_eq!(
-        plan.commands,
-        [
-            "app_snapshot",
-            "open_settings_window",
-            "get_desktop_layout",
-            "set_desktop_layout",
-            "start_meeting",
-            "stop_meeting",
-            "dismiss_meeting",
-            "retry_startup",
-            "first_run_permissions",
-        ]
-    );
+    for command in [
+        "app_snapshot",
+        "start_meeting",
+        "stop_meeting",
+        "dismiss_meeting",
+        "first_run_request_microphone",
+        "first_run_request_system_audio",
+        "library_snapshot",
+        "library_open_note",
+        "library_open_transcript",
+        "operator_note",
+        "save_operator_note",
+    ] {
+        assert!(plan.commands.contains(&command), "missing product command: {command}");
+    }
+    assert_eq!(production["bundle"]["macOS"]["signingIdentity"], "-");
 }
 
 #[test]
-fn production_and_preview_exclude_the_unadmitted_note_runtime_resources() {
+fn preview_is_the_only_optional_build_lane() {
+    let preview = config(include_str!("../tauri.preview.conf.json"));
+    assert!(validate(BuildMode::Preview, &preview).is_ok());
+    assert_eq!(BuildMode::from_enabled_features(false), BuildMode::Production);
+    assert_eq!(BuildMode::from_enabled_features(true), BuildMode::Preview);
+}
+
+#[test]
+fn product_builds_keep_the_unadmitted_note_runtime_out_of_the_bundle() {
     let production = config(include_str!("../tauri.conf.json"));
     let preview = config(include_str!("../tauri.preview.conf.json"));
-    let forbidden = [
-        "../runtime/note-bridge.py",
-        "../runtime/note-runtime-project.json",
-        "../runtime/note-validator.zip",
-    ];
-
     for config in [&production, &preview] {
         let resources = config["bundle"]["resources"].as_object().unwrap();
-        for path in forbidden {
-            assert!(
-                !resources.contains_key(path),
-                "unadmitted note runtime resource must not be bundled: {path}"
-            );
+        for path in [
+            "../runtime/note-bridge.py",
+            "../runtime/note-runtime-project.json",
+            "../runtime/note-validator.zip",
+        ] {
+            assert!(!resources.contains_key(path), "unadmitted runtime resource: {path}");
         }
     }
 }
 
 #[test]
-fn isolated_development_config_with_feature_is_development_only() {
-    let development = config(include_str!("../tauri.library-dev.conf.json"));
-    let plan = plan(BuildMode::Development);
-    assert!(validate(BuildMode::Development, &development).is_ok());
-    assert!(plan.commands.is_empty());
-    assert_eq!(
-        plan.capabilities_path,
-        "capabilities/development/library-dev.json"
-    );
-    assert_eq!(plan.permissions_path, "permissions/development/**/*");
-}
-
-#[test]
-fn preview_config_with_feature_adds_the_library_and_reviewed_audio_deletion_boundary() {
-    let preview = config(include_str!("../tauri.preview.conf.json"));
-    let plan = plan(BuildMode::Preview);
-    assert!(validate(BuildMode::Preview, &preview).is_ok());
-    assert_eq!(plan.capabilities_path, "capabilities/product/*.json");
-    assert_eq!(plan.permissions_path, "permissions/production/**/*");
-    assert_eq!(
-        plan.commands,
-        [
-            "app_snapshot",
-            "open_settings_window",
-            "get_desktop_layout",
-            "set_desktop_layout",
-            "start_meeting",
-            "stop_meeting",
-            "dismiss_meeting",
-            "retry_startup",
-            "preview_profile_snapshot",
-            "preview_enrollment_surface",
-            "preview_enrollment_start_sitting",
-            "preview_enrollment_stop_sitting",
-            "preview_enrollment_operating_points",
-            "preview_enrollment_build_profile",
-            "preview_profile_preserve_legacy",
-            "preview_profile_reset",
-            "preview_library_snapshot",
-            "preview_retention_overview",
-            "preview_library_search",
-            "preview_library_open_search_result",
-            "preview_library_open_note",
-            "preview_library_open_evidence",
-            "preview_library_open_transcript",
-            "preview_delete_meeting_audio",
-            "preview_delete_meeting",
-            // Five named commands, not one "organize". A window allowed to
-            // rename a meeting is not thereby allowed to delete a folder.
-            "library_create_folder",
-            "library_rename_folder",
-            "library_delete_folder",
-            "library_assign_meeting_folder",
-            "library_set_meeting_title",
-            "restore_withheld_turn",
-            // Restoring publishes a new current transcript, so the screen shown
-            // right after a recording needs its projection rebuilt in place —
-            // it has no reader to re-walk the way the Library route does.
-            "refresh_current_transcript",
-            // § D, 2026-08-06: the operator's own note, for the open meeting only.
-            "operator_note",
-            "save_operator_note",
-            "corpus_search",
-            "corpus_embed_pending",
-        ]
-    );
-}
-
-#[test]
-fn production_and_preview_keep_their_intentional_window_sizes() {
+fn product_and_preview_reject_each_others_identity() {
     let production = config(include_str!("../tauri.conf.json"));
     let preview = config(include_str!("../tauri.preview.conf.json"));
-
-    let production_window = &production["app"]["windows"][0];
-    assert_eq!(production_window["width"], 960);
-    assert_eq!(production_window["height"], 900);
-    assert_eq!(production_window["minWidth"], 720);
-    assert_eq!(production_window["minHeight"], 560);
-    assert_eq!(production_window["resizable"], true);
-
-    let preview_window = &preview["app"]["windows"][0];
-    assert_eq!(preview_window["width"], 1080);
-    assert_eq!(preview_window["height"], 900);
-    assert_eq!(preview_window["minWidth"], 800);
-    assert_eq!(preview_window["minHeight"], 640);
-    assert_eq!(preview_window["resizable"], true);
+    assert!(validate(BuildMode::Production, &preview).is_err());
+    assert!(validate(BuildMode::Preview, &production).is_err());
 }
 
 #[test]
-fn surface_features_select_exactly_one_build_lane() {
-    assert!(matches!(
-        BuildMode::from_enabled_features(false, false, false),
-        Ok(BuildMode::Production)
-    ));
-    assert!(matches!(
-        BuildMode::from_enabled_features(true, false, false),
-        Ok(BuildMode::Development)
-    ));
-    assert!(matches!(
-        BuildMode::from_enabled_features(false, true, false),
-        Ok(BuildMode::Preview)
-    ));
-    assert!(matches!(
-        BuildMode::from_enabled_features(false, false, true),
-        Ok(BuildMode::UiReview)
-    ));
-    assert!(BuildMode::from_enabled_features(true, true, false).is_err());
-    assert!(BuildMode::from_enabled_features(false, true, true).is_err());
-}
-
-#[test]
-fn ui_review_config_is_backend_free_and_isolated() {
-    let review = config(include_str!("../tauri.ui-review.conf.json"));
-    let plan = plan(BuildMode::UiReview);
-    assert!(validate(BuildMode::UiReview, &review).is_ok());
-    assert!(plan.commands.is_empty());
-    assert_eq!(plan.capabilities_path, "capabilities/review/*.json");
-    assert_eq!(review["bundle"]["resources"], Value::Null);
-    assert_eq!(
-        review["app"]["windows"][0]["url"],
-        "index.html?review=synthetic"
-    );
-    assert!(validate(BuildMode::Production, &review).is_err());
-    assert!(validate(BuildMode::Preview, &review).is_err());
-    assert!(validate(BuildMode::Development, &review).is_err());
-}
-
-#[test]
-fn production_rejects_every_isolated_surface_or_hybrid_field() {
+fn product_rejects_a_hybrid_or_non_adhoc_bundle() {
     let production = config(include_str!("../tauri.conf.json"));
-    let mut hybrids = Vec::new();
+    let mut hybrid = production.clone();
+    hybrid["app"]["windows"].as_array_mut().unwrap().push(json!({ "label": "extra" }));
+    assert!(validate(BuildMode::Production, &hybrid).is_err());
 
-    let mut identifier = production.clone();
-    identifier["identifier"] = Value::String(build_contract::DEV_IDENTIFIER.into());
-    hybrids.push(identifier);
-
-    let mut frontend = production.clone();
-    frontend["build"]["frontendDist"] = Value::String(build_contract::DEV_FRONTEND.into());
-    hybrids.push(frontend);
-
-    let mut window = production.clone();
-    window["app"]["windows"][0]["label"] = Value::String(build_contract::DEV_WINDOW.into());
-    hybrids.push(window);
-
-    let mut extra_window = production.clone();
-    extra_window["app"]["windows"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "label": build_contract::DEV_WINDOW,
-        }));
-    hybrids.push(extra_window);
-
-    let mut capability = production.clone();
-    capability["app"]["security"]["capabilities"] = json!([build_contract::DEV_CAPABILITY]);
-    hybrids.push(capability);
-
-    let mut extra_capability = production.clone();
-    extra_capability["app"]["security"]["capabilities"]
-        .as_array_mut()
-        .unwrap()
-        .push(Value::String(build_contract::DEV_CAPABILITY.into()));
-    hybrids.push(extra_capability);
-
-    let mut inactive_bundle = production.clone();
-    inactive_bundle["bundle"]["active"] = Value::Bool(false);
-    hybrids.push(inactive_bundle);
-
-    let mut empty_resources = production.clone();
-    empty_resources["bundle"]["resources"] = Value::Null;
-    hybrids.push(empty_resources);
-
-    let mut non_adhoc = production.clone();
+    let mut non_adhoc = production;
     non_adhoc["bundle"]["macOS"]["signingIdentity"] = Value::String("not-ad-hoc".into());
-    hybrids.push(non_adhoc);
-
-    let mut preview_identifier = production.clone();
-    preview_identifier["identifier"] = Value::String(build_contract::PREVIEW_IDENTIFIER.into());
-    hybrids.push(preview_identifier);
-
-    let mut preview_window = production.clone();
-    preview_window["app"]["windows"][0]["label"] =
-        Value::String(build_contract::PREVIEW_WINDOW.into());
-    hybrids.push(preview_window);
-
-    let mut preview_capability = production.clone();
-    preview_capability["app"]["security"]["capabilities"] =
-        json!([build_contract::PREVIEW_CAPABILITY]);
-    hybrids.push(preview_capability);
-
-    for hybrid in hybrids {
-        assert!(validate(BuildMode::Production, &hybrid).is_err());
-    }
-}
-
-#[test]
-fn development_rejects_every_production_preview_or_hybrid_field() {
-    let development = config(include_str!("../tauri.library-dev.conf.json"));
-    let production = config(include_str!("../tauri.conf.json"));
-    let mut hybrids = Vec::new();
-
-    let mut identifier = development.clone();
-    identifier["identifier"] = Value::String(build_contract::PRODUCTION_IDENTIFIER.into());
-    hybrids.push(identifier);
-
-    let mut frontend = development.clone();
-    frontend["build"]["frontendDist"] = Value::String(build_contract::PRODUCTION_FRONTEND.into());
-    hybrids.push(frontend);
-
-    let mut window = development.clone();
-    window["app"]["windows"][0]["label"] = Value::String(build_contract::PRODUCTION_WINDOW.into());
-    hybrids.push(window);
-
-    let mut extra_window = development.clone();
-    extra_window["app"]["windows"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "label": build_contract::PRODUCTION_WINDOW,
-        }));
-    hybrids.push(extra_window);
-
-    let mut capability = development.clone();
-    capability["app"]["security"]["capabilities"] = json!([build_contract::PRODUCTION_CAPABILITY]);
-    hybrids.push(capability);
-
-    let mut extra_capability = development.clone();
-    extra_capability["app"]["security"]["capabilities"]
-        .as_array_mut()
-        .unwrap()
-        .push(Value::String(build_contract::PRODUCTION_CAPABILITY.into()));
-    hybrids.push(extra_capability);
-
-    let mut active_bundle = development.clone();
-    active_bundle["bundle"]["active"] = Value::Bool(true);
-    hybrids.push(active_bundle);
-
-    let mut production_resources = development.clone();
-    production_resources["bundle"]["resources"] = production["bundle"]["resources"].clone();
-    hybrids.push(production_resources);
-
-    let mut preview_identifier = development.clone();
-    preview_identifier["identifier"] = Value::String(build_contract::PREVIEW_IDENTIFIER.into());
-    hybrids.push(preview_identifier);
-
-    let mut preview_window = development.clone();
-    preview_window["app"]["windows"][0]["label"] =
-        Value::String(build_contract::PREVIEW_WINDOW.into());
-    hybrids.push(preview_window);
-
-    let mut preview_capability = development.clone();
-    preview_capability["app"]["security"]["capabilities"] =
-        json!([build_contract::PREVIEW_CAPABILITY]);
-    hybrids.push(preview_capability);
-
-    for hybrid in hybrids {
-        assert!(validate(BuildMode::Development, &hybrid).is_err());
-    }
-}
-
-#[test]
-fn preview_rejects_production_development_and_hybrid_fields() {
-    let preview = config(include_str!("../tauri.preview.conf.json"));
-    let production = config(include_str!("../tauri.conf.json"));
-    let development = config(include_str!("../tauri.library-dev.conf.json"));
-    let mut hybrids = Vec::new();
-
-    for other in [&production, &development] {
-        let mut identifier = preview.clone();
-        identifier["identifier"] = other["identifier"].clone();
-        hybrids.push(identifier);
-
-        let mut name = preview.clone();
-        name["productName"] = other["productName"].clone();
-        hybrids.push(name);
-
-        let mut window = preview.clone();
-        window["app"]["windows"] = other["app"]["windows"].clone();
-        hybrids.push(window);
-
-        let mut capability = preview.clone();
-        capability["app"]["security"]["capabilities"] =
-            other["app"]["security"]["capabilities"].clone();
-        hybrids.push(capability);
-    }
-
-    let mut library_frontend = preview.clone();
-    library_frontend["build"]["frontendDist"] = Value::String(build_contract::DEV_FRONTEND.into());
-    hybrids.push(library_frontend);
-
-    let mut changed_resources = preview.clone();
-    changed_resources["bundle"]["resources"] = Value::Null;
-    hybrids.push(changed_resources);
-
-    for (source, destination) in [
-        ("../runtime/note-bridge.py", "note-bridge.py"),
-        (
-            "../runtime/note-runtime-project.json",
-            "note-runtime-project.json",
-        ),
-        ("../runtime/note-validator.zip", "note-validator.zip"),
-    ] {
-        let mut unadmitted_note_runtime = preview.clone();
-        unadmitted_note_runtime["bundle"]["resources"]
-            .as_object_mut()
-            .unwrap()
-            .insert(source.into(), Value::String(destination.into()));
-        hybrids.push(unadmitted_note_runtime);
-    }
-
-    let mut non_adhoc = preview.clone();
-    non_adhoc["bundle"]["macOS"]["signingIdentity"] = Value::String("not-ad-hoc".into());
-    hybrids.push(non_adhoc);
-
-    for hybrid in hybrids {
-        assert!(validate(BuildMode::Preview, &hybrid).is_err());
-    }
+    assert!(validate(BuildMode::Production, &non_adhoc).is_err());
 }

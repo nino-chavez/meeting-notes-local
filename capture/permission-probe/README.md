@@ -1,18 +1,14 @@
 # permission-probe
 
-Reports this application's two capture permissions without recording anything.
+Reports the fallback first-run permissions for builds that do not ship the real
+meeting recorder. Internal-alpha Yawn builds use `meeting-capture --permission-preflight`
+instead, so macOS clears the exact executable that will later access the microphone
+and system audio.
 
-It exists because first run (`docs/screens-and-states.md` § H) has to reach a
-`ready` state meaning "permissions exist", and nothing in the app could measure
-that. The microphone check lived inside `MeetingCaptureCLI`'s start path and the
-system-audio check is the status of the tap-create call, so both were discovered
-by trying to record. A first-run screen cannot record, and north-star feature 10
-forbids a surface claiming a state it cannot measure.
-
-Separate executable, not a mode on `MeetingCaptureCLI`: that CLI's argument
-contract is exactly four inherited file descriptors and is frozen
-(`vertical-slice.md` Wave B). `aec-probe` is the precedent in this directory —
-a standalone package answering one question, writing no product record.
+It remains useful for non-recording admissions: microphone has a status API, and
+system audio can be measured by creating a disposable tap. The recorder's own
+preflight takes over when that recorder exists, because a separate requester cannot
+prove the real capture helper will not prompt later.
 
 ## The two permissions are not symmetric
 
@@ -64,7 +60,8 @@ Creating and destroying a tap reads no audio buffer, builds no aggregate device,
 writes no file, and touches no product record. The binary opens no capture
 directory and takes no descriptors.
 
-**Permissions belong to the binary that asks.** Run from a terminal, this reports
-the terminal's permissions, not the app's — useful for checking the probe, useless
-for checking Yawn. The answer is only about the app when the probe runs from inside
-the signed bundle.
+**Permissions belong to the binary that asks.** This executable is intentionally
+not the internal-alpha capture preflight: even inside the signed bundle, clearing a
+standalone probe does not prove that `meeting-capture` can start a meeting. Run it
+from a terminal only to inspect the probe itself; do not use its result as evidence
+that Yawn's recorder has access.

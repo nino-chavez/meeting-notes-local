@@ -288,8 +288,8 @@ fn finish_removal(
         // written so that a crash resumes here: the row removal is a no-op when
         // there is no row, so repeating it costs nothing.
         //
-        // `vertical-slice.md`: "Whole-meeting deletion is not admitted until its
-        // staged operation removes the metadata row in the same recoverable
+        // Whole-meeting deletion is admitted only when its staged operation removes
+        // the metadata row in the same recoverable
         // sequence as the meeting bytes; leaving title or folder text behind is
         // not successful whole-meeting deletion."
         crate::library_metadata::forget_meeting(storage, &receipt.meeting_id)
@@ -790,8 +790,7 @@ mod tests {
         assert_eq!(recorded.byte_size, payload.len() as u64);
     }
 
-    /// The clause `vertical-slice.md` sets: "leaving title or folder text behind
-    /// is not successful whole-meeting deletion."
+    /// Leaving title or folder text behind is not successful whole-meeting deletion.
     ///
     /// Written because the failure is not the obvious one. A row outliving its
     /// meeting does not strand that meeting's title — `library_read` grants the

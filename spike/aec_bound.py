@@ -2125,8 +2125,8 @@ def _ground_truth_controls() -> bool:
 
         #     What the gate DID has to survive a closed terminal. Every count here
         #     was computed, printed and thrown away before this control existed,
-        #     including the co-located-speaker alert that screens-and-states.md
-        #     requires to reach the post-meeting note.
+        #     including the co-located-speaker alert that must reach the
+        #     post-meeting note.
         check("the report carries what was dropped, not just what survived",
               (rep["applied"], rep["rejected"], rep["unscorable_kept"]),
               (True, 1, 1), shown="1 rejected, 1 unscorable kept")

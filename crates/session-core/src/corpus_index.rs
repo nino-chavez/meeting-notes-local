@@ -25,8 +25,8 @@
 //! `replace_from_projection` removes it. A stale vector is worse than no vector,
 //! because it answers with a meeting that no longer says what it said.
 //!
-//! `vertical-slice.md` permitted this on exactly those terms — "a rebuildable
-//! cache after measured library size makes the scan a problem", and "no derived
+//! This is a rebuildable cache used only after measured library size makes the
+//! scan a problem. No derived
 //! index may become the sole copy of a meeting, transcript, note, locator, or
 //! library label". Both clauses survive. The measurement that fired the first
 //! one is `src/bin/corpus-scan-bench.rs`.
