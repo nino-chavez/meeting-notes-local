@@ -124,7 +124,23 @@ echo "== signing app bundle"
 codesign --force --options runtime --timestamp \
   --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
-"$ROOT/scripts/verify-release-bundle.py" "$APP" --signed --admission "$ADMISSION"
+# macOS can briefly refuse the bundled runtime immediately after a large app has
+# been re-signed, even though the same closed bundle verifies moments later.
+# Keep that transient state inside the release lane rather than making an
+# operator re-run signing and create duplicate Apple submissions. A real
+# runtime defect still fails after the bounded retries below.
+verified=0
+for attempt in 1 2 3; do
+  if "$ROOT/scripts/verify-release-bundle.py" "$APP" --signed --admission "$ADMISSION"; then
+    verified=1
+    break
+  fi
+  if [[ "$attempt" -lt 3 ]]; then
+    echo "signed runtime is not ready for verification; retrying in 10 seconds"
+    sleep 10
+  fi
+done
+[[ "$verified" == "1" ]] || die "signed app failed release verification"
 
 echo "== notarizing app"
 ditto -c -k --keepParent "$APP" "$STAGE/app.zip"
