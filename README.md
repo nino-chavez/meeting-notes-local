@@ -1,49 +1,46 @@
-# Yawn
+<h1 align="center">Yawn</h1>
 
-Yawn is a private macOS meeting notepad. It records a consented meeting on the
-Mac, keeps an operator's own notes beside the transcript, and retains a
-readable meeting note without requiring an account, upload, calendar, bot, or
-automatic sharing.
+<p align="center">
+  A private meeting notepad for macOS.<br />
+  <sub>On this Mac · No account · No upload · No meeting bot</sub>
+</p>
 
-The interface is intentionally small:
+<p align="center">
+  <img src="./assets/readme/yawn-hero.svg" alt="Yawn: a private meeting notepad for macOS." width="840" />
+</p>
 
-1. Start one recording after an explicit consent and retention check.
-2. Type the points that matter while the conversation is happening.
-3. Reopen the finished note from Meetings.
+> [!IMPORTANT]
+> **Internal alpha.** Yawn currently supports Apple-silicon Macs running macOS
+> 14.4 or later. The first setup downloads the local speech runtime and models
+> (about 2 GB). No meeting data is uploaded.
 
-Read [the product brief](./docs/product-brief.md) for the current product
-contract and the research inputs behind the reset. Old UI, IA, and design
-material was deliberately removed rather than treated as a design baseline.
+Yawn keeps one job simple: stay in the conversation while you keep a useful,
+private record of it. Record a consented meeting, write the details you do not
+want to lose, then reopen the finished note when you need to check it.
 
-## What is currently true
+## A meeting has three moments
 
-- macOS 14.4 or later is required.
-- A recording requires participant consent, headphones, and one person near
-  the microphone.
-- Retained recording audio is explicitly set to 1, 7, or 30 days.
-- Yawn distinguishes the operator's notes, generated claims, transcript text,
-  withheld turns, and incomplete runs.
-- Passing tests do not prove a useful real-meeting result or a completed
-  human-quality review.
+| Before | During | After |
+| --- | --- | --- |
+| Confirm consent, headphones, and audio retention. | Keep your own notes in a calm canvas while Yawn records. | Reopen the note, generated draft, and source transcript from Meetings. |
 
-## Repository map
+Yawn is deliberately not a workspace, dashboard, task manager, CRM, calendar,
+or shared meeting bot. Read [the product brief](./docs/product-brief.md) for
+the complete product contract.
 
-- [apps/desktop](./apps/desktop/) — the Tauri app and bundled frontend.
-- [crates/session-core](./crates/session-core/) — capture, storage, transcript,
-  and meeting-domain contracts.
-- [worker](./worker/) — the local transcription and note-processing worker.
-- [capture](./capture/) — signed macOS capture and permission helpers.
-- [spike/RESULTS.md](./spike/RESULTS.md) — measured audio and voice-isolation
-  evidence.
-- [notes/EVAL.md](./notes/EVAL.md) — note-generation measurement evidence.
-- [docs/distribution-runbook.md](./docs/distribution-runbook.md) — packaging
-  and release procedure.
+## Private by design
 
-## Test the desktop app from a fresh clone
+- Capture, transcription, and retained meeting data stay on this Mac.
+- Recording begins only after you confirm participant consent, headphones, and
+  that you are the one person near the microphone.
+- You explicitly choose whether retained recording audio lasts **1, 7, or 30
+  days**.
+- Your notes, generated meeting-note claims, and source transcript remain
+  distinct. The transcript is there when you need to check a detail.
+- An interrupted or failed run is shown plainly. It is never presented as a
+  completed meeting.
 
-Yawn currently supports Apple-silicon Macs running macOS 14.4 or later. The
-first setup downloads the local speech runtime and models (about 2 GB); no
-meeting data is uploaded.
+## Run Yawn locally
 
 ```sh
 git clone git@github.com:nino-chavez/yawn-app.git
@@ -54,25 +51,45 @@ npm ci
 npm run dev
 ```
 
-The runtime is intentionally ignored by Git. Do not commit it, symlink it, or
-place meeting exports anywhere in this checkout.
+The local runtime is intentionally ignored by Git. Do not commit it, symlink
+it, or store meeting exports in this checkout.
 
-The current package is an internal alpha. Before recording, grant the requested
-macOS permissions and confirm consent, headphones, and that only one person is
-near the microphone. A successful build does not prove a useful real-meeting
-result.
+### Before your first recording
 
-## Checks
+1. Grant the requested macOS permissions.
+2. Get clear participant consent to record.
+3. Use headphones and make sure you are the only person near the microphone.
+4. Choose the audio-retention period that fits the meeting.
+
+A successful build proves the software built. It does not prove that a real
+meeting was recorded, transcribed, or useful.
+
+## Work on the app
+
+Run the focused checks before changing the desktop surface:
 
 ```sh
-cd apps/desktop
-npm run test:ui
+(cd apps/desktop && npm run test:ui)
+cargo test -p local-meeting-notes-desktop
 ```
 
-For Rust changes, run the relevant
-`cargo test -p local-meeting-notes-desktop` lane as well. The preview build is
-a bounded development surface; it is not proof that a real meeting was
-recorded, transcribed, or judged useful.
+| When you need to… | Start here |
+| --- | --- |
+| Change the macOS app or its interface | [apps/desktop](./apps/desktop/) |
+| Change capture, storage, or meeting contracts | [crates/session-core](./crates/session-core/) |
+| Change local transcription or note processing | [worker](./worker/) |
+| Understand packaging and releases | [distribution runbook](./docs/distribution-runbook.md) |
+
+## Evidence and deeper reading
+
+- [Product brief](./docs/product-brief.md) — the current product contract and
+  scope.
+- [Real-meeting handoff](./docs/real-meeting-handoff.md) — a bounded manual
+  test for an actual meeting.
+- [Audio and voice-isolation results](./spike/RESULTS.md) — measured limits and
+  evidence.
+- [Note-generation evaluation](./notes/EVAL.md) — measurement evidence for
+  generated notes.
 
 ## License
 
