@@ -618,6 +618,23 @@ h3 {
   line-height: 1.65;
 }
 
+.note-editor-compact {
+  min-height: 180px;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-soft);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.note-editor-help {
+  margin: 9px 0 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .note-editor::placeholder {
   color: #a3a39c;
 }
@@ -682,6 +699,26 @@ h3 {
   font-size: 11px;
   line-height: 1.45;
   text-align: right;
+}
+
+.transcript-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.button-small {
+  min-height: 32px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.transcript-action-status {
+  min-height: 1em;
+  color: var(--ink-faint);
+  font-size: 11px;
 }
 
 .transcript-line {

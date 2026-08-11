@@ -320,6 +320,9 @@ struct RestoredTranscriptProjection {
 struct PreviewLibraryTranscript {
     state: &'static str,
     meeting_id: Option<String>,
+    /// A fresh one-use capability to open this same checked artifact in the
+    /// system app. It is opaque to the webview and never carries a path.
+    transcript_file_handle: Option<String>,
     /// The digest the projection was verified against — the exact value the
     /// frozen restore-withheld-turn shape requires back, so a restore request
     /// can only name the transcript the operator was actually reading.
@@ -2363,6 +2366,108 @@ fn save_operator_note(
     Ok(operator_note::read(&directory))
 }
 
+/// Resolves the one verified transcript artifact already selected by a meeting
+/// view. This stays entirely on the native side: the webview receives no path,
+/// digest, or filesystem authority, and Finder/TextEdit only receives a file
+/// the existing transcript reader has checked against `meeting.json`.
+fn verified_transcript_file(
+    storage: &StorageRoot,
+    meeting_id: &str,
+    expected: &ArtifactRef,
+) -> Result<PathBuf, String> {
+    let directory = meeting_dir(storage, meeting_id).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    if meeting.artifacts.current_transcript.as_ref() != Some(expected) {
+        return Err("That transcript changed. Reopen the meeting and try again.".into());
+    }
+    let path = resolve_artifact(&directory, &expected.relative_path).map_err(error_text)?;
+    let bytes = read_private_bytes(&path, TRANSCRIPT_MAX_BYTES).map_err(error_text)?;
+    if format!("{:x}", Sha256::digest(&bytes)) != expected.sha256 {
+        return Err("That transcript changed. Reopen the meeting and try again.".into());
+    }
+    let current = load_meeting(&directory).map_err(error_text)?;
+    if current.artifacts.current_transcript.as_ref() != Some(expected)
+        || artifact_ref(&directory, &expected.relative_path).map_err(error_text)? != *expected
+    {
+        return Err("That transcript changed. Reopen the meeting and try again.".into());
+    }
+    Ok(path)
+}
+
+/// Opens one verified local transcript in the system's default text-capable
+/// app. This is intentionally a fixed native executable and a checked artifact
+/// path, not general shell or filesystem access from the webview.
+fn open_verified_transcript_file(
+    storage: &StorageRoot,
+    meeting_id: &str,
+    expected: &ArtifactRef,
+) -> Result<(), String> {
+    let path = verified_transcript_file(storage, meeting_id, expected)?;
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("/usr/bin/open")
+            .arg(&path)
+            .status()
+            .map_err(|_| "Yawn could not open this transcript file.".to_string())?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("Yawn could not open this transcript file.".into())
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err("Opening transcript files is available only on macOS.".into())
+    }
+}
+
+/// Opens the transcript belonging to the active completed meeting. Unlike the
+/// library route, this path has no browser-supplied meeting identifier: it uses
+/// the settled capture projection and re-checks that exact artifact under the
+/// storage coordination lock before opening it.
+#[tauri::command]
+fn open_current_transcript_file(state: State<'_, ApplicationState>) -> Result<(), String> {
+    let (meeting_id, current_transcript_sha256) = {
+        let model = state.model.lock().expect("application model lock");
+        if model.reducer.capture() != CaptureState::TranscriptReady {
+            return Err("There is no finished transcript open.".into());
+        }
+        (
+            model
+                .meeting_id
+                .clone()
+                .ok_or_else(|| "There is no finished transcript open.".to_string())?,
+            model
+                .current_transcript_sha256
+                .clone()
+                .ok_or_else(|| "There is no finished transcript open.".to_string())?,
+        )
+    };
+    let storage = {
+        let guard = state.storage.lock().expect("storage context lock");
+        guard
+            .as_ref()
+            .map(|context| context.storage.clone())
+            .ok_or_else(|| "Local storage is unavailable.".to_string())?
+    };
+    let coordination = state.meeting_storage_coordination()?;
+    with_meeting_storage_sequence(&coordination, |_| {
+        let directory = meeting_dir(&storage, &meeting_id).map_err(error_text)?;
+        let meeting = load_meeting(&directory).map_err(error_text)?;
+        let transcript = meeting
+            .artifacts
+            .current_transcript
+            .as_ref()
+            .ok_or_else(|| "That meeting has no current transcript.".to_string())?;
+        if transcript.sha256 != current_transcript_sha256 {
+            return Err("That transcript changed. Reopen the meeting and try again.".into());
+        }
+        open_verified_transcript_file(&storage, &meeting_id, transcript)
+    })
+    .map_err(|_| "The local transcript is unavailable. Reopen the meeting and try again.".to_string())?
+}
+
 #[tauri::command(async)]
 fn refresh_current_transcript(state: State<'_, ApplicationState>) -> Result<(), String> {
     let meeting_id = {
@@ -3948,6 +4053,86 @@ fn preview_library_open_evidence(
     )
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryOperatorNoteSaveResponse {
+    operator_note: operator_note::OperatorNote,
+    /// The next one-use edit capability. A saved note may be edited again, but
+    /// each save requires a new bounded authority rather than keeping a path or
+    /// general meeting-write capability in the webview.
+    operator_note_handle: Option<String>,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryTranscriptFileOpenResponse {
+    /// Reissued after opening so an operator can reopen the same selected file
+    /// without falling back to a general filesystem chooser.
+    transcript_file_handle: Option<String>,
+}
+
+/// Replaces the personal note for one meeting the operator already opened in
+/// Library. The opaque handle is single-use and only resolves through the
+/// current verified library projection.
+#[tauri::command(async)]
+fn library_save_operator_note(
+    handle: String,
+    text: String,
+    state: State<'_, ApplicationState>,
+) -> Result<LibraryOperatorNoteSaveResponse, String> {
+    state.with_preview_library(
+        || Err("The local meeting library is unavailable. Reopen the app and try again.".into()),
+        |reader, active| {
+            let saved = reader.open_operator_note_bound(&handle, active, |storage, meeting_id| {
+                let directory = meeting_dir(storage, meeting_id).map_err(error_text)?;
+                operator_note::write(&directory, &text)?;
+                Ok::<_, String>((meeting_id.to_owned(), operator_note::read(&directory)))
+            });
+            match saved {
+                Ok(Ok((meeting_id, operator_note))) => Ok(LibraryOperatorNoteSaveResponse {
+                    operator_note_handle: if operator_note.unreadable {
+                        None
+                    } else {
+                        reader.retain_operator_note_handle(&meeting_id)
+                    },
+                    operator_note,
+                    message: "Your notes were saved on this Mac.".into(),
+                }),
+                Ok(Err(error)) => Err(error),
+                Err(access) => Err(access.message),
+            }
+        },
+    )
+}
+
+/// Opens the exact transcript artifact selected by a fresh Library handle. The
+/// handle is spent before the file is checked and launched, so this does not
+/// turn Library into generic filesystem access.
+#[tauri::command]
+fn library_open_transcript_file(
+    handle: String,
+    state: State<'_, ApplicationState>,
+) -> Result<LibraryTranscriptFileOpenResponse, String> {
+    state.with_preview_library(
+        || Err("The local meeting library is unavailable. Reopen the app and try again.".into()),
+        |reader, active| match reader.open_transcript_bound(
+            &handle,
+            active,
+            |storage, meeting_id, artifact| {
+                open_verified_transcript_file(storage, meeting_id, artifact)?;
+                Ok::<_, String>(meeting_id.to_owned())
+            },
+        ) {
+            Ok(Ok(meeting_id)) => Ok(LibraryTranscriptFileOpenResponse {
+                transcript_file_handle: reader.retain_transcript_handle(&meeting_id),
+            }),
+            Ok(Err(error)) => Err(error),
+            Err(access) => Err(access.message),
+        },
+    )
+}
+
 #[tauri::command]
 fn library_open_transcript(
     handle: String,
@@ -3957,6 +4142,7 @@ fn library_open_transcript(
         || PreviewLibraryTranscript {
             state: "unavailable",
             meeting_id: None,
+            transcript_file_handle: None,
             current_transcript_sha256: None,
             turns: Vec::new(),
             warnings: Vec::new(),
@@ -3975,9 +4161,11 @@ fn library_open_transcript(
             },
         ) {
             Ok((meeting_id, transcript_sha256, Ok((turns, warnings)))) => {
+                let transcript_file_handle = reader.retain_transcript_handle(&meeting_id);
                 PreviewLibraryTranscript {
                     state: "transcript",
                     meeting_id: Some(meeting_id),
+                    transcript_file_handle,
                     current_transcript_sha256: Some(transcript_sha256),
                     turns,
                     warnings,
@@ -3987,6 +4175,7 @@ fn library_open_transcript(
             Ok((_, _, Err(_))) => PreviewLibraryTranscript {
                 state: "stale",
                 meeting_id: None,
+                transcript_file_handle: None,
                 current_transcript_sha256: None,
                 turns: Vec::new(),
                 warnings: Vec::new(),
@@ -3996,6 +4185,7 @@ fn library_open_transcript(
             Err(opened) => PreviewLibraryTranscript {
                 state: opened.state,
                 meeting_id: None,
+                transcript_file_handle: None,
                 current_transcript_sha256: None,
                 turns: Vec::new(),
                 warnings: Vec::new(),
@@ -4084,9 +4274,12 @@ fn main() {
             first_run_request_system_audio,
             operator_note,
             save_operator_note,
+            open_current_transcript_file,
             library_snapshot,
             library_open_note,
             library_open_transcript,
+            library_open_transcript_file,
+            library_save_operator_note,
             preview_library_open_evidence
         ])
         .setup(|app| {

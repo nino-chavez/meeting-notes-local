@@ -13,6 +13,7 @@ import {
   permissionSummary,
   retentionLabel,
   shouldPollSnapshot,
+  transcriptPlainText,
   transcriptionWorkerHeartbeatAgeSeconds,
 } from "./view-model.mjs";
 
@@ -75,6 +76,24 @@ test("small display helpers stay readable", () => {
   assert.equal(retentionLabel(1), "1 day");
   assert.equal(retentionLabel(7), "7 days");
   assert.equal(humanize("evidence_state"), "Evidence State");
+});
+
+test("a copied transcript keeps known gaps visible", () => {
+  const copied = transcriptPlainText([
+    { start: 0, speaker: "Me", text: "we agreed to defer the migration" },
+    { start: 63, withheld: true },
+    { start: 125, speaker: "Them", text: "  send the numbers Friday  " },
+    { start: 130, speaker: "Them", text: "   " },
+    { start: 140, text: "no speaker recorded" },
+  ]);
+  assert.deepEqual(copied.split("\n"), [
+    "[00:00] Me: we agreed to defer the migration",
+    "[01:03] (withheld — a voice check set this turn aside)",
+    "[02:05] Them: send the numbers Friday",
+    "[02:20] Unattributed: no speaker recorded",
+  ]);
+  assert.equal(transcriptPlainText([]), "");
+  assert.equal(transcriptPlainText(null), "");
 });
 
 test("startup keeps polling until the app is ready", () => {

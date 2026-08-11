@@ -9,6 +9,7 @@ import {
   permissionSummary,
   retentionLabel,
   shouldPollSnapshot,
+  transcriptPlainText,
   transcriptionWorkerHeartbeatAgeSeconds,
 } from "./view-model.mjs";
 
@@ -34,9 +35,11 @@ const state = {
   searchTimer: null,
   selected: null,
   snapshot: null,
+  transcriptActionStatus: {},
 };
 
 let noteSaveTimer;
+let libraryNoteSaveTimer;
 let permissionsRefreshTask;
 let activityTimer;
 
@@ -104,6 +107,7 @@ function permissionAction(permission) {
 }
 
 function render() {
+  const editorFocus = captureEditorFocus();
   const status = statusLabel(state.snapshot, state.permissions);
   const audioReady = canOpenStart(state.snapshot, state.permissions);
   let content;
@@ -139,7 +143,37 @@ function render() {
       ${state.error ? `<aside class="toast" role="alert"><button type="button" data-action="clear-error" aria-label="Dismiss">×</button>${escapeHtml(state.error)}</aside>` : ""}
     </div>
   `;
+  restoreEditorFocus(editorFocus);
   syncActivityClock();
+}
+
+// Snapshot polling keeps recording and transcription honest, but rebuilding the
+// whole document used to replace the active textarea every 900 ms. Preserve a
+// real editor's focus and selection only when the same meeting still owns it.
+function captureEditorFocus() {
+  const active = document.activeElement;
+  const field = active?.dataset?.field;
+  if (!["operator-note", "library-operator-note"].includes(field)) return null;
+  if (!active.dataset.meetingId) return null;
+  return {
+    field,
+    meetingId: active.dataset.meetingId,
+    start: Number.isInteger(active.selectionStart) ? active.selectionStart : null,
+    end: Number.isInteger(active.selectionEnd) ? active.selectionEnd : null,
+    direction: active.selectionDirection || "none",
+  };
+}
+
+function restoreEditorFocus(focus) {
+  if (!focus) return;
+  const target = Array.from(root.querySelectorAll(`textarea[data-field="${focus.field}"]`))
+    .find((candidate) => candidate.dataset.meetingId === focus.meetingId);
+  if (!target || target.disabled) return;
+  target.focus({ preventScroll: true });
+  if (focus.start === null || focus.end === null) return;
+  const start = Math.min(focus.start, target.value.length);
+  const end = Math.min(Math.max(start, focus.end), target.value.length);
+  target.setSelectionRange(start, end, focus.direction);
 }
 
 function renderBrowserNotice() {
@@ -253,12 +287,15 @@ function renderCapture() {
       ${context ? `<p class="message-card ${presentation.tone === "attention" ? "attention" : ""}">${escapeHtml(context)}</p>` : ""}
       <article class="note-workbench">
         <div class="note-editor-head"><strong>Your notes</strong><span class="save-state" id="note-save-state">${escapeHtml(noteSaveCopy())}</span></div>
-        <textarea class="note-editor" data-field="operator-note" aria-label="Your meeting notes" placeholder="Write down the detail you will want to verify later." ${disabled ? "disabled" : ""}>${escapeHtml(state.noteDraft)}</textarea>
+        <textarea class="note-editor" data-field="operator-note" data-meeting-id="${escapeHtml(snapshot.meeting_id || "")}" aria-label="Your meeting notes" placeholder="Write down the detail you will want to verify later." ${disabled ? "disabled" : ""}>${escapeHtml(state.noteDraft)}</textarea>
         <div class="capture-foot">
           <p>${state.noteUnreadable ? "This note could not be read, so Yawn will not overwrite it." : "Saved separately from the transcript. These are your notes, not generated claims."}</p>
         </div>
       </article>
-      ${snapshot.turns?.length ? renderTranscript(snapshot.turns, terminal ? "Source transcript" : "Live transcript", terminal ? "The retained record for checking a detail that matters." : "Yawn adds local transcription here as it becomes available.") : ""}
+      ${snapshot.turns?.length ? renderTranscript(snapshot.turns, terminal ? "Source transcript" : "Live transcript", terminal ? "The retained record for checking a detail that matters." : "Yawn adds local transcription here as it becomes available.", {
+        copyAction: "copy-current-transcript",
+        openFileAction: snapshot.capture === "transcript-ready" && snapshot.current_transcript_sha256 ? "open-current-transcript-file" : "",
+      }) : ""}
     </section>
   `;
 }
@@ -330,10 +367,22 @@ function captureAction(snapshot, terminal) {
   return "";
 }
 
-function renderTranscript(turns, title, detail = "") {
+function transcriptActionStatus(scope) {
+  return state.transcriptActionStatus?.[scope] || "";
+}
+
+function renderTranscript(turns, title, detail = "", { copyAction = "", openFileAction = "" } = {}) {
+  const scope = copyAction.includes("library") ? "library" : "current";
+  const copyBusy = state.busyAction === copyAction;
+  const fileBusy = state.busyAction === openFileAction;
   return `
     <section class="transcript-panel" aria-labelledby="transcript-heading">
       <div class="transcript-heading"><h3 id="transcript-heading">${escapeHtml(title)}</h3>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div>
+      ${copyAction || openFileAction ? `<div class="transcript-actions" aria-label="Transcript actions">
+        ${copyAction ? `<button class="button button-quiet button-small" type="button" data-action="${copyAction}" ${copyBusy ? "disabled" : ""}>${copyBusy ? "Copying…" : "Copy transcript"}</button>` : ""}
+        ${openFileAction ? `<button class="button button-quiet button-small" type="button" data-action="${openFileAction}" ${fileBusy ? "disabled" : ""}>${fileBusy ? "Opening…" : "Open transcript file"}</button>` : ""}
+        <span class="transcript-action-status" role="status" aria-live="polite">${escapeHtml(transcriptActionStatus(scope))}</span>
+      </div>` : ""}
       ${turns.map((turn) => `
         <div class="transcript-line ${turn.withheld ? "withheld" : ""}">
           <time>${escapeHtml(timeLabel(turn.start))}</time>
@@ -349,6 +398,15 @@ function renderMeeting() {
   const title = row.label || `Meeting · ${dateLabel(row.createdAtEpochSeconds)}`;
   const claims = note?.claims || [];
   const operatorNote = note?.operatorNote;
+  const selectedNoteState = state.selected?.operatorNoteSaveState || "local";
+  const selectedNoteCopy = operatorNote?.unreadable
+    ? "Not editable"
+    : selectedNoteState === "saving"
+      ? "Saving…"
+      : selectedNoteState === "saved"
+        ? "Saved on this Mac"
+        : "Stored on this Mac";
+  const noteEditable = !operatorNote?.unreadable && Boolean(note?.operatorNoteHandle);
   const claimEvidence = state.selected.claimEvidence || {};
   return `
     <article class="meeting-page" aria-labelledby="meeting-title">
@@ -374,15 +432,17 @@ function renderMeeting() {
           </li>`).join("")}</ul>` : `<p class="quiet-copy">No generated meeting-note claims are available for this meeting.</p>`}
         </section>
         <section class="note-section your-notes-section" aria-labelledby="operator-note-heading">
-          <h3 id="operator-note-heading">Your notes</h3>
+          <div class="note-editor-head"><h3 id="operator-note-heading">Your notes</h3><span class="save-state" id="library-note-save-state">${escapeHtml(selectedNoteCopy)}</span></div>
           ${operatorNote?.unreadable
             ? `<p class="message-card attention">Yawn could not read this meeting’s personal note, so it was left unchanged.</p>`
-            : operatorNote?.text
-              ? `<div class="operator-note-copy">${escapeHtml(operatorNote.text)}</div>`
-              : `<p class="quiet-copy">You did not add a personal note during this meeting.</p>`}
+            : `<textarea class="note-editor note-editor-compact" data-field="library-operator-note" data-meeting-id="${escapeHtml(row.meetingId || "")}" aria-label="Your meeting notes" placeholder="Write down the detail you will want to verify later." ${noteEditable ? "" : "disabled"}>${escapeHtml(state.selected?.operatorNoteDraft || "")}</textarea>
+              <p class="note-editor-help">${noteEditable ? "Saved separately from the transcript. These are your notes, not generated claims." : "Reopen this meeting to edit its notes."}</p>`}
         </section>
       </div>
-      ${transcript?.turns?.length ? renderTranscript(transcript.turns, "Source transcript", "The retained record. Use it to check a decision, owner, or follow-up that matters.") : transcript?.message ? `<section class="note-section"><p class="message-card">${escapeHtml(transcript.message)}</p></section>` : ""}
+      ${transcript?.turns?.length ? renderTranscript(transcript.turns, "Source transcript", "The retained record. Use it to check a decision, owner, or follow-up that matters.", {
+        copyAction: "copy-library-transcript",
+        openFileAction: "open-library-transcript-file",
+      }) : transcript?.message ? `<section class="note-section"><p class="message-card">${escapeHtml(transcript.message)}</p></section>` : ""}
       <section class="retention-copy" aria-labelledby="retention-heading">
         <h3 id="retention-heading">Audio retention</h3>
         <p>${escapeHtml(note?.audioRetention?.message || "Audio-retention details are unavailable for this meeting.")}</p>
@@ -445,6 +505,20 @@ function setNoteSaveCopy() {
   if (target) target.textContent = noteSaveCopy();
 }
 
+function setLibraryNoteSaveCopy() {
+  const selection = state.selected;
+  const target = document.querySelector("#library-note-save-state");
+  if (!selection || !target) return;
+  const unreadable = selection.note?.operatorNote?.unreadable;
+  target.textContent = unreadable
+    ? "Not editable"
+    : selection.operatorNoteSaveState === "saving"
+      ? "Saving…"
+      : selection.operatorNoteSaveState === "saved"
+        ? "Saved on this Mac"
+        : "Stored on this Mac";
+}
+
 function reportError(error) {
   state.error = String(error instanceof Error ? error.message : error).replace(/^Error:\s*/, "").trim() || "Yawn could not complete that action.";
   render();
@@ -457,6 +531,7 @@ function clearCurrentNote() {
   state.noteLoadedFor = "";
   state.noteSaveState = "local";
   state.noteUnreadable = false;
+  state.transcriptActionStatus = { ...state.transcriptActionStatus, current: "" };
 }
 
 function canReadCurrentNote(snapshot) {
@@ -586,12 +661,23 @@ async function leaveCurrentCapture({ startAnother = false } = {}) {
 async function openMeeting(handle) {
   const row = state.library?.rows?.find((candidate) => candidate.handle === handle);
   if (!row) return;
+  await flushSelectedNoteSave();
+  state.transcriptActionStatus = { ...state.transcriptActionStatus, library: "" };
   await runBusy("meeting", async () => {
     const note = await invoke("library_open_note", { handle });
     const transcript = note.transcriptHandle
       ? await invoke("library_open_transcript", { handle: note.transcriptHandle })
       : null;
-    state.selected = { row, note, transcript, claimEvidence: {} };
+    const operatorNote = note.operatorNote || { text: "", unreadable: false };
+    state.selected = {
+      row,
+      note,
+      transcript,
+      claimEvidence: {},
+      operatorNoteDraft: operatorNote.text || "",
+      operatorNoteSaveQueue: Promise.resolve(),
+      operatorNoteSaveState: operatorNote.unreadable ? "unreadable" : operatorNote.text ? "saved" : "local",
+    };
     state.activeView = "meeting";
   });
 }
@@ -599,6 +685,7 @@ async function openMeeting(handle) {
 async function openClaimEvidence(ordinal) {
   const selection = state.selected;
   if (!selection?.row?.meetingId || !Number.isFinite(ordinal)) return;
+  await flushSelectedNoteSave();
   await runBusy(`evidence-${ordinal}`, async () => {
     // Claim handles are deliberately one-use capabilities. A fresh local
     // meeting handle keeps every source request scoped to the meeting the
@@ -625,6 +712,9 @@ async function openClaimEvidence(ordinal) {
     state.selected = {
       ...state.selected,
       note,
+      transcript: state.selected.transcript && evidence.transcriptHandle
+        ? { ...state.selected.transcript, transcriptFileHandle: evidence.transcriptHandle }
+        : state.selected.transcript,
       claimEvidence: {
         ...(state.selected.claimEvidence || {}),
         [ordinal]: evidence,
@@ -661,6 +751,43 @@ function scheduleNoteSave() {
   }, 600);
 }
 
+function queueSelectedNoteSave(text = state.selected?.operatorNoteDraft, selection = state.selected) {
+  if (!selection?.row?.meetingId || selection.note?.operatorNote?.unreadable) return Promise.resolve();
+  selection.operatorNoteSaveQueue = (selection.operatorNoteSaveQueue || Promise.resolve())
+    .catch(() => undefined)
+    .then(async () => {
+      if (state.selected !== selection) return;
+      const handle = selection.note?.operatorNoteHandle;
+      if (!handle) throw new Error("Reopen this meeting before saving its notes.");
+      selection.operatorNoteSaveState = "saving";
+      setLibraryNoteSaveCopy();
+      const saved = await invoke("library_save_operator_note", { handle, text });
+      if (state.selected !== selection) return;
+      selection.note = {
+        ...selection.note,
+        operatorNote: saved.operatorNote,
+        operatorNoteHandle: saved.operatorNoteHandle,
+      };
+      selection.operatorNoteSaveState = selection.operatorNoteDraft === text ? "saved" : "local";
+      setLibraryNoteSaveCopy();
+    })
+    .catch((error) => {
+      if (state.selected !== selection) return;
+      selection.operatorNoteSaveState = "local";
+      state.error = String(error).replace(/^Error:\s*/, "") || "Yawn could not save this note.";
+      render();
+    });
+  return selection.operatorNoteSaveQueue;
+}
+
+function scheduleSelectedNoteSave() {
+  clearTimeout(libraryNoteSaveTimer);
+  libraryNoteSaveTimer = setTimeout(() => {
+    libraryNoteSaveTimer = undefined;
+    void queueSelectedNoteSave();
+  }, 600);
+}
+
 async function flushPendingNoteSave() {
   if (noteSaveTimer !== undefined) {
     clearTimeout(noteSaveTimer);
@@ -670,7 +797,19 @@ async function flushPendingNoteSave() {
   await state.noteSaveQueue;
 }
 
+async function flushSelectedNoteSave() {
+  const selection = state.selected;
+  if (!selection) return;
+  if (libraryNoteSaveTimer !== undefined) {
+    clearTimeout(libraryNoteSaveTimer);
+    libraryNoteSaveTimer = undefined;
+    await queueSelectedNoteSave(selection.operatorNoteDraft, selection);
+  }
+  await selection.operatorNoteSaveQueue;
+}
+
 async function openMeetings() {
+  await flushSelectedNoteSave();
   state.selected = null;
   state.activeView = "home";
   if (!invoke) {
@@ -678,6 +817,65 @@ async function openMeetings() {
     return;
   }
   await runBusy("library", refreshLibrary);
+}
+
+function transcriptTurns(scope) {
+  return scope === "library"
+    ? state.selected?.transcript?.turns || []
+    : state.snapshot?.turns || [];
+}
+
+async function writeTranscriptToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const fallback = document.createElement("textarea");
+  fallback.value = text;
+  fallback.setAttribute("readonly", "");
+  fallback.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
+  document.body.append(fallback);
+  fallback.select();
+  const copied = document.execCommand("copy");
+  fallback.remove();
+  if (!copied) throw new Error("Copy failed. Select the transcript instead.");
+}
+
+async function copyTranscript(scope) {
+  const text = transcriptPlainText(transcriptTurns(scope));
+  if (!text) {
+    state.transcriptActionStatus = { ...(state.transcriptActionStatus || {}), [scope]: "Nothing to copy." };
+    render();
+    return;
+  }
+  state.transcriptActionStatus = { ...(state.transcriptActionStatus || {}), [scope]: "Copying…" };
+  render();
+  try {
+    await writeTranscriptToClipboard(text);
+    state.transcriptActionStatus = { ...(state.transcriptActionStatus || {}), [scope]: "Copied." };
+  } catch {
+    state.transcriptActionStatus = { ...(state.transcriptActionStatus || {}), [scope]: "Copy failed. Select the transcript instead." };
+  }
+  render();
+}
+
+async function openTranscriptFile(scope) {
+  if (scope === "library") await flushSelectedNoteSave();
+  await runBusy(`open-${scope}-transcript-file`, async () => {
+    if (scope === "current") {
+      await invoke("open_current_transcript_file");
+      return;
+    }
+    const selection = state.selected;
+    const handle = selection?.transcript?.transcriptFileHandle;
+    if (!handle) throw new Error("Reopen this meeting before opening its transcript file.");
+    const opened = await invoke("library_open_transcript_file", { handle });
+    if (state.selected !== selection || !selection.transcript) return;
+    selection.transcript = {
+      ...selection.transcript,
+      transcriptFileHandle: opened.transcriptFileHandle,
+    };
+  });
 }
 
 async function retryStartup() {
@@ -700,6 +898,10 @@ function handleClick(event) {
   else if (action === "record-another") void recordAnother();
   else if (action === "open-meeting") void openMeeting(control.dataset.handle);
   else if (action === "open-claim-evidence") void openClaimEvidence(Number(control.dataset.ordinal));
+  else if (action === "copy-current-transcript") void copyTranscript("current");
+  else if (action === "copy-library-transcript") void copyTranscript("library");
+  else if (action === "open-current-transcript-file") void openTranscriptFile("current");
+  else if (action === "open-library-transcript-file") void openTranscriptFile("library");
   else if (action === "retry-startup") void retryStartup();
   else if (action === "request-microphone") void requestPermission("microphone");
   else if (action === "request-system-audio") void requestPermission("system-audio");
@@ -721,6 +923,13 @@ function handleInput(event) {
     setNoteSaveCopy();
     scheduleNoteSave();
   }
+  if (event.target.dataset.field === "library-operator-note") {
+    if (!state.selected) return;
+    state.selected.operatorNoteDraft = event.target.value;
+    state.selected.operatorNoteSaveState = "local";
+    setLibraryNoteSaveCopy();
+    scheduleSelectedNoteSave();
+  }
 }
 
 function handleChange(event) {
@@ -732,6 +941,8 @@ function handleChange(event) {
     state.consent[event.target.dataset.attestation] = event.target.checked;
     render();
   }
+  if (event.target.dataset.field === "operator-note") void flushPendingNoteSave();
+  if (event.target.dataset.field === "library-operator-note") void flushSelectedNoteSave();
 }
 
 function handleKeydown(event) {

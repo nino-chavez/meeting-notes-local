@@ -40,8 +40,11 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "library_snapshot",
     "library_open_note",
     "library_open_transcript",
+    "library_open_transcript_file",
+    "library_save_operator_note",
     "operator_note",
     "save_operator_note",
+    "open_current_transcript_file",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

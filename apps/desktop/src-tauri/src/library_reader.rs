@@ -52,6 +52,7 @@ pub(crate) struct LibraryReader {
     projection: LibraryProjection,
     excluded_meeting_ids: HashSet<String>,
     handles: HashMap<String, LibraryHit>,
+    operator_note_handles: HashMap<String, LibraryHit>,
     audio_deletion_handles: HashMap<String, LibraryHit>,
     meeting_deletion_handles: HashMap<String, LibraryHit>,
 }
@@ -212,6 +213,10 @@ pub(crate) struct LibrarySearchOpenResponse {
 pub(crate) struct LibraryNoteResponse {
     pub(crate) state: &'static str,
     pub(crate) transcript_handle: Option<String>,
+    /// A single-use authority to replace the operator's own note for this
+    /// meeting. It is distinct from transcript and deletion handles: none of
+    /// those acts authorizes changing the reader's private note.
+    pub(crate) operator_note_handle: Option<String>,
     pub(crate) audio_deletion_handle: Option<String>,
     /// Separate from `audio_deletion_handle`, and issued for every readable
     /// meeting rather than only for one holding retained audio: a meeting whose
@@ -298,6 +303,18 @@ pub(crate) struct LibraryTranscriptAccess {
     pub(crate) message: String,
 }
 
+/// Authorization for one edit of the operator's note in a retained meeting.
+///
+/// The browser never receives a path or a reusable meeting identifier that can
+/// be written. It spends a fresh handle issued while that exact meeting detail
+/// view was open; the callback receives the resolved storage root only after
+/// the projection and active-meeting checks succeed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LibraryOperatorNoteAccess {
+    pub(crate) state: &'static str,
+    pub(crate) message: String,
+}
+
 impl LibraryReader {
     /// Builds from an active-ID snapshot taken by the caller while it holds the
     /// meeting-storage sequence. Reader methods never acquire that sequence;
@@ -330,6 +347,7 @@ impl LibraryReader {
             projection,
             excluded_meeting_ids,
             handles: HashMap::new(),
+            operator_note_handles: HashMap::new(),
             audio_deletion_handles: HashMap::new(),
             meeting_deletion_handles: HashMap::new(),
         }
@@ -746,6 +764,9 @@ impl LibraryReader {
         };
         let audio_retention = self.audio_retention(&meeting_id);
         let operator_note = self.operator_note(&meeting_id);
+        let operator_note_handle = (!operator_note.unreadable)
+            .then(|| self.retain_operator_note_handle(&meeting_id))
+            .flatten();
         let audio_deletion_handle =
             self.retain_audio_deletion_handle(&meeting_id, audio_retention.state == "retained");
         let meeting_deletion_handle = self.retain_meeting_deletion_handle(&meeting_id);
@@ -754,6 +775,7 @@ impl LibraryReader {
                 return LibraryNoteResponse {
                     state: "summary-failed",
                     transcript_handle: self.retain_transcript_handle(&meeting_id),
+                    operator_note_handle,
                     audio_deletion_handle,
                     meeting_deletion_handle,
                     meeting_id: meeting_id.into(),
@@ -770,6 +792,7 @@ impl LibraryReader {
                 return LibraryNoteResponse {
                     state: "transcript-only",
                     transcript_handle: transcript_handle.clone(),
+                    operator_note_handle,
                     audio_deletion_handle,
                     meeting_deletion_handle,
                     meeting_id: meeting_id.into(),
@@ -814,6 +837,7 @@ impl LibraryReader {
         LibraryNoteResponse {
             state: "note",
             transcript_handle: self.retain_transcript_handle(&meeting_id),
+            operator_note_handle,
             audio_deletion_handle,
             meeting_deletion_handle,
             meeting_id: meeting_id.into(),
@@ -846,7 +870,7 @@ impl LibraryReader {
             self.clear_handles();
             return Self::stale_evidence();
         };
-        self.clear_handles();
+        self.clear_non_note_handles();
         match self.projection.open_claim_evidence_excluding(
             &self.storage,
             &hit,
@@ -885,6 +909,33 @@ impl LibraryReader {
         self.open_transcript_current(handle, active_meeting_ids, load)
     }
 
+    /// Spends an operator-note handle and runs one bounded write callback. The
+    /// same snapshot/active-set rules as transcript opening apply, but this
+    /// deliberately accepts only a retained meeting handle, never a claim or
+    /// transcript handle.
+    pub(crate) fn open_operator_note_bound<T>(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+        save: impl FnOnce(&StorageRoot, &str) -> T,
+    ) -> Result<T, LibraryOperatorNoteAccess> {
+        if !self.revalidate(active_meeting_ids) {
+            return Err(Self::stale_operator_note());
+        }
+        let Some(hit) = self.operator_note_handles.remove(handle) else {
+            self.clear_handles();
+            return Err(Self::stale_operator_note());
+        };
+        let meeting_id = match self.projection.open_snapshot(&hit) {
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
+            Ok(_) | Err(_) => return Err(Self::stale_operator_note()),
+        };
+        if active_meeting_ids.contains(&meeting_id) {
+            return Err(Self::stale_operator_note());
+        }
+        Ok(save(&self.storage, &meeting_id))
+    }
+
     fn open_transcript_current<T>(
         &mut self,
         handle: &str,
@@ -895,7 +946,7 @@ impl LibraryReader {
             self.clear_handles();
             return Err(Self::stale_transcript());
         };
-        self.clear_handles();
+        self.clear_non_note_handles();
         let response = match self.projection.open_snapshot(&hit) {
             Ok(OpenedLibraryHit::Transcript {
                 meeting_id,
@@ -966,6 +1017,7 @@ impl LibraryReader {
         LibraryNoteResponse {
             state: "unavailable",
             transcript_handle: None,
+            operator_note_handle: None,
             audio_deletion_handle: None,
             meeting_deletion_handle: None,
             meeting_id: meeting_id.into(),
@@ -1099,10 +1151,21 @@ impl LibraryReader {
         }
     }
 
-    fn clear_handles(&mut self) {
+    /// Clears handles for every other library action while leaving the current
+    /// detail view's personal-note edit capability intact. Reading a source
+    /// passage must not make the adjacent note editor fail on its next save.
+    fn clear_non_note_handles(&mut self) {
         self.handles.clear();
         self.audio_deletion_handles.clear();
         self.meeting_deletion_handles.clear();
+    }
+
+    /// A new snapshot generation, a changed active set, or opening a different
+    /// note invalidates every capability, including an unsaved personal-note
+    /// editor from a prior detail view.
+    fn clear_handles(&mut self) {
+        self.clear_non_note_handles();
+        self.operator_note_handles.clear();
     }
 
     /// A single-use transcript handle for a meeting named by ID rather than
@@ -1121,6 +1184,20 @@ impl LibraryReader {
             .meeting_handle(meeting_id)
             .ok()
             .map(|hit| self.retain_handle(hit))
+    }
+
+    /// A single-use handle for exactly one personal-note edit. It shares the
+    /// reader's generation with the visible detail view and dies when it is
+    /// spent, a new snapshot is minted, or the library revalidates differently.
+    pub(crate) fn retain_operator_note_handle(&mut self, meeting_id: &str) -> Option<String> {
+        self.projection
+            .meeting_handle(meeting_id)
+            .ok()
+            .map(|hit| {
+                let handle = Uuid::new_v4().to_string();
+                self.operator_note_handles.insert(handle.clone(), hit);
+                handle
+            })
     }
 
     fn meeting_has_transcript(&self, meeting_id: &str) -> bool {
@@ -1315,6 +1392,7 @@ impl LibraryReader {
         LibraryNoteResponse {
             state: "stale",
             transcript_handle: None,
+            operator_note_handle: None,
             audio_deletion_handle: None,
             meeting_deletion_handle: None,
             meeting_id: meeting_id.into(),
@@ -1330,6 +1408,14 @@ impl LibraryReader {
             state: "stale",
             meeting_id: None,
             message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn stale_operator_note() -> LibraryOperatorNoteAccess {
+        LibraryOperatorNoteAccess {
+            state: "stale",
+            message: "This meeting changed or is no longer available. Reopen it and try again."
+                .into(),
         }
     }
 
@@ -1872,6 +1958,66 @@ mod tests {
             |_, _, _| called.set(true),
         );
         assert_eq!(refused.unwrap_err().state, "stale");
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn a_retained_meeting_note_edit_handle_is_single_use_and_scoped() {
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            &[1; 19],
+            &[2; 23],
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
+
+        let generic_handle = reader.snapshot(&HashSet::new()).rows[0].handle.clone();
+        let called = Cell::new(false);
+        let generic_refused = reader.open_operator_note_bound(
+            &generic_handle,
+            &HashSet::new(),
+            |_, _| called.set(true),
+        );
+        assert_eq!(generic_refused.unwrap_err().state, "stale");
+        assert!(!called.get());
+
+        let snapshot = reader.snapshot(&HashSet::new());
+        let note = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
+        let note_handle = note
+            .operator_note_handle
+            .expect("readable meeting gets an edit handle");
+        let transcript_handle = note
+            .transcript_handle
+            .expect("retained meeting gets a transcript handle");
+        reader
+            .open_transcript_bound(&transcript_handle, &HashSet::new(), |_, _, _| ())
+            .unwrap();
+        let saved = reader
+            .open_operator_note_bound(&note_handle, &HashSet::new(), |storage, meeting_id| {
+                called.set(true);
+                let directory = meeting_dir(storage, meeting_id).unwrap();
+                crate::operator_note::write(&directory, "capture the budget risk").unwrap();
+                crate::operator_note::read(&directory)
+            })
+            .unwrap();
+        assert!(called.get());
+        assert_eq!(saved.text, "capture the budget risk");
+
+        let reused = reader.open_operator_note_bound(&note_handle, &HashSet::new(), |_, _| ());
+        assert_eq!(reused.unwrap_err().state, "stale");
+
+        let snapshot = reader.snapshot(&HashSet::new());
+        let refreshed = reader.open_note(&snapshot.rows[0].handle, &HashSet::new());
+        assert_eq!(refreshed.operator_note.text, "capture the budget risk");
+        let active_handle = refreshed.operator_note_handle.unwrap();
+        called.set(false);
+        let active_refused = reader.open_operator_note_bound(
+            &active_handle,
+            &HashSet::from([MEETING_ID.to_owned()]),
+            |_, _| called.set(true),
+        );
+        assert_eq!(active_refused.unwrap_err().state, "stale");
         assert!(!called.get());
     }
 

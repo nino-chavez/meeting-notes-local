@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-open-transcript-file"
+description = "Enables the library_open_transcript_file command without any pre-configured scope."
+commands.allow = ["library_open_transcript_file"]
+
+[[permission]]
+identifier = "deny-library-open-transcript-file"
+description = "Denies the library_open_transcript_file command without any pre-configured scope."
+commands.deny = ["library_open_transcript_file"]

@@ -190,3 +190,27 @@ export function retentionLabel(days) {
 export function humanize(value) {
   return String(value || "").replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
+
+// Clipboard text is a portable reading copy, not a claim that the transcript
+// is complete. A turn the voice check withheld still occupies a visible line,
+// so pasting this elsewhere cannot silently turn a known gap into a seamless
+// record.
+export function transcriptPlainText(turns) {
+  const rows = Array.isArray(turns) ? turns : [];
+  const lines = [];
+  for (const turn of rows) {
+    const seconds = Math.max(0, Math.floor(Number(turn?.start) || 0));
+    const stamp = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+    if (turn?.withheld) {
+      lines.push(`[${stamp}] (withheld — a voice check set this turn aside)`);
+      continue;
+    }
+    const speaker = typeof turn?.speaker === "string" && turn.speaker.trim()
+      ? turn.speaker.trim()
+      : "Unattributed";
+    const text = typeof turn?.text === "string" ? turn.text.trim() : "";
+    if (!text) continue;
+    lines.push(`[${stamp}] ${speaker}: ${text}`);
+  }
+  return lines.join("\n");
+}

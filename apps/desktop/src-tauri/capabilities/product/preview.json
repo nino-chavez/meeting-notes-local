@@ -1,7 +1,7 @@
 {
   "$schema": "../../gen/schemas/desktop-schema.json",
   "identifier": "preview-window",
-  "description": "The local Preview build exercises the same single meeting-notes flow as the shipped window, including retained source passages for completed notes. It has no reference-interface, generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
+  "description": "The local Preview build exercises the same single meeting-notes flow as the shipped window, including editable personal notes and only the verified transcript file the operator selected. It has no reference-interface, generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
   "windows": [
     "preview"
   ],
@@ -23,7 +23,10 @@
     "allow-library-open-note",
     "allow-preview-library-open-evidence",
     "allow-library-open-transcript",
+    "allow-library-open-transcript-file",
+    "allow-library-save-operator-note",
     "allow-operator-note",
-    "allow-save-operator-note"
+    "allow-save-operator-note",
+    "allow-open-current-transcript-file"
   ]
 }

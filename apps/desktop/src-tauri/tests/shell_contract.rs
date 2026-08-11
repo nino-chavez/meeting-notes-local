@@ -17,8 +17,11 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "library_open_note",
     "preview_library_open_evidence",
     "library_open_transcript",
+    "library_open_transcript_file",
+    "library_save_operator_note",
     "operator_note",
     "save_operator_note",
+    "open_current_transcript_file",
 ];
 
 const MAIN_PERMISSIONS: &[&str] = &[
@@ -36,8 +39,11 @@ const MAIN_PERMISSIONS: &[&str] = &[
     "allow-library-open-note",
     "allow-preview-library-open-evidence",
     "allow-library-open-transcript",
+    "allow-library-open-transcript-file",
+    "allow-library-save-operator-note",
     "allow-operator-note",
     "allow-save-operator-note",
+    "allow-open-current-transcript-file",
 ];
 
 fn permissions(source: &str) -> Vec<String> {

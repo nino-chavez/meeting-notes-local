@@ -25,8 +25,11 @@ fn production_config_is_the_signed_product_lane() {
         "library_snapshot",
         "library_open_note",
         "library_open_transcript",
+        "library_open_transcript_file",
+        "library_save_operator_note",
         "operator_note",
         "save_operator_note",
+        "open_current_transcript_file",
     ] {
         assert!(plan.commands.contains(&command), "missing product command: {command}");
     }
