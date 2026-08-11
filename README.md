@@ -46,8 +46,8 @@ first setup downloads the local speech runtime and models (about 2 GB); no
 meeting data is uploaded.
 
 ```sh
-git clone git@github.com:nino-chavez/meeting-notes-local.git
-cd meeting-notes-local
+git clone git@github.com:nino-chavez/yawn-app.git
+cd yawn-app
 ./worker/build_runtime.sh build-alpha
 cd apps/desktop
 npm ci

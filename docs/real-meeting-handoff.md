@@ -33,8 +33,8 @@ in the operator's room is outside this test.
 ## Install from the clean repository
 
 ```sh
-git clone git@github.com:nino-chavez/meeting-notes-local.git
-cd meeting-notes-local
+git clone git@github.com:nino-chavez/yawn-app.git
+cd yawn-app
 
 (cd capture/audiotee && swift build -c release)
 
