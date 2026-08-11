@@ -127,6 +127,10 @@ impl ArtifactRef {
 pub enum PendingStorageOperation {
     #[serde(rename = "audio-deletion/1")]
     AudioDeletionV1,
+    /// The transcript and every generated note are being removed, while the
+    /// capture evidence and the operator's own note remain with the meeting.
+    #[serde(rename = "transcript-deletion/1")]
+    TranscriptDeletionV1,
 }
 
 #[derive(Debug, Error)]
@@ -205,6 +209,10 @@ impl MeetingRecord {
             self.artifacts.microphone_audio.is_some() || self.artifacts.system_audio.is_some();
         let transcript = self.artifacts.current_transcript.is_some();
         let note = self.artifacts.current_note.is_some();
+        let audio_deletion_pending = self.pending_storage_operation
+            == Some(PendingStorageOperation::AudioDeletionV1);
+        let transcript_deletion_pending = self.pending_storage_operation
+            == Some(PendingStorageOperation::TranscriptDeletionV1);
 
         match self.lifecycle {
             MeetingLifecycle::Incomplete => {
@@ -274,7 +282,7 @@ impl MeetingRecord {
             AudioState::Retained => {
                 if !any_audio
                     || self.retention.deletion_receipt.is_some()
-                    || self.pending_storage_operation.is_some()
+                    || audio_deletion_pending
                 {
                     return Err(MeetingError::Malformed("invalid retained audio state"));
                 }
@@ -282,8 +290,7 @@ impl MeetingRecord {
             AudioState::Deleting => {
                 if !any_audio
                     || self.retention.deletion_receipt.is_some()
-                    || self.pending_storage_operation
-                        != Some(PendingStorageOperation::AudioDeletionV1)
+                    || !audio_deletion_pending
                 {
                     return Err(MeetingError::Malformed("invalid deleting audio state"));
                 }
@@ -293,10 +300,31 @@ impl MeetingRecord {
                     return Err(MeetingError::Malformed("released audio lacks a receipt"));
                 };
                 validate_ref(receipt, "deletion/audio-deletion.json")?;
-                if !any_audio || self.pending_storage_operation.is_some() {
+                if !any_audio || audio_deletion_pending {
                     return Err(MeetingError::Malformed("invalid released audio state"));
                 }
             }
+        }
+
+        // `transcript-deletion/1` first detaches all derived evidence from the
+        // record, then stages and removes the transcript and notes directories.
+        // The only durable intermediate that may be presented to a reader is
+        // therefore a captured meeting with no source transcript or generated
+        // note. Keeping this pairing exact prevents an audio-deletion receipt
+        // from being mistaken for authority to remove text, or a dangling
+        // transcript pointer from surviving an accepted deletion.
+        if transcript_deletion_pending
+            && (self.lifecycle != MeetingLifecycle::Captured || transcript || note)
+        {
+            return Err(MeetingError::Malformed(
+                "invalid pending transcript deletion state",
+            ));
+        }
+        if self.pending_storage_operation.is_some()
+            && !audio_deletion_pending
+            && !transcript_deletion_pending
+        {
+            return Err(MeetingError::Malformed("unknown pending storage operation"));
         }
 
         if self.lifecycle == MeetingLifecycle::Incomplete

@@ -14,11 +14,15 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "first_run_request_microphone",
     "first_run_request_system_audio",
     "library_snapshot",
+    "library_set_meeting_title",
     "library_open_note",
     "preview_library_open_evidence",
     "library_open_transcript",
     "library_open_transcript_file",
     "library_save_operator_note",
+    "preview_delete_meeting_audio",
+    "preview_delete_meeting_transcript",
+    "preview_delete_meeting",
     "operator_note",
     "save_operator_note",
     "open_current_transcript_file",
@@ -36,11 +40,15 @@ const MAIN_PERMISSIONS: &[&str] = &[
     "allow-first-run-request-microphone",
     "allow-first-run-request-system-audio",
     "allow-library-snapshot",
+    "allow-library-set-meeting-title",
     "allow-library-open-note",
     "allow-preview-library-open-evidence",
     "allow-library-open-transcript",
     "allow-library-open-transcript-file",
     "allow-library-save-operator-note",
+    "allow-preview-delete-meeting-audio",
+    "allow-preview-delete-meeting-transcript",
+    "allow-preview-delete-meeting",
     "allow-operator-note",
     "allow-save-operator-note",
     "allow-open-current-transcript-file",
@@ -77,7 +85,7 @@ fn product_windows_have_only_the_commands_the_new_surface_uses() {
 
     assert_eq!(main, expected);
     assert_eq!(preview, expected);
-    for forbidden in ["profile", "folder", "layout", "corpus", "delete-meeting", "reference"] {
+    for forbidden in ["profile", "folder", "layout", "corpus", "reference"] {
         assert!(main.iter().all(|permission| !permission.contains(forbidden)));
     }
 }

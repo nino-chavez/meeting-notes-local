@@ -685,6 +685,17 @@ impl AppDataWriterLock {
         }
     }
 
+    /// Authority for `transcript-deletion/1`, which removes derived text while
+    /// preserving the capture evidence and the operator's own note.
+    pub fn transcript_deletion_authority(
+        &self,
+    ) -> crate::transcript_deletion::TranscriptDeletionAuthority<'_> {
+        crate::transcript_deletion::TranscriptDeletionAuthority {
+            storage: &self.storage,
+            coordination: self.coordination.as_ref(),
+        }
+    }
+
     #[cfg(target_os = "macos")]
     pub fn profile_lifecycle_authority(&self) -> ProfileLifecycleAuthority<'_> {
         ProfileLifecycleAuthority { lock: self }

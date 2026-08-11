@@ -23,6 +23,7 @@ const state = {
   error: "",
   library: null,
   modal: "",
+  notice: "",
   noteDraft: "",
   noteLoadedFor: "",
   noteLoading: false,
@@ -31,6 +32,7 @@ const state = {
   noteUnreadable: false,
   permissions: null,
   retentionDays: 7,
+  renameDraft: "",
   search: "",
   searchTimer: null,
   selected: null,
@@ -140,6 +142,9 @@ function render() {
       </header>
       <main class="stage">${content}</main>
       ${state.modal === "start" ? renderStartSheet() : ""}
+      ${state.modal === "rename-meeting" ? renderRenameMeetingSheet() : ""}
+      ${["delete-recording", "delete-transcript", "delete-meeting"].includes(state.modal) ? renderMeetingDeletionSheet() : ""}
+      ${state.notice ? `<aside class="toast toast-notice" role="status"><button type="button" data-action="clear-notice" aria-label="Dismiss">×</button>${escapeHtml(state.notice)}</aside>` : ""}
       ${state.error ? `<aside class="toast" role="alert"><button type="button" data-action="clear-error" aria-label="Dismiss">×</button>${escapeHtml(state.error)}</aside>` : ""}
     </div>
   `;
@@ -408,11 +413,19 @@ function renderMeeting() {
         : "Stored on this Mac";
   const noteEditable = !operatorNote?.unreadable && Boolean(note?.operatorNoteHandle);
   const claimEvidence = state.selected.claimEvidence || {};
+  const metadataRevision = state.library?.metadataRevision;
+  const canRename = metadataRevision != null && Number.isInteger(Number(metadataRevision));
+  const canDeleteRecording = Boolean(note?.audioDeletionHandle);
+  const canDeleteTranscript = Boolean(note?.transcriptDeletionHandle);
+  const canDeleteMeeting = Boolean(note?.meetingDeletionHandle);
   return `
     <article class="meeting-page" aria-labelledby="meeting-title">
       <button class="text-button" type="button" data-action="meetings">Back to meetings</button>
       <p class="eyebrow">Saved on this Mac</p>
-      <h1 class="meeting-title" id="meeting-title">${escapeHtml(title)}</h1>
+      <div class="meeting-title-row">
+        <h1 class="meeting-title" id="meeting-title">${escapeHtml(title)}</h1>
+        ${canRename ? `<button class="button button-quiet button-small" type="button" data-action="rename-meeting">Rename</button>` : ""}
+      </div>
       <div class="meeting-meta"><span>${escapeHtml(dateLabel(row.createdAtEpochSeconds))}</span><span>${escapeHtml(note?.state ? humanize(note.state) : "Loading note")}</span></div>
       ${note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
       ${claims.length ? `
@@ -447,6 +460,17 @@ function renderMeeting() {
         <h3 id="retention-heading">Audio retention</h3>
         <p>${escapeHtml(note?.audioRetention?.message || "Audio-retention details are unavailable for this meeting.")}</p>
       </section>
+      ${(canDeleteRecording || canDeleteTranscript || canDeleteMeeting) ? `<section class="meeting-management" aria-labelledby="meeting-management-heading">
+        <div>
+          <h3 id="meeting-management-heading">Manage this meeting</h3>
+          <p>These actions only affect this meeting on this Mac.</p>
+        </div>
+        <div class="meeting-management-actions">
+          ${canDeleteRecording ? `<button class="button button-secondary button-small" type="button" data-action="delete-recording">Delete recording</button>` : ""}
+          ${canDeleteTranscript ? `<button class="button button-secondary button-small" type="button" data-action="delete-transcript">Delete transcript</button>` : ""}
+          ${canDeleteMeeting ? `<button class="button button-danger button-small" type="button" data-action="delete-meeting">Delete meeting…</button>` : ""}
+        </div>
+      </section>` : ""}
     </article>
   `;
 }
@@ -490,6 +514,72 @@ function renderStartSheet() {
         <div class="sheet-actions">
           <button class="button button-quiet" type="button" data-action="close-start">Cancel</button>
           <button class="button button-record" type="button" data-action="start-recording" ${!audioReady || !allConfirmed || state.busyAction === "start" ? "disabled" : ""}>${state.busyAction === "start" ? "Starting…" : "Start recording"}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderRenameMeetingSheet() {
+  const selection = state.selected;
+  if (!selection) return "";
+  const saving = state.busyAction === "rename-meeting";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="start-sheet" role="dialog" aria-modal="true" aria-labelledby="rename-meeting-title">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Meeting name</p><h2 id="rename-meeting-title">Give this meeting a useful name.</h2><p>Only this local meeting’s label changes. The recording, transcript, and notes stay as they are.</p></div>
+          <button class="icon-button" type="button" data-action="close-modal" aria-label="Close">×</button>
+        </div>
+        <form data-form="rename-meeting">
+          <label class="field-label" for="meeting-title-input">Meeting name
+            <input class="meeting-title-input" id="meeting-title-input" data-field="meeting-title" maxlength="120" value="${escapeHtml(state.renameDraft)}" placeholder="e.g. Q3 pricing review" autocomplete="off" />
+            <small>Leave this empty to use the opening line from the transcript again.</small>
+          </label>
+          <div class="sheet-actions">
+            <button class="button button-quiet" type="button" data-action="close-modal">Cancel</button>
+            <button class="button button-primary" type="submit" ${saving ? "disabled" : ""}>${saving ? "Saving…" : "Save name"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderMeetingDeletionSheet() {
+  const selection = state.selected;
+  if (!selection) return "";
+  const deleteRecording = state.modal === "delete-recording";
+  const deleteTranscript = state.modal === "delete-transcript";
+  const action = deleteRecording
+    ? "confirm-delete-recording"
+    : deleteTranscript
+      ? "confirm-delete-transcript"
+      : "confirm-delete-meeting";
+  const busy = state.busyAction === action;
+  const title = selection.row.label || `Meeting · ${dateLabel(selection.row.createdAtEpochSeconds)}`;
+  const heading = deleteRecording
+    ? "Delete this recording?"
+    : deleteTranscript
+      ? "Delete this transcript?"
+      : "Delete this meeting?";
+  const detail = deleteRecording
+    ? "This permanently removes the saved microphone and system audio from this Mac. The transcript and your personal notes stay."
+    : deleteTranscript
+      ? "This permanently removes the transcript and generated points from this Mac. Any recording and your personal notes stay."
+      : "This permanently removes the recording, transcript, generated points, personal notes, and saved name from this Mac.";
+  const label = deleteRecording ? "Delete recording" : deleteTranscript ? "Delete transcript" : "Delete meeting";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="start-sheet destructive-sheet" role="dialog" aria-modal="true" aria-labelledby="delete-meeting-title">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Permanent deletion</p><h2 id="delete-meeting-title">${heading}</h2><p>${escapeHtml(detail)}</p></div>
+          <button class="icon-button" type="button" data-action="close-modal" aria-label="Close">×</button>
+        </div>
+        <p class="destructive-target">${escapeHtml(title)}</p>
+        <div class="sheet-actions">
+          <button class="button button-quiet" type="button" data-action="close-modal">Cancel</button>
+          <button class="button button-danger" type="button" data-action="${action}" ${busy ? "disabled" : ""}>${busy ? "Deleting…" : label}</button>
         </div>
       </section>
     </div>
@@ -662,23 +752,146 @@ async function openMeeting(handle) {
   const row = state.library?.rows?.find((candidate) => candidate.handle === handle);
   if (!row) return;
   await flushSelectedNoteSave();
-  state.transcriptActionStatus = { ...state.transcriptActionStatus, library: "" };
   await runBusy("meeting", async () => {
-    const note = await invoke("library_open_note", { handle });
-    const transcript = note.transcriptHandle
-      ? await invoke("library_open_transcript", { handle: note.transcriptHandle })
-      : null;
-    const operatorNote = note.operatorNote || { text: "", unreadable: false };
-    state.selected = {
-      row,
-      note,
-      transcript,
-      claimEvidence: {},
-      operatorNoteDraft: operatorNote.text || "",
-      operatorNoteSaveQueue: Promise.resolve(),
-      operatorNoteSaveState: operatorNote.unreadable ? "unreadable" : operatorNote.text ? "saved" : "local",
-    };
-    state.activeView = "meeting";
+    await loadSelectedMeeting(row);
+  });
+}
+
+async function loadSelectedMeeting(row) {
+  state.transcriptActionStatus = { ...state.transcriptActionStatus, library: "" };
+  const note = await invoke("library_open_note", { handle: row.handle });
+  const transcript = note.transcriptHandle
+    ? await invoke("library_open_transcript", { handle: note.transcriptHandle })
+    : null;
+  const operatorNote = note.operatorNote || { text: "", unreadable: false };
+  state.selected = {
+    row,
+    note,
+    transcript,
+    claimEvidence: {},
+    operatorNoteDraft: operatorNote.text || "",
+    operatorNoteSaveQueue: Promise.resolve(),
+    operatorNoteSaveState: operatorNote.unreadable ? "unreadable" : operatorNote.text ? "saved" : "local",
+  };
+  state.activeView = "meeting";
+}
+
+async function reopenSelectedMeeting(meetingId) {
+  await refreshLibrary();
+  const row = state.library?.rows?.find((candidate) => candidate.meetingId === meetingId);
+  if (!row) {
+    state.selected = null;
+    state.activeView = "home";
+    return;
+  }
+  await loadSelectedMeeting(row);
+}
+
+function openMeetingRename() {
+  const selection = state.selected;
+  if (!selection) return;
+  state.renameDraft = selection.row.labelSource === "operator" ? selection.row.label || "" : "";
+  state.modal = "rename-meeting";
+  render();
+  queueMicrotask(() => root.querySelector("#meeting-title-input")?.focus());
+}
+
+async function saveMeetingTitle() {
+  const selection = state.selected;
+  const metadataRevision = state.library?.metadataRevision;
+  const revision = Number(metadataRevision);
+  if (!selection?.row?.meetingId || metadataRevision == null || !Number.isInteger(revision)) {
+    reportError(new Error("Reopen Meetings before changing this name."));
+    return;
+  }
+  await flushSelectedNoteSave();
+  await runBusy("rename-meeting", async () => {
+    const title = state.renameDraft.trim();
+    const response = await invoke("library_set_meeting_title", {
+      expectedRevision: revision,
+      meetingId: selection.row.meetingId,
+      title: title || null,
+    });
+    if (response.state !== "ok") throw new Error(response.message || "Yawn could not change this meeting name.");
+    if (state.selected !== selection) return;
+    state.modal = "";
+    state.notice = title ? "Meeting name saved on this Mac." : "Meeting name reset to its opening line.";
+    await reopenSelectedMeeting(selection.row.meetingId);
+  });
+}
+
+function openMeetingDeletion(kind) {
+  const selection = state.selected;
+  if (!selection) return;
+  const allowed = kind === "delete-recording"
+    ? Boolean(selection.note?.audioDeletionHandle)
+    : kind === "delete-transcript"
+      ? Boolean(selection.note?.transcriptDeletionHandle)
+      : Boolean(selection.note?.meetingDeletionHandle);
+  if (!allowed) return;
+  state.modal = kind;
+  render();
+}
+
+async function deleteSelectedRecording() {
+  const selection = state.selected;
+  const handle = selection?.note?.audioDeletionHandle;
+  if (!selection?.row?.meetingId || !handle) {
+    reportError(new Error("Reopen this meeting before deleting its recording."));
+    return;
+  }
+  await flushSelectedNoteSave();
+  await runBusy("confirm-delete-recording", async () => {
+    const response = await invoke("preview_delete_meeting_audio", { handle });
+    if (!["released", "already-released"].includes(response.state)) {
+      throw new Error(response.message || "Yawn could not delete this recording.");
+    }
+    if (state.selected !== selection) return;
+    state.modal = "";
+    state.notice = response.message || "The recording was permanently deleted from this Mac.";
+    await reopenSelectedMeeting(selection.row.meetingId);
+  });
+}
+
+async function deleteSelectedTranscript() {
+  const selection = state.selected;
+  const handle = selection?.note?.transcriptDeletionHandle;
+  if (!selection?.row?.meetingId || !handle) {
+    reportError(new Error("Reopen this meeting before deleting its transcript."));
+    return;
+  }
+  await flushSelectedNoteSave();
+  await runBusy("confirm-delete-transcript", async () => {
+    const response = await invoke("preview_delete_meeting_transcript", { handle, confirmed: true });
+    if (!["removed", "already-removed"].includes(response.state)) {
+      throw new Error(response.message || "Yawn could not delete this transcript.");
+    }
+    if (state.selected !== selection) return;
+    state.modal = "";
+    state.notice = response.message || "The transcript and generated notes were permanently deleted from this Mac.";
+    await reopenSelectedMeeting(selection.row.meetingId);
+  });
+}
+
+async function deleteSelectedMeeting() {
+  const selection = state.selected;
+  const handle = selection?.note?.meetingDeletionHandle;
+  if (!handle) {
+    reportError(new Error("Reopen this meeting before deleting it."));
+    return;
+  }
+  await flushSelectedNoteSave();
+  await runBusy("confirm-delete-meeting", async () => {
+    const response = await invoke("preview_delete_meeting", { handle, confirmed: true });
+    if (!["removed", "already-removed"].includes(response.state)) {
+      throw new Error(response.message || "Yawn could not delete this meeting.");
+    }
+    if (state.selected !== selection) return;
+    state.selected = null;
+    state.activeView = "home";
+    state.modal = "";
+    state.notice = response.message || "The meeting was permanently deleted from this Mac.";
+    await refreshLibrary();
   });
 }
 
@@ -891,13 +1104,20 @@ function handleClick(event) {
   const action = control.dataset.action;
   if (action === "home" || action === "meetings") void openMeetings();
   else if (action === "open-start") openStart();
-  else if (action === "close-start") { state.modal = ""; render(); }
+  else if (action === "close-start" || action === "close-modal") { state.modal = ""; render(); }
   else if (action === "start-recording") void startRecording();
   else if (action === "stop-recording") void stopRecording();
   else if (action === "dismiss-current") void dismissCurrent();
   else if (action === "record-another") void recordAnother();
   else if (action === "open-meeting") void openMeeting(control.dataset.handle);
   else if (action === "open-claim-evidence") void openClaimEvidence(Number(control.dataset.ordinal));
+  else if (action === "rename-meeting") openMeetingRename();
+  else if (action === "delete-recording") openMeetingDeletion("delete-recording");
+  else if (action === "delete-transcript") openMeetingDeletion("delete-transcript");
+  else if (action === "delete-meeting") openMeetingDeletion("delete-meeting");
+  else if (action === "confirm-delete-recording") void deleteSelectedRecording();
+  else if (action === "confirm-delete-transcript") void deleteSelectedTranscript();
+  else if (action === "confirm-delete-meeting") void deleteSelectedMeeting();
   else if (action === "copy-current-transcript") void copyTranscript("current");
   else if (action === "copy-library-transcript") void copyTranscript("library");
   else if (action === "open-current-transcript-file") void openTranscriptFile("current");
@@ -909,6 +1129,7 @@ function handleClick(event) {
     if (invoke) void invoke("open_settings_window").catch(reportError);
   }
   else if (action === "clear-error") { state.error = ""; render(); }
+  else if (action === "clear-notice") { state.notice = ""; render(); }
 }
 
 function handleInput(event) {
@@ -929,6 +1150,9 @@ function handleInput(event) {
     state.selected.operatorNoteSaveState = "local";
     setLibraryNoteSaveCopy();
     scheduleSelectedNoteSave();
+  }
+  if (event.target.dataset.field === "meeting-title") {
+    state.renameDraft = event.target.value;
   }
 }
 
@@ -958,6 +1182,12 @@ function handleKeydown(event) {
   }
 }
 
+function handleSubmit(event) {
+  if (event.target.dataset.form !== "rename-meeting") return;
+  event.preventDefault();
+  void saveMeetingTitle();
+}
+
 async function initialize() {
   render();
   if (!invoke) return;
@@ -982,6 +1212,7 @@ document.addEventListener("click", handleClick);
 document.addEventListener("input", handleInput);
 document.addEventListener("change", handleChange);
 document.addEventListener("keydown", handleKeydown);
+document.addEventListener("submit", handleSubmit);
 window.addEventListener("focus", refreshPermissionsOnReturn);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refreshPermissionsOnReturn();

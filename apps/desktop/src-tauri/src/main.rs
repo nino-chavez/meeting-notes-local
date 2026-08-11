@@ -10,9 +10,6 @@ mod library_reader;
 // into the current internal-alpha command set.
 #[allow(dead_code)]
 mod product_facade;
-// The manual audio-deletion facade is intentionally compiled but not wired
-// into the current internal-alpha command set.
-#[allow(dead_code)]
 mod manual_delete_facade;
 // First run's permission surface (§ H). Runs the manifest-verified permission
 // probe and parses its output as untrusted input; holds no storage authority and
@@ -69,12 +66,14 @@ use local_meeting_notes_session_core::protocol::{
 use local_meeting_notes_session_core::recovery::{
     RecoveryCode, RecoveryDisposition, scan_and_recover,
 };
+use local_meeting_notes_session_core::meeting_deletion::reconcile_pending_meeting_deletions;
 use local_meeting_notes_session_core::reducer::{
     CaptureState, ExclusiveOperation, Reducer, StartupState,
 };
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, RetentionOutcome, execute_due_retention_excluding, meeting_dir,
 };
+use local_meeting_notes_session_core::transcript_deletion::reconcile_pending_transcript_deletions;
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::retention::{
     ProfileEnrollmentAdmissionError, ProfileEnrollmentCompletion, ProfileEnrollmentWorker,
@@ -624,6 +623,10 @@ impl ApplicationState {
         &self,
     ) -> manual_delete_facade::WholeMeetingDeletionFacade<'_> {
         manual_delete_facade::WholeMeetingDeletionFacade::new(&self.app_data_writer_lock)
+    }
+
+    fn transcript_deletion_facade(&self) -> manual_delete_facade::TranscriptDeletionFacade<'_> {
+        manual_delete_facade::TranscriptDeletionFacade::new(&self.app_data_writer_lock)
     }
 
     fn meeting_storage_coordination(&self) -> Result<Arc<MeetingStorageCoordination>, String> {
@@ -3879,6 +3882,159 @@ fn preview_delete_meeting_audio_for(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PreviewTranscriptDeletionResponse {
+    state: &'static str,
+    message: String,
+}
+
+fn unavailable_preview_transcript_deletion() -> PreviewTranscriptDeletionResponse {
+    PreviewTranscriptDeletionResponse {
+        state: "unavailable",
+        message: "Transcript deletion is unavailable. Reopen Library and try again.".into(),
+    }
+}
+
+fn with_preview_transcript_deletion_gate<T>(
+    startup: StartupState,
+    capture: CaptureState,
+    operation: impl FnOnce() -> T,
+) -> Result<T, PreviewAudioDeletionGateRefusal> {
+    if startup != StartupState::Ready {
+        return Err(PreviewAudioDeletionGateRefusal {
+            state: "not-ready",
+            message: "Transcript deletion is available after the installation check is ready.",
+        });
+    }
+    if !matches!(capture, CaptureState::Idle | CaptureState::TranscriptReady) {
+        return Err(PreviewAudioDeletionGateRefusal {
+            state: "capture-active",
+            message: "Transcript deletion is unavailable while a meeting is active or recovering.",
+        });
+    }
+    Ok(operation())
+}
+
+/// Removes the transcript and generated notes after the local shell reports a
+/// reviewed confirmation. The separately typed facade token keeps this act
+/// distinct from freeing raw audio or deleting the entire meeting.
+#[tauri::command(async)]
+fn preview_delete_meeting_transcript(
+    handle: String,
+    confirmed: bool,
+    state: State<'_, ApplicationState>,
+) -> PreviewTranscriptDeletionResponse {
+    preview_delete_meeting_transcript_for(handle, confirmed, &state)
+}
+
+fn preview_delete_meeting_transcript_for(
+    handle: String,
+    confirmed: bool,
+    state: &ApplicationState,
+) -> PreviewTranscriptDeletionResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return unavailable_preview_transcript_deletion();
+    };
+    if sitting_task_active(state) {
+        return PreviewTranscriptDeletionResponse {
+            state: "capture-active",
+            message: "Finish the setup recording before deleting a transcript.".into(),
+        };
+    }
+    let (startup, capture) = match state.model.lock() {
+        Ok(model) => (model.reducer.startup(), model.reducer.capture()),
+        Err(_) => return unavailable_preview_transcript_deletion(),
+    };
+    let prepared = match with_preview_transcript_deletion_gate(startup, capture, || {
+        state.with_preview_library(
+            || library_reader::LibraryTranscriptDeletionAccess {
+                state: "unavailable",
+                meeting_id: None,
+                message: "Transcript deletion is unavailable. Reopen Library and try again.".into(),
+            },
+            |reader, active| reader.authorize_transcript_deletion(&handle, active),
+        )
+    }) {
+        Ok(prepared) => prepared,
+        Err(refusal) => {
+            return PreviewTranscriptDeletionResponse {
+                state: refusal.state,
+                message: refusal.message.into(),
+            };
+        }
+    };
+
+    if with_preview_library_invalidated(state, || ()).is_err() {
+        return unavailable_preview_transcript_deletion();
+    }
+
+    let Some(meeting_id) = prepared.meeting_id else {
+        return PreviewTranscriptDeletionResponse {
+            state: prepared.state,
+            message: prepared.message,
+        };
+    };
+    if prepared.state != "authorized" {
+        return PreviewTranscriptDeletionResponse {
+            state: prepared.state,
+            message: prepared.message,
+        };
+    }
+
+    let review = if confirmed {
+        manual_delete_facade::TranscriptDeletionReview::Reviewed
+    } else {
+        manual_delete_facade::TranscriptDeletionReview::NotReviewed
+    };
+    let result = state
+        .transcript_deletion_facade()
+        .delete_transcript(manual_delete_facade::TranscriptDeletionUiArgs { meeting_id, review });
+    let (response_state, message) = match result {
+        Ok(manual_delete_facade::TranscriptDeletionFacadeOutcome::TranscriptRemoved) => (
+            "removed",
+            "The transcript and generated notes were permanently deleted from this Mac.",
+        ),
+        Ok(manual_delete_facade::TranscriptDeletionFacadeOutcome::RecoveredRemoval) => (
+            "removed",
+            "The interrupted transcript deletion was recovered and completed.",
+        ),
+        Ok(manual_delete_facade::TranscriptDeletionFacadeOutcome::AlreadyRemoved) => {
+            ("already-removed", "This meeting transcript was already deleted.")
+        }
+        Ok(manual_delete_facade::TranscriptDeletionFacadeOutcome::DeferredActive) => (
+            "deferred-active",
+            "Transcript deletion was deferred because this meeting is still active.",
+        ),
+        Err(manual_delete_facade::TranscriptDeletionFacadeError::ConfirmationRequired) => (
+            "confirmation-required",
+            "Deleting a transcript removes its generated notes permanently. Confirm to continue.",
+        ),
+        Err(manual_delete_facade::TranscriptDeletionFacadeError::MeetingActionInProgress) => (
+            "action-in-progress",
+            "Another action for this meeting is in progress. Reopen Library and try again.",
+        ),
+        Err(manual_delete_facade::TranscriptDeletionFacadeError::NoTranscript) => (
+            "no-transcript",
+            "This meeting has no retained transcript to delete.",
+        ),
+        Err(manual_delete_facade::TranscriptDeletionFacadeError::NoSuchMeeting) => {
+            ("already-removed", "This meeting was already deleted.")
+        }
+        Err(
+            manual_delete_facade::TranscriptDeletionFacadeError::WriterLockUnavailable
+            | manual_delete_facade::TranscriptDeletionFacadeError::StorageUnavailable,
+        ) => (
+            "unavailable",
+            "Transcript deletion could not complete. Reopen Library and try again.",
+        ),
+    };
+    PreviewTranscriptDeletionResponse {
+        state: response_state,
+        message: message.into(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PreviewMeetingDeletionResponse {
     state: &'static str,
     message: String,
@@ -4276,10 +4432,14 @@ fn main() {
             save_operator_note,
             open_current_transcript_file,
             library_snapshot,
+            library_set_meeting_title,
             library_open_note,
             library_open_transcript,
             library_open_transcript_file,
             library_save_operator_note,
+            preview_delete_meeting_audio,
+            preview_delete_meeting_transcript,
+            preview_delete_meeting,
             preview_library_open_evidence
         ])
         .setup(|app| {
@@ -4402,6 +4562,36 @@ fn initialize_application(app: AppHandle, retry: bool) {
             return;
         }
     };
+    if let Err(error) = reconcile_pending_meeting_deletions(&storage_context.storage, &coordination)
+    {
+        let _ = write_private_diagnostic(
+            &storage_context.diagnostics,
+            "meeting_deletion_reconciliation_failed",
+            &error.to_string(),
+        );
+        finish_startup_failure(
+            &state,
+            retry,
+            StartupFailure::Diagnostic,
+            "an interrupted meeting deletion requires attention",
+        );
+        return;
+    }
+    if let Err(error) = reconcile_pending_transcript_deletions(&storage_context.storage, &coordination)
+    {
+        let _ = write_private_diagnostic(
+            &storage_context.diagnostics,
+            "transcript_deletion_reconciliation_failed",
+            &error.to_string(),
+        );
+        finish_startup_failure(
+            &state,
+            retry,
+            StartupFailure::Diagnostic,
+            "an interrupted transcript deletion requires attention",
+        );
+        return;
+    }
     let storage_sequence = match coordination.lock_sequence() {
         Ok(sequence) => sequence,
         Err(_) => {

@@ -14,6 +14,9 @@ use local_meeting_notes_session_core::meeting_deletion::{
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, ManualAudioDeletionError, ManualAudioDeletionOutcome,
 };
+use local_meeting_notes_session_core::transcript_deletion::{
+    TranscriptDeletionError, TranscriptDeletionOutcome,
+};
 
 /// A closed, in-process result of the reviewed destructive confirmation.
 ///
@@ -212,6 +215,94 @@ fn map_meeting_deletion_error(error: MeetingDeletionError) -> WholeMeetingDeleti
     }
 }
 
+/// The reviewed confirmation for removing transcript-derived material while
+/// preserving the recording and the operator's own note. This is intentionally
+/// not interchangeable with either audio or whole-meeting confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TranscriptDeletionReview {
+    Reviewed,
+    NotReviewed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptDeletionUiArgs {
+    pub(crate) meeting_id: String,
+    pub(crate) review: TranscriptDeletionReview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TranscriptDeletionFacadeOutcome {
+    DeferredActive,
+    TranscriptRemoved,
+    RecoveredRemoval,
+    AlreadyRemoved,
+}
+
+impl From<TranscriptDeletionOutcome> for TranscriptDeletionFacadeOutcome {
+    fn from(outcome: TranscriptDeletionOutcome) -> Self {
+        match outcome {
+            TranscriptDeletionOutcome::DeferredActive => Self::DeferredActive,
+            TranscriptDeletionOutcome::TranscriptRemoved => Self::TranscriptRemoved,
+            TranscriptDeletionOutcome::RecoveredRemoval => Self::RecoveredRemoval,
+            TranscriptDeletionOutcome::AlreadyRemoved => Self::AlreadyRemoved,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TranscriptDeletionFacadeError {
+    ConfirmationRequired,
+    WriterLockUnavailable,
+    MeetingActionInProgress,
+    NoTranscript,
+    NoSuchMeeting,
+    StorageUnavailable,
+}
+
+/// Desktop owner for transcript-only removal.
+pub(crate) struct TranscriptDeletionFacade<'a> {
+    writer_lock: &'a Mutex<Option<Arc<AppDataWriterLock>>>,
+}
+
+impl<'a> TranscriptDeletionFacade<'a> {
+    pub(crate) fn new(writer_lock: &'a Mutex<Option<Arc<AppDataWriterLock>>>) -> Self {
+        Self { writer_lock }
+    }
+
+    pub(crate) fn delete_transcript(
+        &self,
+        args: TranscriptDeletionUiArgs,
+    ) -> Result<TranscriptDeletionFacadeOutcome, TranscriptDeletionFacadeError> {
+        if args.review != TranscriptDeletionReview::Reviewed {
+            return Err(TranscriptDeletionFacadeError::ConfirmationRequired);
+        }
+        let held = self
+            .writer_lock
+            .lock()
+            .map_err(|_| TranscriptDeletionFacadeError::WriterLockUnavailable)?;
+        if held.is_none() {
+            return Err(TranscriptDeletionFacadeError::WriterLockUnavailable);
+        }
+        held.as_ref()
+            .expect("checked app-data writer lock")
+            .transcript_deletion_authority()
+            .delete_transcript(&args.meeting_id)
+            .map(TranscriptDeletionFacadeOutcome::from)
+            .map_err(map_transcript_deletion_error)
+    }
+}
+
+fn map_transcript_deletion_error(error: TranscriptDeletionError) -> TranscriptDeletionFacadeError {
+    match error {
+        TranscriptDeletionError::NonterminalProductOperation => {
+            TranscriptDeletionFacadeError::MeetingActionInProgress
+        }
+        TranscriptDeletionError::NoTranscript => TranscriptDeletionFacadeError::NoTranscript,
+        TranscriptDeletionError::NoSuchMeeting => TranscriptDeletionFacadeError::NoSuchMeeting,
+        _ => TranscriptDeletionFacadeError::StorageUnavailable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -368,6 +459,29 @@ mod tests {
         assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
         assert!(directory.exists());
         assert!(!storage.path().join("deletions").exists());
+    }
+
+    #[test]
+    fn unreviewed_transcript_deletion_refuses_before_lock_or_derived_removal() {
+        let (_temporary, storage) = storage();
+        let directory = write_fixture(&storage, true);
+        let before = fs::read(directory.join("meeting.json")).unwrap();
+        let state = ApplicationState::default();
+        let unreviewed = TranscriptDeletionUiArgs {
+            meeting_id: MEETING_ID.into(),
+            review: TranscriptDeletionReview::NotReviewed,
+        };
+
+        assert_eq!(
+            state
+                .transcript_deletion_facade()
+                .delete_transcript(unreviewed),
+            Err(TranscriptDeletionFacadeError::ConfirmationRequired)
+        );
+        assert_eq!(fs::read(directory.join("meeting.json")).unwrap(), before);
+        assert!(directory.join("transcript").exists());
+        assert!(directory.join("notes").exists());
+        assert!(!directory.join("deletion").exists());
     }
 
     /// The two review tokens are distinct types, so a reviewed decision about
