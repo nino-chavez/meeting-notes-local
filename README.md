@@ -78,7 +78,8 @@ cargo test -p local-meeting-notes-desktop
 | Change the macOS app or its interface | [apps/desktop](./apps/desktop/) |
 | Change capture, storage, or meeting contracts | [crates/session-core](./crates/session-core/) |
 | Change local transcription or note processing | [worker](./worker/) |
-| Understand packaging and releases | [distribution runbook](./docs/distribution-runbook.md) |
+| Package, install, or publish a release | [deployment guide](./DEPLOYMENT.md) |
+| Inspect packaging evidence and release history | [distribution runbook](./docs/distribution-runbook.md) |
 
 ## Evidence and deeper reading
 

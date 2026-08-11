@@ -1,0 +1,163 @@
+# Deploying Yawn
+
+This is the short, safe release path for an agent or release operator. Use it
+when changing the macOS app, installing a new build, publishing its installer,
+or updating the Yawn landing page.
+
+The detailed record lives in [docs/distribution-runbook.md](./docs/distribution-runbook.md).
+That document explains the native packaging choices and keeps historical
+receipts. This guide is the how-to. It deliberately does not name a current
+version: inspect the built artifact and public URL instead.
+
+## What counts as released
+
+There are four separate states:
+
+1. The source commit is on the intended Git branch.
+2. The exact app and DMG are signed, notarized, stapled, and locally verified.
+3. The DMG is reachable from the versioned public R2 URL.
+4. The live landing page links to that verified URL and checksum.
+
+Do not call a build released until all four are true. A successful local build,
+an Apple `Accepted` result, or a pushed landing-page commit is not enough on its
+own.
+
+## Scope and stop conditions
+
+Yawn's distributable lane is `internal-alpha`. It is a transcript and manual
+notes build, not an automatic-note release. Do not change its runtime admission
+to `product` as a packaging shortcut.
+
+Stop and report the blocker instead of improvising when any of these is true:
+
+- the app source is dirty or the version values disagree;
+- the runtime build cannot find the pinned local model assets;
+- the host cannot see the Developer ID identity or `filmroom-notary` profile;
+- the signed verifier or Gatekeeper rejects the app or DMG;
+- a suitable R2 S3 credential is unavailable for the large DMG upload; or
+- GitHub authentication is invalid, so a branch cannot be pushed or merged.
+
+Never put Apple credentials, Cloudflare credentials, meeting audio, transcript
+text, notes, or user data in Git or deployment logs.
+
+## Build and notarize the internal-alpha app
+
+Start at the repository root:
+
+```sh
+git status --short
+worker/build_runtime.sh build-alpha
+(cd apps/desktop && npm run build)
+scripts/verify-release-bundle.py \
+  --admission internal-alpha \
+  target/release/bundle/macos/Yawn.app
+scripts/sign-notarize.sh preflight
+scripts/sign-notarize.sh run-alpha target/release/bundle/macos/Yawn.app
+```
+
+Run the signed-bundle check and signing lane in a native macOS terminal context.
+MLX needs this Mac's Metal device; a restricted shell can falsely fail its
+import check. Keep the signing lane attached as one process. In Codex, do not
+wrap it with `/usr/bin/script`: that wrapper can detach the child, which makes a
+second signing attempt dangerous.
+
+The lane creates these exact artifacts:
+
+```text
+target/release/bundle/macos/Yawn.app
+target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg
+target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg.sha256
+```
+
+Before delivery, independently run:
+
+```sh
+scripts/verify-signed-release.sh \
+  target/release/bundle/macos/Yawn.app \
+  target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg \
+  internal-alpha
+shasum -a 256 target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg
+```
+
+The checksum used on the landing page must come from the completed `.sha256`
+sidecar or this final command. Never retype or reuse a previous release digest.
+
+## Install locally without mixing bundles
+
+Install from the signed DMG, never from the build directory. Mount the DMG,
+copy `Yawn.app` to a new staging name in `/Applications`, verify its version and
+signature, then replace `/Applications/Yawn.app`. Keep the previous bundle only
+until the replacement reports the expected version and passes a strict code
+signature check.
+
+Do not merge a new app into an existing app bundle. A staged replacement avoids
+leaving stale signed files behind. Quit Yawn before the swap. Verify the final
+bundle with:
+
+```sh
+plutil -extract CFBundleShortVersionString raw /Applications/Yawn.app/Contents/Info.plist
+codesign --verify --deep --strict --verbose=2 /Applications/Yawn.app
+```
+
+## Publish the installer
+
+The public bucket is `yawn-releases`. Versioned public objects use this URL:
+
+```text
+https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/Yawn-<version>-macos-arm64.dmg
+```
+
+The current DMGs are about 1.7 GiB. `npx wrangler r2 object put --remote` has a
+300 MiB remote-upload limit, so it must not be used to publish a release DMG.
+Use a multipart-capable S3 client such as `rclone` or the AWS CLI with an
+existing R2 **Object Read & Write** access-key pair scoped to `yawn-releases`.
+An ordinary Cloudflare API token is not an S3 access-key pair and must not be
+passed to an S3 client.
+
+Keep credentials in 1Password. Reuse an existing scoped R2 credential when it
+exists. If it does not exist, stop and obtain explicit authority to create one;
+do not silently mint a broad, long-lived credential during a release.
+
+Upload the exact completed DMG under its versioned filename with content type
+`application/x-apple-diskimage` and immutable cache control. Then verify the
+public URL returns `200` and the expected `Content-Length` before editing the
+landing page. A byte range request is enough to prove public reachability; do
+not download the full image merely to test the link.
+
+## Update and deploy the landing page
+
+The site source is `/Users/nino/Workspace/dev/apps/yawn-site`. Its
+`index.html` owns the version, download URL, and SHA-256 shown to users. Update
+all three together only after the new R2 object is public.
+
+Commit the site source, then deploy it manually:
+
+```sh
+cd /Users/nino/Workspace/dev/apps/yawn-site
+npx wrangler pages deploy . --project-name=yawn-site --branch=main
+```
+
+This Pages project has no Git integration. A site commit or push does not deploy
+the public page. Re-fetch the exact live page with `Cache-Control: no-cache` and
+confirm it names the new version, URL, and checksum.
+
+Only after both the new R2 URL and live landing page are verified may the
+previous installer and its matching checksum sidecar be deleted. Confirm the
+exact old key first. Never delete an old installer before its replacement has a
+working public link.
+
+## Push and hand off source
+
+Check `gh auth status` before a remote Git operation. If authentication is
+invalid, do not claim the branch was pushed, the pull request exists, or `main`
+contains the fix. Restore GitHub authentication, push the reviewed branch, and
+merge the exact source commit that produced the artifact. Keep release-document
+updates in a separate, clearly labeled commit when they are recorded after the
+artifact is made.
+
+## Final receipt
+
+Record only these delivery facts: source commit, app version, DMG filename and
+SHA-256, Apple app/DMG acceptance, installed-app version, public download URL,
+landing-page deployment result, and retired object keys. The human hardware
+test remains separate from packaging evidence.
