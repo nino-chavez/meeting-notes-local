@@ -1,5 +1,35 @@
 # Yawn distribution runbook
 
+## 0.5.7 release receipt
+
+**0.5.7 was released on 2026-08-12 with speech-model management in Settings.**
+The artifact was built from `main` commit `da14c3726d721001d9372fcf0a4dd3da961674c0`.
+PR #69 squash-merged the model-management feature at `120b3b2`, and PR #70
+squash-merged the 0.5.7 version bump at the release commit above.
+
+The signed artifact is `Yawn-0.5.7-macos-arm64.dmg`, 345,222,032 bytes, with
+SHA-256 `eea3973de85260e93afa4f1d25fdca9c7b2fc94b623a3eb6d86ac48c0d59875d`.
+Apple accepted app submission `4f1bf227-c7c4-4baf-9f3e-f601050a379e` and DMG
+submission `80f07c2c-ee96-4ce1-a039-cf84ee3549b6`. Both artifacts were stapled,
+Gatekeeper accepted them with `source=Notarized Developer ID`, and the independent
+signed-release verifier passed with 169 arm64-compatible Mach-O files under the
+`internal-alpha` admission.
+
+The public installer URL returned 200 with the recorded byte count, disk-image
+content type, immutable cache control, and a full streamed SHA-256 match. Landing
+site commit `4c54b3b` was manually deployed to Cloudflare Pages as deployment
+`79a02781`; both that immutable deployment and `yawn-site.pages.dev` displayed
+version 0.5.7, the exact public URL, and the matching checksum. The installed
+`/Applications/Yawn.app` reports 0.5.7, passes strict code-signature and staple
+validation, and completed a fresh local startup. This is packaging and startup
+evidence, not a transcript-accuracy or automatic-note judgment.
+
+Only after the replacement and landing page were live, the exact superseded R2
+keys `Yawn-0.5.6-macos-arm64.dmg` and
+`Yawn-0.5.6-macos-arm64.dmg.sha256` were deleted and returned 404. The 0.5.7
+installer remained public, and both immutable transcript-model weight objects
+remained reachable with their catalog byte counts.
+
 ## Downloadable transcript models (0.5.6 release lane)
 
 Release 0.5.6 uses `app-runtime/2`. The signed and notarized app contains
