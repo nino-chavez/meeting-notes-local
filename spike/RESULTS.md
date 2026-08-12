@@ -555,8 +555,7 @@ survives is held-out FAR/FRR, and at the sample sizes here (10 quiet, 14 read,
 with wide bars. Every conclusion above is single-subject.
 
 **The recordings and the analysis harness are not retained in the repository.**
-The audio is the operator's own voice and other people who did not consent to
-publication, so it cannot be committed,
+The audio is the operator's own voice and other people, so it cannot be committed,
 but that leaves these numbers unreproducible from a clone — a real gap, and the
 same reproducibility standard this project applies to its own claims.
 
