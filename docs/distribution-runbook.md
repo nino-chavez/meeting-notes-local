@@ -1,8 +1,8 @@
 # Yawn distribution runbook
 
-## Downloadable transcript models (next release lane)
+## Downloadable transcript models (0.5.6 release lane)
 
-The next release uses `app-runtime/2`. The signed and notarized app contains
+Release 0.5.6 uses `app-runtime/2`. The signed and notarized app contains
 the Python runtime, capture helpers, MiniLM embedding model, and
 `model-catalog.json`. It does not contain Whisper weights. First launch is the
 installer step: the user chooses either the 464 MB Q4 model or the 1.61 GB full
@@ -44,10 +44,32 @@ control. Verify public byte counts and full downloaded hashes before building
 the app that advertises those URLs. Do not overwrite an existing revision key;
 a changed model gets a new revision path and a newly signed app catalog.
 
-The Q4 lane still needs a real transcription comparison before release. The
-implementation proves that MLX can load the `weights.npz` format and that the
-packaging boundary is exact. It does not prove the smaller model's accuracy on
-Yawn's meeting audio.
+The operator reported that the completed 0.5.6 checks passed. That report is not
+a recorded accuracy measurement: no transcript content or comparison score is
+stored in this runbook. The packaging evidence proves that MLX loads the
+`weights.npz` format and that the model boundary is exact.
+
+**0.5.6 was released, 2026-08-12, with downloadable transcript models.** The
+artifact was built from release head `0327ad8`; PR #67 squash-merged the identical
+source tree to `main` as `732e075`. The DMG is
+`Yawn-0.5.6-macos-arm64.dmg`, 345,913,055 bytes, with SHA-256
+`a33c7ac6603ebf43243f58e46be5b0f69dd818a20f58ee4270fecdbc0e890859`.
+Apple accepted app submission `3aa442be-8a18-40a7-87e3-c51a7aed49c0` and DMG
+submission `6db1de15-e3d2-4d3b-863a-4b9574493c54`; both artifacts were stapled
+and Gatekeeper accepted them with `source=Notarized Developer ID`.
+
+The app copied from the DMG passed `verify-signed-release.sh` for the
+`internal-alpha` admission with 169 arm64-compatible Mach-O files. The installed
+`/Applications/Yawn.app` reports version 0.5.6, passes strict code-signature
+verification, and has a valid staple. The public DMG URL returned 200 with the
+recorded byte count, disk-image content type, immutable cache control, and a
+full streamed SHA-256 match. The live `yawn-site.pages.dev` page showed the same
+version, URL, and digest.
+
+After those checks, the superseded R2 key
+`Yawn-0.5.5-macos-arm64.dmg` was deleted and returned 404. No matching 0.5.5
+checksum sidecar existed. The 0.5.6 DMG remained public with a 200 response, and
+the four immutable model objects remained untouched.
 
 **0.5.1 was cut, 2026-08-08, and it is the only image on the operator's desktop.**
 It exists because 0.5.0 was cut at `e39f576` hours before `corpus-scan-bench` was
