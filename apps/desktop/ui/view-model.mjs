@@ -214,3 +214,15 @@ export function transcriptPlainText(turns) {
   }
   return lines.join("\n");
 }
+
+// Search is intentionally local to the retained text. A withheld turn remains
+// visible in the full transcript, but it has no text that can truthfully match.
+export function transcriptTurnsMatching(turns, query) {
+  const rows = Array.isArray(turns) ? turns : [];
+  const needle = String(query || "").trim().toLocaleLowerCase();
+  if (!needle) return rows;
+  return rows.filter((turn) => (
+    !turn?.withheld
+    && String(turn?.text || "").toLocaleLowerCase().includes(needle)
+  ));
+}

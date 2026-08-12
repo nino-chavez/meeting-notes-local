@@ -10,6 +10,7 @@ import {
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
+  transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
 } from "./view-model.mjs";
 
@@ -22,6 +23,7 @@ const state = {
   consent: { participantsConsented: false, headphones: false, operatorAlone: false },
   error: "",
   library: null,
+  meetingManagementOpen: false,
   modal: "",
   notice: "",
   noteDraft: "",
@@ -38,6 +40,7 @@ const state = {
   selected: null,
   snapshot: null,
   transcriptActionStatus: {},
+  transcriptQuery: "",
 };
 
 let noteSaveTimer;
@@ -158,7 +161,7 @@ function render() {
 function captureEditorFocus() {
   const active = document.activeElement;
   const field = active?.dataset?.field;
-  if (!["operator-note", "library-operator-note"].includes(field)) return null;
+  if (!["operator-note", "library-operator-note", "transcript-search"].includes(field)) return null;
   if (!active.dataset.meetingId) return null;
   return {
     field,
@@ -171,11 +174,11 @@ function captureEditorFocus() {
 
 function restoreEditorFocus(focus) {
   if (!focus) return;
-  const target = Array.from(root.querySelectorAll(`textarea[data-field="${focus.field}"]`))
+  const target = Array.from(root.querySelectorAll(`[data-field="${focus.field}"]`))
     .find((candidate) => candidate.dataset.meetingId === focus.meetingId);
   if (!target || target.disabled) return;
   target.focus({ preventScroll: true });
-  if (focus.start === null || focus.end === null) return;
+  if (focus.start === null || focus.end === null || typeof target.setSelectionRange !== "function") return;
   const start = Math.min(focus.start, target.value.length);
   const end = Math.min(Math.max(start, focus.end), target.value.length);
   target.setSelectionRange(start, end, focus.direction);
@@ -376,25 +379,69 @@ function transcriptActionStatus(scope) {
   return state.transcriptActionStatus?.[scope] || "";
 }
 
-function renderTranscript(turns, title, detail = "", { copyAction = "", openFileAction = "" } = {}) {
+function renderTranscript(turns, title, detail = "", { copyAction = "", openFileAction = "", workspace = false } = {}) {
   const scope = copyAction.includes("library") ? "library" : "current";
   const copyBusy = state.busyAction === copyAction;
   const fileBusy = state.busyAction === openFileAction;
+  const query = workspace ? state.transcriptQuery.trim() : "";
+  const visibleTurns = workspace ? transcriptTurnsMatching(turns, query) : turns;
+  const actions = copyAction || openFileAction ? `<div class="transcript-actions" aria-label="Transcript actions">
+    ${copyAction ? `<button class="button button-quiet button-small" type="button" data-action="${copyAction}" ${copyBusy ? "disabled" : ""}>${copyBusy ? "Copying…" : "Copy transcript"}</button>` : ""}
+    ${openFileAction ? `<button class="button button-quiet button-small" type="button" data-action="${openFileAction}" ${fileBusy ? "disabled" : ""}>${fileBusy ? "Opening…" : "Open transcript file"}</button>` : ""}
+    <span class="transcript-action-status" role="status" aria-live="polite">${escapeHtml(transcriptActionStatus(scope))}</span>
+  </div>` : "";
+  const transcriptLines = visibleTurns.map((turn) => `
+    <div class="transcript-line ${turn.withheld ? "withheld" : ""}">
+      <time>${escapeHtml(timeLabel(turn.start))}</time>
+      <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
+    </div>
+  `).join("");
+  if (workspace) {
+    const queryStatus = query
+      ? visibleTurns.length
+        ? `${visibleTurns.length} matching ${visibleTurns.length === 1 ? "moment" : "moments"}.`
+        : "No matching moments."
+      : "Find a phrase, decision, or follow-up.";
+    return `
+      <section class="transcript-panel transcript-workspace" aria-labelledby="transcript-heading">
+        <div class="transcript-workspace-toolbar">
+          <div class="transcript-heading"><h3 id="transcript-heading">${escapeHtml(title)}</h3>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div>
+          ${actions}
+        </div>
+        <div class="transcript-search-row">
+          <label class="screen-reader-only" for="transcript-search-input">Find in transcript</label>
+          <input class="transcript-search" id="transcript-search-input" data-field="transcript-search" data-meeting-id="${escapeHtml(state.selected?.row?.meetingId || "")}" type="search" value="${escapeHtml(state.transcriptQuery)}" placeholder="Find in transcript" autocomplete="off" aria-describedby="transcript-search-status">
+          ${query ? `<button class="button button-quiet button-small" type="button" data-action="clear-transcript-search">Clear</button>` : ""}
+          <span class="transcript-search-status" id="transcript-search-status" role="status" aria-live="polite">${escapeHtml(queryStatus)}</span>
+        </div>
+        <div class="transcript-scroll" tabindex="0" aria-label="Transcript turns">
+          ${transcriptLines || `<p class="transcript-empty">${query ? "No retained transcript turn matches that search." : "No transcript turns are available."}</p>`}
+        </div>
+      </section>
+    `;
+  }
   return `
     <section class="transcript-panel" aria-labelledby="transcript-heading">
       <div class="transcript-heading"><h3 id="transcript-heading">${escapeHtml(title)}</h3>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div>
-      ${copyAction || openFileAction ? `<div class="transcript-actions" aria-label="Transcript actions">
-        ${copyAction ? `<button class="button button-quiet button-small" type="button" data-action="${copyAction}" ${copyBusy ? "disabled" : ""}>${copyBusy ? "Copying…" : "Copy transcript"}</button>` : ""}
-        ${openFileAction ? `<button class="button button-quiet button-small" type="button" data-action="${openFileAction}" ${fileBusy ? "disabled" : ""}>${fileBusy ? "Opening…" : "Open transcript file"}</button>` : ""}
-        <span class="transcript-action-status" role="status" aria-live="polite">${escapeHtml(transcriptActionStatus(scope))}</span>
-      </div>` : ""}
-      ${turns.map((turn) => `
-        <div class="transcript-line ${turn.withheld ? "withheld" : ""}">
-          <time>${escapeHtml(timeLabel(turn.start))}</time>
-          <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
-        </div>
-      `).join("")}
+      ${actions}
+      ${transcriptLines}
     </section>
+  `;
+}
+
+function renderDraftPoints(claims, claimEvidence) {
+  if (!claims.length) return "";
+  return `
+    <details class="draft-points" open>
+      <summary><span><strong>Draft from transcript</strong><small>Generated points need review against the retained source.</small></span><span class="draft-points-state">Review</span></summary>
+      <div class="draft-points-content">
+        <ul class="claim-list">${claims.map((claim) => `<li class="claim-item">
+          <span class="claim-label">${escapeHtml(humanize(claim.claimType))}</span>
+          <p>${escapeHtml(claim.claim)}</p>
+          ${renderClaimEvidence(claim, claimEvidence[claim.ordinal])}
+        </li>`).join("")}</ul>
+      </div>
+    </details>
   `;
 }
 
@@ -418,59 +465,51 @@ function renderMeeting() {
   const canDeleteRecording = Boolean(note?.audioDeletionHandle);
   const canDeleteTranscript = Boolean(note?.transcriptDeletionHandle);
   const canDeleteMeeting = Boolean(note?.meetingDeletionHandle);
+  const canManage = canDeleteRecording || canDeleteTranscript || canDeleteMeeting;
+  const retentionMessage = note?.audioRetention?.message || "Audio-retention details are unavailable for this meeting.";
   return `
-    <article class="meeting-page" aria-labelledby="meeting-title">
+    <article class="meeting-page meeting-workspace-page" aria-labelledby="meeting-title">
       <button class="text-button" type="button" data-action="meetings">Back to meetings</button>
-      <p class="eyebrow">Saved on this Mac</p>
-      <div class="meeting-title-row">
-        <h1 class="meeting-title" id="meeting-title">${escapeHtml(title)}</h1>
-        ${canRename ? `<button class="button button-quiet button-small" type="button" data-action="rename-meeting">Rename</button>` : ""}
-      </div>
-      <div class="meeting-meta"><span>${escapeHtml(dateLabel(row.createdAtEpochSeconds))}</span><span>${escapeHtml(note?.state ? humanize(note.state) : "Loading note")}</span></div>
+      <header class="meeting-detail-header">
+        <p class="eyebrow">Saved on this Mac</p>
+        <div class="meeting-title-row">
+          <h1 class="meeting-title" id="meeting-title">${escapeHtml(title)}</h1>
+          <div class="meeting-header-actions">
+            ${canRename ? `<button class="button button-quiet button-small" type="button" data-action="rename-meeting">Rename</button>` : ""}
+            ${canManage ? `<div class="meeting-manage-control">
+              <button class="button button-secondary button-small" type="button" data-action="toggle-meeting-management" aria-expanded="${state.meetingManagementOpen ? "true" : "false"}" aria-controls="meeting-manage-menu">Manage</button>
+              ${state.meetingManagementOpen ? `<div class="meeting-manage-menu" id="meeting-manage-menu" role="group" aria-label="Manage this meeting">
+                <p>These actions affect only this meeting on this Mac.</p>
+                ${canDeleteRecording ? `<button class="button button-secondary button-small" type="button" data-action="delete-recording">Delete recording</button>` : ""}
+                ${canDeleteTranscript ? `<button class="button button-secondary button-small" type="button" data-action="delete-transcript">Delete transcript</button>` : ""}
+                ${canDeleteMeeting ? `<button class="button button-danger button-small" type="button" data-action="delete-meeting">Delete meeting…</button>` : ""}
+              </div>` : ""}
+            </div>` : ""}
+          </div>
+        </div>
+        <div class="meeting-meta"><span>${escapeHtml(dateLabel(row.createdAtEpochSeconds))}</span><span>${escapeHtml(note?.state ? humanize(note.state) : "Loading note")}</span></div>
+        <p class="meeting-storage-note">${escapeHtml(retentionMessage)}</p>
+      </header>
       ${note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
-      ${claims.length ? `
-        <section class="draft-notice" aria-label="About this draft note">
-          <p class="eyebrow">Draft note</p>
-          <h2>Review before you rely on it.</h2>
-          <p>These points were generated from the transcript. A summary can miss a commitment or join two nearby ideas, so each point keeps a path back to its source.</p>
-        </section>
-      ` : ""}
-      <div class="meeting-review-grid">
-        <section class="note-section" aria-labelledby="meeting-note-heading">
-          <h3 id="meeting-note-heading">${claims.length ? "Points from the transcript" : "Draft note"}</h3>
-          ${claims.length ? `<ul class="claim-list">${claims.map((claim) => `<li class="claim-item">
-            <span class="claim-label">${escapeHtml(humanize(claim.claimType))}</span>
-            <p>${escapeHtml(claim.claim)}</p>
-            ${renderClaimEvidence(claim, claimEvidence[claim.ordinal])}
-          </li>`).join("")}</ul>` : `<p class="quiet-copy">No generated meeting-note claims are available for this meeting.</p>`}
-        </section>
-        <section class="note-section your-notes-section" aria-labelledby="operator-note-heading">
+      <div class="meeting-workspace">
+        <main class="meeting-source-pane">
+          ${renderDraftPoints(claims, claimEvidence)}
+          ${transcript?.turns?.length ? renderTranscript(transcript.turns, "Source transcript", "The retained record for checking a decision, owner, or follow-up.", {
+            copyAction: "copy-library-transcript",
+            openFileAction: "open-library-transcript-file",
+            workspace: true,
+          }) : transcript?.message ? `<section class="note-section transcript-unavailable"><p class="message-card">${escapeHtml(transcript.message)}</p></section>` : ""}
+        </main>
+        <aside class="meeting-notes-pane">
+          <section class="note-section your-notes-section" aria-labelledby="operator-note-heading">
           <div class="note-editor-head"><h3 id="operator-note-heading">Your notes</h3><span class="save-state" id="library-note-save-state">${escapeHtml(selectedNoteCopy)}</span></div>
           ${operatorNote?.unreadable
             ? `<p class="message-card attention">Yawn could not read this meeting’s personal note, so it was left unchanged.</p>`
-            : `<textarea class="note-editor note-editor-compact" data-field="library-operator-note" data-meeting-id="${escapeHtml(row.meetingId || "")}" aria-label="Your meeting notes" placeholder="Write down the detail you will want to verify later." ${noteEditable ? "" : "disabled"}>${escapeHtml(state.selected?.operatorNoteDraft || "")}</textarea>
+            : `<textarea class="note-editor meeting-notes-editor" data-field="library-operator-note" data-meeting-id="${escapeHtml(row.meetingId || "")}" aria-label="Your meeting notes" placeholder="Write down the detail you will want to verify later." ${noteEditable ? "" : "disabled"}>${escapeHtml(state.selected?.operatorNoteDraft || "")}</textarea>
               <p class="note-editor-help">${noteEditable ? "Saved separately from the transcript. These are your notes, not generated claims." : "Reopen this meeting to edit its notes."}</p>`}
-        </section>
+          </section>
+        </aside>
       </div>
-      ${transcript?.turns?.length ? renderTranscript(transcript.turns, "Source transcript", "The retained record. Use it to check a decision, owner, or follow-up that matters.", {
-        copyAction: "copy-library-transcript",
-        openFileAction: "open-library-transcript-file",
-      }) : transcript?.message ? `<section class="note-section"><p class="message-card">${escapeHtml(transcript.message)}</p></section>` : ""}
-      <section class="retention-copy" aria-labelledby="retention-heading">
-        <h3 id="retention-heading">Audio retention</h3>
-        <p>${escapeHtml(note?.audioRetention?.message || "Audio-retention details are unavailable for this meeting.")}</p>
-      </section>
-      ${(canDeleteRecording || canDeleteTranscript || canDeleteMeeting) ? `<section class="meeting-management" aria-labelledby="meeting-management-heading">
-        <div>
-          <h3 id="meeting-management-heading">Manage this meeting</h3>
-          <p>These actions only affect this meeting on this Mac.</p>
-        </div>
-        <div class="meeting-management-actions">
-          ${canDeleteRecording ? `<button class="button button-secondary button-small" type="button" data-action="delete-recording">Delete recording</button>` : ""}
-          ${canDeleteTranscript ? `<button class="button button-secondary button-small" type="button" data-action="delete-transcript">Delete transcript</button>` : ""}
-          ${canDeleteMeeting ? `<button class="button button-danger button-small" type="button" data-action="delete-meeting">Delete meeting…</button>` : ""}
-        </div>
-      </section>` : ""}
     </article>
   `;
 }
@@ -764,6 +803,8 @@ async function loadSelectedMeeting(row) {
     ? await invoke("library_open_transcript", { handle: note.transcriptHandle })
     : null;
   const operatorNote = note.operatorNote || { text: "", unreadable: false };
+  state.meetingManagementOpen = false;
+  state.transcriptQuery = "";
   state.selected = {
     row,
     note,
@@ -790,6 +831,7 @@ async function reopenSelectedMeeting(meetingId) {
 function openMeetingRename() {
   const selection = state.selected;
   if (!selection) return;
+  state.meetingManagementOpen = false;
   state.renameDraft = selection.row.labelSource === "operator" ? selection.row.label || "" : "";
   state.modal = "rename-meeting";
   render();
@@ -829,6 +871,7 @@ function openMeetingDeletion(kind) {
       ? Boolean(selection.note?.transcriptDeletionHandle)
       : Boolean(selection.note?.meetingDeletionHandle);
   if (!allowed) return;
+  state.meetingManagementOpen = false;
   state.modal = kind;
   render();
 }
@@ -1024,6 +1067,8 @@ async function flushSelectedNoteSave() {
 async function openMeetings() {
   await flushSelectedNoteSave();
   state.selected = null;
+  state.meetingManagementOpen = false;
+  state.transcriptQuery = "";
   state.activeView = "home";
   if (!invoke) {
     render();
@@ -1111,6 +1156,10 @@ function handleClick(event) {
   else if (action === "record-another") void recordAnother();
   else if (action === "open-meeting") void openMeeting(control.dataset.handle);
   else if (action === "open-claim-evidence") void openClaimEvidence(Number(control.dataset.ordinal));
+  else if (action === "toggle-meeting-management") {
+    state.meetingManagementOpen = !state.meetingManagementOpen;
+    render();
+  }
   else if (action === "rename-meeting") openMeetingRename();
   else if (action === "delete-recording") openMeetingDeletion("delete-recording");
   else if (action === "delete-transcript") openMeetingDeletion("delete-transcript");
@@ -1122,6 +1171,11 @@ function handleClick(event) {
   else if (action === "copy-library-transcript") void copyTranscript("library");
   else if (action === "open-current-transcript-file") void openTranscriptFile("current");
   else if (action === "open-library-transcript-file") void openTranscriptFile("library");
+  else if (action === "clear-transcript-search") {
+    state.transcriptQuery = "";
+    render();
+    queueMicrotask(() => root.querySelector("[data-field='transcript-search']")?.focus());
+  }
   else if (action === "retry-startup") void retryStartup();
   else if (action === "request-microphone") void requestPermission("microphone");
   else if (action === "request-system-audio") void requestPermission("system-audio");
@@ -1151,6 +1205,10 @@ function handleInput(event) {
     setLibraryNoteSaveCopy();
     scheduleSelectedNoteSave();
   }
+  if (event.target.dataset.field === "transcript-search") {
+    state.transcriptQuery = event.target.value;
+    render();
+  }
   if (event.target.dataset.field === "meeting-title") {
     state.renameDraft = event.target.value;
   }
@@ -1171,6 +1229,7 @@ function handleChange(event) {
 
 function handleKeydown(event) {
   if (event.key === "Escape" && state.modal) { state.modal = ""; render(); return; }
+  if (event.key === "Escape" && state.meetingManagementOpen) { state.meetingManagementOpen = false; render(); return; }
   if (!event.metaKey || event.altKey || event.ctrlKey) return;
   if (event.key.toLowerCase() === "r" && canOpenStart(state.snapshot, state.permissions)) {
     event.preventDefault();

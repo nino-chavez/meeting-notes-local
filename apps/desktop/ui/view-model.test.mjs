@@ -14,6 +14,7 @@ import {
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
+  transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
 } from "./view-model.mjs";
 
@@ -94,6 +95,17 @@ test("a copied transcript keeps known gaps visible", () => {
   ]);
   assert.equal(transcriptPlainText([]), "");
   assert.equal(transcriptPlainText(null), "");
+});
+
+test("transcript search only matches retained text", () => {
+  const turns = [
+    { text: "Decide the release date" },
+    { text: "This turn cannot be searched", withheld: true },
+    { text: "Send the release recap" },
+  ];
+  assert.deepEqual(transcriptTurnsMatching(turns, "RELEASE"), [turns[0], turns[2]]);
+  assert.deepEqual(transcriptTurnsMatching(turns, ""), turns);
+  assert.deepEqual(transcriptTurnsMatching(null, "release"), []);
 });
 
 test("startup keeps polling until the app is ready", () => {
