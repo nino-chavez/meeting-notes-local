@@ -149,9 +149,9 @@ It is advisory because work is routinely assigned *to* someone by someone else,
 and the owner may say nothing but "yeah". And it has a real blind spot: it
 compares words, so it catches an owner who never discussed the topic and misses
 an owner who discussed something adjacent. On the real meeting below, the note
-put one attendee down as giving feedback on the project plan when what they
-offered was feedback in the first sync meeting. They genuinely said "feedback",
-"project" and "plan" — just not about that object. Word overlap cannot see the object of a
+attached a participant to a commitment whose object was not the one they had
+spoken about — they had discussed a neighbouring object, so every content word
+the check compares was genuinely present. Word overlap cannot see the object of a
 verb, and this check does not pretend to.
 
 `check_grounding` stays out of the verdict deliberately. On real notes it
@@ -230,40 +230,42 @@ not currently reach for.
 
 ---
 
-## A real meeting, from Google Meet
+## A real meeting, outside the corpus
 
 Everything above ran on corpus transcripts. The pipeline was then pointed at a
-genuine 37-minute Google Meet call — four colleagues, real ASR output with
-crosstalk interleaved mid-sentence, and Gemini's own notes in the same export to
+real private call — hosted-platform ASR output with crosstalk interleaved
+mid-sentence, and the platform notetaker's own notes in the same export to
 compare against. **The transcript and the notes it produced are not in this
 repository and never will be; that meeting belongs to the people in it.** What
-is here is `load_meet()`, which parses the format.
+is here is `load_meet()`, which parses the format. The call's participants,
+subject matter and duration are withheld throughout this document; what is
+reported is the pipeline's behaviour on it.
 
 It went better than the corpus runs predicted, and it found two defects.
 
-What the notes got right, verified line by line against the transcript rather
-than against the model's confidence: the project's purpose, the straw-man
-project plan and its correct owner, the data-quality risk, the conflict between
-old documents and current features, and — in the runs that caught it — the
-"not sooner than 2 months because of security checks" timeline, correctly
-attributed. Nothing was invented outright in any run.
+What the notes got right was verified line by line against the transcript rather
+than against the model's confidence: the substantive topics, an owner correctly
+attached to the commitment that was theirs, a stated risk, and — in the runs that
+caught it — a schedule commitment, correctly attributed. The topics themselves
+are withheld. Nothing was invented outright in any run.
 
 What it got wrong is subtler and worth more than the successes:
 
-- **Omission again.** The `named` run missed two commitments Gemini caught: the
-  GitHub-usernames request and the weekly sync, both plainly in the transcript.
-  The `channel` and bleed-simulated runs caught the sync and missed others. No
-  check detects this, which is the same hole covid_4 exposed.
-- **Adjacent-object drift.** One attendee was written down as reviewing and
-  giving feedback on the project plan; what they offered was feedback in the
-  first sync meeting. Every element individually true, the composition wrong.
+- **Omission again.** The `named` run missed two commitments the reference
+  notetaker caught, both plainly in the transcript. The `channel` and
+  bleed-simulated runs caught one of them and missed others. No check detects
+  this, which is the same hole covid_4 exposed.
+- **Adjacent-object drift.** A participant was written down as having committed
+  to act on one object when what they had actually spoken about was a
+  neighbouring one. Every element individually true, the composition wrong.
   This is the failure a proofread survives.
 
 Two checks changed because of it. `check_owner_grounding` exists at all, and
-`check_numbers` no longer exempts small integers that carry a unit — the note
-line "at least 2 months" was a schedule commitment nobody would be held to by a
-check that skipped every integer under eleven. It happened to be true. Nothing
-in this harness established that, which is the only part that matters.
+`check_numbers` no longer exempts small integers that carry a unit — a note line
+carrying a small integer and a unit of time was a schedule commitment nobody
+would be held to by a check that skipped every integer under eleven. It happened
+to be true. Nothing in this harness established that, which is the only part
+that matters.
 
 ---
 
@@ -275,14 +277,14 @@ evaluation was the one *this file's own prompt* put there.
 
 What happens instead is **omission**, and it happens constantly.
 
-Measured against the action items Google Meet's own notetaker recorded for the
-same calls — two real meetings, 37 and 56 minutes — hand-verified line by line
-against the transcripts:
+Measured against the action items the hosted platform's own notetaker recorded
+for the same calls — two real meetings, the second roughly half again as long as
+the first — hand-verified line by line against the transcripts:
 
 | Meeting | Reference items | `llama3.1:8b` | `gemma3:12b` |
 |---|---|---|---|
-| A — 37 min, 4 attendees | 4 | 2 | 2 |
-| B — 56 min, 9 attendees | 6 | 1 | 2 |
+| A — shorter call | 4 | 2 | 2 |
+| B — longer call | 6 | 1 | 2 |
 | **Total** | **10** | **3** | **4** |
 
 Every one of those ten items was confirmed present in the transcript first, so
@@ -295,9 +297,9 @@ commitment phrases are said twice each and are missed by both models.
 described rather than quoted. Nothing from them — audio, transcript, notes, or
 participant names — is in this repository.)
 
-**Roughly a third of the commitments.** On a 56-minute nine-person call, the 8B
-model produced three action items where the reference had six, and only one of
-its three matched anything in the reference.
+**Roughly a third of the commitments.** On the longer call, the 8B model
+produced three action items where the reference had six, and only one of its
+three matched anything in the reference.
 
 Both notes passed every gating check. Both were true. Both were half a meeting,
 presented with the structure and confidence of a complete one — which is the
@@ -323,7 +325,7 @@ halves of that turned out to be wrong, and the next section is why. A third is
 what one configuration scores, not what the pipeline can do.
 
 One caveat holds in both directions regardless: the reference is another model's
-output, not ground truth. Google's notetaker has its own omissions and nothing
+output, not ground truth. The hosted notetaker has its own omissions and nothing
 here measures those.
 
 ---
@@ -331,15 +333,15 @@ here measures those.
 ## Running the same audio through both chains
 
 The recording for meeting B arrived, so the whole comparison could finally be
-made properly: one 57-minute call, our capture chain against Google's, ending in
-the same six reference commitments. Three arms, changing one thing at a time.
+made properly: one call, our capture chain against the hosted platform's, ending
+in the same six reference commitments. Three arms, changing one thing at a time.
 Every figure below is hand-verified against the transcript, because the models'
 own recall scores are worthless (see above).
 
 | Arm | Transcript | Labels | `llama3.1:8b` | `gemma3:12b` |
 |---|---|---|---|---|
-| A | Google's | named | 1/6 | 2/6 |
-| B | Google's | stripped | 0/6 | 3/6 |
+| A | the platform's | named | 1/6 | 2/6 |
+| B | the platform's | stripped | 0/6 | 3/6 |
 | C | **ours, from the audio** | none | 0/6 | **4/6** |
 
 **Our speech recognition is not the bottleneck. It is not even a cost.**
@@ -348,26 +350,22 @@ survived, which matters more here than word error rate — a transcript can lose
 "um" a hundred times and lose nothing, but lose the one phrase naming a promised
 document once and that commitment becomes unwritable. Across all six
 commitments, **zero terms present
-in Google's transcript were missing from ours.** Identical counts on every row,
-at 91% of the word count and 25x realtime on a laptop.
+in the platform's transcript were missing from ours.** Identical counts on every
+row, at 91% of the word count and 25x realtime on a laptop.
 
-**The surprise is that our transcript is better input than Google's.** Meet buys
-speaker labels by cutting turns at every interruption: 43% of its units are three
-words or fewer, against 11% of ours, and during crosstalk it emits speaker labels
-*inside* another speaker's sentence —
-
-```
-Speaker A: Oh, wait. Are you able to share? You should be able Speaker B:
-Speaker A: to. Speaker B: to
-```
-
-— where Whisper returns "Oh wait, are you able to share? You should be able to."
-as one intact sentence. Attribution is paid for with sentence integrity, and for
-writing notes the sentences matter more.
+**The surprise is that our transcript is better input than the platform's.** It
+buys speaker labels by cutting turns at every interruption: 43% of its units are
+three words or fewer, against 11% of ours, and during crosstalk it emits speaker
+labels *inside* another speaker's sentence — in the case we hit, splitting a
+single speaker's two-sentence utterance across four interleaved label segments,
+with its final word landing under two different speakers. Whisper returns that
+same utterance as one intact sentence. (The utterance itself is from a private
+call and is not reproduced here.) Attribution is paid for with sentence integrity, and for writing notes the
+sentences matter more.
 
 So the best result in this whole evaluation is the **fully local end-to-end**
-one: our audio, our ASR, no speaker labels, agentless notes. 4 of 6 against
-Gemini's 6, on a nine-person hour-long client call.
+one: our audio, our ASR, no speaker labels, agentless notes. 4 of 6 against the
+reference notetaker's 6, on the longer client call.
 
 Two honest limits on that. The effect is **not consistent across models** — the
 same changes that took gemma3 from 2/6 to 4/6 took llama3.1 from 1/6 to 0/6, so
@@ -382,16 +380,17 @@ guessed, and that the remaining gap is entirely in note-writing.
 `check_recall` is the only check here that asks a model instead of counting
 strings. That was arrived at the hard way: two lexical versions were written
 first, and both were wrong in opposite directions. Scoring against an item's
-full content words rated a note **4/4** that never says "GitHub" once, because
-"provide", "project", "repository" and the attendees' names appear in every row.
-Restricting to each item's unique terms then rejected notes that plainly did
-cover the item, because the unique set fills with incidental words like "gain"
-and "access".
+full content words rated a note **4/4** that never names the item's distinctive
+object at all, because the item's generic words — and the participants' names —
+appear in every row. Restricting to each item's unique terms then rejected notes
+that plainly did cover the item, because the unique set fills with incidental
+words.
 
-The gap between "send GitHub usernames" and "Share GitHub Usernames: provide
-GitHub usernames to gain access" is semantic. No threshold turns word overlap
-into meaning, and tuning one until the fixtures passed would have produced a
-number that measured the fixtures.
+The gap between a reference item and a note line that genuinely covers it is
+semantic: the two can share almost every content word and still name different
+objects, or share almost none and name the same one. No threshold turns word
+overlap into meaning, and tuning one until the fixtures passed would have
+produced a number that measured the fixtures.
 
 So a model judges it — and then the judge itself gets tested, because a model's
 opinion is not a measurement until it is shown to distinguish the cases:
@@ -407,10 +406,10 @@ $ python3 notes/summarize.py --validate-judge --model gemma3:12b
 | `gemma3:12b` | 4/5 |
 
 **Neither passes.** Both fail the same fixture, and it is the decisive one: a
-note saying "provide access to the project repository" is scored as covering
-"share GitHub usernames so access can be granted". That is the same
-adjacent-object confusion the notes themselves commit — the judge cannot see it
-because the judge has the failure.
+note describing the *outcome* of a commitment is scored as covering the
+commitment to perform the specific step that produces it, though the two name
+different objects. That is the same adjacent-object confusion the notes
+themselves commit — the judge cannot see it because the judge has the failure.
 
 Which is exactly why the report never prints a recall score on its own:
 
@@ -471,10 +470,10 @@ $ python3 notes/summarize.py --validate-judge --model gemma3:12b
 | never answers at all | 0/16 | rejected |
 
 **The harness was strengthened, not loosened, and the check for that is
-specific:** the fixture that previously failed *both* models — a note saying
-"provide access to the project repository" scored as covering "share GitHub
-usernames so access can be granted" — is still there, unchanged, and is now
-passed. A calibration set that grew from 5 cases to 16 while dropping the one
+specific:** the fixture that previously failed *both* models — the
+adjacent-object case described above, where a note naming the *outcome* of a
+commitment was scored as covering the commitment to perform the step that
+produces it — is still there, unchanged, and is now passed. A calibration set that grew from 5 cases to 16 while dropping the one
 that used to fail would have been the tell. It kept it. The three sabotaged
 judges exist for the same reason: a fixture set that has only ever been run
 against judges hoped to be good establishes nothing about its power to reject
@@ -548,20 +547,20 @@ regressions: the changes worth detecting are smaller than its error.
 - *Not sampling noise.* `ollama_chat` pins `temperature: 0.0`, and the same item
   against the same note returns the same verdict seven times out of seven.
 
-**What it is, at least in part.** On a one-line note the judge calls "provide the
-measurement plan to the team" ABSENT against "share a measurement plan with
-&lt;client&gt;", and PRESENT against "share a measurement plan with the team". The
-recipient is doing the work. That is wrong under a rule that turns on the
-*object* of the commitment — a recipient is a party to it, exactly like an
-owner, and owners are already excluded.
+**What it is, at least in part.** Holding a one-line note fixed and changing only
+the *recipient* named in the reference item flips the judge's verdict on it
+between ABSENT and PRESENT. The recipient is doing the work. That is wrong under
+a rule that turns on the *object* of the commitment — a recipient is a party to
+it, exactly like an owner, and owners are already excluded. (The item is from a
+private call; the wording is withheld.)
 
 **The obvious fix was tried and rejected on the evidence.** Adding a recipient
 clause to the prompt's list of differences that do not matter held the fixtures
 at 16/16 — and dropped the contaminated note from 1/6 to 0/6, flipping an
-unrelated, clear-cut item ("John will share the brand guidelines document"
-against "send the brand guidelines document") from PRESENT to ABSENT. Two
-different wordings, the same regression. It was reverted rather than kept for
-the fixture score.
+unrelated, clear-cut item from PRESENT to ABSENT — one with no recipient in it
+at all, where the note and the reference named the same object in near-identical
+words. Two different wordings of the clause, the same regression. It was
+reverted rather than kept for the fixture score.
 
 That failure is the more useful finding: **a bullet that should have touched only
 recipient cases changed a verdict that has no recipient ambiguity at all.** A 12B
@@ -587,8 +586,8 @@ unchanged.
 
 A reference commitment counts as **hit** when both hold: the note names the same
 object of the commitment (paraphrase and synonyms fine; a category standing in
-for the object is not — "share a document" does not hit "share the brand
-guidelines"), and it appears *as a commitment*, under Decisions or Action items
+for the object is not — "share a document" does not hit a commitment to share one
+specific named document), and it appears *as a commitment*, under Decisions or Action items
 or stated in the Summary as something that will happen. A topic raised in
 discussion does not hit a commitment to act on it.
 
@@ -610,7 +609,7 @@ Scoring goes one reference item at a time across all arms, rather than one arm
 end to end, because scoring an arm as a unit invites calibrating to its voice.
 
 **This rule postdates some numbers above.** The earlier arm-C figure of 4/6 on
-meeting A and the 5/6 baseline below are the same configuration scored before and
+the longer meeting and the 5/6 baseline below are the same configuration scored before and
 after it existed. The rule is the reason the numbers differ; treat figures from
 this section onward as the comparable ones.
 
@@ -632,8 +631,8 @@ single item moved a total from 3/6 to 4/6.
 
 | | one pass | two passes |
 |---|---|---|
-| meeting A (57 min, 6 reference commitments) | **5/6** | 4/6 |
-| meeting B (37 min, 4 reference commitments) | 2/4 | **3/4** |
+| longer meeting (6 reference commitments) | **5/6** | 4/6 |
+| shorter meeting (4 reference commitments) | 2/4 | **3/4** |
 | **total** | **7/10** | **7/10** |
 | note length | 18 and 11 bullets | 118 and 61 bullets |
 | wall clock | 64 s and 43 s | 344 s and 138 s |
@@ -709,7 +708,7 @@ level took gemma 2/6→4/6 while taking llama 1/6→0/6, and two passes took gem
 down and llama's meeting up. This is the first change that survives a second
 model.
 
-The 8B model is the striking one. On the 57-minute meeting under the old rules it
+The 8B model is the striking one. On the longer meeting under the old rules it
 scored **zero** — four decisions, three action items, all true, not one of them a
 commitment the reference recorded. It was not failing to understand the meeting.
 It was doing what it had been told.
@@ -743,13 +742,12 @@ Three things worth stating about what this is not:
   appear 3 and 15 times in the transcript, so they come from what was said. Notes
   grew from 18 to 21 bullets and 11 to 16, not to the 118 that two passes
   produced.
-- **The gained items are the ones the change aimed at.** The clearest is a
-  commitment to schedule a recurring sync — administrative, easy to read as not
-  worth writing down, and recorded by the reference.
-- **One commitment is missed by both models under both prompts**: providing
-  usernames so repository access can be granted. The two-pass run caught it. That
-  is the ceiling result again — the information reaches some arm, and no single
-  configuration collects all of it.
+- **The gained items are the ones the change aimed at.** The clearest is an
+  administrative scheduling commitment — easy to read as not worth writing down,
+  and recorded by the reference.
+- **One commitment is missed by both models under both prompts.** The two-pass
+  run caught it. That is the ceiling result again — the information reaches some
+  arm, and no single configuration collects all of it.
 
 The two-pass measurements above predate this change; both arms there used the old
 rules, so that comparison stands on its own terms but its absolute numbers are no
@@ -760,14 +758,17 @@ longer the current baseline.
 The two models miss almost disjoint sets of commitments, which is odd enough to
 chase. Locating each reference commitment in its transcript explains it:
 
+The six commitments are the reference items from a private call, so they are
+identified here by position rather than by what they were:
+
 | commitment | position | mentions | `gemma3:12b` | `llama3.1` |
 |---|---|---|---|---|
-| access to the recording | 0–1% | repeated | hit | miss |
-| categorise the data breakdown | 5% | once | hit | miss |
-| share a measurement plan | 50% | once | hit | miss |
-| draft a project plan | 76% | once | hit | hit |
-| provide usernames for access | **92%** | **once** | **miss** | hit |
-| engineering review of a diagram | **95%** | **once** | **miss** | hit |
+| 1 | 0–1% | repeated | hit | miss |
+| 2 | 5% | once | hit | miss |
+| 3 | 50% | once | hit | miss |
+| 4 | 76% | once | hit | hit |
+| 5 | **92%** | **once** | **miss** | hit |
+| 6 | **95%** | **once** | **miss** | hit |
 
 Both of the 12B model's misses are mentioned exactly once in the final 10%.
 Single-mention commitments at 5%, 50% and 76% are all found, so the variable is
@@ -790,9 +791,8 @@ measured. **It does not work.**
 
 Both late commitments were recovered, exactly as designed. Three earlier ones
 were lost paying for them — including, on one meeting, the single most
-substantial commitment in it, replaced by end-of-meeting logistics phrased as
-"someone will have something halfbaked within the week". Reverted; the code is
-not in the repository.
+substantial commitment in it, replaced by a vague end-of-meeting logistics item
+the model had written in its place. Reverted; the code is not in the repository.
 
 That is the third intervention to behave this way. Two passes: relocation.
 Room-noise contamination: relocation. A closing pass: relocation. Set against the
@@ -847,7 +847,7 @@ Stated plainly, in the same spirit as `spike/RESULTS.md`:
   calibration, so on this machine recall is currently a model's opinion with a
   warning label, not a number to quote.
 - **One meeting with a platform reference.** The recall figures above rest on
-  four action items from one 37-minute call. Enough to establish that omission
+  four action items from a single call. Enough to establish that omission
   is the dominant failure and that 12B does not fix it; nowhere near enough to
   put a percentage on either claim.
 
