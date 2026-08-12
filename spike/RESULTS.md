@@ -309,18 +309,19 @@ changed:
 
 - **Room content does not reach the notes.** Of 130 words the room contributed
   that the meeting never used, exactly two appear in the notes: "importance" and
-  "such". No household subject matter survives compression.
+  "such". No room subject matter survives compression.
 - **But the notes change anyway, and deterministically.** Three repeat runs were
   byte-identical, so this is not sampling noise. With the room in: 3 action items
   and 4 decisions. With it out: 5 action items and 5 decisions, and an entirely
   different set of open questions.
 - **Recall barely moves.** Hand-checked against the six reference commitments,
   the contaminated notes hit 3 and the clean notes hit 2 — and they are not the
-  same 3 and 2. The contaminated run caught a commitment about a measurement plan
-  that the clean run missed entirely; the clean run caught a document-sharing
-  commitment in full where the contaminated run got half of it.
+  same 3 and 2. The contaminated run caught a planning commitment that the clean
+  run missed entirely; the clean run caught a document-sharing commitment in full
+  where the contaminated run got half of it. (The commitments are from a private
+  call and are not described further.)
 
-So the damage is not "your family's conversation appears in your meeting notes".
+So the damage is not "a bystander's conversation appears in your meeting notes".
 It is that **irrelevant input perturbs which real content survives compression**,
 without changing how much of it does. On this meeting that is a wash. The
 mechanism keeping it a wash is that the meeting outweighs the room ten to one in
@@ -427,20 +428,22 @@ whether it does.
 ### Answered: the gate works, and the operator sample changed three conclusions
 
 Five 60–75 s captures of the operator on the built-in microphone, in the room the
-household negatives were recorded in. This is the positive class that never
+negative segments were recorded in. This is the positive class that never
 existed before, and it is what turns the threshold from a guess into a number.
+The negatives are other people speaking in the same room on the same microphone;
+that audio is not retained and they are not described further here.
 
 **The gate separates cleanly.** Enrolled on unscripted speech, scored against the
-197 household segments from the long capture:
+197 other-speaker segments from the long capture:
 
 | class | n | min | mean | max |
 |---|---|---|---|---|
 | operator, quiet room (leave-one-out) | 10 | +0.743 | +0.838 | +0.880 |
 | operator, reading aloud | 14 | +0.431 | +0.648 | +0.749 |
 | operator, music playing in the room | 11 | +0.533 | +0.632 | +0.737 |
-| the household | 197 | −0.145 | +0.039 | +0.575 |
+| other speakers | 197 | −0.145 | +0.039 | +0.575 |
 
-The worst quiet segment sits above the best household segment. **The earlier
+The worst quiet segment sits above the best other-speaker segment. **The earlier
 "half strength" figure measured the harder problem** — room against room, every
 speaker far-field. Operator against room, in the right channel, is roughly a
 twentyfold margin.
@@ -457,7 +460,7 @@ works.
 rule — reject 2% of the operator's own speech — gives +0.749 on clean audio, and
 that threshold discards *every* segment recorded with music playing:
 
-| threshold | quiet | read aloud | with room music | household admitted |
+| threshold | quiet | read aloud | with room music | other speakers admitted |
 |---|---|---|---|---|
 | +0.749 | 90% | 7% | **0%** | 0.0% |
 | +0.650 | 100% | 64% | 36% | 0.0% |
@@ -500,8 +503,8 @@ operator's own clean segments at known ratios:
 
 At equal loudness the operator's own voice scores +0.266, against +0.039 for a
 stranger. The embedding is a blend, and it is genuinely no longer his — so
-lowering the threshold to catch it would admit the household as well, since the
-household's best segment is +0.575.
+lowering the threshold to catch it would admit the other speakers as well, since
+their best segment is +0.575.
 
 **This is a missing pipeline stage, not a tuning problem.** The project has bleed
 *detection* — `drop_bled` discards segments that ARE the far end — and voiceprint
@@ -534,7 +537,7 @@ sample quantile cannot resolve 2% — every target at or below 10% lands on the
 same place in the order statistics, and the measured rejection is **10%**, not
 2%. The module was honest and the write-up was not.
 
-**+0.580 is 0.005 above the strongest household segment.** That is not a margin,
+**+0.580 is 0.005 above the strongest other-speaker segment.** That is not a margin,
 it is a coincidence of this sample, and it was reported as an operating point
 with the thinness relegated to a clause. Nothing should ship on it. It stands as
 an experiment result.
@@ -548,11 +551,12 @@ adaptation, not against it.
 **"Twentyfold margin" is not a meaningful way to report cosine separation.**
 Ratios of cosine similarities have no operational meaning. The claim that
 survives is held-out FAR/FRR, and at the sample sizes here (10 quiet, 14 read,
-11 with music, one operator, one household, one day) even that is an estimate
+11 with music, one operator, one room of other speakers, one day) even that is an estimate
 with wide bars. Every conclusion above is single-subject.
 
 **The recordings and the analysis harness are not retained in the repository.**
-The audio is the operator's own voice and a household, so it cannot be committed,
+The audio is the operator's own voice and other people who did not consent to
+publication, so it cannot be committed,
 but that leaves these numbers unreproducible from a clone — a real gap, and the
 same reproducibility standard this project applies to its own claims.
 
@@ -603,7 +607,7 @@ does not own the conferencing app's playback.
 So the next step is a feasibility spike, not production work: preserve hardware
 timestamps and callback discontinuities, emit framed 10 ms streams, and run AEC3
 offline against retained paired fixtures before changing any architecture. Judge
-it on downstream outcomes — operator words retained, household false admits,
+it on downstream outcomes — operator words retained, other-speaker false admits,
 residual echo — not on filter convergence.
 
 ### Answered: echo removal recovers the operator on audio the filter never saw
@@ -729,9 +733,9 @@ chance to carve the operator out of a recording that never contained an echo.
 | free | +0.777 | +0.771 | +0.774 | 8/8 → 8/8 |
 | read | +0.619 | +0.599 | +0.605 | 4/5 → 4/5 |
 | roomnoise | +0.597 | +0.595 | +0.596 | **9/14 → 7/14** |
-| household (197 segments) | +0.037 | +0.037 | +0.037 | 0/197 → 0/197 |
+| other speakers (197 segments) | +0.037 | +0.037 | +0.037 | 0/197 → 0/197 |
 
-The household segments — other people, same microphone, same room — are the only
+The negative segments — other people, same microphone, same room — are the only
 figures here measured on the segmentation the pipeline actually produces, and
 they do not move at all. But the room-noise take loses two windows of fourteen on
 a mean shift of 0.002: its windows cluster right at the operating point, so a
@@ -881,7 +885,7 @@ channel, not the talker. Between the operator's phrases the microphone still
 carries the far end, so a list of voiced microphone intervals is a mixture of the
 voice being recovered and the voice being cancelled. Every echo figure in this
 document was scored against exactly that mixture. The controls are not affected
-in the same way: the quiet takes have no far end to leak, the household rate
+in the same way: the quiet takes have no far end to leak, the other-speaker rate
 counts admissions of segments that are deliberately *not* the operator, and the
 synthetic level sweep mixes into his own clean audio, so what it scores is his
 by construction.
@@ -1091,7 +1095,7 @@ input.
 > **Updated 2026-07-29, and this paragraph's premise no longer holds.** When this
 > was written there was no recording of the operator on this microphone at all.
 > One now exists — 117 s, nine scorable segments — so the sentence "every mic leg
-> in the project is silence or the household", which this paragraph used to carry,
+> in the project is silence or other speakers", which this paragraph used to carry,
 > was true when frozen and is false now. The frozen banner at the top of this file
 > covers the *echo findings*; it does not license a stale claim about what exists.
 > The gap is now narrower and specific: one sitting rather than none, still short
