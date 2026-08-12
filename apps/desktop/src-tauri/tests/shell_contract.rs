@@ -11,6 +11,8 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "dismiss_meeting",
     "retry_startup",
     "install_transcript_model",
+    "transcript_model_settings",
+    "remove_transcript_model",
     "first_run_permissions",
     "first_run_request_microphone",
     "first_run_request_system_audio",
@@ -94,21 +96,41 @@ fn product_windows_have_only_the_commands_the_new_surface_uses() {
 
 #[test]
 fn every_frontend_call_has_a_matching_product_permission() {
-    let script = include_str!("../../ui/main.js");
-    let mut invoked: Vec<String> = script
-        .match_indices("invoke(\"")
-        .map(|(at, _)| {
-            let rest = &script[at + "invoke(\"".len()..];
-            rest[..rest.find('"').expect("unterminated invoke name")].to_owned()
-        })
-        .collect();
-    for command in [
-        "first_run_request_microphone",
-        "first_run_request_system_audio",
-    ] {
-        assert!(script.contains(command));
-        invoked.push(command.to_owned());
+    fn invoked_commands(script: &str, dynamic_commands: &[&str]) -> Vec<String> {
+        let mut invoked: Vec<String> = script
+            .match_indices("invoke(\"")
+            .map(|(at, _)| {
+                let rest = &script[at + "invoke(\"".len()..];
+                rest[..rest.find('"').expect("unterminated invoke name")].to_owned()
+            })
+            .collect();
+        for command in dynamic_commands {
+            assert!(script.contains(command));
+            invoked.push((*command).to_owned());
+        }
+        invoked.sort();
+        invoked.dedup();
+        invoked
     }
+
+    fn assert_permissions(source: &str, invoked: &[String]) {
+        let permitted = permissions(source);
+        for command in invoked {
+            let needed = format!("allow-{}", command.replace('_', "-"));
+            assert!(permitted.contains(&needed), "missing permission for {command}");
+        }
+    }
+
+    let main_invoked = invoked_commands(
+        include_str!("../../ui/main.js"),
+        &["first_run_request_microphone", "first_run_request_system_audio"],
+    );
+    let settings_invoked = invoked_commands(
+        include_str!("../../ui/settings.js"),
+        &["first_run_request_microphone", "first_run_request_system_audio"],
+    );
+    let mut invoked = main_invoked.clone();
+    invoked.extend(settings_invoked.clone());
     invoked.sort();
     invoked.dedup();
 
@@ -119,16 +141,16 @@ fn every_frontend_call_has_a_matching_product_permission() {
         include_str!("../capabilities/product/main.json"),
         include_str!("../capabilities/product/preview.json"),
     ] {
-        let permitted = permissions(source);
-        for command in &invoked {
-            let needed = format!("allow-{}", command.replace('_', "-"));
-            assert!(permitted.contains(&needed), "missing permission for {command}");
-        }
+        assert_permissions(source, &main_invoked);
     }
+    assert_permissions(
+        include_str!("../capabilities/product/settings-window.json"),
+        &settings_invoked,
+    );
 }
 
 #[test]
-fn settings_can_only_check_or_request_audio_access() {
+fn settings_can_only_manage_audio_access_and_local_speech_models() {
     let settings = permissions(include_str!("../capabilities/product/settings-window.json"));
     assert_eq!(
         settings,
@@ -136,6 +158,9 @@ fn settings_can_only_check_or_request_audio_access() {
             "allow-first-run-permissions",
             "allow-first-run-request-microphone",
             "allow-first-run-request-system-audio",
+            "allow-transcript-model-settings",
+            "allow-install-transcript-model",
+            "allow-remove-transcript-model",
         ]
     );
 
@@ -144,6 +169,9 @@ fn settings_can_only_check_or_request_audio_access() {
         "first_run_permissions",
         "first_run_request_microphone",
         "first_run_request_system_audio",
+        "transcript_model_settings",
+        "install_transcript_model",
+        "remove_transcript_model",
     ] {
         assert!(script.contains(command));
     }

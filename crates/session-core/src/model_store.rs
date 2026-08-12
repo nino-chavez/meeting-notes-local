@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::storage::{StorageRoot, durable_replace};
+use crate::storage::{durable_replace, sync_directory, StorageRoot};
 
 const MAX_CATALOG_BYTES: u64 = 128 * 1024;
 const MAX_RECEIPT_BYTES: u64 = 32 * 1024;
@@ -131,6 +131,8 @@ pub enum ModelStoreError {
     InvalidReceipt,
     #[error("installed model is missing, unsafe, or changed")]
     InvalidModel,
+    #[error("the active model cannot be removed")]
+    ActiveModel,
     #[error(transparent)]
     Io(#[from] io::Error),
 }
@@ -217,6 +219,23 @@ pub fn installed_model(
     storage: &StorageRoot,
     catalog: &ModelCatalog,
 ) -> Result<Option<InstalledTranscriptModel>, ModelStoreError> {
+    let Some(entry) = active_model(storage, catalog)? else {
+        return Ok(None);
+    };
+    let relative = Path::new("models").join(&entry.id).join(&entry.revision);
+    let directory = storage.resolve(&relative).map_err(io::Error::other)?;
+    verify_model_directory(&directory, &entry)?;
+    Ok(Some(InstalledTranscriptModel {
+        receipt_path: directory.join(INSTALL_RECEIPT_NAME),
+        entry,
+        directory,
+    }))
+}
+
+pub fn active_model(
+    storage: &StorageRoot,
+    catalog: &ModelCatalog,
+) -> Result<Option<TranscriptModel>, ModelStoreError> {
     let active_path = storage
         .resolve(Path::new(ACTIVE_RECEIPT))
         .map_err(io::Error::other)?;
@@ -228,14 +247,56 @@ pub fn installed_model(
     if active.revision != entry.revision {
         return Err(ModelStoreError::InvalidReceipt);
     }
-    let relative = Path::new("models").join(&entry.id).join(&entry.revision);
-    let directory = storage.resolve(&relative).map_err(io::Error::other)?;
-    verify_model_directory(&directory, entry)?;
-    Ok(Some(InstalledTranscriptModel {
-        entry: entry.clone(),
-        receipt_path: directory.join(INSTALL_RECEIPT_NAME),
-        directory,
-    }))
+    Ok(Some(entry.clone()))
+}
+
+pub fn model_is_stored(
+    storage: &StorageRoot,
+    entry: &TranscriptModel,
+) -> Result<bool, ModelStoreError> {
+    let directory = storage
+        .resolve(&Path::new("models").join(&entry.id).join(&entry.revision))
+        .map_err(io::Error::other)?;
+    if !directory.exists() {
+        return Ok(false);
+    }
+    if directory.is_symlink() || !directory.is_dir() {
+        return Err(ModelStoreError::InvalidModel);
+    }
+    Ok(true)
+}
+
+pub fn remove_inactive_model(
+    storage: &StorageRoot,
+    catalog: &ModelCatalog,
+    id: &str,
+) -> Result<bool, ModelStoreError> {
+    let entry = catalog.model(id)?;
+    if active_model(storage, catalog)?
+        .as_ref()
+        .is_some_and(|active| active.id == entry.id)
+    {
+        return Err(ModelStoreError::ActiveModel);
+    }
+    let models = storage
+        .resolve(Path::new("models"))
+        .map_err(io::Error::other)?;
+    let parent = storage
+        .resolve(&Path::new("models").join(&entry.id))
+        .map_err(io::Error::other)?;
+    let directory = storage
+        .resolve(&Path::new("models").join(&entry.id).join(&entry.revision))
+        .map_err(io::Error::other)?;
+    if !directory.exists() {
+        return Ok(false);
+    }
+    if directory.is_symlink() || !directory.is_dir() {
+        return Err(ModelStoreError::InvalidModel);
+    }
+    fs::remove_dir_all(&directory)?;
+    sync_directory(&parent)?;
+    sync_directory(&models)?;
+    Ok(true)
 }
 
 pub fn verify_model_directory(
@@ -417,6 +478,21 @@ mod tests {
         (temp, storage, catalog)
     }
 
+    fn write_installed_model(storage: &StorageRoot, entry: &TranscriptModel) -> PathBuf {
+        let directory = storage
+            .resolve(&Path::new("models").join(&entry.id).join(&entry.revision))
+            .unwrap();
+        create_private_dir(&directory).unwrap();
+        durable_create_new(&directory.join("config.json"), b"config").unwrap();
+        durable_create_new(&directory.join(&entry.files[1].name), b"weights").unwrap();
+        durable_create_new(
+            &directory.join(INSTALL_RECEIPT_NAME),
+            &install_receipt_bytes(entry),
+        )
+        .unwrap();
+        directory
+    }
+
     #[test]
     fn verifies_and_activates_only_a_complete_catalog_model() {
         let (_temp, storage, catalog) = fixture();
@@ -464,5 +540,34 @@ mod tests {
             verify_model_directory(&directory, entry),
             Err(ModelStoreError::InvalidModel)
         ));
+    }
+
+    #[test]
+    fn removes_only_an_inactive_catalog_model() {
+        let (_temp, storage, mut catalog) = fixture();
+        let mut other = catalog.models[0].clone();
+        other.id = "whisper-test-full".into();
+        other.revision = "b".repeat(40);
+        for file in &mut other.files {
+            file.url = format!("https://example.test/{}/{}", other.revision, file.name);
+        }
+        catalog.models.push(other.clone());
+        catalog.validate().unwrap();
+
+        let active = &catalog.models[0];
+        let active_directory = write_installed_model(&storage, active);
+        let other_directory = write_installed_model(&storage, &other);
+        activate_model(&storage, active).unwrap();
+
+        assert!(model_is_stored(&storage, active).unwrap());
+        assert!(model_is_stored(&storage, &other).unwrap());
+        assert!(matches!(
+            remove_inactive_model(&storage, &catalog, &active.id),
+            Err(ModelStoreError::ActiveModel)
+        ));
+        assert!(active_directory.exists());
+        assert!(remove_inactive_model(&storage, &catalog, &other.id).unwrap());
+        assert!(!other_directory.exists());
+        assert!(!remove_inactive_model(&storage, &catalog, &other.id).unwrap());
     }
 }

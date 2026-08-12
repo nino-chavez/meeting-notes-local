@@ -74,6 +74,9 @@ it is not the home-screen subject. Settings remain a small auxiliary window.
   they need to remember; they are not a form to complete.
 - Keep the status language concrete: recording, preparing, finishing,
   transcript ready, or needs attention.
+- Keep Settings limited to audio access and local speech-model storage. Show
+  which model is in use. Allow switching only between meetings, and never
+  remove the active model.
 - Use a short, quiet Mac-native surface: generous reading width, one main
   content column, light chrome, and color only for recording or attention.
 - Never use fake counts, placeholder meetings, promised automation, or a

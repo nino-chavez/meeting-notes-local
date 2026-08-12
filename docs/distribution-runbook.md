@@ -15,6 +15,12 @@ needing the same download and verification code. Keeping setup in Yawn also
 lets an interrupted download fail before activation and retry through the same
 visible first-run surface.
 
+After setup, Settings shows which model is active and which downloads remain on
+the Mac. A user can download or switch models between meetings and remove an
+inactive download to reclaim space. Yawn never offers to remove the active
+model, and the backend refuses that operation even if a caller bypasses the
+window.
+
 `model-catalog.json` is sealed into the app by its code signature and then bound
 again by `app-runtime.json`. Each catalog entry pins an immutable upstream
 revision, exact object URL, filename, byte count, and SHA-256 digest. The Rust

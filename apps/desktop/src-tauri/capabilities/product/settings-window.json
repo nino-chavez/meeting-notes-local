@@ -1,7 +1,7 @@
 {
   "$schema": "../../gen/schemas/desktop-schema.json",
   "identifier": "settings-window",
-  "description": "The compact Settings window may show and request only the two local capture permissions. It cannot read meetings or use generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
+  "description": "The Settings window may show and request the two local capture permissions, show the signed speech-model catalog, install and activate one catalog model, and remove only an inactive local model. It cannot read meetings or use generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
   "windows": [
     "settings"
   ],
@@ -11,6 +11,9 @@
   "permissions": [
     "allow-first-run-permissions",
     "allow-first-run-request-microphone",
-    "allow-first-run-request-system-audio"
+    "allow-first-run-request-system-audio",
+    "allow-transcript-model-settings",
+    "allow-install-transcript-model",
+    "allow-remove-transcript-model"
   ]
 }

@@ -60,7 +60,8 @@ use local_meeting_notes_session_core::meeting::{
 };
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 use local_meeting_notes_session_core::model_store::{
-    InstalledTranscriptModel, ModelCatalog, TranscriptModel, installed_model,
+    InstalledTranscriptModel, ModelCatalog, TranscriptModel, activate_model, active_model,
+    installed_model, model_is_stored, remove_inactive_model,
 };
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::profile_lifecycle::ProfileLifecycleError;
@@ -134,9 +135,9 @@ fn show_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         WebviewUrl::App("settings.html".into()),
     )
     .title("Yawn Settings")
-    .inner_size(720.0, 560.0)
-    .min_inner_size(720.0, 560.0)
-    .max_inner_size(720.0, 560.0)
+    .inner_size(720.0, 720.0)
+    .min_inner_size(720.0, 720.0)
+    .max_inner_size(720.0, 720.0)
     .resizable(false)
     .minimizable(false)
     .maximizable(false)
@@ -337,6 +338,33 @@ struct ModelSetupOption {
     detail: String,
     download_bytes: u64,
     installed_bytes: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptModelSettingsSnapshot {
+    state: String,
+    options: Vec<TranscriptModelSettingsOption>,
+    active_model_id: Option<String>,
+    selected_model_id: Option<String>,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    error: Option<String>,
+    change_active: bool,
+    can_change: bool,
+    unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptModelSettingsOption {
+    id: String,
+    title: String,
+    detail: String,
+    download_bytes: u64,
+    installed_bytes: u64,
+    stored: bool,
+    active: bool,
 }
 
 impl From<&TranscriptModel> for ModelSetupOption {
@@ -1474,6 +1502,9 @@ fn start_meeting(
     validate_start_request(retention_days, &attestation)?;
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
+    if state.model_install_active.load(Ordering::SeqCst) {
+        return Err("Wait for the speech model change to finish before starting a meeting.".into());
+    }
     let meeting_id = Uuid::new_v4().to_string();
     let attempt_id = Uuid::new_v4().to_string();
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -1745,6 +1776,79 @@ fn verified_model_catalog(
         .map_err(error_text)
 }
 
+fn transcript_model_settings_for(
+    state: &ApplicationState,
+) -> Result<TranscriptModelSettingsSnapshot, String> {
+    let storage_context = state
+        .storage
+        .lock()
+        .map_err(|_| "the private workspace is unavailable".to_string())?
+        .clone()
+        .ok_or_else(|| "the private workspace is unavailable".to_string())?;
+    let manifest =
+        RuntimeManifest::load_and_verify(&storage_context.manifest_path).map_err(error_text)?;
+    let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
+        .ok_or_else(|| "this build does not use downloadable speech models".to_string())?;
+    let active = active_model(&storage_context.storage, &catalog).map_err(error_text)?;
+    let active_model_id = active.as_ref().map(|entry| entry.id.clone());
+    let options = catalog
+        .models
+        .iter()
+        .map(|entry| {
+            let stored = model_is_stored(&storage_context.storage, entry).map_err(error_text)?;
+            Ok(TranscriptModelSettingsOption {
+                id: entry.id.clone(),
+                title: entry.title.clone(),
+                detail: entry.detail.clone(),
+                download_bytes: entry.download_bytes,
+                installed_bytes: entry.installed_bytes,
+                stored,
+                active: active_model_id.as_deref() == Some(entry.id.as_str()),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let installing = state.model_install_active.load(Ordering::SeqCst);
+    let (setup, startup, capture) = {
+        let model = state.model.lock().expect("application model lock");
+        (
+            model.model_setup.clone(),
+            model.reducer.startup(),
+            model.reducer.capture(),
+        )
+    };
+    let startup_ready = matches!(startup, StartupState::Ready | StartupState::ModelRequired);
+    let audio_idle = capture == CaptureState::Idle && !sitting_task_active(state);
+    let can_change = startup_ready && audio_idle && !installing;
+    let unavailable_reason = if installing {
+        Some("Wait for the current model change to finish.".into())
+    } else if !audio_idle {
+        Some("Finish the current meeting before changing speech models.".into())
+    } else if !startup_ready {
+        Some("Yawn must finish starting before speech models can be changed.".into())
+    } else {
+        None
+    };
+    Ok(TranscriptModelSettingsSnapshot {
+        state: setup.state,
+        options,
+        active_model_id,
+        selected_model_id: setup.selected_model_id,
+        downloaded_bytes: setup.downloaded_bytes,
+        total_bytes: setup.total_bytes,
+        error: setup.error,
+        change_active: installing,
+        can_change,
+        unavailable_reason,
+    })
+}
+
+#[tauri::command]
+fn transcript_model_settings(
+    state: State<'_, ApplicationState>,
+) -> Result<TranscriptModelSettingsSnapshot, String> {
+    transcript_model_settings_for(&state)
+}
+
 fn finish_model_selection(
     state: &ApplicationState,
     retry: bool,
@@ -1808,10 +1912,15 @@ fn install_transcript_model(app: AppHandle, model_id: String) -> Result<AppSnaps
         let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
             .ok_or_else(|| "this build does not use downloadable speech models".to_string())?;
         let selected = catalog.model(&model_id).map_err(error_text)?.clone();
+        let previous_active = active_model(&storage_context.storage, &catalog)
+            .map_err(error_text)?;
         {
             let mut model = state.model.lock().expect("application model lock");
-            if model.reducer.startup() != StartupState::ModelRequired {
-                return Err("Model setup is not waiting for a selection.".into());
+            if !matches!(
+                model.reducer.startup(),
+                StartupState::ModelRequired | StartupState::Ready
+            ) {
+                return Err("Speech models cannot be changed from the current state.".into());
             }
             model.model_setup = ModelSetupSnapshot {
                 state: "downloading".into(),
@@ -1824,10 +1933,10 @@ fn install_transcript_model(app: AppHandle, model_id: String) -> Result<AppSnaps
             model.startup_message = format!("Downloading {}.", selected.title);
             model.error = None;
         }
-        Ok::<_, String>((storage_context, selected))
+        Ok::<_, String>((storage_context, selected, previous_active))
     })();
 
-    let (storage_context, selected) = match preparation {
+    let (storage_context, selected, previous_active) = match preparation {
         Ok(prepared) => prepared,
         Err(error) => {
             state.model_install_active.store(false, Ordering::SeqCst);
@@ -1857,23 +1966,29 @@ fn install_transcript_model(app: AppHandle, model_id: String) -> Result<AppSnaps
                 },
             );
             let state = task_app.state::<ApplicationState>();
-            state.model_install_active.store(false, Ordering::SeqCst);
             match install_result {
                 Ok(()) => {
+                    let _command = state.command_lock.lock().expect("command lock");
                     {
                         let mut model = state.model.lock().expect("application model lock");
                         model.model_setup.state = "verifying".into();
                         model.model_setup.downloaded_bytes = selected.download_bytes;
                         model.startup_message = "Verifying the downloaded speech model.".into();
                         if let Err(error) = transition_startup(&mut model, StartupState::Retrying) {
+                            if let Some(previous) = previous_active.as_ref() {
+                                let _ = activate_model(&storage_context.storage, previous);
+                            }
                             model.model_setup.state = "failed".into();
                             model.model_setup.error = Some(error);
+                            state.model_install_active.store(false, Ordering::SeqCst);
                             return;
                         }
                     }
-                    initialize_application(task_app, true);
+                    initialize_application(task_app.clone(), true);
+                    state.model_install_active.store(false, Ordering::SeqCst);
                 }
                 Err(error) => {
+                    state.model_install_active.store(false, Ordering::SeqCst);
                     let detail = error.to_string();
                     let _ = write_private_diagnostic(
                         &storage_context.diagnostics,
@@ -1899,6 +2014,46 @@ fn install_transcript_model(app: AppHandle, model_id: String) -> Result<AppSnaps
         return Err("The speech model download could not start.".into());
     }
     Ok(snapshot)
+}
+
+#[tauri::command]
+fn remove_transcript_model(
+    model_id: String,
+    state: State<'_, ApplicationState>,
+) -> Result<TranscriptModelSettingsSnapshot, String> {
+    let _command = state.command_lock.lock().expect("command lock");
+    if state.model_install_active.load(Ordering::SeqCst) {
+        return Err("Wait for the current model change to finish.".into());
+    }
+    let ready = {
+        let model = state.model.lock().expect("application model lock");
+        matches!(
+            model.reducer.startup(),
+            StartupState::Ready | StartupState::ModelRequired
+        )
+            && model.reducer.capture() == CaptureState::Idle
+    };
+    if !ready || sitting_task_active(&state) {
+        return Err("Finish the current meeting before removing a speech model.".into());
+    }
+    let storage_context = state
+        .storage
+        .lock()
+        .map_err(|_| "the private workspace is unavailable".to_string())?
+        .clone()
+        .ok_or_else(|| "the private workspace is unavailable".to_string())?;
+    let manifest =
+        RuntimeManifest::load_and_verify(&storage_context.manifest_path).map_err(error_text)?;
+    let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
+        .ok_or_else(|| "this build does not use downloadable speech models".to_string())?;
+    remove_inactive_model(&storage_context.storage, &catalog, &model_id)
+        .map_err(|error| match error {
+            local_meeting_notes_session_core::model_store::ModelStoreError::ActiveModel => {
+                "Switch to the other speech model before removing this one.".into()
+            }
+            other => error_text(other),
+        })?;
+    transcript_model_settings_for(&state)
 }
 
 /// Runs one organization mutation under the held process writer lock.
@@ -4653,6 +4808,8 @@ fn main() {
             dismiss_meeting,
             retry_startup,
             install_transcript_model,
+            transcript_model_settings,
+            remove_transcript_model,
             first_run_permissions,
             first_run_request_microphone,
             first_run_request_system_audio,

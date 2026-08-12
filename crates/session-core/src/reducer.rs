@@ -108,6 +108,7 @@ impl Reducer {
                 | (StartupState::ServiceTimeout, StartupState::Retrying)
                 | (StartupState::DiagnosticWritten, StartupState::Retrying)
                 | (StartupState::ModelRequired, StartupState::Retrying)
+                | (StartupState::Ready, StartupState::Retrying)
                 | (StartupState::Ready, StartupState::DiagnosticWritten)
                 | (StartupState::Retrying, StartupState::Ready)
                 | (StartupState::Retrying, StartupState::ModelRequired)
@@ -211,6 +212,15 @@ mod tests {
             .transition_capture(CaptureState::Summarizing)
             .unwrap();
         reducer.transition_capture(CaptureState::Ready).unwrap();
+    }
+
+    #[test]
+    fn ready_runtime_can_restart_after_a_model_change() {
+        let mut reducer = Reducer::default();
+        reducer.transition_startup(StartupState::Checking).unwrap();
+        reducer.transition_startup(StartupState::Ready).unwrap();
+        reducer.transition_startup(StartupState::Retrying).unwrap();
+        reducer.transition_startup(StartupState::Ready).unwrap();
     }
 
     #[test]
