@@ -12,7 +12,7 @@
       <header>
         <p class="eyebrow">Yawn</p>
         <h1>Settings</h1>
-        <p>Only the things that affect a private recording belong here.</p>
+        <p>Recording access and on-device storage live here.</p>
       </header>
       <section class="privacy-card" aria-labelledby="privacy-title">
         <span aria-hidden="true">⌂</span>
@@ -20,6 +20,16 @@
           <h2 id="privacy-title">Kept on this Mac</h2>
           <p>Yawn does not use an account, cloud sync, a meeting bot, or automatic sharing.</p>
         </div>
+      </section>
+      <section class="settings-card" aria-labelledby="model-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="model-title">Speech model</h2>
+            <p>Choose the model Yawn uses for transcripts. Meeting audio stays on this Mac.</p>
+          </div>
+        </div>
+        <div id="models" class="model-list" aria-live="polite"></div>
+        <p id="model-message" class="card-message" role="status"></p>
       </section>
       <section class="settings-card" aria-labelledby="audio-title">
         <div class="section-heading">

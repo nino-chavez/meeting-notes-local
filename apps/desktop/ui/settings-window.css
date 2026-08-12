@@ -32,7 +32,7 @@ button:focus-visible {
 .settings-shell {
   width: min(720px, 100%);
   margin: 0 auto;
-  padding: 54px 56px;
+  padding: 38px 48px;
 }
 
 .eyebrow {
@@ -67,6 +67,13 @@ header > p:last-child,
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.model-copy p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .privacy-card,
@@ -131,6 +138,8 @@ header > p:last-child,
 
 .permission-list { padding: 0 20px; }
 
+.model-list { padding: 0 20px; }
+
 .permission-line {
   display: flex;
   align-items: center;
@@ -141,6 +150,71 @@ header > p:last-child,
 }
 
 .permission-line:first-child { border-top: 0; }
+
+.model-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+
+.model-line:first-child { border-top: 0; }
+
+.model-copy { min-width: 0; }
+
+.model-title-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.model-title-row strong { font-size: 13px; }
+
+.model-size {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.model-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+
+.model-actions button { white-space: nowrap; }
+
+.model-progress {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.model-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.model-progress small { color: var(--muted); }
+
+.card-message {
+  min-height: 18px;
+  margin: 0;
+  padding: 0 20px 16px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.card-message[data-tone="attention"] { color: var(--attention); }
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
 
 .permission-copy { min-width: 0; }
 

@@ -35,6 +35,8 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "dismiss_meeting",
     "retry_startup",
     "install_transcript_model",
+    "transcript_model_settings",
+    "remove_transcript_model",
     "first_run_permissions",
     "first_run_request_microphone",
     "first_run_request_system_audio",
