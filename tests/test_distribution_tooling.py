@@ -260,6 +260,10 @@ class DistributionToolingTests(unittest.TestCase):
                 "encoder-unavailable.identity": b"encoder",
                 "models/whisper-large-v3-turbo/config.json": b"config",
                 "models/whisper-large-v3-turbo/weights.safetensors": b"weights",
+                "models/all-MiniLM-L6-v2/config.json": b"embedder-config",
+                "models/all-MiniLM-L6-v2/sentence_bert_config.json": b"sentence-config",
+                "models/all-MiniLM-L6-v2/tokenizer.json": b"tokenizer",
+                "models/all-MiniLM-L6-v2/model.safetensors": b"embedder-weights",
             }
             for relative, contents in fixtures.items():
                 target = root / relative
@@ -304,6 +308,62 @@ class DistributionToolingTests(unittest.TestCase):
             )
             self.assertNotEqual(blocked.returncode, 0)
             self.assertIn("test-only note runtime resource is present", blocked.stderr)
+
+    def test_external_model_manifest_binds_catalog_without_whisper_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixtures = {
+                "python-runtime/bin/python3.12": b"runtime",
+                "worker/main.py": b"worker",
+                "bin/meeting-capture": b"tap",
+                "bin/permission-probe": b"probe",
+                "encoder-unavailable.identity": b"encoder",
+                "models/all-MiniLM-L6-v2/config.json": b"embedder-config",
+                "models/all-MiniLM-L6-v2/sentence_bert_config.json": b"sentence-config",
+                "models/all-MiniLM-L6-v2/tokenizer.json": b"tokenizer",
+                "models/all-MiniLM-L6-v2/model.safetensors": b"embedder-weights",
+            }
+            for relative, contents in fixtures.items():
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+            completed = subprocess.run(
+                [
+                    str(ROOT / "worker/build_manifest.py"),
+                    str(root),
+                    "--admission",
+                    "internal-alpha",
+                    "--exclude-note-runtime",
+                    "--external-transcript-models",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            manifest = json.loads((root / "app-runtime.json").read_text())
+            self.assertEqual(manifest["schema"], "app-runtime/2")
+            self.assertEqual(manifest["model_catalog"]["path"], "model-catalog.json")
+            self.assertFalse(
+                any(model["id"].startswith("whisper-") for model in manifest["models"])
+            )
+
+    def test_release_verifier_and_builder_agree_on_the_exact_model_catalog(self) -> None:
+        from worker.build_manifest import model_catalog
+
+        verifier = load_release_verifier()
+        with tempfile.TemporaryDirectory() as temporary:
+            resources = Path(temporary)
+            raw = (json.dumps(model_catalog(), indent=2) + "\n").encode()
+            (resources / "model-catalog.json").write_bytes(raw)
+            manifest = {
+                "model_catalog": {
+                    "path": "model-catalog.json",
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            }
+            verifier.verify_model_catalog(resources, manifest)
 
     def test_release_verifier_requires_note_runtime_resources_to_be_absent(self) -> None:
         verifier = load_release_verifier()
@@ -460,6 +520,10 @@ class DistributionToolingTests(unittest.TestCase):
                 "encoder-unavailable.identity": b"encoder",
                 "models/whisper-large-v3-turbo/config.json": b"config",
                 "models/whisper-large-v3-turbo/weights.safetensors": b"weights",
+                "models/all-MiniLM-L6-v2/config.json": b"embedder-config",
+                "models/all-MiniLM-L6-v2/sentence_bert_config.json": b"sentence-config",
+                "models/all-MiniLM-L6-v2/tokenizer.json": b"tokenizer",
+                "models/all-MiniLM-L6-v2/model.safetensors": b"embedder-weights",
                 "models/speaker-encoder/ecapa-tdnn.onnx": b"candidate",
             }
             for relative, contents in fixtures.items():

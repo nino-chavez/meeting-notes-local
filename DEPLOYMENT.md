@@ -31,7 +31,9 @@ to `product` as a packaging shortcut.
 Stop and report the blocker instead of improvising when any of these is true:
 
 - the app source is dirty or the version values disagree;
-- the runtime build cannot find the pinned local model assets;
+- the runtime build cannot find the pinned local embedding-model assets;
+- either hosted transcript model is missing, changed, or unreachable at its
+  immutable catalog URL;
 - the host cannot see the Developer ID identity or `filmroom-notary` profile;
 - the signed verifier or Gatekeeper rejects the app or DMG;
 - a suitable R2 S3 credential is unavailable for the large DMG upload; or
@@ -46,7 +48,7 @@ Start at the repository root:
 
 ```sh
 git status --short
-worker/build_runtime.sh build-alpha
+worker/build_runtime.sh build-alpha-external
 (cd apps/desktop && npm run build)
 scripts/verify-release-bundle.py \
   --admission internal-alpha \
@@ -82,6 +84,33 @@ shasum -a 256 target/release/bundle/macos/Yawn-<version>-macos-arm64.dmg
 The checksum used on the landing page must come from the completed `.sha256`
 sidecar or this final command. Never retype or reuse a previous release digest.
 
+## Stage and publish the two transcript models
+
+The DMG does not carry Whisper weights. On first launch, the signed app asks the
+user to choose the 464 MB Q4 model or the 1.61 GB full Turbo model. It downloads
+that choice to Yawn's private Application Support directory and refuses it
+unless every byte matches the catalog signed inside the app.
+
+Stage the exact immutable object keys before building the release:
+
+```sh
+scripts/prepare-model-hosting.py \
+  --q4-dir <pinned-q4-snapshot> \
+  --full-dir <pinned-full-turbo-snapshot> \
+  --output <new-empty-staging-directory>
+```
+
+Upload the four files listed in `hosting-manifest.json` to `yawn-releases` under
+their exact `models/<model-id>/<revision>/<filename>` keys. Use
+`application/octet-stream` and immutable cache control. Do not upload the
+manifest itself as an app authority; the catalog sealed in `Yawn.app` is the
+authority.
+
+Before cutting the DMG, verify all four public URLs return the recorded byte
+counts and perform one full downloaded SHA-256 check of each object. A HEAD or
+range request proves reachability, not content identity. Do not release a build
+whose model URLs have not passed both checks.
+
 ## Install locally without mixing bundles
 
 Install from the signed DMG, never from the build directory. Mount the DMG,
@@ -107,8 +136,9 @@ The public bucket is `yawn-releases`. Versioned public objects use this URL:
 https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/Yawn-<version>-macos-arm64.dmg
 ```
 
-The current DMGs are about 1.7 GiB. `npx wrangler r2 object put --remote` has a
-300 MiB remote-upload limit, so it must not be used to publish a release DMG.
+Older DMGs containing the full model were about 1.7 GiB. `npx wrangler r2 object
+put --remote` has a 300 MiB remote-upload limit, so it must not be used to
+publish a release DMG or either model weight file.
 Use a multipart-capable S3 client such as `rclone` or the AWS CLI with an
 existing R2 **Object Read & Write** access-key pair scoped to `yawn-releases`.
 An ordinary Cloudflare API token is not an S3 access-key pair and must not be

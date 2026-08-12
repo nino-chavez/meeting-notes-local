@@ -13,12 +13,14 @@ tauri-build = { version = "2", features = [] }
 base64.workspace = true
 libc.workspace = true
 local-meeting-notes-session-core = { path = "../../../crates/session-core" }
+reqwest = { version = "0.12.16", features = ["blocking"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 uuid.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

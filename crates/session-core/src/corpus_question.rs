@@ -636,11 +636,14 @@ mod tests {
     /// and did not help.
     #[test]
     fn the_release_verifier_expects_the_models_the_builder_stages() {
-        fn ids(source: &str, marker: &str) -> Vec<String> {
+        fn ids(source: &str, marker: &str, end_marker: &str) -> Vec<String> {
             let block = source
                 .split_once(marker)
                 .unwrap_or_else(|| panic!("{marker} is still present"))
-                .1;
+                .1
+                .split_once(end_marker)
+                .unwrap_or_else(|| panic!("{end_marker} is still present"))
+                .0;
             let mut found: Vec<String> = block
                 .match_indices("all-minilm-l6-v2-")
                 .chain(block.match_indices("whisper-large-v3-turbo-"))
@@ -663,8 +666,8 @@ mod tests {
         let verifier = std::fs::read_to_string(root.join("scripts/verify-release-bundle.py"))
             .expect("the release verifier is committed");
 
-        let staged = ids(&builder, "\"models\": [");
-        let admitted = ids(&verifier, "expected_models = {");
+        let staged = ids(&builder, "\"models\": [", "        ],");
+        let admitted = ids(&verifier, "expected_models = {", "        actual_models =");
         assert!(!staged.is_empty(), "no models were read from the builder");
         assert_eq!(
             staged, admitted,

@@ -12,6 +12,15 @@ WHISPER_CONFIG_SHA256='b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660
 WHISPER_WEIGHTS_SHA256='951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6'
 WHISPER_DEFAULT="$HOME/.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/$WHISPER_REVISION"
 WHISPER_SOURCE="${LMN_WHISPER_MODEL_DIR:-$WHISPER_DEFAULT}"
+Q4_REVISION='660c343bbf4e52ac257f0b7d952e5388e6f93bef'
+Q4_BASE="https://huggingface.co/mlx-community/whisper-large-v3-turbo-q4/resolve/$Q4_REVISION"
+Q4_DEFAULT="$VENDOR/downloads/whisper-large-v3-turbo-q4"
+Q4_SOURCE="${YAWN_Q4_MODEL_DIR:-$Q4_DEFAULT}"
+Q4_FILES=(config.json weights.npz)
+Q4_SHA256=(
+  '538e24557b8f9bc504700add5e7bbe32087c2353001ff563e64772ad4398671a'
+  '862bbc832b05f3f4ec19dd632b701d61a6d3f5c7906360a10d72a79870642a80'
+)
 # The corpus embedding model, at the immutable revision every measurement in
 # `notes/SEMANTIC_RETRIEVAL.md` was taken against. Downloaded if absent and
 # digest-checked either way, like the CPython archive above — the pins were
@@ -66,8 +75,18 @@ verify() {
   admission="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["admission"])' "$STAGE/app-runtime.json")"
   if [[ "$admission" == "internal-alpha" ]]; then
     [[ -x "$STAGE/bin/meeting-capture" ]]
-    echo "$WHISPER_CONFIG_SHA256  $STAGE/models/whisper-large-v3-turbo/config.json" | shasum -a 256 -c - >/dev/null
-    echo "$WHISPER_WEIGHTS_SHA256  $STAGE/models/whisper-large-v3-turbo/weights.safetensors" | shasum -a 256 -c - >/dev/null
+    local schema
+    schema="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "$STAGE/app-runtime.json")"
+    if [[ "$schema" == "app-runtime/2" ]]; then
+      [[ -f "$STAGE/model-catalog.json" ]]
+      [[ ! -e "$STAGE/models/whisper-large-v3-turbo" ]]
+      PYTHONPATH="$REPO" python3 -c \
+        'import json,sys; from pathlib import Path; from worker.build_manifest import model_catalog; actual=json.load(open(Path(sys.argv[1]) / "model-catalog.json")); assert actual == model_catalog()' \
+        "$STAGE"
+    else
+      echo "$WHISPER_CONFIG_SHA256  $STAGE/models/whisper-large-v3-turbo/config.json" | shasum -a 256 -c - >/dev/null
+      echo "$WHISPER_WEIGHTS_SHA256  $STAGE/models/whisper-large-v3-turbo/weights.safetensors" | shasum -a 256 -c - >/dev/null
+    fi
     (cd "$STAGE" && "$STAGE/python-runtime/bin/python3.12" -E -s -B -c \
       'import mlx.core, mlx_whisper, worker.transcription' 1>/dev/null)
     for index in "${!EMBEDDER_FILES[@]}"; do
@@ -83,6 +102,7 @@ verify() {
       LMN_TAP_TEST_BINARY="$STAGE/bin/audiotee" \
       LMN_MEETING_CAPTURE_TEST_BINARY="$STAGE/bin/meeting-capture" \
       LMN_EMBEDDING_MODEL_DIR="$STAGE/$EMBEDDER_STAGE_RELATIVE" \
+      LMN_TRANSCRIPT_MODEL_DIR="$Q4_SOURCE" \
       "$STAGE/python-runtime/bin/python3.12" -E -s -B -m unittest discover \
         -s "$REPO/worker/tests" -v
   else
@@ -114,14 +134,24 @@ case "$mode" in
     verify
     exit 0
     ;;
-  build|build-alpha|build-alpha-encoder) ;;
+  build|build-alpha|build-alpha-encoder|build-alpha-external) ;;
   *)
-    echo "usage: worker/build_runtime.sh [build|build-alpha|build-alpha-encoder|verify]" >&2
+    echo "usage: worker/build_runtime.sh [build|build-alpha|build-alpha-encoder|build-alpha-external|verify]" >&2
     exit 64
     ;;
 esac
 
 mkdir -p "$DOWNLOADS"
+if [[ "$mode" == "build-alpha-external" ]]; then
+  mkdir -p "$Q4_SOURCE"
+  for index in "${!Q4_FILES[@]}"; do
+    target="$Q4_SOURCE/${Q4_FILES[$index]}"
+    if [[ ! -f "$target" ]] || ! echo "${Q4_SHA256[$index]}  $target" | shasum -a 256 -c - >/dev/null 2>&1; then
+      curl -fL --max-time 1200 -o "$target" "$Q4_BASE/${Q4_FILES[$index]}"
+    fi
+    echo "${Q4_SHA256[$index]}  $target" | shasum -a 256 -c - >/dev/null
+  done
+fi
 ARCHIVE="$DOWNLOADS/cpython-3.12.13-arm64.tar.gz"
 if [[ ! -f "$ARCHIVE" ]] || ! echo "$PYTHON_SHA256  $ARCHIVE" | shasum -a 256 -c - >/dev/null 2>&1; then
   curl -fL --max-time 300 -o "$ARCHIVE" "$PYTHON_URL"
@@ -183,15 +213,17 @@ cp "$REPO/capture/permission-probe/.build/arm64-apple-macosx/release/permission-
   "$STAGE/bin/permission-probe"
 chmod 0755 "$STAGE/bin/permission-probe"
 if [[ "$mode" == build-alpha* ]]; then
-  [[ -f "$WHISPER_SOURCE/config.json" && -f "$WHISPER_SOURCE/weights.safetensors" ]] || {
-    echo "fixed Whisper snapshot $WHISPER_REVISION is unavailable" >&2
-    exit 1
-  }
-  echo "$WHISPER_CONFIG_SHA256  $WHISPER_SOURCE/config.json" | shasum -a 256 -c -
-  echo "$WHISPER_WEIGHTS_SHA256  $WHISPER_SOURCE/weights.safetensors" | shasum -a 256 -c -
-  mkdir -p "$STAGE/models/whisper-large-v3-turbo"
-  cp -L "$WHISPER_SOURCE/config.json" "$WHISPER_SOURCE/weights.safetensors" \
-    "$STAGE/models/whisper-large-v3-turbo/"
+  if [[ "$mode" != "build-alpha-external" ]]; then
+    [[ -f "$WHISPER_SOURCE/config.json" && -f "$WHISPER_SOURCE/weights.safetensors" ]] || {
+      echo "fixed Whisper snapshot $WHISPER_REVISION is unavailable" >&2
+      exit 1
+    }
+    echo "$WHISPER_CONFIG_SHA256  $WHISPER_SOURCE/config.json" | shasum -a 256 -c -
+    echo "$WHISPER_WEIGHTS_SHA256  $WHISPER_SOURCE/weights.safetensors" | shasum -a 256 -c -
+    mkdir -p "$STAGE/models/whisper-large-v3-turbo"
+    cp -L "$WHISPER_SOURCE/config.json" "$WHISPER_SOURCE/weights.safetensors" \
+      "$STAGE/models/whisper-large-v3-turbo/"
+  fi
   mkdir -p "$EMBEDDER_SOURCE"
   for index in "${!EMBEDDER_FILES[@]}"; do
     name="${EMBEDDER_FILES[$index]}"
@@ -227,6 +259,9 @@ printf '%s\n' 'phase-2-boundary-no-encoder-model' > "$STAGE/encoder-unavailable.
 if [[ "$mode" == "build-alpha-encoder" ]]; then
   python3 "$REPO/worker/build_manifest.py" "$STAGE" --admission internal-alpha \
     --encoder "$ENCODER_STAGE_RELATIVE"
+elif [[ "$mode" == "build-alpha-external" ]]; then
+  python3 "$REPO/worker/build_manifest.py" "$STAGE" --admission internal-alpha \
+    --external-transcript-models
 elif [[ "$mode" == "build-alpha" ]]; then
   python3 "$REPO/worker/build_manifest.py" "$STAGE" --admission internal-alpha
 else

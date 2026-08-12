@@ -76,13 +76,24 @@ function elapsedAgoLabel(seconds) {
   return total < 5 ? "just now" : `${timeLabel(total)} ago`;
 }
 
+function byteSizeLabel(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${Math.round(value / (1024 * 1024))} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 function statusLabel(snapshot, permission) {
   const presentation = capturePresentation(snapshot);
   if (!snapshot) return { label: "Opening", tone: "working" };
   if (snapshot.startup !== "ready") {
+    const modelWorking = snapshot.startup === "model-required"
+      && ["downloading", "verifying"].includes(snapshot.model_setup?.state);
     return {
-      label: snapshot.startup === "checking" ? "Opening" : "Needs attention",
-      tone: snapshot.startup === "checking" ? "working" : "attention",
+      label: snapshot.startup === "model-required"
+        ? (modelWorking ? "Installing model" : "Choose a model")
+        : snapshot.startup === "checking" ? "Opening" : "Needs attention",
+      tone: snapshot.startup === "checking" || modelWorking ? "working" : "attention",
     };
   }
   if (presentation.capture === "idle" && permissionSummary(permission).state !== "ready") {
@@ -118,6 +129,7 @@ function render() {
   let content;
   if (!invoke) content = renderBrowserNotice();
   else if (!state.snapshot || state.snapshot.startup === "checking") content = renderStartup(true);
+  else if (state.snapshot.startup === "model-required") content = renderModelSetup();
   else if (state.snapshot.startup !== "ready") content = renderStartup(false);
   else if (state.snapshot.capture !== "idle") content = renderCapture();
   else if (state.selected) content = renderMeeting();
@@ -205,6 +217,53 @@ function renderStartup(checking) {
       <h1>${checking ? "Getting Yawn ready." : "Yawn cannot record yet."}</h1>
       <p class="lede">${checking ? `${escapeHtml(progress)} Recording stays off until that finishes.` : escapeHtml(problem)}</p>
       ${checking ? "" : `<button class="button button-primary" type="button" data-action="retry-startup">Check again</button>`}
+    </section>
+  `;
+}
+
+function renderModelSetup() {
+  const setup = state.snapshot?.model_setup || {};
+  const working = ["downloading", "verifying"].includes(setup.state);
+  const selected = (setup.options || []).find((option) => option.id === setup.selectedModelId);
+  const total = Math.max(1, Number(setup.totalBytes) || 1);
+  const downloaded = Math.min(total, Math.max(0, Number(setup.downloadedBytes) || 0));
+  const progressCopy = setup.state === "verifying"
+    ? "Checking every downloaded file before Yawn uses it."
+    : `${byteSizeLabel(downloaded)} of ${byteSizeLabel(total)} downloaded`;
+  return `
+    <section class="model-setup" aria-labelledby="model-setup-title">
+      <div class="model-setup-copy">
+        <p class="eyebrow">One-time setup</p>
+        <h1 id="model-setup-title">Choose how much space Yawn uses.</h1>
+        <p class="lede">Both models run on this Mac. The smaller model saves disk space. The full model keeps the original Turbo weights.</p>
+      </div>
+      ${working ? `
+        <div class="model-download" role="status" aria-live="polite">
+          <p class="eyebrow">${setup.state === "verifying" ? "Verifying" : "Downloading"}</p>
+          <h2>${escapeHtml(selected?.title || "Speech model")}</h2>
+          <progress max="${total}" value="${downloaded}"></progress>
+          <p>${escapeHtml(progressCopy)}</p>
+          <small>Keep Yawn open. Recording stays off until setup finishes.</small>
+        </div>
+      ` : `
+        ${setup.error ? `<p class="model-setup-error" role="alert">${escapeHtml(setup.error)}</p>` : ""}
+        <div class="model-options">
+          ${(setup.options || []).map((option) => `
+            <article class="model-option">
+              <div>
+                <h2>${escapeHtml(option.title)}</h2>
+                <p>${escapeHtml(option.detail)}</p>
+              </div>
+              <dl>
+                <div><dt>Download</dt><dd>${byteSizeLabel(option.downloadBytes)}</dd></div>
+                <div><dt>On disk</dt><dd>${byteSizeLabel(option.installedBytes)}</dd></div>
+              </dl>
+              <button class="button ${option.id.includes("q4") ? "button-primary" : "button-secondary"}" type="button" data-action="install-model" data-model-id="${escapeHtml(option.id)}">Use this model</button>
+            </article>
+          `).join("")}
+        </div>
+        <p class="model-privacy">The model is downloaded directly to Yawn’s private folder. Meeting audio is not uploaded.</p>
+      `}
     </section>
   `;
 }
@@ -1143,6 +1202,11 @@ async function retryStartup() {
   });
 }
 
+async function installModel(modelId) {
+  state.snapshot = await invoke("install_transcript_model", { modelId });
+  render();
+}
+
 function handleClick(event) {
   const control = event.target.closest("[data-action]");
   if (!control || control.disabled) return;
@@ -1177,6 +1241,7 @@ function handleClick(event) {
     queueMicrotask(() => root.querySelector("[data-field='transcript-search']")?.focus());
   }
   else if (action === "retry-startup") void retryStartup();
+  else if (action === "install-model") void installModel(control.dataset.modelId).catch(reportError);
   else if (action === "request-microphone") void requestPermission("microphone");
   else if (action === "request-system-audio") void requestPermission("system-audio");
   else if (action === "settings" || action === "open-settings") {

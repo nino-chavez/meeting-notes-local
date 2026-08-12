@@ -74,10 +74,15 @@ def require_whisper_model(model_dir: Path) -> Path:
         raise TranscriptionRefused(f"offline transcript model is missing ({exc})") from None
     if not resolved.is_dir():
         raise TranscriptionRefused("offline transcript model is not a directory")
-    for name in ("config.json", "weights.safetensors"):
-        resource = resolved / name
-        if resource.is_symlink() or not resource.is_file():
-            raise TranscriptionRefused(f"offline transcript model lacks safe {name}")
+    config = resolved / "config.json"
+    if config.is_symlink() or not config.is_file():
+        raise TranscriptionRefused("offline transcript model lacks safe config.json")
+    weights = [resolved / "weights.safetensors", resolved / "weights.npz"]
+    present = [path for path in weights if path.exists() or path.is_symlink()]
+    if len(present) != 1 or present[0].is_symlink() or not present[0].is_file():
+        raise TranscriptionRefused(
+            "offline transcript model needs exactly one safe weights file"
+        )
     return resolved
 
 

@@ -1,5 +1,54 @@
 # Yawn distribution runbook
 
+## Downloadable transcript models (next release lane)
+
+The next release uses `app-runtime/2`. The signed and notarized app contains
+the Python runtime, capture helpers, MiniLM embedding model, and
+`model-catalog.json`. It does not contain Whisper weights. First launch is the
+installer step: the user chooses either the 464 MB Q4 model or the 1.61 GB full
+Turbo model, and Yawn downloads only that choice into its private Application
+Support directory.
+
+This is intentionally not a second installer executable. A bootstrap installer
+would add another signed, notarized, updated, and supported program while still
+needing the same download and verification code. Keeping setup in Yawn also
+lets an interrupted download fail before activation and retry through the same
+visible first-run surface.
+
+`model-catalog.json` is sealed into the app by its code signature and then bound
+again by `app-runtime.json`. Each catalog entry pins an immutable upstream
+revision, exact object URL, filename, byte count, and SHA-256 digest. The Rust
+installer writes to a private staging directory, verifies the exact inventory,
+renames it atomically, and only then writes the active-model receipt. The Python
+worker independently rechecks that receipt and every file before reporting
+ready. Meeting audio never participates in this network request.
+
+Build the smaller app runtime with:
+
+```sh
+worker/build_runtime.sh build-alpha-external
+```
+
+Prepare the R2 upload tree with:
+
+```sh
+scripts/prepare-model-hosting.py \
+  --q4-dir <pinned-q4-snapshot> \
+  --full-dir <pinned-full-turbo-snapshot> \
+  --output <new-empty-staging-directory>
+```
+
+The resulting `hosting-manifest.json` is an upload receipt, not runtime
+authority. Upload its four object keys to `yawn-releases` with immutable cache
+control. Verify public byte counts and full downloaded hashes before building
+the app that advertises those URLs. Do not overwrite an existing revision key;
+a changed model gets a new revision path and a newly signed app catalog.
+
+The Q4 lane still needs a real transcription comparison before release. The
+implementation proves that MLX can load the `weights.npz` format and that the
+packaging boundary is exact. It does not prove the smaller model's accuracy on
+Yawn's meeting audio.
+
 **0.5.1 was cut, 2026-08-08, and it is the only image on the operator's desktop.**
 It exists because 0.5.0 was cut at `e39f576` hours before `corpus-scan-bench` was
 pointed at exact search, and carries the defect that hour found: a word appearing

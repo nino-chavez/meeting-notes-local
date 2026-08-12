@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-transcript-model"
+description = "Enables the install_transcript_model command without any pre-configured scope."
+commands.allow = ["install_transcript_model"]
+
+[[permission]]
+identifier = "deny-install-transcript-model"
+description = "Denies the install_transcript_model command without any pre-configured scope."
+commands.deny = ["install_transcript_model"]

@@ -6,6 +6,7 @@ use thiserror::Error;
 pub enum StartupState {
     ShellRendered,
     Checking,
+    ModelRequired,
     Ready,
     RuntimeMissing,
     ServiceTimeout,
@@ -99,14 +100,17 @@ impl Reducer {
             (self.startup, to),
             (StartupState::ShellRendered, StartupState::Checking)
                 | (StartupState::Checking, StartupState::Ready)
+                | (StartupState::Checking, StartupState::ModelRequired)
                 | (StartupState::Checking, StartupState::RuntimeMissing)
                 | (StartupState::Checking, StartupState::ServiceTimeout)
                 | (StartupState::Checking, StartupState::DiagnosticWritten)
                 | (StartupState::RuntimeMissing, StartupState::Retrying)
                 | (StartupState::ServiceTimeout, StartupState::Retrying)
                 | (StartupState::DiagnosticWritten, StartupState::Retrying)
+                | (StartupState::ModelRequired, StartupState::Retrying)
                 | (StartupState::Ready, StartupState::DiagnosticWritten)
                 | (StartupState::Retrying, StartupState::Ready)
+                | (StartupState::Retrying, StartupState::ModelRequired)
                 | (StartupState::Retrying, StartupState::RuntimeMissing)
                 | (StartupState::Retrying, StartupState::ServiceTimeout)
                 | (StartupState::Retrying, StartupState::DiagnosticWritten)

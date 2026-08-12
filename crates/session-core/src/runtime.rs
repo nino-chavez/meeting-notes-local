@@ -33,6 +33,10 @@ pub struct RuntimeManifest {
     /// than silently skipping a check. That is the intended behaviour and the
     /// reason both sides move in the same commit.
     pub permission_probe: RuntimeResource,
+    /// The signed catalog of transcript models that may live in the private
+    /// per-user model store. Version 1 manifests have no catalog and keep the
+    /// transcript weights in `models`; version 2 requires this resource.
+    pub model_catalog: Option<RuntimeResource>,
     pub models: Vec<ModelResource>,
 }
 
@@ -48,6 +52,8 @@ pub enum RuntimeAdmission {
 pub enum RuntimeSchema {
     #[serde(rename = "app-runtime/1")]
     V1,
+    #[serde(rename = "app-runtime/2")]
+    V2,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,6 +112,11 @@ impl RuntimeManifest {
         verify_resource(&root, &manifest.tap)?;
         verify_resource(&root, &manifest.encoder)?;
         verify_resource(&root, &manifest.permission_probe)?;
+        match (&manifest.schema, &manifest.model_catalog) {
+            (RuntimeSchema::V1, None) => {}
+            (RuntimeSchema::V2, Some(catalog)) => verify_resource(&root, catalog)?,
+            _ => return Err(RuntimeError::Malformed),
+        }
         let mut model_ids = HashSet::new();
         for model in &manifest.models {
             if model.id.is_empty()
@@ -124,6 +135,15 @@ impl RuntimeManifest {
     }
 
     pub fn matches_ready(&self, ready: &WorkerReady) -> bool {
+        self.matches_ready_with_external_models(ready, &[])
+    }
+
+    pub fn matches_ready_with_external_models(
+        &self,
+        ready: &WorkerReady,
+        external_models: &[(String, String)],
+    ) -> bool {
+        let expected_count = self.models.len() + external_models.len();
         if !matches!(ready.runtime.kind, RuntimeKind::Bundled)
             || ready.admission != WorkerAdmission::from(&self.admission)
             || !ready
@@ -133,7 +153,7 @@ impl RuntimeManifest {
             || !ready.build.eq_ignore_ascii_case(&self.worker.sha256)
             || !ready.tap.available
             || !ready.tap.build.eq_ignore_ascii_case(&self.tap.sha256)
-            || ready.models.len() != self.models.len()
+            || ready.models.len() != expected_count
         {
             return false;
         }
@@ -143,7 +163,15 @@ impl RuntimeManifest {
                     && actual.id == expected.id
                     && actual.digest.eq_ignore_ascii_case(&expected.sha256)
             })
-        })
+        }) && external_models
+            .iter()
+            .all(|(expected_id, expected_sha256)| {
+                ready.models.iter().any(|actual| {
+                    actual.available
+                        && actual.id == *expected_id
+                        && actual.digest.eq_ignore_ascii_case(expected_sha256)
+                })
+            })
     }
 
     /// The verified absolute path of the permission probe, or an error.
@@ -217,6 +245,12 @@ impl RuntimeManifest {
 
     pub fn is_internal_alpha(&self) -> bool {
         self.admission == RuntimeAdmission::InternalAlpha
+    }
+
+    pub fn model_catalog_path(&self, manifest_path: &Path) -> Option<PathBuf> {
+        self.model_catalog
+            .as_ref()
+            .and_then(|catalog| manifest_path.parent().map(|root| root.join(&catalog.path)))
     }
 }
 
