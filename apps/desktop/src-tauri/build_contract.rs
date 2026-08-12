@@ -34,6 +34,7 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "stop_meeting",
     "dismiss_meeting",
     "retry_startup",
+    "install_transcript_model",
     "first_run_permissions",
     "first_run_request_microphone",
     "first_run_request_system_audio",
@@ -169,6 +170,7 @@ fn has_exact_strings(value: Option<&Value>, expected: &[&str]) -> bool {
 fn production_resources() -> Value {
     serde_json::json!({
         "../runtime/app-runtime.json": "app-runtime.json",
+        "../runtime/model-catalog.json": "model-catalog.json",
         "../runtime/bin": "bin",
         "../runtime/encoder-unavailable.identity": "encoder-unavailable.identity",
         "../runtime/models": "models",

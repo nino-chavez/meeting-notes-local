@@ -152,13 +152,18 @@ def load_manifest(path: Path) -> dict:
         "permission_probe",
         "models",
     }
+    if isinstance(document, dict) and document.get("schema") == "app-runtime/2":
+        required.add("model_catalog")
     if not isinstance(document, dict) or set(document) != required:
         raise ValueError("runtime manifest has the wrong shape")
-    if document["schema"] != "app-runtime/1":
+    if document["schema"] not in {"app-runtime/1", "app-runtime/2"}:
         raise ValueError("runtime manifest schema is not current")
     if document["admission"] not in {"boundary-test", "internal-alpha", "product"}:
         raise ValueError("runtime manifest admission is not current")
-    for name in ("runtime", "worker", "tap", "encoder", "permission_probe"):
+    resources = ["runtime", "worker", "tap", "encoder", "permission_probe"]
+    if document["schema"] == "app-runtime/2":
+        resources.append("model_catalog")
+    for name in resources:
         entry = document[name]
         if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
             raise ValueError(f"runtime manifest {name} entry is malformed")
@@ -211,6 +216,94 @@ def transcript_model_dir(manifest_path: Path, manifest: dict) -> Path | None:
     if len(parents) != 1:
         raise ValueError("fixed transcript model resources do not share one directory")
     return parents.pop()
+
+
+def external_transcript_model(
+    root: Path,
+    manifest_path: Path,
+    manifest: dict,
+    receipt_path: Path | None,
+) -> tuple[Path, list[dict]]:
+    if manifest["schema"] != "app-runtime/2" or receipt_path is None:
+        raise ValueError("external transcript model receipt is unavailable")
+    root = root.resolve(strict=True)
+    expected_parent = root / "models"
+    receipt = receipt_path.resolve(strict=True)
+    if receipt_path.is_symlink() or receipt.name != "model-install.json":
+        raise ValueError("external transcript model receipt is unsafe")
+    document = json.loads(receipt.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or set(document) != {"schema", "id", "revision", "files"}:
+        raise ValueError("external transcript model receipt is malformed")
+    if document["schema"] != "yawn-model-install/1":
+        raise ValueError("external transcript model receipt schema is not current")
+    model_dir = receipt.parent
+    if model_dir.parent.parent != expected_parent:
+        raise ValueError("external transcript model is outside private model storage")
+    if model_dir.is_symlink() or model_dir.parent.is_symlink() or not model_dir.is_dir():
+        raise ValueError("external transcript model directory is unsafe")
+
+    catalog_entry = manifest["model_catalog"]
+    catalog_path = manifest_path.parent / catalog_entry["path"]
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    if not isinstance(catalog, dict) or set(catalog) != {"schema", "models"}:
+        raise ValueError("transcript model catalog is malformed")
+    if catalog["schema"] != "yawn-model-catalog/1" or not isinstance(catalog["models"], list):
+        raise ValueError("transcript model catalog schema is not current")
+    matches = [
+        model
+        for model in catalog["models"]
+        if isinstance(model, dict)
+        and model.get("id") == document["id"]
+        and model.get("revision") == document["revision"]
+    ]
+    if len(matches) != 1:
+        raise ValueError("installed transcript model is not in the signed catalog")
+    model = matches[0]
+    required_model = {
+        "id", "revision", "title", "detail", "downloadBytes", "installedBytes", "files"
+    }
+    if set(model) != required_model or not isinstance(model["files"], list):
+        raise ValueError("signed transcript model entry is malformed")
+    if not isinstance(document["files"], list) or len(document["files"]) != len(model["files"]):
+        raise ValueError("installed transcript model inventory is incomplete")
+    if not all(isinstance(file, dict) for file in document["files"]):
+        raise ValueError("installed transcript model file receipt is malformed")
+
+    actual_names = {item.name for item in model_dir.iterdir()}
+    expected_names = {"model-install.json"}
+    ready_models = []
+    roles = set()
+    for expected in model["files"]:
+        if not isinstance(expected, dict) or set(expected) != {
+            "role", "name", "url", "bytes", "sha256"
+        }:
+            raise ValueError("signed transcript model file is malformed")
+        role = expected["role"]
+        name = expected["name"]
+        if role not in {"config", "weights"} or role in roles:
+            raise ValueError("signed transcript model roles are invalid")
+        roles.add(role)
+        recorded = [file for file in document["files"] if file.get("role") == role]
+        if len(recorded) != 1 or set(recorded[0]) != {"role", "name", "bytes", "sha256"}:
+            raise ValueError("installed transcript model file receipt is malformed")
+        if any(recorded[0].get(key) != expected.get(key) for key in ("role", "name", "bytes", "sha256")):
+            raise ValueError("installed transcript model disagrees with the signed catalog")
+        path = model_dir / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != expected["bytes"]:
+            raise ValueError("installed transcript model file is unsafe or incomplete")
+        if file_sha256(path) != expected["sha256"]:
+            raise ValueError("installed transcript model file digest mismatch")
+        expected_names.add(name)
+        ready_models.append(
+            {
+                "id": f"whisper-transcript-{role}",
+                "digest": expected["sha256"],
+                "available": True,
+            }
+        )
+    if roles != {"config", "weights"} or actual_names != expected_names:
+        raise ValueError("installed transcript model directory is not exact")
+    return model_dir, ready_models
 
 
 # The four files a MiniLM directory needs. All four or none: a directory missing
@@ -323,14 +416,25 @@ def dispatch_without_protocol_output(
             )
 
 
-def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
+def run(
+    root: Path,
+    manifest_path: Path,
+    parent_fd: int,
+    transcript_model_receipt: Path | None = None,
+) -> int:
     # dispatch_without_protocol_output redirects sys.stdout while model adapters
     # run. Capture the actual protocol stream before that redirect so a
     # background heartbeat cannot be discarded alongside adapter noise.
     protocol_output = sys.stdout
     root = require_private_root(root)
     manifest = load_manifest(manifest_path)
-    model_dir = transcript_model_dir(manifest_path, manifest)
+    if manifest["schema"] == "app-runtime/2":
+        model_dir, external_models = external_transcript_model(
+            root, manifest_path, manifest, transcript_model_receipt
+        )
+    else:
+        model_dir = transcript_model_dir(manifest_path, manifest)
+        external_models = []
     embedding_dir = embedding_model_dir(manifest_path, manifest)
     operations = operations_for(manifest["admission"])
     emit(
@@ -349,7 +453,7 @@ def run(root: Path, manifest_path: Path, parent_fd: int) -> int:
                     "available": True,
                 }
                 for model in manifest["models"]
-            ],
+            ] + external_models,
             "operations": sorted(operations),
         },
         protocol_output=protocol_output,
@@ -424,6 +528,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--app-data-root", required=True, type=Path)
     parser.add_argument("--runtime-manifest", required=True, type=Path)
+    parser.add_argument("--transcript-model-receipt", type=Path)
     parser.add_argument("--parent-liveness-fd", type=int)
     arguments = parser.parse_args()
     parent_fd = arguments.parent_liveness_fd
@@ -438,6 +543,7 @@ def main() -> int:
             arguments.app_data_root,
             arguments.runtime_manifest,
             parent_fd,
+            arguments.transcript_model_receipt,
         )
     except (OSError, ValueError, StorageRefused, json.JSONDecodeError):
         return 2

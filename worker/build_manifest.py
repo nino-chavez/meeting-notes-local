@@ -24,6 +24,53 @@ VALIDATOR_SOURCES = {
     "capture_health.py": REPO / "spike/capture_health.py",
 }
 
+MODEL_BASE_URL = os.environ.get(
+    "YAWN_MODEL_BASE_URL",
+    "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models",
+).rstrip("/")
+TRANSCRIPT_MODELS = [
+    {
+        "id": "whisper-large-v3-turbo-q4",
+        "revision": "660c343bbf4e52ac257f0b7d952e5388e6f93bef",
+        "title": "Smaller download",
+        "detail": "A 4-bit local transcription model that uses about 464 MB.",
+        "files": [
+            {
+                "role": "config",
+                "name": "config.json",
+                "bytes": 341,
+                "sha256": "538e24557b8f9bc504700add5e7bbe32087c2353001ff563e64772ad4398671a",
+            },
+            {
+                "role": "weights",
+                "name": "weights.npz",
+                "bytes": 463_664_664,
+                "sha256": "862bbc832b05f3f4ec19dd632b701d61a6d3f5c7906360a10d72a79870642a80",
+            },
+        ],
+    },
+    {
+        "id": "whisper-large-v3-turbo",
+        "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+        "title": "Full model",
+        "detail": "The full local Turbo transcription model, using about 1.61 GB.",
+        "files": [
+            {
+                "role": "config",
+                "name": "config.json",
+                "bytes": 268,
+                "sha256": "b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660ecb6379",
+            },
+            {
+                "role": "weights",
+                "name": "weights.safetensors",
+                "bytes": 1_613_977_612,
+                "sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6",
+            },
+        ],
+    },
+]
+
 
 def sha256(path: Path) -> str:
     if path.is_symlink() or not path.is_file():
@@ -115,6 +162,38 @@ def verify_note_runtime_absent(root: Path) -> None:
             raise SystemExit(f"test-only note runtime resource is present in bundle root: {relative}")
 
 
+def model_catalog() -> dict:
+    models = []
+    for source in TRANSCRIPT_MODELS:
+        revision = source["revision"]
+        files = [
+            {
+                **file,
+                "url": f"{MODEL_BASE_URL}/{source['id']}/{revision}/{file['name']}",
+            }
+            for file in source["files"]
+        ]
+        installed_bytes = sum(file["bytes"] for file in files)
+        models.append(
+            {
+                "id": source["id"],
+                "revision": revision,
+                "title": source["title"],
+                "detail": source["detail"],
+                "downloadBytes": installed_bytes,
+                "installedBytes": installed_bytes,
+                "files": files,
+            }
+        )
+    return {"schema": "yawn-model-catalog/1", "models": models}
+
+
+def write_model_catalog(root: Path) -> Path:
+    path = root / "model-catalog.json"
+    atomic_write(path, (json.dumps(model_catalog(), indent=2) + "\n").encode())
+    return path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -137,6 +216,11 @@ def main() -> int:
             " placeholder identity, which every consumer reads as encoder-unavailable"
         ),
     )
+    parser.add_argument(
+        "--external-transcript-models",
+        action="store_true",
+        help="bind the signed hosted-model catalog instead of bundled Whisper weights",
+    )
     arguments = parser.parse_args()
     root = arguments.root.resolve(strict=True)
     if arguments.encoder.is_absolute() or not (root / arguments.encoder).resolve().is_relative_to(
@@ -148,6 +232,10 @@ def main() -> int:
     else:
         atomic_write(root / NOTE_VALIDATOR, validator_bundle())
         atomic_write(root / NOTE_MANIFEST, canonical_note_manifest(note_manifest(root)))
+    # Tauri's resource map is intentionally identical in every lane. The
+    # catalog is signed into all bundles; only app-runtime/2 authorizes models
+    # installed outside the bundle.
+    catalog_path = write_model_catalog(root)
     resources = {
         "runtime": Path("python-runtime/bin/python3.12"),
         "worker": Path("worker/main.py"),
@@ -164,21 +252,24 @@ def main() -> int:
     }
     models = []
     if arguments.admission == "internal-alpha":
-        models = [
-            {
-                "id": "whisper-large-v3-turbo-config",
-                "path": "models/whisper-large-v3-turbo/config.json",
-            },
-            {
-                "id": "whisper-large-v3-turbo-weights",
-                "path": "models/whisper-large-v3-turbo/weights.safetensors",
-            },
-            # All four or none. `worker.main.embedding_model_dir` requires the
-            # whole set before it will name a directory, because a model missing
-            # its `tokenizer.json` would load and then embed with whatever
-            # tokenizer happened to be importable — the substitution
-            # `packaged_tokenizer_receipt.json` exists to have measured rather
-            # than assumed.
+        if not arguments.external_transcript_models:
+            models.extend(
+                [
+                    {
+                        "id": "whisper-large-v3-turbo-config",
+                        "path": "models/whisper-large-v3-turbo/config.json",
+                    },
+                    {
+                        "id": "whisper-large-v3-turbo-weights",
+                        "path": "models/whisper-large-v3-turbo/weights.safetensors",
+                    },
+                ]
+            )
+        # All four or none. `worker.main.embedding_model_dir` requires the
+        # whole set before it will name a directory, because a model missing
+        # its `tokenizer.json` would load and then embed with whatever
+        # tokenizer happened to be importable.
+        models.extend([
             {
                 "id": "all-minilm-l6-v2-config",
                 "path": "models/all-MiniLM-L6-v2/config.json",
@@ -195,14 +286,20 @@ def main() -> int:
                 "id": "all-minilm-l6-v2-weights",
                 "path": "models/all-MiniLM-L6-v2/model.safetensors",
             },
-        ]
+        ])
+    catalog_resource = None
+    if arguments.external_transcript_models:
+        if arguments.admission != "internal-alpha":
+            raise SystemExit("external transcript models require internal-alpha admission")
+        catalog_resource = {"path": catalog_path.name, "sha256": sha256(catalog_path)}
     manifest = {
-        "schema": "app-runtime/1",
+        "schema": "app-runtime/2" if catalog_resource else "app-runtime/1",
         "admission": arguments.admission,
         **{
             name: {"path": str(relative), "sha256": sha256(root / relative)}
             for name, relative in resources.items()
         },
+        **({"model_catalog": catalog_resource} if catalog_resource else {}),
         "models": [
             {**model, "sha256": sha256(root / model["path"])}
             for model in models

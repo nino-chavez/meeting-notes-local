@@ -1,7 +1,7 @@
 {
   "name": "local-meeting-notes-desktop",
   "private": true,
-  "version": "0.5.5",
+  "version": "0.5.6",
   "scripts": {
     "test:ui": "node --test ui/*.test.mjs",
     "tauri": "tauri",

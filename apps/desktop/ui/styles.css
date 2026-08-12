@@ -1159,6 +1159,110 @@ h3 {
   animation: none;
 }
 
+.model-setup {
+  width: min(820px, 100%);
+  margin: clamp(20px, 5vw, 62px) auto 0;
+}
+
+.model-setup-copy {
+  max-width: 650px;
+  margin-bottom: 28px;
+}
+
+.model-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.model-option,
+.model-download {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.model-option {
+  display: flex;
+  min-height: 292px;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.model-option > div:first-child {
+  flex: 1;
+}
+
+.model-option p,
+.model-download p,
+.model-privacy {
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+
+.model-option dl {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  margin: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.model-option dt {
+  margin-bottom: 3px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.model-option dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.model-download {
+  max-width: 620px;
+}
+
+.model-download progress {
+  width: 100%;
+  height: 9px;
+  margin: 14px 0 10px;
+  accent-color: var(--accent);
+}
+
+.model-download small,
+.model-privacy {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.model-setup-error {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgb(156 103 21 / 25%);
+  border-radius: var(--radius-sm);
+  color: var(--attention);
+  background: var(--attention-soft);
+}
+
+.model-privacy {
+  margin: 18px 2px 0;
+}
+
+@media (max-width: 680px) {
+  .model-options {
+    grid-template-columns: 1fr;
+  }
+
+  .model-option {
+    min-height: 0;
+  }
+}
+
 .modal-backdrop {
   position: fixed;
   z-index: 30;

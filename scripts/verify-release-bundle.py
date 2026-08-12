@@ -128,7 +128,8 @@ def verify_runtime(resources: Path, admission: str) -> None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise VerificationError(f"runtime manifest is unreadable ({exc})") from None
-    require(manifest.get("schema") == "app-runtime/1", "runtime schema is not current")
+    schema = manifest.get("schema")
+    require(schema in {"app-runtime/1", "app-runtime/2"}, "runtime schema is not current")
     # Bound in every admission as the fallback requester. Internal-alpha routes
     # first-run permission setup through meeting-capture itself, while builds
     # without that helper still need a bounded microphone-status surface.
@@ -157,12 +158,6 @@ def verify_runtime(resources: Path, admission: str) -> None:
         # `the_release_verifier_expects_the_models_the_builder_stages` now
         # compares the two files and fails in the ordinary test run instead.
         expected_models = {
-            "whisper-large-v3-turbo-config": (
-                "models/whisper-large-v3-turbo/config.json"
-            ),
-            "whisper-large-v3-turbo-weights": (
-                "models/whisper-large-v3-turbo/weights.safetensors"
-            ),
             # All four or none — `worker.main.embedding_model_dir` requires the
             # whole set before it names a directory, so a bundle carrying three
             # of them would have an embedder that silently does not exist.
@@ -175,6 +170,17 @@ def verify_runtime(resources: Path, admission: str) -> None:
                 "models/all-MiniLM-L6-v2/model.safetensors"
             ),
         }
+        if schema == "app-runtime/1":
+            expected_models.update(
+                {
+                    "whisper-large-v3-turbo-config": (
+                        "models/whisper-large-v3-turbo/config.json"
+                    ),
+                    "whisper-large-v3-turbo-weights": (
+                        "models/whisper-large-v3-turbo/weights.safetensors"
+                    ),
+                }
+            )
         actual_models = {
             model.get("id"): model.get("path")
             for model in manifest.get("models", [])
@@ -184,6 +190,8 @@ def verify_runtime(resources: Path, admission: str) -> None:
             actual_models == expected_models,
             "internal-alpha model inventory is incomplete or unexpected",
         )
+        if schema == "app-runtime/2":
+            verify_model_catalog(resources, manifest)
     python = resources / "python-runtime/bin/python3.12"
     require(python.is_file() and os.access(python, os.X_OK), "bundled Python is missing")
     exercise = """
@@ -209,6 +217,86 @@ np.fft.fft(np.ones(4))
             "internal-alpha offline transcription runtime failed to import",
         )
     verify_encoder_candidate(resources, manifest, python)
+
+
+def verify_model_catalog(resources: Path, manifest: dict) -> None:
+    resource = manifest.get("model_catalog")
+    require(
+        isinstance(resource, dict)
+        and set(resource) == {"path", "sha256"}
+        and resource.get("path") == "model-catalog.json",
+        "downloadable-model runtime lacks the pinned catalog resource",
+    )
+    path = resources / "model-catalog.json"
+    require(not path.is_symlink() and path.is_file(), "model catalog is missing or unsafe")
+    require(
+        hashlib.sha256(path.read_bytes()).hexdigest() == resource.get("sha256"),
+        "model catalog does not match the runtime manifest",
+    )
+    try:
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VerificationError(f"model catalog is unreadable ({exc})") from None
+    require(
+        catalog == {
+            "schema": "yawn-model-catalog/1",
+            "models": [
+                {
+                    "id": "whisper-large-v3-turbo-q4",
+                    "revision": "660c343bbf4e52ac257f0b7d952e5388e6f93bef",
+                    "title": "Smaller download",
+                    "detail": "A 4-bit local transcription model that uses about 464 MB.",
+                    "downloadBytes": 463665005,
+                    "installedBytes": 463665005,
+                    "files": [
+                        {
+                            "role": "config",
+                            "name": "config.json",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/whisper-large-v3-turbo-q4/660c343bbf4e52ac257f0b7d952e5388e6f93bef/config.json",
+                            "bytes": 341,
+                            "sha256": "538e24557b8f9bc504700add5e7bbe32087c2353001ff563e64772ad4398671a",
+                        },
+                        {
+                            "role": "weights",
+                            "name": "weights.npz",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/whisper-large-v3-turbo-q4/660c343bbf4e52ac257f0b7d952e5388e6f93bef/weights.npz",
+                            "bytes": 463664664,
+                            "sha256": "862bbc832b05f3f4ec19dd632b701d61a6d3f5c7906360a10d72a79870642a80",
+                        },
+                    ],
+                },
+                {
+                    "id": "whisper-large-v3-turbo",
+                    "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+                    "title": "Full model",
+                    "detail": "The full local Turbo transcription model, using about 1.61 GB.",
+                    "downloadBytes": 1613977880,
+                    "installedBytes": 1613977880,
+                    "files": [
+                        {
+                            "role": "config",
+                            "name": "config.json",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/config.json",
+                            "bytes": 268,
+                            "sha256": "b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660ecb6379",
+                        },
+                        {
+                            "role": "weights",
+                            "name": "weights.safetensors",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/weights.safetensors",
+                            "bytes": 1613977612,
+                            "sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6",
+                        },
+                    ],
+                },
+            ],
+        },
+        "model catalog is not the release verifier's pinned two-model inventory",
+    )
+    require(
+        not (resources / "models/whisper-large-v3-turbo").exists(),
+        "downloadable-model bundle still contains the full transcript model",
+    )
 
 
 def verify_encoder_candidate(resources: Path, manifest: dict, python: Path) -> None:

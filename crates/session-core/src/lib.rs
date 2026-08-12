@@ -10,6 +10,7 @@ pub mod meeting;
 pub mod meeting_coordination;
 pub mod meeting_deletion;
 pub mod meeting_title;
+pub mod model_store;
 pub mod note_generation;
 pub mod note_projection;
 #[cfg(target_os = "macos")]

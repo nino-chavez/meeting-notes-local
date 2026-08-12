@@ -25,6 +25,7 @@ mod operator_note;
 // above: `library/metadata.json` gained a writer on 2026-08-08 and the surface
 // that reaches it is the point of having one.
 mod library_organization;
+mod model_download;
 // The storage-backed coordinator and worker bridge behind product_facade.
 // Managed as state so the facade commands can be registered in one move once
 // the operator widens the packaged admission; the commands stay unregistered.
@@ -58,6 +59,9 @@ use local_meeting_notes_session_core::meeting::{
     retention_policy_sha256, write_meeting,
 };
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
+use local_meeting_notes_session_core::model_store::{
+    InstalledTranscriptModel, ModelCatalog, TranscriptModel, installed_model,
+};
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::profile_lifecycle::ProfileLifecycleError;
 use local_meeting_notes_session_core::protocol::{
@@ -166,6 +170,7 @@ struct ApplicationState {
     app_data_writer_lock: Arc<Mutex<Option<Arc<AppDataWriterLock>>>>,
     retention_started: AtomicBool,
     permission_observation: Mutex<Option<first_run::FirstRunPermissions>>,
+    model_install_active: AtomicBool,
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
     preview_profile: Mutex<PreviewProfileSnapshot>,
     preview_enrollment: Mutex<PreviewEnrollmentSurface>,
@@ -184,6 +189,7 @@ impl Default for ApplicationState {
             app_data_writer_lock: Arc::new(Mutex::new(None)),
             retention_started: AtomicBool::new(false),
             permission_observation: Mutex::new(None),
+            model_install_active: AtomicBool::new(false),
             preview_library: Mutex::new(None),
             preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
             preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
@@ -196,6 +202,7 @@ struct AppModel {
     admission: String,
     retention_operational: bool,
     startup_message: String,
+    model_setup: ModelSetupSnapshot,
     meeting_id: Option<String>,
     started_at_epoch_seconds: Option<u64>,
     capture_state_started_at_epoch_seconds: Option<u64>,
@@ -222,6 +229,7 @@ impl Default for AppModel {
             admission: "internal-alpha".into(),
             retention_operational: false,
             startup_message: "Preparing your private workspace.".into(),
+            model_setup: ModelSetupSnapshot::default(),
             meeting_id: None,
             started_at_epoch_seconds: None,
             capture_state_started_at_epoch_seconds: None,
@@ -244,6 +252,7 @@ impl AppModel {
             admission: self.admission.clone(),
             retention_operational: self.retention_operational,
             startup_message: self.startup_message.clone(),
+            model_setup: self.model_setup.clone(),
             capture: self.reducer.capture(),
             meeting_id: self.meeting_id.clone(),
             started_at_epoch_seconds: self.started_at_epoch_seconds,
@@ -281,6 +290,7 @@ struct AppSnapshot {
     admission: String,
     retention_operational: bool,
     startup_message: String,
+    model_setup: ModelSetupSnapshot,
     capture: CaptureState,
     meeting_id: Option<String>,
     started_at_epoch_seconds: Option<u64>,
@@ -293,6 +303,52 @@ struct AppSnapshot {
     current_transcript_sha256: Option<String>,
     warnings: Vec<String>,
     error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelSetupSnapshot {
+    state: String,
+    options: Vec<ModelSetupOption>,
+    selected_model_id: Option<String>,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    error: Option<String>,
+}
+
+impl Default for ModelSetupSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "checking".into(),
+            options: Vec::new(),
+            selected_model_id: None,
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelSetupOption {
+    id: String,
+    title: String,
+    detail: String,
+    download_bytes: u64,
+    installed_bytes: u64,
+}
+
+impl From<&TranscriptModel> for ModelSetupOption {
+    fn from(model: &TranscriptModel) -> Self {
+        Self {
+            id: model.id.clone(),
+            title: model.title.clone(),
+            detail: model.detail.clone(),
+            download_bytes: model.download_bytes,
+            installed_bytes: model.installed_bytes,
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -1670,6 +1726,177 @@ fn retry_startup(app: AppHandle) -> Result<AppSnapshot, String> {
             "the installation retry could not start",
         );
         return Err("The installation retry could not start.".into());
+    }
+    Ok(snapshot)
+}
+
+fn verified_model_catalog(
+    manifest_path: &Path,
+    manifest: &RuntimeManifest,
+) -> Result<Option<ModelCatalog>, String> {
+    let Some(resource) = manifest.model_catalog.as_ref() else {
+        return Ok(None);
+    };
+    let path = manifest
+        .model_catalog_path(manifest_path)
+        .ok_or_else(|| "the signed model catalog path is unavailable".to_string())?;
+    ModelCatalog::load_and_verify(&path, &resource.sha256)
+        .map(Some)
+        .map_err(error_text)
+}
+
+fn finish_model_selection(
+    state: &ApplicationState,
+    retry: bool,
+    catalog: &ModelCatalog,
+    error: Option<String>,
+) {
+    let mut model = state.model.lock().expect("application model lock");
+    model.model_setup = ModelSetupSnapshot {
+        state: if error.is_some() { "failed" } else { "choose" }.into(),
+        options: catalog.models.iter().map(ModelSetupOption::from).collect(),
+        selected_model_id: None,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        error,
+    };
+    model.startup_message = "Choose the speech model to keep on this Mac.".into();
+    model.error = None;
+    if transition_startup(&mut model, StartupState::ModelRequired).is_err() {
+        model.error = Some(
+            if retry {
+                "The model setup retry stopped in an invalid state."
+            } else {
+                "Model setup stopped in an invalid state."
+            }
+            .into(),
+        );
+    }
+}
+
+#[tauri::command]
+fn install_transcript_model(app: AppHandle, model_id: String) -> Result<AppSnapshot, String> {
+    let state = app.state::<ApplicationState>();
+    let _command = state.command_lock.lock().expect("command lock");
+    let capture_active = state
+        .model
+        .lock()
+        .expect("application model lock")
+        .reducer
+        .capture()
+        != CaptureState::Idle;
+    if capture_active || sitting_task_active(&state) {
+        return Err("A speech model cannot be installed while audio work is active.".into());
+    }
+    if state
+        .model_install_active
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("A speech model is already downloading.".into());
+    }
+
+    let preparation = (|| {
+        let storage_context = state
+            .storage
+            .lock()
+            .map_err(|_| "the private workspace is unavailable".to_string())?
+            .clone()
+            .ok_or_else(|| "the private workspace is unavailable".to_string())?;
+        let manifest =
+            RuntimeManifest::load_and_verify(&storage_context.manifest_path).map_err(error_text)?;
+        let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
+            .ok_or_else(|| "this build does not use downloadable speech models".to_string())?;
+        let selected = catalog.model(&model_id).map_err(error_text)?.clone();
+        {
+            let mut model = state.model.lock().expect("application model lock");
+            if model.reducer.startup() != StartupState::ModelRequired {
+                return Err("Model setup is not waiting for a selection.".into());
+            }
+            model.model_setup = ModelSetupSnapshot {
+                state: "downloading".into(),
+                options: catalog.models.iter().map(ModelSetupOption::from).collect(),
+                selected_model_id: Some(selected.id.clone()),
+                downloaded_bytes: 0,
+                total_bytes: selected.download_bytes,
+                error: None,
+            };
+            model.startup_message = format!("Downloading {}.", selected.title);
+            model.error = None;
+        }
+        Ok::<_, String>((storage_context, selected))
+    })();
+
+    let (storage_context, selected) = match preparation {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            state.model_install_active.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
+    };
+    let snapshot = state
+        .model
+        .lock()
+        .expect("application model lock")
+        .snapshot();
+    let task_app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("meeting-model-download".into())
+        .spawn(move || {
+            let install_result = model_download::install(
+                &storage_context.storage,
+                &selected,
+                |downloaded_bytes| {
+                    let state = task_app.state::<ApplicationState>();
+                    let mut model = state.model.lock().expect("application model lock");
+                    if model.model_setup.selected_model_id.as_deref()
+                        == Some(selected.id.as_str())
+                    {
+                        model.model_setup.downloaded_bytes = downloaded_bytes;
+                    }
+                },
+            );
+            let state = task_app.state::<ApplicationState>();
+            state.model_install_active.store(false, Ordering::SeqCst);
+            match install_result {
+                Ok(()) => {
+                    {
+                        let mut model = state.model.lock().expect("application model lock");
+                        model.model_setup.state = "verifying".into();
+                        model.model_setup.downloaded_bytes = selected.download_bytes;
+                        model.startup_message = "Verifying the downloaded speech model.".into();
+                        if let Err(error) = transition_startup(&mut model, StartupState::Retrying) {
+                            model.model_setup.state = "failed".into();
+                            model.model_setup.error = Some(error);
+                            return;
+                        }
+                    }
+                    initialize_application(task_app, true);
+                }
+                Err(error) => {
+                    let detail = error.to_string();
+                    let _ = write_private_diagnostic(
+                        &storage_context.diagnostics,
+                        "model_download_failed",
+                        &detail,
+                    );
+                    let mut model = state.model.lock().expect("application model lock");
+                    model.model_setup.state = "failed".into();
+                    model.model_setup.error = Some(
+                        "The speech model could not be downloaded and verified. Choose it again to retry."
+                            .into(),
+                    );
+                    model.startup_message = "Speech model setup needs attention.".into();
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        state.model_install_active.store(false, Ordering::SeqCst);
+        let mut model = state.model.lock().expect("application model lock");
+        model.model_setup.state = "failed".into();
+        model.model_setup.error = Some("The speech model download could not start.".into());
+        write_diagnostic(&state, "model_download_spawn_failed", &error.to_string());
+        return Err("The speech model download could not start.".into());
     }
     Ok(snapshot)
 }
@@ -4425,6 +4652,7 @@ fn main() {
             stop_meeting,
             dismiss_meeting,
             retry_startup,
+            install_transcript_model,
             first_run_permissions,
             first_run_request_microphone,
             first_run_request_system_audio,
@@ -4708,6 +4936,58 @@ fn initialize_application(app: AppHandle, retry: bool) {
             return;
         }
     };
+    let catalog = match verified_model_catalog(&storage_context.manifest_path, &manifest) {
+        Ok(catalog) => catalog,
+        Err(_) => {
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Runtime,
+                "the signed model catalog is missing or changed",
+            );
+            return;
+        }
+    };
+    let installed_transcript_model: Option<InstalledTranscriptModel> = match catalog.as_ref() {
+        Some(catalog) => match installed_model(&storage_context.storage, catalog) {
+            Ok(Some(installed)) => {
+                let mut model = state.model.lock().expect("application model lock");
+                model.model_setup = ModelSetupSnapshot {
+                    state: "installed".into(),
+                    options: catalog.models.iter().map(ModelSetupOption::from).collect(),
+                    selected_model_id: Some(installed.entry.id.clone()),
+                    downloaded_bytes: installed.entry.download_bytes,
+                    total_bytes: installed.entry.download_bytes,
+                    error: None,
+                };
+                Some(installed)
+            }
+            Ok(None) => {
+                finish_model_selection(&state, retry, catalog, None);
+                return;
+            }
+            Err(_) => {
+                finish_model_selection(
+                    &state,
+                    retry,
+                    catalog,
+                    Some(
+                        "The previous speech model is incomplete or changed. Choose a model to repair it."
+                            .into(),
+                    ),
+                );
+                return;
+            }
+        },
+        None => {
+            let mut model = state.model.lock().expect("application model lock");
+            model.model_setup = ModelSetupSnapshot {
+                state: "bundled".into(),
+                ..ModelSetupSnapshot::default()
+            };
+            None
+        }
+    };
     set_startup_message(&state, "Starting the local transcription engine.");
     let worker_path = storage_context.resource_root.join(&manifest.runtime.path);
     let mut command = Command::new(worker_path);
@@ -4716,8 +4996,13 @@ fn initialize_application(app: AppHandle, retry: bool) {
         .arg("--app-data-root")
         .arg(storage_context.storage.path())
         .arg("--runtime-manifest")
-        .arg(&storage_context.manifest_path)
-        .current_dir(&storage_context.resource_root);
+        .arg(&storage_context.manifest_path);
+    if let Some(installed) = installed_transcript_model.as_ref() {
+        command
+            .arg("--transcript-model-receipt")
+            .arg(&installed.receipt_path);
+    }
+    command.current_dir(&storage_context.resource_root);
     let mut worker = match OwnedChild::spawn(&mut command) {
         Ok(worker) => worker,
         Err(SupervisionError::MissingChild) => {
@@ -4745,8 +5030,12 @@ fn initialize_application(app: AppHandle, retry: bool) {
         }
     };
     let ready = worker.wait_ready(Duration::from_secs(10), &internal_alpha_operations());
+    let external_models = installed_transcript_model
+        .as_ref()
+        .map(InstalledTranscriptModel::runtime_models)
+        .unwrap_or_default();
     match ready {
-        Ok(ready) if manifest.matches_ready(&ready) => {}
+        Ok(ready) if manifest.matches_ready_with_external_models(&ready, &external_models) => {}
         Err(SupervisionError::ReadyTimeout) => {
             finish_startup_failure(
                 &state,
@@ -4817,6 +5106,12 @@ fn initialize_application(app: AppHandle, retry: bool) {
         return;
     }
 
+    let mut packaged_models: Vec<(String, String)> = manifest
+        .models
+        .iter()
+        .map(|model| (model.id.clone(), model.sha256.clone()))
+        .collect();
+    packaged_models.extend(external_models);
     let runtime = RuntimeIdentity {
         admission: "internal-alpha".into(),
         worker_build_sha256: manifest.worker.sha256.clone(),
@@ -4824,11 +5119,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
         tap_build_sha256: manifest.tap.sha256.clone(),
         tap_path: storage_context.resource_root.join(&manifest.tap.path),
         encoder_sha256: manifest.encoder.sha256.clone(),
-        packaged_models: manifest
-            .models
-            .iter()
-            .map(|model| (model.id.clone(), model.sha256.clone()))
-            .collect(),
+        packaged_models,
         encoder_available: manifest.encoder.path.file_name()
             != Some(std::ffi::OsStr::new("encoder-unavailable.identity")),
     };

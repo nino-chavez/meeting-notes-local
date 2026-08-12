@@ -125,11 +125,44 @@ class WorkerProcess:
     def __init__(self, root: Path, manifest: Path):
         read_fd, self.write_fd = os.pipe()
         packaged_root_value = os.environ.get("LMN_PACKAGED_RUNTIME_ROOT")
+        model_arguments = []
         if packaged_root_value:
             packaged_root = Path(packaged_root_value)
             executable = packaged_root / "python-runtime/bin/python3.12"
             prefix = [str(executable), "-E", "-s", "-B", "-m", "worker.main"]
             cwd = packaged_root
+            packaged_manifest = json.loads(manifest.read_text())
+            if packaged_manifest["schema"] == "app-runtime/2":
+                source_value = os.environ.get("LMN_TRANSCRIPT_MODEL_DIR")
+                if not source_value:
+                    raise AssertionError(
+                        "LMN_TRANSCRIPT_MODEL_DIR is required for app-runtime/2 tests"
+                    )
+                catalog_path = packaged_root / packaged_manifest["model_catalog"]["path"]
+                entry = json.loads(catalog_path.read_text())["models"][0]
+                model_dir = root / "models" / entry["id"] / entry["revision"]
+                model_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                source = Path(source_value)
+                for file in entry["files"]:
+                    target = model_dir / file["name"]
+                    if not target.exists():
+                        os.link((source / file["name"]).resolve(strict=True), target)
+                receipt = {
+                    "schema": "yawn-model-install/1",
+                    "id": entry["id"],
+                    "revision": entry["revision"],
+                    "files": [
+                        {
+                            key: file[key]
+                            for key in ("role", "name", "bytes", "sha256")
+                        }
+                        for file in entry["files"]
+                    ],
+                }
+                receipt_path = model_dir / "model-install.json"
+                if not receipt_path.exists():
+                    private_file(receipt_path, (json.dumps(receipt) + "\n").encode())
+                model_arguments = ["--transcript-model-receipt", str(receipt_path)]
         else:
             prefix = [sys.executable, "-m", "worker.main"]
             cwd = REPO
@@ -140,6 +173,7 @@ class WorkerProcess:
                 str(root),
                 "--runtime-manifest",
                 str(manifest),
+                *model_arguments,
                 "--parent-liveness-fd",
                 str(read_fd),
             ],
@@ -340,6 +374,79 @@ class WorkerProtocolTests(unittest.TestCase):
 
         loaded = load_manifest(alpha_manifest)
         self.assertEqual(transcript_model_dir(alpha_manifest, loaded), model_dir.resolve())
+
+    def test_external_model_receipt_is_bound_to_the_signed_catalog(self) -> None:
+        from worker.main import external_transcript_model, load_manifest
+
+        model_id = "whisper-large-v3-turbo-q4"
+        revision = "660c343bbf4e52ac257f0b7d952e5388e6f93bef"
+        model_dir = self.root / "models" / model_id / revision
+        model_dir.mkdir(mode=0o700, parents=True)
+        files = []
+        for role, name, contents in (
+            ("config", "config.json", b"config"),
+            ("weights", "weights.npz", b"weights"),
+        ):
+            private_file(model_dir / name, contents)
+            files.append(
+                {
+                    "role": role,
+                    "name": name,
+                    "url": f"https://models.example/{revision}/{name}",
+                    "bytes": len(contents),
+                    "sha256": digest(model_dir / name),
+                }
+            )
+        receipt = {
+            "schema": "yawn-model-install/1",
+            "id": model_id,
+            "revision": revision,
+            "files": [
+                {key: file[key] for key in ("role", "name", "bytes", "sha256")}
+                for file in files
+            ],
+        }
+        receipt_path = model_dir / "model-install.json"
+        private_file(receipt_path, (json.dumps(receipt) + "\n").encode())
+        catalog = {
+            "schema": "yawn-model-catalog/1",
+            "models": [
+                {
+                    "id": model_id,
+                    "revision": revision,
+                    "title": "Smaller download",
+                    "detail": "A fixture model.",
+                    "downloadBytes": sum(file["bytes"] for file in files),
+                    "installedBytes": sum(file["bytes"] for file in files),
+                    "files": files,
+                }
+            ],
+        }
+        catalog_path = self.resources / "model-catalog.json"
+        private_file(catalog_path, (json.dumps(catalog) + "\n").encode())
+        document = json.loads(json.dumps(self.base_manifest))
+        document["schema"] = "app-runtime/2"
+        document["admission"] = "internal-alpha"
+        document["model_catalog"] = {
+            "path": "model-catalog.json",
+            "sha256": digest(catalog_path),
+        }
+        manifest_path = self.resources / "external-alpha.json"
+        private_file(manifest_path, (json.dumps(document) + "\n").encode())
+
+        loaded = load_manifest(manifest_path)
+        selected, ready = external_transcript_model(
+            self.root, manifest_path, loaded, receipt_path
+        )
+        self.assertEqual(selected, model_dir.resolve())
+        self.assertEqual(
+            {entry["id"] for entry in ready},
+            {"whisper-transcript-config", "whisper-transcript-weights"},
+        )
+
+        (model_dir / "weights.npz").write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            external_transcript_model(self.root, manifest_path, loaded, receipt_path)
 
     def test_capture_finalize_creates_exact_receipt_without_overwrite(self) -> None:
         meeting_id = str(uuid.uuid4())

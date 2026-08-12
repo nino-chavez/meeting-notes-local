@@ -16,6 +16,7 @@
     "allow-stop-meeting",
     "allow-dismiss-meeting",
     "allow-retry-startup",
+    "allow-install-transcript-model",
     "allow-first-run-permissions",
     "allow-first-run-request-microphone",
     "allow-first-run-request-system-audio",

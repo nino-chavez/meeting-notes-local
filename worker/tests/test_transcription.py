@@ -285,6 +285,18 @@ class TranscriptionTests(unittest.TestCase):
                 bleed_filter=self.keep,
             )
 
+    def test_accepts_the_q4_npz_weight_format(self) -> None:
+        (self.model / "weights.safetensors").rename(self.model / "weights.npz")
+        _, path = create_transcript_revision(
+            self.capture,
+            self.root / "transcript",
+            self.model,
+            transcribe_audio=self.fake_transcribe,
+            voicing_filter=self.keep,
+            bleed_filter=self.keep,
+        )
+        self.assertTrue(path.is_file())
+
 
 class InstalledVoiceprintGateTests(unittest.TestCase):
     """Which of the three profile states this runtime is in, and what it does."""

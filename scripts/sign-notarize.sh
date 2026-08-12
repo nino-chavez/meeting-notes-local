@@ -116,9 +116,14 @@ echo "== refreshing runtime manifests from signed bytes"
 # encoder candidate back to the placeholder identity.
 ENCODER_PATH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["encoder"]["path"])' \
   "$APP/Contents/Resources/app-runtime.json")"
+MANIFEST_ARGS=()
+if [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' \
+    "$APP/Contents/Resources/app-runtime.json")" == "app-runtime/2" ]]; then
+  MANIFEST_ARGS+=(--external-transcript-models)
+fi
 "$ROOT/worker/build_manifest.py" \
   "$APP/Contents/Resources" --admission "$ADMISSION" --exclude-note-runtime \
-  --encoder "$ENCODER_PATH"
+  --encoder "$ENCODER_PATH" "${MANIFEST_ARGS[@]}"
 
 echo "== signing app bundle"
 codesign --force --options runtime --timestamp \

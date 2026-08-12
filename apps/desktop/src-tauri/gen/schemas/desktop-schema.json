@@ -225,6 +225,12 @@
           "markdownDescription": "Enables the get_desktop_layout command without any pre-configured scope."
         },
         {
+          "description": "Enables the install_transcript_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-transcript-model",
+          "markdownDescription": "Enables the install_transcript_model command without any pre-configured scope."
+        },
+        {
           "description": "Enables the library_assign_meeting_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-library-assign-meeting-folder",
@@ -499,6 +505,12 @@
           "type": "string",
           "const": "deny-get-desktop-layout",
           "markdownDescription": "Denies the get_desktop_layout command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install_transcript_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-transcript-model",
+          "markdownDescription": "Denies the install_transcript_model command without any pre-configured scope."
         },
         {
           "description": "Denies the library_assign_meeting_folder command without any pre-configured scope.",
