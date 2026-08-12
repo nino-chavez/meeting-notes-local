@@ -821,7 +821,7 @@ Stated plainly, in the same spirit as `spike/RESULTS.md`:
   derives them from timestamps across two independently-clocked legs, which is a
   different and worse input than anything measured here.
 - **~~Nothing here has run through the capture path.~~ Closed, and it cost
-  nothing.** The 57.6-minute recording behind arm C was played back through the
+  nothing.** The recording behind arm C was played back through the
   tap while both legs recorded for 75 minutes. Comparing the system leg against
   arm C's direct decode of the same file holds audio and model constant: the two
   transcripts carried **identical counts** of every commitment term, and the
