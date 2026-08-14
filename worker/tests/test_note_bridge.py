@@ -983,12 +983,29 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             "attribution": "none",
             "turns": [
                 {
-                    "text": f"Turn {index:02d}: we agreed to review the packaging option.",
+                    # Multi-byte, and early enough in the turn that a locator
+                    # span straddles it. Fragment offsets are character
+                    # offsets; with ASCII-only text a byte/character confusion
+                    # in `validate_locators` is undetectable, and the whole
+                    # suite passed under one until this fixture carried é and
+                    # an emoji.
+                    "text": (
+                        f"Turn {index:02d}: café \U0001f642 — we agreed to review "
+                        "the packaging option."
+                    ),
                     "start": float(index + 1),
                 }
                 for index in range(turns)
             ],
         }
+        # The coverage this fixture buys is invisible if it ever goes ASCII, so
+        # it is asserted rather than trusted. Measured: with ASCII-only turns,
+        # rewriting `validate_locators` to byte offsets left all 51 tests
+        # passing; with these turns it fails three.
+        self.assertTrue(
+            any(ord(character) > 127 for turn in document["turns"] for character in turn["text"]),
+            "generate fixture must carry multi-byte text",
+        )
         encoded = (json.dumps(document, indent=2) + "\n").encode()
         transcript_id = hashlib.sha256(encoded).hexdigest()
         directory = self.root / "meetings" / self.meeting_id / "transcript"
