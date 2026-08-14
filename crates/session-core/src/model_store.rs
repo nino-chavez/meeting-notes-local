@@ -12,6 +12,10 @@ use crate::storage::{durable_replace, sync_directory, StorageRoot};
 const MAX_CATALOG_BYTES: u64 = 128 * 1024;
 const MAX_RECEIPT_BYTES: u64 = 32 * 1024;
 const ACTIVE_RECEIPT: &str = "models/active-model.json";
+/// Separate from `ACTIVE_RECEIPT` by filename (not just by directory) so
+/// activating a note model can never write over, or be confused with, the
+/// active transcript-model pointer. See `note_models` below.
+const ACTIVE_NOTE_RECEIPT: &str = "models/active-note-model.json";
 pub const INSTALL_RECEIPT_NAME: &str = "model-install.json";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -19,6 +23,26 @@ pub const INSTALL_RECEIPT_NAME: &str = "model-install.json";
 pub struct ModelCatalog {
     pub schema: ModelCatalogSchema,
     pub models: Vec<TranscriptModel>,
+    /// Note-generation models (MLX-LM weight trees: config + one-or-more
+    /// safetensors shards + tokenizer files), added alongside the existing
+    /// whisper `models` list rather than replacing it.
+    ///
+    /// This is a backward-compatible extension of `yawn-model-catalog/1`,
+    /// not a schema bump to `/2`: `model-catalog.json` is staged from the
+    /// repo into the app bundle and pinned by its own sha256 inside the
+    /// runtime manifest (`build_contract.rs`, `RuntimeManifest::model_catalog`
+    /// in `runtime.rs`), so the binary and its catalog always ship, and are
+    /// digest-bound, together — there is no scenario where an old binary
+    /// reads a catalog file written for a newer one. Contrast with
+    /// `RuntimeManifest`'s V1→V2 split, which exists because V2 makes a
+    /// previously-optional verification step (the catalog resource) required
+    /// for every input; adding an empty-by-default `note_models` list changes
+    /// no verification step for any existing catalog or manifest. `#[serde(default)]`
+    /// means a catalog written before this field existed — or one that simply
+    /// ships no note models yet, as this branch does — still deserializes,
+    /// with `note_models` empty. See `docs/note-runtime-decision.md` seam 6.
+    #[serde(default)]
+    pub note_models: Vec<NoteModel>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -56,6 +80,181 @@ pub struct TranscriptModelFile {
 pub enum TranscriptModelFileRole {
     Config,
     Weights,
+}
+
+/// A note-generation model: an MLX-LM weight tree, distinct in shape from a
+/// whisper `TranscriptModel`. This is a separate struct (not an extension of
+/// `TranscriptModel`) so the existing transcript-model type, its `Deserialize`
+/// impl, and every existing struct literal that builds one are untouched.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteModel {
+    pub id: String,
+    pub revision: String,
+    pub title: String,
+    pub detail: String,
+    pub download_bytes: u64,
+    pub installed_bytes: u64,
+    pub files: Vec<NoteModelFile>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteModelFile {
+    pub role: NoteModelFileRole,
+    pub name: String,
+    pub url: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+/// File roles inside one MLX-LM model tree (an mlx-community snapshot).
+///
+/// Unlike whisper's exactly-one-config, exactly-one-weights layout, an
+/// MLX-LM tree ships weights as one-or-more safetensors shards (a single
+/// `model.safetensors` for a small model, or `model-00001-of-00002.safetensors`
+/// alongside a sibling shard when the quantized weights don't fit one file),
+/// plus separate tokenizer artifacts. `Weights` may therefore appear more
+/// than once per model; every other role appears at most once. `WeightsIndex`
+/// (`model.safetensors.index.json`) is only present — and only valid —
+/// alongside a sharded `Weights` set, but validation does not hard-require
+/// it or the tokenizer roles: the measurement gate has not yet picked the
+/// final model pin, and a fixed exact-file-count rule here would be a second
+/// place that pin has to be re-litigated. `validate()` still requires
+/// `Config` exactly once and `Weights` at least once — the minimum any MLX-LM
+/// load needs — and pins every present file's name to its role.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum NoteModelFileRole {
+    Config,
+    Weights,
+    WeightsIndex,
+    Tokenizer,
+    TokenizerConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveNoteModelReceipt {
+    schema: ActiveNoteModelSchema,
+    id: String,
+    revision: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+enum ActiveNoteModelSchema {
+    #[serde(rename = "yawn-active-note-model/1")]
+    V1,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InstalledNoteModelReceipt {
+    schema: InstalledNoteModelSchema,
+    id: String,
+    revision: String,
+    files: Vec<InstalledNoteModelFile>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+enum InstalledNoteModelSchema {
+    #[serde(rename = "yawn-note-model-install/1")]
+    V1,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InstalledNoteModelFile {
+    role: NoteModelFileRole,
+    name: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InstalledNoteModel {
+    pub entry: NoteModel,
+    pub directory: PathBuf,
+    pub receipt_path: PathBuf,
+}
+
+/// Borrowed, role-erased view of one catalog file. `model_download.rs::install`
+/// only ever reads a file's name, url, byte count, and sha256 — never its
+/// role — so this is the entire surface that function needs.
+pub struct DownloadableFile<'a> {
+    pub name: &'a str,
+    pub url: &'a str,
+    pub bytes: u64,
+    pub sha256: &'a str,
+}
+
+/// What `model_download.rs::install` needs from a catalog entry, independent
+/// of whether it is a `TranscriptModel` or a `NoteModel`.
+///
+/// `install()` itself is not generified by this trait on this branch — no
+/// caller downloads a note model yet (that lands with the note-download
+/// command, out of scope here). This trait, and its impls for both model
+/// types below (exercised by `downloadable_view_is_generic_over_transcript_and_note_models`
+/// in tests), is the proof that reuse is mechanical when that caller exists:
+/// the only change `install()` needs is its parameter type, from
+/// `&TranscriptModel` to `&impl DownloadableModel`; the function body reads
+/// `model.id`, `model.revision`, `model.download_bytes`, and `model.files`
+/// today and would read `model.id()`, `model.revision()`,
+/// `model.download_bytes()`, and `model.files()` unchanged in every other
+/// respect.
+pub trait DownloadableModel {
+    fn id(&self) -> &str;
+    fn revision(&self) -> &str;
+    fn download_bytes(&self) -> u64;
+    fn files(&self) -> Vec<DownloadableFile<'_>>;
+}
+
+impl DownloadableModel for TranscriptModel {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn revision(&self) -> &str {
+        &self.revision
+    }
+    fn download_bytes(&self) -> u64 {
+        self.download_bytes
+    }
+    fn files(&self) -> Vec<DownloadableFile<'_>> {
+        self.files
+            .iter()
+            .map(|file| DownloadableFile {
+                name: &file.name,
+                url: &file.url,
+                bytes: file.bytes,
+                sha256: &file.sha256,
+            })
+            .collect()
+    }
+}
+
+impl DownloadableModel for NoteModel {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn revision(&self) -> &str {
+        &self.revision
+    }
+    fn download_bytes(&self) -> u64 {
+        self.download_bytes
+    }
+    fn files(&self) -> Vec<DownloadableFile<'_>> {
+        self.files
+            .iter()
+            .map(|file| DownloadableFile {
+                name: &file.name,
+                url: &file.url,
+                bytes: file.bytes,
+                sha256: &file.sha256,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -204,11 +403,103 @@ impl ModelCatalog {
                 return Err(ModelStoreError::InvalidCatalogEntry);
             }
         }
+        self.validate_note_models()?;
+        Ok(())
+    }
+
+    /// Note-model counterpart of the loop above. Kept as its own pass rather
+    /// than folded into the transcript loop, both so the transcript rules
+    /// stay textually and behaviorally untouched and so an MLX file tree
+    /// (sharded weights, tokenizer files) can use validation shaped for it
+    /// instead of whisper's exactly-one-config-one-weights rule.
+    fn validate_note_models(&self) -> Result<(), ModelStoreError> {
+        if self.note_models.len() > 8 {
+            return Err(ModelStoreError::InvalidCatalogEntry);
+        }
+        let mut ids = HashSet::new();
+        for model in &self.note_models {
+            if !safe_component(&model.id)
+                || !safe_revision(&model.revision)
+                || model.title.trim().is_empty()
+                || model.title.len() > 80
+                || model.detail.trim().is_empty()
+                || model.detail.len() > 240
+                || model.download_bytes == 0
+                || model.installed_bytes == 0
+                || !ids.insert(&model.id)
+            {
+                return Err(ModelStoreError::InvalidCatalogEntry);
+            }
+            let mut names = HashSet::new();
+            let mut config_count = 0_u32;
+            let mut weights_count = 0_u32;
+            let mut weights_index_count = 0_u32;
+            let mut tokenizer_count = 0_u32;
+            let mut tokenizer_config_count = 0_u32;
+            let mut installed_bytes = 0_u64;
+            for file in &model.files {
+                if !names.insert(file.name.as_str())
+                    || !file.url.starts_with("https://")
+                    || file.url.len() > 2048
+                    || !file.url.contains(&model.revision)
+                    || !file.url.ends_with(&file.name)
+                    || file.bytes == 0
+                    || !valid_sha256(&file.sha256)
+                {
+                    return Err(ModelStoreError::InvalidCatalogEntry);
+                }
+                let name_ok = match file.role {
+                    NoteModelFileRole::Config => {
+                        config_count += 1;
+                        file.name == "config.json"
+                    }
+                    NoteModelFileRole::Weights => {
+                        weights_count += 1;
+                        safe_note_weights_name(&file.name)
+                    }
+                    NoteModelFileRole::WeightsIndex => {
+                        weights_index_count += 1;
+                        file.name == "model.safetensors.index.json"
+                    }
+                    NoteModelFileRole::Tokenizer => {
+                        tokenizer_count += 1;
+                        file.name == "tokenizer.json"
+                    }
+                    NoteModelFileRole::TokenizerConfig => {
+                        tokenizer_config_count += 1;
+                        file.name == "tokenizer_config.json"
+                    }
+                };
+                if !name_ok {
+                    return Err(ModelStoreError::InvalidCatalogEntry);
+                }
+                installed_bytes = installed_bytes
+                    .checked_add(file.bytes)
+                    .ok_or(ModelStoreError::InvalidCatalogEntry)?;
+            }
+            if config_count != 1
+                || weights_count == 0
+                || weights_index_count > 1
+                || tokenizer_count > 1
+                || tokenizer_config_count > 1
+                || installed_bytes != model.installed_bytes
+                || model.download_bytes != model.installed_bytes
+            {
+                return Err(ModelStoreError::InvalidCatalogEntry);
+            }
+        }
         Ok(())
     }
 
     pub fn model(&self, id: &str) -> Result<&TranscriptModel, ModelStoreError> {
         self.models
+            .iter()
+            .find(|model| model.id == id)
+            .ok_or(ModelStoreError::UnknownModel)
+    }
+
+    pub fn note_model(&self, id: &str) -> Result<&NoteModel, ModelStoreError> {
+        self.note_models
             .iter()
             .find(|model| model.id == id)
             .ok_or(ModelStoreError::UnknownModel)
@@ -390,6 +681,210 @@ pub fn activate_model(
     Ok(())
 }
 
+/// Storage segment under `models/` reserved for note-model directories,
+/// disjoint from the transcript-model layout (`models/{id}/{revision}`).
+/// `safe_component` — the same validator every catalog id must pass — allows
+/// only `[A-Za-z0-9_-]`, so no valid transcript- or note-model id can ever
+/// equal this segment (it contains `.`) and collide with it on disk.
+const NOTE_MODEL_DIR: &str = "note.d";
+
+fn note_model_relative_path(id: &str, revision: &str) -> PathBuf {
+    Path::new("models")
+        .join(NOTE_MODEL_DIR)
+        .join(id)
+        .join(revision)
+}
+
+pub fn installed_note_model(
+    storage: &StorageRoot,
+    catalog: &ModelCatalog,
+) -> Result<Option<InstalledNoteModel>, ModelStoreError> {
+    let Some(entry) = active_note_model(storage, catalog)? else {
+        return Ok(None);
+    };
+    let directory = storage
+        .resolve(&note_model_relative_path(&entry.id, &entry.revision))
+        .map_err(io::Error::other)?;
+    verify_note_model_directory(&directory, &entry)?;
+    Ok(Some(InstalledNoteModel {
+        receipt_path: directory.join(INSTALL_RECEIPT_NAME),
+        entry,
+        directory,
+    }))
+}
+
+/// The active note-generation model, read from its own receipt
+/// (`ACTIVE_NOTE_RECEIPT`). Deliberately independent of `active_model` above:
+/// activating a note model never touches `ACTIVE_RECEIPT`, so the active
+/// transcript model is never disturbed by a note-model activation, and vice
+/// versa.
+pub fn active_note_model(
+    storage: &StorageRoot,
+    catalog: &ModelCatalog,
+) -> Result<Option<NoteModel>, ModelStoreError> {
+    let active_path = storage
+        .resolve(Path::new(ACTIVE_NOTE_RECEIPT))
+        .map_err(io::Error::other)?;
+    if !active_path.exists() {
+        return Ok(None);
+    }
+    let active: ActiveNoteModelReceipt = read_json(&active_path, MAX_RECEIPT_BYTES)?;
+    let entry = catalog.note_model(&active.id)?;
+    if active.revision != entry.revision {
+        return Err(ModelStoreError::InvalidReceipt);
+    }
+    Ok(Some(entry.clone()))
+}
+
+pub fn note_model_is_stored(
+    storage: &StorageRoot,
+    entry: &NoteModel,
+) -> Result<bool, ModelStoreError> {
+    let directory = storage
+        .resolve(&note_model_relative_path(&entry.id, &entry.revision))
+        .map_err(io::Error::other)?;
+    if !directory.exists() {
+        return Ok(false);
+    }
+    if directory.is_symlink() || !directory.is_dir() {
+        return Err(ModelStoreError::InvalidModel);
+    }
+    Ok(true)
+}
+
+pub fn remove_inactive_note_model(
+    storage: &StorageRoot,
+    catalog: &ModelCatalog,
+    id: &str,
+) -> Result<bool, ModelStoreError> {
+    let entry = catalog.note_model(id)?;
+    if active_note_model(storage, catalog)?
+        .as_ref()
+        .is_some_and(|active| active.id == entry.id)
+    {
+        return Err(ModelStoreError::ActiveModel);
+    }
+    let namespace = storage
+        .resolve(&Path::new("models").join(NOTE_MODEL_DIR))
+        .map_err(io::Error::other)?;
+    let parent = storage
+        .resolve(&Path::new("models").join(NOTE_MODEL_DIR).join(&entry.id))
+        .map_err(io::Error::other)?;
+    let directory = storage
+        .resolve(&note_model_relative_path(&entry.id, &entry.revision))
+        .map_err(io::Error::other)?;
+    if !directory.exists() {
+        return Ok(false);
+    }
+    if directory.is_symlink() || !directory.is_dir() {
+        return Err(ModelStoreError::InvalidModel);
+    }
+    fs::remove_dir_all(&directory)?;
+    sync_directory(&parent)?;
+    sync_directory(&namespace)?;
+    Ok(true)
+}
+
+/// Note-model counterpart of `verify_model_directory`. The one structural
+/// difference: a transcript model's receipt file is looked up by `role`
+/// because each role appears at most once; a note model's `Weights` role can
+/// appear on several shards, so the lookup key here is the (validated-unique)
+/// file `name` instead.
+pub fn verify_note_model_directory(
+    directory: &Path,
+    entry: &NoteModel,
+) -> Result<(), ModelStoreError> {
+    if directory.is_symlink() || !directory.is_dir() {
+        return Err(ModelStoreError::InvalidModel);
+    }
+    let receipt_path = directory.join(INSTALL_RECEIPT_NAME);
+    let receipt: InstalledNoteModelReceipt = read_json(&receipt_path, MAX_RECEIPT_BYTES)?;
+    if receipt.id != entry.id || receipt.revision != entry.revision {
+        return Err(ModelStoreError::InvalidReceipt);
+    }
+    let expected_files: HashSet<_> = entry.files.iter().map(|file| file.name.as_str()).collect();
+    let actual_names: HashSet<_> = fs::read_dir(directory)?
+        .map(|item| item.map(|item| item.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<_, _>>()?;
+    let mut expected_names: HashSet<String> = expected_files
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    expected_names.insert(INSTALL_RECEIPT_NAME.to_string());
+    if actual_names != expected_names || receipt.files.len() != entry.files.len() {
+        return Err(ModelStoreError::InvalidModel);
+    }
+    for expected in &entry.files {
+        let recorded = receipt
+            .files
+            .iter()
+            .find(|file| file.name == expected.name)
+            .ok_or(ModelStoreError::InvalidReceipt)?;
+        if recorded.role != expected.role
+            || recorded.bytes != expected.bytes
+            || recorded.sha256 != expected.sha256
+        {
+            return Err(ModelStoreError::InvalidReceipt);
+        }
+        let path = directory.join(&expected.name);
+        if path.is_symlink()
+            || !path.is_file()
+            || path.metadata()?.len() != expected.bytes
+            || file_sha256(&path)? != expected.sha256
+        {
+            return Err(ModelStoreError::InvalidModel);
+        }
+    }
+    Ok(())
+}
+
+pub fn note_install_receipt_bytes(entry: &NoteModel) -> Vec<u8> {
+    let receipt = InstalledNoteModelReceipt {
+        schema: InstalledNoteModelSchema::V1,
+        id: entry.id.clone(),
+        revision: entry.revision.clone(),
+        files: entry
+            .files
+            .iter()
+            .map(|file| InstalledNoteModelFile {
+                role: file.role,
+                name: file.name.clone(),
+                bytes: file.bytes,
+                sha256: file.sha256.clone(),
+            })
+            .collect(),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&receipt).expect("note model receipt serializes");
+    bytes.push(b'\n');
+    bytes
+}
+
+/// Note-model counterpart of `activate_model`. Writes only
+/// `ACTIVE_NOTE_RECEIPT`, so it can never disturb `ACTIVE_RECEIPT` — the two
+/// pointers are separate files, not separate keys in one file, precisely so
+/// this property holds without a runtime check.
+pub fn activate_note_model(
+    storage: &StorageRoot,
+    entry: &NoteModel,
+) -> Result<(), ModelStoreError> {
+    let directory = storage
+        .resolve(&note_model_relative_path(&entry.id, &entry.revision))
+        .map_err(io::Error::other)?;
+    verify_note_model_directory(&directory, entry)?;
+    let active = ActiveNoteModelReceipt {
+        schema: ActiveNoteModelSchema::V1,
+        id: entry.id.clone(),
+        revision: entry.revision.clone(),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&active).expect("active note receipt serializes");
+    bytes.push(b'\n');
+    let path = storage
+        .resolve(Path::new(ACTIVE_NOTE_RECEIPT))
+        .map_err(io::Error::other)?;
+    durable_replace(&path, &bytes)?;
+    Ok(())
+}
+
 fn read_json<T: for<'de> Deserialize<'de>>(
     path: &Path,
     max_bytes: u64,
@@ -410,6 +905,19 @@ fn safe_component(value: &str) -> bool {
 
 fn safe_revision(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// A sharded MLX weights filename: `model.safetensors`,
+/// `model-00001-of-00002.safetensors`, and so on. Same character allowlist
+/// as `safe_component` plus `.`, which the shard suffix and file extension
+/// both need; still rejects path separators, `..`, and anything else that
+/// would leave the model directory.
+fn safe_note_weights_name(name: &str) -> bool {
+    name.ends_with(".safetensors")
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -473,6 +981,10 @@ mod tests {
                     },
                 ],
             }],
+            // Mechanical compile-fix for the new field, not a behavioral
+            // change: every existing assertion in this module is about
+            // `catalog.models`, and stays byte-for-byte as written.
+            note_models: Vec::new(),
         };
         catalog.validate().unwrap();
         (temp, storage, catalog)
@@ -569,5 +1081,236 @@ mod tests {
         assert!(remove_inactive_model(&storage, &catalog, &other.id).unwrap());
         assert!(!other_directory.exists());
         assert!(!remove_inactive_model(&storage, &catalog, &other.id).unwrap());
+    }
+
+    // --- note-model fixtures -------------------------------------------------
+    //
+    // A note model is pushed onto the same `fixture()` catalog used above
+    // rather than built standalone, because `ModelCatalog::validate` requires
+    // `models` to be non-empty — matching the real shipped catalog, which
+    // always carries the whisper entries and would carry note entries
+    // alongside them, never instead of them.
+
+    fn push_note_fixture(catalog: &mut ModelCatalog) -> NoteModel {
+        let revision = "c".repeat(40);
+        let files: [(NoteModelFileRole, &str, &[u8]); 6] = [
+            (NoteModelFileRole::Config, "config.json", b"note-config"),
+            (
+                NoteModelFileRole::Weights,
+                "model-00001-of-00002.safetensors",
+                b"shard-0",
+            ),
+            (
+                NoteModelFileRole::Weights,
+                "model-00002-of-00002.safetensors",
+                b"shard-1",
+            ),
+            (
+                NoteModelFileRole::WeightsIndex,
+                "model.safetensors.index.json",
+                b"index",
+            ),
+            (NoteModelFileRole::Tokenizer, "tokenizer.json", b"tokenizer"),
+            (
+                NoteModelFileRole::TokenizerConfig,
+                "tokenizer_config.json",
+                b"tokenizer-config",
+            ),
+        ];
+        let total: u64 = files.iter().map(|(_, _, bytes)| bytes.len() as u64).sum();
+        let note = NoteModel {
+            id: "note-test-mlx".into(),
+            revision: revision.clone(),
+            title: "Test note model".into(),
+            detail: "A fixture MLX note-generation model.".into(),
+            download_bytes: total,
+            installed_bytes: total,
+            files: files
+                .iter()
+                .map(|(role, name, bytes)| NoteModelFile {
+                    role: *role,
+                    name: (*name).to_string(),
+                    url: format!("https://example.test/{revision}/{name}"),
+                    bytes: bytes.len() as u64,
+                    sha256: digest(bytes),
+                })
+                .collect(),
+        };
+        catalog.note_models.push(note.clone());
+        catalog.validate().unwrap();
+        note
+    }
+
+    fn write_installed_note_model(storage: &StorageRoot, entry: &NoteModel) -> PathBuf {
+        let directory = storage
+            .resolve(&note_model_relative_path(&entry.id, &entry.revision))
+            .unwrap();
+        create_private_dir(&directory).unwrap();
+        let contents: [(&str, &[u8]); 6] = [
+            ("config.json", b"note-config"),
+            ("model-00001-of-00002.safetensors", b"shard-0"),
+            ("model-00002-of-00002.safetensors", b"shard-1"),
+            ("model.safetensors.index.json", b"index"),
+            ("tokenizer.json", b"tokenizer"),
+            ("tokenizer_config.json", b"tokenizer-config"),
+        ];
+        for (name, bytes) in contents {
+            durable_create_new(&directory.join(name), bytes).unwrap();
+        }
+        durable_create_new(
+            &directory.join(INSTALL_RECEIPT_NAME),
+            &note_install_receipt_bytes(entry),
+        )
+        .unwrap();
+        directory
+    }
+
+    #[test]
+    fn verifies_and_activates_a_note_model_independently_of_the_transcript_model() {
+        let (_temp, storage, mut catalog) = fixture();
+        let note = push_note_fixture(&mut catalog);
+        let transcript = catalog.models[0].clone();
+
+        let transcript_directory = write_installed_model(&storage, &transcript);
+        activate_model(&storage, &transcript).unwrap();
+        let note_directory = write_installed_note_model(&storage, &note);
+        activate_note_model(&storage, &note).unwrap();
+
+        let installed_transcript = installed_model(&storage, &catalog).unwrap().unwrap();
+        assert_eq!(installed_transcript.directory, transcript_directory);
+        let installed_note = installed_note_model(&storage, &catalog).unwrap().unwrap();
+        assert_eq!(installed_note.entry.id, note.id);
+        assert_eq!(installed_note.directory, note_directory);
+        assert_eq!(installed_note.entry.files.len(), 6);
+        assert_ne!(installed_note.directory, installed_transcript.directory);
+
+        // Two independent pointer files: activating one model never moves the
+        // other's active receipt.
+        assert_eq!(
+            active_model(&storage, &catalog).unwrap().unwrap().id,
+            transcript.id
+        );
+        assert_eq!(
+            active_note_model(&storage, &catalog).unwrap().unwrap().id,
+            note.id
+        );
+    }
+
+    #[test]
+    fn refuses_changed_note_weights_and_unexpected_files() {
+        let (_temp, storage, mut catalog) = fixture();
+        let note = push_note_fixture(&mut catalog);
+        let directory = write_installed_note_model(&storage, &note);
+        assert!(verify_note_model_directory(&directory, &note).is_ok());
+
+        // Tampering with one shard of a multi-shard weight set is caught,
+        // exactly as a single-file whisper weight tamper is above.
+        fs::write(
+            directory.join("model-00002-of-00002.safetensors"),
+            b"tampered",
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_note_model_directory(&directory, &note),
+            Err(ModelStoreError::InvalidModel)
+        ));
+        fs::write(directory.join("model-00002-of-00002.safetensors"), b"shard-1").unwrap();
+        durable_create_new(&directory.join("extra"), b"unexpected").unwrap();
+        assert!(matches!(
+            verify_note_model_directory(&directory, &note),
+            Err(ModelStoreError::InvalidModel)
+        ));
+    }
+
+    #[test]
+    fn removes_only_an_inactive_note_model() {
+        let (_temp, storage, mut catalog) = fixture();
+        let note = push_note_fixture(&mut catalog);
+        let mut other = note.clone();
+        other.id = "note-test-mlx-alt".into();
+        other.revision = "d".repeat(40);
+        for file in &mut other.files {
+            file.url = format!("https://example.test/{}/{}", other.revision, file.name);
+        }
+        catalog.note_models.push(other.clone());
+        catalog.validate().unwrap();
+
+        let active_directory = write_installed_note_model(&storage, &note);
+        let other_directory = write_installed_note_model(&storage, &other);
+        activate_note_model(&storage, &note).unwrap();
+
+        assert!(note_model_is_stored(&storage, &note).unwrap());
+        assert!(note_model_is_stored(&storage, &other).unwrap());
+        assert!(matches!(
+            remove_inactive_note_model(&storage, &catalog, &note.id),
+            Err(ModelStoreError::ActiveModel)
+        ));
+        assert!(active_directory.exists());
+        assert!(remove_inactive_note_model(&storage, &catalog, &other.id).unwrap());
+        assert!(!other_directory.exists());
+        assert!(!remove_inactive_note_model(&storage, &catalog, &other.id).unwrap());
+    }
+
+    #[test]
+    fn a_catalog_without_the_note_models_key_still_deserializes_with_an_empty_list() {
+        // The exact bytes `worker/build_manifest.py::model_catalog()` writes,
+        // and `scripts/verify-release-bundle.py::verify_model_catalog` pins
+        // by deep equality, today — no `noteModels` key at all. Proves the
+        // additive field needs no change on either the Python builder or the
+        // release verifier for a branch that ships no note models, per
+        // `docs/note-runtime-decision.md` seam 6.
+        let raw = r#"{
+          "schema": "yawn-model-catalog/1",
+          "models": [
+            {
+              "id": "whisper-large-v3-turbo-q4",
+              "revision": "660c343bbf4e52ac257f0b7d952e5388e6f93bef",
+              "title": "Smaller download",
+              "detail": "A 4-bit local transcription model that uses about 464 MB.",
+              "downloadBytes": 463665005,
+              "installedBytes": 463665005,
+              "files": [
+                {"role": "config", "name": "config.json", "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/whisper-large-v3-turbo-q4/660c343bbf4e52ac257f0b7d952e5388e6f93bef/config.json", "bytes": 341, "sha256": "538e24557b8f9bc504700add5e7bbe32087c2353001ff563e64772ad4398671a"},
+                {"role": "weights", "name": "weights.npz", "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/whisper-large-v3-turbo-q4/660c343bbf4e52ac257f0b7d952e5388e6f93bef/weights.npz", "bytes": 463664664, "sha256": "862bbc832b05f3f4ec19dd632b701d61a6d3f5c7906360a10d72a79870642a80"}
+              ]
+            },
+            {
+              "id": "whisper-large-v3-turbo",
+              "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+              "title": "Full model",
+              "detail": "The full local Turbo transcription model, using about 1.61 GB.",
+              "downloadBytes": 1613977880,
+              "installedBytes": 1613977880,
+              "files": [
+                {"role": "config", "name": "config.json", "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/config.json", "bytes": 268, "sha256": "b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660ecb6379"},
+                {"role": "weights", "name": "weights.safetensors", "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/whisper-large-v3-turbo/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb/weights.safetensors", "bytes": 1613977612, "sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6"}
+              ]
+            }
+          ]
+        }"#;
+        let catalog: ModelCatalog = serde_json::from_str(raw).unwrap();
+        catalog.validate().unwrap();
+        assert_eq!(catalog.models.len(), 2);
+        assert!(catalog.note_models.is_empty());
+    }
+
+    #[test]
+    fn downloadable_view_is_generic_over_transcript_and_note_models() {
+        // Mechanical proof that `model_download.rs::install` can be reused
+        // unchanged once a note-model download caller exists: both model
+        // types satisfy `DownloadableModel` today, through the same trait,
+        // with no special-casing.
+        let (_temp, _storage, mut catalog) = fixture();
+        let note = push_note_fixture(&mut catalog);
+        let transcript = catalog.models[0].clone();
+
+        fn total_declared_bytes(model: &impl DownloadableModel) -> u64 {
+            model.files().iter().map(|file| file.bytes).sum()
+        }
+
+        assert_eq!(total_declared_bytes(&transcript), transcript.download_bytes());
+        assert_eq!(total_declared_bytes(&note), note.download_bytes());
+        assert_eq!(transcript.id(), transcript.id.as_str());
+        assert_eq!(note.revision(), note.revision.as_str());
     }
 }
