@@ -2796,6 +2796,61 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         assert!(verify_manifest(path, PROJECT_ROLE).is_ok());
     }
 
+    /// The canonicality rule has to be tested by breaking it, because every
+    /// manifest these tests write is produced by `canonical_manifest` and is
+    /// therefore canonical by construction. A blind mutation that deleted the
+    /// byte comparison outright survived the whole suite.
+    ///
+    /// This matters more than an ordinary missing case. Rust accepting a
+    /// non-canonical manifest that `worker/note_bridge.py` then refuses is a
+    /// cross-language divergence: the admission would succeed here and the
+    /// child would refuse at startup, reported as a bare transport failure.
+    #[test]
+    fn verify_manifest_refuses_a_semantically_identical_noncanonical_manifest() {
+        let fixture = launch_fixture("descriptor-binding");
+        let canonical = fs::read_to_string(&fixture.manifest_path).unwrap();
+        assert!(verify_manifest(&fixture.manifest_path, PROJECT_ROLE).is_ok());
+
+        // Same JSON, same fields, same order, same digests -- only the
+        // separator spelling differs, which is what `json.dumps` pins.
+        let compact = canonical.replace("\": \"", "\":\"");
+        assert_ne!(compact, canonical, "the perturbation must change the bytes");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&compact).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&canonical).unwrap(),
+            "and must not change the document"
+        );
+        private_file(&fixture.manifest_path, compact.as_bytes(), false);
+        assert!(verify_manifest(&fixture.manifest_path, PROJECT_ROLE).is_err());
+    }
+
+    /// The identifier bound is 128 characters. Nothing exercised it until a
+    /// blind mutation widened it to 4096 and the suite could not tell.
+    #[test]
+    fn verify_manifest_bounds_the_model_identifier_length() {
+        let fixture = launch_fixture("descriptor-binding");
+        let generator = fixture.generator();
+        let digest = fixture.pinned_models()[0].sha256.clone();
+        let path = &fixture.generate_manifest_path;
+
+        let at_bound = vec![RuntimeManifestModel {
+            id: "n".repeat(128),
+            sha256: digest.clone(),
+        }];
+        fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &at_bound);
+        assert!(
+            verify_manifest(path, GENERATE_ROLE).is_ok(),
+            "128 characters is inside the bound"
+        );
+
+        let past_bound = vec![RuntimeManifestModel {
+            id: "n".repeat(129),
+            sha256: digest,
+        }];
+        fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &past_bound);
+        assert!(verify_manifest(path, GENERATE_ROLE).is_err());
+    }
+
     #[test]
     fn verify_manifest_refuses_repeated_and_malformed_model_entries() {
         let fixture = launch_fixture("descriptor-binding");
