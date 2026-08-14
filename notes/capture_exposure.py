@@ -56,8 +56,15 @@ def capture_review_view(transcript: Transcript) -> Transcript:
             "a review that exposes every turn cannot be built around a withheld "
             "one. Resolve the withheld turns first."
         )
+    # A speaker prefix is shown only when the transcript distinguishes more
+    # than one speaker. An in-person capture lands every voice on the mic leg,
+    # so all turns read "Me" while half of them belong to the other person;
+    # printing that uniform label would assert an attribution the record does
+    # not carry.
+    distinct_speakers = {turn.speaker for turn in transcript.turns if turn.speaker}
+    prefix = len(distinct_speakers) > 1
     turns = [
-        Turn(text=(f"{turn.speaker}: {turn.text}" if turn.speaker else turn.text))
+        Turn(text=(f"{turn.speaker}: {turn.text}" if prefix and turn.speaker else turn.text))
         for turn in transcript.turns
     ]
     return Transcript(
@@ -200,6 +207,15 @@ def _self_test() -> int:
     assert all(
         turn.text.startswith(("Me: ", "Them: ")) for turn in view.turns
     ), "the review view must keep channel attribution visible"
+    uniform = Transcript(
+        source="capture exposure fixture", attribution="channel", turns=[
+            Turn(text="Both people share this leg.", speaker="Me"),
+            Turn(text="So a uniform label names nobody.", speaker="Me"),
+        ])
+    assert all(
+        not turn.text.startswith("Me: ")
+        for turn in capture_review_view(uniform).turns
+    ), "a single-speaker capture must not assert a per-person attribution"
     manifest = generate_manifest(view, STRATEGY_BROAD)
     events = [{
         "event_id": "draft-001", "kind": "DECISION",
