@@ -42,8 +42,8 @@ CLASSIFIER_CONTRACT_SCHEMA = "candidate-classifier-response/1"
 QMSUM_SPAN_SCHEMA = "qmsum-search-spans/1"
 REGISTERED_RUN_SCHEMA = "candidate-classifier-registration/1"
 CLASSIFIER_NUM_PREDICT_BASE = 32
-CLASSIFIER_NUM_PREDICT_PER_ITEM = 48
-CLASSIFIER_NUM_PREDICT_MAX = 2048
+CLASSIFIER_NUM_PREDICT_PER_ITEM = 96
+CLASSIFIER_NUM_PREDICT_MAX = 4096
 
 STRATEGY_BROAD = "broad"
 STRATEGY_CUE = "cue"
@@ -305,7 +305,7 @@ REGISTERED_RUN = {
         "batch_size": 32,
         "num_ctx": 16384,
         "temperature": 0.0,
-        "num_predict": "min(2048, 32 + 48 * candidates)",
+        "num_predict": "min(4096, 32 + 96 * candidates)",
     },
     "gates": {
         "fixture_agreement": 12,
@@ -1290,7 +1290,7 @@ def run_self_test() -> int:
         else:
             raise AssertionError(
                 f"invalid classifier token count was accepted: {invalid!r}")
-    assert classification_num_predict(32) == 1568
+    assert classification_num_predict(32) == 3104
 
     batch = candidate_batches(broad["candidates"], 3)[0]
     ids = [row["candidate_id"] for row in batch]

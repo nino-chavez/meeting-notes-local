@@ -2197,3 +2197,39 @@ The next sequence is fixed:
 A passing classifier result would authorize the fixed-cardinality label-and-claim
 experiment. It would not establish note usefulness, produce an accepted real-content
 encounter, or make the product ready for implementation, beta or general availability.
+
+### Pre-run amendment, 2026-08-14: the output bound was measured wrong and re-registered
+
+No registered ES2004c corpus call has run under any registration. Before the
+first one, the private-capture lane (`notes/capture_classifier.py`, same
+classifier contract, different corpus) made the first live call under the
+registered decoding options and was refused by the runner's own completion
+proof: gemma3:12b hit the 1,568-token output limit on a full 32-candidate
+batch.
+
+A single off-registration probe with the ceiling raised to 4,096 measured the
+truth. The pinned model (`f4031aab…`) completed the same batch cleanly —
+`done_reason: stop`, 32 unique candidate IDs, valid schema — at 2,401 output
+tokens: **75.0 tokens per item against the budgeted 48**, 1.47 characters per
+token, because 64-hex candidate IDs tokenize far below the repository's
+3.7-characters-per-token estimator. The registered run would have refused
+identically at batch 1 of 21. The estimator was conservative for prompt
+budgeting and anti-conservative for output budgeting; nothing had ever
+exercised the output side.
+
+The amendment changes exactly one formula:
+`num_predict = min(2048, 32 + 48 × candidates)` becomes
+`min(4096, 32 + 96 × candidates)` — measured 75 per item plus ~28% headroom.
+A full batch's ceiling becomes 3,104; the measured full-batch prompt of
+12,944 tokens plus that ceiling stays under the unchanged 16,384-token
+context. Model, digest, batch size, temperature, prompts, fixtures, schemas,
+gates, and every other registered value are untouched.
+
+The executable registration is therefore re-pinned from
+`cf377030002773496ce98c221a6f15120028e258bace236b2ba260e9175744e4` to
+`87526ad6f0b16f123f85e35f916d2bd13b2518b1027d2d0aac899ad2913223a8`, and every
+artifact binding the old digest — review references, decision exports,
+ledgers, and pending locks — must be regenerated and re-approved before use.
+The registered predictions above stand unchanged; prediction 4's runtime
+uncertainty now includes the measured fact that responses are ~2.4k tokens
+per full batch.
