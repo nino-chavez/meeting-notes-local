@@ -844,24 +844,26 @@ mod tests {
         );
     }
 
-    /// A lone surrogate is refused at the JSON layer, before any claim rule
-    /// runs -- and that is the only thing refusing it.
+    /// A lone surrogate never becomes a claim, because the escape never
+    /// parses.
     ///
-    /// `forbidden` covers Cc plus U+2028/U+2029. A lone surrogate is category
-    /// Cs, so it is outside that set on both sides of the boundary: measured,
-    /// Python's `json.loads` accepts `"\ud800"`, yields a one-character string
-    /// of category Cs, and the worker's `forbidden_in_claim` admits it.
+    /// `forbidden` covers Cc plus U+2028/U+2029, and a lone surrogate is
+    /// category Cs, so it is outside that set. Nothing in this module's claim
+    /// rules refuses one; `strict_json` does, at the JSON layer, before any
+    /// claim rule runs. That is what this test locks.
     ///
-    /// Two things currently stop that reaching a claim, and only one of them
-    /// is a rule. The worker emits with `ensure_ascii=False`, and encoding a
-    /// lone surrogate to UTF-8 raises rather than producing bytes. But the
-    /// escaped spelling is what a serializer flag away, and `json.dumps` with
-    /// `ensure_ascii=True` re-emits `"\ud800"` happily. So the emit-side
-    /// `ensure_ascii` pin is load-bearing for correctness here, not only for
-    /// the frame-size headroom it was pinned for.
+    /// The rule is enforced independently on the worker side, and the two
+    /// mechanisms are different: Rust cannot hold a surrogate in a `char` at
+    /// all, while Python can, so the worker names Cs in its own forbidden set
+    /// rather than inheriting a parser guarantee. Neither enforcement point
+    /// would move if the other changed, which is the same two-owner shape as
+    /// the locator cap.
     ///
-    /// This locks the Rust half: the escape never parses, so a claim can
-    /// never carry a surrogate however the far side spells it.
+    /// Deliberately no claim here about *how* the far side refuses. An
+    /// earlier version of this comment asserted the worker's mechanism and
+    /// was wrong on every count -- a cross-owner detail that can change
+    /// without this test noticing is exactly the stale-measurement failure
+    /// this suite exists to catch.
     #[test]
     fn a_lone_surrogate_escape_never_parses_into_a_claim() {
         for raw in [
