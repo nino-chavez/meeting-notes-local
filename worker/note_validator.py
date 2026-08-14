@@ -479,10 +479,13 @@ def generate(
     """Select note points from one pinned transcript and locate them here.
 
     The transcript is opened, digest-checked, and held open exactly as the
-    read-only paths do. `ask` is the injected model seam: it takes one fully
-    built classification request and returns the raw response. No note,
-    markdown, or product record is read or written, and the transcript's
-    identity is re-checked after classification, so a swap mid-run is caught.
+    read-only paths do. `ask` is the injected model seam: it takes one built
+    classification request and returns the raw response. The caller owns the
+    transport and may add transport-only fields to it — the bridge attaches the
+    verified model directory to every request — but nothing it adds is read
+    back here. No note, markdown, or product record is read or written, and the
+    transcript's identity is re-checked after classification, so a swap mid-run
+    is caught.
 
     What comes back is locators, not prose. Every point is an excerpt the
     transcript already holds; no claim text is synthesized here, because a

@@ -922,6 +922,15 @@ for request, ids in batches():
     answer(verdicts(ids, lambda index: "KEEP"))
 """
 
+# Reports the model directory it was handed. The real generator loads MLX-LM
+# from that path, and no other stub reads the field, so without this the one
+# protocol value seam 5 depends on would be unexercised.
+STUB_REPORTS_MODEL_DIRECTORY = STUB_PREAMBLE + """
+for request, ids in batches():
+    Path(MARKER).write_text(request.get("model_directory") or "absent")
+    answer(verdicts(ids, lambda index: "ABSTAIN"))
+"""
+
 
 MODEL_FILES = {"config.json": b"{}\n", "weights.npz": b"weights\n"}
 
@@ -990,7 +999,11 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         assertion rather than a claim about the failure code.
         """
         self.generator.unlink(missing_ok=True)
-        marked = f"from pathlib import Path\nPath({str(self.marker)!r}).write_text('ran')\n"
+        marked = (
+            "from pathlib import Path\n"
+            f"MARKER = {str(self.marker)!r}\n"
+            "Path(MARKER).write_text('ran')\n"
+        )
         private_file(self.generator, (marked + source).encode())
 
     def _write_model_tree(self, files: dict[str, bytes]) -> None:
@@ -1203,6 +1216,34 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         finally:
             bridge.close()
         self.assertEqual(bridge._process.returncode, 2)
+
+    def test_missing_transcript_refuses_without_loading_the_model(self) -> None:
+        """Nothing before the first batch needs a model, so none is loaded."""
+        (
+            self.root / "meetings" / self.meeting_id / "transcript"
+            / f"{self.transcript_id}.json"
+        ).unlink()
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"], {
+            "code": "artifact-missing",
+            "recoverable": True,
+            "receipt": {},
+        })
+        # A multi-gigabyte model load in front of a refusal the model was never
+        # needed for would also have spent the run's whole deadline.
+        self.assertFalse(self.marker.exists())
+
+    def test_verified_model_directory_reaches_the_child(self) -> None:
+        self._write_generator(STUB_REPORTS_MODEL_DIRECTORY)
+        self._write_generate_manifest()
+        result, _, _, _ = self._run()
+        # Every candidate abstained, so there is no note; the point is the path.
+        self.assertEqual(result["failure"]["code"], "no-model-candidates")
+        self.assertEqual(
+            self.marker.read_text(), str(self.root / self.MODEL_DIRECTORY)
+        )
 
     def test_unpinned_model_file_refuses_before_the_generator_runs(self) -> None:
         (self.root / self.MODEL_DIRECTORY / "weights.npz").write_bytes(b"substituted\n")

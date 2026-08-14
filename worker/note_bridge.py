@@ -1165,39 +1165,43 @@ def _run_generation(
     session: _GeneratorSession | None = None
     receipt: dict = {}
     try:
-        try:
-            session = _GeneratorSession(
-                runtime.resources["generator"], model, arguments["deadline_s"]
-            )
-        except GeneratorRefused as exc:
-            require_identity()
-            _transcript_only(request_id, exc.code, exc.recoverable, {})
-            return 0
-        # One session, every batch. The model directory travels in the first
-        # request rather than on argv, so it never reaches a process listing.
-        first = [True]
-
+        # Spawned on the first batch, not before it. Everything ahead of that
+        # first request — opening the transcript, checking its digest, loading
+        # it, enumerating candidates — can refuse, and none of those refusals
+        # needs a model. Spawning eagerly would make a missing transcript pay a
+        # multi-gigabyte load, and spend the run's deadline on it, before
+        # answering a question the model was never required for.
         def ask(request: dict) -> str:
-            if first[0]:
-                request = {**request, "model_directory": model.path}
-                first[0] = False
-            return session.ask(request)
+            nonlocal session
+
+            if session is None:
+                session = _GeneratorSession(
+                    runtime.resources["generator"], model, arguments["deadline_s"]
+                )
+            # On every request, not just the first: the value is the same
+            # verified path each time, and a child that had to remember it from
+            # one earlier message is a contract that breaks quietly when the
+            # batching changes.
+            return session.ask({**request, "model_directory": model.path})
+
+        def session_receipt() -> dict:
+            return session.receipt() if session is not None else {}
 
         try:
             result = validator.generate(root_fd, arguments, ask=ask)
         except (validator.GenerationRefused, GeneratorRefused) as exc:
             require_identity()
-            _transcript_only(request_id, exc.code, exc.recoverable, session.receipt())
+            _transcript_only(request_id, exc.code, exc.recoverable, session_receipt())
             return 0
         except validator.ArtifactFailure as exc:
             require_identity()
-            _transcript_only(request_id, exc.code, exc.recoverable, session.receipt())
+            _transcript_only(request_id, exc.code, exc.recoverable, session_receipt())
             return 0
         except Exception:
             require_identity()
-            _transcript_only(request_id, "note2-validation-failed", False, session.receipt())
+            _transcript_only(request_id, "note2-validation-failed", False, session_receipt())
             return 0
-        receipt = session.receipt()
+        receipt = session_receipt()
         # The model may not have changed under the generator that read it.
         try:
             model.require_unchanged()

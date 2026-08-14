@@ -225,9 +225,18 @@ class DistributionToolingTests(unittest.TestCase):
             self.assertEqual(document["bridge"]["relative_path"], "note-bridge.py")
             self.assertEqual(document["validator"]["relative_path"], "note-validator.zip")
             with zipfile.ZipFile(root / "note-validator.zip") as archive:
+                # Order-sensitive on purpose: `verify_note_runtime` compares the
+                # namelist to `VALIDATOR_SOURCES` positionally, so a module may
+                # be appended but never reordered.
                 self.assertEqual(
                     archive.namelist(),
-                    ["note_validator.py", "summarize.py", "transcript.py", "capture_health.py"],
+                    [
+                        "note_validator.py",
+                        "summarize.py",
+                        "transcript.py",
+                        "capture_health.py",
+                        "candidate_first.py",
+                    ],
                 )
 
     def test_bundle_contract_excludes_unadmitted_note_project_runtime(self) -> None:
