@@ -1199,6 +1199,11 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "transcript-only")
         self.assertIsNone(result["generation"])
         self.assertEqual(result["failure"]["code"], "keep-budget-exceeded")
+        # It tripped on accumulated keeps, not on the first batch failing for
+        # some other reason. The fixture is sized against `REGISTERED_RUN`'s
+        # keep budget and batch size; both would need revisiting if either
+        # number moves.
+        self.assertGreaterEqual(result["failure"]["receipt"]["responses"], 2)
 
     def test_generator_carrying_project_manifest_is_still_refused(self) -> None:
         self._write_generate_manifest(role="project")
