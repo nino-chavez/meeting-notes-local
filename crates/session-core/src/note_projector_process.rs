@@ -2851,6 +2851,113 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         assert!(verify_manifest(path, GENERATE_ROLE).is_err());
     }
 
+    /// An identifier is a name, not a path. This is the narrower-than-the-
+    /// bridge rule I asserted to the worker side as a contract, and until a
+    /// second mutation round widened the charset to admit `.` and `/`, the
+    /// only test touching it used a space -- a character both sides reject.
+    /// The claim was untested at exactly the point where the two sides differ.
+    #[test]
+    fn verify_manifest_refuses_path_shaped_model_identifiers() {
+        let fixture = launch_fixture("descriptor-binding");
+        let generator = fixture.generator();
+        let digest = fixture.pinned_models()[0].sha256.clone();
+        let path = &fixture.generate_manifest_path;
+        for identifier in [
+            "note.generator",
+            "note/generator",
+            "../generator",
+            "note generator",
+        ] {
+            let models = vec![RuntimeManifestModel {
+                id: identifier.into(),
+                sha256: digest.clone(),
+            }];
+            fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &models);
+            assert!(
+                verify_manifest(path, GENERATE_ROLE).is_err(),
+                "{identifier} is not a name"
+            );
+        }
+        let models = vec![RuntimeManifestModel {
+            id: "note-generator_weights2".into(),
+            sha256: digest,
+        }];
+        fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &models);
+        assert!(
+            verify_manifest(path, GENERATE_ROLE).is_ok(),
+            "the bound must not be so tight it rejects a plain name"
+        );
+    }
+
+    /// A pinned set that two catalog entries both provide names no single
+    /// model, so admission refuses rather than picking one. The fixture
+    /// carries a single model, so nothing could exercise this until a
+    /// mutation deleted the check and the suite could not tell.
+    #[test]
+    fn admission_refuses_a_pinned_set_two_catalog_entries_both_provide() {
+        let fixture = generative_fixture("descriptor-binding");
+        assert!(fixture.is_admitted());
+
+        let mut ambiguous = fixture.catalog.clone();
+        let mut twin = ambiguous.models[0].clone();
+        twin.id = "note-generator-twin".into();
+        twin.revision = "c".repeat(40);
+        for file in &mut twin.files {
+            file.url = format!("https://example.test/{}/{}", twin.revision, file.name);
+        }
+        ambiguous.models.push(twin);
+        ambiguous.validate().expect("two entries may share digests");
+
+        assert!(
+            admitted_process_projector(
+                &fixture.storage,
+                &ambiguous,
+                &fixture.manifest_path,
+                &fixture.generate_manifest_path,
+            )
+            .is_none(),
+            "an ambiguous pin is refused, never resolved by position"
+        );
+    }
+
+    /// Admission verifies the manifest it will actually hand the child, not
+    /// only the one it read the pin from. A verified generator and a verified
+    /// model do not authorize a project manifest that no longer checks out.
+    #[test]
+    fn admission_refuses_when_the_project_manifest_does_not_verify() {
+        let fixture = generative_fixture("descriptor-binding");
+        assert!(fixture.is_admitted());
+        fs::remove_file(&fixture.manifest_path).unwrap();
+        assert!(!fixture.is_admitted());
+        assert_eq!(
+            fixture.admit().project(&request()),
+            Err(ProjectTransportError::Unavailable)
+        );
+    }
+
+    /// A manifest resource path may not climb out of the resource root. The
+    /// charset alone admits `..`, so the component check is the whole of the
+    /// rule; the target here is a real file outside the root, so the test
+    /// witnesses that check rather than a failed open.
+    #[test]
+    fn verify_manifest_refuses_a_resource_path_that_climbs_out_of_the_root() {
+        let fixture = launch_fixture("descriptor-binding");
+        let outside = fixture.resources.parent().unwrap().join("note-bridge.py");
+        private_file(&outside, LAUNCH_FIXTURE_BRIDGE.as_bytes(), false);
+
+        let [runtime, _, validator] = fixture.manifest_resources();
+        let climbing = RuntimeManifestResource {
+            relative_path: "../note-bridge.py".into(),
+            sha256: format!("{:x}", Sha256::digest(LAUNCH_FIXTURE_BRIDGE.as_bytes())),
+        };
+        private_file(
+            &fixture.manifest_path,
+            canonical_manifest(PROJECT_ROLE, &runtime, &climbing, &validator, None, &[]).as_bytes(),
+            false,
+        );
+        assert!(verify_manifest(&fixture.manifest_path, PROJECT_ROLE).is_err());
+    }
+
     #[test]
     fn verify_manifest_refuses_repeated_and_malformed_model_entries() {
         let fixture = launch_fixture("descriptor-binding");
