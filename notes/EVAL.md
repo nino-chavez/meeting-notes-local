@@ -2477,3 +2477,45 @@ Falsifier unchanged: recall below 11/13 on this view fails ship-gate
 condition 1 for this pin and reopens the runtime choice. If the constrained
 arm passes as diagnostic, the official gated run re-runs it under a fresh
 operator-approved lock before anything merges.
+
+### Constrained-verdict result — pin falsified on keep calibration
+
+The constrained transport worked exactly as registered: all six batches
+decoded strictly, 165 of 165 decisions (prediction 1 held). The verdicts did
+not: **keep 165 of 165, abstain 0**. Recall "13/13" is vacuous — a classifier
+that keeps everything recalls everything and selects nothing — and the keep
+gate fails at 2.6x the 64 budget, so this pin fails ship-gate condition 4.
+
+A margin probe on batch 1 rules out the comparison as the artifact: the
+first-token logit gap and the full teacher-forced sequence-logprob gap agree
+on every candidate (disagreement 0/32), KEEP wins 32/32 with min +6.375,
+median +10.75, max +12.5 nats, and no candidate comes within 1 nat. The
+model is not near a boundary being tipped by tokenization; the quantized
+weights are certain.
+
+The comparison that matters: ollama's `gemma3:12b` — the same nominal QAT
+weight family — abstained on 19% of these candidates (keep 133/165) on the
+same view at the same temperature. The MLX 4-bit QAT conversion abandons
+abstention wholesale. Conclusion for the record: **quantization artifact
+identity, not weight-family identity, is a behavioral variable.** A model
+pin must name the exact artifact measured; "same weights, different
+quantizer" is a different model.
+
+### Preregistration — higher-precision quantization arm
+
+Per the runtime decision doc's ordered fallback ("a different quantization
+of the same weights" before "a different model family"): next arm is
+`mlx-community/gemma-3-12b-it-8bit`, digest pinned after download, same
+constrained-verdict transport, same ±2 view, temperature zero.
+
+Registered predictions:
+
+1. Strict decode 165/165 — transport property, carries over.
+2. Directional keep prediction: 8-bit abstains on some candidates
+   (keep < 165). This is the discriminator: if 8-bit also keeps everything,
+   quantization precision is exonerated and the divergence is in the MLX
+   prompt assembly (chat-template rendering vs ollama's template), which
+   becomes the next preregistered investigation before any further model
+   download.
+3. Ship falsifier unchanged: recall < 11/13 on this view, or keep > 64,
+   fails the pin.
