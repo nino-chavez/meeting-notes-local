@@ -844,6 +844,49 @@ mod tests {
         );
     }
 
+    /// A lone surrogate is refused at the JSON layer, before any claim rule
+    /// runs -- and that is the only thing refusing it.
+    ///
+    /// `forbidden` covers Cc plus U+2028/U+2029. A lone surrogate is category
+    /// Cs, so it is outside that set on both sides of the boundary: measured,
+    /// Python's `json.loads` accepts `"\ud800"`, yields a one-character string
+    /// of category Cs, and the worker's `forbidden_in_claim` admits it.
+    ///
+    /// Two things currently stop that reaching a claim, and only one of them
+    /// is a rule. The worker emits with `ensure_ascii=False`, and encoding a
+    /// lone surrogate to UTF-8 raises rather than producing bytes. But the
+    /// escaped spelling is what a serializer flag away, and `json.dumps` with
+    /// `ensure_ascii=True` re-emits `"\ud800"` happily. So the emit-side
+    /// `ensure_ascii` pin is load-bearing for correctness here, not only for
+    /// the frame-size headroom it was pinned for.
+    ///
+    /// This locks the Rust half: the escape never parses, so a claim can
+    /// never carry a surrogate however the far side spells it.
+    #[test]
+    fn a_lone_surrogate_escape_never_parses_into_a_claim() {
+        for raw in [
+            br#"{"a":"\ud800"}"#.as_slice(),
+            br#"{"a":"\udfff"}"#.as_slice(),
+            br#"{"a":"\ud800\ud800"}"#.as_slice(),
+        ] {
+            assert!(
+                strict_json(raw).is_err(),
+                "a lone surrogate must not parse: {}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+        // A well-formed pair is legal and must still parse, so the rule above
+        // is refusing the surrogate rather than the escape syntax.
+        let paired = strict_json(br#"{"a":"\ud83d\ude00"}"#).expect("a valid pair parses");
+        match paired {
+            StrictJson::Object(entries) => match &entries[0].1 {
+                StrictJson::String(value) => assert_eq!(value, "\u{1F600}"),
+                _ => panic!("expected a string"),
+            },
+            _ => panic!("expected an object"),
+        }
+    }
+
     /// An over-large frame is a transport refusal, not a capacity refusal.
     /// `projection-capacity-exceeded` is the child's structured refusal inside
     /// a small frame; a frame too large to read carries no such claim.
