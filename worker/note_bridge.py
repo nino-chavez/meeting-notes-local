@@ -1017,6 +1017,16 @@ def _read_frame(parent_fd: int | None) -> bytes:
 
 
 def _emit(value: dict) -> None:
+    """Write one outbound frame. `ensure_ascii=False` is contract, not taste.
+
+    Every frame this bridge writes goes through here, and the spelling is load
+    bearing rather than cosmetic. A ``backslash-u`` escape costs six bytes per
+    non-ASCII scalar against a fixed 64 KiB frame, so the same legal projection
+    can fit unescaped and overflow escaped — measured on the shared fixture's
+    worst legal case at 65,236 bytes against 95,956. The manifest already pins
+    this spelling and Rust refuses a backslash in it outright; the result frame
+    has no such parser-side guard, so the guarantee has to live at the writer.
+    """
     encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if len(encoded) + 1 > MAX_FRAME_BYTES:
         raise BridgeRefused("bridge frame exceeds its limit")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import select
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest import mock
 import uuid
@@ -20,8 +22,10 @@ from worker.note_validator import ArtifactFailure
 from worker.note_validator import inspect as inspect_snapshot
 from worker.note_validator import project as project_snapshot
 from worker.note_bridge import (
+    MAX_FRAME_BYTES,
     BridgeRefused,
     InvalidArguments,
+    _emit,
     _parse_command,
     _watch_parent_pid,
     verify_descriptor_runtime,
@@ -834,6 +838,15 @@ class NoteProjectBridgeTests(unittest.TestCase):
             "recoverable": False,
         })
         self.assertIsNone(result["projection"])
+        # The refusal is what reached the pipe, so the over-large frame was
+        # measured and discarded before any write. That ordering is what the
+        # Rust transport depends on: an oversized frame arriving instead would
+        # refuse as a content-free `Unavailable` and abort the whole library
+        # rebuild naming the wrong cause.
+        self.assertLess(
+            len(json.dumps(result, separators=(",", ":")).encode() + b"\n"),
+            MAX_FRAME_BYTES,
+        )
 
 
 # Stub classifiers stand in for the MLX-LM child. They are ordinary
@@ -1318,6 +1331,61 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(result["failure"]["code"], "invalid-request")
         self.assertFalse(self.marker.exists())
 
+
+
+class FrameSerializationContractTests(unittest.TestCase):
+    """`ensure_ascii=False` on every outbound frame is a size contract."""
+
+    def _emitted(self, value: dict) -> bytes:
+        stream = io.BytesIO()
+        holder = types.SimpleNamespace(buffer=stream)
+        with mock.patch.object(sys, "stdout", holder):
+            _emit(value)
+        return stream.getvalue()
+
+    def _non_ascii_frame(self) -> tuple[dict, str]:
+        """A result frame carrying the fixture's own non-ASCII text.
+
+        Worth stating plainly: the shared fixture has exactly one non-ASCII
+        string, `transcript_turns[3]`, and no result frame in it carries any.
+        So the cross-language fixture never exercises a non-ASCII *frame* —
+        which is why the escaping cost went unnoticed on both sides. This
+        borrows that text into a claim to exercise the writer; no validation
+        runs on it, because the serializer is what is under test.
+        """
+        fixture = json.loads(
+            (REPO / "tests/fixtures/note-projection-v1.fixture").read_text(encoding="utf-8")
+        )
+        text = fixture["transcript_turns"][3]
+        result = fixture["valid_results"][1]["result"]
+        result["projection"]["claims"][4]["claim"] = text
+        return result, text
+
+    def test_non_ascii_frames_are_written_raw_and_never_escaped(self) -> None:
+        result, text = self._non_ascii_frame()
+        self.assertTrue(any(ord(character) > 127 for character in text))
+        frame = self._emitted(result)
+        # The escape is what costs six bytes per scalar against a fixed frame.
+        self.assertNotIn(b"\\u", frame)
+        self.assertIn(text.encode("utf-8"), frame)
+        self.assertEqual(json.loads(frame.decode("utf-8")), result)
+
+    def test_escaping_the_same_frame_would_inflate_it(self) -> None:
+        """The contract is load bearing, not cosmetic — measure the delta."""
+        result, _ = self._non_ascii_frame()
+        raw = len(self._emitted(result))
+        escaped = len(
+            json.dumps(result, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
+        )
+        self.assertGreater(escaped, raw)
+
+    def test_a_frame_over_the_limit_raises_instead_of_writing_a_partial(self) -> None:
+        oversized = {"schema": "note-bridge-result/1", "pad": "x" * (MAX_FRAME_BYTES + 1)}
+        stream = io.BytesIO()
+        holder = types.SimpleNamespace(buffer=stream)
+        with mock.patch.object(sys, "stdout", holder), self.assertRaises(BridgeRefused):
+            _emit(oversized)
+        self.assertEqual(stream.getvalue(), b"")
 
 if __name__ == "__main__":
     unittest.main()
