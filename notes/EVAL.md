@@ -2437,3 +2437,43 @@ different model family — each its own preregistered arm, not silent
 retries). A content-controlled diagnostic runs before any official gated
 run, so an operator approval cycle is spent only on a configuration the
 diagnostic predicts will pass.
+
+### MLX diagnostic, unconstrained emission — transport failure, not a weights measurement
+
+The first MLX diagnostics (gemma-3-12b-it-qat-4bit, ±2 window view, temp 0,
+mlx-lm 0.30.4) never measured the weights. Unconstrained generation emitted
+fenced JSON in a self-invented shape (a bare list keyed `classification`);
+strict registered decoding refused all six batches. A measured shape adapter
+recovered three batches — and each recovered batch kept 32 of 32 candidates.
+The other three batches refused even adapted. Face-value tally (decisions 96
+of 165, keep 96, "recall 11/13") is a keep-everything artifact: a transport
+that keeps whatever it parses recalls events with no selectivity at all, and
+blows the 64-keep gate while measuring nothing. Conclusion: ollama's
+registered `response_format` was doing load-bearing enforcement, and format
+constraint is a required transport property, not serialization detail.
+
+### Preregistration amendment — constrained-verdict MLX transport
+
+The next diagnostic replaces free generation with a constrained decoder built
+on plain mlx-lm APIs (no new packages; runtime identity unchanged): the
+response JSON is assembled deterministically in the registered shape and
+offered order, and the model contributes exactly one greedy binary choice per
+candidate — KEEP vs ABSTAIN — scored at the verdict position with the full
+prompt and all prior forced tokens in context. This is the ollama
+`response_format` grammar tightened to its decision content: order and shape
+become exact by construction (registered decode's canonicalization becomes a
+no-op), and duplicates, drops, and unknown locators become impossible.
+
+Registered predictions, before any constrained token is scored:
+
+1. All six batches decode strictly; decisions = 165 of 165.
+2. Keep count: no prediction — calibration across transports is exactly what
+   this arm measures (unconstrained QAT kept 100% where it parsed; ollama
+   kept 81% on this view).
+3. Recall: the standing prediction from the arm preregistration (10–12 of 13,
+   ev-011 in the miss-set) carries over unchanged.
+
+Falsifier unchanged: recall below 11/13 on this view fails ship-gate
+condition 1 for this pin and reopens the runtime choice. If the constrained
+arm passes as diagnostic, the official gated run re-runs it under a fresh
+operator-approved lock before anything merges.
