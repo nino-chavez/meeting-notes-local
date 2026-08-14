@@ -195,20 +195,35 @@ pub struct DownloadableFile<'a> {
 ///
 /// `install()` itself is not generified by this trait on this branch — no
 /// caller downloads a note model yet (that lands with the note-download
-/// command, out of scope here). This trait, and its impls for both model
-/// types below (exercised by `downloadable_view_is_generic_over_transcript_and_note_models`
-/// in tests), is the proof that reuse is mechanical when that caller exists:
-/// the only change `install()` needs is its parameter type, from
-/// `&TranscriptModel` to `&impl DownloadableModel`; the function body reads
-/// `model.id`, `model.revision`, `model.download_bytes`, and `model.files`
-/// today and would read `model.id()`, `model.revision()`,
-/// `model.download_bytes()`, and `model.files()` unchanged in every other
-/// respect.
+/// command, out of scope here). But every call `install()`'s body makes that
+/// differs by model kind is covered by a method here, so the claim that it
+/// is reusable is verified by the impls and `downloadable_model_reuse_is_verified_not_assumed`
+/// (in tests) below rather than merely asserted:
+///
+/// - the download loop itself (streaming, byte-exactness, digest-per-file)
+///   reads only `id`, `revision`, `download_bytes`, and `files` — already
+///   kind-agnostic before this trait existed;
+/// - `install_receipt_bytes(model)` → `model.receipt_bytes()`;
+/// - `verify_model_directory(&staging, model)` → `model.verify_directory(&staging)`;
+/// - `activate_model(storage, model)` → `model.activate(storage)`;
+/// - the hardcoded `models/{id}/{revision}` staging path → `model.relative_path()`.
+///
+/// With those five substitutions, `install()`'s body is unchanged line for
+/// line; only its parameter type moves from `&TranscriptModel` to
+/// `&impl DownloadableModel`.
 pub trait DownloadableModel {
     fn id(&self) -> &str;
     fn revision(&self) -> &str;
     fn download_bytes(&self) -> u64;
     fn files(&self) -> Vec<DownloadableFile<'_>>;
+    /// Where this model installs, relative to the storage root.
+    fn relative_path(&self) -> PathBuf;
+    /// The install-receipt bytes to write once every file's digest is confirmed.
+    fn receipt_bytes(&self) -> Vec<u8>;
+    /// Verifies an installed (or freshly staged) directory against this entry.
+    fn verify_directory(&self, directory: &Path) -> Result<(), ModelStoreError>;
+    /// Marks this model the active one of its own kind.
+    fn activate(&self, storage: &StorageRoot) -> Result<(), ModelStoreError>;
 }
 
 impl DownloadableModel for TranscriptModel {
@@ -232,6 +247,18 @@ impl DownloadableModel for TranscriptModel {
             })
             .collect()
     }
+    fn relative_path(&self) -> PathBuf {
+        Path::new("models").join(&self.id).join(&self.revision)
+    }
+    fn receipt_bytes(&self) -> Vec<u8> {
+        install_receipt_bytes(self)
+    }
+    fn verify_directory(&self, directory: &Path) -> Result<(), ModelStoreError> {
+        verify_model_directory(directory, self)
+    }
+    fn activate(&self, storage: &StorageRoot) -> Result<(), ModelStoreError> {
+        activate_model(storage, self)
+    }
 }
 
 impl DownloadableModel for NoteModel {
@@ -254,6 +281,18 @@ impl DownloadableModel for NoteModel {
                 sha256: &file.sha256,
             })
             .collect()
+    }
+    fn relative_path(&self) -> PathBuf {
+        note_model_relative_path(&self.id, &self.revision)
+    }
+    fn receipt_bytes(&self) -> Vec<u8> {
+        note_install_receipt_bytes(self)
+    }
+    fn verify_directory(&self, directory: &Path) -> Result<(), ModelStoreError> {
+        verify_note_model_directory(directory, self)
+    }
+    fn activate(&self, storage: &StorageRoot) -> Result<(), ModelStoreError> {
+        activate_note_model(storage, self)
     }
 }
 
@@ -477,9 +516,19 @@ impl ModelCatalog {
                     .checked_add(file.bytes)
                     .ok_or(ModelStoreError::InvalidCatalogEntry)?;
             }
+            // A sharded weight set (more than one `Weights` file) requires
+            // exactly one index, matching the doc comment on
+            // `NoteModelFileRole`: `mlx_lm.load` needs the index to map
+            // tensors across shards, and a single-file model has no shards
+            // for an index to describe.
+            let index_matches_sharding = if weights_count > 1 {
+                weights_index_count == 1
+            } else {
+                weights_index_count == 0
+            };
             if config_count != 1
                 || weights_count == 0
-                || weights_index_count > 1
+                || !index_matches_sharding
                 || tokenizer_count > 1
                 || tokenizer_config_count > 1
                 || installed_bytes != model.installed_bytes
@@ -1312,5 +1361,65 @@ mod tests {
         assert_eq!(total_declared_bytes(&note), note.download_bytes());
         assert_eq!(transcript.id(), transcript.id.as_str());
         assert_eq!(note.revision(), note.revision.as_str());
+    }
+
+    #[test]
+    fn downloadable_model_reuse_is_verified_not_assumed() {
+        // Drives one generic function through the exact sequence
+        // `model_download.rs::install`'s body follows — resolve the staging
+        // path, write every file, write the receipt, verify the directory,
+        // activate — for a `TranscriptModel` and a `NoteModel` alike, using
+        // only `DownloadableModel` methods. This is what makes the trait's
+        // doc comment a verified claim rather than an asserted one: nothing
+        // here special-cases either model kind.
+        let (_temp, storage, mut catalog) = fixture();
+        let note = push_note_fixture(&mut catalog);
+        let transcript = catalog.models[0].clone();
+
+        fn install_like<M: DownloadableModel>(
+            storage: &StorageRoot,
+            model: &M,
+            files: &[(&str, &[u8])],
+        ) {
+            let directory = storage.resolve(&model.relative_path()).unwrap();
+            create_private_dir(&directory).unwrap();
+            for (name, bytes) in files {
+                durable_create_new(&directory.join(name), bytes).unwrap();
+            }
+            durable_create_new(&directory.join(INSTALL_RECEIPT_NAME), &model.receipt_bytes())
+                .unwrap();
+            model.verify_directory(&directory).unwrap();
+            model.activate(storage).unwrap();
+        }
+
+        install_like(
+            &storage,
+            &transcript,
+            &[
+                ("config.json", b"config"),
+                ("weights.npz", b"weights"),
+            ],
+        );
+        install_like(
+            &storage,
+            &note,
+            &[
+                ("config.json", b"note-config"),
+                ("model-00001-of-00002.safetensors", b"shard-0"),
+                ("model-00002-of-00002.safetensors", b"shard-1"),
+                ("model.safetensors.index.json", b"index"),
+                ("tokenizer.json", b"tokenizer"),
+                ("tokenizer_config.json", b"tokenizer-config"),
+            ],
+        );
+
+        assert_eq!(
+            active_model(&storage, &catalog).unwrap().unwrap().id,
+            transcript.id
+        );
+        assert_eq!(
+            active_note_model(&storage, &catalog).unwrap().unwrap().id,
+            note.id
+        );
     }
 }
