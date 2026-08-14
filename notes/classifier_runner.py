@@ -427,8 +427,14 @@ def validate_review_artifact_promotion(
     ledger: dict,
     *,
     enforce_registered: bool = True,
+    coordinates: list[dict] | None = None,
 ) -> dict:
-    """Re-run the canonical review validators and require exact promotion."""
+    """Re-run the canonical review validators and require exact promotion.
+
+    Coordinates default to the registered QMSum raw-row derivation. A private
+    capture lane supplies its own identity coordinates; every validator
+    downstream of that derivation is unchanged.
+    """
     reference, reference_bytes = _load_json(
         reference_path,
         "candidate exposure review reference",
@@ -437,7 +443,8 @@ def validate_review_artifact_promotion(
         decisions_path,
         "candidate exposure review decisions",
     )
-    coordinates = qmsum_coordinates(corpus_path, transcript)
+    if coordinates is None:
+        coordinates = qmsum_coordinates(corpus_path, transcript)
     source = reference.get("source")
     if not isinstance(source, dict):
         raise StructuredOutputError("candidate exposure reference source is malformed")
@@ -499,6 +506,7 @@ def load_locked_review_preflight(
     approved_lock_sha256: str | None,
     *,
     enforce_registered: bool = True,
+    coordinates: list[dict] | None = None,
 ) -> tuple[dict, dict, dict, dict]:
     """Finish all review and packet gates before model transport is resolved."""
     ledger, lock, ledger_binding = load_operator_locked_ledger(
@@ -515,6 +523,7 @@ def load_locked_review_preflight(
         manifest,
         ledger,
         enforce_registered=enforce_registered,
+        coordinates=coordinates,
     )
     ledger_binding = {
         **ledger_binding,

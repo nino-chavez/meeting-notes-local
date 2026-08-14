@@ -41,7 +41,7 @@ from candidate_first import (
     generate_manifest,
     registered_run_sha256,
 )
-from capture_exposure import capture_review_view
+from capture_exposure import capture_review_view, identity_coordinates
 from classifier_runner import (
     CORPUS_CALL,
     ELAPSED_LIMIT_SECONDS,
@@ -169,6 +169,7 @@ def run_capture_classifier(
         manifest,
         approved_lock_sha256,
         enforce_registered=False,
+        coordinates=identity_coordinates(view),
     )
     deterministic_controls = deterministic_sabotage_controls()
 
@@ -362,6 +363,101 @@ def _self_test() -> int:
         pass
     else:
         raise AssertionError("an over-limit keep count was accepted")
+
+    # The one seam that differs from the registered lane — preflight with
+    # identity coordinates on a capture-shaped corpus — is exercised end to
+    # end: fixture corpus file, reference, decisions, ledger, and approved
+    # lock, through load_locked_review_preflight itself.
+    import hashlib as _hashlib
+    import json as _json
+    import tempfile
+
+    from candidate_exposure import (
+        build_pending_ledger_lock,
+        build_runner_ledger,
+        create_reference,
+        validate_review_decisions,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
+        corpus_file = tmpdir / "transcript.json"
+        corpus_file.write_text(_json.dumps({
+            "source": "capture classifier preflight fixture",
+            "attribution": "channel",
+            "turns": [
+                {"text": turn.text, "speaker": turn.speaker}
+                for turn in fixture.turns
+            ],
+        }))
+        file_view = capture_review_view(load(corpus_file))
+        file_manifest = generate_manifest(file_view, STRATEGY_BROAD)
+        events = [{
+            "event_id": "draft-001", "kind": "DECISION",
+            "neutral_atomic_proposition": "The ship date is Friday.",
+            "type_specific": {"temporal_status": "PENDING_OPERATOR_REVIEW"},
+            "acceptable_candidate_ids": [
+                file_manifest["candidates"][0]["candidate_id"]],
+        }]
+        coordinates = identity_coordinates(file_view)
+        regions = {
+            "schema": "candidate-exposure-review-regions/1",
+            "coordinate_contract": {
+                "schema": "candidate-exposure-coordinate-contract/1",
+                "canonical_ordinals": "zero-based",
+                "character_spans": "zero-based half-open",
+                "display_labels": "one-based and noncanonical",
+                "review_region_ranges": "zero-based raw-turn ordinals, inclusive",
+            },
+            "regions": [],
+        }
+        reference = create_reference(
+            file_view, file_manifest, events,
+            corpus_sha256=_file_sha256(corpus_file),
+            coordinates=coordinates, regions=regions, section_size=2,
+            enforce_registered=False)
+        decisions = {
+            "schema": "candidate-exposure-review-decisions/2",
+            "reference_sha256": reference["reference_sha256"],
+            "registration_sha256": reference["source"]["registration_sha256"],
+            "events": [{
+                "event_id": "draft-001", "disposition": "ACCEPT",
+                "kind": "DECISION",
+                "neutral_atomic_proposition": "The ship date is Friday.",
+                "selected_bundle_sha256": [
+                    reference["events"][0]["evidence_bundles"][0]["bundle_sha256"]],
+                "ambiguity_reason": "", "notes": "",
+            }],
+            "sections": [
+                {"section_id": row["section_id"], "reviewed": True,
+                 "resolution": "NO_MISSING_EVENT", "notes": ""}
+                for row in reference["sections"]
+            ],
+        }
+        ledger = build_runner_ledger(
+            validate_review_decisions(decisions, reference), reference)
+        lock = build_pending_ledger_lock(
+            ledger, file_manifest, prepared_at="fixture")
+        reference_file = tmpdir / "reference.json"
+        decisions_file = tmpdir / "decisions.json"
+        ledger_file = tmpdir / "ledger.json"
+        lock_file = tmpdir / "lock.json"
+        reference_file.write_bytes(_json_bytes(reference))
+        decisions_file.write_bytes(_json_bytes(decisions))
+        ledger_file.write_bytes(_json_bytes(ledger))
+        lock_bytes = _json_bytes(lock)
+        lock_file.write_bytes(lock_bytes)
+        approved = _hashlib.sha256(lock_bytes).hexdigest()
+        loaded_ledger, _lock, binding, exposure = load_locked_review_preflight(
+            corpus_file, reference_file, decisions_file, ledger_file, lock_file,
+            file_view, file_manifest, approved,
+            enforce_registered=False,
+            coordinates=coordinates,
+        )
+        assert loaded_ledger["events"][0]["event_id"] == "draft-001"
+        assert exposure["all_bundles_packet_exposed"] is True
+        assert binding["review_artifacts"]["review_reference_sha256"] == (
+            reference["reference_sha256"])
 
     # Constructing the adapter performs no network operation by contract; the
     # protocol surface is checked structurally.
