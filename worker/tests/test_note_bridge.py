@@ -18,7 +18,8 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from worker.note_validator import ArtifactFailure
+from worker.note_validator import ArtifactFailure, GenerationRefused
+from worker.note_validator import locate_kept_candidates, validate_locators
 from worker.note_validator import inspect as inspect_snapshot
 from worker.note_validator import project as project_snapshot
 from worker.note_bridge import (
@@ -935,6 +936,13 @@ for request, ids in batches():
     answer(verdicts(ids, lambda index: "KEEP"))
 """
 
+# Answers with more bytes than one response is allowed to occupy.
+STUB_FLOODS_STDOUT = STUB_PREAMBLE + """
+for request, ids in batches():
+    sys.stdout.write("x" * (1024 * 1024 + 64) + chr(10))
+    sys.stdout.flush()
+"""
+
 # Reports the model directory it was handed. The real generator loads MLX-LM
 # from that path, and no other stub reads the field, so without this the one
 # protocol value seam 5 depends on would be unexercised.
@@ -1327,6 +1335,87 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         })
         self.assertFalse(self.marker.exists())
 
+    # Every test below was written after a blind mutation run: each weakens one
+    # check and the whole suite still passed. They cover the checks that had no
+    # witness, not the ones that looked risky.
+
+    def test_non_canonical_manifest_bytes_never_reach_ready(self) -> None:
+        """Same document, same field order, different indent — still refused."""
+        document = self._harness._manifest_document()
+        document["role"] = "generate"
+        document["generator"] = {
+            "relative_path": self.generator.name,
+            "sha256": digest(self.generator),
+        }
+        document["models"] = self._model_entries()
+        self.manifest.unlink(missing_ok=True)
+        private_file(
+            self.manifest, json.dumps(document, ensure_ascii=False, indent=4).encode()
+        )
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_manifest_carrying_a_json_escape_never_reaches_ready(self) -> None:
+        """Locks the behaviour; the escape check is not what currently enforces it.
+
+        Measured, because the first version of this test was believed to cover
+        the `b"\\\\" in raw` refusal and did not. Deleting that refusal leaves
+        this passing, and so does deleting it together with the resource
+        charset that looked like the backup — the manifest is refused because
+        no file of that name can be opened. Every string field the manifest has
+        today is either compared to a closed set or charset-constrained, so no
+        backslash can reach anywhere the escape check is the only guard. It is
+        defence in depth for a field that does not exist yet, and this test is
+        a behavioural lock rather than a witness for it.
+        """
+        document = self._harness._manifest_document()
+        document["role"] = "generate"
+        document["generator"] = {
+            "relative_path": f"{self.generator.name}\nsecond-line",
+            "sha256": digest(self.generator),
+        }
+        document["models"] = self._model_entries()
+        self._harness._write_manifest(document)
+        self.assertIn(b"\\", self.manifest.read_bytes())
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_group_writable_model_directory_refuses(self) -> None:
+        (self.root / self.MODEL_DIRECTORY).chmod(0o770)
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"]["code"], "model-unavailable")
+        self.assertFalse(self.marker.exists())
+
+    def test_model_id_outside_the_shared_charset_never_reaches_ready(self) -> None:
+        """A dot passes a path check and fails Rust's `valid_model_identifier`."""
+        entries = self._model_entries()
+        entries[0]["id"] = "note.generator.config"
+        self._write_generate_manifest(models=entries)
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_response_past_the_byte_cap_is_transcript_only(self) -> None:
+        self._write_generator(STUB_FLOODS_STDOUT)
+        self._write_generate_manifest()
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"]["code"], "response-length-truncation")
+
     def test_generate_command_may_not_name_a_note(self) -> None:
         with self.assertRaises(InvalidArguments):
             _parse_command(
@@ -1403,6 +1492,96 @@ class FrameSerializationContractTests(unittest.TestCase):
         with mock.patch.object(sys, "stdout", holder), self.assertRaises(BridgeRefused):
             _emit(oversized)
         self.assertEqual(stream.getvalue(), b"")
+
+
+class EvidenceRuleTests(unittest.TestCase):
+    """The note/2 locator rule, exercised directly.
+
+    A blind mutation run widened the cap to 1..32 and dropped the sorted and
+    duplicate checks, and every test still passed: the generate path emits one
+    locator per point and every stored fixture is already well formed, so
+    nothing in either lane supplied a locator set the rule was supposed to
+    reject. These tests supply them.
+
+    Deliberately unit tests rather than fixture rows. The same rule is enforced
+    in `note_projection.rs`, and the shared fixture is the right place for
+    cross-language parity — but it is indexed positionally by two suites, so it
+    is being widened once, after both branches land.
+    """
+
+    TURNS = ("Alpha beta gamma delta.", "Epsilon zeta eta theta.")
+
+    def _transcript(self):
+        from transcript import load_bytes
+
+        document = {
+            "schema": "file-transcript/1",
+            "source": "synthetic evidence-rule control; not product evidence",
+            "attribution": "none",
+            "turns": [
+                {"text": text, "start": float(index + 1)}
+                for index, text in enumerate(self.TURNS)
+            ],
+        }
+        return load_bytes((json.dumps(document, indent=2) + "\n").encode(), source="rule")
+
+    def _reference(self, turn: int, start: int, end: int) -> dict:
+        text = self.TURNS[turn][start:end]
+        return {
+            "turn": turn,
+            "char_start": start,
+            "char_end": end,
+            "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        }
+
+    def test_a_well_formed_locator_set_passes(self) -> None:
+        transcript = self._transcript()
+        locators = validate_locators(
+            [self._reference(0, 0, 5), self._reference(1, 0, 7)], transcript
+        )
+        self.assertEqual(len(locators), 2)
+
+    def test_more_than_three_locators_is_refused(self) -> None:
+        transcript = self._transcript()
+        references = [
+            self._reference(0, 0, 5),
+            self._reference(0, 6, 10),
+            self._reference(0, 11, 16),
+            self._reference(1, 0, 7),
+        ]
+        with self.assertRaises(ArtifactFailure):
+            validate_locators(references, transcript)
+
+    def test_an_empty_locator_set_is_refused(self) -> None:
+        with self.assertRaises(ArtifactFailure):
+            validate_locators([], self._transcript())
+
+    def test_out_of_order_locators_are_refused(self) -> None:
+        transcript = self._transcript()
+        references = [self._reference(1, 0, 7), self._reference(0, 0, 5)]
+        with self.assertRaises(ArtifactFailure):
+            validate_locators(references, transcript)
+
+    def test_duplicate_locators_are_refused(self) -> None:
+        transcript = self._transcript()
+        references = [self._reference(0, 0, 5), self._reference(0, 0, 5)]
+        with self.assertRaises(ArtifactFailure):
+            validate_locators(references, transcript)
+
+    def test_a_digest_that_does_not_describe_the_span_is_refused(self) -> None:
+        transcript = self._transcript()
+        reference = self._reference(0, 0, 5)
+        reference["text_sha256"] = hashlib.sha256(b"something else").hexdigest()
+        with self.assertRaises(ArtifactFailure):
+            validate_locators([reference], transcript)
+
+    def test_a_candidate_from_another_transcript_view_is_refused(self) -> None:
+        """The view digest is the only thing tying candidates to this transcript."""
+        transcript = self._transcript()
+        manifest = {"transcript_view_sha256": "0" * 64}
+        with self.assertRaises(GenerationRefused) as caught:
+            locate_kept_candidates(manifest, [], transcript)
+        self.assertEqual(caught.exception.code, "citation-locator")
 
 if __name__ == "__main__":
     unittest.main()
