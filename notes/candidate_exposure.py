@@ -904,25 +904,39 @@ refresh();
 }})();</script>'''
 
 
+def _bundle_summary_excerpt(bundle: dict, limit: int = 110) -> str:
+    anchor_rows = [row for row in bundle["evidence"] if row["anchor"]]
+    text = (anchor_rows or bundle["evidence"])[0]["text"]
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    return html.escape(text)
+
+
 def _render_html(reference: dict, transcript: Transcript) -> str:
     event_html = []
     for event in reference["events"]:
-        evidence = []
-        checks = []
+        bundle_groups = []
         dom_id = f'cer-event-{event["event_sha256"][:12]}'
         for bundle_index, bundle in enumerate(event["evidence_bundles"], 1):
             bundle_id = f"{dom_id}-bundle-{bundle_index}"
-            checks.append(
-                f'<label class="form-check" for="{bundle_id}">'
+            rows = bundle["evidence"]
+            first, last = rows[0]["clean_turn_display"], rows[-1]["clean_turn_display"]
+            evidence = "".join(
+                f'<blockquote>{"<strong>Anchor — </strong>" if row["anchor"] else ""}'
+                f'Clean {row["clean_turn_display"]} / raw '
+                f'{row["raw_turn_display"]}: {html.escape(row["text"])}</blockquote>'
+                for row in rows)
+            bundle_groups.append(
+                f'<fieldset class="bundle-group">'
+                f'<legend><label class="form-check" for="{bundle_id}">'
                 f'<input id="{bundle_id}" type="checkbox" '
                 f'class="bundle form-check-input" '
                 f'value="{bundle["bundle_sha256"]}"> '
-                f'<span class="form-check-label">Bundle '
-                f'{bundle["bundle_sha256"][:10]}</span></label>')
-            for row in bundle["evidence"]:
-                evidence.append(
-                    f'<blockquote>Clean {row["clean_turn_display"]} / raw '
-                    f'{row["raw_turn_display"]}: {html.escape(row["text"])}</blockquote>')
+                f'<span class="form-check-label">Bundle {bundle_index} · '
+                f'anchor turn {bundle["anchor_clean_turn_display"]} · '
+                f'turns {first}–{last}</span></label></legend>'
+                f'<details><summary>{_bundle_summary_excerpt(bundle)}</summary>'
+                f'{evidence}</details></fieldset>')
         event_id = html.escape(event["event_id"])
         proposition = html.escape(event["neutral_atomic_proposition"])
         event_html.append(f'''
@@ -932,16 +946,14 @@ def _render_html(reference: dict, transcript: Transcript) -> str:
  <textarea id="{dom_id}-proposition" class="proposition form-control">{proposition}</textarea>
  <label for="{dom_id}-kind" class="form-label">Kind</label>
  <select id="{dom_id}-kind" class="kind form-select" data-original="{event["kind"]}">{''.join(f'<option{(" selected" if value == event["kind"] else "")}>{value}</option>' for value in EVENT_TYPES)}</select>
- <fieldset><legend>Acceptable evidence bundles</legend>{''.join(checks)}</fieldset>
- {''.join(evidence)}
+ <fieldset><legend>Decision</legend><div class="dispositions viz-row viz-controls">{''.join(f'<button type="button" class="btn btn-ghost" aria-pressed="false" data-value="{value}">{value.title()}</button>' for value in ("ACCEPT", "EDIT", "REJECT"))}</div> <output>Pending</output></fieldset>
  <div class="review-detail" hidden>
   <label for="{dom_id}-ambiguity" class="form-label">Ambiguity or override reason (required)</label>
   <textarea id="{dom_id}-ambiguity" class="ambiguity-reason form-control" required aria-required="true"></textarea>
   <label for="{dom_id}-notes" class="form-label">Optional review notes</label>
   <textarea id="{dom_id}-notes" class="notes form-control"></textarea>
  </div>
- <fieldset><legend>Relationship adjudication</legend><div class="dispositions viz-row viz-controls">{''.join(f'<button type="button" class="btn btn-ghost" aria-pressed="false" data-value="{value}">{value.title()}</button>' for value in ("ACCEPT", "EDIT", "REJECT"))}</div></fieldset>
- <output>Pending</output>
+ <fieldset><legend>Acceptable evidence bundles — each group is one candidate's context window; check every bundle whose evidence supports the proposition</legend>{''.join(bundle_groups)}</fieldset>
 </article>''')
     sections = []
     for section in reference["sections"]:
