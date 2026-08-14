@@ -2397,3 +2397,43 @@ the app surface:
 This is a posture decision, not a run, so no registration digest changes.
 The next work is app-side: an architecture decision on what runtime executes
 the pinned model inside a local-only product, before any UI.
+
+### Preregistration — MLX runtime re-measurement arm
+
+The runtime decision (`docs/note-runtime-decision.md`) moves the shipped
+generator from ollama to MLX-LM, and ship-gate condition 1 requires recall
+re-measured after any runtime change. This arm measures it, before any app
+code merges.
+
+Candidate pin: `mlx-community/gemma-3-12b-it-qat-4bit` — the MLX conversion
+of Google's QAT 4-bit release, the same weight family ollama's `gemma3:12b`
+ships, so this is the closest available match to the measured configuration.
+The exact model-tree digest is pinned after download, before any run.
+Runtime identity: the documented MLX research recipe (CPython 3.14,
+`mlx==0.32.0`, `mlx-lm==0.30.4`, `transformers==5.0.0rc1`), recorded
+per-receipt as in the MLX admission harness.
+
+Configuration under test: the ±2 fragment window view — the only measured
+configuration that reaches the ship gate's 11/13 (ollama 12b: keep 133,
+recall 11/13, miss {ev-011, ev-012}). Prompt, locators, decoding options,
+batch shape, and budgets are unchanged from the registered contract; the
+transport changes from ollama HTTP to in-process MLX-LM generation with the
+same deterministic (temperature-zero) decoding.
+
+Registered predictions, before any MLX token is generated:
+
+1. Recall on the operator-locked capture ledger under the ±2 window view
+   will be within one event of the ollama measurement: 10–12 of 13.
+2. The miss-set will include ev-011 (missed by every configuration ever
+   tested, both families, and the frontier roadmap).
+3. No keep-count prediction is registered beyond the standing 64 gate;
+   today's evidence says keep-rate is the least stable quantity across
+   runtimes.
+
+Falsifier: recall below 11/13 on this view fails ship-gate condition 1 for
+this pin; per the runtime decision doc, the MLX runtime choice reopens
+(next candidates: a different quantization of the same weights, then a
+different model family — each its own preregistered arm, not silent
+retries). A content-controlled diagnostic runs before any official gated
+run, so an operator approval cycle is spent only on a configuration the
+diagnostic predicts will pass.
