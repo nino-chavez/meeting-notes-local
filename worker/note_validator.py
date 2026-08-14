@@ -222,6 +222,12 @@ def validate_locators(evidence_refs: list, transcript) -> list[dict]:
     `text_sha256` recomputed from the transcript's own bytes. Nothing supplied
     is trusted, so a reference naming a turn or a span the transcript does not
     have cannot pass.
+
+    The one-to-three bound is enforced twice, by two owners. This is the note/2
+    artifact contract, and `note_projection.rs` re-parses it independently at
+    `parse_claim`, failing closed with a content-free `Unavailable`. Relaxing it
+    here would not relax it there: a wider view motivating more locators has to
+    move both, and the Rust side is the one that will not follow a Python edit.
     """
     locators = []
     for reference in evidence_refs:
