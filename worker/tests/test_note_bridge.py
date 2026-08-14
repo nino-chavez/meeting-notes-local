@@ -936,6 +936,15 @@ for request, ids in batches():
     answer(verdicts(ids, lambda index: "KEEP"))
 """
 
+# Rewrites a pinned model file while the session is still running, so the
+# post-generation identity recheck has something to catch.
+STUB_REWRITES_THE_MODEL = STUB_PREAMBLE + """
+for request, ids in batches():
+    target = Path(request["model_directory"]) / "config.json"
+    target.write_bytes(b"{}" + b" " * 64 + chr(10).encode())
+    answer(verdicts(ids, lambda index: "KEEP" if index == 0 else "ABSTAIN"))
+"""
+
 # Answers with more bytes than one response is allowed to occupy.
 STUB_FLOODS_STDOUT = STUB_PREAMBLE + """
 for request, ids in batches():
@@ -1416,6 +1425,114 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "transcript-only")
         self.assertEqual(result["failure"]["code"], "response-length-truncation")
 
+    # Round-two mutation survivors. Round one hardened twelve checks; these are
+    # ten sites round one never touched, of which eight survived. A suite is not
+    # done being wrong just because the last round of it was fixed.
+
+    def test_a_storage_root_that_is_not_owner_private_never_reaches_ready(self) -> None:
+        self.root.chmod(0o755)
+        try:
+            bridge = self._start()
+            try:
+                self.assertIsNone(bridge.ready)
+            finally:
+                bridge.close()
+            self.assertEqual(bridge._process.returncode, 2)
+        finally:
+            self.root.chmod(0o700)
+
+    def test_two_model_entries_pinning_one_digest_never_reach_ready(self) -> None:
+        """An ambiguous pin cannot name which file is which."""
+        entries = self._model_entries()
+        entries[1]["sha256"] = entries[0]["sha256"]
+        self._write_generate_manifest(models=entries)
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_two_model_entries_sharing_one_id_never_reach_ready(self) -> None:
+        entries = self._model_entries()
+        entries[1]["id"] = entries[0]["id"]
+        self._write_generate_manifest(models=entries)
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_a_manifest_naming_a_different_file_with_the_same_bytes_is_refused(self) -> None:
+        """Digest equality is not identity — but measure which check says so.
+
+        Written to witness `_require_runtime_identity`'s bridge comparison, and
+        it does not: deleting that comparison leaves this passing, because
+        `_require_loaded_code_confined` independently refuses a `__main__` whose
+        inode is not the manifested one. Removing both together is caught. So
+        the self-identity check is redundancy, and this is a behavioural lock.
+        """
+        twin = self.resources / "note-bridge-twin.py"
+        private_file(twin, self.bridge.read_bytes())
+        self.assertEqual(digest(twin), digest(self.bridge))
+        document = self._harness._manifest_document()
+        document["role"] = "generate"
+        document["bridge"] = {"relative_path": twin.name, "sha256": digest(twin)}
+        document["generator"] = {
+            "relative_path": self.generator.name,
+            "sha256": digest(self.generator),
+        }
+        document["models"] = self._model_entries()
+        self._harness._write_manifest(document)
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_a_command_for_another_role_is_a_protocol_failure(self) -> None:
+        command = {
+            "schema": "note-bridge-command/1",
+            "request_id": str(uuid.uuid4()),
+            "operation": "note.inspect",
+            "arguments": {
+                "meeting_id": self.meeting_id,
+                "transcript_id": self.transcript_id,
+                "model_directory": self.MODEL_DIRECTORY,
+                "deadline_s": 20,
+            },
+        }
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(json.dumps(command).encode() + b"\n")
+        finally:
+            bridge.close()
+        self.assertIsNone(result)
+        self.assertEqual((returncode, error), (2, b""))
+        self.assertFalse(self.marker.exists())
+
+    def test_a_model_file_rewritten_mid_run_refuses_after_generation(self) -> None:
+        """The pinned model must still be the pinned model when the run ends.
+
+        Witnesses the pathname half of `_ModelTree.require_unchanged`, not the
+        descriptor half: deleting the `os.fstat` comparison alone leaves this
+        passing, because `_require_link` re-stats the same file by name and an
+        in-place rewrite changes its size. Removing both is caught. The two
+        halves answer different questions — a replaced pathname versus a
+        rewritten inode — and only one of them is exercised here.
+        """
+        self._write_generator(STUB_REWRITES_THE_MODEL)
+        self._write_generate_manifest()
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"]["code"], "model-unavailable")
+        # It ran to completion first, so this is the post-generation recheck and
+        # not the pre-flight verification refusing a bad tree.
+        self.assertGreaterEqual(result["failure"]["receipt"]["responses"], 1)
+
     def test_generate_command_may_not_name_a_note(self) -> None:
         with self.assertRaises(InvalidArguments):
             _parse_command(
@@ -1567,6 +1684,19 @@ class EvidenceRuleTests(unittest.TestCase):
         references = [self._reference(0, 0, 5), self._reference(0, 0, 5)]
         with self.assertRaises(ArtifactFailure):
             validate_locators(references, transcript)
+
+    def test_an_empty_span_is_refused(self) -> None:
+        """`end == start` cites nothing; a locator must point at some text."""
+        transcript = self._transcript()
+        with self.assertRaises(ArtifactFailure):
+            validate_locators([self._reference(0, 3, 3)], transcript)
+
+    def test_a_reversed_span_is_refused(self) -> None:
+        transcript = self._transcript()
+        reference = self._reference(0, 0, 5)
+        reference["char_start"], reference["char_end"] = 5, 0
+        with self.assertRaises(ArtifactFailure):
+            validate_locators([reference], transcript)
 
     def test_a_digest_that_does_not_describe_the_span_is_refused(self) -> None:
         transcript = self._transcript()
