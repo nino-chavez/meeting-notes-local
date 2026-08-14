@@ -14,7 +14,7 @@ pub mod model_store;
 pub mod note_generation;
 pub mod note_projection;
 #[cfg(target_os = "macos")]
-mod note_projector_process;
+pub mod note_projector_process;
 pub mod operation_store;
 pub mod operations;
 #[cfg(target_os = "macos")]
