@@ -422,12 +422,20 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
 
 
 def locate_kept_candidates(manifest: dict, kept: list[dict], transcript) -> list[dict]:
-    """Resolve every kept candidate to transcript locators, and verify them here.
+    """Resolve every kept candidate to its anchor locator, and verify it here.
 
     The excerpts are exact by construction — they are transcript slices the
     enumerator produced — and they are re-derived anyway. `validate_locators`
     recomputes each span's digest from the loaded turns, so a fragment id that
     no longer resolves to the bytes it names refuses rather than rendering.
+
+    A point cites its **anchor**, not the whole window it was classified in.
+    `visible_fragment_ids` is what the model was shown for context; the anchor
+    is what the candidate is about, which is why the deterministic control arm
+    cites the anchor alone. Two consequences follow. The point never cites text
+    the model merely saw nearby, and the locator count stays 1 whatever the view
+    is — a ±2 window would offer five fragments and blow note/2's three-locator
+    rule if the window were the citation.
     """
     from summarize import build_fragment_map
 
@@ -438,19 +446,18 @@ def locate_kept_candidates(manifest: dict, kept: list[dict], transcript) -> list
     points = []
     for ordinal, candidate in enumerate(kept):
         try:
-            references = [
-                {
-                    "turn": lookup[fragment_id]["turn"],
-                    "char_start": lookup[fragment_id]["char_start"],
-                    "char_end": lookup[fragment_id]["char_end"],
-                    "text_sha256": lookup[fragment_id]["text_sha256"],
-                }
-                for fragment_id in candidate["visible_fragment_ids"]
-            ]
-            anchor = candidate["visible_fragment_ids"].index(
-                candidate["anchor_fragment_id"]
+            anchor = lookup[candidate["anchor_fragment_id"]]
+            locators = validate_locators(
+                [
+                    {
+                        "turn": anchor["turn"],
+                        "char_start": anchor["char_start"],
+                        "char_end": anchor["char_end"],
+                        "text_sha256": anchor["text_sha256"],
+                    }
+                ],
+                transcript,
             )
-            locators = validate_locators(references, transcript)
         except ArtifactFailure as exc:
             # The retained transcript is intact; the candidate no longer
             # resolves against it. Not a storage code.
@@ -462,7 +469,6 @@ def locate_kept_candidates(manifest: dict, kept: list[dict], transcript) -> list
                 "point_ordinal": ordinal,
                 "candidate_id": candidate["candidate_id"],
                 "evidence_state": "located",
-                "anchor_locator": anchor,
                 "locators": locators,
             }
         )

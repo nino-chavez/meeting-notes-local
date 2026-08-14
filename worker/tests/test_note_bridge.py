@@ -1104,8 +1104,10 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             self.assertEqual(point["point_ordinal"], ordinal)
             self.assertTrue(point["candidate_id"].startswith("cf-"))
             self.assertEqual(point["evidence_state"], "located")
-            self.assertTrue(1 <= len(point["locators"]) <= 3)
-            self.assertIn(point["anchor_locator"], range(len(point["locators"])))
+            # One locator: the candidate's anchor. Not the classification
+            # window, which is context the model saw and the point does not
+            # cite — and which a wider view would grow past note/2's cap.
+            self.assertEqual(len(point["locators"]), 1)
             # Locators are transcript spans, and the frame carries no prose.
             self.assertNotIn("claim", point)
         receipt = result["generation"]["receipt"]
