@@ -2363,3 +2363,37 @@ The measured boundary, stated as the running conclusion: no tested local
 configuration meets the 100%-recall gate on real disfluent meeting speech,
 and the one instrument that has caught every event in this study is the
 operator-reviewed evidence ledger itself.
+
+### Product decision, 2026-08-14 — the generator is admitted at measured quality
+
+The operator reviewed today's boundary and made the product call this study
+existed to inform: generated notes enter Yawn as **cited drafts paired with
+the transcript**, not as a record. Two inputs settled it. The measurement:
+the best local configuration keeps 11 of 13 operator-locked events with a
+citation path for every keep, and the miss class is characterized (assigned
+actions and late-meeting items spread across short disfluent rows), not
+anecdotal. The market check (Granola, Otter, Notion — vendor docs and
+current reviews pulled 2026-08-14): every comparable tool ships the same
+summary-plus-transcript pairing and none claims the summary is complete, so
+the 100%-recall gate was the bar for a note that *replaces* its transcript —
+a product nobody ships. That gate is retired for shipping and retained as a
+research instrument.
+
+The ship gate that replaces it, for any note-generation build that reaches
+the app surface:
+
+1. **Recall ≥ 11/13** on the operator-locked private-capture ledger under
+   the registered configuration, re-measured after any change to model,
+   prompt, view, or decoding.
+2. **Every displayed point cites its transcript rows**, and the citation
+   resolves on the meeting's own transcript surface. A point that cannot
+   cite is not displayed.
+3. **The note surface states its own incompleteness** — a generated note is
+   labeled a draft from the transcript, with the transcript in the same
+   view, per the product brief's standing rule that a tidy summary must
+   never look like a complete record.
+4. The keep budget (≤ 64) and time budget (≤ 900 s) stand unchanged.
+
+This is a posture decision, not a run, so no registration digest changes.
+The next work is app-side: an architecture decision on what runtime executes
+the pinned model inside a local-only product, before any UI.
