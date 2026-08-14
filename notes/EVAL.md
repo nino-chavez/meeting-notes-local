@@ -2563,3 +2563,25 @@ Registered predictions:
    forced-serialization context at the verdict position and runner-side
    sampling internals, in that order — each its own arm before any new model.
 3. Ship falsifier unchanged: recall < 11/13 or keep > 64 fails the pin.
+
+### Ollama-structure result — prompt structure is the dominant variable, and the gate is jointly unsatisfiable
+
+Two-turn rendering, same weights, same transport: keep **136 of 165**,
+recall **11/13** (prediction 2 met — within three keeps of ollama's 133, so
+the MLX transport adopts the ollama rendering). Per-batch profile is not
+calibrated selectivity: batch 1 abstained 29 of 32, batches 2–6 kept
+everything, and the miss-set moved again — {ev-001, ev-002}, the meeting's
+opening, where ollama's 133-keep run missed {ev-011, ev-012}, the closing.
+
+The larger fact this run makes unavoidable: **no measured configuration on
+any transport satisfies the ship gate's two quantitative conditions
+jointly.** Every configuration reaching recall ≥ 11/13 keeps 97–136 of 165
+candidates — the keep-64 budget fails by 1.5–2.1x, and a "note" citing ~80%
+of the transcript rows is not a selective draft. Every configuration
+respecting the keep budget (27b: 11 keeps; coalesced view: 39) collapses to
+recall 4/13–9/13. The precision/recall frontier of the gemma family on this
+task, measured across two transports, three quantizations, two scales, and
+four views, does not pass through (recall ≥ 11/13, keep ≤ 64). The ship
+gate as ratified embeds a joint constraint nothing measured has met; the
+morning's product decision priced the recall number but not the keep bloat.
+This goes back to the operator before any further arm.
