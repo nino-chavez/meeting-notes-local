@@ -2263,3 +2263,39 @@ bound to superseded digests must be regenerated and re-approved. A side
 effect worth recording: locators cut the response cost roughly threefold, so
 the 96-token per-item budget from the first amendment is now generous rather
 than tight.
+
+### View-sensitivity measurement, 2026-08-14 — no further amendment adopted
+
+After the locator amendment, the first complete live run on a private capture
+ledger (a real 12-minute in-person 1:1; 164 Whisper rows; 13 operator-adopted
+events) refused at the recall gate. Three follow-up diagnostics reshaped only
+the classifier's view of the same transcript, holding model, prompt, fixtures,
+temperature, and decode constant. Content-controlled results:
+
+| View | Candidates | Recall | Keep (limit 64) | Missed events |
+| --- | --- | --- | --- | --- |
+| Registered: row units, ±1 fragment, 16k ctx | 165 | 10/13 | 97 | ev-008, ev-011, ev-012 |
+| Row units, ±2 fragments, 32k ctx | 165 | 11/13 | 133 | ev-011, ev-012 |
+| Coalesced ~280-char units, ±2, 32k ctx | 71 | 9/13 | 39 | ev-008, ev-009, ev-010, ev-011 |
+
+Every configuration produced a different miss-set; two events that every
+row-unit view recalled were lost by the coalesced view, and the widened
+window recovered one event at the cost of the classifier keeping 81% of all
+candidates. The keep overflow is not backchannels: only 21 of the 133 keeps
+were bare assents.
+
+Conclusion recorded rather than patched around: on live-capture speech,
+gemma3:12b's KEEP/ABSTAIN judgment at temperature zero is **view-sensitive**
+— reshaping what the model sees moves which commitments it loses, and no
+tested view met the 100%-recall gate. A fourth view adjustment fitted to this
+one meeting would be curve-fitting, so none was adopted: the widened-window
+and unit-coalescing changes were reverted from the working tree after
+measurement (the coalescing implementation and its measurements are retained
+privately with the capture packet). The registration remains the locator
+registration.
+
+What this leaves open, deliberately, as the next decision: a different or
+larger local model under the same harness; per-candidate calls or
+self-consistency voting instead of single-pass batches; or accepting a
+sub-100% recall gate with an explicit human backstop. Each changes the
+experiment's meaning and needs its own preregistration.
