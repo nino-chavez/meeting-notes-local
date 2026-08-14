@@ -2964,6 +2964,16 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         let generator = fixture.generator();
         let pinned = fixture.pinned_models();
         let path = &fixture.generate_manifest_path;
+        // Uniqueness is two rules, and a case that repeats both witnesses
+        // neither: the digest clause refuses it and the identifier clause is
+        // never reached. Each repetition needs the other field distinct.
+        let repeated_identifier = vec![
+            pinned[0].clone(),
+            RuntimeManifestModel {
+                id: pinned[0].id.clone(),
+                sha256: pinned[1].sha256.clone(),
+            },
+        ];
         let repeated_digest = vec![
             pinned[0].clone(),
             RuntimeManifestModel {
@@ -2973,6 +2983,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         ];
         for models in [
             vec![pinned[0].clone(), pinned[0].clone()],
+            repeated_identifier,
             repeated_digest,
             vec![RuntimeManifestModel {
                 id: "note generator".into(),
