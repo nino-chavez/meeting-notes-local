@@ -62,3 +62,17 @@ Known risk to manage at step 5: a ~7–8 GB 4-bit model and whisper weights
 contend for unified memory in one MLX process; note generation must run
 after transcription completes and release the whisper runtime first (the
 release hook already exists in `worker/transcription.py`).
+
+## Correction, 2026-08-14 — network denial is structural, not enforced
+
+Two independent implementation sessions verified the same fact: the
+`SECURITY_NO_NETWORK_ACCESS` flag in `note_projector_process.rs` is
+`kSecCSNoNetworkAccess`, a code-signature *validation* option (it stops the
+signature assessment from fetching revocation data over the network). It does
+not deny the child process a socket, and the bundled Python's entitlements
+carry no sandbox. Today the no-network promise for the generator child is
+structural — its bytes are digest-pinned, so what runs is known — but nothing
+enforces it at runtime. Before the note generator ships, the launcher must add
+real enforcement (a sandbox profile or equivalent) or this document's
+"network-denied posture" language must be weakened to match reality. Tracked
+as a pre-ship requirement, not folded silently into any slice.
