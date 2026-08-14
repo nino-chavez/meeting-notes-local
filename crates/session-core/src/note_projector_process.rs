@@ -2826,6 +2826,61 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         }
     }
 
+    /// `note_runtime_models` derives one identifier per file *role*, so it can
+    /// only name a catalog entry carrying one file per role.  It does not
+    /// enforce that itself -- `ModelCatalog::validate` does, by requiring
+    /// exactly one `Config` and one `Weights`.  The mapping is injective by
+    /// inheritance, not by construction.
+    ///
+    /// That matters because a note-generation model large enough to be worth
+    /// shipping is normally sharded across several weights files.  The catalog
+    /// cannot express that today.  If a later slice teaches it to, two weights
+    /// files collide on one identifier and admission refuses at `parse_models`
+    /// -- an honest refusal, but one that reads as a malformed manifest rather
+    /// than as an identifier scheme that cannot name the model.  This test
+    /// pins the limit so the change fails here, where the reason is written.
+    #[test]
+    fn note_runtime_model_ids_are_one_per_role_and_cannot_name_a_sharded_model() {
+        let fixture = launch_fixture("descriptor-binding");
+        let entry = &fixture.catalog.models[0];
+        assert_eq!(
+            note_runtime_models(entry)
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["note-generator-config", "note-generator-weights"]
+        );
+
+        let mut sharded = entry.clone();
+        sharded.files.push(TranscriptModelFile {
+            role: TranscriptModelFileRole::Weights,
+            name: "weights-00002.safetensors".into(),
+            url: format!(
+                "https://example.test/{}/weights-00002.safetensors",
+                sharded.revision
+            ),
+            bytes: 1,
+            sha256: "d".repeat(64),
+        });
+        assert!(
+            ModelCatalog {
+                schema: ModelCatalogSchema::V1,
+                models: vec![sharded.clone()],
+            }
+            .validate()
+            .is_err(),
+            "the catalog, not this mapping, is what keeps the identifiers distinct"
+        );
+
+        let collided = note_runtime_models(&sharded);
+        assert_eq!(
+            collided[1].id, collided[2].id,
+            "sharded weights collapse onto one identifier"
+        );
+        fixture.write_generate_manifest(Some(&fixture.generator()), &collided);
+        assert!(!fixture.is_admitted());
+    }
+
     #[test]
     fn admission_refuses_the_packaged_validator_only_manifest_exactly_as_the_default_does() {
         let fixture = launch_fixture("descriptor-binding");
