@@ -12,9 +12,32 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
+# The registered keep budget in notes/EVAL.md. A generator that proposes more
+# points than the measured configuration is allowed to keep is refused rather
+# than truncated, so a capacity overflow can never look like a shorter note.
+MAX_GENERATED_CLAIMS = 64
+GENERATED_ROW_FIELDS = ("claim", "claim_type", "claim_sha256", "evidence_refs")
+GENERATED_REFERENCE_FIELDS = ("turn", "char_start", "char_end", "text_sha256")
 
 
 class ArtifactFailure(ValueError):
+    def __init__(self, code: str, recoverable: bool):
+        super().__init__(code)
+        self.code = code
+        self.recoverable = recoverable
+
+
+class GenerationRefused(ValueError):
+    """Untrusted generator output failed a check; the caller falls back.
+
+    Separate from `ArtifactFailure` because the two answer different questions.
+    An artifact failure says the retained bytes on this Mac are missing, unsafe,
+    or changed. A generation refusal says the retained bytes were fine and the
+    model's proposal did not survive the note/2 evidence rules. Only the second
+    is allowed to produce `transcript-only`; collapsing them would let a storage
+    fault be reported as a quiet quality outcome.
+    """
+
     def __init__(self, code: str, recoverable: bool):
         super().__init__(code)
         self.code = code
@@ -197,6 +220,75 @@ def _validate_snapshot(
             raise ArtifactFailure("artifact-invalid", False) from exc
 
 
+def validate_claim_rows(cited: list, transcript) -> list[dict]:
+    """Re-derive every claim's locators against the transcript it cites.
+
+    One implementation of the note/2 evidence rule, shared by the stored-note
+    projection and by the generator admission path. Nothing is taken from the
+    supplied rows: every locator is bounds-checked against the loaded turns and
+    every `text_sha256` is recomputed from the transcript's own bytes, so a row
+    that names a turn or a span the transcript does not have cannot pass.
+    """
+    claims = []
+    for ordinal, row in enumerate(cited):
+        claim = row["claim"]
+        claim_type = row["type"]
+        if (
+            not isinstance(claim, str)
+            or not claim
+            or len(claim) > 160
+            or claim_type not in {"decision", "action", "proposal", "question"}
+            or row.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()
+        ):
+            raise ArtifactFailure("artifact-invalid", False)
+        locators = []
+        for reference in row["evidence_refs"]:
+            turn = reference["turn"]
+            start = reference["char_start"]
+            end = reference["char_end"]
+            if (
+                type(turn) is not int
+                or type(start) is not int
+                or type(end) is not int
+                or turn < 0
+                or start < 0
+                or end <= start
+                or turn >= len(transcript.turns)
+                or end > len(transcript.turns[turn].text)
+            ):
+                raise ArtifactFailure("artifact-invalid", False)
+            text_sha256 = hashlib.sha256(
+                transcript.turns[turn].text[start:end].encode("utf-8")
+            ).hexdigest()
+            if reference.get("text_sha256") != text_sha256:
+                raise ArtifactFailure("artifact-invalid", False)
+            locators.append(
+                {
+                    "turn": turn,
+                    "start": start,
+                    "end": end,
+                    "text_sha256": text_sha256,
+                }
+            )
+        if not 1 <= len(locators) <= 3 or locators != sorted(
+            locators, key=lambda locator: (
+                locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
+            )
+        ) or len({tuple(locator.items()) for locator in locators}) != len(locators):
+            raise ArtifactFailure("artifact-invalid", False)
+        claims.append(
+            {
+                "claim_ordinal": ordinal,
+                "claim_sha256": row["claim_sha256"],
+                "claim_type": claim_type,
+                "evidence_state": "located",
+                "claim": claim,
+                "locators": locators,
+            }
+        )
+    return claims
+
+
 def _project_snapshot(
     meeting_id: str,
     note_id: str,
@@ -237,63 +329,7 @@ def _project_snapshot(
         citations = structured_artifact_citations(document, transcript)
         if not isinstance(checks, dict) or checks.get("citations") != citations:
             raise ArtifactFailure("artifact-invalid", False)
-        claims = []
-        for ordinal, cited in enumerate(citations["cited"]):
-            claim = cited["claim"]
-            claim_type = cited["type"]
-            if (
-                not isinstance(claim, str)
-                or not claim
-                or len(claim) > 160
-                or claim_type not in {"decision", "action", "proposal", "question"}
-                or cited.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()
-            ):
-                raise ArtifactFailure("artifact-invalid", False)
-            locators = []
-            for reference in cited["evidence_refs"]:
-                turn = reference["turn"]
-                start = reference["char_start"]
-                end = reference["char_end"]
-                if (
-                    type(turn) is not int
-                    or type(start) is not int
-                    or type(end) is not int
-                    or turn < 0
-                    or start < 0
-                    or end <= start
-                    or turn >= len(transcript.turns)
-                    or end > len(transcript.turns[turn].text)
-                ):
-                    raise ArtifactFailure("artifact-invalid", False)
-                text_sha256 = hashlib.sha256(
-                    transcript.turns[turn].text[start:end].encode("utf-8")
-                ).hexdigest()
-                if reference.get("text_sha256") != text_sha256:
-                    raise ArtifactFailure("artifact-invalid", False)
-                locators.append(
-                    {
-                        "turn": turn,
-                        "start": start,
-                        "end": end,
-                        "text_sha256": text_sha256,
-                    }
-                )
-            if not 1 <= len(locators) <= 3 or locators != sorted(
-                locators, key=lambda locator: (
-                    locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
-                )
-            ) or len({tuple(locator.items()) for locator in locators}) != len(locators):
-                raise ArtifactFailure("artifact-invalid", False)
-            claims.append(
-                {
-                    "claim_ordinal": ordinal,
-                    "claim_sha256": cited["claim_sha256"],
-                    "claim_type": claim_type,
-                    "evidence_state": "located",
-                    "claim": claim,
-                    "locators": locators,
-                }
-            )
+        claims = validate_claim_rows(citations["cited"], transcript)
         return {
             "schema": "note-claim-projection/1",
             "note_json_sha256": note_id,
@@ -312,6 +348,126 @@ def _project_snapshot(
         SystemExit,
     ) as exc:
         raise ArtifactFailure("artifact-invalid", False) from exc
+
+
+def _generated_object(value: object, names: tuple[str, ...]) -> dict:
+    """Accept only an exact, ordered object from untrusted generator output."""
+    if not isinstance(value, dict) or tuple(value) != names:
+        raise GenerationRefused("response-contract", False)
+    return value
+
+
+def validate_generated_rows(rows: object, transcript) -> list[dict]:
+    """Replay untrusted generated points through the note/2 evidence rule.
+
+    The generator is never trusted for anything except proposing text and
+    locators. Shape is checked first so a malformed response cannot reach the
+    evidence rule, then `validate_claim_rows` re-derives every span from the
+    transcript's own bytes. Nothing that fails is repaired or trimmed.
+    """
+    if not isinstance(rows, list):
+        raise GenerationRefused("response-contract", False)
+    if not rows:
+        raise GenerationRefused("no-model-candidates", True)
+    if len(rows) > MAX_GENERATED_CLAIMS:
+        raise GenerationRefused("keep-budget-exceeded", False)
+    cited: list[dict] = []
+    for row in rows:
+        entry = _generated_object(row, GENERATED_ROW_FIELDS)
+        references = entry["evidence_refs"]
+        if not isinstance(references, list):
+            raise GenerationRefused("response-contract", False)
+        cited.append(
+            {
+                "claim": entry["claim"],
+                "type": entry["claim_type"],
+                "claim_sha256": entry["claim_sha256"],
+                "evidence_refs": [
+                    _generated_object(reference, GENERATED_REFERENCE_FIELDS)
+                    for reference in references
+                ],
+            }
+        )
+    digests = [row["claim_sha256"] for row in cited]
+    if len(set(digests)) != len(digests):
+        raise GenerationRefused("response-contract", False)
+    try:
+        return validate_claim_rows(cited, transcript)
+    except ArtifactFailure as exc:
+        # The retained transcript is intact — this is the generator's failure,
+        # and it must not be reported with a storage code.
+        raise GenerationRefused("citation-locator", False) from exc
+    except (UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
+        raise GenerationRefused("response-contract", False) from exc
+
+
+def generate(
+    root_fd: int,
+    arguments: dict,
+    *,
+    produce: Callable[[dict], object],
+    after_open: Callable[[], None] | None = None,
+) -> dict:
+    """Generate note points from one pinned transcript and validate them here.
+
+    The transcript is opened, digest-checked, and held open exactly as the
+    read-only paths do. `produce` is the injected generator seam: it receives a
+    derived view and returns untrusted rows. No note, markdown, or product
+    record is read or written, and the transcript's identity is re-checked after
+    the generator has run, so a swap during generation is still caught.
+    """
+    from transcript import load_bytes
+
+    meeting_id = arguments["meeting_id"]
+    transcript_id = arguments["transcript_id"]
+    directories: list[_DirectoryLink] = []
+    files: list[_FileLink] = []
+    open_directories: list[int] = []
+    try:
+        transcript_fd, transcript_links = _open_directories(
+            root_fd, ["meetings", meeting_id, "transcript"]
+        )
+        open_directories.append(transcript_fd)
+        directories.extend(transcript_links)
+        transcript_file = _open_file(transcript_fd, f"{transcript_id}.json")
+        files.append(transcript_file)
+        if after_open is not None:
+            after_open()
+        transcript_bytes = _read_file(transcript_file)
+        _require_links(directories, files)
+        if hashlib.sha256(transcript_bytes).hexdigest() != transcript_id:
+            raise ArtifactFailure("artifact-changed", False)
+        try:
+            transcript = load_bytes(transcript_bytes, source=f"transcript:{transcript_id}")
+        except (UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
+            raise ArtifactFailure("artifact-invalid", False) from exc
+        view = {
+            "schema": "note-generation-view/1",
+            "transcript_sha256": transcript_id,
+            "turns": [
+                {"turn": ordinal, "text": turn.text}
+                for ordinal, turn in enumerate(transcript.turns)
+            ],
+        }
+        if not view["turns"]:
+            raise GenerationRefused("no-generatable-transcript", True)
+        claims = validate_generated_rows(produce(view), transcript)
+        _require_links(directories, files)
+        _require_snapshot(transcript_file, transcript_bytes, transcript_id)
+        _require_links(directories, files)
+        return {
+            "schema": "note-generation/1",
+            "transcript_sha256": transcript_id,
+            "claims": claims,
+        }
+    finally:
+        for link in files:
+            os.close(link.file_fd)
+        for descriptor in open_directories:
+            os.close(descriptor)
+        for link in reversed(directories):
+            os.close(link.child_fd)
+            os.close(link.parent_fd)
 
 
 def inspect(

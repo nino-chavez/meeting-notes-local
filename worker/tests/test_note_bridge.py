@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 import uuid
@@ -832,6 +833,350 @@ class NoteProjectBridgeTests(unittest.TestCase):
             "recoverable": False,
         })
         self.assertIsNone(result["projection"])
+
+
+# Four stub generators stand in for the MLX-LM child: one that cites correctly,
+# one that answers with something that is not a response at all, one that cites
+# a transcript row the meeting does not have, and one that never answers. They
+# are ordinary manifest-pinned generator resources, so each runs through the
+# real spawn, deadline, and validation path rather than around it.
+STUB_PREAMBLE = """import hashlib, json, sys, time
+request = json.loads(sys.stdin.readline())
+turns = request["view"]["turns"]
+
+
+def answer(items, observed=None):
+    sys.stdout.write(json.dumps({
+        "schema": "note-generation-response/1",
+        "items": items,
+        "observed": observed or {
+            "finish_reason": "stop",
+            "prompt_tokens": 11,
+            "generated_tokens": 7,
+        },
+    }))
+    sys.stdout.flush()
+
+
+def cite(turn, claim):
+    text = turn["text"]
+    end = min(len(text), 40)
+    return {
+        "claim": claim,
+        "claim_type": "decision",
+        "claim_sha256": hashlib.sha256(claim.encode("utf-8")).hexdigest(),
+        "evidence_refs": [{
+            "turn": turn["turn"],
+            "char_start": 0,
+            "char_end": end,
+            "text_sha256": hashlib.sha256(text[:end].encode("utf-8")).hexdigest(),
+        }],
+    }
+"""
+
+STUB_WELL_FORMED = STUB_PREAMBLE + """
+answer([cite(turns[0], "the operator agreed to send the summary")])
+"""
+
+STUB_MALFORMED = STUB_PREAMBLE + """
+sys.stdout.write("this is not a response object at all")
+sys.stdout.flush()
+"""
+
+STUB_FABRICATED_ROW = STUB_PREAMBLE + """
+row = cite(turns[0], "SECRETCLAIMMARKER the far side committed to a date")
+row["evidence_refs"][0]["turn"] = len(turns) + 5
+answer([row])
+"""
+
+STUB_NEVER_ANSWERS = STUB_PREAMBLE + """
+time.sleep(30)
+"""
+
+STUB_OVER_BUDGET = STUB_PREAMBLE + """
+answer([cite(turns[0], "point number %d" % index) for index in range(65)])
+"""
+
+
+MODEL_FILES = {"config.json": b"{}\n", "weights.npz": b"weights\n"}
+
+
+class NoteGenerateBridgeTests(unittest.TestCase):
+    """The admitted generator path: one generator, and nothing it says is taken."""
+
+    MODEL_DIRECTORY = "models/note-model/rev-1"
+
+    def setUp(self) -> None:
+        self._harness = NoteBridgeHarnessTests()
+        self._harness.setUp()
+        self._harness.role = "generate"
+        self.marker = self._harness.base / "generator-ran"
+        self.generator = self._harness.resources / "note-generator.py"
+        self._write_generator(STUB_WELL_FORMED)
+        self._write_model_tree(MODEL_FILES)
+        self._write_generate_manifest()
+
+    def tearDown(self) -> None:
+        self._harness.tearDown()
+
+    def __getattr__(self, name):
+        harness = self.__dict__.get("_harness")
+        if harness is None:
+            raise AttributeError(name)
+        return getattr(harness, name)
+
+    def _write_generator(self, source: str) -> None:
+        """Pin a stub as the manifest's generator, marking that it actually ran.
+
+        The marker is what makes "refused before the generator ran" a real
+        assertion rather than a claim about the failure code.
+        """
+        self.generator.unlink(missing_ok=True)
+        marked = f"from pathlib import Path\nPath({str(self.marker)!r}).write_text('ran')\n"
+        private_file(self.generator, (marked + source).encode())
+
+    def _write_model_tree(self, files: dict[str, bytes]) -> None:
+        directory = self.root / self.MODEL_DIRECTORY
+        if directory.exists():
+            shutil.rmtree(self.root / "models")
+        for name, data in files.items():
+            private_file(directory / name, data)
+        for part in (self.root / "models", directory.parent, directory):
+            part.chmod(0o700)
+
+    def _model_entries(self, files: dict[str, bytes] | None = None) -> list[dict]:
+        return [
+            {"id": f"note-generator-{index}", "sha256": hashlib.sha256(data).hexdigest()}
+            for index, data in enumerate((files or MODEL_FILES).values())
+        ]
+
+    def _write_generate_manifest(
+        self,
+        *,
+        role: str = "generate",
+        generator: dict | None = None,
+        models: list[dict] | None = None,
+    ) -> None:
+        document = self._harness._manifest_document()
+        document["role"] = role
+        document["generator"] = generator if generator is not None else {
+            "relative_path": self.generator.name,
+            "sha256": digest(self.generator),
+        }
+        document["models"] = self._model_entries() if models is None else models
+        self._harness._write_manifest(document)
+
+    def _generate_command(self, **overrides) -> tuple[str, bytes]:
+        request_id = str(uuid.uuid4())
+        arguments = {
+            "meeting_id": self.meeting_id,
+            "transcript_id": self.transcript_id,
+            "model_directory": self.MODEL_DIRECTORY,
+            "deadline_s": 20,
+        }
+        arguments.update(overrides)
+        command = {
+            "schema": "note-bridge-command/1",
+            "request_id": request_id,
+            "operation": "note.generate",
+            "arguments": arguments,
+        }
+        return request_id, json.dumps(command).encode() + b"\n"
+
+    def _run(self, **overrides) -> tuple[dict | None, int, bytes, str]:
+        request_id, command = self._generate_command(**overrides)
+        bridge = self._start()
+        try:
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        return result, returncode, error, request_id
+
+    def _transcript_turns(self) -> list[dict]:
+        raw = (
+            self.root / "meetings" / self.meeting_id / "transcript" / f"{self.transcript_id}.json"
+        ).read_text(encoding="utf-8")
+        return [
+            turn for turn in json.loads(raw).get("turns", []) if isinstance(turn, dict)
+        ]
+
+    def test_generate_manifest_reaches_ready_and_returns_validated_points(self) -> None:
+        before = self._tree()
+        request_id, command = self._generate_command()
+        bridge = self._start()
+        try:
+            self.assertEqual(
+                bridge.ready,
+                {
+                    "schema": "note-bridge-event/1",
+                    "event": "ready",
+                    "protocol": 1,
+                    "role": "generate",
+                    "manifest_sha256": digest(self.manifest),
+                    "operations": ["note.generate"],
+                },
+            )
+            result, returncode, error = bridge.send(command)
+        finally:
+            bridge.close()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["request_id"], request_id)
+        self.assertEqual(result["outcome"], "generated")
+        self.assertIsNone(result["failure"])
+        self.assertEqual(result["generation"]["transcript_sha256"], self.transcript_id)
+        claims = result["generation"]["claims"]
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["evidence_state"], "located")
+        self.assertEqual(claims[0]["claim_type"], "decision")
+        self.assertEqual(len(claims[0]["locators"]), 1)
+        self.assertEqual(
+            claims[0]["claim_sha256"],
+            hashlib.sha256(claims[0]["claim"].encode()).hexdigest(),
+        )
+        receipt = result["generation"]["receipt"]
+        self.assertEqual(receipt["generation"]["finish_reason"], "stop")
+        self.assertEqual(receipt["generation"]["generated_tokens"], 7)
+        # No model digests were offered, so the receipt says so rather than
+        # inventing one.
+        self.assertEqual(receipt["generation"]["model_tree_sha256"], "unavailable")
+        # Nothing under the private root moved: no note, no markdown, no receipt.
+        self.assertEqual(self._tree(), before)
+        self.assertTrue(self.marker.exists())
+
+    def test_malformed_generator_response_is_transcript_only(self) -> None:
+        self._write_generator(STUB_MALFORMED)
+        self._write_generate_manifest()
+        result, returncode, error, request_id = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["request_id"], request_id)
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertIsNone(result["generation"])
+        self.assertEqual(result["failure"]["code"], "response-json-syntax")
+
+    def test_fabricated_citation_is_transcript_only_and_leaks_no_content(self) -> None:
+        self._write_generator(STUB_FABRICATED_ROW)
+        self._write_generate_manifest()
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertIsNone(result["generation"])
+        self.assertEqual(result["failure"]["code"], "citation-locator")
+        # A refusal receipt must say what failed without saying what was said.
+        frame = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn("SECRETCLAIMMARKER", frame)
+        for turn in self._transcript_turns():
+            text = turn.get("text") or ""
+            if len(text) > 12:
+                self.assertNotIn(text[:12], frame)
+
+    def test_generator_that_never_answers_is_transcript_only_at_the_deadline(self) -> None:
+        self._write_generator(STUB_NEVER_ANSWERS)
+        self._write_generate_manifest()
+        started = time.monotonic()
+        result, returncode, error, _ = self._run(deadline_s=1)
+        self.assertLess(time.monotonic() - started, 20)
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertIsNone(result["generation"])
+        self.assertEqual(result["failure"], {
+            "code": "timeout",
+            "recoverable": True,
+            "receipt": {},
+        })
+
+    def test_more_points_than_the_keep_budget_are_refused_not_trimmed(self) -> None:
+        self._write_generator(STUB_OVER_BUDGET)
+        self._write_generate_manifest()
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertIsNone(result["generation"])
+        self.assertEqual(result["failure"]["code"], "keep-budget-exceeded")
+
+    def test_generator_carrying_project_manifest_is_still_refused(self) -> None:
+        self._write_generate_manifest(role="project")
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+        self.assertFalse(self.marker.exists())
+
+    def test_generate_manifest_without_models_never_reaches_ready(self) -> None:
+        self._write_generate_manifest(models=[])
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+
+    def test_unpinned_model_file_refuses_before_the_generator_runs(self) -> None:
+        (self.root / self.MODEL_DIRECTORY / "weights.npz").write_bytes(b"substituted\n")
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"], {
+            "code": "model-unavailable",
+            "recoverable": True,
+            "receipt": {},
+        })
+        self.assertFalse(self.marker.exists())
+
+    def test_symlinked_model_directory_refuses_before_the_generator_runs(self) -> None:
+        real = self.base / "real-model"
+        shutil.move(str(self.root / self.MODEL_DIRECTORY), str(real))
+        (self.root / self.MODEL_DIRECTORY).symlink_to(real, target_is_directory=True)
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"]["code"], "model-unavailable")
+        self.assertFalse(self.marker.exists())
+
+    def test_extra_file_beside_the_pinned_model_refuses(self) -> None:
+        private_file(self.root / self.MODEL_DIRECTORY / "extra.bin", b"extra\n")
+        result, _, _, _ = self._run()
+        self.assertEqual(result["failure"]["code"], "model-unavailable")
+        self.assertFalse(self.marker.exists())
+
+    def test_install_receipt_is_not_counted_as_a_pinned_model_file(self) -> None:
+        private_file(self.root / self.MODEL_DIRECTORY / "model-install.json", b"{}\n")
+        result, _, _, _ = self._run()
+        self.assertEqual(result["outcome"], "generated")
+
+    def test_deadline_outside_the_registered_bound_is_an_invalid_request(self) -> None:
+        result, returncode, error, request_id = self._run(deadline_s=901)
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["request_id"], request_id)
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"], {
+            "code": "invalid-request",
+            "recoverable": False,
+            "receipt": {},
+        })
+        self.assertFalse(self.marker.exists())
+
+    def test_generate_command_may_not_name_a_note(self) -> None:
+        with self.assertRaises(InvalidArguments):
+            _parse_command(
+                json.dumps({
+                    "schema": "note-bridge-command/1",
+                    "request_id": str(uuid.uuid4()),
+                    "operation": "note.generate",
+                    "arguments": {
+                        "meeting_id": self.meeting_id,
+                        "note_id": self.note_id,
+                        "transcript_id": self.transcript_id,
+                    },
+                }).encode(),
+                "generate",
+            )
+
+    def test_escaping_model_directory_is_an_invalid_request(self) -> None:
+        result, _, _, _ = self._run(model_directory="models/../../etc")
+        self.assertEqual(result["failure"]["code"], "invalid-request")
+        self.assertFalse(self.marker.exists())
 
 
 if __name__ == "__main__":
