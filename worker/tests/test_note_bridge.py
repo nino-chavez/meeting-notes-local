@@ -20,6 +20,7 @@ from pathlib import Path
 
 from worker.note_validator import ArtifactFailure, GenerationRefused
 from worker.note_validator import locate_kept_candidates, validate_locators
+from worker.note_validator import forbidden_in_claim, validate_claim_rows
 from worker.note_validator import inspect as inspect_snapshot
 from worker.note_validator import project as project_snapshot
 from worker.note_bridge import (
@@ -1716,6 +1717,84 @@ class EvidenceRuleTests(unittest.TestCase):
         references = [self._reference(0, 0, 5), self._reference(0, 0, 5)]
         with self.assertRaises(ArtifactFailure):
             validate_locators(references, transcript)
+
+    def _claim_row(self, claim: str) -> dict:
+        span = self.TURNS[0][0:10]
+        return {
+            "claim": claim,
+            "type": "decision",
+            "claim_sha256": hashlib.sha256(claim.encode("utf-8")).hexdigest(),
+            "evidence_refs": [
+                {
+                    "turn": 0,
+                    "char_start": 0,
+                    "char_end": 10,
+                    "text_sha256": hashlib.sha256(span.encode("utf-8")).hexdigest(),
+                }
+            ],
+        }
+
+    def test_an_ordinary_claim_passes(self) -> None:
+        """Positive control for the refusals below."""
+        claims = validate_claim_rows([self._claim_row("we agreed to ship")], self._transcript())
+        self.assertEqual(len(claims), 1)
+
+    def test_control_characters_in_claim_text_are_refused(self) -> None:
+        """Matches `note_projection.rs`, which refuses these content-free.
+
+        Every one of these was accepted here until measured. A claim this
+        validator admits and Rust refuses does not render wrong — it aborts the
+        library rebuild for an unrelated reason, because the refusal carries no
+        content by design.
+        """
+        transcript = self._transcript()
+        for label, code_point in (
+            ("newline", 0x0A),
+            ("carriage return", 0x0D),
+            ("tab", 0x09),
+            ("null", 0x00),
+            ("delete", 0x7F),
+            ("C1 next-line", 0x85),
+            ("line separator", 0x2028),
+            ("paragraph separator", 0x2029),
+        ):
+            with self.subTest(label):
+                claim = "we agreed" + chr(code_point) + "to ship"
+                with self.assertRaises(ArtifactFailure):
+                    validate_claim_rows([self._claim_row(claim)], transcript)
+
+    def test_the_forbidden_set_is_exactly_rusts(self) -> None:
+        """Cc plus the two separators — no more, no less."""
+        self.assertTrue(all(forbidden_in_claim(chr(point)) for point in range(0x00, 0x20)))
+        self.assertTrue(all(forbidden_in_claim(chr(point)) for point in range(0x7F, 0xA0)))
+        self.assertTrue(forbidden_in_claim(chr(0x2028)))
+        self.assertTrue(forbidden_in_claim(chr(0x2029)))
+        for allowed in (" ", "a", "\u00e9", "\U0001f642", "\u00a0", "\u200b"):
+            self.assertFalse(forbidden_in_claim(allowed), allowed)
+
+    def test_a_claim_at_the_cap_passes_and_one_over_it_is_refused(self) -> None:
+        """160 is the boundary `note_projection.rs` enforces; both sides count."""
+        transcript = self._transcript()
+        at_cap = "a" * 160
+        self.assertEqual(len(validate_claim_rows([self._claim_row(at_cap)], transcript)), 1)
+        with self.assertRaises(ArtifactFailure):
+            validate_claim_rows([self._claim_row("a" * 161)], transcript)
+
+    def test_the_claim_cap_counts_characters_not_bytes(self) -> None:
+        """160 emoji are 640 bytes and still one legal claim.
+
+        Rust counts with `chars().count()`. A byte-length cap here would refuse
+        a claim Rust admits, which is the same divergence class as the control
+        characters, pointing the other way.
+        """
+        claim = "\U0001f642" * 160
+        self.assertGreater(len(claim.encode("utf-8")), 160)
+        claims = validate_claim_rows([self._claim_row(claim)], self._transcript())
+        self.assertEqual(len(claims), 1)
+
+    def test_an_empty_claim_is_refused(self) -> None:
+        with self.assertRaises(ArtifactFailure):
+            validate_claim_rows([self._claim_row("")], self._transcript())
 
     def test_an_empty_span_is_refused(self) -> None:
         """`end == start` cites nothing; a locator must point at some text."""

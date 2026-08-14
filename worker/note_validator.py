@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import tempfile
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -214,6 +215,20 @@ def _validate_snapshot(
             raise ArtifactFailure("artifact-invalid", False) from exc
 
 
+def forbidden_in_claim(character: str) -> bool:
+    """Characters a displayed claim may not contain, matching `note_projection.rs`.
+
+    Unicode category Cc is exactly Rust's `char::is_control()` — U+0000..U+001F
+    and U+007F..U+009F — and the two separators are category Zl and Zp, so they
+    are named rather than derived. The rule lives on both sides of the boundary
+    and neither is the other's fallback: Rust refuses such a claim with a
+    content-free `Unavailable` that aborts the whole library rebuild, so a
+    projection this validator accepts and that one refuses is a divergence
+    reported as a storage fault on an unrelated meeting.
+    """
+    return unicodedata.category(character) == "Cc" or character in "\u2028\u2029"
+
+
 def validate_locators(evidence_refs: list, transcript) -> list[dict]:
     """Re-derive one point's locators against the transcript it cites.
 
@@ -277,6 +292,7 @@ def validate_claim_rows(cited: list, transcript) -> list[dict]:
             not isinstance(claim, str)
             or not claim
             or len(claim) > 160
+            or any(forbidden_in_claim(character) for character in claim)
             or claim_type not in {"decision", "action", "proposal", "question"}
             or row.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()
         ):
