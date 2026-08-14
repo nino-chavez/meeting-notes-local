@@ -2533,3 +2533,33 @@ context at the verdict position — relative to whatever ollama's build showed
 it. Per the preregistration, the next step is the prompt-assembly parity
 investigation (byte-level comparison of rendered prompts and generation
 context between the two transports) before any further model download.
+
+### Prompt-assembly parity — the rendering difference, measured at source
+
+Byte-level comparison of the two transports' rendering of the same
+system+user pair:
+
+- HF/MLX `apply_chat_template` (gemma-3): one merged turn —
+  `<bos><start_of_turn>user\n{system}\n\n{user}<end_of_turn>\n<start_of_turn>model\n`.
+- ollama's gemma3 template (`ollama show gemma3:12b --template`): the system
+  message is its **own** user turn —
+  `<start_of_turn>user\n{system}<end_of_turn>\n<start_of_turn>user\n{user}<end_of_turn>\n<start_of_turn>model\n`
+  (BOS added by the runtime).
+
+### Preregistration — ollama-structure rendering arm
+
+Same constrained-verdict transport, same ±2 view, temperature zero,
+gemma-3-12b-it-qat-4bit (the family match to ollama's Q4 QAT build), with one
+change: the prompt is rendered in ollama's two-turn structure instead of the
+HF merged-turn structure, BOS prepended once.
+
+Registered predictions:
+
+1. Strict decode 165/165 (transport property, carries).
+2. Directional: abstention reappears (keep < 165). If keep is materially
+   below 165 and within sight of ollama's 133, prompt structure is the
+   dominant variable and the MLX transport adopts the ollama rendering for
+   the official arm. If keep stays 165, the remaining suspects are the
+   forced-serialization context at the verdict position and runner-side
+   sampling internals, in that order — each its own arm before any new model.
+3. Ship falsifier unchanged: recall < 11/13 or keep > 64 fails the pin.
