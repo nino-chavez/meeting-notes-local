@@ -306,6 +306,12 @@ REGISTERED_RUN = {
         "num_ctx": 16384,
         "temperature": 0.0,
         "num_predict": "min(4096, 32 + 96 * candidates)",
+        "model_facing_candidate_ids": (
+            "batch-positional locators c01..cNN; local decode maps each "
+            "locator to its registered candidate ID, requires exact "
+            "single coverage, canonicalizes order, and counts "
+            "displacement as a diagnostic"
+        ),
     },
     "gates": {
         "fixture_agreement": 12,
@@ -868,21 +874,34 @@ def classification_num_predict(candidate_count: int) -> int:
     )
 
 
-def classification_format(candidate_ids: list[str]) -> dict:
+def batch_locators(candidate_ids: list[str]) -> list[str]:
+    """Short model-facing labels for one batch, mapped locally by position.
+
+    Measured 2026-08-14 on the pinned gemma3:12b: echoing 64-hex candidate
+    IDs cost 75 output tokens per item and produced duplicated and dropped
+    IDs in 2 of 6 live batches. The model never sees the hex IDs in the
+    response contract; it sees c01..cNN, and only local code maps them back.
+    """
     if (
         not isinstance(candidate_ids, list)
         or not candidate_ids
+        or len(candidate_ids) > 99
         or any(not isinstance(value, str) or not value for value in candidate_ids)
         or len(candidate_ids) != len(set(candidate_ids))
     ):
         raise StructuredOutputError(
-            "classifier schema requires unique nonblank candidate IDs")
+            "classifier schema requires up to 99 unique nonblank candidate IDs")
+    return [f"c{index:02d}" for index in range(1, len(candidate_ids) + 1)]
+
+
+def classification_format(candidate_ids: list[str]) -> dict:
+    locators = batch_locators(candidate_ids)
     item = {
         "type": "object",
         "additionalProperties": False,
         "required": ["candidate_id", "verdict"],
         "properties": {
-            "candidate_id": {"type": "string", "enum": candidate_ids},
+            "candidate_id": {"type": "string", "enum": locators},
             "verdict": {"type": "string", "enum": ["KEEP", "ABSTAIN"]},
         },
     }
@@ -939,9 +958,11 @@ def decode_classification(raw: str, expected_candidate_ids: list[str]) -> dict:
         raise StructuredOutputError(
             "classifier response cardinality does not match its offered candidates")
 
-    safe_rows = []
-    for index, (row, expected_id) in enumerate(
-            zip(rows, expected_candidate_ids, strict=True)):
+    locators = batch_locators(expected_candidate_ids)
+    position = {locator: index for index, locator in enumerate(locators)}
+    seen: set[str] = set()
+    returned: list[tuple[str, str]] = []
+    for index, row in enumerate(rows):
         if not isinstance(row, _OrderedObject):
             raise StructuredOutputError(
                 f"classifier item {index} must be a JSON object")
@@ -950,21 +971,39 @@ def decode_classification(raw: str, expected_candidate_ids: list[str]) -> dict:
             raise StructuredOutputError(
                 f"classifier item {index} keys are missing, extra, or reordered")
         values = dict(row.pairs)
-        candidate_id = values["candidate_id"]
+        locator = values["candidate_id"]
         verdict = values["verdict"]
-        if not isinstance(candidate_id, str) or not isinstance(verdict, str):
+        if not isinstance(locator, str) or not isinstance(verdict, str):
             raise StructuredOutputError(
                 f"classifier item {index} values must be strings")
-        if candidate_id != expected_id:
+        if locator not in position:
             raise StructuredOutputError(
-                f"classifier item {index} is missing, duplicated, reordered, or unknown")
+                f"classifier item {index} names an unknown candidate locator")
+        if locator in seen:
+            raise StructuredOutputError(
+                f"classifier item {index} duplicates candidate locator {locator}")
         if verdict not in {"KEEP", "ABSTAIN"}:
             raise StructuredOutputError(
                 f"classifier item {index} has an invalid verdict")
-        safe_rows.append({
-            "candidate_id": candidate_id,
+        seen.add(locator)
+        returned.append((locator, verdict))
+    if len(returned) != len(locators):
+        raise StructuredOutputError(
+            "classifier response does not cover the offered candidates exactly once")
+    # Order carries no information the locator does not already carry, and no
+    # JSON schema can constrain it. Decode canonicalizes to registered order
+    # deterministically and counts the displacement as a replayable diagnostic.
+    out_of_order = sum(
+        1 for index, (locator, _verdict) in enumerate(returned)
+        if position[locator] != index)
+    safe_rows = [
+        {
+            "candidate_id": expected_candidate_ids[position[locator]],
             "verdict": verdict,
-        })
+        }
+        for locator, verdict in sorted(
+            returned, key=lambda pair: position[pair[0]])
+    ]
     return {
         "schema": CLASSIFIER_CONTRACT_SCHEMA,
         "items": safe_rows,
@@ -973,6 +1012,7 @@ def decode_classification(raw: str, expected_candidate_ids: list[str]) -> dict:
             "returned": len(safe_rows),
             "keep": sum(row["verdict"] == "KEEP" for row in safe_rows),
             "abstain": sum(row["verdict"] == "ABSTAIN" for row in safe_rows),
+            "out_of_order_positions": out_of_order,
         },
     }
 
@@ -1003,12 +1043,13 @@ def _classification_user(packets: list[dict]) -> str:
 
 def classifier_fixture_request() -> tuple[dict, str, str, list[str]]:
     candidate_ids = [row["candidate_id"] for row in CLASSIFIER_FIXTURES]
+    locators = batch_locators(candidate_ids)
     packets = [
         {
-            "candidate_id": row["candidate_id"],
+            "candidate_id": locator,
             "fragments": row["fragments"],
         }
-        for row in CLASSIFIER_FIXTURES
+        for locator, row in zip(locators, CLASSIFIER_FIXTURES, strict=True)
     ]
     expected = [row["expected"] for row in CLASSIFIER_FIXTURES]
     return (
@@ -1069,6 +1110,7 @@ def classification_request(
         row["source_fragment_id"]: row
         for row in fragment_map["fragments"]
     }
+    locators = batch_locators(candidate_ids)
     packets = []
     for candidate in batch:
         rows = []
@@ -1106,7 +1148,7 @@ def classification_request(
                 "text": anchor_turn[cue_start:cue_end],
             }
         packets.append({
-            "candidate_id": candidate["candidate_id"],
+            "candidate_id": locators[len(packets)],
             "cue": cue,
             "fragments": rows,
         })
@@ -1297,11 +1339,12 @@ def run_self_test() -> int:
     schema = classification_format(ids)
     bounds = schema["properties"]["items"]
     assert bounds["minItems"] == bounds["maxItems"] == len(ids)
+    locators = batch_locators(ids)
     raw = json.dumps({
         "items": [
-            {"candidate_id": ids[0], "verdict": "KEEP"},
-            {"candidate_id": ids[1], "verdict": "ABSTAIN"},
-            {"candidate_id": ids[2], "verdict": "KEEP"},
+            {"candidate_id": locators[0], "verdict": "KEEP"},
+            {"candidate_id": locators[1], "verdict": "ABSTAIN"},
+            {"candidate_id": locators[2], "verdict": "KEEP"},
         ]
     }, separators=(",", ":"))
     decoded = decode_classification(raw, ids)
@@ -1310,18 +1353,32 @@ def run_self_test() -> int:
         "returned": 3,
         "keep": 2,
         "abstain": 1,
+        "out_of_order_positions": 0,
     }
+    assert [row["candidate_id"] for row in decoded["items"]] == ids
+    reordered = json.dumps({
+        "items": [
+            {"candidate_id": locators[1], "verdict": "ABSTAIN"},
+            {"candidate_id": locators[0], "verdict": "KEEP"},
+            {"candidate_id": locators[2], "verdict": "KEEP"},
+        ]
+    }, separators=(",", ":"))
+    canonical = decode_classification(reordered, ids)
+    assert canonical["counts"]["out_of_order_positions"] == 2
+    assert [row["candidate_id"] for row in canonical["items"]] == ids
+    assert [row["verdict"] for row in canonical["items"]] == [
+        "KEEP", "ABSTAIN", "KEEP"]
     all_abstain = json.dumps({
         "items": [
-            {"candidate_id": candidate_id, "verdict": "ABSTAIN"}
-            for candidate_id in ids
+            {"candidate_id": locator, "verdict": "ABSTAIN"}
+            for locator in locators
         ]
     }, separators=(",", ":"))
     assert decode_classification(all_abstain, ids)["counts"]["abstain"] == 3
     all_keep = json.dumps({
         "items": [
-            {"candidate_id": candidate_id, "verdict": "KEEP"}
-            for candidate_id in ids
+            {"candidate_id": locator, "verdict": "KEEP"}
+            for locator in locators
         ]
     }, separators=(",", ":"))
     assert decode_classification(all_keep, ids)["counts"]["keep"] == 3
@@ -1331,38 +1388,38 @@ def run_self_test() -> int:
         "{}",
         '{"items":[]}',
         json.dumps({"items": [
+            {"candidate_id": locators[0], "verdict": "KEEP"},
+            {"candidate_id": locators[0], "verdict": "ABSTAIN"},
+            {"candidate_id": locators[2], "verdict": "KEEP"},
+        ]}, separators=(",", ":")),
+        json.dumps({"items": [
             {"candidate_id": ids[0], "verdict": "KEEP"},
-            {"candidate_id": ids[0], "verdict": "ABSTAIN"},
-            {"candidate_id": ids[2], "verdict": "KEEP"},
-        ]}, separators=(",", ":")),
-        json.dumps({"items": [
-            {"candidate_id": ids[1], "verdict": "KEEP"},
-            {"candidate_id": ids[0], "verdict": "ABSTAIN"},
-            {"candidate_id": ids[2], "verdict": "KEEP"},
-        ]}, separators=(",", ":")),
-        json.dumps({"items": [
-            {"verdict": "KEEP", "candidate_id": ids[0]},
             {"candidate_id": ids[1], "verdict": "ABSTAIN"},
             {"candidate_id": ids[2], "verdict": "KEEP"},
         ]}, separators=(",", ":")),
         json.dumps({"items": [
-            {"candidate_id": ids[0], "verdict": "MAYBE"},
-            {"candidate_id": ids[1], "verdict": "ABSTAIN"},
-            {"candidate_id": ids[2], "verdict": "KEEP"},
+            {"verdict": "KEEP", "candidate_id": locators[0]},
+            {"candidate_id": locators[1], "verdict": "ABSTAIN"},
+            {"candidate_id": locators[2], "verdict": "KEEP"},
         ]}, separators=(",", ":")),
         json.dumps({"items": [
-            {"candidate_id": ids[0], "verdict": []},
-            {"candidate_id": ids[1], "verdict": "ABSTAIN"},
-            {"candidate_id": ids[2], "verdict": "KEEP"},
+            {"candidate_id": locators[0], "verdict": "MAYBE"},
+            {"candidate_id": locators[1], "verdict": "ABSTAIN"},
+            {"candidate_id": locators[2], "verdict": "KEEP"},
+        ]}, separators=(",", ":")),
+        json.dumps({"items": [
+            {"candidate_id": locators[0], "verdict": []},
+            {"candidate_id": locators[1], "verdict": "ABSTAIN"},
+            {"candidate_id": locators[2], "verdict": "KEEP"},
         ]}, separators=(",", ":")),
         (
-            '{"items":[{"candidate_id":"' + ids[0]
-            + '","candidate_id":"' + ids[0] + '","verdict":"KEEP"}]}'
+            '{"items":[{"candidate_id":"' + locators[0]
+            + '","candidate_id":"' + locators[0] + '","verdict":"KEEP"}]}'
         ),
         json.dumps({"items": [
-            {"candidate_id": ids[0], "verdict": "KEEP", "extra": True},
-            {"candidate_id": ids[1], "verdict": "ABSTAIN"},
-            {"candidate_id": ids[2], "verdict": "KEEP"},
+            {"candidate_id": locators[0], "verdict": "KEEP", "extra": True},
+            {"candidate_id": locators[1], "verdict": "ABSTAIN"},
+            {"candidate_id": locators[2], "verdict": "KEEP"},
         ]}, separators=(",", ":")),
     ]
     for raw_invalid in invalid_responses:
@@ -1378,7 +1435,8 @@ def run_self_test() -> int:
         transcript, broad, batch, 3)
     assert request_schema == schema
     assert system == CLASSIFIER_SYSTEM
-    assert all(candidate_id in user for candidate_id in ids)
+    assert all(locator in user for locator in locators)
+    assert all(candidate_id not in user for candidate_id in ids)
     assert all(row["anchor_fragment_id"] in row["visible_fragment_ids"] for row in batch)
     altered_batch = json.loads(json.dumps(batch))
     altered_batch[0]["visible_fragment_ids"] = altered_batch[0][
@@ -1400,14 +1458,16 @@ def run_self_test() -> int:
     fixture_ids = [row["candidate_id"] for row in CLASSIFIER_FIXTURES]
     assert fixture_schema == classification_format(fixture_ids)
     assert fixture_system == CLASSIFIER_SYSTEM
-    assert all(candidate_id in fixture_user for candidate_id in fixture_ids)
+    fixture_locators = batch_locators(fixture_ids)
+    assert all(locator in fixture_user for locator in fixture_locators)
+    assert all(candidate_id not in fixture_user for candidate_id in fixture_ids)
     assert set(fixture_expected) == {"KEEP", "ABSTAIN"}
     assert classifier_fixture_sha256() == _json_sha256(CLASSIFIER_FIXTURES)
     fixture_raw = json.dumps({
         "items": [
-            {"candidate_id": candidate_id, "verdict": expected}
-            for candidate_id, expected in zip(
-                fixture_ids, fixture_expected, strict=True)
+            {"candidate_id": locator, "verdict": expected}
+            for locator, expected in zip(
+                fixture_locators, fixture_expected, strict=True)
         ]
     }, separators=(",", ":"))
     assert decode_fixture_classification(
@@ -1416,10 +1476,10 @@ def run_self_test() -> int:
         sabotaged_raw = json.dumps({
             "items": [
                 {
-                    "candidate_id": candidate_id,
+                    "candidate_id": locator,
                     "verdict": sabotaged_verdict,
                 }
-                for candidate_id in fixture_ids
+                for locator in fixture_locators
             ]
         }, separators=(",", ":"))
         try:

@@ -68,6 +68,7 @@ from candidate_exposure import (
 from candidate_exposure import SCHEMA as REVIEW_REFERENCE_SCHEMA
 from candidate_first import (
     CLASSIFIER_FIXTURES,
+    batch_locators,
     CLASSIFIER_SYSTEM,
     REGISTERED_RUN,
     SABOTAGED_ALWAYS_ABSTAIN_SYSTEM,
@@ -127,7 +128,10 @@ KEEP_LIMIT = REGISTERED_RUN["gates"]["maximum_keep"]
 ELAPSED_LIMIT_SECONDS = float(REGISTERED_RUN["gates"]["maximum_elapsed_seconds"])
 PROMPT_ESTIMATE_CHARS_PER_TOKEN = 3.7
 
-RESPONSE_VALIDATION = "strict replayable JSON containing only ordered candidate decisions"
+RESPONSE_VALIDATION = (
+    "strict replayable JSON covering every offered candidate locator exactly "
+    "once; decode canonicalizes order and counts displacement"
+)
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -252,7 +256,7 @@ def derive_registered_inputs(corpus_path: Path) -> tuple[Transcript, dict, dict,
     if classifier_fixture_sha256() != REGISTERED_RUN["classifier"]["fixture_sha256"]:
         raise StructuredOutputError("registered classifier fixtures changed")
     if registered_run_sha256() != (
-        "87526ad6f0b16f123f85e35f916d2bd13b2518b1027d2d0aac899ad2913223a8"
+        "cbbb4e2448475ce5375b075d806581448936c81f7942c489c55c2e0a923d7a69"
     ):
         raise StructuredOutputError("candidate classifier registration changed")
     return transcript, first_manifest, registry, authority
@@ -867,13 +871,14 @@ def validate_call_receipt(
 def deterministic_sabotage_controls() -> dict:
     """Prove locally that the two trivial fixed patterns fail semantics."""
     fixture_ids = [row["candidate_id"] for row in CLASSIFIER_FIXTURES]
+    fixture_locators = batch_locators(fixture_ids)
     rows = []
     for verdict in ("KEEP", "ABSTAIN"):
         raw = json.dumps(
             {
                 "items": [
-                    {"candidate_id": candidate_id, "verdict": verdict}
-                    for candidate_id in fixture_ids
+                    {"candidate_id": locator, "verdict": verdict}
+                    for locator in fixture_locators
                 ]
             },
             separators=(",", ":"),
@@ -914,8 +919,14 @@ def _assert_sabotaged_semantics(decoded: dict, verdict: str) -> None:
         raise StructuredOutputError(
             f"sabotaged model call did not produce the commanded all-{verdict} pattern"
         )
+    fixture_locators = batch_locators(
+        [row["candidate_id"] for row in CLASSIFIER_FIXTURES])
     raw = json.dumps(
-        {"items": decoded["items"]},
+        {"items": [
+            {"candidate_id": locator, "verdict": row["verdict"]}
+            for locator, row in zip(
+                fixture_locators, decoded["items"], strict=True)
+        ]},
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -1687,9 +1698,9 @@ class _FakeTransport:
         if self.clock is not None:
             self.clock.advance(self.chat_cost_seconds)
         candidate_ids = response_format_candidate_ids(response_format)
-        if system == CLASSIFIER_SYSTEM and candidate_ids == [
-            row["candidate_id"] for row in CLASSIFIER_FIXTURES
-        ]:
+        if system == CLASSIFIER_SYSTEM and candidate_ids == batch_locators(
+            [row["candidate_id"] for row in CLASSIFIER_FIXTURES]
+        ) and len(candidate_ids) == len(CLASSIFIER_FIXTURES):
             verdicts = [row["expected"] for row in CLASSIFIER_FIXTURES]
         elif system == SABOTAGED_ALWAYS_KEEP_SYSTEM:
             verdicts = ["KEEP"] * len(candidate_ids)
@@ -1952,7 +1963,6 @@ def run_self_test() -> int:
         "malformed",
         "missing-decision",
         "duplicate-decision",
-        "reordered-decisions",
         "length",
         "missing-completion",
         "context",
@@ -1973,6 +1983,23 @@ def run_self_test() -> int:
             schema=fixture_schema,
             candidate_ids=fixture_ids,
         )
+
+    reordered_transport = _FakeTransport(mode="reordered-decisions")
+    _receipt, reordered_decoded = perform_call(
+        reordered_transport,
+        identity=identity,
+        timeout=1,
+        call_ordinal=1,
+        call_kind=FIXTURE_CALL,
+        batch_ordinal=None,
+        system_contract=REGISTERED_SYSTEM,
+        system=fixture_system,
+        user=fixture_user,
+        schema=fixture_schema,
+        candidate_ids=fixture_ids,
+    )
+    assert reordered_decoded["counts"]["out_of_order_positions"] == 2
+    assert [row["candidate_id"] for row in reordered_decoded["items"]] == fixture_ids
 
     controls = deterministic_sabotage_controls()
     assert len(controls["rows"]) == 2

@@ -2233,3 +2233,33 @@ ledgers, and pending locks — must be regenerated and re-approved before use.
 The registered predictions above stand unchanged; prediction 4's runtime
 uncertainty now includes the measured fact that responses are ~2.4k tokens
 per full batch.
+
+### Second pre-run amendment, 2026-08-14: short model-facing locators
+
+Still before any registered corpus call. Under the corrected output budget,
+the next live private-capture attempt was refused by strict decoding: an item
+did not match its expected candidate ID. A content-free six-batch diagnostic
+(coverage and order only; no verdicts retained) measured the failure shape on
+the pinned model: every batch completed with the correct cardinality, but
+**2 of 6 batches contained duplicated and dropped 64-hex candidate IDs**, and
+3 of 6 returned items out of registered order. The model cannot reliably echo
+thirty-two 64-character hexadecimal strings, independent of budget.
+
+The amendment stops asking it to. The response contract now uses
+batch-positional locators `c01..cNN` in the model-facing packets and schema
+enum; local decode maps each locator back to its registered candidate ID.
+Decode requires exact single coverage of the offered locators — duplicates,
+gaps, and unknown locators still refuse — and canonicalizes item order
+deterministically, counting displacement into the replayable
+`out_of_order_positions` diagnostic, because order carries no information the
+locator does not already carry and no JSON schema can constrain it. The
+classifier system prompt, fixtures, model pin, batch size, context, gates,
+and the corrected output budget are unchanged; the sabotage controls and
+fixture calls use the same locator contract.
+
+The executable registration re-pins from `87526ad6…3223a8` to
+`cbbb4e2448475ce5375b075d806581448936c81f7942c489c55c2e0a923d7a69`. Artifacts
+bound to superseded digests must be regenerated and re-approved. A side
+effect worth recording: locators cut the response cost roughly threefold, so
+the 96-token per-item budget from the first amendment is now generous rather
+than tight.
