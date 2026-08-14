@@ -638,6 +638,112 @@ mod tests {
         }
     }
 
+    /// Serialized size of one claim, in the shape `parse_claim` accepts.
+    fn escaped_len(serialized: &str) -> usize {
+        serialized
+            .chars()
+            .map(|character| match character as u32 {
+                0..=0x7F => 1,
+                0x80..=0xFFFF => 6,
+                _ => 12,
+            })
+            .sum()
+    }
+
+    /// The projection frame has under 1% headroom at the current keep budget,
+    /// and the margin turns on a serialization choice nobody pinned.
+    ///
+    /// A worst-case legal projection is 64 claims -- the keep budget in
+    /// `notes/EVAL.md` -- each carrying the maximum 160 characters and the
+    /// maximum three locators. Written as raw UTF-8 with non-ASCII text that
+    /// is about 65,200 bytes against a 65,536-byte frame. Written with
+    /// non-ASCII escaped as `\uXXXX` the same projection is about 96,000
+    /// bytes, and overflows somewhere in the forties.
+    ///
+    /// Unlike the runtime manifest, the result frame carries no canonicality
+    /// rule: `parse_result` accepts either spelling. So whether a legal
+    /// projection fits depends on a serializer flag on the far side of the
+    /// process boundary, which no test on either side pins.
+    ///
+    /// An over-large frame is refused by the length check as `Unavailable`,
+    /// never `CapacityExceeded`. That is deliberate -- at that point a valid
+    /// oversized frame is indistinguishable from a malformed one, and the
+    /// transport must not guess -- but the two map to different
+    /// `LibraryReadError` variants, so the rebuild reports the wrong reason.
+    ///
+    /// This pins the headroom so a keep-budget or locator-cap change fails
+    /// here, where the arithmetic is written down, rather than as an
+    /// unexplained `Unavailable` on one meeting.
+    #[test]
+    fn a_worst_case_legal_projection_fits_the_frame_only_while_unescaped() {
+        let text: String = "\u{6f22}".repeat(160);
+        assert_eq!(
+            text.chars().count(),
+            160,
+            "the parser cap is 160 characters"
+        );
+        let claims: Vec<_> = (0..64_u64)
+            .map(|ordinal| {
+                serde_json::json!({
+                    "claim_ordinal": ordinal,
+                    "claim_sha256": "a".repeat(64),
+                    "claim_type": "proposal",
+                    "evidence_state": "located",
+                    "claim": text,
+                    "locators": (0..3_u64).map(|index| serde_json::json!({
+                        "turn": 999,
+                        "start": 1000 + index,
+                        "end": 2000 + index,
+                        "text_sha256": "b".repeat(64),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let document = serde_json::json!({
+            "schema": "note-projection-result/1",
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "operation": "note.project",
+            "outcome": "succeeded",
+            "projection": {
+                "schema": "note-claim-projection/1",
+                "note_json_sha256": "c".repeat(64),
+                "note_markdown_sha256": "d".repeat(64),
+                "transcript_sha256": "e".repeat(64),
+                "claims": claims,
+            },
+            "failure": Value::Null,
+        });
+        let serialized = serde_json::to_string(&document).unwrap();
+
+        let raw = serialized.len() + 1;
+        assert!(
+            raw <= MAX_PROJECTION_FRAME_BYTES,
+            "a worst-case legal projection must fit unescaped: {raw} bytes"
+        );
+        assert!(
+            MAX_PROJECTION_FRAME_BYTES - raw < MAX_PROJECTION_FRAME_BYTES / 100,
+            "headroom is under one percent; a wider budget or cap will not fit"
+        );
+        assert!(
+            escaped_len(&serialized) + 1 > MAX_PROJECTION_FRAME_BYTES,
+            "the same projection escaped does not fit, and nothing pins which is sent"
+        );
+    }
+
+    /// An over-large frame is a transport refusal, not a capacity refusal.
+    /// `projection-capacity-exceeded` is the child's structured refusal inside
+    /// a small frame; a frame too large to read carries no such claim.
+    #[test]
+    fn an_over_large_frame_is_unavailable_rather_than_capacity_exceeded() {
+        let mut oversized = Vec::with_capacity(MAX_PROJECTION_FRAME_BYTES + 2);
+        oversized.resize(MAX_PROJECTION_FRAME_BYTES + 1, b'x');
+        oversized.push(b'\n');
+        assert!(matches!(
+            parse_result(&oversized, &request(), &turns()),
+            Err(ProjectionError::Unavailable)
+        ));
+    }
+
     #[test]
     fn result_requires_exactly_one_terminal_newline_and_no_second_frame_bytes() {
         let fixture = fixture();
