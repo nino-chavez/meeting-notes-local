@@ -2519,3 +2519,17 @@ Registered predictions:
    download.
 3. Ship falsifier unchanged: recall < 11/13 on this view, or keep > 64,
    fails the pin.
+
+### 8-bit result — quantization exonerated; the divergence is prompt assembly
+
+`mlx-community/gemma-3-12b-it-8bit` under the identical constrained-verdict
+transport: keep **165 of 165**, abstain 0, all batches strict — byte-for-byte
+the same verdict profile as the 4-bit QAT arm. Prediction 2's discriminator
+fires in the exonerating direction: two quantizations of the same weights at
+different precisions agree completely, so quantization precision is not the
+cause. The keep-everything behavior comes from what the MLX transport shows
+the model — chat-template rendering, BOS handling, or the forced-serialization
+context at the verdict position — relative to whatever ollama's build showed
+it. Per the preregistration, the next step is the prompt-assembly parity
+investigation (byte-level comparison of rendered prompts and generation
+context between the two transports) before any further model download.
