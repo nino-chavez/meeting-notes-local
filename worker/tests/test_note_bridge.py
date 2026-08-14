@@ -25,6 +25,8 @@ from worker.note_validator import project as project_snapshot
 from worker.note_bridge import (
     MAX_FRAME_BYTES,
     BridgeRefused,
+    _REQUIRED_FLAGS,
+    _confine_runtime_imports,
     InvalidArguments,
     _emit,
     _parse_command,
@@ -1533,6 +1535,36 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         # not the pre-flight verification refusing a bad tree.
         self.assertGreaterEqual(result["failure"]["receipt"]["responses"], 1)
 
+    def test_a_transcript_with_no_classifiable_text_refuses_cleanly(self) -> None:
+        """Turns that hold no words yield no candidates, and that is not a note.
+
+        I reported this branch unreachable — the empty-transcript guard sits in
+        front of it — and that was wrong. A whitespace-only turn passes that
+        guard (the transcript does have a turn) and produces zero fragments, so
+        zero candidates and zero batches. Reachable, and a real capture case: a
+        meeting whose transcription produced only blank rows must refuse rather
+        than return an empty note.
+        """
+        document = {
+            "schema": "file-transcript/1",
+            "source": "synthetic blank-capture control; not product evidence",
+            "attribution": "none",
+            "turns": [{"text": "   ", "start": float(index + 1)} for index in range(3)],
+        }
+        encoded = (json.dumps(document, indent=2) + "\n").encode()
+        transcript_id = hashlib.sha256(encoded).hexdigest()
+        private_file(
+            self.root / "meetings" / self.meeting_id / "transcript" / f"{transcript_id}.json",
+            encoded,
+        )
+        self._harness.transcript_id = transcript_id
+        result, returncode, error, _ = self._run()
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"]["code"], "no-generatable-transcript")
+        # Refused before any model was loaded, because no model was needed.
+        self.assertFalse(self.marker.exists())
+
     def test_generate_command_may_not_name_a_note(self) -> None:
         with self.assertRaises(InvalidArguments):
             _parse_command(
@@ -1712,6 +1744,83 @@ class EvidenceRuleTests(unittest.TestCase):
         with self.assertRaises(GenerationRefused) as caught:
             locate_kept_candidates(manifest, [], transcript)
         self.assertEqual(caught.exception.code, "citation-locator")
+
+
+class RuntimeConfinementTests(unittest.TestCase):
+    """`_confine_runtime_imports` refuses an import path it did not sanction.
+
+    Reached as a unit because the subprocess harness cannot construct the state:
+    the bridge always starts with `-I -S -E -s`, so site initialization never
+    runs and site-packages never lands on `sys.path`. That made the check look
+    unreachable, which is a claim about the *gate in front of it*, not about the
+    check itself.
+
+    Every refusal here is asserted by message, not merely by type. The first
+    version of this class used the real interpreter's site-packages and passed
+    with the site-packages check deleted — Homebrew's site-packages resolves
+    outside the resolved base prefix, so the *prefix-escape* refusal fired and
+    `assertRaises(BridgeRefused)` could not tell the two apart. A synthetic
+    prefix puts the directory genuinely inside, so the intended branch is the
+    one that runs.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.prefix = Path(self.temporary.name).resolve()
+        self.stdlib = self.prefix / "lib" / f"python3.{sys.version_info.minor}"
+        self.stdlib.mkdir(mode=0o700, parents=True)
+        self.site_packages = self.stdlib / "site-packages"
+        self.site_packages.mkdir(mode=0o700)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _confine_with(self, entries: list[str]):
+        """Call the confiner with sanctioned flags and a chosen import path."""
+        flags = types.SimpleNamespace(**dict(_REQUIRED_FLAGS))
+        saved_path = list(sys.path)
+        saved_modules = {
+            name: sys.modules.pop(name)
+            for name in ("site", "sitecustomize", "usercustomize")
+            if name in sys.modules
+        }
+        try:
+            with (
+                mock.patch.object(sys, "flags", flags),
+                mock.patch.object(sys, "base_prefix", str(self.prefix)),
+            ):
+                sys.path[:] = entries
+                return _confine_runtime_imports()
+        finally:
+            sys.path[:] = saved_path
+            sys.modules.update(saved_modules)
+
+    def test_a_standard_library_path_is_sanctioned(self) -> None:
+        """Positive control: without it, the refusals below prove nothing."""
+        approved = self._confine_with([str(self.stdlib)])
+        self.assertIn(self.stdlib, approved)
+
+    def test_site_packages_inside_the_prefix_is_refused_by_name(self) -> None:
+        with self.assertRaises(BridgeRefused) as caught:
+            self._confine_with([str(self.site_packages)])
+        self.assertIn("site packages", str(caught.exception))
+
+    def test_a_path_outside_the_interpreter_prefix_is_refused_by_name(self) -> None:
+        with self.assertRaises(BridgeRefused) as caught:
+            self._confine_with([str(REPO)])
+        self.assertIn("escapes the interpreter prefix", str(caught.exception))
+
+    def test_an_attested_runtime_with_no_library_path_is_refused(self) -> None:
+        with self.assertRaises(BridgeRefused) as caught:
+            self._confine_with([])
+        self.assertIn("no standard-library path", str(caught.exception))
+
+    def test_an_unsanctioned_flag_is_refused_before_any_path_is_read(self) -> None:
+        flags = types.SimpleNamespace(**{**_REQUIRED_FLAGS, "no_site": 0})
+        with mock.patch.object(sys, "flags", flags), self.assertRaises(BridgeRefused) as caught:
+            _confine_runtime_imports()
+        self.assertIn("isolated no-site mode", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
