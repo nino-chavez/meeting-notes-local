@@ -19,6 +19,7 @@ from worker.storage import StorageRefused, require_private_root
 
 MAX_FRAME_BYTES = 64 * 1024
 TRANSCRIPTION_HEARTBEAT_SECONDS = 3
+NOTE_GENERATION_HEARTBEAT_SECONDS = 3
 _PROTOCOL_WRITE_LOCK = threading.Lock()
 # sitting.derive joined the packaged alpha set on 2026-08-04 by the operator's
 # guided-enrollment registration decision, following the same-day encoder
@@ -87,7 +88,7 @@ def emit_progress(
 ) -> None:
     uuid.UUID(request_id)
     uuid.UUID(meeting_id)
-    if state not in {"recording", "transcribing"}:
+    if state not in {"recording", "transcribing", "finishing"}:
         raise ValueError("progress state is outside the closed protocol")
     emit(
         {
@@ -134,6 +135,45 @@ def start_transcription_heartbeat(
     thread = threading.Thread(
         target=emit_heartbeat,
         name="transcription-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return stopped, thread
+
+
+def start_note_generation_heartbeat(
+    request_id: str,
+    operation: str,
+    arguments: object,
+    *,
+    protocol_output,
+) -> tuple[threading.Event, threading.Thread] | None:
+    if operation != "note.create" or not isinstance(arguments, dict):
+        return None
+    meeting_id = arguments.get("meeting_id")
+    if not isinstance(meeting_id, str):
+        return None
+
+    stopped = threading.Event()
+
+    def emit_heartbeat() -> None:
+        while not stopped.wait(NOTE_GENERATION_HEARTBEAT_SECONDS):
+            try:
+                emit_progress(
+                    request_id,
+                    meeting_id,
+                    "finishing",
+                    protocol_output=protocol_output,
+                )
+            except Exception:
+                # The terminal result path remains authoritative. A broken
+                # protocol stream or malformed local input must not leave a
+                # background thread running after its request ends.
+                return
+
+    thread = threading.Thread(
+        target=emit_heartbeat,
+        name="note-generation-heartbeat",
         daemon=True,
     )
     thread.start()
@@ -469,7 +509,14 @@ def run(
             return 0
         try:
             request_id, operation, arguments = parse_command(frame, operations)
+            # Each starter is guarded to its own operation and returns None
+            # otherwise, so exactly one of these can be active per request.
             heartbeat = start_transcription_heartbeat(
+                request_id,
+                operation,
+                arguments,
+                protocol_output=protocol_output,
+            ) or start_note_generation_heartbeat(
                 request_id,
                 operation,
                 arguments,

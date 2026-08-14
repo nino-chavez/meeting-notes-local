@@ -2,11 +2,21 @@
 //!
 //! `restore_withheld_turn` was registered on 2026-08-04 by the operator's
 //! correction-surface (J4) decision, with `DesktopProductCoordinator` as the
-//! storage-backed owner. `regenerate_note` remains intentionally absent from
-//! `tauri::generate_handler!`: no note generator is admitted — the bounded
-//! note generator was rejected on review — so its coordinator can only
-//! refuse, and a rendered control that cannot work is the exact failure the
-//! shell contract exists to prevent.
+//! storage-backed owner. It remains out of `tauri::generate_handler!` today:
+//! no rendered control invokes it yet.
+//!
+//! `regenerate_note` is registered in `tauri::generate_handler!` on the
+//! `note-runtime-decision.md` seam-4/5 branch, ahead of the projector and
+//! model work (seams 2, 3, and 6 of that doc) that still has to land before
+//! merge. Registering the command early is safe today only because
+//! `DesktopProductCoordinator::accept_regeneration` truthfully refuses with
+//! `CoordinatorError::Unavailable` before touching the worker — no note
+//! generator is admitted, so the facade never claims the single-operation
+//! slot (see `regeneration_stays_truthfully_unavailable_even_with_a_live_runtime`
+//! in `product_coordinator.rs`). This branch merges to main only after the
+//! measurement gate clears and a real projector is admitted, so the invariant
+//! "no rendered control that cannot work" holds at merge time even though it
+//! is relaxed, deliberately, for the life of this branch.
 
 use std::sync::{Arc, Mutex};
 
@@ -209,8 +219,9 @@ pub(crate) fn restore_withheld_turn(
     Ok(accepted)
 }
 
-/// Unregistered Tauri command — see the module header for why it stays out
-/// of `invoke_handler` while no note generator is admitted.
+/// Registered in `invoke_handler` on this branch ahead of its coordinator's
+/// real worker path — see the module header for why that is still safe today
+/// and what has to land before merge.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn regenerate_note(
     meeting_id: Uuid,

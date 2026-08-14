@@ -56,6 +56,7 @@ const MAIN_PERMISSIONS: &[&str] = &[
     "allow-operator-note",
     "allow-save-operator-note",
     "allow-open-current-transcript-file",
+    "allow-regenerate-note",
 ];
 
 fn permissions(source: &str) -> Vec<String> {
@@ -192,4 +193,14 @@ fn desktop_handler_exposes_the_same_small_product_command_set() {
     for retired in ["get_desktop_layout", "preview_profile", "library_create_folder", "corpus_search"] {
         assert!(!handler.contains(retired), "retired command remains in the product handler: {retired}");
     }
+    // regenerate_note is intentionally absent from PRODUCT_COMMANDS above: no
+    // rendered control invokes it yet (see product_facade.rs's module header),
+    // so it must not appear in every_frontend_call_has_a_matching_product_permission's
+    // frontend-invocation parity check. It is registered in the handler on
+    // this branch ahead of that control, per the operator's runtime-decision
+    // sequencing.
+    assert!(
+        handler.contains("regenerate_note"),
+        "handler does not register regenerate_note"
+    );
 }

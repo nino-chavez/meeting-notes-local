@@ -912,6 +912,10 @@ while True:
         with mock.patch("worker.main.sys.stdout", output):
             emit_progress(request_id, meeting_id, "transcribing")
         self.assertEqual(json.loads(output.getvalue())["state"], "transcribing")
+        output = io.StringIO()
+        with mock.patch("worker.main.sys.stdout", output):
+            emit_progress(request_id, meeting_id, "finishing")
+        self.assertEqual(json.loads(output.getvalue())["state"], "finishing")
         with self.assertRaises(ValueError):
             emit_progress(request_id, meeting_id, "arming")
 
@@ -950,6 +954,64 @@ while True:
                 "meeting_id": meeting_id,
             },
         )
+
+    def test_transcription_heartbeat_is_not_started_for_note_create(self) -> None:
+        from worker.main import start_transcription_heartbeat
+
+        heartbeat = start_transcription_heartbeat(
+            str(uuid.uuid4()),
+            "note.create",
+            {"meeting_id": str(uuid.uuid4())},
+            protocol_output=io.StringIO(),
+        )
+        self.assertIsNone(heartbeat)
+
+    def test_note_generation_heartbeat_uses_the_protocol_stream(self) -> None:
+        from worker.main import start_note_generation_heartbeat
+
+        request_id = str(uuid.uuid4())
+        meeting_id = str(uuid.uuid4())
+        protocol = io.StringIO()
+        with mock.patch("worker.main.NOTE_GENERATION_HEARTBEAT_SECONDS", 0.01):
+            heartbeat = start_note_generation_heartbeat(
+                request_id,
+                "note.create",
+                {"meeting_id": meeting_id},
+                protocol_output=protocol,
+            )
+            self.assertIsNotNone(heartbeat)
+            stopped, thread = heartbeat
+            try:
+                for _ in range(100):
+                    if protocol.getvalue():
+                        break
+                    threading.Event().wait(0.01)
+                self.assertTrue(protocol.getvalue())
+            finally:
+                stopped.set()
+                thread.join()
+
+        self.assertEqual(
+            json.loads(protocol.getvalue().splitlines()[0]),
+            {
+                "schema": "worker-event/2",
+                "request_id": request_id,
+                "event": "capture.state",
+                "state": "finishing",
+                "meeting_id": meeting_id,
+            },
+        )
+
+    def test_note_generation_heartbeat_is_not_started_for_transcript_create(self) -> None:
+        from worker.main import start_note_generation_heartbeat
+
+        heartbeat = start_note_generation_heartbeat(
+            str(uuid.uuid4()),
+            "transcript.create",
+            {"meeting_id": str(uuid.uuid4())},
+            protocol_output=io.StringIO(),
+        )
+        self.assertIsNone(heartbeat)
 
     def test_operation_stdout_cannot_enter_protocol(self) -> None:
         from worker.main import dispatch_without_protocol_output

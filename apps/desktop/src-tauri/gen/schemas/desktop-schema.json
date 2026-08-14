@@ -423,6 +423,12 @@
           "markdownDescription": "Enables the refresh_current_transcript command without any pre-configured scope."
         },
         {
+          "description": "Enables the regenerate_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-regenerate-note",
+          "markdownDescription": "Enables the regenerate_note command without any pre-configured scope."
+        },
+        {
           "description": "Enables the remove_transcript_model command without any pre-configured scope.",
           "type": "string",
           "const": "allow-remove-transcript-model",
@@ -715,6 +721,12 @@
           "type": "string",
           "const": "deny-refresh-current-transcript",
           "markdownDescription": "Denies the refresh_current_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the regenerate_note command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-regenerate-note",
+          "markdownDescription": "Denies the regenerate_note command without any pre-configured scope."
         },
         {
           "description": "Denies the remove_transcript_model command without any pre-configured scope.",
