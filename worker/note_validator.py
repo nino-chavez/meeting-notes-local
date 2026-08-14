@@ -225,8 +225,20 @@ def forbidden_in_claim(character: str) -> bool:
     content-free `Unavailable` that aborts the whole library rebuild, so a
     projection this validator accepts and that one refuses is a divergence
     reported as a storage fault on an unrelated meeting.
+
+    Category Cs — a lone surrogate, which `json.loads` will happily produce from
+    a `\\ud800` escape — is refused here as a rule rather than as an accident.
+    It was already refused, but only because computing the claim digest encodes
+    to UTF-8 and that raises, so the refusal depended on where the digest check
+    sat in a boolean chain. Rust reaches the same end by a different mechanism:
+    serde_json rejects the escape at parse, so a surrogate never becomes a
+    `char` there. Same behaviour, two unrelated enforcement points, worth naming
+    because neither would move if the other changed.
     """
-    return unicodedata.category(character) == "Cc" or character in "\u2028\u2029"
+    return (
+        unicodedata.category(character) in {"Cc", "Cs"}
+        or character in "\u2028\u2029"
+    )
 
 
 def validate_locators(evidence_refs: list, transcript) -> list[dict]:

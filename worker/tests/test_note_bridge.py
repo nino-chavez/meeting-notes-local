@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import types
+import unicodedata
 import unittest
 from unittest import mock
 import uuid
@@ -1723,7 +1724,12 @@ class EvidenceRuleTests(unittest.TestCase):
         return {
             "claim": claim,
             "type": "decision",
-            "claim_sha256": hashlib.sha256(claim.encode("utf-8")).hexdigest(),
+            # Encoding a lone surrogate raises, so a row carrying one gets a
+            # placeholder. The forbidden-character rule short-circuits ahead of
+            # the digest comparison, which is exactly what is under test.
+            "claim_sha256": (
+                hashlib.sha256(claim.encode("utf-8", "surrogatepass")).hexdigest()
+            ),
             "evidence_refs": [
                 {
                     "turn": 0,
@@ -1763,14 +1769,43 @@ class EvidenceRuleTests(unittest.TestCase):
                 with self.assertRaises(ArtifactFailure):
                     validate_claim_rows([self._claim_row(claim)], transcript)
 
-    def test_the_forbidden_set_is_exactly_rusts(self) -> None:
-        """Cc plus the two separators — no more, no less."""
-        self.assertTrue(all(forbidden_in_claim(chr(point)) for point in range(0x00, 0x20)))
-        self.assertTrue(all(forbidden_in_claim(chr(point)) for point in range(0x7F, 0xA0)))
+    def test_the_forbidden_set_covers_rusts_and_says_where_it_is_wider(self) -> None:
+        """Cc and the two separators mirror `forbidden()`; Cs is deliberately extra.
+
+        Rust's `forbidden()` does not name surrogates because serde_json refuses
+        the escape at parse, so a surrogate can never reach that function. Python
+        has no such parser guarantee — `json.loads` returns a lone surrogate
+        happily — so the set here is wider by exactly Cs. Behaviour matches; the
+        two enforcement points do not, and the asymmetry is the point of the
+        test.
+        """
+        for point in range(0x00, 0x20):
+            self.assertTrue(forbidden_in_claim(chr(point)), hex(point))
+        for point in range(0x7F, 0xA0):
+            self.assertTrue(forbidden_in_claim(chr(point)), hex(point))
         self.assertTrue(forbidden_in_claim(chr(0x2028)))
         self.assertTrue(forbidden_in_claim(chr(0x2029)))
+        for point in (0xD800, 0xDBFF, 0xDC00, 0xDFFF):
+            self.assertTrue(forbidden_in_claim(chr(point)), hex(point))
         for allowed in (" ", "a", "\u00e9", "\U0001f642", "\u00a0", "\u200b"):
             self.assertFalse(forbidden_in_claim(allowed), allowed)
+
+    def test_a_lone_surrogate_is_refused_as_a_rule_not_as_an_encoding_error(self) -> None:
+        """It was already refused; it was not refused *by a rule*.
+
+        `json.loads` produces a lone surrogate from a `\\ud800` escape, and the
+        old path stopped it only when the claim digest encoded to UTF-8 and
+        raised — a refusal that depended on the digest check's position in a
+        boolean chain. The outcome was right and the reason was accidental.
+        """
+        lone = json.loads('"\\ud800"')
+        self.assertEqual(unicodedata.category(lone), "Cs")
+        row = self._claim_row("we agreed " + lone + " to ship")
+        with self.assertRaises(ArtifactFailure) as caught:
+            validate_claim_rows([row], self._transcript())
+        # The rule refuses it, so the failure is the validator's closed code and
+        # not a UnicodeEncodeError escaping from the digest computation.
+        self.assertEqual(caught.exception.code, "artifact-invalid")
 
     def test_a_claim_at_the_cap_passes_and_one_over_it_is_refused(self) -> None:
         """160 is the boundary `note_projection.rs` enforces; both sides count."""
