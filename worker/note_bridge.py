@@ -34,6 +34,10 @@ MAX_GENERATOR_RESPONSE_BYTES = 1024 * 1024
 GENERATOR_DEADLINE_S = 900
 # Written by `model_store.rs` beside the model files it installs. It is install
 # provenance, not model bytes, so it is excluded from the pinned digest set.
+# Tolerated, not required: `model_store::verify_model_directory` requires it and
+# reads it, and this bridge deliberately does not parse install provenance — the
+# manifest's digests are the authority here, so a directory with no receipt
+# passes the bridge and still fails the Rust check that owns that question.
 MODEL_INSTALL_RECEIPT = "model-install.json"
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SAFE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -85,7 +89,10 @@ _GENERATOR_BOOTSTRAP = (
 )
 # Set while a generator child is running so the parent-liveness watchers can
 # reap it. Without this a bridge that exits on parent EOF leaves a model process
-# holding several gigabytes of unified memory after the app has quit.
+# holding several gigabytes of unified memory after the app has quit. It is
+# assigned after `Popen` returns, so a parent EOF inside that window still
+# orphans the child; closing it needs a pre-fork registration this transport
+# does not have.
 _RUNNING_GENERATOR: subprocess.Popen | None = None
 
 
@@ -1184,8 +1191,13 @@ def _run_generation(
     }
     encoded = json.dumps(generated, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if len(encoded) + 1 > MAX_FRAME_BYTES:
-        # Refused, never truncated: a shortened note is indistinguishable from a
-        # note the model chose to keep short.
+        # Unreachable at the current budget, and kept anyway. A maximal
+        # projection — 64 claims, each a 160-character claim with three
+        # locators — encodes to 46,019 bytes against a 65,536-byte frame, so
+        # `MAX_GENERATED_CLAIMS` refuses first and no test can reach this line.
+        # It stands because the keep budget is a product number that can move,
+        # and if it moves the answer must still be a refusal: a shortened note
+        # is indistinguishable from a note the model chose to keep short.
         _transcript_only(request_id, "generation-capacity-exceeded", False, receipt)
         return 0
     _emit(generated)
