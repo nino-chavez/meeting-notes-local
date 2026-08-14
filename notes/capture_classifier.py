@@ -77,7 +77,7 @@ def _file_sha256(path: Path) -> str:
 
 RESULT_SCHEMA = "capture-classifier-result/1"
 HARNESS_REGISTRATION_SHA256 = (
-    "cbbb4e2448475ce5375b075d806581448936c81f7942c489c55c2e0a923d7a69"
+    "94e8cfecb2404fe5295cde5b18e9ab3accdbc1df32da9f59afe52f2d099a1e10"
 )
 
 

@@ -298,9 +298,9 @@ REGISTERED_RUN = {
         "fixture_sha256": (
             "52bb4ac93d1dc5e9a384c78b2801fca22865640304301510031ec16ab1e4fb91"
         ),
-        "model": "gemma3:12b",
+        "model": "gemma3:27b",
         "model_digest": (
-            "f4031aab637d1ffa37b42570452ae0e4fad0314754d17ded67322e4b95836f8a"
+            "a418f5838eaf7fe2cfe0a3046c8384b68ba43a4435542c942f9db00a5f342203"
         ),
         "batch_size": 32,
         "num_ctx": 16384,
