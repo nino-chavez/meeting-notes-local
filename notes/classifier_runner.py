@@ -983,18 +983,29 @@ def validate_corpus_receipts(
     identity: dict,
     *,
     first_call_ordinal: int = 4,
+    expected_batches: int | None = None,
+    expected_decisions: int | None = None,
 ) -> tuple[list[dict], float]:
-    """Re-derive every registered ordered batch and durable decision."""
+    """Re-derive every registered ordered batch and durable decision.
+
+    The expected counts default to the registered ES2004c corpus. A private
+    capture lane passes its own manifest-derived counts; every other check —
+    ordered coverage, receipt binding, exact response identity — is the same.
+    """
+    if expected_batches is None:
+        expected_batches = EXPECTED_CORPUS_BATCHES
+    if expected_decisions is None:
+        expected_decisions = EXPECTED_CORPUS_DECISIONS
     batch_size = REGISTERED_BATCH_SIZE
     batches = candidate_batches(manifest["candidates"], batch_size)
-    if len(batches) != EXPECTED_CORPUS_BATCHES:
+    if len(batches) != expected_batches:
         raise StructuredOutputError(
-            f"registered corpus does not produce {EXPECTED_CORPUS_BATCHES} batches"
+            f"registered corpus does not produce {expected_batches} batches"
         )
-    if not isinstance(receipts, list) or len(receipts) != EXPECTED_CORPUS_BATCHES:
+    if not isinstance(receipts, list) or len(receipts) != expected_batches:
         raise StructuredOutputError(
             "classifier result does not retain exactly "
-            f"{EXPECTED_CORPUS_BATCHES} corpus batch receipts"
+            f"{expected_batches} corpus batch receipts"
         )
     decisions: list[dict] = []
     elapsed = 0.0
@@ -1026,13 +1037,13 @@ def validate_corpus_receipts(
     expected_ids = [row["candidate_id"] for row in manifest["candidates"]]
     actual_ids = [row["candidate_id"] for row in decisions]
     if (
-        len(decisions) != EXPECTED_CORPUS_DECISIONS
+        len(decisions) != expected_decisions
         or actual_ids != expected_ids
         or len(actual_ids) != len(set(actual_ids))
     ):
         raise StructuredOutputError(
             "classifier receipts do not retain all "
-            f"{EXPECTED_CORPUS_DECISIONS} decisions once and in order"
+            f"{expected_decisions} decisions once and in order"
         )
     return decisions, elapsed
 
