@@ -221,10 +221,23 @@ def forbidden_in_claim(character: str) -> bool:
     Unicode category Cc is exactly Rust's `char::is_control()` — U+0000..U+001F
     and U+007F..U+009F — and the two separators are category Zl and Zp, so they
     are named rather than derived. The rule lives on both sides of the boundary
-    and neither is the other's fallback: Rust refuses such a claim with a
-    content-free `Unavailable` that aborts the whole library rebuild, so a
-    projection this validator accepts and that one refuses is a divergence
-    reported as a storage fault on an unrelated meeting.
+    and neither is the other's fallback.
+
+    Why a divergence here costs more than a refusal, which is the reason the
+    rule is stated rather than left to the other side. Refusing is cheap: a
+    declared `artifact-invalid` becomes `ProjectionError::ArtifactInvalid`, then
+    `MeetingInspectionError::Quarantine`, and the rebuild counts one quarantined
+    meeting and continues. Diverging is not: a claim this validator *accepts*
+    and the Rust parser rejects returns `ProjectionError::Unavailable`, which
+    becomes `LibraryReadError::ArtifactUnavailable` and ends the whole rebuild,
+    content-free, naming no meeting. The failure worth engineering against is
+    therefore not refusing too much here — it is admitting something the far
+    side will not parse.
+
+    That paragraph is a claim about code this file does not own. Verified
+    2026-08-14 at `note_projection.rs:220` for the refusal, and
+    `library_read.rs:1383-1389` and `:484-487` for both mappings. Re-derive it
+    before trusting it; nothing here fails when it goes stale.
 
     Category Cs — a lone surrogate, which `json.loads` will happily produce from
     a `\\ud800` escape — is refused here as a rule rather than as an accident.
