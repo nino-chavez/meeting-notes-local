@@ -2299,3 +2299,29 @@ larger local model under the same harness; per-candidate calls or
 self-consistency voting instead of single-pass batches; or accepting a
 sub-100% recall gate with an explicit human backstop. Each changes the
 experiment's meaning and needs its own preregistration.
+
+### Preregistration — model scale-up, 2026-08-14
+
+The view-sensitivity conclusion above leaves the model as the next variable.
+The amendment swaps exactly one registered value pair: `model` becomes
+`gemma3:27b` at a digest pinned after download. Same family, same template,
+same license terms as the registered 12b; prompts, fixtures, locators, batch
+size, context, decoding options, and gates are untouched, so parameter count
+is the only difference between the two arms.
+
+Registered predictions, before any 27b token is generated:
+
+1. On the private-capture ledger under the registered view (row units, ±1
+   fragment), 27b's recall will be at least 11/13, and its miss-set will be
+   a subset of the 12b miss-set {ev-008, ev-011, ev-012} — scale should not
+   lose events the smaller model found.
+2. The keep count is uncertain; no prediction is registered beyond the
+   standing 64 gate.
+3. Falsifier: if 27b's miss-set is not a subset of the 12b's — if scale moves
+   which commitments are lost the way view reshaping did — the
+   model-scale hypothesis is falsified for this contract, and the next arm is
+   self-consistency voting rather than a still-larger model.
+
+A content-controlled diagnostic runs before any official gated run, so an
+operator approval cycle is spent only on a configuration the diagnostic
+predicts will pass.
