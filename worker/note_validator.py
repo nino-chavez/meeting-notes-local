@@ -12,12 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
-# The registered keep budget in notes/EVAL.md. A generator that proposes more
-# points than the measured configuration is allowed to keep is refused rather
-# than truncated, so a capacity overflow can never look like a shorter note.
-MAX_GENERATED_CLAIMS = 64
-GENERATED_ROW_FIELDS = ("claim", "claim_type", "claim_sha256", "evidence_refs")
-GENERATED_REFERENCE_FIELDS = ("turn", "char_start", "char_end", "text_sha256")
 
 
 class ArtifactFailure(ValueError):
@@ -220,15 +214,55 @@ def _validate_snapshot(
             raise ArtifactFailure("artifact-invalid", False) from exc
 
 
-def validate_claim_rows(cited: list, transcript) -> list[dict]:
-    """Re-derive every claim's locators against the transcript it cites.
+def validate_locators(evidence_refs: list, transcript) -> list[dict]:
+    """Re-derive one point's locators against the transcript it cites.
 
-    One implementation of the note/2 evidence rule, shared by the stored-note
-    projection and by the generator admission path. Nothing is taken from the
-    supplied rows: every locator is bounds-checked against the loaded turns and
-    every `text_sha256` is recomputed from the transcript's own bytes, so a row
-    that names a turn or a span the transcript does not have cannot pass.
+    The note/2 evidence rule, in one place: one to three references, in order,
+    without duplicates, each bounds-checked against the loaded turns and each
+    `text_sha256` recomputed from the transcript's own bytes. Nothing supplied
+    is trusted, so a reference naming a turn or a span the transcript does not
+    have cannot pass.
     """
+    locators = []
+    for reference in evidence_refs:
+        turn = reference["turn"]
+        start = reference["char_start"]
+        end = reference["char_end"]
+        if (
+            type(turn) is not int
+            or type(start) is not int
+            or type(end) is not int
+            or turn < 0
+            or start < 0
+            or end <= start
+            or turn >= len(transcript.turns)
+            or end > len(transcript.turns[turn].text)
+        ):
+            raise ArtifactFailure("artifact-invalid", False)
+        text_sha256 = hashlib.sha256(
+            transcript.turns[turn].text[start:end].encode("utf-8")
+        ).hexdigest()
+        if reference.get("text_sha256") != text_sha256:
+            raise ArtifactFailure("artifact-invalid", False)
+        locators.append(
+            {
+                "turn": turn,
+                "start": start,
+                "end": end,
+                "text_sha256": text_sha256,
+            }
+        )
+    if not 1 <= len(locators) <= 3 or locators != sorted(
+        locators, key=lambda locator: (
+            locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
+        )
+    ) or len({tuple(locator.items()) for locator in locators}) != len(locators):
+        raise ArtifactFailure("artifact-invalid", False)
+    return locators
+
+
+def validate_claim_rows(cited: list, transcript) -> list[dict]:
+    """Re-derive every stored claim and its locators against the transcript."""
     claims = []
     for ordinal, row in enumerate(cited):
         claim = row["claim"]
@@ -241,41 +275,6 @@ def validate_claim_rows(cited: list, transcript) -> list[dict]:
             or row.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()
         ):
             raise ArtifactFailure("artifact-invalid", False)
-        locators = []
-        for reference in row["evidence_refs"]:
-            turn = reference["turn"]
-            start = reference["char_start"]
-            end = reference["char_end"]
-            if (
-                type(turn) is not int
-                or type(start) is not int
-                or type(end) is not int
-                or turn < 0
-                or start < 0
-                or end <= start
-                or turn >= len(transcript.turns)
-                or end > len(transcript.turns[turn].text)
-            ):
-                raise ArtifactFailure("artifact-invalid", False)
-            text_sha256 = hashlib.sha256(
-                transcript.turns[turn].text[start:end].encode("utf-8")
-            ).hexdigest()
-            if reference.get("text_sha256") != text_sha256:
-                raise ArtifactFailure("artifact-invalid", False)
-            locators.append(
-                {
-                    "turn": turn,
-                    "start": start,
-                    "end": end,
-                    "text_sha256": text_sha256,
-                }
-            )
-        if not 1 <= len(locators) <= 3 or locators != sorted(
-            locators, key=lambda locator: (
-                locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
-            )
-        ) or len({tuple(locator.items()) for locator in locators}) != len(locators):
-            raise ArtifactFailure("artifact-invalid", False)
         claims.append(
             {
                 "claim_ordinal": ordinal,
@@ -283,7 +282,7 @@ def validate_claim_rows(cited: list, transcript) -> list[dict]:
                 "claim_type": claim_type,
                 "evidence_state": "located",
                 "claim": claim,
-                "locators": locators,
+                "locators": validate_locators(row["evidence_refs"], transcript),
             }
         )
     return claims
@@ -350,71 +349,144 @@ def _project_snapshot(
         raise ArtifactFailure("artifact-invalid", False) from exc
 
 
-def _generated_object(value: object, names: tuple[str, ...]) -> dict:
-    """Accept only an exact, ordered object from untrusted generator output."""
-    if not isinstance(value, dict) or tuple(value) != names:
-        raise GenerationRefused("response-contract", False)
-    return value
+def _response_refusal(raw: str) -> str:
+    """Name which half of the response contract failed, without content."""
+    try:
+        json.loads(raw)
+    except (UnicodeError, ValueError):
+        return "response-json-syntax"
+    return "response-contract"
 
 
-def validate_generated_rows(rows: object, transcript) -> list[dict]:
-    """Replay untrusted generated points through the note/2 evidence rule.
+def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, list[dict]]:
+    """Enumerate candidates locally, then take one verdict per offered candidate.
 
-    The generator is never trusted for anything except proposing text and
-    locators. Shape is checked first so a malformed response cannot reach the
-    evidence rule, then `validate_claim_rows` re-derives every span from the
-    transcript's own bytes. Nothing that fails is repaired or trimmed.
+    This is the measured task, not a paraphrase of it. Deterministic local code
+    builds the candidate manifest and every request packet; the model's entire
+    output surface is one KEEP or ABSTAIN per candidate it was offered. It
+    cannot name a row it was not shown, invent a locator, or decide how many
+    points exist — `decode_classification` refuses an unknown, duplicated,
+    reordered, or miscounted verdict before anything reaches the transcript.
     """
-    if not isinstance(rows, list):
-        raise GenerationRefused("response-contract", False)
-    if not rows:
-        raise GenerationRefused("no-model-candidates", True)
-    if len(rows) > MAX_GENERATED_CLAIMS:
-        raise GenerationRefused("keep-budget-exceeded", False)
-    cited: list[dict] = []
-    for row in rows:
-        entry = _generated_object(row, GENERATED_ROW_FIELDS)
-        references = entry["evidence_refs"]
-        if not isinstance(references, list):
-            raise GenerationRefused("response-contract", False)
-        cited.append(
+    import candidate_first
+    from summarize import StructuredOutputError
+
+    registered = candidate_first.REGISTERED_RUN["classifier"]
+    budget = candidate_first.REGISTERED_RUN["gates"]["maximum_keep"]
+    batch_size = registered["batch_size"]
+    try:
+        manifest = candidate_first.generate_manifest(transcript, candidate_first.STRATEGY_BROAD)
+        candidate_first.validate_manifest(manifest, transcript)
+        batches = candidate_first.candidate_batches(manifest["candidates"], batch_size)
+    except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
+        raise GenerationRefused("no-generatable-transcript", True) from exc
+    if not batches:
+        raise GenerationRefused("no-generatable-transcript", True)
+    kept: list[dict] = []
+    for batch in batches:
+        candidate_ids = [row["candidate_id"] for row in batch]
+        try:
+            schema, system, user = candidate_first.classification_request(
+                transcript, manifest, batch, batch_size
+            )
+        except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
+            raise GenerationRefused("request-contract", False) from exc
+        raw = ask(
             {
-                "claim": entry["claim"],
-                "type": entry["claim_type"],
-                "claim_sha256": entry["claim_sha256"],
-                "evidence_refs": [
-                    _generated_object(reference, GENERATED_REFERENCE_FIELDS)
-                    for reference in references
-                ],
+                "schema": "note-classification-request/1",
+                "system": system,
+                "user": user,
+                "response_format": schema,
+                "num_predict": candidate_first.classification_num_predict(len(batch)),
+                "num_ctx": registered["num_ctx"],
+                "temperature": registered["temperature"],
             }
         )
-    digests = [row["claim_sha256"] for row in cited]
-    if len(set(digests)) != len(digests):
-        raise GenerationRefused("response-contract", False)
-    try:
-        return validate_claim_rows(cited, transcript)
-    except ArtifactFailure as exc:
-        # The retained transcript is intact — this is the generator's failure,
-        # and it must not be reported with a storage code.
-        raise GenerationRefused("citation-locator", False) from exc
-    except (UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
-        raise GenerationRefused("response-contract", False) from exc
+        try:
+            decoded = candidate_first.decode_classification(raw, candidate_ids)
+        except (StructuredOutputError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+            # `decode_classification` reports one error type for both "this is
+            # not JSON" and "this is JSON that breaks the contract". The
+            # research taxonomy separates them, so the discriminator is a
+            # parse attempt — not a second copy of the decoder.
+            raise GenerationRefused(_response_refusal(raw), False) from exc
+        verdicts = {row["candidate_id"]: row["verdict"] for row in decoded["items"]}
+        kept.extend(row for row in batch if verdicts[row["candidate_id"]] == "KEEP")
+        # Checked as it accumulates, so a run that has already blown the
+        # registered budget stops instead of classifying the remaining batches.
+        if len(kept) > budget:
+            raise GenerationRefused("keep-budget-exceeded", False)
+    if not kept:
+        raise GenerationRefused("no-model-candidates", True)
+    return manifest, kept
+
+
+def locate_kept_candidates(manifest: dict, kept: list[dict], transcript) -> list[dict]:
+    """Resolve every kept candidate to transcript locators, and verify them here.
+
+    The excerpts are exact by construction — they are transcript slices the
+    enumerator produced — and they are re-derived anyway. `validate_locators`
+    recomputes each span's digest from the loaded turns, so a fragment id that
+    no longer resolves to the bytes it names refuses rather than rendering.
+    """
+    from summarize import build_fragment_map
+
+    fragment_map = build_fragment_map(transcript)
+    lookup = {row["source_fragment_id"]: row for row in fragment_map["fragments"]}
+    if fragment_map["transcript_view_sha256"] != manifest["transcript_view_sha256"]:
+        raise GenerationRefused("citation-locator", False)
+    points = []
+    for ordinal, candidate in enumerate(kept):
+        try:
+            references = [
+                {
+                    "turn": lookup[fragment_id]["turn"],
+                    "char_start": lookup[fragment_id]["char_start"],
+                    "char_end": lookup[fragment_id]["char_end"],
+                    "text_sha256": lookup[fragment_id]["text_sha256"],
+                }
+                for fragment_id in candidate["visible_fragment_ids"]
+            ]
+            anchor = candidate["visible_fragment_ids"].index(
+                candidate["anchor_fragment_id"]
+            )
+            locators = validate_locators(references, transcript)
+        except ArtifactFailure as exc:
+            # The retained transcript is intact; the candidate no longer
+            # resolves against it. Not a storage code.
+            raise GenerationRefused("citation-locator", False) from exc
+        except (ValueError, KeyError, TypeError, IndexError) as exc:
+            raise GenerationRefused("citation-locator", False) from exc
+        points.append(
+            {
+                "point_ordinal": ordinal,
+                "candidate_id": candidate["candidate_id"],
+                "evidence_state": "located",
+                "anchor_locator": anchor,
+                "locators": locators,
+            }
+        )
+    return points
 
 
 def generate(
     root_fd: int,
     arguments: dict,
     *,
-    produce: Callable[[dict], object],
+    ask: Callable[[dict], str],
     after_open: Callable[[], None] | None = None,
 ) -> dict:
-    """Generate note points from one pinned transcript and validate them here.
+    """Select note points from one pinned transcript and locate them here.
 
     The transcript is opened, digest-checked, and held open exactly as the
-    read-only paths do. `produce` is the injected generator seam: it receives a
-    derived view and returns untrusted rows. No note, markdown, or product
-    record is read or written, and the transcript's identity is re-checked after
-    the generator has run, so a swap during generation is still caught.
+    read-only paths do. `ask` is the injected model seam: it takes one fully
+    built classification request and returns the raw response. No note,
+    markdown, or product record is read or written, and the transcript's
+    identity is re-checked after classification, so a swap mid-run is caught.
+
+    What comes back is locators, not prose. Every point is an excerpt the
+    transcript already holds; no claim text is synthesized here, because a
+    prose stage is a separate measurement.
     """
     from transcript import load_bytes
 
@@ -441,24 +513,19 @@ def generate(
             transcript = load_bytes(transcript_bytes, source=f"transcript:{transcript_id}")
         except (UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise ArtifactFailure("artifact-invalid", False) from exc
-        view = {
-            "schema": "note-generation-view/1",
-            "transcript_sha256": transcript_id,
-            "turns": [
-                {"turn": ordinal, "text": turn.text}
-                for ordinal, turn in enumerate(transcript.turns)
-            ],
-        }
-        if not view["turns"]:
+        if not transcript.turns:
             raise GenerationRefused("no-generatable-transcript", True)
-        claims = validate_generated_rows(produce(view), transcript)
+        manifest, kept = _classify_candidates(transcript, ask)
+        points = locate_kept_candidates(manifest, kept, transcript)
         _require_links(directories, files)
         _require_snapshot(transcript_file, transcript_bytes, transcript_id)
         _require_links(directories, files)
         return {
             "schema": "note-generation/1",
             "transcript_sha256": transcript_id,
-            "claims": claims,
+            "manifest_sha256": manifest["manifest_sha256"],
+            "candidates": len(manifest["candidates"]),
+            "points": points,
         }
     finally:
         for link in files:

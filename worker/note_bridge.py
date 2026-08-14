@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -56,6 +57,12 @@ _VALIDATOR_MODULES = {
     "summarize": "summarize.py",
     "transcript": "transcript.py",
     "capture_health": "capture_health.py",
+    # The candidate enumerator the measured arm ran. Pinned rather than
+    # reimplemented: candidate identity is derived from fragment ids, and a
+    # second copy of that derivation is a second owner of what the model is
+    # allowed to be asked. Its own imports are `summarize` and `transcript`,
+    # both already here, so the closure adds exactly one module.
+    "candidate_first": "candidate_first.py",
 }
 _REQUIRED_FLAGS = {
     "isolated": 1,
@@ -403,8 +410,14 @@ def _model_entry(value: object, label: str) -> dict:
     """
     if not isinstance(value, dict) or list(value) != ["id", "sha256"]:
         raise BridgeRefused(f"{label} has the wrong shape")
+    # Narrower than `_safe_component` on purpose, and matched to Rust's
+    # `valid_model_identifier`: an id is a name, not a path, so it gets no dot
+    # and no slash. Two sides that disagree on the charset would let one admit
+    # an id the other refuses.
+    if not isinstance(value["id"], str) or not _SAFE_MEETING_ID.fullmatch(value["id"]):
+        raise BridgeRefused(f"{label} id is not a plain identifier")
     return {
-        "id": _safe_component(value["id"], f"{label} id"),
+        "id": value["id"],
         "sha256": _safe_digest(value["sha256"], f"{label} digest"),
     }
 
@@ -629,7 +642,7 @@ def load_validator(runtime: _VerifiedRuntime):
     try:
         for name in _VALIDATOR_MODULES:
             sys.modules.pop(name, None)
-        for name in ("capture_health", "transcript", "summarize"):
+        for name in ("capture_health", "transcript", "summarize", "candidate_first"):
             importlib.import_module(name)
         module = importlib.import_module("note_validator")
     finally:
@@ -801,110 +814,116 @@ def _reap_generator() -> None:
         os.killpg(os.getpgid(child.pid), 9)
 
 
-def run_generator(
-    source: _RetainedFile,
-    model: _ModelTree,
-    view: dict,
-    deadline_s: int,
-) -> tuple[list, dict]:
-    """Run the manifest-pinned generator once, in its own process group.
+class _GeneratorSession:
+    """One generator child, many classification batches, one whole-run deadline.
 
-    The one place private transcript text leaves this process. It travels over a
-    pipe to a child of this bridge and back, and nothing is written to disk. The
-    child is a transport: it proposes rows, and every row is validated here
-    against the retained transcript before any of it is returned.
+    A child per batch would reload several gigabytes of model weights twenty-odd
+    times for one meeting, so the child is a session: it loads once, then
+    answers one request line per batch until stdin closes. The deadline is the
+    registered whole-run budget and it covers model load, so a child that spends
+    it all on startup times out rather than silently borrowing from generation.
 
-    What this function does *not* do is deny the child the network. Nothing in
-    this file can: `SECURITY_NO_NETWORK_ACCESS` in `note_projector_process.rs`
-    is a code-signature validation flag, not a process sandbox, and the app
-    ships no sandbox entitlement. The generator's own bytes are digest-pinned by
-    the manifest, so what runs is known; denying it a socket is the launcher's
-    job, and it is not done yet.
+    Reads and writes are interleaved. A batch of 32 candidate packets exceeds
+    the pipe buffer, and the child cannot answer before it has the whole line,
+    so writing the request to completion before reading would deadlock.
     """
-    global _RUNNING_GENERATOR
 
-    os.lseek(source.file_fd, 0, os.SEEK_SET)
-    request = json.dumps(
-        {
-            "schema": "note-generation-request/1",
-            "model_directory": model.path,
-            "max_response_bytes": MAX_GENERATOR_RESPONSE_BYTES,
-            "view": view,
-        },
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    try:
-        child = subprocess.Popen(
-            [
-                sys.executable,
-                *_GENERATOR_FLAGS,
-                "-c",
-                _GENERATOR_BOOTSTRAP.format(fd=source.file_fd),
-            ],
-            cwd="/",
-            env={},
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            pass_fds=(source.file_fd,),
-            start_new_session=True,
-        )
-    except OSError as exc:
-        raise GeneratorRefused("provider-generation-failure", True) from exc
-    _RUNNING_GENERATOR = child
-    try:
+    def __init__(self, source: _RetainedFile, model: _ModelTree, deadline_s: int):
+        global _RUNNING_GENERATOR
+
+        os.lseek(source.file_fd, 0, os.SEEK_SET)
+        self.started = time.monotonic()
+        self.expires_at = self.started + deadline_s
+        self.responses = 0
+        self.response_bytes = 0
+        self.last_response_sha256 = "unavailable"
+        self._pending = bytearray()
         try:
-            raw, _ = child.communicate(request + b"\n", timeout=deadline_s)
-        except subprocess.TimeoutExpired as exc:
-            _reap_generator()
-            child.communicate()
-            raise GeneratorRefused("timeout", True) from exc
-    finally:
+            self._child = subprocess.Popen(
+                [
+                    sys.executable,
+                    *_GENERATOR_FLAGS,
+                    "-c",
+                    _GENERATOR_BOOTSTRAP.format(fd=source.file_fd),
+                ],
+                cwd="/",
+                env={},
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                pass_fds=(source.file_fd,),
+                start_new_session=True,
+                bufsize=0,
+            )
+        except OSError as exc:
+            raise GeneratorRefused("provider-generation-failure", True) from exc
+        _RUNNING_GENERATOR = self._child
+
+    def _remaining(self) -> float:
+        remaining = self.expires_at - time.monotonic()
+        if remaining <= 0:
+            raise GeneratorRefused("timeout", True)
+        return remaining
+
+    def ask(self, request: dict) -> str:
+        """Send one batch and take exactly one response line back."""
+        payload = bytearray(
+            json.dumps(request, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            + b"\n"
+        )
+        stdin = self._child.stdin
+        stdout = self._child.stdout
+        while True:
+            if b"\n" in self._pending:
+                break
+            writable = [stdin] if payload else []
+            ready, sendable, _ = select.select([stdout], writable, [], self._remaining())
+            if sendable:
+                try:
+                    written = os.write(stdin.fileno(), payload[:65536])
+                except BrokenPipeError as exc:
+                    raise GeneratorRefused("provider-generation-failure", True) from exc
+                del payload[:written]
+            if ready:
+                chunk = os.read(stdout.fileno(), 65536)
+                if not chunk:
+                    raise GeneratorRefused("provider-generation-failure", True)
+                self._pending.extend(chunk)
+                self.response_bytes += len(chunk)
+                if self.response_bytes > MAX_GENERATOR_RESPONSE_BYTES:
+                    raise GeneratorRefused("response-length-truncation", False)
+            if not ready and not sendable:
+                raise GeneratorRefused("timeout", True)
+        line, _, rest = bytes(self._pending).partition(b"\n")
+        self._pending = bytearray(rest)
+        self.responses += 1
+        self.last_response_sha256 = hashlib.sha256(line).hexdigest()
+        try:
+            return line.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise GeneratorRefused("response-json-syntax", False) from exc
+
+    def receipt(self) -> dict:
+        """Closed, content-free: counts and digests, never a response body."""
+        return {
+            "responses": self.responses,
+            "response_bytes": self.response_bytes,
+            "last_response_sha256": self.last_response_sha256,
+            "elapsed_s": round(time.monotonic() - self.started, 6),
+        }
+
+    def close(self) -> None:
+        global _RUNNING_GENERATOR
+
+        try:
+            if self._child.stdin and not self._child.stdin.closed:
+                self._child.stdin.close()
+        except OSError:
+            pass
         _reap_generator()
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            self._child.wait(timeout=5)
         _RUNNING_GENERATOR = None
-    if child.returncode != 0:
-        raise GeneratorRefused("provider-generation-failure", True)
-    if len(raw) > MAX_GENERATOR_RESPONSE_BYTES:
-        raise GeneratorRefused("response-length-truncation", False)
-    try:
-        response = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
-    except (BridgeRefused, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise GeneratorRefused("response-json-syntax", False) from exc
-    if not isinstance(response, dict) or list(response) != ["schema", "items", "observed"]:
-        raise GeneratorRefused("response-contract", False)
-    if response["schema"] != "note-generation-response/1":
-        raise GeneratorRefused("response-contract", False)
-    observed = response["observed"]
-    if not isinstance(observed, dict):
-        raise GeneratorRefused("response-contract", False)
-    return response["items"], {
-        "response_sha256": hashlib.sha256(raw).hexdigest(),
-        "response_bytes": len(raw),
-        "generation": _generation_receipt(observed),
-    }
-
-
-def _generation_receipt(observed: dict) -> dict:
-    """Keep only the closed, content-free fields a receipt is allowed to carry.
-
-    Everything here is a digest, a count, or a closed-set token. No claim text,
-    no transcript text, and no model output survives into a receipt, so a
-    failure receipt says what failed without saying what was said.
-    """
-    receipt: dict[str, object] = {}
-    for name in ("prompt_tokens", "generated_tokens"):
-        value = observed.get(name)
-        receipt[name] = value if type(value) is int and value >= 0 else "unavailable"
-    reason = observed.get("finish_reason")
-    receipt["finish_reason"] = (
-        reason if reason in {"stop", "length"} else "unavailable"
-    )
-    for name in ("model_tree_sha256", "request_sha256", "rendered_template_sha256"):
-        value = observed.get(name)
-        pinned = isinstance(value, str) and _SAFE_DIGEST.fullmatch(value)
-        receipt[name] = value if pinned else "unavailable"
-    return receipt
 
 
 def _canonical_uuid(value: object) -> str:
@@ -1012,7 +1031,7 @@ def _transcript_only(request_id: str, code: str, recoverable: bool, receipt: dic
     a fabricated citation, a timeout — because the product answer is the same in
     all of them and a caller must not be able to tell them apart by shape. The
     receipt is closed and content-free by construction; see
-    `_generation_receipt`.
+    `_GeneratorSession.receipt`.
     """
     _emit({
         "schema": "note-generation-result/1",
@@ -1135,42 +1154,50 @@ def _run_generation(
     loaded, and every exit that is not a fully validated projection is the same
     `transcript-only` outcome.
     """
-    receipt: dict = {}
-    model: _ModelTree | None = None
     try:
         model = _open_model_tree(
             root_fd, root_path, arguments["model_directory"], runtime.models
         )
-    except BridgeRefused:
+    except (BridgeRefused, OSError):
         require_identity()
         _transcript_only(request_id, "model-unavailable", True, {})
         return 0
-    except OSError:
-        require_identity()
-        _transcript_only(request_id, "model-unavailable", True, {})
-        return 0
+    session: _GeneratorSession | None = None
+    receipt: dict = {}
     try:
-        def produce(view: dict) -> list:
-            nonlocal receipt
-            items, receipt = run_generator(
-                runtime.resources["generator"], model, view, arguments["deadline_s"]
+        try:
+            session = _GeneratorSession(
+                runtime.resources["generator"], model, arguments["deadline_s"]
             )
-            return items
+        except GeneratorRefused as exc:
+            require_identity()
+            _transcript_only(request_id, exc.code, exc.recoverable, {})
+            return 0
+        # One session, every batch. The model directory travels in the first
+        # request rather than on argv, so it never reaches a process listing.
+        first = [True]
+
+        def ask(request: dict) -> str:
+            if first[0]:
+                request = {**request, "model_directory": model.path}
+                first[0] = False
+            return session.ask(request)
 
         try:
-            result = validator.generate(root_fd, arguments, produce=produce)
+            result = validator.generate(root_fd, arguments, ask=ask)
         except (validator.GenerationRefused, GeneratorRefused) as exc:
             require_identity()
-            _transcript_only(request_id, exc.code, exc.recoverable, receipt)
+            _transcript_only(request_id, exc.code, exc.recoverable, session.receipt())
             return 0
         except validator.ArtifactFailure as exc:
             require_identity()
-            _transcript_only(request_id, exc.code, exc.recoverable, receipt)
+            _transcript_only(request_id, exc.code, exc.recoverable, session.receipt())
             return 0
         except Exception:
             require_identity()
-            _transcript_only(request_id, "note2-validation-failed", False, receipt)
+            _transcript_only(request_id, "note2-validation-failed", False, session.receipt())
             return 0
+        receipt = session.receipt()
         # The model may not have changed under the generator that read it.
         try:
             model.require_unchanged()
@@ -1179,6 +1206,8 @@ def _run_generation(
             _transcript_only(request_id, "model-unavailable", True, receipt)
             return 0
     finally:
+        if session is not None:
+            session.close()
         model.close()
     require_identity()
     generated = {

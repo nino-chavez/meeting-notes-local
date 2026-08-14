@@ -152,6 +152,7 @@ class NoteBridgeHarnessTests(unittest.TestCase):
             "summarize.py": REPO / "notes/summarize.py",
             "transcript.py": REPO / "notes/transcript.py",
             "capture_health.py": REPO / "spike/capture_health.py",
+            "candidate_first.py": REPO / "notes/candidate_first.py",
         }
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
             for name, source in sources.items():
@@ -835,66 +836,90 @@ class NoteProjectBridgeTests(unittest.TestCase):
         self.assertIsNone(result["projection"])
 
 
-# Four stub generators stand in for the MLX-LM child: one that cites correctly,
-# one that answers with something that is not a response at all, one that cites
-# a transcript row the meeting does not have, and one that never answers. They
-# are ordinary manifest-pinned generator resources, so each runs through the
-# real spawn, deadline, and validation path rather than around it.
-STUB_PREAMBLE = """import hashlib, json, sys, time
-request = json.loads(sys.stdin.readline())
-turns = request["view"]["turns"]
+# Stub classifiers stand in for the MLX-LM child. They are ordinary
+# manifest-pinned generator resources driven over the real session protocol, so
+# each runs through the real spawn, batching, deadline, and decode path rather
+# than around it. Every stub is a session: it answers one request line per
+# batch until stdin closes.
+#
+# Note what a stub cannot do. The model's whole output surface is one KEEP or
+# ABSTAIN per candidate it was offered, so there is no stub that fabricates a
+# transcript row — `decode_classification` refuses an unknown, duplicated,
+# reordered, or miscounted verdict before anything reaches the transcript. The
+# case is replaced by one that answers with an id it was never shown.
+STUB_PREAMBLE = """import json, sys, time
 
 
-def answer(items, observed=None):
-    sys.stdout.write(json.dumps({
-        "schema": "note-generation-response/1",
-        "items": items,
-        "observed": observed or {
-            "finish_reason": "stop",
-            "prompt_tokens": 11,
-            "generated_tokens": 7,
-        },
-    }))
+def batches():
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            return
+        request = json.loads(line)
+        enum = request["response_format"]["properties"]["items"]["items"]
+        yield request, list(enum["properties"]["candidate_id"]["enum"])
+
+
+def answer(rows):
+    sys.stdout.write(json.dumps({"items": rows}) + chr(10))
     sys.stdout.flush()
 
 
-def cite(turn, claim):
-    text = turn["text"]
-    end = min(len(text), 40)
-    return {
-        "claim": claim,
-        "claim_type": "decision",
-        "claim_sha256": hashlib.sha256(claim.encode("utf-8")).hexdigest(),
-        "evidence_refs": [{
-            "turn": turn["turn"],
-            "char_start": 0,
-            "char_end": end,
-            "text_sha256": hashlib.sha256(text[:end].encode("utf-8")).hexdigest(),
-        }],
-    }
+def verdicts(ids, pattern):
+    return [
+        {"candidate_id": value, "verdict": pattern(index)}
+        for index, value in enumerate(ids)
+    ]
 """
 
+# Keeps the first candidate of every batch and abstains on the rest.
 STUB_WELL_FORMED = STUB_PREAMBLE + """
-answer([cite(turns[0], "the operator agreed to send the summary")])
+for request, ids in batches():
+    answer(verdicts(ids, lambda index: "KEEP" if index == 0 else "ABSTAIN"))
 """
 
 STUB_MALFORMED = STUB_PREAMBLE + """
-sys.stdout.write("this is not a response object at all")
-sys.stdout.flush()
+for request, ids in batches():
+    sys.stdout.write("this is not a classifier response at all" + chr(10))
+    sys.stdout.flush()
 """
 
-STUB_FABRICATED_ROW = STUB_PREAMBLE + """
-row = cite(turns[0], "SECRETCLAIMMARKER the far side committed to a date")
-row["evidence_refs"][0]["turn"] = len(turns) + 5
-answer([row])
+# Names a candidate it was never offered. Under the old generate-and-locate
+# shape this was "cites a nonexistent transcript row"; selection makes the
+# stronger check structural.
+STUB_UNOFFERED_CANDIDATE = STUB_PREAMBLE + """
+for request, ids in batches():
+    rows = verdicts(ids, lambda index: "ABSTAIN")
+    rows[0]["candidate_id"] = "cf-SECRETFABRICATEDIDMARKER"
+    answer(rows)
+"""
+
+STUB_WRONG_CARDINALITY = STUB_PREAMBLE + """
+for request, ids in batches():
+    answer(verdicts(ids, lambda index: "ABSTAIN")[:-1])
+"""
+
+STUB_INVALID_VERDICT = STUB_PREAMBLE + """
+for request, ids in batches():
+    answer(verdicts(ids, lambda index: "MAYBE"))
 """
 
 STUB_NEVER_ANSWERS = STUB_PREAMBLE + """
 time.sleep(30)
 """
 
-STUB_OVER_BUDGET = STUB_PREAMBLE + """
-answer([cite(turns[0], "point number %d" % index) for index in range(65)])
+# Answers the first batch and then hangs, so the deadline is proven to cover
+# the whole session and not merely the child's startup.
+STUB_STALLS_AFTER_FIRST_BATCH = STUB_PREAMBLE + """
+for index, (request, ids) in enumerate(batches()):
+    if index:
+        time.sleep(30)
+    answer(verdicts(ids, lambda position: "ABSTAIN"))
+"""
+
+STUB_KEEPS_EVERYTHING = STUB_PREAMBLE + """
+for request, ids in batches():
+    answer(verdicts(ids, lambda index: "KEEP"))
 """
 
 
@@ -906,6 +931,12 @@ class NoteGenerateBridgeTests(unittest.TestCase):
 
     MODEL_DIRECTORY = "models/note-model/rev-1"
 
+    # Long enough for two things at once: more than the registered batch size
+    # of 32, so the session protocol that makes one model load serve a whole
+    # meeting is exercised, and more than the registered keep budget of 64, so
+    # a classifier that keeps everything can actually overrun it.
+    TRANSCRIPT_TURNS = 70
+
     def setUp(self) -> None:
         self._harness = NoteBridgeHarnessTests()
         self._harness.setUp()
@@ -915,6 +946,33 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self._write_generator(STUB_WELL_FORMED)
         self._write_model_tree(MODEL_FILES)
         self._write_generate_manifest()
+        self.candidates = self._write_long_transcript(self.TRANSCRIPT_TURNS)
+        self.assertGreater(self.candidates, 64, "fixture must span batches and the keep budget")
+
+    def _write_long_transcript(self, turns: int) -> int:
+        """Replace the meeting's transcript with one that spans several batches."""
+        sys.path.insert(0, str(REPO / "notes"))
+        from summarize import build_fragment_map
+        from transcript import load_bytes
+
+        document = {
+            "schema": "file-transcript/1",
+            "source": "synthetic generate-path control; not product evidence",
+            "attribution": "none",
+            "turns": [
+                {
+                    "text": f"Turn {index:02d}: we agreed to review the packaging option.",
+                    "start": float(index + 1),
+                }
+                for index in range(turns)
+            ],
+        }
+        encoded = (json.dumps(document, indent=2) + "\n").encode()
+        transcript_id = hashlib.sha256(encoded).hexdigest()
+        directory = self.root / "meetings" / self.meeting_id / "transcript"
+        private_file(directory / f"{transcript_id}.json", encoded)
+        self._harness.transcript_id = transcript_id
+        return len(build_fragment_map(load_bytes(encoded, source="fixture"))["fragments"])
 
     def tearDown(self) -> None:
         self._harness.tearDown()
@@ -1024,24 +1082,35 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "generated")
         self.assertIsNone(result["failure"])
         self.assertEqual(result["generation"]["transcript_sha256"], self.transcript_id)
-        claims = result["generation"]["claims"]
-        self.assertEqual(len(claims), 1)
-        self.assertEqual(claims[0]["evidence_state"], "located")
-        self.assertEqual(claims[0]["claim_type"], "decision")
-        self.assertEqual(len(claims[0]["locators"]), 1)
-        self.assertEqual(
-            claims[0]["claim_sha256"],
-            hashlib.sha256(claims[0]["claim"].encode()).hexdigest(),
-        )
+        self.assertEqual(result["generation"]["candidates"], self.candidates)
+        points = result["generation"]["points"]
+        # One keep per batch, and the fixture spans three batches, so a session
+        # that only served its first request would fail here.
+        self.assertEqual(len(points), 3)
+        for ordinal, point in enumerate(points):
+            self.assertEqual(point["point_ordinal"], ordinal)
+            self.assertTrue(point["candidate_id"].startswith("cf-"))
+            self.assertEqual(point["evidence_state"], "located")
+            self.assertTrue(1 <= len(point["locators"]) <= 3)
+            self.assertIn(point["anchor_locator"], range(len(point["locators"])))
+            # Locators are transcript spans, and the frame carries no prose.
+            self.assertNotIn("claim", point)
         receipt = result["generation"]["receipt"]
-        self.assertEqual(receipt["generation"]["finish_reason"], "stop")
-        self.assertEqual(receipt["generation"]["generated_tokens"], 7)
-        # No model digests were offered, so the receipt says so rather than
-        # inventing one.
-        self.assertEqual(receipt["generation"]["model_tree_sha256"], "unavailable")
+        self.assertEqual(receipt["responses"], 3)
+        self.assertGreater(receipt["response_bytes"], 0)
         # Nothing under the private root moved: no note, no markdown, no receipt.
         self.assertEqual(self._tree(), before)
         self.assertTrue(self.marker.exists())
+
+    def test_generated_locators_resolve_to_the_transcripts_own_bytes(self) -> None:
+        result, _, _, _ = self._run()
+        turns = self._transcript_turns()
+        for point in result["generation"]["points"]:
+            for locator in point["locators"]:
+                text = turns[locator["turn"]]["text"][locator["start"]:locator["end"]]
+                self.assertEqual(
+                    hashlib.sha256(text.encode()).hexdigest(), locator["text_sha256"]
+                )
 
     def test_malformed_generator_response_is_transcript_only(self) -> None:
         self._write_generator(STUB_MALFORMED)
@@ -1053,21 +1122,35 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertIsNone(result["generation"])
         self.assertEqual(result["failure"]["code"], "response-json-syntax")
 
-    def test_fabricated_citation_is_transcript_only_and_leaks_no_content(self) -> None:
-        self._write_generator(STUB_FABRICATED_ROW)
+    def test_unoffered_candidate_is_transcript_only_and_leaks_no_content(self) -> None:
+        self._write_generator(STUB_UNOFFERED_CANDIDATE)
         self._write_generate_manifest()
         result, returncode, error, _ = self._run()
         self.assertEqual((returncode, error), (0, b""))
         self.assertEqual(result["outcome"], "transcript-only")
         self.assertIsNone(result["generation"])
-        self.assertEqual(result["failure"]["code"], "citation-locator")
+        self.assertEqual(result["failure"]["code"], "response-contract")
         # A refusal receipt must say what failed without saying what was said.
         frame = json.dumps(result, ensure_ascii=False)
-        self.assertNotIn("SECRETCLAIMMARKER", frame)
+        self.assertNotIn("SECRETFABRICATEDIDMARKER", frame)
         for turn in self._transcript_turns():
             text = turn.get("text") or ""
             if len(text) > 12:
                 self.assertNotIn(text[:12], frame)
+
+    def test_wrong_verdict_cardinality_is_transcript_only(self) -> None:
+        self._write_generator(STUB_WRONG_CARDINALITY)
+        self._write_generate_manifest()
+        result, _, _, _ = self._run()
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"]["code"], "response-contract")
+
+    def test_verdict_outside_the_closed_set_is_transcript_only(self) -> None:
+        self._write_generator(STUB_INVALID_VERDICT)
+        self._write_generate_manifest()
+        result, _, _, _ = self._run()
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"]["code"], "response-contract")
 
     def test_generator_that_never_answers_is_transcript_only_at_the_deadline(self) -> None:
         self._write_generator(STUB_NEVER_ANSWERS)
@@ -1078,14 +1161,23 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual((returncode, error), (0, b""))
         self.assertEqual(result["outcome"], "transcript-only")
         self.assertIsNone(result["generation"])
-        self.assertEqual(result["failure"], {
-            "code": "timeout",
-            "recoverable": True,
-            "receipt": {},
-        })
+        self.assertEqual(result["failure"]["code"], "timeout")
+
+    def test_deadline_covers_the_whole_session_not_only_model_load(self) -> None:
+        self._write_generator(STUB_STALLS_AFTER_FIRST_BATCH)
+        self._write_generate_manifest()
+        started = time.monotonic()
+        result, returncode, error, _ = self._run(deadline_s=2)
+        self.assertLess(time.monotonic() - started, 20)
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "transcript-only")
+        self.assertEqual(result["failure"]["code"], "timeout")
+        # The first batch was answered before the stall, so the deadline fired
+        # mid-session rather than at startup.
+        self.assertEqual(result["failure"]["receipt"]["responses"], 1)
 
     def test_more_points_than_the_keep_budget_are_refused_not_trimmed(self) -> None:
-        self._write_generator(STUB_OVER_BUDGET)
+        self._write_generator(STUB_KEEPS_EVERYTHING)
         self._write_generate_manifest()
         result, returncode, error, _ = self._run()
         self.assertEqual((returncode, error), (0, b""))
