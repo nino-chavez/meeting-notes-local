@@ -2325,3 +2325,41 @@ Registered predictions, before any 27b token is generated:
 A content-controlled diagnostic runs before any official gated run, so an
 operator approval cycle is spent only on a configuration the diagnostic
 predicts will pass.
+
+### Scale-up result, 2026-08-14 — falsified; 12b pin restored
+
+gemma3:27b (digest `a418f583…`) ran the registered view on the same capture
+ledger. Recall **4 of 13**, keep **11 of 165**. The miss-set is emphatically
+not a subset of the 12b's: seven events every 12b configuration recalled were
+lost (ev-003 through ev-007, ev-009, ev-010), while ev-008 — the assigned
+action item both the 12b arm and the frontier roadmap missed — was recalled.
+Prediction 1 falsified; per the preregistered falsifier, the next arm is
+self-consistency rather than a still-larger model. The registered model pin
+is restored to gemma3:12b, returning the registration byte-exact to
+`cbbb4e24…`.
+
+The cross-model picture, all at temperature zero on the same prompt:
+
+| Arm | Keep of 165 | Recall |
+| --- | --- | --- |
+| 12b, registered view | 97 | 10/13 |
+| 12b, ±2 window | 133 | 11/13 |
+| 12b, coalesced units | 39 (of 71) | 9/13 |
+| 27b, registered view | 11 | 4/13 |
+
+Two facts worth more than another run. First, the KEEP/ABSTAIN criterion is
+uncalibrated across models: the same words produce a 59% keep-rate from 12b
+and a 7% keep-rate from 27b, so the gate's meaning does not transfer with the
+prompt. Second, a deterministic union across the three 12b views — computable
+from the retained diagnostics with no new inference — reaches 12/13 and no
+further: **ev-011, a real assigned action stated across ten disfluent rows,
+is missed by every view, both models, and the frontier roadmap.** Only the
+human-reviewed draft caught it. Temperature-sampled majority voting remains
+the registered next arm, but its ceiling should be read against that
+universal miss: a majority cannot recover what no configuration keeps even
+once.
+
+The measured boundary, stated as the running conclusion: no tested local
+configuration meets the 100%-recall gate on real disfluent meeting speech,
+and the one instrument that has caught every event in this study is the
+operator-reviewed evidence ledger itself.

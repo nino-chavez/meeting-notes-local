@@ -256,7 +256,7 @@ def derive_registered_inputs(corpus_path: Path) -> tuple[Transcript, dict, dict,
     if classifier_fixture_sha256() != REGISTERED_RUN["classifier"]["fixture_sha256"]:
         raise StructuredOutputError("registered classifier fixtures changed")
     if registered_run_sha256() != (
-        "94e8cfecb2404fe5295cde5b18e9ab3accdbc1df32da9f59afe52f2d099a1e10"
+        "cbbb4e2448475ce5375b075d806581448936c81f7942c489c55c2e0a923d7a69"
     ):
         raise StructuredOutputError("candidate classifier registration changed")
     return transcript, first_manifest, registry, authority
