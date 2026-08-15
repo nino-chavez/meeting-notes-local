@@ -33,10 +33,15 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::meeting::valid_opaque_id;
+use crate::model_store::{
+    ModelCatalog, TranscriptModel, TranscriptModelFileRole, verify_model_directory,
+};
 use crate::note_projection::{
     MAX_PROJECTION_FRAME_BYTES, NoteProjector, ProjectRequest, ProjectTransportError,
-    ProjectionCancellation, StrictJson, array, exact_object, strict_json, string, u64_value,
+    ProjectionCancellation, StrictJson, UnavailableProjector, array, exact_object, strict_json,
+    string, u64_value,
 };
+use crate::storage::StorageRoot;
 
 const MANIFEST_FD: RawFd = 100;
 const BRIDGE_FD: RawFd = 101;
@@ -46,6 +51,12 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 16 * 1024;
 const CLEANUP_GRACE: Duration = Duration::from_millis(750);
 const PRODUCT_RUNTIME_PATH: &str = "python-runtime/bin/python3.12";
+/// The read-only claim-projection role this transport speaks.  It never runs a
+/// model, so its manifest carries no generator and no pinned models.
+const PROJECT_ROLE: &str = "project";
+/// The note-generation role.  Its manifest is the bundle's signed statement of
+/// which generator and which model digests the app ships.
+const GENERATE_ROLE: &str = "generate";
 const PYTHON_SIGNING_IDENTIFIER_SUFFIX: &str = ".python-runtime";
 const PYTHON_ENTITLEMENT: &str = "com.apple.security.cs.allow-unsigned-executable-memory";
 const CODE_SIGNATURE_RUNTIME: u32 = 0x0001_0000;
@@ -170,7 +181,7 @@ impl ProcessNoteProjector {
         }
         validate_storage_root(&self.storage_root)?;
         validate_request(request)?;
-        let mut runtime = verify_manifest(&self.manifest_path)?;
+        let mut runtime = verify_manifest(&self.manifest_path, PROJECT_ROLE)?;
         let prepared_admission = prepare_interpreter_admission(&runtime, &self.admission)?;
         runtime.require_unchanged()?;
 
@@ -272,6 +283,99 @@ impl ProcessNoteProjector {
     }
 }
 
+/// The note-runtime model identifiers a catalog entry provides, one per file.
+///
+/// The identifiers are note-scoped on purpose: `runtime_models` already names
+/// the same files for the transcription worker, and the two runtimes must not
+/// be able to satisfy each other's manifest by accident.
+fn note_runtime_models(entry: &TranscriptModel) -> Vec<RuntimeManifestModel> {
+    let mut models: Vec<_> = entry
+        .files
+        .iter()
+        .map(|file| RuntimeManifestModel {
+            id: match file.role {
+                TranscriptModelFileRole::Config => "note-generator-config".to_owned(),
+                TranscriptModelFileRole::Weights => "note-generator-weights".to_owned(),
+            },
+            sha256: file.sha256.clone(),
+        })
+        .collect();
+    models.sort_by(|left, right| left.id.cmp(&right.id));
+    models
+}
+
+/// Chooses the `note.project` transport for one library snapshot.
+///
+/// The default is `UnavailableProjector` and stays the default unless every
+/// condition below holds.  A missing note model is an honest refusal -- the
+/// same refusal the reader already renders -- never a hang and never a note
+/// the product cannot substantiate.
+///
+/// 1. The `generate`-role manifest verifies and pins a generator with at least
+///    one model file.  The bundle ships only a `project`-role manifest today,
+///    so this condition alone keeps the shipped default unchanged.
+/// 2. Exactly one signed-catalog model provides that pinned set, digest for
+///    digest.
+/// 3. That model is installed in the private store and re-verified now by
+///    `model_store::verify_model_directory`, not merely recorded as present.
+/// 4. The `project`-role manifest, which is the one this transport actually
+///    hands to the child, verifies on its own terms.
+///
+/// The two manifests are separate because the roles admit different shapes.
+/// `worker/note_bridge.py` refuses a generator on the `project` role, and the
+/// descriptor transport this projector uses is `project`-only.  Reading the
+/// `generate` manifest here is how Rust learns which model the bundle pins
+/// without handing that manifest to this child; the signed model catalog
+/// carries no note-model role yet, so it is the only build-time pin available.
+pub fn admit_note_projector(
+    storage: &StorageRoot,
+    catalog: &ModelCatalog,
+    project_manifest_path: &Path,
+    generate_manifest_path: &Path,
+) -> Arc<dyn NoteProjector> {
+    match admitted_process_projector(
+        storage,
+        catalog,
+        project_manifest_path,
+        generate_manifest_path,
+    ) {
+        Some(projector) => Arc::new(projector),
+        None => Arc::new(UnavailableProjector),
+    }
+}
+
+fn admitted_process_projector(
+    storage: &StorageRoot,
+    catalog: &ModelCatalog,
+    project_manifest_path: &Path,
+    generate_manifest_path: &Path,
+) -> Option<ProcessNoteProjector> {
+    let generate = verify_manifest(generate_manifest_path, GENERATE_ROLE).ok()?;
+    generate.generator.as_ref()?;
+    let mut pinned = generate.models;
+    if pinned.is_empty() {
+        return None;
+    }
+    pinned.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut admitted = catalog
+        .models
+        .iter()
+        .filter(|entry| note_runtime_models(entry) == pinned);
+    let entry = admitted.next()?;
+    if admitted.next().is_some() {
+        return None;
+    }
+    let directory = storage
+        .resolve(&Path::new("models").join(&entry.id).join(&entry.revision))
+        .ok()?;
+    verify_model_directory(&directory, entry).ok()?;
+    verify_manifest(project_manifest_path, PROJECT_ROLE).ok()?;
+    Some(ProcessNoteProjector::product(
+        storage.path().to_path_buf(),
+        project_manifest_path.to_path_buf(),
+    ))
+}
+
 fn stage_descriptors(sources: [RawFd; 3]) -> Result<[File; 3], InternalOutcome> {
     let mut staged = Vec::with_capacity(sources.len());
     let mut minimum = FIRST_STAGING_FD;
@@ -345,11 +449,28 @@ struct RuntimeManifestResource {
     sha256: String,
 }
 
+/// One model file the manifest pins for the note runtime.
+///
+/// Deliberately carries no path.  Note-generation weights live in the private
+/// per-user model store, not beside the bundle-owned resources, so the manifest
+/// names them the way `app-runtime` names externally installed models: by
+/// identifier and digest, resolved beneath the storage root the child already
+/// receives.
+#[derive(Clone, PartialEq, Eq)]
+struct RuntimeManifestModel {
+    id: String,
+    sha256: String,
+}
+
 struct VerifiedRuntime {
     manifest: PinnedResource,
     executable: PinnedResource,
     bridge: PinnedResource,
     validator: PinnedResource,
+    /// Present only for a generator-bearing manifest.  `None` is the shipped
+    /// validator-only shape and admits no note generation at all.
+    generator: Option<PinnedResource>,
+    models: Vec<RuntimeManifestModel>,
 }
 
 impl VerifiedRuntime {
@@ -358,6 +479,9 @@ impl VerifiedRuntime {
         self.executable.require_unchanged()?;
         self.bridge.require_unchanged()?;
         self.validator.require_unchanged()?;
+        if let Some(generator) = self.generator.as_mut() {
+            generator.require_unchanged()?;
+        }
         Ok(())
     }
 }
@@ -438,7 +562,12 @@ impl PinnedResource {
     }
 }
 
-fn verify_manifest(path: &Path) -> Result<VerifiedRuntime, InternalOutcome> {
+/// Verifies one `note-runtime/1` manifest against the role the caller expects.
+///
+/// The role is an argument, not an inference, because the two roles admit
+/// different shapes and `worker/note_bridge.py` refuses the wrong pairing:
+/// `project` may carry no generator and no models, `generate` must carry both.
+fn verify_manifest(path: &Path, expected_role: &str) -> Result<VerifiedRuntime, InternalOutcome> {
     if !path.is_absolute() {
         return Err(InternalOutcome::Unavailable);
     }
@@ -483,18 +612,39 @@ fn verify_manifest(path: &Path) -> Result<VerifiedRuntime, InternalOutcome> {
     )
     .map_err(|_| InternalOutcome::Unavailable)?;
     if string(fields[0]).map_err(|_| InternalOutcome::Unavailable)? != "note-runtime/1"
-        || string(fields[1]).map_err(|_| InternalOutcome::Unavailable)? != "project"
-        || !matches!(fields[5], StrictJson::Null)
-        || !array(fields[6])
-            .map_err(|_| InternalOutcome::Unavailable)?
-            .is_empty()
+        || string(fields[1]).map_err(|_| InternalOutcome::Unavailable)? != expected_role
     {
         return Err(InternalOutcome::Unavailable);
     }
     let executable = parse_resource(fields[2])?;
     let bridge = parse_resource(fields[3])?;
     let validator = parse_resource(fields[4])?;
-    if canonical_manifest(&executable, &bridge, &validator).as_bytes() != manifest_bytes {
+    let generator = match fields[5] {
+        StrictJson::Null => None,
+        value => Some(parse_resource(value)?),
+    };
+    let models = parse_models(fields[6])?;
+    // A generator is admitted on the role that runs one, and only complete.
+    // This mirrors `_require_generator_admission` in `worker/note_bridge.py`
+    // as a biconditional: a generator without pinned models could load
+    // anything on disk, and pinned models without a generator name weights
+    // nothing will read.
+    if (expected_role == GENERATE_ROLE) != generator.is_some()
+        || generator.is_some() == models.is_empty()
+    {
+        return Err(InternalOutcome::Unavailable);
+    }
+    if canonical_manifest(
+        expected_role,
+        &executable,
+        &bridge,
+        &validator,
+        generator.as_ref(),
+        &models,
+    )
+    .as_bytes()
+        != manifest_bytes
+    {
         return Err(InternalOutcome::Unavailable);
     }
     Ok(VerifiedRuntime {
@@ -502,7 +652,37 @@ fn verify_manifest(path: &Path) -> Result<VerifiedRuntime, InternalOutcome> {
         executable: PinnedResource::open(&root, root_path, &executable)?,
         bridge: PinnedResource::open(&root, root_path, &bridge)?,
         validator: PinnedResource::open(&root, root_path, &validator)?,
+        generator: generator
+            .as_ref()
+            .map(|resource| PinnedResource::open(&root, root_path, resource))
+            .transpose()?,
+        models,
     })
+}
+
+fn parse_models(value: &StrictJson) -> Result<Vec<RuntimeManifestModel>, InternalOutcome> {
+    let entries = array(value).map_err(|_| InternalOutcome::Unavailable)?;
+    let mut models: Vec<RuntimeManifestModel> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let fields =
+            exact_object(entry, ["id", "sha256"]).map_err(|_| InternalOutcome::Unavailable)?;
+        let id = string(fields[0])
+            .map_err(|_| InternalOutcome::Unavailable)?
+            .to_owned();
+        let sha256 = string(fields[1])
+            .map_err(|_| InternalOutcome::Unavailable)?
+            .to_owned();
+        if !valid_model_identifier(&id)
+            || !valid_digest(&sha256)
+            || models
+                .iter()
+                .any(|model| model.id == id || model.sha256 == sha256)
+        {
+            return Err(InternalOutcome::Unavailable);
+        }
+        models.push(RuntimeManifestModel { id, sha256 });
+    }
+    Ok(models)
 }
 
 fn parse_resource(value: &StrictJson) -> Result<RuntimeManifestResource, InternalOutcome> {
@@ -523,19 +703,52 @@ fn parse_resource(value: &StrictJson) -> Result<RuntimeManifestResource, Interna
     })
 }
 
+/// Renders the one canonical byte sequence a `note-runtime/1` manifest may
+/// have.  It must equal `json.dumps(document, ensure_ascii=False, indent=2)`
+/// byte for byte: the bootstrap and `worker/note_bridge.py` both re-derive the
+/// manifest that way and refuse anything else, so a single wrong space here
+/// turns every generator-bearing manifest into a silent refusal.
 fn canonical_manifest(
+    role: &str,
     runtime: &RuntimeManifestResource,
     bridge: &RuntimeManifestResource,
     validator: &RuntimeManifestResource,
+    generator: Option<&RuntimeManifestResource>,
+    models: &[RuntimeManifestModel],
 ) -> String {
+    let generator = match generator {
+        None => "null".to_owned(),
+        Some(resource) => format!(
+            "{{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }}",
+            resource.relative_path, resource.sha256,
+        ),
+    };
+    let models = if models.is_empty() {
+        "[]".to_owned()
+    } else {
+        format!(
+            "[\n{}\n  ]",
+            models
+                .iter()
+                .map(|model| format!(
+                    "    {{\n      \"id\": \"{}\",\n      \"sha256\": \"{}\"\n    }}",
+                    model.id, model.sha256,
+                ))
+                .collect::<Vec<_>>()
+                .join(",\n")
+        )
+    };
     format!(
-        "{{\n  \"schema\": \"note-runtime/1\",\n  \"role\": \"project\",\n  \"runtime\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"bridge\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"validator\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"generator\": null,\n  \"models\": []\n}}",
+        "{{\n  \"schema\": \"note-runtime/1\",\n  \"role\": \"{}\",\n  \"runtime\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"bridge\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"validator\": {{\n    \"relative_path\": \"{}\",\n    \"sha256\": \"{}\"\n  }},\n  \"generator\": {},\n  \"models\": {}\n}}",
+        role,
         runtime.relative_path,
         runtime.sha256,
         bridge.relative_path,
         bridge.sha256,
         validator.relative_path,
         validator.sha256,
+        generator,
+        models,
     )
 }
 
@@ -1390,6 +1603,14 @@ fn valid_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn valid_model_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
 #[derive(Serialize)]
 struct ProjectCommand<'a> {
     schema: &'static str,
@@ -1710,6 +1931,14 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::model_store::{
+        INSTALL_RECEIPT_NAME, ModelCatalogSchema, TranscriptModelFile, install_receipt_bytes,
+    };
+    use crate::storage::{create_private_dir, durable_create_new};
+
+    const GENERATOR_FIXTURE: &[u8] = b"generator-fixture";
+    const NOTE_CONFIG_FIXTURE: &[u8] = b"note-generator-config-fixture";
+    const NOTE_WEIGHTS_FIXTURE: &[u8] = b"note-generator-weights-fixture";
 
     fn request() -> ProjectRequest {
         ProjectRequest {
@@ -1751,6 +1980,173 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         _temporary: TempDir,
         storage_root: PathBuf,
         manifest_path: PathBuf,
+        generate_manifest_path: PathBuf,
+        resources: PathBuf,
+        storage: StorageRoot,
+        catalog: ModelCatalog,
+    }
+
+    impl LaunchFixture {
+        fn admit(&self) -> Arc<dyn NoteProjector> {
+            admit_note_projector(
+                &self.storage,
+                &self.catalog,
+                &self.manifest_path,
+                &self.generate_manifest_path,
+            )
+        }
+
+        fn is_admitted(&self) -> bool {
+            admitted_process_projector(
+                &self.storage,
+                &self.catalog,
+                &self.manifest_path,
+                &self.generate_manifest_path,
+            )
+            .is_some()
+        }
+
+        fn model_directory(&self) -> PathBuf {
+            let entry = &self.catalog.models[0];
+            self.storage
+                .resolve(&Path::new("models").join(&entry.id).join(&entry.revision))
+                .unwrap()
+        }
+
+        fn install_note_model(&self) {
+            let entry = &self.catalog.models[0];
+            let directory = self.model_directory();
+            create_private_dir(&directory).unwrap();
+            durable_create_new(&directory.join("config.json"), NOTE_CONFIG_FIXTURE).unwrap();
+            durable_create_new(&directory.join("weights.safetensors"), NOTE_WEIGHTS_FIXTURE)
+                .unwrap();
+            durable_create_new(
+                &directory.join(INSTALL_RECEIPT_NAME),
+                &install_receipt_bytes(entry),
+            )
+            .unwrap();
+        }
+
+        fn resource(&self, relative: &str, bytes: &[u8]) -> RuntimeManifestResource {
+            RuntimeManifestResource {
+                relative_path: relative.into(),
+                sha256: format!("{:x}", Sha256::digest(bytes)),
+            }
+        }
+
+        fn manifest_resources(&self) -> [RuntimeManifestResource; 3] {
+            [
+                RuntimeManifestResource {
+                    relative_path: PRODUCT_RUNTIME_PATH.into(),
+                    sha256: format!(
+                        "{:x}",
+                        Sha256::digest(
+                            fs::read(self.resources.join(PRODUCT_RUNTIME_PATH)).unwrap()
+                        )
+                    ),
+                },
+                self.resource("note-bridge.py", LAUNCH_FIXTURE_BRIDGE.as_bytes()),
+                self.resource("note-validator.zip", b"validator-fixture"),
+            ]
+        }
+
+        /// Writes the `project`-role manifest: the validator-only shape the
+        /// packaged bundle carries and the only shape this transport speaks.
+        fn write_project_manifest(&self) {
+            self.write_manifest(&self.manifest_path, PROJECT_ROLE, None, &[]);
+        }
+
+        /// Writes the `generate`-role manifest Rust reads to learn which
+        /// generator and model digests the bundle pins.
+        fn write_generate_manifest(
+            &self,
+            generator: Option<&RuntimeManifestResource>,
+            models: &[RuntimeManifestModel],
+        ) {
+            self.write_manifest(
+                &self.generate_manifest_path,
+                GENERATE_ROLE,
+                generator,
+                models,
+            );
+        }
+
+        fn write_manifest(
+            &self,
+            path: &Path,
+            role: &str,
+            generator: Option<&RuntimeManifestResource>,
+            models: &[RuntimeManifestModel],
+        ) {
+            let [runtime, bridge, validator] = self.manifest_resources();
+            private_file(
+                path,
+                canonical_manifest(role, &runtime, &bridge, &validator, generator, models)
+                    .as_bytes(),
+                false,
+            );
+        }
+
+        fn pinned_models(&self) -> Vec<RuntimeManifestModel> {
+            note_runtime_models(&self.catalog.models[0])
+        }
+
+        fn generator(&self) -> RuntimeManifestResource {
+            self.resource("note-generator.py", GENERATOR_FIXTURE)
+        }
+    }
+
+    fn note_catalog() -> ModelCatalog {
+        let revision = "b".repeat(40);
+        let catalog = ModelCatalog {
+            schema: ModelCatalogSchema::V1,
+            models: vec![TranscriptModel {
+                id: "note-generator-test".into(),
+                revision: revision.clone(),
+                title: "Note generator".into(),
+                detail: "A local note-generation model.".into(),
+                download_bytes: (NOTE_CONFIG_FIXTURE.len() + NOTE_WEIGHTS_FIXTURE.len()) as u64,
+                installed_bytes: (NOTE_CONFIG_FIXTURE.len() + NOTE_WEIGHTS_FIXTURE.len()) as u64,
+                files: vec![
+                    TranscriptModelFile {
+                        role: TranscriptModelFileRole::Config,
+                        name: "config.json".into(),
+                        url: format!("https://example.test/{revision}/config.json"),
+                        bytes: NOTE_CONFIG_FIXTURE.len() as u64,
+                        sha256: format!("{:x}", Sha256::digest(NOTE_CONFIG_FIXTURE)),
+                    },
+                    TranscriptModelFile {
+                        role: TranscriptModelFileRole::Weights,
+                        name: "weights.safetensors".into(),
+                        url: format!("https://example.test/{revision}/weights.safetensors"),
+                        bytes: NOTE_WEIGHTS_FIXTURE.len() as u64,
+                        sha256: format!("{:x}", Sha256::digest(NOTE_WEIGHTS_FIXTURE)),
+                    },
+                ],
+            }],
+        };
+        catalog.validate().unwrap();
+        catalog
+    }
+
+    /// Re-derives canonical manifest bytes the way every consumer does:
+    /// `json.dumps(document, ensure_ascii=False, indent=2)`.  This is the one
+    /// contract the Rust renderer, the bootstrap, and `worker/note_bridge.py`
+    /// must agree on byte for byte.
+    fn python_canonical(bytes: &[u8]) -> Vec<u8> {
+        let mut child = Command::new("python3")
+            .args([
+                "-c",
+                "import json,sys\nraw=sys.stdin.buffer.read()\nsys.stdout.buffer.write(json.dumps(json.loads(raw),ensure_ascii=False,indent=2).encode())",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        output.stdout
     }
 
     fn current_python() -> PathBuf {
@@ -1772,49 +2168,61 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         .unwrap();
     }
 
+    /// A validator-only fixture: the shape `worker/build_manifest.py` packages
+    /// today, which admits no generator and therefore no note model.
     fn launch_fixture(mode: &str) -> LaunchFixture {
         let temporary = TempDir::new().unwrap();
         let base = temporary.path().canonicalize().unwrap();
         let resources = base.join("resources");
-        let storage_root = base.join("storage");
         fs::create_dir(&resources).unwrap();
-        fs::create_dir(&storage_root).unwrap();
         fs::set_permissions(&resources, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::set_permissions(&storage_root, fs::Permissions::from_mode(0o700)).unwrap();
+        let repository = base.join("repository");
+        create_private_dir(&repository).unwrap();
+        let storage = StorageRoot::create(&base.join("storage"), &repository).unwrap();
+        let storage_root = storage.path().to_path_buf();
         private_file(&storage_root.join("fixture-mode"), mode.as_bytes(), false);
 
         let runtime_path = resources.join(PRODUCT_RUNTIME_PATH);
         fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
         fs::copy(current_python(), &runtime_path).unwrap();
         fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o700)).unwrap();
-        let bridge_path = resources.join("note-bridge.py");
-        let validator_path = resources.join("note-validator.zip");
-        private_file(&bridge_path, LAUNCH_FIXTURE_BRIDGE.as_bytes(), false);
-        private_file(&validator_path, b"validator-fixture", false);
-
-        let runtime = RuntimeManifestResource {
-            relative_path: PRODUCT_RUNTIME_PATH.into(),
-            sha256: format!("{:x}", Sha256::digest(fs::read(&runtime_path).unwrap())),
-        };
-        let bridge = RuntimeManifestResource {
-            relative_path: "note-bridge.py".into(),
-            sha256: format!("{:x}", Sha256::digest(LAUNCH_FIXTURE_BRIDGE.as_bytes())),
-        };
-        let validator = RuntimeManifestResource {
-            relative_path: "note-validator.zip".into(),
-            sha256: format!("{:x}", Sha256::digest(b"validator-fixture")),
-        };
-        let manifest_path = resources.join("note-runtime-project.json");
         private_file(
-            &manifest_path,
-            canonical_manifest(&runtime, &bridge, &validator).as_bytes(),
+            &resources.join("note-bridge.py"),
+            LAUNCH_FIXTURE_BRIDGE.as_bytes(),
             false,
         );
-        LaunchFixture {
+        private_file(
+            &resources.join("note-validator.zip"),
+            b"validator-fixture",
+            false,
+        );
+        private_file(
+            &resources.join("note-generator.py"),
+            GENERATOR_FIXTURE,
+            false,
+        );
+
+        let fixture = LaunchFixture {
             _temporary: temporary,
             storage_root,
-            manifest_path,
-        }
+            manifest_path: resources.join("note-runtime-project.json"),
+            generate_manifest_path: resources.join("note-runtime-generate.json"),
+            resources,
+            storage,
+            catalog: note_catalog(),
+        };
+        fixture.write_project_manifest();
+        fixture
+    }
+
+    /// The same fixture plus a `generate`-role manifest and its pinned note
+    /// model, installed and intact.  This is the shape a later bundle ships;
+    /// the packaged bundle today writes only the `project` manifest.
+    fn generative_fixture(mode: &str) -> LaunchFixture {
+        let fixture = launch_fixture(mode);
+        fixture.write_generate_manifest(Some(&fixture.generator()), &fixture.pinned_models());
+        fixture.install_note_model();
+        fixture
     }
 
     fn projector(fixture: &LaunchFixture, ready_ms: u64, project_ms: u64) -> ProcessNoteProjector {
@@ -1834,7 +2242,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         claimed_bridge_digest: Option<&str>,
         occupy_targets: bool,
     ) -> Output {
-        let mut runtime = verify_manifest(&fixture.manifest_path).unwrap();
+        let mut runtime = verify_manifest(&fixture.manifest_path, PROJECT_ROLE).unwrap();
         if let Some(digest) = claimed_bridge_digest {
             let mut document: serde_json::Value =
                 serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
@@ -1891,6 +2299,56 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         let fixture = launch_fixture("descriptor-binding");
         let marker = fixture.storage_root.join("bound-command");
         let output = launch_bootstrap(&fixture, Some(&"0".repeat(64)), false);
+        assert!(!output.status.success());
+        assert!(!marker.exists());
+    }
+
+    /// The descriptor transport is `project`-only on both sides.  A generator
+    /// on that role is refused by `verify_descriptor_runtime` in
+    /// `worker/note_bridge.py`, so the bootstrap must refuse it too rather
+    /// than admit a shape the real bridge rejects one layer down.
+    #[test]
+    fn bootstrap_refuses_a_generator_on_the_project_role() {
+        let fixture = launch_fixture("descriptor-binding");
+        let marker = fixture.storage_root.join("bound-command");
+        let [runtime, bridge, validator] = fixture.manifest_resources();
+        let generator = fixture.generator();
+        let bytes = canonical_manifest(
+            PROJECT_ROLE,
+            &runtime,
+            &bridge,
+            &validator,
+            Some(&generator),
+            &fixture.pinned_models(),
+        )
+        .into_bytes();
+        let mut verified = verify_manifest(&fixture.manifest_path, PROJECT_ROLE).unwrap();
+        private_file(&fixture.manifest_path, &bytes, false);
+        verified.manifest.file = File::open(&fixture.manifest_path).unwrap();
+        verified.manifest.identity = FileIdentity::from_file(&verified.manifest.file).unwrap();
+        let staged = stage_descriptors([
+            verified.manifest.file.as_raw_fd(),
+            verified.bridge.file.as_raw_fd(),
+            verified.validator.file.as_raw_fd(),
+        ])
+        .unwrap();
+        let inherited = [
+            (staged[0].as_raw_fd(), MANIFEST_FD),
+            (staged[1].as_raw_fd(), BRIDGE_FD),
+            (staged[2].as_raw_fd(), VALIDATOR_FD),
+        ];
+        let mut command = Command::new(&verified.executable.path);
+        command
+            .args(["-I", "-S", "-E", "-s", "-B", "-c", BOOTSTRAP])
+            .arg(std::process::id().to_string())
+            .arg(&fixture.storage_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(move || install_descriptor_mappings(inherited));
+        }
+        let output = command.output().unwrap();
         assert!(!output.status.success());
         assert!(!marker.exists());
     }
@@ -2181,7 +2639,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
     #[test]
     fn injected_start_time_mismatch_refuses_the_retained_live_code_binding() {
         let fixture = launch_fixture("descriptor-binding");
-        let runtime = verify_manifest(&fixture.manifest_path).unwrap();
+        let runtime = verify_manifest(&fixture.manifest_path, PROJECT_ROLE).unwrap();
         let inspector = InjectedStartTimes(Mutex::new(VecDeque::from([
             ProcessStartTime {
                 epoch_seconds: 100,
@@ -2275,5 +2733,413 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         )
         .unwrap();
         assert!(!resources_are_inside(&root, [&manifest, &bridge]));
+    }
+    #[test]
+    fn canonical_manifest_bytes_match_python_canonical_json_for_both_roles() {
+        let fixture = launch_fixture("descriptor-binding");
+        let [runtime, bridge, validator] = fixture.manifest_resources();
+        let generator = fixture.generator();
+        for (role, generator, models) in [
+            (PROJECT_ROLE, None, Vec::new()),
+            (GENERATE_ROLE, Some(&generator), fixture.pinned_models()),
+        ] {
+            let rendered =
+                canonical_manifest(role, &runtime, &bridge, &validator, generator, &models)
+                    .into_bytes();
+            assert_eq!(
+                python_canonical(&rendered),
+                rendered,
+                "Rust and Python must agree on the one canonical manifest byte sequence"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_manifest_pins_a_generator_and_its_models_on_the_generate_role() {
+        let fixture = generative_fixture("descriptor-binding");
+        let runtime = verify_manifest(&fixture.generate_manifest_path, GENERATE_ROLE).unwrap();
+        let generator = runtime.generator.expect("generator-bearing manifest");
+        assert_eq!(
+            generator.digest,
+            format!("{:x}", Sha256::digest(GENERATOR_FIXTURE))
+        );
+        assert_eq!(generator.path, fixture.resources.join("note-generator.py"));
+        assert_eq!(
+            runtime
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["note-generator-config", "note-generator-weights"]
+        );
+    }
+
+    /// The role and the generator move together in both directions, matching
+    /// `_require_generator_admission` in `worker/note_bridge.py`.
+    #[test]
+    fn verify_manifest_refuses_every_mismatch_of_role_generator_and_models() {
+        let fixture = launch_fixture("descriptor-binding");
+        let generator = fixture.generator();
+        let pinned = fixture.pinned_models();
+        let path = &fixture.generate_manifest_path;
+        for (role, generator, models) in [
+            (GENERATE_ROLE, Some(&generator), Vec::new()),
+            (GENERATE_ROLE, None, pinned.clone()),
+            (GENERATE_ROLE, None, Vec::new()),
+            (PROJECT_ROLE, Some(&generator), pinned.clone()),
+        ] {
+            fixture.write_manifest(path, role, generator, &models);
+            assert!(verify_manifest(path, role).is_err());
+        }
+        fixture.write_manifest(path, PROJECT_ROLE, None, &[]);
+        assert!(verify_manifest(path, GENERATE_ROLE).is_err());
+        assert!(verify_manifest(path, PROJECT_ROLE).is_ok());
+    }
+
+    /// The canonicality rule has to be tested by breaking it, because every
+    /// manifest these tests write is produced by `canonical_manifest` and is
+    /// therefore canonical by construction. A blind mutation that deleted the
+    /// byte comparison outright survived the whole suite.
+    ///
+    /// This matters more than an ordinary missing case. Rust accepting a
+    /// non-canonical manifest that `worker/note_bridge.py` then refuses is a
+    /// cross-language divergence: the admission would succeed here and the
+    /// child would refuse at startup, reported as a bare transport failure.
+    #[test]
+    fn verify_manifest_refuses_a_semantically_identical_noncanonical_manifest() {
+        let fixture = launch_fixture("descriptor-binding");
+        let canonical = fs::read_to_string(&fixture.manifest_path).unwrap();
+        assert!(verify_manifest(&fixture.manifest_path, PROJECT_ROLE).is_ok());
+
+        // Same JSON, same fields, same order, same digests -- only the
+        // separator spelling differs, which is what `json.dumps` pins.
+        let compact = canonical.replace("\": \"", "\":\"");
+        assert_ne!(compact, canonical, "the perturbation must change the bytes");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&compact).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&canonical).unwrap(),
+            "and must not change the document"
+        );
+        private_file(&fixture.manifest_path, compact.as_bytes(), false);
+        assert!(verify_manifest(&fixture.manifest_path, PROJECT_ROLE).is_err());
+    }
+
+    /// The identifier bound is 128 characters. Nothing exercised it until a
+    /// blind mutation widened it to 4096 and the suite could not tell.
+    #[test]
+    fn verify_manifest_bounds_the_model_identifier_length() {
+        let fixture = launch_fixture("descriptor-binding");
+        let generator = fixture.generator();
+        let digest = fixture.pinned_models()[0].sha256.clone();
+        let path = &fixture.generate_manifest_path;
+
+        let at_bound = vec![RuntimeManifestModel {
+            id: "n".repeat(128),
+            sha256: digest.clone(),
+        }];
+        fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &at_bound);
+        assert!(
+            verify_manifest(path, GENERATE_ROLE).is_ok(),
+            "128 characters is inside the bound"
+        );
+
+        let past_bound = vec![RuntimeManifestModel {
+            id: "n".repeat(129),
+            sha256: digest,
+        }];
+        fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &past_bound);
+        assert!(verify_manifest(path, GENERATE_ROLE).is_err());
+    }
+
+    /// An identifier is a name, not a path. This is the narrower-than-the-
+    /// bridge rule I asserted to the worker side as a contract, and until a
+    /// second mutation round widened the charset to admit `.` and `/`, the
+    /// only test touching it used a space -- a character both sides reject.
+    /// The claim was untested at exactly the point where the two sides differ.
+    #[test]
+    fn verify_manifest_refuses_path_shaped_model_identifiers() {
+        let fixture = launch_fixture("descriptor-binding");
+        let generator = fixture.generator();
+        let digest = fixture.pinned_models()[0].sha256.clone();
+        let path = &fixture.generate_manifest_path;
+        for identifier in [
+            "note.generator",
+            "note/generator",
+            "../generator",
+            "note generator",
+        ] {
+            let models = vec![RuntimeManifestModel {
+                id: identifier.into(),
+                sha256: digest.clone(),
+            }];
+            fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &models);
+            assert!(
+                verify_manifest(path, GENERATE_ROLE).is_err(),
+                "{identifier} is not a name"
+            );
+        }
+        let models = vec![RuntimeManifestModel {
+            id: "note-generator_weights2".into(),
+            sha256: digest,
+        }];
+        fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &models);
+        assert!(
+            verify_manifest(path, GENERATE_ROLE).is_ok(),
+            "the bound must not be so tight it rejects a plain name"
+        );
+    }
+
+    /// A pinned set that two catalog entries both provide names no single
+    /// model, so admission refuses rather than picking one. The fixture
+    /// carries a single model, so nothing could exercise this until a
+    /// mutation deleted the check and the suite could not tell.
+    #[test]
+    fn admission_refuses_a_pinned_set_two_catalog_entries_both_provide() {
+        let fixture = generative_fixture("descriptor-binding");
+        assert!(fixture.is_admitted());
+
+        let mut ambiguous = fixture.catalog.clone();
+        let mut twin = ambiguous.models[0].clone();
+        twin.id = "note-generator-twin".into();
+        twin.revision = "c".repeat(40);
+        for file in &mut twin.files {
+            file.url = format!("https://example.test/{}/{}", twin.revision, file.name);
+        }
+        ambiguous.models.push(twin);
+        ambiguous.validate().expect("two entries may share digests");
+
+        assert!(
+            admitted_process_projector(
+                &fixture.storage,
+                &ambiguous,
+                &fixture.manifest_path,
+                &fixture.generate_manifest_path,
+            )
+            .is_none(),
+            "an ambiguous pin is refused, never resolved by position"
+        );
+    }
+
+    /// Admission verifies the manifest it will actually hand the child, not
+    /// only the one it read the pin from. A verified generator and a verified
+    /// model do not authorize a project manifest that no longer checks out.
+    #[test]
+    fn admission_refuses_when_the_project_manifest_does_not_verify() {
+        let fixture = generative_fixture("descriptor-binding");
+        assert!(fixture.is_admitted());
+        fs::remove_file(&fixture.manifest_path).unwrap();
+        assert!(!fixture.is_admitted());
+        assert_eq!(
+            fixture.admit().project(&request()),
+            Err(ProjectTransportError::Unavailable)
+        );
+    }
+
+    /// A manifest resource path may not climb out of the resource root. The
+    /// charset alone admits `..`, so the component check is the whole of the
+    /// rule; the target here is a real file outside the root, so the test
+    /// witnesses that check rather than a failed open.
+    #[test]
+    fn verify_manifest_refuses_a_resource_path_that_climbs_out_of_the_root() {
+        let fixture = launch_fixture("descriptor-binding");
+        let outside = fixture.resources.parent().unwrap().join("note-bridge.py");
+        private_file(&outside, LAUNCH_FIXTURE_BRIDGE.as_bytes(), false);
+
+        let [runtime, _, validator] = fixture.manifest_resources();
+        let climbing = RuntimeManifestResource {
+            relative_path: "../note-bridge.py".into(),
+            sha256: format!("{:x}", Sha256::digest(LAUNCH_FIXTURE_BRIDGE.as_bytes())),
+        };
+        private_file(
+            &fixture.manifest_path,
+            canonical_manifest(PROJECT_ROLE, &runtime, &climbing, &validator, None, &[]).as_bytes(),
+            false,
+        );
+        assert!(verify_manifest(&fixture.manifest_path, PROJECT_ROLE).is_err());
+    }
+
+    #[test]
+    fn verify_manifest_refuses_repeated_and_malformed_model_entries() {
+        let fixture = launch_fixture("descriptor-binding");
+        let generator = fixture.generator();
+        let pinned = fixture.pinned_models();
+        let path = &fixture.generate_manifest_path;
+        // Uniqueness is two rules, and a case that repeats both witnesses
+        // neither: the digest clause refuses it and the identifier clause is
+        // never reached. Each repetition needs the other field distinct.
+        let repeated_identifier = vec![
+            pinned[0].clone(),
+            RuntimeManifestModel {
+                id: pinned[0].id.clone(),
+                sha256: pinned[1].sha256.clone(),
+            },
+        ];
+        let repeated_digest = vec![
+            pinned[0].clone(),
+            RuntimeManifestModel {
+                id: pinned[1].id.clone(),
+                sha256: pinned[0].sha256.clone(),
+            },
+        ];
+        for models in [
+            vec![pinned[0].clone(), pinned[0].clone()],
+            repeated_identifier,
+            repeated_digest,
+            vec![RuntimeManifestModel {
+                id: "note generator".into(),
+                sha256: pinned[0].sha256.clone(),
+            }],
+            vec![RuntimeManifestModel {
+                id: pinned[0].id.clone(),
+                sha256: "abc".into(),
+            }],
+        ] {
+            fixture.write_manifest(path, GENERATE_ROLE, Some(&generator), &models);
+            assert!(verify_manifest(path, GENERATE_ROLE).is_err());
+        }
+    }
+
+    /// `note_runtime_models` derives one identifier per file *role*, so it can
+    /// only name a catalog entry carrying one file per role.  It does not
+    /// enforce that itself -- `ModelCatalog::validate` does, by requiring
+    /// exactly one `Config` and one `Weights`.  The mapping is injective by
+    /// inheritance, not by construction.
+    ///
+    /// That matters because a note-generation model large enough to be worth
+    /// shipping is normally sharded across several weights files.  The catalog
+    /// cannot express that today.  If a later slice teaches it to, two weights
+    /// files collide on one identifier and admission refuses at `parse_models`
+    /// -- an honest refusal, but one that reads as a malformed manifest rather
+    /// than as an identifier scheme that cannot name the model.  This test
+    /// pins the limit so the change fails here, where the reason is written.
+    #[test]
+    fn note_runtime_model_ids_are_one_per_role_and_cannot_name_a_sharded_model() {
+        let fixture = launch_fixture("descriptor-binding");
+        let entry = &fixture.catalog.models[0];
+        assert_eq!(
+            note_runtime_models(entry)
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["note-generator-config", "note-generator-weights"]
+        );
+
+        let mut sharded = entry.clone();
+        sharded.files.push(TranscriptModelFile {
+            role: TranscriptModelFileRole::Weights,
+            name: "weights-00002.safetensors".into(),
+            url: format!(
+                "https://example.test/{}/weights-00002.safetensors",
+                sharded.revision
+            ),
+            bytes: 1,
+            sha256: "d".repeat(64),
+        });
+        assert!(
+            ModelCatalog {
+                schema: ModelCatalogSchema::V1,
+                models: vec![sharded.clone()],
+            }
+            .validate()
+            .is_err(),
+            "the catalog, not this mapping, is what keeps the identifiers distinct"
+        );
+
+        let collided = note_runtime_models(&sharded);
+        assert_eq!(
+            collided[1].id, collided[2].id,
+            "sharded weights collapse onto one identifier"
+        );
+        fixture.write_generate_manifest(Some(&fixture.generator()), &collided);
+        assert!(!fixture.is_admitted());
+    }
+
+    #[test]
+    fn admission_refuses_the_packaged_validator_only_manifest_exactly_as_the_default_does() {
+        let fixture = launch_fixture("descriptor-binding");
+        fixture.install_note_model();
+        assert!(!fixture.is_admitted());
+        assert_eq!(
+            fixture.admit().project(&request()),
+            UnavailableProjector.project(&request())
+        );
+    }
+
+    #[test]
+    fn admission_refuses_a_generator_whose_model_is_not_installed() {
+        let fixture = launch_fixture("descriptor-binding");
+        fixture.write_generate_manifest(Some(&fixture.generator()), &fixture.pinned_models());
+        assert!(!fixture.is_admitted());
+        assert_eq!(
+            fixture.admit().project(&request()),
+            Err(ProjectTransportError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn admission_refuses_an_installed_model_whose_bytes_or_inventory_changed() {
+        let fixture = generative_fixture("descriptor-binding");
+        assert!(fixture.is_admitted());
+        let weights = fixture.model_directory().join("weights.safetensors");
+        fs::write(&weights, b"different note weights of a different length").unwrap();
+        assert!(!fixture.is_admitted());
+        fs::write(&weights, NOTE_WEIGHTS_FIXTURE).unwrap();
+        assert!(fixture.is_admitted());
+        fs::write(fixture.model_directory().join("extra.bin"), b"extra").unwrap();
+        assert!(!fixture.is_admitted());
+    }
+
+    #[test]
+    fn admission_refuses_pinned_models_no_catalog_entry_provides() {
+        let fixture = generative_fixture("descriptor-binding");
+        assert!(fixture.is_admitted());
+        let mut foreign = fixture.pinned_models();
+        foreign[1].sha256 = "0".repeat(64);
+        fixture.write_generate_manifest(Some(&fixture.generator()), &foreign);
+        assert!(!fixture.is_admitted());
+    }
+
+    #[test]
+    fn admission_refuses_a_missing_or_tampered_generator_resource() {
+        let fixture = generative_fixture("descriptor-binding");
+        assert!(fixture.is_admitted());
+        private_file(
+            &fixture.resources.join("note-generator.py"),
+            b"tampered generator",
+            false,
+        );
+        assert!(!fixture.is_admitted());
+        fs::remove_file(fixture.resources.join("note-generator.py")).unwrap();
+        assert!(!fixture.is_admitted());
+        assert_eq!(
+            fixture.admit().project(&request()),
+            Err(ProjectTransportError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn an_admitted_projector_still_drives_the_child_on_the_project_manifest() {
+        let fixture = generative_fixture("descriptor-binding");
+        assert!(fixture.is_admitted());
+        let result = projector(&fixture, 2_000, 2_000)
+            .project(&request())
+            .unwrap();
+        assert_eq!(result, b"{}\n");
+        assert_eq!(
+            fs::read(fixture.storage_root.join("bound-command")).unwrap(),
+            project_command(&request()).unwrap()
+        );
+    }
+
+    #[test]
+    fn an_admitted_projector_honors_cancellation_before_the_child_is_launched() {
+        let fixture = generative_fixture("descriptor-binding");
+        let cancellation = ProjectionCancellation::default();
+        cancellation.cancel();
+        assert_eq!(
+            projector(&fixture, 2_000, 2_000).project_with_cancellation(&request(), &cancellation),
+            Err(ProjectTransportError::Cancelled)
+        );
+        assert!(!fixture.storage_root.join("bound-command").exists());
     }
 }

@@ -2019,6 +2019,11 @@ mod tests {
         Success,
         Refusal(&'static str),
         Transport,
+        /// A frame the worker calls successful, carrying a claim this side
+        /// will not parse. Distinct from `Refusal`: nothing is declared
+        /// wrong, so the reader learns of the disagreement only by failing to
+        /// read it.
+        Divergent,
     }
 
     struct FixtureProjector(Mutex<ProjectorMode>);
@@ -2038,6 +2043,18 @@ mod tests {
                 ProjectorMode::Transport => Err(ProjectTransportError::Unavailable),
                 ProjectorMode::Refusal(code) => {
                     Ok(format!("{{\"schema\":\"note-projection-result/1\",\"request_id\":\"{}\",\"operation\":\"note.project\",\"outcome\":\"refused\",\"projection\":null,\"failure\":{{\"code\":\"{code}\",\"recoverable\":{}}}}}\n", request.request_id, code == "artifact-missing").into_bytes())
+                }
+                ProjectorMode::Divergent => {
+                    // A control character in claim text. `parse_claim` checks
+                    // the text rules before the digest, so the digest here is
+                    // the true one: the only thing wrong with this frame is
+                    // the rule under test, not a second defect that would let
+                    // the test pass for the wrong reason.
+                    let locator = "{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}";
+                    let claim = format!(
+                        "{{\"claim_ordinal\":0,\"claim_sha256\":\"4958e6f016634210e3858a8d3680ee15a58c8fea265af6448aa3751e1b5946a0\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"claim\\u0007a\",\"locators\":[{locator}]}}"
+                    );
+                    Ok(format!("{{\"schema\":\"note-projection-result/1\",\"request_id\":\"{}\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"{}\",\"note_markdown_sha256\":\"{}\",\"transcript_sha256\":\"{}\",\"claims\":[{claim}]}},\"failure\":null}}\n", request.request_id, request.note_json_sha256, request.note_markdown_sha256, request.transcript_sha256).into_bytes())
                 }
                 ProjectorMode::Success => {
                     let locator = "{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}";
@@ -2389,6 +2406,48 @@ mod tests {
                 Err(actual) if actual == expected
             ));
         }
+    }
+
+    /// Refusing and diverging are different failures with different costs,
+    /// and the gap between them is why the claim rules are duplicated on both
+    /// sides of the boundary rather than delegated to this one.
+    ///
+    /// A declared refusal quarantines the affected meetings and the rebuild
+    /// continues. A frame the worker calls successful, carrying a claim this
+    /// side will not parse, is a content-free `Unavailable` that aborts the
+    /// whole rebuild and names no meeting -- so a disagreement about one
+    /// claim surfaces as the library being unavailable.
+    ///
+    /// The asymmetry is the argument for duplicating the rules: refusing too
+    /// much locally costs a meeting, admitting something the other side will
+    /// not parse costs the library. Nothing else asserts the two branches
+    /// stay distinct, so a refactor collapsing them would be invisible.
+    #[test]
+    fn a_divergent_claim_costs_the_library_while_a_declared_refusal_costs_a_meeting() {
+        let diverged = Fixture::new();
+        diverged.ready_meeting("meeting-a", 10);
+        diverged.ready_meeting("meeting-b", 9);
+        assert!(matches!(
+            LibraryProjection::rebuild_with_projector(
+                &diverged.storage,
+                ReadLimits::default(),
+                Arc::new(FixtureProjector::new(ProjectorMode::Divergent)),
+            ),
+            Err(LibraryReadError::ArtifactUnavailable)
+        ));
+
+        let refused = Fixture::new();
+        refused.ready_meeting("meeting-a", 10);
+        refused.ready_meeting("meeting-b", 9);
+        let projection = LibraryProjection::rebuild_with_projector(
+            &refused.storage,
+            ReadLimits::default(),
+            Arc::new(FixtureProjector::new(ProjectorMode::Refusal(
+                "artifact-invalid",
+            ))),
+        )
+        .expect("a declared refusal must not fail the whole rebuild");
+        assert_eq!(projection.quarantined_meetings(), 2);
     }
 
     #[test]

@@ -638,6 +638,271 @@ mod tests {
         }
     }
 
+    /// Rewrites every non-ASCII character as `\uXXXX`, the way a serializer
+    /// with `ensure_ascii=True` would. Both spellings are legal JSON and
+    /// `parse_result` accepts either.
+    fn escape_non_ascii(serialized: &str) -> String {
+        let mut escaped = String::with_capacity(serialized.len());
+        for character in serialized.chars() {
+            if character.is_ascii() {
+                escaped.push(character);
+            } else {
+                let mut units = [0_u16; 2];
+                for unit in character.encode_utf16(&mut units) {
+                    escaped.push_str(&format!("\\u{unit:04x}"));
+                }
+            }
+        }
+        escaped
+    }
+
+    fn non_ascii_result(text: &str) -> Value {
+        let anchor = &turns()[3];
+        serde_json::json!({
+            "schema": "note-projection-result/1",
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "operation": "note.project",
+            "outcome": "succeeded",
+            "projection": {
+                "schema": "note-claim-projection/1",
+                "note_json_sha256": "a".repeat(64),
+                "note_markdown_sha256": "b".repeat(64),
+                "transcript_sha256": "c".repeat(64),
+                "claims": [{
+                    "claim_ordinal": 0,
+                    "claim_sha256": format!("{:x}", Sha256::digest(text.as_bytes())),
+                    "claim_type": "decision",
+                    "evidence_state": "located",
+                    "claim": text,
+                    "locators": [{
+                        "turn": 3,
+                        "start": 0,
+                        "end": anchor.chars().count(),
+                        "text_sha256": format!("{:x}", Sha256::digest(anchor.as_bytes())),
+                    }],
+                }],
+            },
+            "failure": Value::Null,
+        })
+    }
+
+    /// The shared fixture holds exactly one non-ASCII string --
+    /// `transcript_turns[3]`, `"aé🙂z"` -- and no result frame carries any.
+    /// Locator offsets over that turn are exercised, which is what proves
+    /// offsets are counted in characters. Claim *text* over non-ASCII is not,
+    /// and no fixture frame is written in the escaped spelling at all.
+    ///
+    /// Three invariants the cross-language contract rests on, none covered:
+    /// a frame must parse identically whether non-ASCII arrives raw or
+    /// escaped; the 160 cap counts characters, not bytes or UTF-16 units; and
+    /// `claim_sha256` is taken over decoded UTF-8 so both spellings agree on
+    /// it. Escaping is a serializer flag on the far side of the boundary, so
+    /// nothing here may depend on which one is set.
+    ///
+    /// Pinned on this side rather than by widening the shared fixture: both
+    /// test suites index that fixture positionally, so inserting a case is a
+    /// change with two owners and belongs to whoever owns the fixture once
+    /// the branches land.
+    #[test]
+    fn non_ascii_claim_text_parses_identically_raw_or_escaped() {
+        let text: String = "é🙂".repeat(80);
+        assert_eq!(text.chars().count(), 160, "the cap is 160 characters");
+        assert!(
+            text.len() > 160,
+            "and this text is longer than that in bytes"
+        );
+
+        let raw = frame(&non_ascii_result(&text));
+        let escaped = {
+            let mut bytes = escape_non_ascii(&ordered_json(&non_ascii_result(&text))).into_bytes();
+            bytes.push(b'\n');
+            bytes
+        };
+        assert!(
+            escaped.is_ascii(),
+            "the escaped spelling carries no raw UTF-8"
+        );
+        assert!(escaped.len() > raw.len(), "escaping inflates the frame");
+
+        let from_raw = parse_result(&raw, &request(), &turns()).expect("raw spelling parses");
+        let from_escaped =
+            parse_result(&escaped, &request(), &turns()).expect("escaped spelling parses");
+        assert!(
+            from_raw == from_escaped,
+            "the two spellings must yield the same claims"
+        );
+        assert_eq!(
+            from_raw[0].text, text,
+            "text decodes to the same characters"
+        );
+    }
+
+    /// One character past the cap is refused in either spelling, so the bound
+    /// cannot be widened by choosing a serializer.
+    #[test]
+    fn a_claim_over_the_character_cap_is_refused_in_either_spelling() {
+        let text: String = "é".repeat(161);
+        let raw = frame(&non_ascii_result(&text));
+        let escaped = {
+            let mut bytes = escape_non_ascii(&ordered_json(&non_ascii_result(&text))).into_bytes();
+            bytes.push(b'\n');
+            bytes
+        };
+        assert!(parse_result(&raw, &request(), &turns()).is_err());
+        assert!(parse_result(&escaped, &request(), &turns()).is_err());
+    }
+
+    /// Serialized size of one claim, in the shape `parse_claim` accepts.
+    fn escaped_len(serialized: &str) -> usize {
+        serialized
+            .chars()
+            .map(|character| match character as u32 {
+                0..=0x7F => 1,
+                0x80..=0xFFFF => 6,
+                _ => 12,
+            })
+            .sum()
+    }
+
+    /// The projection frame has under 1% headroom at the current keep budget,
+    /// and the margin turns on a serialization choice nobody pinned.
+    ///
+    /// A worst-case legal projection is 64 claims -- the keep budget in
+    /// `notes/EVAL.md` -- each carrying the maximum 160 characters and the
+    /// maximum three locators. Written as raw UTF-8 with non-ASCII text that
+    /// is about 65,200 bytes against a 65,536-byte frame. Written with
+    /// non-ASCII escaped as `\uXXXX` the same projection is about 96,000
+    /// bytes, and overflows somewhere in the forties.
+    ///
+    /// Unlike the runtime manifest, the result frame carries no canonicality
+    /// rule: `parse_result` accepts either spelling. So whether a legal
+    /// projection fits depends on a serializer flag on the far side of the
+    /// process boundary, which no test on either side pins.
+    ///
+    /// An over-large frame is refused by the length check as `Unavailable`,
+    /// never `CapacityExceeded`. That is deliberate -- at that point a valid
+    /// oversized frame is indistinguishable from a malformed one, and the
+    /// transport must not guess -- but the two map to different
+    /// `LibraryReadError` variants, so the rebuild reports the wrong reason.
+    ///
+    /// This pins the headroom so a keep-budget or locator-cap change fails
+    /// here, where the arithmetic is written down, rather than as an
+    /// unexplained `Unavailable` on one meeting.
+    #[test]
+    fn a_worst_case_legal_projection_fits_the_frame_only_while_unescaped() {
+        let text: String = "\u{6f22}".repeat(160);
+        assert_eq!(
+            text.chars().count(),
+            160,
+            "the parser cap is 160 characters"
+        );
+        let claims: Vec<_> = (0..64_u64)
+            .map(|ordinal| {
+                serde_json::json!({
+                    "claim_ordinal": ordinal,
+                    "claim_sha256": "a".repeat(64),
+                    "claim_type": "proposal",
+                    "evidence_state": "located",
+                    "claim": text,
+                    "locators": (0..3_u64).map(|index| serde_json::json!({
+                        "turn": 999,
+                        "start": 1000 + index,
+                        "end": 2000 + index,
+                        "text_sha256": "b".repeat(64),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let document = serde_json::json!({
+            "schema": "note-projection-result/1",
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "operation": "note.project",
+            "outcome": "succeeded",
+            "projection": {
+                "schema": "note-claim-projection/1",
+                "note_json_sha256": "c".repeat(64),
+                "note_markdown_sha256": "d".repeat(64),
+                "transcript_sha256": "e".repeat(64),
+                "claims": claims,
+            },
+            "failure": Value::Null,
+        });
+        let serialized = serde_json::to_string(&document).unwrap();
+
+        let raw = serialized.len() + 1;
+        assert!(
+            raw <= MAX_PROJECTION_FRAME_BYTES,
+            "a worst-case legal projection must fit unescaped: {raw} bytes"
+        );
+        assert!(
+            MAX_PROJECTION_FRAME_BYTES - raw < MAX_PROJECTION_FRAME_BYTES / 100,
+            "headroom is under one percent; a wider budget or cap will not fit"
+        );
+        assert!(
+            escaped_len(&serialized) + 1 > MAX_PROJECTION_FRAME_BYTES,
+            "the same projection escaped does not fit, and nothing pins which is sent"
+        );
+    }
+
+    /// A lone surrogate never becomes a claim, because the escape never
+    /// parses.
+    ///
+    /// `forbidden` covers Cc plus U+2028/U+2029, and a lone surrogate is
+    /// category Cs, so it is outside that set. Nothing in this module's claim
+    /// rules refuses one; `strict_json` does, at the JSON layer, before any
+    /// claim rule runs. That is what this test locks.
+    ///
+    /// The rule is enforced independently on the worker side, and the two
+    /// mechanisms are different: Rust cannot hold a surrogate in a `char` at
+    /// all, while Python can, so the worker names Cs in its own forbidden set
+    /// rather than inheriting a parser guarantee. Neither enforcement point
+    /// would move if the other changed, which is the same two-owner shape as
+    /// the locator cap.
+    ///
+    /// Deliberately no claim here about *how* the far side refuses. An
+    /// earlier version of this comment asserted the worker's mechanism and
+    /// was wrong on every count -- a cross-owner detail that can change
+    /// without this test noticing is exactly the stale-measurement failure
+    /// this suite exists to catch.
+    #[test]
+    fn a_lone_surrogate_escape_never_parses_into_a_claim() {
+        for raw in [
+            br#"{"a":"\ud800"}"#.as_slice(),
+            br#"{"a":"\udfff"}"#.as_slice(),
+            br#"{"a":"\ud800\ud800"}"#.as_slice(),
+        ] {
+            assert!(
+                strict_json(raw).is_err(),
+                "a lone surrogate must not parse: {}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+        // A well-formed pair is legal and must still parse, so the rule above
+        // is refusing the surrogate rather than the escape syntax.
+        let paired = strict_json(br#"{"a":"\ud83d\ude00"}"#).expect("a valid pair parses");
+        match paired {
+            StrictJson::Object(entries) => match &entries[0].1 {
+                StrictJson::String(value) => assert_eq!(value, "\u{1F600}"),
+                _ => panic!("expected a string"),
+            },
+            _ => panic!("expected an object"),
+        }
+    }
+
+    /// An over-large frame is a transport refusal, not a capacity refusal.
+    /// `projection-capacity-exceeded` is the child's structured refusal inside
+    /// a small frame; a frame too large to read carries no such claim.
+    #[test]
+    fn an_over_large_frame_is_unavailable_rather_than_capacity_exceeded() {
+        let mut oversized = Vec::with_capacity(MAX_PROJECTION_FRAME_BYTES + 2);
+        oversized.resize(MAX_PROJECTION_FRAME_BYTES + 1, b'x');
+        oversized.push(b'\n');
+        assert!(matches!(
+            parse_result(&oversized, &request(), &turns()),
+            Err(ProjectionError::Unavailable)
+        ));
+    }
+
     #[test]
     fn result_requires_exactly_one_terminal_newline_and_no_second_frame_bytes() {
         let fixture = fixture();
