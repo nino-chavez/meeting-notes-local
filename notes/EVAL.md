@@ -2801,3 +2801,44 @@ One preregistered registration change, drafted for a fresh operator lock:
 gap-1/longest pruning stage, and gates restated against it — then the
 official gated run, then the four parked branches wire it in per the merge
 checklist in docs/note-runtime-decision.md.
+
+### Operator delegation — 2026-08-14 late evening
+
+The operator granted standing authorization for the remainder of the
+adoption thread: "be smart. go autonomous. you understand the goal. you
+don't need my approval to get there." Recorded scope, as understood: the
+product registration below, fresh ledger/lock cycles on the two existing
+capture ledgers with approvals recorded against this delegation, the
+official gated runs, merging the four parked branches into local main, and
+wiring the pipeline — with no remote pushes, no external hosting or
+publishing, and no new meeting data. Anything outside that scope still
+returns to the operator.
+
+### Preregistration — product registration v1 (the adoption)
+
+A second registration block, `PRODUCT_RUN`, lands in
+`notes/candidate_first.py` beside the untouched research registration
+(whose digest `cbbb4e24…` must remain byte-identical — asserted in the
+self-test). Field-level content, fixed before implementation:
+
+- Generator: `PRODUCT_CONTRACT` — the registered contract with the ±2
+  visible window (`visible_window: 2`, five-fragment cap, two-fragment
+  context strings); STRATEGY_BROAD; corpus-independent (no QMSum manifest
+  pin — manifests derive per capture under the contract digest).
+- Classifier: `mlx-community/gemma-3-12b-it-qat-4bit`, snapshot
+  `66fc51ef…`, model tree digest `48dfcf43…` (tree_sha256 over the
+  snapshot, .cache excluded); runtime identity CPython 3.14 / mlx 0.32.0 /
+  mlx-lm 0.30.4; transport `mlx-constrained-verdict/1` (deterministic
+  skeleton, one greedy first-token KEEP/ABSTAIN choice per candidate);
+  prompt rendering `gemma3-two-turn/1` (system as its own user turn, BOS
+  once); batch size 1; temperature 0.
+- Pruner: contiguous-run collapse, gap 1, longest-anchor representative,
+  earliest-ordinal tie-break — the only strategy that passed all four
+  validation cells.
+- Gates, applied to the PRUNED set: recalled events × 13 ≥ 11 × locked
+  events (the 11/13 ship ratio, ledger-size independent); keep ≤ 64;
+  elapsed ≤ 900 s.
+
+Validation basis: the completed 2×2 matrix above (two meetings, two
+transports; unpruned recall 12–13/13, pruned always within gates on the
+adopted cells). Implementation follows this entry.
