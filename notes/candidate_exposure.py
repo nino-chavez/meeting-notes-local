@@ -30,11 +30,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from candidate_first import (
+    PRODUCT_RUN,
     REGISTERED_RUN,
     STRATEGY_BROAD,
     StructuredOutputError,
     _json_bytes,
     _json_sha256,
+    product_run_sha256,
     qmsum_search_spans,
     registered_run_sha256,
     validate_manifest,
@@ -460,6 +462,12 @@ def create_reference(
         raise StructuredOutputError("corpus SHA-256 must be hexadecimal") from exc
     event_rows = _event_input(events)
     regions = review_regions(regions)
+    # Product-lane bundles carry the evidence anchor alone; the research
+    # registration and its locked history keep full-window bundles.
+    anchor_only_bundles = (
+        PRODUCT_RUN["ledger"]["evidence_bundles"] == "anchor-fragment-only"
+        and registration_sha256 == product_run_sha256()
+    )
     candidates = {row["candidate_id"]: row for row in manifest["candidates"]}
     if any(candidate_id not in candidates for event in event_rows
            for candidate_id in event["acceptable_candidate_ids"]):
@@ -475,10 +483,13 @@ def create_reference(
                             coordinates)
             for candidate_id in event["acceptable_candidate_ids"]
         ]
-        for bundle in bundles:
-            bundle["acceptable_fragment_ids"] = [
-                row["source_fragment_id"] for row in bundle["evidence"]
-            ]
+        for candidate_id, bundle in zip(
+                event["acceptable_candidate_ids"], bundles):
+            bundle["acceptable_fragment_ids"] = (
+                [candidates[candidate_id]["anchor_fragment_id"]]
+                if anchor_only_bundles
+                else [row["source_fragment_id"] for row in bundle["evidence"]]
+            )
             bundle["bundle_sha256"] = _json_sha256({
                 key: value for key, value in bundle.items() if key != "bundle_sha256"
             })

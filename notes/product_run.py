@@ -56,7 +56,7 @@ from summarize import StructuredOutputError
 from transcript import Transcript, Turn, load
 
 PRODUCT_REGISTRATION_SHA256 = (
-    "957858c6a32138c6faf6689816b6c4da2d60161667190b3fbe7c10283973e994"
+    "fe493522e2d428d58f95b2f262b1383aa1f383d28c3691e4f3222f66ca67efb0"
 )
 
 RESULT_SCHEMA = "product-run-result/1"

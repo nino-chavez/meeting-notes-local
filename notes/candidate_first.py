@@ -389,6 +389,13 @@ PRODUCT_RUN = {
             "displacement as a diagnostic"
         ),
     },
+    "ledger": {
+        # The anchor line is the evidence; the window is context shown
+        # around it. Full-window bundles made the recall gate demand exact
+        # anchor equality once bundle and window widths matched (EVAL.md
+        # amendment, 2026-08-14 later).
+        "evidence_bundles": "anchor-fragment-only",
+    },
     "pruner": {
         "strategy": "contiguous-run-collapse",
         "gap": 1,
