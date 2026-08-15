@@ -1,7 +1,7 @@
 {
   "$schema": "../../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "The shipped meeting-notes window may run one local meeting flow: check readiness, request the two capture permissions, start and stop a meeting, name a meeting, edit an operator note, copy a transcript, open only the verified transcript file the operator selected, release a selected recording, delete a confirmed transcript and its generated notes, delete a confirmed meeting, and open local completed notes with retained source passages. It cannot use generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
+  "description": "The shipped meeting-notes window may run one local meeting flow: check readiness, request the two capture permissions, start and stop a meeting, name a meeting, edit an operator note, copy a transcript, open only the verified transcript file the operator selected, release a selected recording, delete a confirmed transcript and its generated notes, delete a confirmed meeting, open local completed notes with retained source passages, and regenerate a meeting note from its current transcript. It cannot use generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
   "windows": [
     "main"
   ],
@@ -32,6 +32,7 @@
     "allow-preview-delete-meeting",
     "allow-operator-note",
     "allow-save-operator-note",
-    "allow-open-current-transcript-file"
+    "allow-open-current-transcript-file",
+    "allow-regenerate-note"
   ]
 }

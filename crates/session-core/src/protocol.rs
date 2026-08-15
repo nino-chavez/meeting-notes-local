@@ -197,6 +197,13 @@ pub enum ProgressEvent {
 pub enum CaptureProgressState {
     Recording,
     Transcribing,
+    // `note.create` heartbeats reuse the capture.state event and this state
+    // enum, exactly as `transcript.create` does with `Transcribing` — the
+    // worker owns one shared heartbeat wire shape, not one per operation.
+    // The wire value mirrors the product brief's own status word for this
+    // step (docs/product-brief.md: "recording, preparing, finishing,
+    // transcript ready, or needs attention").
+    Finishing,
 }
 
 #[derive(Debug, Deserialize)]
@@ -262,7 +269,7 @@ impl RequestTracker {
             return Err(ProtocolError::DuplicateRequest);
         }
         let meeting_id = match command.operation {
-            Operation::CaptureStart | Operation::TranscriptCreate => {
+            Operation::CaptureStart | Operation::TranscriptCreate | Operation::NoteCreate => {
                 let value = command
                     .arguments
                     .get("meeting_id")
@@ -306,6 +313,13 @@ impl RequestTracker {
                 // A transcription heartbeat confirms the worker still owns the
                 // request. It is intentionally repeatable and carries no
                 // fabricated completion estimate.
+                Ok(())
+            }
+            Operation::NoteCreate if progress.state == CaptureProgressState::Finishing => {
+                // A note-generation heartbeat confirms the worker still owns
+                // the request, exactly like the transcription heartbeat above.
+                // It is intentionally repeatable and carries no fabricated
+                // completion estimate.
                 Ok(())
             }
             _ => Err(ProtocolError::InvalidEvent),
@@ -473,6 +487,68 @@ mod tests {
     }
 
     #[test]
+    fn note_generation_heartbeats_are_repeatable_for_the_active_request() {
+        let request_id = Uuid::new_v4();
+        let meeting_id = Uuid::new_v4();
+        let command = WorkerCommand {
+            schema: "worker-command/2",
+            request_id,
+            operation: Operation::NoteCreate,
+            arguments: serde_json::json!({
+                "meeting_id": meeting_id,
+                "source_transcript_sha256": "a".repeat(64)
+            }),
+        };
+        let result = WorkerResult {
+            schema: ResultSchema::V2,
+            request_id,
+            ok: true,
+            code: None,
+            recoverable: None,
+            artifact_digests: HashMap::new(),
+        };
+        let heartbeat = WorkerProgress {
+            schema: WorkerEventSchema::V2,
+            request_id,
+            event: ProgressEvent::CaptureState,
+            state: CaptureProgressState::Finishing,
+            meeting_id,
+        };
+
+        let mut tracker = RequestTracker::default();
+        tracker.register(&command).unwrap();
+        tracker.progress(&heartbeat).unwrap();
+        tracker.progress(&heartbeat).unwrap();
+        tracker.terminal(&result).unwrap();
+    }
+
+    #[test]
+    fn note_generation_state_is_invalid_for_a_transcript_create_request() {
+        let request_id = Uuid::new_v4();
+        let meeting_id = Uuid::new_v4();
+        let command = WorkerCommand {
+            schema: "worker-command/2",
+            request_id,
+            operation: Operation::TranscriptCreate,
+            arguments: serde_json::json!({"meeting_id": meeting_id}),
+        };
+        let mismatched = WorkerProgress {
+            schema: WorkerEventSchema::V2,
+            request_id,
+            event: ProgressEvent::CaptureState,
+            state: CaptureProgressState::Finishing,
+            meeting_id,
+        };
+
+        let mut tracker = RequestTracker::default();
+        tracker.register(&command).unwrap();
+        assert_eq!(
+            tracker.progress(&mismatched),
+            Err(ProtocolError::InvalidEvent)
+        );
+    }
+
+    #[test]
     fn progress_with_unknown_field_fails_closed() {
         let request_id = Uuid::new_v4();
         let meeting_id = Uuid::new_v4();
@@ -483,5 +559,21 @@ mod tests {
             parse_output(frame.as_bytes()).unwrap_err(),
             ProtocolError::Malformed
         );
+    }
+
+    #[test]
+    fn note_generation_finishing_state_parses_from_the_wire_shape() {
+        let request_id = Uuid::new_v4();
+        let meeting_id = Uuid::new_v4();
+        let frame = format!(
+            "{{\"schema\":\"worker-event/2\",\"request_id\":\"{request_id}\",\"event\":\"capture.state\",\"state\":\"finishing\",\"meeting_id\":\"{meeting_id}\"}}"
+        );
+        let output = parse_output(frame.as_bytes()).unwrap();
+        match output {
+            WorkerOutput::Progress(progress) => {
+                assert_eq!(progress.state, CaptureProgressState::Finishing);
+            }
+            WorkerOutput::Result(_) => panic!("expected a progress frame"),
+        }
     }
 }

@@ -52,6 +52,7 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "operator_note",
     "save_operator_note",
     "open_current_transcript_file",
+    "regenerate_note",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

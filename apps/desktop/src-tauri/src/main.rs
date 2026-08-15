@@ -4825,7 +4825,8 @@ fn main() {
             preview_delete_meeting_audio,
             preview_delete_meeting_transcript,
             preview_delete_meeting,
-            preview_library_open_evidence
+            preview_library_open_evidence,
+            product_facade::regenerate_note
         ])
         .setup(|app| {
             let settings = tauri::menu::MenuItemBuilder::with_id(
