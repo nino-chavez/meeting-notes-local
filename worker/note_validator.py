@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import tempfile
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,23 @@ MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 
 
 class ArtifactFailure(ValueError):
+    def __init__(self, code: str, recoverable: bool):
+        super().__init__(code)
+        self.code = code
+        self.recoverable = recoverable
+
+
+class GenerationRefused(ValueError):
+    """Untrusted generator output failed a check; the caller falls back.
+
+    Separate from `ArtifactFailure` because the two answer different questions.
+    An artifact failure says the retained bytes on this Mac are missing, unsafe,
+    or changed. A generation refusal says the retained bytes were fine and the
+    model's proposal did not survive the note/2 evidence rules. Only the second
+    is allowed to produce `transcript-only`; collapsing them would let a storage
+    fault be reported as a quiet quality outcome.
+    """
+
     def __init__(self, code: str, recoverable: bool):
         super().__init__(code)
         self.code = code
@@ -197,6 +215,126 @@ def _validate_snapshot(
             raise ArtifactFailure("artifact-invalid", False) from exc
 
 
+def forbidden_in_claim(character: str) -> bool:
+    """Characters a displayed claim may not contain, matching `note_projection.rs`.
+
+    Unicode category Cc is exactly Rust's `char::is_control()` — U+0000..U+001F
+    and U+007F..U+009F — and the two separators are category Zl and Zp, so they
+    are named rather than derived. The rule lives on both sides of the boundary
+    and neither is the other's fallback.
+
+    Why a divergence here costs more than a refusal, which is the reason the
+    rule is stated rather than left to the other side. Refusing is cheap: a
+    declared `artifact-invalid` becomes `ProjectionError::ArtifactInvalid`, then
+    `MeetingInspectionError::Quarantine`, and the rebuild counts one quarantined
+    meeting and continues. Diverging is not: a claim this validator *accepts*
+    and the Rust parser rejects returns `ProjectionError::Unavailable`, which
+    becomes `LibraryReadError::ArtifactUnavailable` and ends the whole rebuild,
+    content-free, naming no meeting. The failure worth engineering against is
+    therefore not refusing too much here — it is admitting something the far
+    side will not parse.
+
+    That paragraph is a claim about code this file does not own. Verified
+    2026-08-14 at `note_projection.rs:220` for the refusal, and
+    `library_read.rs:1383-1389` and `:484-487` for both mappings. Re-derive it
+    before trusting it; nothing here fails when it goes stale.
+
+    Category Cs — a lone surrogate, which `json.loads` will happily produce from
+    a `\\ud800` escape — is refused here as a rule rather than as an accident.
+    It was already refused, but only because computing the claim digest encodes
+    to UTF-8 and that raises, so the refusal depended on where the digest check
+    sat in a boolean chain. Rust reaches the same end by a different mechanism:
+    serde_json rejects the escape at parse, so a surrogate never becomes a
+    `char` there. Same behaviour, two unrelated enforcement points, worth naming
+    because neither would move if the other changed.
+    """
+    return (
+        unicodedata.category(character) in {"Cc", "Cs"}
+        or character in "\u2028\u2029"
+    )
+
+
+def validate_locators(evidence_refs: list, transcript) -> list[dict]:
+    """Re-derive one point's locators against the transcript it cites.
+
+    The note/2 evidence rule, in one place: one to three references, in order,
+    without duplicates, each bounds-checked against the loaded turns and each
+    `text_sha256` recomputed from the transcript's own bytes. Nothing supplied
+    is trusted, so a reference naming a turn or a span the transcript does not
+    have cannot pass.
+
+    The one-to-three bound is enforced twice, by two owners. This is the note/2
+    artifact contract, and `note_projection.rs` re-parses it independently at
+    `parse_claim`, failing closed with a content-free `Unavailable`. Relaxing it
+    here would not relax it there: a wider view motivating more locators has to
+    move both, and the Rust side is the one that will not follow a Python edit.
+    """
+    locators = []
+    for reference in evidence_refs:
+        turn = reference["turn"]
+        start = reference["char_start"]
+        end = reference["char_end"]
+        if (
+            type(turn) is not int
+            or type(start) is not int
+            or type(end) is not int
+            or turn < 0
+            or start < 0
+            or end <= start
+            or turn >= len(transcript.turns)
+            or end > len(transcript.turns[turn].text)
+        ):
+            raise ArtifactFailure("artifact-invalid", False)
+        text_sha256 = hashlib.sha256(
+            transcript.turns[turn].text[start:end].encode("utf-8")
+        ).hexdigest()
+        if reference.get("text_sha256") != text_sha256:
+            raise ArtifactFailure("artifact-invalid", False)
+        locators.append(
+            {
+                "turn": turn,
+                "start": start,
+                "end": end,
+                "text_sha256": text_sha256,
+            }
+        )
+    if not 1 <= len(locators) <= 3 or locators != sorted(
+        locators, key=lambda locator: (
+            locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
+        )
+    ) or len({tuple(locator.items()) for locator in locators}) != len(locators):
+        raise ArtifactFailure("artifact-invalid", False)
+    return locators
+
+
+def validate_claim_rows(cited: list, transcript) -> list[dict]:
+    """Re-derive every stored claim and its locators against the transcript."""
+    claims = []
+    for ordinal, row in enumerate(cited):
+        claim = row["claim"]
+        claim_type = row["type"]
+        if (
+            not isinstance(claim, str)
+            or not claim
+            or len(claim) > 160
+            or any(forbidden_in_claim(character) for character in claim)
+            or claim_type not in {"decision", "action", "proposal", "question"}
+            or row.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()
+        ):
+            raise ArtifactFailure("artifact-invalid", False)
+        claims.append(
+            {
+                "claim_ordinal": ordinal,
+                "claim_sha256": row["claim_sha256"],
+                "claim_type": claim_type,
+                "evidence_state": "located",
+                "claim": claim,
+                "locators": validate_locators(row["evidence_refs"], transcript),
+            }
+        )
+    return claims
+
+
 def _project_snapshot(
     meeting_id: str,
     note_id: str,
@@ -237,63 +375,7 @@ def _project_snapshot(
         citations = structured_artifact_citations(document, transcript)
         if not isinstance(checks, dict) or checks.get("citations") != citations:
             raise ArtifactFailure("artifact-invalid", False)
-        claims = []
-        for ordinal, cited in enumerate(citations["cited"]):
-            claim = cited["claim"]
-            claim_type = cited["type"]
-            if (
-                not isinstance(claim, str)
-                or not claim
-                or len(claim) > 160
-                or claim_type not in {"decision", "action", "proposal", "question"}
-                or cited.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()
-            ):
-                raise ArtifactFailure("artifact-invalid", False)
-            locators = []
-            for reference in cited["evidence_refs"]:
-                turn = reference["turn"]
-                start = reference["char_start"]
-                end = reference["char_end"]
-                if (
-                    type(turn) is not int
-                    or type(start) is not int
-                    or type(end) is not int
-                    or turn < 0
-                    or start < 0
-                    or end <= start
-                    or turn >= len(transcript.turns)
-                    or end > len(transcript.turns[turn].text)
-                ):
-                    raise ArtifactFailure("artifact-invalid", False)
-                text_sha256 = hashlib.sha256(
-                    transcript.turns[turn].text[start:end].encode("utf-8")
-                ).hexdigest()
-                if reference.get("text_sha256") != text_sha256:
-                    raise ArtifactFailure("artifact-invalid", False)
-                locators.append(
-                    {
-                        "turn": turn,
-                        "start": start,
-                        "end": end,
-                        "text_sha256": text_sha256,
-                    }
-                )
-            if not 1 <= len(locators) <= 3 or locators != sorted(
-                locators, key=lambda locator: (
-                    locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
-                )
-            ) or len({tuple(locator.items()) for locator in locators}) != len(locators):
-                raise ArtifactFailure("artifact-invalid", False)
-            claims.append(
-                {
-                    "claim_ordinal": ordinal,
-                    "claim_sha256": cited["claim_sha256"],
-                    "claim_type": claim_type,
-                    "evidence_state": "located",
-                    "claim": claim,
-                    "locators": locators,
-                }
-            )
+        claims = validate_claim_rows(citations["cited"], transcript)
         return {
             "schema": "note-claim-projection/1",
             "note_json_sha256": note_id,
@@ -312,6 +394,203 @@ def _project_snapshot(
         SystemExit,
     ) as exc:
         raise ArtifactFailure("artifact-invalid", False) from exc
+
+
+def _response_refusal(raw: str) -> str:
+    """Name which half of the response contract failed, without content."""
+    try:
+        json.loads(raw)
+    except (UnicodeError, ValueError):
+        return "response-json-syntax"
+    return "response-contract"
+
+
+def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, list[dict]]:
+    """Enumerate candidates locally, then take one verdict per offered candidate.
+
+    This is the measured task, not a paraphrase of it. Deterministic local code
+    builds the candidate manifest and every request packet; the model's entire
+    output surface is one KEEP or ABSTAIN per candidate it was offered. It
+    cannot name a row it was not shown, invent a locator, or decide how many
+    points exist — `decode_classification` refuses an unknown, duplicated,
+    reordered, or miscounted verdict before anything reaches the transcript.
+    """
+    import candidate_first
+    from summarize import StructuredOutputError
+
+    registered = candidate_first.REGISTERED_RUN["classifier"]
+    budget = candidate_first.REGISTERED_RUN["gates"]["maximum_keep"]
+    batch_size = registered["batch_size"]
+    try:
+        manifest = candidate_first.generate_manifest(transcript, candidate_first.STRATEGY_BROAD)
+        candidate_first.validate_manifest(manifest, transcript)
+        batches = candidate_first.candidate_batches(manifest["candidates"], batch_size)
+    except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
+        raise GenerationRefused("no-generatable-transcript", True) from exc
+    if not batches:
+        raise GenerationRefused("no-generatable-transcript", True)
+    kept: list[dict] = []
+    for batch in batches:
+        candidate_ids = [row["candidate_id"] for row in batch]
+        try:
+            schema, system, user = candidate_first.classification_request(
+                transcript, manifest, batch, batch_size
+            )
+        except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
+            raise GenerationRefused("request-contract", False) from exc
+        raw = ask(
+            {
+                "schema": "note-classification-request/1",
+                "system": system,
+                "user": user,
+                "response_format": schema,
+                "num_predict": candidate_first.classification_num_predict(len(batch)),
+                "num_ctx": registered["num_ctx"],
+                "temperature": registered["temperature"],
+            }
+        )
+        try:
+            decoded = candidate_first.decode_classification(raw, candidate_ids)
+        except (StructuredOutputError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+            # `decode_classification` reports one error type for both "this is
+            # not JSON" and "this is JSON that breaks the contract". The
+            # research taxonomy separates them, so the discriminator is a
+            # parse attempt — not a second copy of the decoder.
+            raise GenerationRefused(_response_refusal(raw), False) from exc
+        verdicts = {row["candidate_id"]: row["verdict"] for row in decoded["items"]}
+        kept.extend(row for row in batch if verdicts[row["candidate_id"]] == "KEEP")
+        # Checked as it accumulates, so a run that has already blown the
+        # registered budget stops instead of classifying the remaining batches.
+        if len(kept) > budget:
+            raise GenerationRefused("keep-budget-exceeded", False)
+    if not kept:
+        raise GenerationRefused("no-model-candidates", True)
+    return manifest, kept
+
+
+def locate_kept_candidates(manifest: dict, kept: list[dict], transcript) -> list[dict]:
+    """Resolve every kept candidate to its anchor locator, and verify it here.
+
+    The excerpts are exact by construction — they are transcript slices the
+    enumerator produced — and they are re-derived anyway. `validate_locators`
+    recomputes each span's digest from the loaded turns, so a fragment id that
+    no longer resolves to the bytes it names refuses rather than rendering.
+
+    A point cites its **anchor**, not the whole window it was classified in.
+    `visible_fragment_ids` is what the model was shown for context; the anchor
+    is what the candidate is about, which is why the deterministic control arm
+    cites the anchor alone. Two consequences follow. The point never cites text
+    the model merely saw nearby, and the locator count stays 1 whatever the view
+    is — a ±2 window would offer five fragments and blow note/2's three-locator
+    rule if the window were the citation.
+    """
+    from summarize import build_fragment_map
+
+    fragment_map = build_fragment_map(transcript)
+    lookup = {row["source_fragment_id"]: row for row in fragment_map["fragments"]}
+    if fragment_map["transcript_view_sha256"] != manifest["transcript_view_sha256"]:
+        raise GenerationRefused("citation-locator", False)
+    points = []
+    for ordinal, candidate in enumerate(kept):
+        try:
+            anchor = lookup[candidate["anchor_fragment_id"]]
+            locators = validate_locators(
+                [
+                    {
+                        "turn": anchor["turn"],
+                        "char_start": anchor["char_start"],
+                        "char_end": anchor["char_end"],
+                        "text_sha256": anchor["text_sha256"],
+                    }
+                ],
+                transcript,
+            )
+        except ArtifactFailure as exc:
+            # The retained transcript is intact; the candidate no longer
+            # resolves against it. Not a storage code.
+            raise GenerationRefused("citation-locator", False) from exc
+        except (ValueError, KeyError, TypeError, IndexError) as exc:
+            raise GenerationRefused("citation-locator", False) from exc
+        points.append(
+            {
+                "point_ordinal": ordinal,
+                "candidate_id": candidate["candidate_id"],
+                "evidence_state": "located",
+                "locators": locators,
+            }
+        )
+    return points
+
+
+def generate(
+    root_fd: int,
+    arguments: dict,
+    *,
+    ask: Callable[[dict], str],
+    after_open: Callable[[], None] | None = None,
+) -> dict:
+    """Select note points from one pinned transcript and locate them here.
+
+    The transcript is opened, digest-checked, and held open exactly as the
+    read-only paths do. `ask` is the injected model seam: it takes one built
+    classification request and returns the raw response. The caller owns the
+    transport and may add transport-only fields to it — the bridge attaches the
+    verified model directory to every request — but nothing it adds is read
+    back here. No note, markdown, or product record is read or written, and the
+    transcript's identity is re-checked after classification, so a swap mid-run
+    is caught.
+
+    What comes back is locators, not prose. Every point is an excerpt the
+    transcript already holds; no claim text is synthesized here, because a
+    prose stage is a separate measurement.
+    """
+    from transcript import load_bytes
+
+    meeting_id = arguments["meeting_id"]
+    transcript_id = arguments["transcript_id"]
+    directories: list[_DirectoryLink] = []
+    files: list[_FileLink] = []
+    open_directories: list[int] = []
+    try:
+        transcript_fd, transcript_links = _open_directories(
+            root_fd, ["meetings", meeting_id, "transcript"]
+        )
+        open_directories.append(transcript_fd)
+        directories.extend(transcript_links)
+        transcript_file = _open_file(transcript_fd, f"{transcript_id}.json")
+        files.append(transcript_file)
+        if after_open is not None:
+            after_open()
+        transcript_bytes = _read_file(transcript_file)
+        _require_links(directories, files)
+        if hashlib.sha256(transcript_bytes).hexdigest() != transcript_id:
+            raise ArtifactFailure("artifact-changed", False)
+        try:
+            transcript = load_bytes(transcript_bytes, source=f"transcript:{transcript_id}")
+        except (UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
+            raise ArtifactFailure("artifact-invalid", False) from exc
+        if not transcript.turns:
+            raise GenerationRefused("no-generatable-transcript", True)
+        manifest, kept = _classify_candidates(transcript, ask)
+        points = locate_kept_candidates(manifest, kept, transcript)
+        _require_links(directories, files)
+        _require_snapshot(transcript_file, transcript_bytes, transcript_id)
+        _require_links(directories, files)
+        return {
+            "schema": "note-generation/1",
+            "transcript_sha256": transcript_id,
+            "manifest_sha256": manifest["manifest_sha256"],
+            "candidates": len(manifest["candidates"]),
+            "points": points,
+        }
+    finally:
+        for link in files:
+            os.close(link.file_fd)
+        for descriptor in open_directories:
+            os.close(descriptor)
+        for link in reversed(directories):
+            os.close(link.child_fd)
+            os.close(link.parent_fd)
 
 
 def inspect(

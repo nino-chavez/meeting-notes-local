@@ -17,11 +17,14 @@ REPO = Path(__file__).resolve().parents[1]
 NOTE_MANIFEST = Path("note-runtime-project.json")
 NOTE_BRIDGE = Path("note-bridge.py")
 NOTE_VALIDATOR = Path("note-validator.zip")
+# Insertion order is the zip write order, and `verify_note_runtime` compares
+# `archive.namelist()` to this list positionally. Append; do not reorder.
 VALIDATOR_SOURCES = {
     "note_validator.py": REPO / "worker/note_validator.py",
     "summarize.py": REPO / "notes/summarize.py",
     "transcript.py": REPO / "notes/transcript.py",
     "capture_health.py": REPO / "spike/capture_health.py",
+    "candidate_first.py": REPO / "notes/candidate_first.py",
 }
 
 MODEL_BASE_URL = os.environ.get(

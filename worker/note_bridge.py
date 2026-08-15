@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Private, one-shot, inspect-only note bridge for the repository test harness."""
+"""Private, one-shot note bridge: read-only inspection, projection, and generation."""
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.abc
 import importlib.util
@@ -13,14 +14,32 @@ import os
 import re
 import select
 import stat
+import subprocess
 import sys
 import threading
+import time
 import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 MAX_FRAME_BYTES = 64 * 1024
+# One generated response, read whole. Larger than any admissible note by a wide
+# margin, and bounded so a runaway decode cannot be absorbed instead of refused.
+MAX_GENERATOR_RESPONSE_BYTES = 1024 * 1024
+# The registered whole-run time budget in notes/EVAL.md. The generator is a
+# child of a one-shot bridge, so the deadline is the bridge's, not a manifest
+# field: seam 3 keeps the manifest at `relative_path` + `sha256` per resource,
+# which leaves no escape-free place to carry a number that changes the measured
+# configuration anyway.
+GENERATOR_DEADLINE_S = 900
+# Written by `model_store.rs` beside the model files it installs. It is install
+# provenance, not model bytes, so it is excluded from the pinned digest set.
+# Tolerated, not required: `model_store::verify_model_directory` requires it and
+# reads it, and this bridge deliberately does not parse install provenance — the
+# manifest's digests are the authority here, so a directory with no receipt
+# passes the bridge and still fails the Rust check that owns that question.
+MODEL_INSTALL_RECEIPT = "model-install.json"
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SAFE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_MEETING_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -38,6 +57,12 @@ _VALIDATOR_MODULES = {
     "summarize": "summarize.py",
     "transcript": "transcript.py",
     "capture_health": "capture_health.py",
+    # The candidate enumerator the measured arm ran. Pinned rather than
+    # reimplemented: candidate identity is derived from fragment ids, and a
+    # second copy of that derivation is a second owner of what the model is
+    # allowed to be asked. Its own imports are `summarize` and `transcript`,
+    # both already here, so the closure adds exactly one module.
+    "candidate_first": "candidate_first.py",
 }
 _REQUIRED_FLAGS = {
     "isolated": 1,
@@ -47,6 +72,35 @@ _REQUIRED_FLAGS = {
     "safe_path": True,
     "dont_write_bytecode": 1,
 }
+# The generator child keeps every isolation flag the bridge can keep and drops
+# exactly the two it cannot. `-I` and `-S` suppress site initialization, and
+# site initialization is what puts MLX-LM on the import path; a generator that
+# kept them could not load the model runtime at all. `-E` (ignore environment)
+# and `-s` (no user site) survive, the environment is emptied rather than
+# filtered, and the child never sees the bridge's own confined import path.
+_GENERATOR_FLAGS = ("-E", "-s", "-B")
+# The child runs the manifest-pinned generator bytes read from an inherited
+# descriptor, never a pathname. The pathname was already verified, but a name
+# can be replaced between verification and exec while a descriptor cannot, so
+# the verified bytes are the ones that run.
+_GENERATOR_BOOTSTRAP = (
+    "import os\n"
+    "c=[]\n"
+    "while True:\n"
+    " b=os.read({fd},1048576)\n"
+    " if not b:\n"
+    "  break\n"
+    " c.append(b)\n"
+    "os.close({fd})\n"
+    "exec(compile(b''.join(c),'<note-generator>','exec'),{{'__name__':'__main__'}})\n"
+)
+# Set while a generator child is running so the parent-liveness watchers can
+# reap it. Without this a bridge that exits on parent EOF leaves a model process
+# holding several gigabytes of unified memory after the app has quit. It is
+# assigned after `Popen` returns, so a parent EOF inside that window still
+# orphans the child; closing it needs a pre-fork registration this transport
+# does not have.
+_RUNNING_GENERATOR: subprocess.Popen | None = None
 
 
 class BridgeRefused(ValueError):
@@ -89,6 +143,7 @@ class _VerifiedRuntime:
     manifest: _RetainedFile
     resources: dict[str, _RetainedFile]
     role: str
+    models: tuple[dict, ...] = ()
 
     def require_unchanged(self) -> None:
         _require_link(self.manifest)
@@ -345,6 +400,55 @@ def _resource(value: object, label: str) -> dict:
     }
 
 
+def _model_entry(value: object, label: str) -> dict:
+    """Accept one manifest model entry: an id and the digest it must have.
+
+    Deliberately carries no path. Externally installed models are named by id
+    and digest everywhere else in the app (`model_store.rs::runtime_models`,
+    `runtime.rs::matches_ready_with_external_models`), and the directory that
+    holds them is supplied per request, not frozen into the bundle manifest.
+    """
+    if not isinstance(value, dict) or list(value) != ["id", "sha256"]:
+        raise BridgeRefused(f"{label} has the wrong shape")
+    # Narrower than `_safe_component` on purpose, and matched to Rust's
+    # `valid_model_identifier`: an id is a name, not a path, so it gets no dot
+    # and no slash. Two sides that disagree on the charset would let one admit
+    # an id the other refuses.
+    if not isinstance(value["id"], str) or not _SAFE_MEETING_ID.fullmatch(value["id"]):
+        raise BridgeRefused(f"{label} id is not a plain identifier")
+    return {
+        "id": value["id"],
+        "sha256": _safe_digest(value["sha256"], f"{label} digest"),
+    }
+
+
+def _require_generator_admission(document: dict) -> None:
+    """Admit a generator only on the role that runs one, and only complete.
+
+    This is a biconditional, not a relaxation. Every manifest the app ships
+    today is `inspect` or `project`, and for those the refusal is unchanged: a
+    generator or a model entry is still a hard refusal. A `generate` manifest is
+    the one admitted shape, and it must carry both halves — a generator without
+    pinned models could load anything on disk, and pinned models without a
+    generator name weights nothing will read.
+    """
+    generator = document["generator"]
+    models = document["models"]
+    if document["role"] != "generate":
+        if generator is not None or models != []:
+            raise BridgeRefused("validator-only note bridge may not carry a generator or models")
+        return
+    if generator is None or not isinstance(models, list) or not models:
+        raise BridgeRefused("generate manifest needs a generator and its pinned models")
+    document["generator"] = _resource(generator, "generator")
+    entries = [_model_entry(model, f"model {ordinal}") for ordinal, model in enumerate(models)]
+    identifiers = [entry["id"] for entry in entries]
+    digests = [entry["sha256"] for entry in entries]
+    if len(set(identifiers)) != len(identifiers) or len(set(digests)) != len(digests):
+        raise BridgeRefused("generate manifest repeats a model id or digest")
+    document["models"] = entries
+
+
 def verify_runtime(manifest_path: Path) -> _VerifiedRuntime:
     resource_root = manifest_path.parent
     root_fd = _open_absolute_directory(resource_root, private=False)
@@ -383,16 +487,21 @@ def verify_runtime(manifest_path: Path) -> _VerifiedRuntime:
         if document["schema"] != "note-runtime/1" or document["role"] not in {
             "inspect",
             "project",
+            "generate",
         }:
             raise BridgeRefused("note bridge manifest has the wrong role")
         for field in ("runtime", "bridge", "validator"):
             document[field] = _resource(document[field], field)
-        if document["generator"] is not None or document["models"] != []:
-            raise BridgeRefused("validator-only note bridge may not carry a generator or models")
-        for field in ("runtime", "bridge", "validator"):
+        _require_generator_admission(document)
+        opened = ("runtime", "bridge", "validator")
+        if document["role"] == "generate":
+            opened += ("generator",)
+        for field in opened:
             resource = document[field]
             resources[field] = _open_beneath(root_fd, resource["relative_path"], resource["sha256"])
-        verified = _VerifiedRuntime(root_fd, manifest, resources, document["role"])
+        verified = _VerifiedRuntime(
+            root_fd, manifest, resources, document["role"], tuple(document["models"])
+        )
         _require_runtime_identity(verified)
         verified.require_unchanged()
         return verified
@@ -448,12 +557,17 @@ def verify_descriptor_runtime(
             raise BridgeRefused("manifest fields or field order are not current")
         if json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8") != raw:
             raise BridgeRefused("manifest bytes are not canonical")
+        # The descriptor transport stages exactly three inherited descriptors
+        # (manifest, bridge, validator) and no fourth for a generator, so this
+        # launch cannot reach manifest-pinned generator bytes at all. It stays
+        # project-only until that protocol gains a descriptor; the shared
+        # admission rule below keeps the refusal identical to the one it
+        # replaced for every manifest the app ships.
         if document["schema"] != "note-runtime/1" or document["role"] != "project":
             raise BridgeRefused("descriptor bridge manifest has the wrong role")
         for field in ("runtime", "bridge", "validator"):
             document[field] = _resource(document[field], field)
-        if document["generator"] is not None or document["models"] != []:
-            raise BridgeRefused("project bridge may not carry a generator or models")
+        _require_generator_admission(document)
         resources["bridge"] = _resource_from_descriptor(bridge_fd)
         resources["validator"] = _resource_from_descriptor(validator_fd)
         if resources["bridge"].digest != document["bridge"]["sha256"]:
@@ -528,7 +642,7 @@ def load_validator(runtime: _VerifiedRuntime):
     try:
         for name in _VALIDATOR_MODULES:
             sys.modules.pop(name, None)
-        for name in ("capture_health", "transcript", "summarize"):
+        for name in ("capture_health", "transcript", "summarize", "candidate_first"):
             importlib.import_module(name)
         module = importlib.import_module("note_validator")
     finally:
@@ -540,6 +654,276 @@ def load_validator(runtime: _VerifiedRuntime):
     ):
         raise BridgeRefused("validator helper did not load from the verified bundle")
     return module, finder
+
+
+@dataclass
+class _ModelTree:
+    """One verified model directory, held open for the generator's lifetime.
+
+    Digests are streamed rather than retained: the note model is several
+    gigabytes, and reading it into the bridge to hash it would cost more memory
+    than running it. The descriptors stay open so an unlink or a replacement of
+    the directory or any pinned file is detected afterwards.
+    """
+
+    directory_fd: int
+    directories: list[_DirectoryLink]
+    files: list[_RetainedFile]
+    path: str
+
+    def require_unchanged(self) -> None:
+        for link in self.directories:
+            try:
+                current = os.stat(link.name, dir_fd=link.parent_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise BridgeRefused("verified model directory changed") from exc
+            if not _same_identity(link.identity, current):
+                raise BridgeRefused("verified model directory changed")
+        for resource in self.files:
+            _require_link(resource)
+            if not _same_identity(resource.identity, os.fstat(resource.file_fd)):
+                raise BridgeRefused("verified model file changed")
+
+    def close(self) -> None:
+        for resource in self.files:
+            os.close(resource.file_fd)
+            os.close(resource.parent_fd)
+        os.close(self.directory_fd)
+        for link in reversed(self.directories):
+            os.close(link.child_fd)
+            os.close(link.parent_fd)
+
+
+def _streamed_digest(descriptor: int, identity: os.stat_result) -> str:
+    """Hash a pinned regular file without retaining its bytes."""
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    remaining = identity.st_size
+    while remaining:
+        chunk = os.read(descriptor, min(remaining, 4 * 1024 * 1024))
+        if not chunk:
+            raise BridgeRefused("verified model file changed while being read")
+        digest.update(chunk)
+        remaining -= len(chunk)
+    if not _same_identity(identity, os.fstat(descriptor)):
+        raise BridgeRefused("verified model file changed while being read")
+    return digest.hexdigest()
+
+
+def _open_model_tree(
+    root_fd: int,
+    root_path: Path,
+    relative_path: str,
+    pinned: tuple[dict, ...],
+) -> _ModelTree:
+    """Open the installed model directory beneath the storage root and pin it.
+
+    Every path component is opened with `O_NOFOLLOW`, so a symlink anywhere in
+    the chain refuses instead of resolving — the same rule
+    `transcription.require_whisper_model` applies to the transcript model, made
+    per-component rather than per-directory. The directory's contents must then
+    match the manifest's pinned digests exactly, one file per entry: an extra
+    file, a missing file, or a digest the manifest does not pin all refuse.
+    """
+    parent = os.dup(root_fd)
+    directories: list[_DirectoryLink] = []
+    files: list[_RetainedFile] = []
+    directory_fd: int | None = None
+    try:
+        for component in relative_path.split("/"):
+            child = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent,
+            )
+            identity = os.fstat(child)
+            if not stat.S_ISDIR(identity.st_mode) or identity.st_uid != os.geteuid():
+                os.close(child)
+                raise BridgeRefused("model path has an unsafe directory")
+            if stat.S_IMODE(identity.st_mode) & 0o022:
+                os.close(child)
+                raise BridgeRefused("model path is group or world writable")
+            directories.append(_DirectoryLink(parent, component, child, identity))
+            parent = os.dup(child)
+        directory_fd = parent
+        parent = None
+        names = sorted(
+            name
+            for name in os.listdir(directory_fd)
+            if name != MODEL_INSTALL_RECEIPT
+        )
+        expected = {entry["sha256"] for entry in pinned}
+        if len(names) != len(expected):
+            raise BridgeRefused("model directory does not hold the pinned file set")
+        observed: set[str] = set()
+        for name in names:
+            file_parent = os.dup(directory_fd)
+            try:
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=file_parent)
+            except OSError as exc:
+                os.close(file_parent)
+                raise BridgeRefused("model file is missing or unsafe") from exc
+            identity = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(identity.st_mode)
+                or identity.st_uid != os.geteuid()
+                or stat.S_IMODE(identity.st_mode) & 0o022
+            ):
+                os.close(descriptor)
+                os.close(file_parent)
+                raise BridgeRefused("model file is not an owner-private regular file")
+            digest = _streamed_digest(descriptor, identity)
+            if digest not in expected or digest in observed:
+                os.close(descriptor)
+                os.close(file_parent)
+                raise BridgeRefused("model file digest is not pinned by the manifest")
+            observed.add(digest)
+            files.append(_RetainedFile(file_parent, name, descriptor, identity, digest, b"", []))
+        if observed != expected:
+            raise BridgeRefused("model directory does not hold the pinned file set")
+        return _ModelTree(directory_fd, directories, files, str(root_path / relative_path))
+    except Exception:
+        for resource in files:
+            os.close(resource.file_fd)
+            os.close(resource.parent_fd)
+        if parent is not None:
+            os.close(parent)
+        if directory_fd is not None:
+            os.close(directory_fd)
+        for link in reversed(directories):
+            os.close(link.child_fd)
+            os.close(link.parent_fd)
+        raise
+
+
+class GeneratorRefused(ValueError):
+    """The generator child could not produce a readable response."""
+
+    def __init__(self, code: str, recoverable: bool):
+        super().__init__(code)
+        self.code = code
+        self.recoverable = recoverable
+
+
+def _reap_generator() -> None:
+    """Kill the generator's process group, if one is running."""
+    child = _RUNNING_GENERATOR
+    if child is None or child.poll() is not None:
+        return
+    with contextlib.suppress(OSError, ProcessLookupError):
+        os.killpg(os.getpgid(child.pid), 9)
+
+
+class _GeneratorSession:
+    """One generator child, many classification batches, one whole-run deadline.
+
+    A child per batch would reload several gigabytes of model weights twenty-odd
+    times for one meeting, so the child is a session: it loads once, then
+    answers one request line per batch until stdin closes. The deadline is the
+    registered whole-run budget and it covers model load, so a child that spends
+    it all on startup times out rather than silently borrowing from generation.
+
+    Reads and writes are interleaved. A batch of 32 candidate packets exceeds
+    the pipe buffer, and the child cannot answer before it has the whole line,
+    so writing the request to completion before reading would deadlock.
+    """
+
+    def __init__(self, source: _RetainedFile, model: _ModelTree, deadline_s: int):
+        global _RUNNING_GENERATOR
+
+        os.lseek(source.file_fd, 0, os.SEEK_SET)
+        self.started = time.monotonic()
+        self.expires_at = self.started + deadline_s
+        self.responses = 0
+        self.response_bytes = 0
+        self.last_response_sha256 = "unavailable"
+        self._pending = bytearray()
+        try:
+            self._child = subprocess.Popen(
+                [
+                    sys.executable,
+                    *_GENERATOR_FLAGS,
+                    "-c",
+                    _GENERATOR_BOOTSTRAP.format(fd=source.file_fd),
+                ],
+                cwd="/",
+                env={},
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                pass_fds=(source.file_fd,),
+                start_new_session=True,
+                bufsize=0,
+            )
+        except OSError as exc:
+            raise GeneratorRefused("provider-generation-failure", True) from exc
+        _RUNNING_GENERATOR = self._child
+
+    def _remaining(self) -> float:
+        remaining = self.expires_at - time.monotonic()
+        if remaining <= 0:
+            raise GeneratorRefused("timeout", True)
+        return remaining
+
+    def ask(self, request: dict) -> str:
+        """Send one batch and take exactly one response line back."""
+        payload = bytearray(
+            json.dumps(request, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            + b"\n"
+        )
+        stdin = self._child.stdin
+        stdout = self._child.stdout
+        while True:
+            if b"\n" in self._pending:
+                break
+            writable = [stdin] if payload else []
+            ready, sendable, _ = select.select([stdout], writable, [], self._remaining())
+            if sendable:
+                try:
+                    written = os.write(stdin.fileno(), payload[:65536])
+                except BrokenPipeError as exc:
+                    raise GeneratorRefused("provider-generation-failure", True) from exc
+                del payload[:written]
+            if ready:
+                chunk = os.read(stdout.fileno(), 65536)
+                if not chunk:
+                    raise GeneratorRefused("provider-generation-failure", True)
+                self._pending.extend(chunk)
+                self.response_bytes += len(chunk)
+                if self.response_bytes > MAX_GENERATOR_RESPONSE_BYTES:
+                    raise GeneratorRefused("response-length-truncation", False)
+            if not ready and not sendable:
+                raise GeneratorRefused("timeout", True)
+        line, _, rest = bytes(self._pending).partition(b"\n")
+        self._pending = bytearray(rest)
+        self.responses += 1
+        self.last_response_sha256 = hashlib.sha256(line).hexdigest()
+        try:
+            return line.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise GeneratorRefused("response-json-syntax", False) from exc
+
+    def receipt(self) -> dict:
+        """Closed, content-free: counts and digests, never a response body."""
+        return {
+            "responses": self.responses,
+            "response_bytes": self.response_bytes,
+            "last_response_sha256": self.last_response_sha256,
+            "elapsed_s": round(time.monotonic() - self.started, 6),
+        }
+
+    def close(self) -> None:
+        global _RUNNING_GENERATOR
+
+        try:
+            if self._child.stdin and not self._child.stdin.closed:
+                self._child.stdin.close()
+        except OSError:
+            pass
+        _reap_generator()
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            self._child.wait(timeout=5)
+        _RUNNING_GENERATOR = None
 
 
 def _canonical_uuid(value: object) -> str:
@@ -577,18 +961,32 @@ def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
     if value["schema"] != "note-bridge-command/1" or value["operation"] != operation:
         raise BridgeRefused("command is outside the manifest role")
     arguments = value["arguments"]
-    if not isinstance(arguments, dict) or list(arguments) != [
-        "meeting_id",
-        "note_id",
-        "transcript_id",
-    ]:
+    # Generation names no note: the note is what it is being asked to propose.
+    # It names the installed model directory instead, because the manifest pins
+    # model identity by digest and the caller owns where that model is
+    # installed.
+    expected = (
+        ["meeting_id", "transcript_id", "model_directory", "deadline_s"]
+        if role == "generate"
+        else ["meeting_id", "note_id", "transcript_id"]
+    )
+    if not isinstance(arguments, dict) or list(arguments) != expected:
         raise InvalidArguments("note arguments have the wrong shape")
     if role == "inspect":
         _canonical_uuid(arguments["meeting_id"])
     else:
         _opaque_meeting_id(arguments["meeting_id"])
     try:
-        _safe_digest(arguments["note_id"], "note ID")
+        if role != "generate":
+            _safe_digest(arguments["note_id"], "note ID")
+        else:
+            _safe_component(arguments["model_directory"], "model directory")
+            # The caller owns the budget for the run it started; the bridge owns
+            # the ceiling. `GENERATOR_DEADLINE_S` is the registered whole-run
+            # bound, so a caller may ask for less and can never ask for more.
+            deadline = arguments["deadline_s"]
+            if type(deadline) is not int or not 1 <= deadline <= GENERATOR_DEADLINE_S:
+                raise InvalidArguments("generation deadline is outside the registered bound")
         _safe_digest(arguments["transcript_id"], "transcript ID")
     except BridgeRefused as exc:
         raise InvalidArguments(str(exc)) from exc
@@ -619,6 +1017,16 @@ def _read_frame(parent_fd: int | None) -> bytes:
 
 
 def _emit(value: dict) -> None:
+    """Write one outbound frame. `ensure_ascii=False` is contract, not taste.
+
+    Every frame this bridge writes goes through here, and the spelling is load
+    bearing rather than cosmetic. A ``backslash-u`` escape costs six bytes per
+    non-ASCII scalar against a fixed 64 KiB frame, so the same legal projection
+    can fit unescaped and overflow escaped — measured on the shared fixture's
+    worst legal case at 65,236 bytes against 95,956. The manifest already pins
+    this spelling and Rust refuses a backslash in it outright; the result frame
+    has no such parser-side guard, so the guarantee has to live at the writer.
+    """
     encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if len(encoded) + 1 > MAX_FRAME_BYTES:
         raise BridgeRefused("bridge frame exceeds its limit")
@@ -626,7 +1034,29 @@ def _emit(value: dict) -> None:
     sys.stdout.buffer.flush()
 
 
+def _transcript_only(request_id: str, code: str, recoverable: bool, receipt: dict) -> None:
+    """Every generate failure lands here: no note, and the transcript stands.
+
+    One outcome for every failure class — a storage fault, a malformed response,
+    a fabricated citation, a timeout — because the product answer is the same in
+    all of them and a caller must not be able to tell them apart by shape. The
+    receipt is closed and content-free by construction; see
+    `_GeneratorSession.receipt`.
+    """
+    _emit({
+        "schema": "note-generation-result/1",
+        "request_id": request_id,
+        "operation": "note.generate",
+        "outcome": "transcript-only",
+        "generation": None,
+        "failure": {"code": code, "recoverable": recoverable, "receipt": receipt},
+    })
+
+
 def _refused(request_id: str, code: str, recoverable: bool, role: str) -> None:
+    if role == "generate":
+        _transcript_only(request_id, code, recoverable, {})
+        return
     if role == "inspect":
         _emit({
             "schema": "note-bridge-result/1",
@@ -655,8 +1085,10 @@ def _watch_parent(parent_fd: int) -> None:
             except InterruptedError:
                 continue
             except OSError:
+                _reap_generator()
                 os._exit(2)
             if value == b"":
+                _reap_generator()
                 os._exit(0)
 
     threading.Thread(target=exit_at_eof, daemon=True).start()
@@ -683,7 +1115,12 @@ def _watch_parent_pid(expected_parent_pid: int) -> None:
         try:
             events = queue.control(None, 1, None)
         except Exception:
+            _reap_generator()
             os._exit(2)
+        # The generator is the one child this bridge can leave behind, and it
+        # holds the model's unified memory. Reaped before exit, in its own
+        # process group, so the app quitting does not strand several gigabytes.
+        _reap_generator()
         os._exit(0 if events else 2)
 
     threading.Thread(target=exit_with_parent, daemon=True).start()
@@ -709,6 +1146,105 @@ def _require_descriptor_identity(
         for name in _VALIDATOR_MODULES
     ):
         raise BridgeRefused("validator code escaped the inherited bundle")
+
+
+def _run_generation(
+    runtime: _VerifiedRuntime,
+    validator,
+    root_fd: int,
+    root_path: Path,
+    arguments: dict,
+    request_id: str,
+    require_identity,
+) -> int:
+    """Verify the model, run the generator, and admit only validated points.
+
+    Fail-closed throughout. The model tree is verified before the generator is
+    invoked, so an unpinned or symlinked model refuses without any model being
+    loaded, and every exit that is not a fully validated projection is the same
+    `transcript-only` outcome.
+    """
+    try:
+        model = _open_model_tree(
+            root_fd, root_path, arguments["model_directory"], runtime.models
+        )
+    except (BridgeRefused, OSError):
+        require_identity()
+        _transcript_only(request_id, "model-unavailable", True, {})
+        return 0
+    session: _GeneratorSession | None = None
+    receipt: dict = {}
+    try:
+        # Spawned on the first batch, not before it. Everything ahead of that
+        # first request — opening the transcript, checking its digest, loading
+        # it, enumerating candidates — can refuse, and none of those refusals
+        # needs a model. Spawning eagerly would make a missing transcript pay a
+        # multi-gigabyte load, and spend the run's deadline on it, before
+        # answering a question the model was never required for.
+        def ask(request: dict) -> str:
+            nonlocal session
+
+            if session is None:
+                session = _GeneratorSession(
+                    runtime.resources["generator"], model, arguments["deadline_s"]
+                )
+            # On every request, not just the first: the value is the same
+            # verified path each time, and a child that had to remember it from
+            # one earlier message is a contract that breaks quietly when the
+            # batching changes.
+            return session.ask({**request, "model_directory": model.path})
+
+        def session_receipt() -> dict:
+            return session.receipt() if session is not None else {}
+
+        try:
+            result = validator.generate(root_fd, arguments, ask=ask)
+        except (validator.GenerationRefused, GeneratorRefused) as exc:
+            require_identity()
+            _transcript_only(request_id, exc.code, exc.recoverable, session_receipt())
+            return 0
+        except validator.ArtifactFailure as exc:
+            require_identity()
+            _transcript_only(request_id, exc.code, exc.recoverable, session_receipt())
+            return 0
+        except Exception:
+            require_identity()
+            _transcript_only(request_id, "note2-validation-failed", False, session_receipt())
+            return 0
+        receipt = session_receipt()
+        # The model may not have changed under the generator that read it.
+        try:
+            model.require_unchanged()
+        except BridgeRefused:
+            require_identity()
+            _transcript_only(request_id, "model-unavailable", True, receipt)
+            return 0
+    finally:
+        if session is not None:
+            session.close()
+        model.close()
+    require_identity()
+    generated = {
+        "schema": "note-generation-result/1",
+        "request_id": request_id,
+        "operation": "note.generate",
+        "outcome": "generated",
+        "generation": {**result, "receipt": receipt},
+        "failure": None,
+    }
+    encoded = json.dumps(generated, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if len(encoded) + 1 > MAX_FRAME_BYTES:
+        # Unreachable at the current budget, and kept anyway. A maximal
+        # projection — 64 claims, each a 160-character claim with three
+        # locators — encodes to 46,019 bytes against a 65,536-byte frame, so
+        # `MAX_GENERATED_CLAIMS` refuses first and no test can reach this line.
+        # It stands because the keep budget is a product number that can move,
+        # and if it moves the answer must still be a refusal: a shortened note
+        # is indistinguishable from a note the model chose to keep short.
+        _transcript_only(request_id, "generation-capacity-exceeded", False, receipt)
+        return 0
+    _emit(generated)
+    return 0
 
 
 def run(
@@ -777,6 +1313,16 @@ def run(
             require_identity()
             return 2
         require_identity()
+        if runtime.role == "generate":
+            return _run_generation(
+                runtime,
+                validator,
+                root_fd,
+                root_path,
+                arguments,
+                request_id,
+                require_identity,
+            )
         try:
             result = (
                 validator.inspect(root_fd, arguments)
