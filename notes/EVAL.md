@@ -3208,3 +3208,31 @@ fixture (sampled request digests match exactly); per-batch cost 0.55 s
 → 0.049 s, a full 720-candidate validation pass ~400 s → ~35 s. No
 contract, schema, or registration change; the registration digest is
 unchanged.
+
+### Vendor-notes A/B — scored against the same 15 locked events
+
+Per METHOD.md ordering, the vendor's generated notes were opened for
+the first time only after the official result existed, and scored
+per-event (attested / partially attested / absent) against the same
+locked events the pipeline was gated on. Full per-event table in the
+packet (AB-SCORING.md); this log carries numbers only.
+
+Vendor notes: 12 attested, 3 partial, 0 absent — strict 12/15,
+lenient 15/15. Pipeline: 14/15 anchored by cited verbatim excerpts.
+
+The qualitative split is the finding. The vendor's misses are
+prose-shaped: two events attested in substance but with the exchange
+or a qualifying clause dropped, and one decision-level
+mis-attestation — a proposal the transcript shows was corrected in the
+meeting is recorded as an aligned decision in the vendor's headline
+decisions section. The pipeline's miss is coverage-shaped: one event's
+anchors did not survive pruning. The pipeline cannot mis-attest by
+construction (it cites transcript spans; it writes no claims), which
+is the trade the product brief bets on: cited evidence over fluent
+summary. Both instruments cleared the 13-of-15 bar the cycle set —
+the vendor only on the lenient count.
+
+Worker suite after the perf fix: 99 passed, 0 failed, 59.4 s (was
+259.7 s with one timeout failure). The previously-failing refusal-path
+test passes with no test changes — its failure was the quadratic
+validation cost, not its premise.
