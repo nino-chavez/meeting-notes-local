@@ -2664,3 +2664,31 @@ The one untested cell that would prove or refute per-candidate judgment:
 larger than one candidate is possible. Estimated ~4–5 h at current prompt
 sizes. Not run; whether to spend it is the operator's call, recorded as the
 only remaining registered arm on this model family.
+
+### Preregistration — batch-size-1 arm (operator-authorized, final arm on this family)
+
+165 independent single-candidate calls: ollama transport (gemma3:12b,
+digest f4031aab…), ±2 view, registered schema per call, temperature zero,
+`repeat_penalty` explicitly 1.0, `num_predict` per the registered formula at
+one candidate. No response can contain a verdict block larger than one
+candidate, so block placement is eliminated as a mechanism by construction.
+Decisions dumped (ids and verdicts only, private).
+
+Registered predictions:
+
+1. All 165 calls decode strictly.
+2. The block-verdict hypothesis predicts near-uniform verdicts at n=1
+   (keep ≈ 165 or ≈ 0): a model that flips whole batches is reading region
+   texture, not candidates, and a region of one still reads as its texture.
+   Per-candidate judgment predicts an interior keep count with keeps
+   concentrating on event anchors.
+3. Caveat recorded before the run: single-candidate calls remove
+   cross-candidate context, which changes the task. A keep-all outcome
+   means candidates look keepable in isolation — that still disqualifies
+   the family for temp-0 selection, since both the batched and unbatched
+   forms would then have failed for different reasons.
+
+Disposition rule: interior keep count with recall ≥ 11/13 at keep ≤ 64 →
+the batching redesign becomes the registered product path. Near-uniform
+verdicts → this model family is disqualified for candidate selection and
+today's boundary is terminal pending a new model generation.
