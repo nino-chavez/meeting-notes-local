@@ -2885,3 +2885,47 @@ refusals, and the `PRODUCT_RUN` registration block are unchanged; the
 registration digest does not move. Both official commands then rerun
 deterministically (greedy decode) with dumps enabled — meeting 1 to learn
 the miss, meeting 2 for its first official result.
+
+### Refusal diagnosed — the recall gate was measuring bundle inflation,
+### not memory (mechanism + amendment preregistration)
+
+The instrumented rerun of official run 1 (deterministic; dump ids-only)
+gives: keep 104/165, pruned 27, recall 9/13, missed ev-003/005/006/012,
+elapsed 1195 s. Three findings, each checked against artifacts:
+
+1. **The verdict vector is byte-identical to the ±1 validation run** —
+   165 shared candidate ids, zero flips. The model's per-candidate
+   judgment is window-insensitive on this meeting; the ±2 window changed
+   nothing the model did. The refusal is not a model regression.
+2. **Evidence bundles inflate with the contract window.** The events plan
+   names evidence *candidates*; `create_reference` writes each bundle as
+   that candidate's full visible context (3 fragments under research, 5
+   under product — verified in both ledgers). The gate requires bundle ⊆
+   survivor window, so equal widths collapse to exact anchor equality.
+   The pruned survivor set (27 of 104 keeps) rarely sits exactly on an
+   evidence anchor — hence 9/13.
+3. **The validation matrix crossed metrics.** `prune_eval.py` tested the
+   research ledger's 3-fragment bundles against ±2 windows — ±1 anchor
+   slack that the registered configuration does not have. The four-cell
+   "pass" was measured under a gate that no registered pipeline runs.
+
+Semantically the bundle is wrong, not the pruner: the anchor line *is*
+the evidence; the window is context shown around it. A survivor whose
+±2 window shows the evidence line lets a reader find the event — that is
+what recall is supposed to mean here.
+
+**Amendment (preregistered before any confirming run):** product-lane
+evidence bundles become the evidence candidate's anchor fragment alone.
+`PRODUCT_RUN` gains `ledger.evidence_bundles: "anchor-fragment-only"`;
+`create_reference` derives anchor-only bundles exactly when the cycle is
+built under the product registration digest, so research references and
+their locked history regenerate unchanged. The recall gate formula does
+not move; the digest does. Cycles and locks re-derive with delegated
+approval.
+
+**Predictions, stated before the runs:** meeting 1 (from the official ±2
+dump): pruned 27, recall 13/13, PASS. Meeting 2 (from the ±1 MLX dump
+mapped onto the ±2 product manifest, assuming the window-insensitivity
+verified on meeting 1): pruned 54, recall 12/13 missing ev-012 — the
+known pruning cost — PASS. The reruns test both predictions; a verdict
+flip on meeting 2 falsifies the transfer assumption, not the amendment.
