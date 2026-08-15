@@ -119,3 +119,23 @@ seam-6 widening for sharded weights (pinned by characterization test),
 catalog entry + model hosting (needs the external-publish step the
 delegation excludes), and app-side admission wiring (in progress:
 bridge product alignment + real MLX generator child).
+
+## Merge record addendum (2026-08-14, later)
+
+The bridge product-alignment branch merged to local main under the same
+delegation: the generate lane now runs the product registration (±2
+window, batch size 1, prune-then-budget on the pruned set, 3600 s
+deadline bound to the registration at startup), and the real
+`worker/note_generator_mlx.py` child exists with its sync obligation
+enforced as a byte-identity test against `notes/product_run.py`. The
+generate manifest builder lands unwired by decision: Rust refuses an
+empty-models manifest and the signed catalog carries no note-model role
+yet, so wiring waits on the catalog entry. The future catalog entry must
+use exactly the ids Rust derives — `note-generator-config` and
+`note-generator-weights`, sorted. All lanes green post-merge.
+
+Caveat carried from notes/EVAL.md: the product registration this lane
+aligns to is under an open refusal — official run 1 missed the recall
+gate at the registered ±2 window. The lane binds to the registration
+mechanism, not the numbers; an amendment moves the digest and the
+startup binding check refuses any half-updated bundle loudly.
