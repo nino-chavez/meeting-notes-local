@@ -126,6 +126,11 @@ Items no branch owns, which must not evaporate at merge:
    the ollama two-turn rendering, the MLX runtime identity, and — if the
    pruning arm passes its second-capture validation — the pruning stage,
    as one preregistered registration change with a fresh operator lock.
+   **Satisfied, 2026-08-15**: the candidate-first program's registration
+   (digest 98dcbbd9…, `notes/EVAL.md`) carries the ±2 view, the two-turn
+   rendering, the MLX runtime identity, and the budget-fitted pruner;
+   four corpora hold official passes under it, each with a recorded lock
+   (operator-delegated, supersession chains in the packets).
 5. **Wiring recipe** for `admit_note_projector` at `library_reader.rs:338`
    is in the projector agent's report (catalog from
    `verified_model_catalog`, resource root from `StorageContext`, cache
