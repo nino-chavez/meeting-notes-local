@@ -141,6 +141,40 @@
         },
         "failure": null
       }
+    },
+    {
+      "name": "non-ascii-claim-text-round-trips",
+      "note": "The one fixture row whose claim text and locator slice leave ASCII; scalar offsets, not UTF-8 bytes.",
+      "result": {
+        "schema": "note-projection-result/1",
+        "request_id": "11111111-1111-4111-8111-111111111111",
+        "operation": "note.project",
+        "outcome": "succeeded",
+        "projection": {
+          "schema": "note-claim-projection/1",
+          "note_json_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "note_markdown_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "transcript_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "claims": [
+            {
+              "claim_ordinal": 0,
+              "claim_sha256": "ab0e7c40050b262fb6823a38268fdd8c4baedaac23c029ee2d173cf11777d28b",
+              "claim_type": "decision",
+              "evidence_state": "located",
+              "claim": "aé🙂z",
+              "locators": [
+                {
+                  "turn": 3,
+                  "start": 0,
+                  "end": 4,
+                  "text_sha256": "ab0e7c40050b262fb6823a38268fdd8c4baedaac23c029ee2d173cf11777d28b"
+                }
+              ]
+            }
+          ]
+        },
+        "failure": null
+      }
     }
   ],
   "refusal_results": [
@@ -261,6 +295,36 @@
     {
       "name": "unknown-field",
       "raw_frame": "{\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"refused\",\"projection\":null,\"failure\":{\"code\":\"artifact-changed\",\"recoverable\":false},\"extra\":null}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "locators-not-strictly-sorted",
+      "raw_frame": "{\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[{\"claim_ordinal\":0,\"claim_sha256\":\"ea74f253f71f6aa7122cab599fec186c0ade49ee583e2f4c8a358ab227c50a11\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"sorted check\",\"locators\":[{\"turn\":1,\"start\":0,\"end\":4,\"text_sha256\":\"f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753\"},{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}]}]},\"failure\":null}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "claim-digest-wrong-length",
+      "raw_frame": "{\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[{\"claim_ordinal\":0,\"claim_sha256\":\"3290cd6471f86d39420fdfcf73cf106b6883a658856405cee50136bc57dd778\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"digest length\",\"locators\":[{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}]}]},\"failure\":null}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "locators-over-the-cap",
+      "raw_frame": "{\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[{\"claim_ordinal\":0,\"claim_sha256\":\"c0b48adb50bfa6cce94429fa4f5fab46bced08f0af2be41dfa1d342989f47a03\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"locator cap\",\"locators\":[{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"},{\"turn\":1,\"start\":0,\"end\":4,\"text_sha256\":\"f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753\"},{\"turn\":2,\"start\":0,\"end\":5,\"text_sha256\":\"be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67\"},{\"turn\":3,\"start\":0,\"end\":4,\"text_sha256\":\"ab0e7c40050b262fb6823a38268fdd8c4baedaac23c029ee2d173cf11777d28b\"}]}]},\"failure\":null}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "empty-claim-text",
+      "raw_frame": "{\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[{\"claim_ordinal\":0,\"claim_sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"\",\"locators\":[{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}]}]},\"failure\":null}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "control-character-in-claim-text",
+      "raw_frame": "{\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[{\"claim_ordinal\":0,\"claim_sha256\":\"82d34c7d68cf28219ce4ab8dd592d88dec35d1ef51625beef76220c2df266bd3\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"a\\u0001b\",\"locators\":[{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}]}]},\"failure\":null}\n",
+      "expected": "protocol-failure"
+    },
+    {
+      "name": "lone-surrogate-escape-in-claim-text",
+      "raw_frame": "{\"schema\":\"note-projection-result/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.project\",\"outcome\":\"succeeded\",\"projection\":{\"schema\":\"note-claim-projection/1\",\"note_json_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"note_markdown_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"transcript_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claims\":[{\"claim_ordinal\":0,\"claim_sha256\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"claim_type\":\"decision\",\"evidence_state\":\"located\",\"claim\":\"\\ud800\",\"locators\":[{\"turn\":0,\"start\":0,\"end\":5,\"text_sha256\":\"8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8\"}]}]},\"failure\":null}\n",
       "expected": "protocol-failure"
     }
   ],

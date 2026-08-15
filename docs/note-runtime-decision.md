@@ -106,6 +106,15 @@ Items no branch owns, which must not evaporate at merge:
    `strictly_sorted`, digest length, locator cap, empty claim text
    (genuine Rust-side gaps); control-character and surrogate rows as
    parity locks. Both closing agent reports state it identically.
+   **Done, 2026-08-15**: `note-projection-v1.fixture` gained
+   `valid_results[2]` (the fixture's one non-ASCII claim text, parsed on
+   both sides) and six `invalid_result_frames` rows — unsorted locators,
+   truncated claim digest, four locators, empty claim text,
+   control-character claim text, lone-surrogate escape — each generated
+   from the same template as the parsing valid row and mutated in exactly
+   one field, so the rejection is attributable. Both consumers exercise
+   them: the Rust generic loop plus a `results[2]` assertion, the Python
+   structural loop.
 2. **Network enforcement before ship** (see Correction above): sandbox
    profile or equivalent on the generator child, or weaken this doc's
    posture language.

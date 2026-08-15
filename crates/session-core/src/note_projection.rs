@@ -577,6 +577,13 @@ mod tests {
         assert_eq!(claims.len(), 5);
         assert_eq!(claims[0].text, claims[1].text);
         assert_eq!((claims[0].ordinal, claims[1].ordinal), (0, 1));
+        let non_ascii = match parse_result(&frame(&results[2]["result"]), &request(), &turns()) {
+            Ok(value) => value,
+            Err(_) => panic!("fixture non-ASCII projection must parse"),
+        };
+        assert_eq!(non_ascii.len(), 1);
+        assert_eq!(non_ascii[0].text, turns()[3]);
+        assert!(non_ascii[0].text.chars().any(|c| !c.is_ascii()));
     }
 
     #[test]
