@@ -3047,3 +3047,35 @@ identical, so pruner behavior is measurable without model runs); any
 amendment must pass all three corpora offline before it is
 preregistered, and the app-capture meetings must remain passing under
 it. No new registration until that sweep is recorded here.
+
+### Amendment preregistration — budget-fitted coverage collapse (pruner v2)
+
+Offline sweep over all three corpora's deterministic verdict dumps
+(five variants; table in the session record): single-representative run
+collapse and coverage variants each fail somewhere — coverage fixes
+recall but overflows the budget on dense corpora; wider gaps fit the
+budget but destroy recall. The resolution is to make the budget a
+constraint the pruner *fits* instead of a gate it hopes to meet:
+
+**Budget-fitted coverage collapse.** Kept candidates form contiguous
+runs at the smallest gap g in 1..10 whose run count is within the keep
+budget; within each run, representatives are taken one per stride-s
+segment (longest anchor, earliest ordinal on ties), with s the smallest
+value from 5 (the visible-window width) upward whose survivor count is
+within the budget. Deterministic, model-free, event-blind; survivors
+respect the budget by construction, and the keep gate remains as a
+refusal backstop for the exhausted-fit case (g > 10 still over budget).
+
+Measured on the three dumps — these are the exact predictions for the
+official reruns (greedy decode; the verdict vectors will not move):
+
+- meeting 1: gap 1, stride 5, keep 35, recall 13/13 — PASS (unchanged)
+- meeting 2: gap 1, stride 6, keep 64, recall 13/13 — PASS, and the
+  ev-012 pruning cost from the current pruner is *recovered*
+- zoom town hall: gap 2, stride 8, keep 58, recall 13/14 (ev-003, a
+  single-anchor event) — PASS
+
+`PRODUCT_RUN["pruner"]` moves to the fitted strategy; digest moves;
+cycles and locks re-derive under delegated approval; all three official
+runs repeat. The bridge's generate lane follows the registration
+mechanically and its restated constants are binding-checked at startup.
