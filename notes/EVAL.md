@@ -2973,3 +2973,26 @@ for it. Remaining before ship, all outside this delegation or the repo:
 model catalog entry + hosting (external publish), network-denial
 enforcement, and the release-time wiring recorded in
 docs/note-runtime-decision.md.
+
+### Third corpus admitted — Zoom town hall (2026-08-11 recording)
+
+The operator extended the delegation to a third-party corpus already on
+disk ("everything you need is on disk"): a Zoom town-hall recording with
+a 447-turn attributed transcript, converted to the app's transcript
+shape by a prior session (raw digest e0ffd89e…, verified against its
+source manifest). It loads through the registered loader and yields 453
+broad candidates under PRODUCT_CONTRACT — the largest corpus measured,
+within the elapsed budget at meeting-2's measured pace. This is the
+first transcript produced by a third-party ASR (Zoom) rather than the
+app's own capture path.
+
+Packet `zoom-town-hall-2026-08-11` holds the transcript copy, an
+events template, and a resolver that maps operator-named timestamps to
+candidate ids mechanically (ids and counts only; transcript text stays
+on disk). Blocked on exactly one input: the operator authoring the
+ground-truth events (EVENTS.json). The A/B half of the exercise — the
+vendor's own generated notes — is not on disk; the local .md is a
+formatted transcript render (91% verbatim turn overlap, measured), not
+a summary. If the operator exports the Zoom AI Companion summary, it
+gets scored against the same locked events; without it, this corpus
+still serves as the third-party generalization test.
