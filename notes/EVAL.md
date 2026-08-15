@@ -2929,3 +2929,14 @@ mapped onto the ±2 product manifest, assuming the window-insensitivity
 verified on meeting 1): pruned 54, recall 12/13 missing ev-012 — the
 known pruning cost — PASS. The reruns test both predictions; a verdict
 flip on meeting 2 falsifies the transfer assumption, not the amendment.
+
+### Official reruns pending — background launches externally stopped
+
+Three consecutive background launches of the amended official runs
+(fe493522 locks) were stopped from outside the session on 2026-08-14
+between ~23:00 and ~23:35 — not by the OS (no memory pressure, no jetsam
+record) and not by this session. No inference completed, so the
+preregistered predictions above remain untested. All state is durable:
+amendment committed, cycles and locks built and approved, run commands
+in `~/.yawn-research/capture-exposure/OFFICIAL-RERUN.md`. The runs are
+deterministic; nothing is lost by the interruption.
