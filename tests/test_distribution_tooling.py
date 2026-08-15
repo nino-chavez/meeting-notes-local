@@ -18,6 +18,15 @@ def source(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def load_build_manifest():
+    path = ROOT / "worker/build_manifest.py"
+    spec = importlib.util.spec_from_file_location("note_build_manifest", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_release_verifier():
     path = ROOT / "scripts/verify-release-bundle.py"
     spec = importlib.util.spec_from_file_location("release_bundle_verifier", path)
@@ -185,6 +194,72 @@ class DistributionToolingTests(unittest.TestCase):
             '"note-validator.zip"',
         ):
             self.assertIn(required, verifier)
+
+    def test_note_generate_manifest_pins_the_mlx_generator_and_stays_unwritten(self) -> None:
+        """The `generate` sibling builds, pins the real generator, and ships nowhere.
+
+        Two halves, because either alone is misleading. The builder must
+        produce exactly the bytes Rust re-derives in `canonical_manifest`, and
+        `main()` must still not write it: the signed catalog carries no
+        note-model role, so a written file could only pin an empty model set,
+        which `note_projector_process.rs` refuses.
+        """
+        builder = source("worker/build_manifest.py")
+        self.assertIn('NOTE_GENERATE_MANIFEST = Path("note-runtime-generate.json")', builder)
+        self.assertIn('NOTE_GENERATOR = Path("note-generator-mlx.py")', builder)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixtures = {
+                "python-runtime/bin/python3.12": b"runtime",
+                "worker/main.py": b"worker",
+                "bin/audiotee": b"tap",
+                "bin/permission-probe": b"probe",
+                "encoder-unavailable.identity": b"encoder",
+                "note-bridge.py": source("worker/note_bridge.py").encode(),
+                "note-generator-mlx.py": source("worker/note_generator_mlx.py").encode(),
+            }
+            for relative, contents in fixtures.items():
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+            completed = subprocess.run(
+                [str(ROOT / "worker/build_manifest.py"), str(root)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertFalse((root / "note-runtime-generate.json").exists())
+
+            module = load_build_manifest()
+            models = [
+                {"id": "note-generator-weights", "sha256": "b" * 64},
+                {"id": "note-generator-config", "sha256": "a" * 64},
+            ]
+            document = module.note_generate_manifest(root, models)
+            self.assertEqual(list(document), [
+                "schema", "role", "runtime", "bridge", "validator", "generator", "models"
+            ])
+            self.assertEqual(document["schema"], "note-runtime/1")
+            self.assertEqual(document["role"], "generate")
+            self.assertEqual(document["generator"], {
+                "relative_path": "note-generator-mlx.py",
+                "sha256": hashlib.sha256(
+                    source("worker/note_generator_mlx.py").encode()
+                ).hexdigest(),
+            })
+            # Sorted by id, because Rust sorts the pinned set before comparing
+            # it to a catalog entry's derived one.
+            self.assertEqual([model["id"] for model in document["models"]], [
+                "note-generator-config", "note-generator-weights"
+            ])
+            raw = module.canonical_note_manifest(document)
+            self.assertEqual(raw, json.dumps(document, ensure_ascii=False, indent=2).encode())
+            self.assertNotIn(b"\\", raw)
+            # An empty model set is refused here, not deferred to Rust.
+            with self.assertRaises(SystemExit):
+                module.note_generate_manifest(root, [])
 
     def test_note_project_runtime_manifest_and_validator_zip_are_generated_canonically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

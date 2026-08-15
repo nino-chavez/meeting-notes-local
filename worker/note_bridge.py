@@ -27,12 +27,21 @@ MAX_FRAME_BYTES = 64 * 1024
 # One generated response, read whole. Larger than any admissible note by a wide
 # margin, and bounded so a runaway decode cannot be absorbed instead of refused.
 MAX_GENERATOR_RESPONSE_BYTES = 1024 * 1024
-# The registered whole-run time budget in notes/EVAL.md. The generator is a
-# child of a one-shot bridge, so the deadline is the bridge's, not a manifest
-# field: seam 3 keeps the manifest at `relative_path` + `sha256` per resource,
-# which leaves no escape-free place to carry a number that changes the measured
-# configuration anyway.
-GENERATOR_DEADLINE_S = 900
+# The registered whole-run time budget: `candidate_first.PRODUCT_RUN["gates"]
+# ["maximum_elapsed_seconds"]`, re-derived for batch size 1 from the measured
+# 6–11 s per single-candidate call (notes/EVAL.md, "Amendment — product elapsed
+# budget re-derived for batch size 1"). It is the *harness* budget — the
+# ceiling a measured run may occupy — and explicitly not a deadline a person
+# waiting on a note would accept. The app-side UX deadline is a separate
+# product number owned by the caller and still to be set; the caller may always
+# ask for less and can never ask for more.
+#
+# Written here rather than imported because the bridge is exec'd from verified
+# bytes before any validator module exists on the import path, and the value is
+# needed while parsing a command. `_require_registered_deadline` binds the two
+# at startup instead, so a registration that moves this number refuses the
+# bridge rather than leaving the ceiling quietly behind the registration.
+GENERATOR_DEADLINE_S = 3600
 # Written by `model_store.rs` beside the model files it installs. It is install
 # provenance, not model bytes, so it is excluded from the pinned digest set.
 # Tolerated, not required: `model_store::verify_model_directory` requires it and
@@ -656,6 +665,27 @@ def load_validator(runtime: _VerifiedRuntime):
     return module, finder
 
 
+def _require_registered_deadline(candidate_first) -> None:
+    """Bind `GENERATOR_DEADLINE_S` to the registration that owns the number.
+
+    The bridge cannot import the registration at module scope, so it restates
+    the value — and a restated constant is a second owner unless something
+    checks it. This is that check: one registration, one budget, and a
+    generate bundle whose two halves disagree never reaches `ready`.
+
+    Scoped to the role that runs a generator, deliberately. `project` and
+    `inspect` never read a deadline and never spawn a child, and the `project`
+    role is the shipped projection transport — making it refuse over a number
+    it does not use would turn a research-lane edit into a broken reader.
+    """
+    try:
+        registered = candidate_first.PRODUCT_RUN["gates"]["maximum_elapsed_seconds"]
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise BridgeRefused("pinned registration carries no elapsed budget") from exc
+    if registered != GENERATOR_DEADLINE_S:
+        raise BridgeRefused("bridge deadline does not match the registered elapsed budget")
+
+
 @dataclass
 class _ModelTree:
     """One verified model directory, held open for the generator's lifetime.
@@ -1268,6 +1298,8 @@ def run(
     root_fd = _open_absolute_directory(root_path, private=True)
     try:
         validator, bundle_loader = load_validator(runtime)
+        if runtime.role == "generate":
+            _require_registered_deadline(sys.modules["candidate_first"])
 
         def require_identity() -> None:
             if isinstance(runtime, _DescriptorRuntime):

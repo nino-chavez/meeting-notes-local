@@ -15,7 +15,17 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 NOTE_MANIFEST = Path("note-runtime-project.json")
+# The `generate`-role sibling. `crates/session-core/src/note_projector_process.rs`
+# reads it beside the project manifest to learn which generator and which model
+# digests the bundle pins, and refuses a generate manifest that names a
+# generator without pinning models (or the reverse). It is built here and not
+# yet written by `main()`: the signed model catalog carries no note-model role,
+# so any file written today would pin an empty model set and be refused anyway.
+# Adding the entry is the step that turns this on — see the note on
+# `note_generate_manifest`.
+NOTE_GENERATE_MANIFEST = Path("note-runtime-generate.json")
 NOTE_BRIDGE = Path("note-bridge.py")
+NOTE_GENERATOR = Path("note-generator-mlx.py")
 NOTE_VALIDATOR = Path("note-validator.zip")
 # Insertion order is the zip write order, and `verify_note_runtime` compares
 # `archive.namelist()` to this list positionally. Append; do not reorder.
@@ -139,6 +149,47 @@ def note_manifest(root: Path) -> dict:
     }
 
 
+def note_generate_manifest(root: Path, models: list[dict]) -> dict:
+    """The `generate`-role manifest: the same three resources, plus the generator.
+
+    `worker/note_generator_mlx.py` is the generator, staged as
+    `note-generator-mlx.py`, and it is pinned by digest exactly as the bridge
+    and validator are — the bridge execs the verified bytes read from an
+    inherited descriptor, never the pathname, so this digest is what decides
+    which generator can run.
+
+    `models` are the note-model file pins, one `{"id", "sha256"}` per file, in
+    the ids `note_runtime_models` derives on the Rust side. It is a parameter
+    rather than a constant because those digests belong to a signed catalog
+    entry that does not exist yet; the manifest cannot be written until it does,
+    and an empty list is refused here rather than producing a manifest that
+    Rust and `worker/note_bridge.py` would both refuse later.
+    """
+    if not models:
+        raise SystemExit("generate manifest requires at least one pinned model file")
+    resources = {
+        "runtime": Path("python-runtime/bin/python3.12"),
+        "bridge": NOTE_BRIDGE,
+        "validator": NOTE_VALIDATOR,
+    }
+    return {
+        "schema": "note-runtime/1",
+        "role": "generate",
+        **{
+            name: {
+                "relative_path": str(relative),
+                "sha256": sha256(root / relative),
+            }
+            for name, relative in resources.items()
+        },
+        "generator": {
+            "relative_path": str(NOTE_GENERATOR),
+            "sha256": sha256(root / NOTE_GENERATOR),
+        },
+        "models": sorted(models, key=lambda model: model["id"]),
+    }
+
+
 def canonical_note_manifest(document: dict) -> bytes:
     return json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -159,7 +210,13 @@ def verify_note_runtime(root: Path) -> None:
 
 
 def verify_note_runtime_absent(root: Path) -> None:
-    for relative in (NOTE_BRIDGE, NOTE_MANIFEST, NOTE_VALIDATOR):
+    for relative in (
+        NOTE_BRIDGE,
+        NOTE_MANIFEST,
+        NOTE_VALIDATOR,
+        NOTE_GENERATE_MANIFEST,
+        NOTE_GENERATOR,
+    ):
         path = root / relative
         if path.exists() or path.is_symlink():
             raise SystemExit(f"test-only note runtime resource is present in bundle root: {relative}")

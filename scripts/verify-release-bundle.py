@@ -49,6 +49,8 @@ EXPECTED_ENCODER_ONNX_SHA256 = (
 )
 FORBIDDEN_NOTE_RUNTIME_RESOURCES = (
     Path("note-bridge.py"),
+    Path("note-generator-mlx.py"),
+    Path("note-runtime-generate.json"),
     Path("note-runtime-project.json"),
     Path("note-validator.zip"),
 )

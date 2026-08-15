@@ -13,6 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
+# Transport-advisory, not registered. `PRODUCT_RUN` pins no context width
+# because the product transport is in-process MLX-LM: the child sizes its own
+# context from the model's own configuration, so nothing here can set it. The
+# field stays on the request packet because the packet's shape is the
+# transport's contract and a provider that does honour a context width (a
+# server-backed one) must still be told a number wide enough for the ±2 window
+# at batch size 1. A generator that ignores it is behaving correctly.
+TRANSPORT_NUM_CTX = 32768
 
 
 class ArtifactFailure(ValueError):
@@ -414,22 +422,37 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
     cannot name a row it was not shown, invent a locator, or decide how many
     points exist — `decode_classification` refuses an unknown, duplicated,
     reordered, or miscounted verdict before anything reaches the transcript.
+
+    The configuration is `candidate_first.PRODUCT_RUN`, the registration the
+    operator adopted for the product lane: the ±2 visible window, batch size 1,
+    temperature 0, and the contiguous-run pruning stage. Two consequences that
+    are easy to get wrong. Raw keeps legitimately run into the hundreds at
+    batch size 1 — the measured cells kept 71–152 of 165–300 — so a cumulative
+    keep budget checked as verdicts accumulate would refuse every real meeting;
+    the registered gate is `maximum_keep_after_prune`, applied once, to the
+    pruned set. And the pruner needs one verdict per candidate, so every
+    decision is retained rather than only the keeps.
     """
     import candidate_first
     from summarize import StructuredOutputError
 
-    registered = candidate_first.REGISTERED_RUN["classifier"]
-    budget = candidate_first.REGISTERED_RUN["gates"]["maximum_keep"]
+    registered = candidate_first.PRODUCT_RUN["classifier"]
+    budget = candidate_first.PRODUCT_RUN["gates"]["maximum_keep_after_prune"]
+    gap = candidate_first.PRODUCT_RUN["pruner"]["gap"]
     batch_size = registered["batch_size"]
     try:
-        manifest = candidate_first.generate_manifest(transcript, candidate_first.STRATEGY_BROAD)
+        manifest = candidate_first.generate_manifest(
+            transcript,
+            candidate_first.STRATEGY_BROAD,
+            contract=candidate_first.PRODUCT_CONTRACT,
+        )
         candidate_first.validate_manifest(manifest, transcript)
         batches = candidate_first.candidate_batches(manifest["candidates"], batch_size)
     except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
         raise GenerationRefused("no-generatable-transcript", True) from exc
     if not batches:
         raise GenerationRefused("no-generatable-transcript", True)
-    kept: list[dict] = []
+    decisions: list[dict] = []
     for batch in batches:
         candidate_ids = [row["candidate_id"] for row in batch]
         try:
@@ -445,7 +468,7 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
                 "user": user,
                 "response_format": schema,
                 "num_predict": candidate_first.classification_num_predict(len(batch)),
-                "num_ctx": registered["num_ctx"],
+                "num_ctx": TRANSPORT_NUM_CTX,
                 "temperature": registered["temperature"],
             }
         )
@@ -457,14 +480,25 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
             # research taxonomy separates them, so the discriminator is a
             # parse attempt — not a second copy of the decoder.
             raise GenerationRefused(_response_refusal(raw), False) from exc
-        verdicts = {row["candidate_id"]: row["verdict"] for row in decoded["items"]}
-        kept.extend(row for row in batch if verdicts[row["candidate_id"]] == "KEEP")
-        # Checked as it accumulates, so a run that has already blown the
-        # registered budget stops instead of classifying the remaining batches.
-        if len(kept) > budget:
-            raise GenerationRefused("keep-budget-exceeded", False)
-    if not kept:
+        decisions.extend(decoded["items"])
+    if not any(row["verdict"] == "KEEP" for row in decisions):
         raise GenerationRefused("no-model-candidates", True)
+    try:
+        pruned = candidate_first.prune_keeps(manifest["candidates"], decisions, gap=gap)
+    except (StructuredOutputError, ValueError, KeyError, TypeError) as exc:
+        # Not a model refusal. `decode_classification` already guaranteed exact
+        # single coverage of every offered locator, batch by batch, so a pruner
+        # that rejects the assembled decision set means local code built the
+        # batches or the manifest wrongly — the same class as a request the
+        # contract could not build.
+        raise GenerationRefused("request-contract", False) from exc
+    if pruned["counts"]["pruned_keep"] > budget:
+        raise GenerationRefused("keep-budget-exceeded", False)
+    rows = {row["candidate_id"]: row for row in manifest["candidates"]}
+    # `pruned_candidate_ids` is already in ordinal order — the pruner sorts
+    # keeps by ordinal, walks runs in that order, and emits one representative
+    # per run — so the points that follow are in transcript order.
+    kept = [rows[candidate_id] for candidate_id in pruned["pruned_candidate_ids"]]
     return manifest, kept
 
 

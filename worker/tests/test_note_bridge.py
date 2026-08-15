@@ -21,10 +21,12 @@ from pathlib import Path
 
 from worker.note_validator import ArtifactFailure, GenerationRefused
 from worker.note_validator import locate_kept_candidates, validate_locators
+from worker.note_validator import TRANSPORT_NUM_CTX
 from worker.note_validator import forbidden_in_claim, validate_claim_rows
 from worker.note_validator import inspect as inspect_snapshot
 from worker.note_validator import project as project_snapshot
 from worker.note_bridge import (
+    GENERATOR_DEADLINE_S,
     MAX_FRAME_BYTES,
     BridgeRefused,
     _REQUIRED_FLAGS,
@@ -32,6 +34,7 @@ from worker.note_bridge import (
     InvalidArguments,
     _emit,
     _parse_command,
+    _require_registered_deadline,
     _watch_parent_pid,
     verify_descriptor_runtime,
 )
@@ -155,7 +158,11 @@ class NoteBridgeHarnessTests(unittest.TestCase):
         self.temporary.cleanup()
 
     @staticmethod
-    def _write_validator_bundle(path: Path, note_validator_suffix: bytes = b"") -> None:
+    def _write_validator_bundle(
+        path: Path,
+        note_validator_suffix: bytes = b"",
+        candidate_first_suffix: bytes = b"",
+    ) -> None:
         sources = {
             "note_validator.py": REPO / "worker/note_validator.py",
             "summarize.py": REPO / "notes/summarize.py",
@@ -163,12 +170,13 @@ class NoteBridgeHarnessTests(unittest.TestCase):
             "capture_health.py": REPO / "spike/capture_health.py",
             "candidate_first.py": REPO / "notes/candidate_first.py",
         }
+        suffixes = {
+            "note_validator.py": note_validator_suffix,
+            "candidate_first.py": candidate_first_suffix,
+        }
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
             for name, source in sources.items():
-                data = source.read_bytes()
-                if name == "note_validator.py":
-                    data += note_validator_suffix
-                archive.writestr(name, data)
+                archive.writestr(name, source.read_bytes() + suffixes.get(name, b""))
         path.chmod(0o600)
 
     def _replace_validator(self, note_validator_suffix: str) -> None:
@@ -890,10 +898,17 @@ def verdicts(ids, pattern):
     ]
 """
 
-# Keeps the first candidate of every batch and abstains on the rest.
+# Keeps one candidate every twentieth request and abstains on the rest.
+#
+# The registered product batch size is 1, so every request offers exactly one
+# locator and "keep the first of each batch" would keep the whole meeting — and
+# the gap-1 pruner would then collapse the lot into a single point, because the
+# fixture's anchors are one per consecutive turn. Spacing the keeps twenty
+# requests apart leaves each one its own run, so the point count is a witness
+# for the session protocol and for the pruner at the same time.
 STUB_WELL_FORMED = STUB_PREAMBLE + """
-for request, ids in batches():
-    answer(verdicts(ids, lambda index: "KEEP" if index == 0 else "ABSTAIN"))
+for index, (request, ids) in enumerate(batches()):
+    answer(verdicts(ids, lambda position: "KEEP" if index % 20 == 0 else "ABSTAIN"))
 """
 
 STUB_MALFORMED = STUB_PREAMBLE + """
@@ -940,6 +955,14 @@ for request, ids in batches():
     answer(verdicts(ids, lambda index: "KEEP"))
 """
 
+# Keeps every other candidate, so no two keeps are adjacent and the gap-1
+# pruner collapses nothing. This is the only shape that can push the *pruned*
+# set past the budget: keeping more is not enough, the keeps have to be spread.
+STUB_KEEPS_ALTERNATING = STUB_PREAMBLE + """
+for index, (request, ids) in enumerate(batches()):
+    answer(verdicts(ids, lambda position: "KEEP" if index % 2 == 0 else "ABSTAIN"))
+"""
+
 # Rewrites a pinned model file while the session is still running, so the
 # post-generation identity recheck has something to catch.
 STUB_REWRITES_THE_MODEL = STUB_PREAMBLE + """
@@ -965,6 +988,20 @@ for request, ids in batches():
     answer(verdicts(ids, lambda index: "ABSTAIN"))
 """
 
+# Reports the rest of the request packet: the decoding fields a provider is
+# told to honour, and how many candidates one request offers. Nothing else
+# reads them, so without this the packet could drift to any values at all.
+STUB_REPORTS_REQUEST = STUB_PREAMBLE + """
+for request, ids in batches():
+    Path(MARKER).write_text(json.dumps({
+        "num_ctx": request.get("num_ctx"),
+        "temperature": request.get("temperature"),
+        "num_predict": request.get("num_predict"),
+        "offered": len(ids),
+    }))
+    answer(verdicts(ids, lambda index: "ABSTAIN"))
+"""
+
 
 MODEL_FILES = {"config.json": b"{}\n", "weights.npz": b"weights\n"}
 
@@ -974,11 +1011,17 @@ class NoteGenerateBridgeTests(unittest.TestCase):
 
     MODEL_DIRECTORY = "models/note-model/rev-1"
 
-    # Long enough for two things at once: more than the registered batch size
-    # of 32, so the session protocol that makes one model load serve a whole
-    # meeting is exercised, and more than the registered keep budget of 64, so
-    # a classifier that keeps everything can actually overrun it.
+    # One candidate per turn, and the registered product batch size is 1, so
+    # this is also the number of requests one run makes: the session protocol
+    # that makes one model load serve a whole meeting is exercised seventy
+    # times over. It is also past the registered keep budget of 64, so a
+    # classifier that keeps everything overruns the raw keep count — which, per
+    # `PRODUCT_RUN`, is no longer the number the gate is applied to.
     TRANSCRIPT_TURNS = 70
+
+    # Past twice the keep budget, so a classifier that keeps every other
+    # candidate produces more than 64 runs and cannot be pruned back under it.
+    SPREAD_TRANSCRIPT_TURNS = 140
 
     def setUp(self) -> None:
         self._harness = NoteBridgeHarnessTests()
@@ -1030,6 +1073,10 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         encoded = (json.dumps(document, indent=2) + "\n").encode()
         transcript_id = hashlib.sha256(encoded).hexdigest()
         directory = self.root / "meetings" / self.meeting_id / "transcript"
+        # The one this replaces goes, so a test that rewrites the transcript
+        # does not leave a second one in the tree the read-only assertions
+        # compare before and after.
+        (directory / f"{self._harness.transcript_id}.json").unlink(missing_ok=True)
         private_file(directory / f"{transcript_id}.json", encoded)
         self._harness.transcript_id = transcript_id
         return len(build_fragment_map(load_bytes(encoded, source="fixture"))["fragments"])
@@ -1056,6 +1103,16 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             "Path(MARKER).write_text('ran')\n"
         )
         private_file(self.generator, (marked + source).encode())
+
+    def _replace_validator_registration_budget(self, seconds: int) -> None:
+        """Move the pinned registration's elapsed budget inside the bundle."""
+        self.validator.unlink()
+        self._harness._write_validator_bundle(
+            self.validator,
+            candidate_first_suffix=(
+                f'\nPRODUCT_RUN["gates"]["maximum_elapsed_seconds"] = {seconds}\n'
+            ).encode(),
+        )
 
     def _write_model_tree(self, files: dict[str, bytes]) -> None:
         directory = self.root / self.MODEL_DIRECTORY
@@ -1114,6 +1171,35 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             bridge.close()
         return result, returncode, error, request_id
 
+    def _manifest_digests(self) -> tuple[str, str]:
+        """The product manifest's digest, and the research one it must not be.
+
+        The two contracts enumerate the same candidates from this fixture and
+        differ only in how wide a view each candidate carries, so the candidate
+        count cannot tell them apart and the digest is the only field on the
+        result frame that can.
+        """
+        sys.path.insert(0, str(REPO / "notes"))
+        import candidate_first
+        from transcript import load_bytes
+
+        raw = (
+            self.root / "meetings" / self.meeting_id / "transcript" / f"{self.transcript_id}.json"
+        ).read_bytes()
+        loaded = load_bytes(raw, source="fixture")
+        product = candidate_first.generate_manifest(
+            loaded, candidate_first.STRATEGY_BROAD,
+            contract=candidate_first.PRODUCT_CONTRACT,
+        )
+        research = candidate_first.generate_manifest(
+            loaded, candidate_first.STRATEGY_BROAD,
+        )
+        self.assertNotEqual(product["manifest_sha256"], research["manifest_sha256"])
+        self.assertEqual(
+            product["counts"]["candidates"], research["counts"]["candidates"]
+        )
+        return product["manifest_sha256"], research["manifest_sha256"]
+
     def _transcript_turns(self) -> list[dict]:
         raw = (
             self.root / "meetings" / self.meeting_id / "transcript" / f"{self.transcript_id}.json"
@@ -1147,10 +1233,16 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertIsNone(result["failure"])
         self.assertEqual(result["generation"]["transcript_sha256"], self.transcript_id)
         self.assertEqual(result["generation"]["candidates"], self.candidates)
+        # The manifest was enumerated under `PRODUCT_CONTRACT`'s ±2 window, not
+        # the research contract's single-fragment one.
+        product, research = self._manifest_digests()
+        self.assertEqual(result["generation"]["manifest_sha256"], product)
+        self.assertNotEqual(result["generation"]["manifest_sha256"], research)
         points = result["generation"]["points"]
-        # One keep per batch, and the fixture spans three batches, so a session
-        # that only served its first request would fail here.
-        self.assertEqual(len(points), 3)
+        # One keep every twentieth of seventy single-candidate requests, none
+        # of them adjacent, so the pruner collapses nothing: four points. A
+        # session that only served its first request would report one.
+        self.assertEqual(len(points), 4)
         for ordinal, point in enumerate(points):
             self.assertEqual(point["point_ordinal"], ordinal)
             self.assertTrue(point["candidate_id"].startswith("cf-"))
@@ -1161,8 +1253,14 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             self.assertEqual(len(point["locators"]), 1)
             # Locators are transcript spans, and the frame carries no prose.
             self.assertNotIn("claim", point)
+        # Transcript order, which is what `point_ordinal` claims to number.
+        # `point_ordinal` alone is just `enumerate` and witnesses nothing.
+        turns = [point["locators"][0]["turn"] for point in points]
+        self.assertEqual(turns, sorted(turns))
+        self.assertEqual(len(set(turns)), len(turns))
         receipt = result["generation"]["receipt"]
-        self.assertEqual(receipt["responses"], 3)
+        # One response per candidate, because the registered batch size is 1.
+        self.assertEqual(receipt["responses"], self.candidates)
         self.assertGreater(receipt["response_bytes"], 0)
         # Nothing under the private root moved: no note, no markdown, no receipt.
         self.assertEqual(self._tree(), before)
@@ -1242,19 +1340,45 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         # mid-session rather than at startup.
         self.assertEqual(result["failure"]["receipt"]["responses"], 1)
 
-    def test_more_points_than_the_keep_budget_are_refused_not_trimmed(self) -> None:
+    def test_raw_keeps_over_the_budget_pass_once_pruning_brings_them_under(self) -> None:
+        """The registered gate is on the pruned set, and this is why it must be.
+
+        At batch size 1 the measured cells kept 71–152 of 165–300 candidates:
+        raw keeps run past 64 on every real meeting. A budget checked as
+        verdicts accumulate would refuse all of them before the pruning stage
+        that exists precisely to bring the count down. Here the classifier
+        keeps all seventy, their anchors are consecutive turns, gap-1 collapse
+        makes them one run, and one point is displayed.
+        """
         self._write_generator(STUB_KEEPS_EVERYTHING)
         self._write_generate_manifest()
-        result, returncode, error, _ = self._run()
+        result, returncode, error, _ = self._run(deadline_s=120)
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "generated")
+        self.assertIsNone(result["failure"])
+        self.assertGreater(self.candidates, 64)
+        self.assertEqual(result["generation"]["receipt"]["responses"], self.candidates)
+        self.assertEqual(len(result["generation"]["points"]), 1)
+
+    def test_more_pruned_points_than_the_keep_budget_are_refused_not_trimmed(self) -> None:
+        """Spread keeps survive pruning, so the budget still has to refuse."""
+        candidates = self._write_long_transcript(self.SPREAD_TRANSCRIPT_TURNS)
+        self._write_generator(STUB_KEEPS_ALTERNATING)
+        self._write_generate_manifest()
+        result, returncode, error, _ = self._run(deadline_s=120)
         self.assertEqual((returncode, error), (0, b""))
         self.assertEqual(result["outcome"], "transcript-only")
         self.assertIsNone(result["generation"])
         self.assertEqual(result["failure"]["code"], "keep-budget-exceeded")
-        # It tripped on accumulated keeps, not on the first batch failing for
-        # some other reason. The fixture is sized against `REGISTERED_RUN`'s
-        # keep budget and batch size; both would need revisiting if either
-        # number moves.
-        self.assertGreaterEqual(result["failure"]["receipt"]["responses"], 2)
+        # Not recoverable: re-running the same model over the same transcript
+        # produces the same overrun, so a retry is not the answer.
+        self.assertIs(result["failure"]["recoverable"], False)
+        # No early stop any more: the gate is applied once, after every
+        # candidate has a verdict, because the pruner needs all of them.
+        self.assertEqual(result["failure"]["receipt"]["responses"], candidates)
+        # More runs than the budget after collapse, which is the thing the
+        # previous case could not produce.
+        self.assertGreater((candidates + 1) // 2, 64)
 
     def test_generator_carrying_project_manifest_is_still_refused(self) -> None:
         self._write_generate_manifest(role="project")
@@ -1292,6 +1416,24 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         # A multi-gigabyte model load in front of a refusal the model was never
         # needed for would also have spent the run's whole deadline.
         self.assertFalse(self.marker.exists())
+
+    def test_the_request_packet_carries_the_registered_decoding_fields(self) -> None:
+        """One candidate per request, temperature zero, and the advisory width.
+
+        `num_ctx` is the one field the registration does not pin — the MLX
+        child sizes its own context — so it is locked to `TRANSPORT_NUM_CTX`
+        rather than to a literal restated here: what the module documents is
+        what a provider is actually told.
+        """
+        self._write_generator(STUB_REPORTS_REQUEST)
+        self._write_generate_manifest()
+        result, _, _, _ = self._run()
+        self.assertEqual(result["failure"]["code"], "no-model-candidates")
+        reported = json.loads(self.marker.read_text())
+        self.assertEqual(reported["num_ctx"], TRANSPORT_NUM_CTX)
+        self.assertEqual(reported["temperature"], 0)
+        self.assertEqual(reported["offered"], 1)
+        self.assertGreater(reported["num_predict"], 0)
 
     def test_verified_model_directory_reaches_the_child(self) -> None:
         self._write_generator(STUB_REPORTS_MODEL_DIRECTORY)
@@ -1337,7 +1479,8 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "generated")
 
     def test_deadline_outside_the_registered_bound_is_an_invalid_request(self) -> None:
-        result, returncode, error, request_id = self._run(deadline_s=901)
+        """3600 s is the registered harness budget; 3601 is not askable."""
+        result, returncode, error, request_id = self._run(deadline_s=3601)
         self.assertEqual((returncode, error), (0, b""))
         self.assertEqual(result["request_id"], request_id)
         self.assertEqual(result["outcome"], "transcript-only")
@@ -1347,6 +1490,56 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             "receipt": {},
         })
         self.assertFalse(self.marker.exists())
+
+    def test_the_registered_bound_itself_is_askable(self) -> None:
+        """The negative alone would pass with the bound set anywhere below 3601.
+
+        Paired with the case above this pins the bound to exactly the
+        registered `PRODUCT_RUN` elapsed budget, which the old 900 s literal
+        would fail.
+        """
+        self.assertEqual(GENERATOR_DEADLINE_S, 3600)
+        result, returncode, error, _ = self._run(deadline_s=GENERATOR_DEADLINE_S)
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "generated")
+
+    def test_a_bridge_whose_deadline_left_the_registration_never_reaches_ready(self) -> None:
+        """The restated constant is bound to the registration, not merely equal to it.
+
+        `GENERATOR_DEADLINE_S` cannot import the registration — the bridge is
+        exec'd from verified bytes before any validator module exists — so the
+        only thing stopping a second owner from drifting is this check. Moving
+        the registration's budget inside the pinned bundle must refuse the
+        bridge, not leave the ceiling silently behind.
+        """
+        self._replace_validator_registration_budget(3599)
+        self._write_generate_manifest()
+        bridge = self._start()
+        try:
+            self.assertIsNone(bridge.ready)
+        finally:
+            bridge.close()
+        self.assertEqual(bridge._process.returncode, 2)
+        self.assertFalse(self.marker.exists())
+
+    def test_the_deadline_binding_does_not_reach_the_roles_that_never_use_it(self) -> None:
+        """Scope, pinned in both directions.
+
+        The generate role refuses the same divergent bundle (above). `project`
+        is the shipped projection transport and reads no deadline at all, so a
+        registration edit in `notes/` must not stop a note from being
+        projected. Without this the check would sit in `load_validator` and
+        silently widen to every role.
+        """
+        self._replace_validator_registration_budget(3599)
+        self._harness.role = "project"
+        self._harness._write_manifest()
+        bridge = self._start()
+        try:
+            self.assertIsNotNone(bridge.ready)
+            self.assertEqual(bridge.ready["role"], "project")
+        finally:
+            bridge.close()
 
     # Every test below was written after a blind mutation run: each weakens one
     # check and the whole suite still passed. They cover the checks that had no
@@ -1588,6 +1781,238 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(result["failure"]["code"], "invalid-request")
         self.assertFalse(self.marker.exists())
 
+
+
+class NoteGeneratorChildTests(unittest.TestCase):
+    """`worker/note_generator_mlx.py`, everywhere it can be checked without MLX.
+
+    The decode itself needs the pinned weights and cannot run here — that is
+    what the registered runs measure. Everything around it can: which locators
+    the child is allowed to answer about, what it refuses, the bytes it
+    assembles, and the session loop. And one thing more, which no runtime test
+    could give: that the two blocks it duplicates from
+    `notes/product_run.py` have not drifted from it.
+    """
+
+    DECIDE = (
+        "    def decide(self, system: str, user: str, locators: list[str]) -> list[str]:\n"
+        "        import mlx.core as mx\n"
+    )
+    ASSEMBLE = "def _assemble_contract_response(locators: list[str], verdicts: list[str]) -> str:"
+    # The two names the child may spell differently, because it may not import
+    # from `notes/`. Everything else in the mirrored blocks must be identical
+    # byte for byte.
+    RENAMES = (("self._loaded()", "self._load()"), ("_Refused(", "StructuredOutputError("))
+
+    def setUp(self) -> None:
+        sys.path.insert(0, str(REPO / "notes"))
+        from worker import note_generator_mlx
+
+        self.child = note_generator_mlx
+
+    @staticmethod
+    def _block(text: str, start: str, end: str) -> str:
+        opened = text.index(start)
+        return text[opened:text.index(end, opened)].rstrip()
+
+    def _mirrored(self, start: str, reference_end: str, child_end: str) -> tuple[str, str]:
+        reference = self._block(
+            (REPO / "notes/product_run.py").read_text(encoding="utf-8"), start, reference_end
+        )
+        mirror = self._block(
+            (REPO / "worker/note_generator_mlx.py").read_text(encoding="utf-8"), start, child_end
+        )
+        for local, referenced in self.RENAMES:
+            mirror = mirror.replace(local, referenced)
+        return reference, mirror
+
+    def test_the_decode_has_not_drifted_from_its_reference_implementation(self) -> None:
+        """The sync obligation, as a check rather than a comment.
+
+        `notes/product_run.py::MLXVerdictTransport.decide` is what every
+        registered measurement ran. This child duplicates it because the
+        bridge's confined import path cannot reach `notes/`, so nothing but
+        this comparison stops the shipped decode from quietly becoming a
+        different configuration from the measured one.
+        """
+        reference, mirror = self._mirrored(
+            self.DECIDE, "\n\ndef _assemble_contract_response", "    # --- end block mirrored"
+        )
+        self.assertEqual(reference, mirror)
+        # Named individually, so a future edit that changes both files in the
+        # same wrong direction still has to explain itself here.
+        for registered in (
+            "<start_of_turn>user\\n",
+            "<end_of_turn>\\n",
+            "tok.bos_token_id",
+            "add_special_tokens=False",
+            "make_prompt_cache",
+            "chunk: int = 2048",
+            'last[keep_first].item() > last[abstain_first].item()',
+        ):
+            self.assertIn(registered, mirror, registered)
+
+    def test_the_response_assembly_has_not_drifted_from_its_reference(self) -> None:
+        reference, mirror = self._mirrored(
+            self.ASSEMBLE, "\n\ndef accept_all_decisions", "# --- end block mirrored"
+        )
+        self.assertEqual(reference, mirror)
+
+    def _schema(self, count: int) -> tuple[dict, list[str]]:
+        import candidate_first
+
+        candidate_ids = [f"cf-{index:064x}" for index in range(count)]
+        return candidate_first.classification_format(candidate_ids), candidate_ids
+
+    def test_the_offered_locators_are_read_from_the_bridges_own_request_schema(self) -> None:
+        """Not a hand-written shape: the schema the validator actually sends."""
+        import candidate_first
+
+        schema, candidate_ids = self._schema(1)
+        self.assertEqual(
+            self.child._offered_locators({"response_format": schema}),
+            candidate_first.batch_locators(candidate_ids),
+        )
+
+    def test_a_request_that_offers_no_locators_is_refused(self) -> None:
+        schema, _ = self._schema(3)
+        broken = [
+            {},
+            {"response_format": {}},
+            {"response_format": {"properties": {"items": {}}}},
+            {"response_format": "not a schema"},
+        ]
+        for request in broken:
+            with self.assertRaises(self.child._Refused):
+                self.child._offered_locators(request)
+
+    def test_a_malformed_locator_set_is_refused_rather_than_answered(self) -> None:
+        """Each case must fail on its own defect, not on the wrapper.
+
+        Measured: the first version of this test passed the bare schema where a
+        request belongs, so every case refused on the missing `response_format`
+        key and three locator checks could be deleted with the suite still
+        green. The unmutated control below is what makes the rest of the loop
+        mean anything.
+        """
+        import copy
+
+        schema, _ = self._schema(3)
+
+        def request(enum: object) -> dict:
+            broken = copy.deepcopy(schema)
+            broken["properties"]["items"]["items"]["properties"]["candidate_id"][
+                "enum"
+            ] = enum
+            return {"response_format": broken}
+
+        offered = schema["properties"]["items"]["items"]["properties"]["candidate_id"]["enum"]
+        self.assertEqual(self.child._offered_locators(request(offered)), offered)
+        for enum in (
+            [],
+            "c01",
+            [offered[0], offered[0], offered[2]],
+            [offered[0], 7, offered[2]],
+            [offered[0], "", offered[2]],
+        ):
+            with self.assertRaises(self.child._Refused):
+                self.child._offered_locators(request(enum))
+
+    def test_a_model_directory_that_is_not_there_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(
+                self.child._model_directory({"model_directory": temporary}), temporary
+            )
+            for value in (None, "", 7, str(Path(temporary) / "absent")):
+                with self.assertRaises(self.child._Refused):
+                    self.child._model_directory({"model_directory": value})
+
+    def test_the_assembled_response_decodes_under_the_registered_contract(self) -> None:
+        import candidate_first
+
+        _schema, candidate_ids = self._schema(4)
+        locators = candidate_first.batch_locators(candidate_ids)
+        verdicts = ["KEEP", "ABSTAIN", "ABSTAIN", "KEEP"]
+        raw = self.child._assemble_contract_response(locators, verdicts)
+        decoded = candidate_first.decode_classification(raw, candidate_ids)
+        self.assertEqual([row["verdict"] for row in decoded["items"]], verdicts)
+        self.assertEqual(
+            [row["candidate_id"] for row in decoded["items"]], candidate_ids
+        )
+        self.assertEqual(decoded["counts"]["out_of_order_positions"], 0)
+
+    def _stub_session(self, verdict: str = "KEEP"):
+        child = self.child
+
+        class _Stub:
+            resolved: list[str] = []
+
+            def resolve(self, directory):
+                _Stub.resolved.append(directory)
+
+            def decide(self, system, user, locators):
+                return [verdict] * len(locators)
+
+        return _Stub
+
+    def _drive(self, requests: list[dict], session=None) -> tuple[int, list[str]]:
+        """Run the child's session loop over prepared lines, without MLX."""
+        written: list[str] = []
+        stdin = io.StringIO("".join(json.dumps(row) + "\n" for row in requests))
+        holder = types.SimpleNamespace(
+            write=lambda text: written.append(text), flush=lambda: None
+        )
+        with mock.patch.object(self.child, "_Session", session or self._stub_session()):
+            with mock.patch.object(sys, "stdin", stdin), mock.patch.object(
+                sys, "stdout", holder
+            ):
+                code = self.child.main()
+        return code, "".join(written).splitlines()
+
+    def _request(self, count: int = 2, **overrides) -> dict:
+        schema, _ = self._schema(count)
+        request = {
+            "schema": "note-classification-request/1",
+            "system": "classify",
+            "user": "candidates",
+            "response_format": schema,
+            "temperature": 0.0,
+            "model_directory": "/",
+        }
+        request.update(overrides)
+        return request
+
+    def test_the_session_answers_one_line_per_request_until_stdin_closes(self) -> None:
+        session = self._stub_session()
+        code, lines = self._drive(
+            [self._request(2), self._request(3)], session=session
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(
+            [len(json.loads(line)["items"]) for line in lines], [2, 3]
+        )
+        # Every request resolves the model directory it names. The counterpart
+        # of the refusal case below, which asserts the opposite: without this,
+        # a child that never resolved the model at all would still pass.
+        self.assertEqual(session.resolved, ["/", "/"])
+
+    def test_a_request_the_child_cannot_answer_writes_one_error_line_and_exits(self) -> None:
+        """The bridge reads the line, not the exit code — so there must be a line."""
+        code, lines = self._drive([self._request(2, temperature=0.7), self._request(2)])
+        self.assertEqual(code, 1)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(list(json.loads(lines[0])), ["error"])
+        # An error line is not a classifier response, which is exactly how the
+        # bridge turns it into a refusal.
+        self.assertNotIn("items", lines[0])
+
+    def test_a_request_with_no_prompt_is_refused_before_any_model_is_touched(self) -> None:
+        session = self._stub_session()
+        code, lines = self._drive([self._request(2, system="")], session=session)
+        self.assertEqual(code, 1)
+        self.assertEqual(list(json.loads(lines[0])), ["error"])
+        self.assertEqual(session.resolved, [])
 
 
 class FrameSerializationContractTests(unittest.TestCase):
