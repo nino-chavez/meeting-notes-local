@@ -434,7 +434,10 @@ def create_reference(
     regions: object,
     section_size: int = 25,
     enforce_registered: bool = True,
+    registration_sha256: str | None = None,
 ) -> dict:
+    if registration_sha256 is None:
+        registration_sha256 = registered_run_sha256()
     manifest = validate_manifest(manifest, transcript)
     if manifest["strategy"] != STRATEGY_BROAD:
         raise StructuredOutputError("candidate exposure references require a broad manifest")
@@ -546,7 +549,7 @@ def create_reference(
             "manifest_schema": manifest["schema"],
             "manifest_sha256": manifest["manifest_sha256"],
             "manifest_strategy": manifest["strategy"],
-            "registration_sha256": registered_run_sha256(),
+            "registration_sha256": registration_sha256,
             "cleaned_turns": len(transcript.turns),
             "review_regions": regions,
             "review_regions_sha256": regions_sha256,
@@ -588,6 +591,7 @@ def validate_reference(
     regions: object,
     *,
     enforce_registered: bool = True,
+    registration_sha256: str | None = None,
 ) -> dict:
     if not isinstance(reference, dict):
         raise StructuredOutputError("candidate exposure reference must be an object")
@@ -617,13 +621,18 @@ def validate_reference(
         regions=regions,
         section_size=reference["section_size"],
         enforce_registered=enforce_registered,
+        registration_sha256=reference["source"]["registration_sha256"],
     )
     if _json_bytes(reference) != _json_bytes(expected):
         raise StructuredOutputError("reference does not re-derive from its pinned inputs")
     return reference
 
 
-def validate_review_decisions(decisions: object, reference: dict) -> dict:
+def validate_review_decisions(
+    decisions: object, reference: dict, *, registration_sha256: str | None = None,
+) -> dict:
+    if registration_sha256 is None:
+        registration_sha256 = registered_run_sha256()
     if not isinstance(decisions, dict) or set(decisions) != {
         "schema", "reference_sha256", "registration_sha256", "events", "sections"
     }:
@@ -631,7 +640,7 @@ def validate_review_decisions(decisions: object, reference: dict) -> dict:
     if (
         decisions["schema"] != REVIEW_DECISIONS_SCHEMA
         or decisions["reference_sha256"] != reference["reference_sha256"]
-        or decisions["registration_sha256"] != registered_run_sha256()
+        or decisions["registration_sha256"] != registration_sha256
     ):
         raise StructuredOutputError("review decisions are bound to different inputs")
     expected_events = {row["event_id"]: row for row in reference["events"]}
@@ -721,8 +730,13 @@ def validate_review_decisions(decisions: object, reference: dict) -> dict:
     return decisions
 
 
-def build_runner_ledger(decisions: object, reference: dict) -> dict:
-    decisions = validate_review_decisions(decisions, reference)
+def build_runner_ledger(
+    decisions: object, reference: dict, *, registration_sha256: str | None = None,
+) -> dict:
+    if registration_sha256 is None:
+        registration_sha256 = registered_run_sha256()
+    decisions = validate_review_decisions(
+        decisions, reference, registration_sha256=registration_sha256)
     missing_sections = [
         row["section_id"] for row in decisions["sections"]
         if row["resolution"] == "MISSING_EVENT_REPORTED"
@@ -757,7 +771,7 @@ def build_runner_ledger(decisions: object, reference: dict) -> dict:
         raise StructuredOutputError("review retained no events for the runner ledger")
     base = {
         "schema": RUNNER_LEDGER_SCHEMA,
-        "registration_sha256": registered_run_sha256(),
+        "registration_sha256": registration_sha256,
         "transcript_view_sha256": reference["source"]["transcript_view_sha256"],
         "review_reference_sha256": reference["reference_sha256"],
         "review_decisions_sha256": _json_sha256(decisions),
@@ -771,6 +785,7 @@ def build_pending_ledger_lock(
     manifest: dict,
     *,
     prepared_at: str | None = None,
+    registration_sha256: str | None = None,
 ) -> dict:
     """Create bytes the operator may approve; never self-assert approval."""
     if (
@@ -779,7 +794,9 @@ def build_pending_ledger_lock(
         or not isinstance(ledger.get("ledger_sha256"), str)
         or not isinstance(ledger.get("review_reference_sha256"), str)
         or not isinstance(ledger.get("review_decisions_sha256"), str)
-        or ledger.get("registration_sha256") != registered_run_sha256()
+        or ledger.get("registration_sha256") != (
+            registration_sha256 if registration_sha256 is not None
+            else registered_run_sha256())
         or not isinstance(manifest, dict)
         or not isinstance(manifest.get("manifest_sha256"), str)
     ):
@@ -795,7 +812,7 @@ def build_pending_ledger_lock(
         "ledger_sha256": ledger["ledger_sha256"],
         "review_reference_sha256": ledger["review_reference_sha256"],
         "review_decisions_sha256": ledger["review_decisions_sha256"],
-        "registration_sha256": registered_run_sha256(),
+        "registration_sha256": ledger["registration_sha256"],
         "manifest_sha256": manifest["manifest_sha256"],
         "prepared_at": prepared_at,
     }
