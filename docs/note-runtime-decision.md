@@ -76,3 +76,32 @@ enforces it at runtime. Before the note generator ships, the launcher must add
 real enforcement (a sandbox profile or equivalent) or this document's
 "network-denied posture" language must be weakened to match reality. Tracked
 as a pre-ship requirement, not folded silently into any slice.
+
+## Merge checklist (recorded 2026-08-14, owner: the session that merges)
+
+Four finished branches wait on the measurement gate, all runtime-agnostic:
+bridge admission (`worktree-agent-a331fcc4b9544b303`, 15 commits), projector
+(`worktree-agent-a4d535796e42db89a`, 10 commits), command/protocol
+(`worktree-agent-a3028d9a18ca4af29`), catalog (`worktree-agent-a7cd23fd64579a7c6`).
+Items no branch owns, which must not evaporate at merge:
+
+1. **Shared cross-language fixture pass** (after all branches land): one
+   non-ASCII result frame; `invalid_result_frames` rows for
+   `strictly_sorted`, digest length, locator cap, empty claim text
+   (genuine Rust-side gaps); control-character and surrogate rows as
+   parity locks. Both closing agent reports state it identically.
+2. **Network enforcement before ship** (see Correction above): sandbox
+   profile or equivalent on the generator child, or weaken this doc's
+   posture language.
+3. **Seam-6 alignment**: the projector's one-id-per-role model mapping is
+   pinned by a characterization test and must widen when the catalog's
+   sharded-weights role merges; `worker/build_manifest.py` needs the
+   `note-runtime-generate.json` sibling constant.
+4. **Registration adoption**: the official gated run adopts the ±2 view,
+   the ollama two-turn rendering, the MLX runtime identity, and — if the
+   pruning arm passes its second-capture validation — the pruning stage,
+   as one preregistered registration change with a fresh operator lock.
+5. **Wiring recipe** for `admit_note_projector` at `library_reader.rs:338`
+   is in the projector agent's report (catalog from
+   `verified_model_catalog`, resource root from `StorageContext`, cache
+   the admission decision off the hot rebuild path).
