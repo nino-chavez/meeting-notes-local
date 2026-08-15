@@ -2731,3 +2731,28 @@ registered steps remain before any official gated run, in order:
    to the official registration change (±2 view, two-turn rendering, MLX
    runtime identity, batch size 1, the surviving pruner, and the fresh
    operator lock, as one preregistered adoption).
+
+### MLX batch-size-1 parity — judgment survives the ship transport
+
+Registered step 1 ran: gemma-3-12b-it-qat-4bit, constrained verdicts,
+two-turn rendering, batch size 1, same ledger. Keep **104 of 165** —
+interior and scattered, more permissive than ollama's 71 but nothing like
+the batched slab — and recall **12/13 with the identical miss, ev-005**.
+Per-candidate judgment is a property of unbatched prompting, not of the
+ollama runtime.
+
+Pruner scoring on the MLX keep set narrows the field to one: of the five
+fdd59c81-passing strategies, only **contiguous-run collapse (gap 1,
+longest-anchor representative)** passes on both transports (MLX: keep 27,
+recall 12/13). The second-capture validation scores all five as
+preregistered, but ship candidacy requires the both-transport survivor.
+
+### Second-capture validation — ledger locked, run authorized
+
+Meeting 81b2fe54 (299-turn single-speaker internal presentation — a
+different meeting genre from the 630 1:1): 13 agent-drafted events were
+bulk-ratified by the operator (provenance caveat in the packet's
+DECISION-RECORD.md), promoted to ledger 77b4173f…, and the operator
+approved lock 622dd23a… scoped to the batch-size-1 ollama arm plus offline
+pruner scoring. The run is in flight; its script verifies the approved
+digest against the lock bytes before any inference.
