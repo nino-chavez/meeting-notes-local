@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -272,6 +273,38 @@ def _event_recall(ledger: dict, manifest: dict, keep_ids: set[str]) -> dict:
     }
 
 
+def _refusal_diagnostics(
+    decisions_rows: list[dict], pruned: dict, recall: dict, elapsed: float,
+) -> None:
+    """Report gate numbers before a refusal; a refused run must still say how far it missed.
+
+    The optional dump carries candidate ids and verdicts only, never
+    transcript text.
+    """
+    diagnostic = {
+        "schema": "product-run-refusal-diagnostic/1",
+        "counts": {
+            "candidates": len(decisions_rows),
+            "keep": sum(row["verdict"] == "KEEP" for row in decisions_rows),
+            "pruned_keep": pruned["counts"]["pruned_keep"],
+            "runs": pruned["counts"]["runs"],
+        },
+        "recall": recall,
+        "elapsed_seconds": round(elapsed, 3),
+    }
+    dump_path = os.environ.get("YAWN_DECISIONS_DUMP")
+    if dump_path:
+        Path(dump_path).write_text(json.dumps(
+            {"diagnostic": diagnostic, "decisions": decisions_rows},
+            indent=1) + "\n")
+    if (
+        pruned["counts"]["pruned_keep"] > KEEP_LIMIT
+        or not recall["gate_pass"]
+        or elapsed > ELAPSED_LIMIT_SECONDS
+    ):
+        print(json.dumps(diagnostic, indent=1), file=sys.stderr)
+
+
 def run_product_classifier(
     transcript_path: Path,
     cycle_dir: Path,
@@ -344,14 +377,15 @@ def run_product_classifier(
 
     pruned = prune_keeps(
         manifest["candidates"], decisions_rows, gap=PRODUCT_RUN["pruner"]["gap"])
+    recall = _event_recall(ledger, manifest, set(pruned["pruned_candidate_ids"]))
+    elapsed = monotonic() - started
+    _refusal_diagnostics(decisions_rows, pruned, recall, elapsed)
     if pruned["counts"]["pruned_keep"] > KEEP_LIMIT:
         raise StructuredOutputError(
             "the pruned keep set exceeds the registered budget")
-    recall = _event_recall(ledger, manifest, set(pruned["pruned_candidate_ids"]))
     if not recall["gate_pass"]:
         raise StructuredOutputError(
             "the pruned keep set does not meet the registered recall gate")
-    elapsed = monotonic() - started
     if elapsed > ELAPSED_LIMIT_SECONDS:
         raise StructuredOutputError(
             "the product run exceeded its registered time budget")
