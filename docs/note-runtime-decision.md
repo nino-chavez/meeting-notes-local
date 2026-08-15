@@ -77,6 +77,22 @@ real enforcement (a sandbox profile or equivalent) or this document's
 "network-denied posture" language must be weakened to match reality. Tracked
 as a pre-ship requirement, not folded silently into any slice.
 
+**Resolved, 2026-08-15 — enforcement is now real.** The launcher's `pre_exec`
+calls `sandbox_init` with the named `no-network` Seatbelt profile between fork
+and exec, so the kernel denies the interpreter child every socket. The sandbox
+survives exec and wraps no binary, so the pinned interpreter path and the
+code-signing admission chain are unchanged; application is fail-closed (a
+child the profile cannot be applied to does not launch). Verified before
+landing: the profile denies a local TCP connect (EPERM) and leaves mlx GPU
+compute working, both probed empirically; a characterization test in
+`note_projector_process.rs` pins the behavior (the connect an unsandboxed
+control child completes is denied in the sandboxed child). `sandbox_init` is
+deprecated in the headers with no replacement for this shape — sandboxing a
+child the parent is about to exec — which is the "why not canonical"
+sentence: the supported alternatives (App Sandbox entitlements, a
+NetworkExtension content filter) either sandbox the wrong process or are
+system-wide machinery for a per-child guarantee.
+
 ## Merge checklist (recorded 2026-08-14, owner: the session that merges)
 
 Four finished branches wait on the measurement gate, all runtime-agnostic:

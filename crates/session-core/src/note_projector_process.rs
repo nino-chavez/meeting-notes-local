@@ -209,6 +209,7 @@ impl ProcessNoteProjector {
                 if libc::setpgid(0, 0) != 0 {
                     return Err(io::Error::last_os_error());
                 }
+                deny_network_in_child()?;
                 install_descriptor_mappings(inherited)
             });
         }
@@ -390,6 +391,34 @@ fn stage_descriptors(sources: [RawFd; 3]) -> Result<[File; 3], InternalOutcome> 
         staged.push(unsafe { File::from_raw_fd(descriptor) });
     }
     staged.try_into().map_err(|_| InternalOutcome::Unavailable)
+}
+
+/// Seatbelt entry point.  Deprecated in the headers since 10.8 with no
+/// replacement for sandboxing a child a parent is about to exec, and still the
+/// mechanism Apple's own tooling relies on for exactly that.
+unsafe extern "C" {
+    fn sandbox_init(
+        profile: *const libc::c_char,
+        flags: u64,
+        errorbuf: *mut *mut libc::c_char,
+    ) -> libc::c_int;
+}
+
+const SANDBOX_NAMED: u64 = 0x0001;
+
+/// Kernel-enforced network denial for the interpreter child, called between
+/// fork and exec.  The named `no-network` profile denies every socket while
+/// leaving file, pipe, and GPU access alone (mlx compute verified under it),
+/// and because the sandbox survives exec the pinned interpreter path is
+/// unchanged — the code-signing admission chain never sees a wrapper binary.
+/// Fail-closed: if the profile cannot be applied the child must not launch.
+fn deny_network_in_child() -> io::Result<()> {
+    let profile = c"no-network";
+    let mut error: *mut libc::c_char = std::ptr::null_mut();
+    if unsafe { sandbox_init(profile.as_ptr(), SANDBOX_NAMED, &mut error) } != 0 {
+        return Err(io::Error::other("sandbox_init(no-network) failed"));
+    }
+    Ok(())
 }
 
 fn install_descriptor_mappings(inherited: [(RawFd, RawFd); 3]) -> io::Result<()> {
@@ -2148,6 +2177,31 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success());
         output.stdout
+    }
+
+    /// The launch path's network denial, characterized against a live socket:
+    /// the same connect that succeeds unsandboxed must fail once
+    /// `deny_network_in_child` has run in the child.  The listener is local so
+    /// the test proves kernel enforcement, not the absence of a route.
+    #[test]
+    fn sandboxed_child_is_denied_the_socket_an_unsandboxed_child_reaches() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let probe = format!(
+            "import socket,sys\ns=socket.socket()\ntry:\n    s.connect(('127.0.0.1', {port}))\nexcept OSError:\n    sys.exit(7)\nsys.exit(0)",
+        );
+        let control = Command::new("python3")
+            .args(["-c", &probe])
+            .output()
+            .unwrap();
+        assert!(control.status.success(), "control connect must succeed");
+        let mut sandboxed = Command::new("python3");
+        sandboxed.args(["-c", &probe]);
+        unsafe {
+            sandboxed.pre_exec(deny_network_in_child);
+        }
+        let output = sandboxed.output().unwrap();
+        assert_eq!(output.status.code(), Some(7), "sandboxed connect must be denied");
     }
 
     fn current_python() -> PathBuf {
