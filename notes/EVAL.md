@@ -3024,3 +3024,26 @@ or this ASR; the honest statement is directional: if per-candidate
 judgment generalizes across ASR sources, the pruned set should clear
 12/14 within the 64-keep budget. Run launched detached (453 candidates,
 largest corpus measured).
+
+### Zoom town hall official run — REFUSED on both gates (falsification)
+
+The registered pipeline does not generalize to this corpus as-is:
+keep 298/453 (66% — versus 63% and 51% on the app-captured meetings),
+pruned 71 > 64 budget (first refusal trigger), recall 11/14 with
+ev-003/008/011 missed, elapsed 2322 s. Diagnosis from the dump: the
+corpus is fact-dense and the whisper segmentation is finer-grained than
+the app's capture turns, so keeps form long contiguous runs; gap-1
+collapse then both overflows the budget (71 runs survive) and loses
+events that sit inside a run more than two turns from its single
+longest-anchor representative — the ev-012 mechanism from meeting 2,
+amplified by density. A second finding rides along: contract windows
+and pruner gaps are measured in *turns*, so their effective time width
+shrinks as ASR segmentation gets finer — turn-count semantics do not
+transfer across transcription granularity.
+
+Next step, in order: an offline pruner-variant sweep against all three
+corpora's verdict dumps (the verdicts are deterministic and transport-
+identical, so pruner behavior is measurable without model runs); any
+amendment must pass all three corpora offline before it is
+preregistered, and the app-capture meetings must remain passing under
+it. No new registration until that sweep is recorded here.
