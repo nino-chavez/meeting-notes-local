@@ -963,6 +963,13 @@ for index, (request, ids) in enumerate(batches()):
     answer(verdicts(ids, lambda position: "KEEP" if index % 2 == 0 else "ABSTAIN"))
 """
 
+# Keeps candidates isolated beyond the pruner's largest fitting gap (10
+# turns), so no (gap, stride) in the registered fit range can merge them.
+STUB_KEEPS_EVERY_ELEVENTH = STUB_PREAMBLE + """
+for index, (request, ids) in enumerate(batches()):
+    answer(verdicts(ids, lambda position: "KEEP" if index % 11 == 0 else "ABSTAIN"))
+"""
+
 # Rewrites a pinned model file while the session is still running, so the
 # post-generation identity recheck has something to catch.
 STUB_REWRITES_THE_MODEL = STUB_PREAMBLE + """
@@ -1019,9 +1026,11 @@ class NoteGenerateBridgeTests(unittest.TestCase):
     # `PRODUCT_RUN`, is no longer the number the gate is applied to.
     TRANSCRIPT_TURNS = 70
 
-    # Past twice the keep budget, so a classifier that keeps every other
-    # candidate produces more than 64 runs and cannot be pruned back under it.
-    SPREAD_TRANSCRIPT_TURNS = 140
+    # 720 turns with a keep every 11th: 66 keeps, each isolated past the
+    # pruner's largest fitting gap (10 turns), so every gap in range leaves
+    # more than 64 runs and the budget-fitted collapse cannot fit — the one
+    # shape the fitted pruner must still refuse.
+    SPREAD_TRANSCRIPT_TURNS = 720
 
     def setUp(self) -> None:
         self._harness = NoteBridgeHarnessTests()
@@ -1343,12 +1352,13 @@ class NoteGenerateBridgeTests(unittest.TestCase):
     def test_raw_keeps_over_the_budget_pass_once_pruning_brings_them_under(self) -> None:
         """The registered gate is on the pruned set, and this is why it must be.
 
-        At batch size 1 the measured cells kept 71–152 of 165–300 candidates:
+        At batch size 1 the measured cells kept 71–298 of 165–453 candidates:
         raw keeps run past 64 on every real meeting. A budget checked as
         verdicts accumulate would refuse all of them before the pruning stage
         that exists precisely to bring the count down. Here the classifier
-        keeps all seventy, their anchors are consecutive turns, gap-1 collapse
-        makes them one run, and one point is displayed.
+        keeps all seventy consecutive turns: one run, and the budget-fitted
+        coverage collapse (stride 5 fits) keeps one point per five-turn
+        stretch — fourteen points, every kept anchor within two turns of one.
         """
         self._write_generator(STUB_KEEPS_EVERYTHING)
         self._write_generate_manifest()
@@ -1358,14 +1368,14 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertIsNone(result["failure"])
         self.assertGreater(self.candidates, 64)
         self.assertEqual(result["generation"]["receipt"]["responses"], self.candidates)
-        self.assertEqual(len(result["generation"]["points"]), 1)
+        self.assertEqual(len(result["generation"]["points"]), 14)
 
     def test_more_pruned_points_than_the_keep_budget_are_refused_not_trimmed(self) -> None:
-        """Spread keeps survive pruning, so the budget still has to refuse."""
+        """Keeps isolated past every fitting gap still force a refusal."""
         candidates = self._write_long_transcript(self.SPREAD_TRANSCRIPT_TURNS)
-        self._write_generator(STUB_KEEPS_ALTERNATING)
+        self._write_generator(STUB_KEEPS_EVERY_ELEVENTH)
         self._write_generate_manifest()
-        result, returncode, error, _ = self._run(deadline_s=120)
+        result, returncode, error, _ = self._run(deadline_s=240)
         self.assertEqual((returncode, error), (0, b""))
         self.assertEqual(result["outcome"], "transcript-only")
         self.assertIsNone(result["generation"])
@@ -1376,9 +1386,9 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         # No early stop any more: the gate is applied once, after every
         # candidate has a verdict, because the pruner needs all of them.
         self.assertEqual(result["failure"]["receipt"]["responses"], candidates)
-        # More runs than the budget after collapse, which is the thing the
-        # previous case could not produce.
-        self.assertGreater((candidates + 1) // 2, 64)
+        # More isolated keeps than the budget at every gap the fit may use,
+        # which is the one shape the previous case cannot produce.
+        self.assertGreater((candidates + 10) // 11, 64)
 
     def test_generator_carrying_project_manifest_is_still_refused(self) -> None:
         self._write_generate_manifest(role="project")

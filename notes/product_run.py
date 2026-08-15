@@ -56,7 +56,7 @@ from summarize import StructuredOutputError
 from transcript import Transcript, Turn, load
 
 PRODUCT_REGISTRATION_SHA256 = (
-    "fe493522e2d428d58f95b2f262b1383aa1f383d28c3691e4f3222f66ca67efb0"
+    "98dcbbd94000cb3339676347c36e36f7abdca82914877bf3e912a574190c715f"
 )
 
 RESULT_SCHEMA = "product-run-result/1"
@@ -376,7 +376,10 @@ def run_product_classifier(
             "the product run did not decide every candidate exactly once")
 
     pruned = prune_keeps(
-        manifest["candidates"], decisions_rows, gap=PRODUCT_RUN["pruner"]["gap"])
+        manifest["candidates"], decisions_rows,
+        budget=PRODUCT_RUN["pruner"]["budget"],
+        stride_floor=PRODUCT_RUN["pruner"]["stride_floor"],
+        max_gap=PRODUCT_RUN["pruner"]["max_gap"])
     recall = _event_recall(ledger, manifest, set(pruned["pruned_candidate_ids"]))
     elapsed = monotonic() - started
     _refusal_diagnostics(decisions_rows, pruned, recall, elapsed)

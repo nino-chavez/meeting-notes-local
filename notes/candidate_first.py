@@ -397,8 +397,14 @@ PRODUCT_RUN = {
         "evidence_bundles": "anchor-fragment-only",
     },
     "pruner": {
-        "strategy": "contiguous-run-collapse",
-        "gap": 1,
+        # Budget-fitted coverage collapse (EVAL.md amendment, 2026-08-15):
+        # smallest gap in 1..max_gap whose run count fits the keep budget,
+        # then the smallest per-run segment stride from the visible-window
+        # width upward whose survivor count fits it.
+        "strategy": "budget-fitted-coverage-collapse",
+        "budget": "recomputed-at-import",
+        "stride_floor": 5,
+        "max_gap": 10,
         "representative": "longest-anchor",
         "tie_break": "earliest-ordinal",
     },
@@ -412,6 +418,7 @@ PRODUCT_RUN = {
     },
 }
 PRODUCT_RUN["generator"]["contract_sha256"] = _json_sha256(PRODUCT_CONTRACT)
+PRODUCT_RUN["pruner"]["budget"] = PRODUCT_RUN["gates"]["maximum_keep_after_prune"]
 
 
 def product_run_sha256() -> str:
@@ -422,14 +429,20 @@ def prune_keeps(
     candidates: list[dict],
     decisions: list[dict],
     *,
-    gap: int = 1,
+    budget: int = 64,
+    stride_floor: int = 5,
+    max_gap: int = 10,
 ) -> dict:
-    """Collapse contiguous runs of kept candidates to their longest anchor.
+    """Budget-fitted coverage collapse (EVAL.md amendment, 2026-08-15).
 
-    The registered product pruning stage: adjacent keeps (anchor turns within
-    `gap`) form a run; each run retains the candidate with the longest anchor
-    span, earliest ordinal on ties. Deterministic, model-free, and measured
-    across the validation matrix before adoption (notes/EVAL.md).
+    Kept candidates form contiguous runs at the smallest anchor-turn gap in
+    1..max_gap whose run count fits the budget; within each run one
+    representative (longest anchor, earliest ordinal on ties) is taken per
+    stride-length segment, with the stride the smallest value from the
+    visible-window width upward whose survivor count fits the budget.
+    Deterministic, model-free, and blind to the event ledger. When no gap in
+    range fits, the widest-gap collapse is returned over budget and the keep
+    gate refuses the run.
     """
     by_id = {row["candidate_id"]: row for row in candidates}
     verdicts = {}
@@ -448,24 +461,69 @@ def prune_keeps(
         (by_id[cid] for cid, verdict in verdicts.items() if verdict == "KEEP"),
         key=lambda row: row["ordinal"],
     )
-    runs: list[list[dict]] = []
-    for row in kept:
-        if runs and row["anchor_turn"] - runs[-1][-1]["anchor_turn"] <= gap:
-            runs[-1].append(row)
+
+    def runs_at(gap: int) -> list[list[dict]]:
+        runs: list[list[dict]] = []
+        for row in kept:
+            if runs and row["anchor_turn"] - runs[-1][-1]["anchor_turn"] <= gap:
+                runs[-1].append(row)
+            else:
+                runs.append([row])
+        return runs
+
+    def collapse(runs: list[list[dict]], stride: int) -> list[dict]:
+        survivors: list[dict] = []
+        for run in runs:
+            segment: list[dict] = []
+            segment_start = run[0]["anchor_turn"]
+            for row in run:
+                if row["anchor_turn"] - segment_start >= stride:
+                    survivors.append(max(
+                        segment,
+                        key=lambda r: r["anchor_char_end"] - r["anchor_char_start"]))
+                    segment = []
+                    segment_start = row["anchor_turn"]
+                segment.append(row)
+            if segment:
+                survivors.append(max(
+                    segment,
+                    key=lambda r: r["anchor_char_end"] - r["anchor_char_start"]))
+        return survivors
+
+    fitted_gap = None
+    fitted_stride = None
+    pruned: list[dict] = []
+    if kept:
+        for gap in range(1, max_gap + 1):
+            runs = runs_at(gap)
+            if len(runs) > budget:
+                continue
+            longest_span = max(
+                run[-1]["anchor_turn"] - run[0]["anchor_turn"] for run in runs)
+            stride = stride_floor
+            while True:
+                survivors = collapse(runs, stride)
+                if len(survivors) <= budget:
+                    fitted_gap, fitted_stride, pruned = gap, stride, survivors
+                    break
+                if stride > longest_span:
+                    raise StructuredOutputError(
+                        "pruner stride exhausted without fitting the budget")
+                stride += 1
+            if fitted_gap is not None:
+                break
         else:
-            runs.append([row])
-    pruned = [
-        max(run, key=lambda row: row["anchor_char_end"] - row["anchor_char_start"])
-        for run in runs
-    ]
+            pruned = collapse(runs_at(max_gap), stride_floor)
     return {
-        "schema": "product-pruned-keeps/1",
+        "schema": "product-pruned-keeps/2",
         "counts": {
             "decisions": len(verdicts),
             "keep": len(kept),
-            "runs": len(runs),
+            "runs": len(runs_at(fitted_gap)) if fitted_gap is not None else (
+                len(runs_at(max_gap)) if kept else 0),
             "pruned_keep": len(pruned),
         },
+        "fitted": {"gap": fitted_gap, "stride": fitted_stride},
         "pruned_candidate_ids": [row["candidate_id"] for row in pruned],
     }
 

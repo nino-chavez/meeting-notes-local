@@ -438,7 +438,7 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
 
     registered = candidate_first.PRODUCT_RUN["classifier"]
     budget = candidate_first.PRODUCT_RUN["gates"]["maximum_keep_after_prune"]
-    gap = candidate_first.PRODUCT_RUN["pruner"]["gap"]
+    pruner = candidate_first.PRODUCT_RUN["pruner"]
     batch_size = registered["batch_size"]
     try:
         manifest = candidate_first.generate_manifest(
@@ -484,7 +484,10 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
     if not any(row["verdict"] == "KEEP" for row in decisions):
         raise GenerationRefused("no-model-candidates", True)
     try:
-        pruned = candidate_first.prune_keeps(manifest["candidates"], decisions, gap=gap)
+        pruned = candidate_first.prune_keeps(
+            manifest["candidates"], decisions,
+            budget=pruner["budget"], stride_floor=pruner["stride_floor"],
+            max_gap=pruner["max_gap"])
     except (StructuredOutputError, ValueError, KeyError, TypeError) as exc:
         # Not a model refusal. `decode_classification` already guaranteed exact
         # single coverage of every offered locator, batch by batch, so a pruner
