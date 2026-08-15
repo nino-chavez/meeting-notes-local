@@ -2623,3 +2623,44 @@ Prediction: contiguous-run collapse alone brings keep under 64 (the 136
 keeps tile mostly contiguous spans; runs, not points, are what the model
 is really marking). No prediction on whether anchor retention survives
 representative selection — that is what the offline evaluation measures.
+
+### Pruning arm result — falsified, and the reason reframes the program
+
+Offline evaluation (38 strategies: contiguous-run collapse × gap × representative,
+assent-drop, section caps, compositions) against the dumped MLX keep set:
+**zero strategies pass.** The dump shows why no pruner could: the 136 keeps
+are one contiguous slab (anchor turns 0–163, a single 30-turn abstain
+window). Instrument correction recorded: the evaluator's first assent match
+recompiled the registered pattern without its flags (0 matches vs the
+registered object's 20); corrected before any conclusion was drawn.
+
+### The mechanism, isolated — block verdicts, not judgment
+
+Two discriminators close the causal chain:
+
+1. Unconstrained emission + two-turn rendering: keep-all in every parsed
+   batch — the teacher-forced skeleton is exonerated.
+2. The registered ollama arm re-run with `repeat_penalty` explicitly 1.0
+   (the registered transport never set it, so 1.1 was silently active in
+   every prior ollama measurement): keep **133**, recall **11/13** — totals
+   identical to the penalty-default run, so the penalty is exonerated too.
+   But the distribution is the finding: batches 1–4 and 6 keep all;
+   **batch 5 abstains all 32.** Batch 5 spans the turns holding ev-011 and
+   ev-012 — the ollama arm's entire miss-set. The MLX two-turn arm put its
+   abstain block on batch 1 and missed ev-001/ev-002.
+
+Unified reinterpretation of every number this program has produced: at
+temperature zero, gemma-family models emit **regionally uniform verdict
+blocks per response** — whole batches flip KEEP or ABSTAIN together. What
+looked like view-sensitivity, scale miscalibration, transport divergence,
+and calibrated abstention is one mechanism: which batch catches the abstain
+block. Recall differences measure block placement, not evidence judgment.
+Per-candidate selectivity has never been observed in any configuration:
+2 runtimes, 2 penalties, 3 quantizations, 2 scales, 2 renderings, 2
+decoding modes, 4 views.
+
+The one untested cell that would prove or refute per-candidate judgment:
+**batch size 1** — 165 independent single-candidate calls, where no block
+larger than one candidate is possible. Estimated ~4–5 h at current prompt
+sizes. Not run; whether to spend it is the operator's call, recorded as the
+only remaining registered arm on this model family.
