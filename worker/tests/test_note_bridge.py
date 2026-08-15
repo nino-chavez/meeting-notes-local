@@ -21,6 +21,7 @@ from pathlib import Path
 
 from worker.note_validator import ArtifactFailure, GenerationRefused
 from worker.note_validator import locate_kept_candidates, validate_locators
+from worker.note_validator import TRANSPORT_NUM_CTX
 from worker.note_validator import forbidden_in_claim, validate_claim_rows
 from worker.note_validator import inspect as inspect_snapshot
 from worker.note_validator import project as project_snapshot
@@ -987,6 +988,20 @@ for request, ids in batches():
     answer(verdicts(ids, lambda index: "ABSTAIN"))
 """
 
+# Reports the rest of the request packet: the decoding fields a provider is
+# told to honour, and how many candidates one request offers. Nothing else
+# reads them, so without this the packet could drift to any values at all.
+STUB_REPORTS_REQUEST = STUB_PREAMBLE + """
+for request, ids in batches():
+    Path(MARKER).write_text(json.dumps({
+        "num_ctx": request.get("num_ctx"),
+        "temperature": request.get("temperature"),
+        "num_predict": request.get("num_predict"),
+        "offered": len(ids),
+    }))
+    answer(verdicts(ids, lambda index: "ABSTAIN"))
+"""
+
 
 MODEL_FILES = {"config.json": b"{}\n", "weights.npz": b"weights\n"}
 
@@ -1152,6 +1167,35 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             bridge.close()
         return result, returncode, error, request_id
 
+    def _manifest_digests(self) -> tuple[str, str]:
+        """The product manifest's digest, and the research one it must not be.
+
+        The two contracts enumerate the same candidates from this fixture and
+        differ only in how wide a view each candidate carries, so the candidate
+        count cannot tell them apart and the digest is the only field on the
+        result frame that can.
+        """
+        sys.path.insert(0, str(REPO / "notes"))
+        import candidate_first
+        from transcript import load_bytes
+
+        raw = (
+            self.root / "meetings" / self.meeting_id / "transcript" / f"{self.transcript_id}.json"
+        ).read_bytes()
+        loaded = load_bytes(raw, source="fixture")
+        product = candidate_first.generate_manifest(
+            loaded, candidate_first.STRATEGY_BROAD,
+            contract=candidate_first.PRODUCT_CONTRACT,
+        )
+        research = candidate_first.generate_manifest(
+            loaded, candidate_first.STRATEGY_BROAD,
+        )
+        self.assertNotEqual(product["manifest_sha256"], research["manifest_sha256"])
+        self.assertEqual(
+            product["counts"]["candidates"], research["counts"]["candidates"]
+        )
+        return product["manifest_sha256"], research["manifest_sha256"]
+
     def _transcript_turns(self) -> list[dict]:
         raw = (
             self.root / "meetings" / self.meeting_id / "transcript" / f"{self.transcript_id}.json"
@@ -1185,6 +1229,11 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertIsNone(result["failure"])
         self.assertEqual(result["generation"]["transcript_sha256"], self.transcript_id)
         self.assertEqual(result["generation"]["candidates"], self.candidates)
+        # The manifest was enumerated under `PRODUCT_CONTRACT`'s ±2 window, not
+        # the research contract's single-fragment one.
+        product, research = self._manifest_digests()
+        self.assertEqual(result["generation"]["manifest_sha256"], product)
+        self.assertNotEqual(result["generation"]["manifest_sha256"], research)
         points = result["generation"]["points"]
         # One keep every twentieth of seventy single-candidate requests, none
         # of them adjacent, so the pruner collapses nothing: four points. A
@@ -1200,6 +1249,11 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             self.assertEqual(len(point["locators"]), 1)
             # Locators are transcript spans, and the frame carries no prose.
             self.assertNotIn("claim", point)
+        # Transcript order, which is what `point_ordinal` claims to number.
+        # `point_ordinal` alone is just `enumerate` and witnesses nothing.
+        turns = [point["locators"][0]["turn"] for point in points]
+        self.assertEqual(turns, sorted(turns))
+        self.assertEqual(len(set(turns)), len(turns))
         receipt = result["generation"]["receipt"]
         # One response per candidate, because the registered batch size is 1.
         self.assertEqual(receipt["responses"], self.candidates)
@@ -1312,6 +1366,9 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "transcript-only")
         self.assertIsNone(result["generation"])
         self.assertEqual(result["failure"]["code"], "keep-budget-exceeded")
+        # Not recoverable: re-running the same model over the same transcript
+        # produces the same overrun, so a retry is not the answer.
+        self.assertIs(result["failure"]["recoverable"], False)
         # No early stop any more: the gate is applied once, after every
         # candidate has a verdict, because the pruner needs all of them.
         self.assertEqual(result["failure"]["receipt"]["responses"], candidates)
@@ -1355,6 +1412,24 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         # A multi-gigabyte model load in front of a refusal the model was never
         # needed for would also have spent the run's whole deadline.
         self.assertFalse(self.marker.exists())
+
+    def test_the_request_packet_carries_the_registered_decoding_fields(self) -> None:
+        """One candidate per request, temperature zero, and the advisory width.
+
+        `num_ctx` is the one field the registration does not pin — the MLX
+        child sizes its own context — so it is locked to `TRANSPORT_NUM_CTX`
+        rather than to a literal restated here: what the module documents is
+        what a provider is actually told.
+        """
+        self._write_generator(STUB_REPORTS_REQUEST)
+        self._write_generate_manifest()
+        result, _, _, _ = self._run()
+        self.assertEqual(result["failure"]["code"], "no-model-candidates")
+        reported = json.loads(self.marker.read_text())
+        self.assertEqual(reported["num_ctx"], TRANSPORT_NUM_CTX)
+        self.assertEqual(reported["temperature"], 0)
+        self.assertEqual(reported["offered"], 1)
+        self.assertGreater(reported["num_predict"], 0)
 
     def test_verified_model_directory_reaches_the_child(self) -> None:
         self._write_generator(STUB_REPORTS_MODEL_DIRECTORY)
@@ -1789,23 +1864,36 @@ class NoteGeneratorChildTests(unittest.TestCase):
                 self.child._offered_locators(request)
 
     def test_a_malformed_locator_set_is_refused_rather_than_answered(self) -> None:
+        """Each case must fail on its own defect, not on the wrapper.
+
+        Measured: the first version of this test passed the bare schema where a
+        request belongs, so every case refused on the missing `response_format`
+        key and three locator checks could be deleted with the suite still
+        green. The unmutated control below is what makes the rest of the loop
+        mean anything.
+        """
         import copy
 
         schema, _ = self._schema(3)
-        for mutate in (
-            lambda enum: [],
-            lambda enum: "c01",
-            lambda enum: [enum[0], enum[0], enum[2]],
-            lambda enum: [enum[0], 7, enum[2]],
-            lambda enum: [enum[0], "", enum[2]],
-        ):
+
+        def request(enum: object) -> dict:
             broken = copy.deepcopy(schema)
-            item = broken["properties"]["items"]["items"]
-            item["properties"]["candidate_id"]["enum"] = mutate(
-                item["properties"]["candidate_id"]["enum"]
-            )
+            broken["properties"]["items"]["items"]["properties"]["candidate_id"][
+                "enum"
+            ] = enum
+            return {"response_format": broken}
+
+        offered = schema["properties"]["items"]["items"]["properties"]["candidate_id"]["enum"]
+        self.assertEqual(self.child._offered_locators(request(offered)), offered)
+        for enum in (
+            [],
+            "c01",
+            [offered[0], offered[0], offered[2]],
+            [offered[0], 7, offered[2]],
+            [offered[0], "", offered[2]],
+        ):
             with self.assertRaises(self.child._Refused):
-                self.child._offered_locators(broken)
+                self.child._offered_locators(request(enum))
 
     def test_a_model_directory_that_is_not_there_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1872,12 +1960,19 @@ class NoteGeneratorChildTests(unittest.TestCase):
         return request
 
     def test_the_session_answers_one_line_per_request_until_stdin_closes(self) -> None:
-        code, lines = self._drive([self._request(2), self._request(3)])
+        session = self._stub_session()
+        code, lines = self._drive(
+            [self._request(2), self._request(3)], session=session
+        )
         self.assertEqual(code, 0)
         self.assertEqual(len(lines), 2)
         self.assertEqual(
             [len(json.loads(line)["items"]) for line in lines], [2, 3]
         )
+        # Every request resolves the model directory it names. The counterpart
+        # of the refusal case below, which asserts the opposite: without this,
+        # a child that never resolved the model at all would still pass.
+        self.assertEqual(session.resolved, ["/", "/"])
 
     def test_a_request_the_child_cannot_answer_writes_one_error_line_and_exits(self) -> None:
         """The bridge reads the line, not the exit code — so there must be a line."""
