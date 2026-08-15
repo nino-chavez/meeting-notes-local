@@ -43,6 +43,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+import weakref
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -1817,9 +1818,28 @@ TRANSPORT_COMPLETION_PROOF = {
 }
 
 
+_VIEW_SHA256_CACHE: dict[int, tuple["weakref.ref", str]] = {}
+
+
 def transcript_view_sha256(transcript: Transcript) -> str:
-    """Bind references to the exact transformed text and labels shown to the model."""
-    return _sha256(transcript.render())
+    """Bind references to the exact transformed text and labels shown to the model.
+
+    Cached per Transcript instance: views are never mutated after load (every
+    transform builds a new instance via `_derived`), and re-rendering the full
+    view per fragment made per-batch validation quadratic in candidate count.
+    Transcript is an unhashable dataclass, so the key is its id; the stored
+    weakref both evicts the entry on collection and guards against id reuse.
+    """
+    key = id(transcript)
+    entry = _VIEW_SHA256_CACHE.get(key)
+    if entry is not None and entry[0]() is transcript:
+        return entry[1]
+    digest = _sha256(transcript.render())
+    _VIEW_SHA256_CACHE[key] = (
+        weakref.ref(transcript, lambda _, key=key: _VIEW_SHA256_CACHE.pop(key, None)),
+        digest,
+    )
+    return digest
 
 
 def _turn_fragment_spans(text: str) -> list[tuple[int, int]]:

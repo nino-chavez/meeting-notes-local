@@ -3179,3 +3179,32 @@ which event would be lost. All three pruner-v2 official runs are now
 green with predictions exact; the run executed alone under the
 one-heavy-job rule. Next in queue: the meet-2026-07-24 official run
 (304 candidates, gate ≥13 of 15), then the vendor-notes A/B scoring.
+
+### Meet corpus — official run PASS; vendor A/B unblocked
+
+meet-2026-07-24 (registration 98dcbbd9…, lock f953bbd3…): 304
+candidates, 187 keep, 40 pruned across 26 runs, recall 14/15 with
+ev-010 the only miss (gate required 13 of 15), 1802.1 s, result
+26e768f0…. PASS on the first official run of this corpus; no
+preregistered prediction existed (the transcript had never been through
+the pipeline offline). Ran alone under the one-heavy-job rule.
+
+Four corpora, four official passes under registration 98dcbbd9…. Per
+the recorded bias-control ordering, the vendor notes document may now
+be opened for the first time and scored per-event against the same 15
+locked events.
+
+### Performance fix landed — per-instance view-digest cache
+
+With no run in flight, the deferred fix from the pre-panic profiling
+lands: `transcript_view_sha256` re-rendered and re-hashed the full
+transcript view for every fragment of every candidate on every
+per-batch validation call, making runs quadratic in candidate count.
+It now caches the digest per Transcript instance (id-keyed, weakref
+guard and eviction; views are immutable after load — every transform
+builds a new instance). Verified before landing: request bytes are
+byte-identical to the pre-change baseline on the synthetic 720-turn
+fixture (sampled request digests match exactly); per-batch cost 0.55 s
+→ 0.049 s, a full 720-candidate validation pass ~400 s → ~35 s. No
+contract, schema, or registration change; the registration digest is
+unchanged.
