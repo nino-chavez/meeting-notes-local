@@ -2996,3 +2996,31 @@ formatted transcript render (91% verbatim turn overlap, measured), not
 a summary. If the operator exports the Zoom AI Companion summary, it
 gets scored against the same locked events; without it, this corpus
 still serves as the third-party generalization test.
+
+### Zoom town hall — events drafted, cycle locked, official run launched
+
+The operator directed the session to proceed without waiting on manual
+event authorship ("go", twice, after the packet was staged). The corpus
+is 630 Volleyball's consented tryouts town hall (2026-08-11, 41 min,
+447 turns, whisper-large-v3-turbo ASR) — the operator's own organization,
+recorded for redistribution to families, with a prior session's
+evidence index alongside it. This is the first corpus whose transcript
+the session itself read: the ground truth is a session-drafted 14-event
+plan (EVENTS.json — decisions on affiliation, fees, refund policy,
+same-day acceptance, registration requirements, schedules, date
+corrections; the regional-team and age-eligibility questions; the
+follow-up and recording commitments), each event carrying 1-4 evidence
+timestamps resolved mechanically to manifest candidates. Caveat carried
+on the lock: the plan is session-drafted, not operator-locked; the
+operator may amend EVENTS.json and supersede. The plan was digest-locked
+before any inference on this corpus, so the draft cannot have been
+shaped by run results.
+
+Cycle: ledger 2d7686a7…, lock 99f33a78…, registration fe493522…, accept
+-all with the caveat in PROVENANCE.md and LOCK-APPROVAL.md. Gate at 14
+events: recalled × 13 ≥ 154 → at least 12 of 14. No preregistered
+numeric prediction this time — no prior verdicts exist for this corpus
+or this ASR; the honest statement is directional: if per-candidate
+judgment generalizes across ASR sources, the pruned set should clear
+12/14 within the 64-keep budget. Run launched detached (453 candidates,
+largest corpus measured).
