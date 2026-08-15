@@ -59,6 +59,10 @@ use local_meeting_notes_session_core::meeting::{
     retention_policy_sha256, write_meeting,
 };
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
+use local_meeting_notes_session_core::note_projection::{NoteProjector, UnavailableProjector};
+use local_meeting_notes_session_core::note_projector_process::{
+    GENERATE_MANIFEST_FILE, PROJECT_MANIFEST_FILE, admit_note_projector,
+};
 use local_meeting_notes_session_core::model_store::{
     InstalledTranscriptModel, ModelCatalog, TranscriptModel, activate_model, active_model,
     installed_model, model_is_stored, remove_inactive_model,
@@ -175,6 +179,11 @@ struct ApplicationState {
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
     preview_profile: Mutex<PreviewProfileSnapshot>,
     preview_enrollment: Mutex<PreviewEnrollmentSurface>,
+    // Successful note-projector admission, cached off the hot library-rebuild
+    // path. Only success is cached: a failed admission (no generate manifest,
+    // no catalog entry, weights not yet downloaded) is cheap to re-derive and
+    // must retry so a model installed mid-session activates without restart.
+    note_projector: Mutex<Option<Arc<dyn NoteProjector>>>,
 }
 
 impl Default for ApplicationState {
@@ -194,6 +203,7 @@ impl Default for ApplicationState {
             preview_library: Mutex::new(None),
             preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
             preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
+            note_projector: Mutex::new(None),
         }
     }
 }
@@ -669,6 +679,47 @@ fn preview_storage_clone(state: &ApplicationState) -> Result<StorageRoot, ()> {
         .as_ref()
         .map(|context| context.storage.clone())
         .ok_or(())
+}
+
+/// The admitted `note.project` transport for library rebuilds, resolved per
+/// the wiring recipe in `docs/note-runtime-decision.md`: catalog from
+/// `verified_model_catalog`, manifest paths from the resource root, the
+/// admission decision cached (successes only) off the hot rebuild path.
+/// Every failure shape degrades to `UnavailableProjector`, which is also
+/// today's steady state — the bundle ships no generate manifest and the
+/// signed catalog carries no note-model role yet.
+fn admitted_note_projector(state: &ApplicationState) -> Arc<dyn NoteProjector> {
+    if let Ok(cached) = state.note_projector.lock()
+        && let Some(projector) = cached.as_ref()
+    {
+        return Arc::clone(projector);
+    }
+    let unavailable: Arc<dyn NoteProjector> = Arc::new(UnavailableProjector);
+    let Ok(guard) = state.storage.lock() else {
+        return unavailable;
+    };
+    let Some(context) = guard.clone() else {
+        return unavailable;
+    };
+    drop(guard);
+    let Ok(manifest) = RuntimeManifest::load_and_verify(&context.manifest_path) else {
+        return unavailable;
+    };
+    let Ok(Some(catalog)) = verified_model_catalog(&context.manifest_path, &manifest) else {
+        return unavailable;
+    };
+    let Some(projector) = admit_note_projector(
+        &context.storage,
+        &catalog,
+        &context.resource_root.join(PROJECT_MANIFEST_FILE),
+        &context.resource_root.join(GENERATE_MANIFEST_FILE),
+    ) else {
+        return unavailable;
+    };
+    if let Ok(mut cached) = state.note_projector.lock() {
+        *cached = Some(Arc::clone(&projector));
+    }
+    projector
 }
 
 fn with_preview_library_invalidated<T>(
@@ -2579,8 +2630,13 @@ fn library_snapshot_with(
         Ok(coordination) => coordination,
         Err(_) => return library_reader::LibraryReader::unavailable_snapshot(),
     };
+    let projector = admitted_note_projector(state);
     with_meeting_storage_sequence(&coordination, |active_meeting_ids| {
-        let mut reader = match library_reader::LibraryReader::rebuild(storage, active_meeting_ids) {
+        let mut reader = match library_reader::LibraryReader::rebuild_with_projector(
+            storage,
+            active_meeting_ids,
+            projector,
+        ) {
             Ok(reader) => reader,
             Err(_) => return library_reader::LibraryReader::unavailable_snapshot(),
         };

@@ -57,6 +57,11 @@ const PROJECT_ROLE: &str = "project";
 /// The note-generation role.  Its manifest is the bundle's signed statement of
 /// which generator and which model digests the app ships.
 const GENERATE_ROLE: &str = "generate";
+/// The bundled manifest file names, owned here so `worker/build_manifest.py`
+/// (`NOTE_MANIFEST`, `NOTE_GENERATE_MANIFEST`) and every admitting caller
+/// agree on one spelling per role.
+pub const PROJECT_MANIFEST_FILE: &str = "note-runtime-project.json";
+pub const GENERATE_MANIFEST_FILE: &str = "note-runtime-generate.json";
 const PYTHON_SIGNING_IDENTIFIER_SUFFIX: &str = ".python-runtime";
 const PYTHON_ENTITLEMENT: &str = "com.apple.security.cs.allow-unsigned-executable-memory";
 const CODE_SIGNATURE_RUNTIME: u32 = 0x0001_0000;
@@ -328,21 +333,23 @@ fn note_runtime_models(entry: &TranscriptModel) -> Vec<RuntimeManifestModel> {
 /// `generate` manifest here is how Rust learns which model the bundle pins
 /// without handing that manifest to this child; the signed model catalog
 /// carries no note-model role yet, so it is the only build-time pin available.
+/// `None` is refusal, not an error: the caller chooses whether refusal is
+/// cacheable.  Success may be held for the process lifetime (the projector
+/// re-verifies its manifest on every launch); refusal must be re-derived so a
+/// catalog or model that arrives mid-session admits without a restart.
 pub fn admit_note_projector(
     storage: &StorageRoot,
     catalog: &ModelCatalog,
     project_manifest_path: &Path,
     generate_manifest_path: &Path,
-) -> Arc<dyn NoteProjector> {
-    match admitted_process_projector(
+) -> Option<Arc<dyn NoteProjector>> {
+    admitted_process_projector(
         storage,
         catalog,
         project_manifest_path,
         generate_manifest_path,
-    ) {
-        Some(projector) => Arc::new(projector),
-        None => Arc::new(UnavailableProjector),
-    }
+    )
+    .map(|projector| Arc::new(projector) as Arc<dyn NoteProjector>)
 }
 
 fn admitted_process_projector(
@@ -393,9 +400,9 @@ fn stage_descriptors(sources: [RawFd; 3]) -> Result<[File; 3], InternalOutcome> 
     staged.try_into().map_err(|_| InternalOutcome::Unavailable)
 }
 
-/// Seatbelt entry point.  Deprecated in the headers since 10.8 with no
-/// replacement for sandboxing a child a parent is about to exec, and still the
-/// mechanism Apple's own tooling relies on for exactly that.
+// Seatbelt entry point.  Deprecated in the headers since 10.8 with no
+// replacement for sandboxing a child a parent is about to exec, and still the
+// mechanism Apple's own tooling relies on for exactly that.
 unsafe extern "C" {
     fn sandbox_init(
         profile: *const libc::c_char,
@@ -2023,6 +2030,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
                 &self.manifest_path,
                 &self.generate_manifest_path,
             )
+            .unwrap_or_else(|| Arc::new(UnavailableProjector))
         }
 
         fn is_admitted(&self) -> bool {

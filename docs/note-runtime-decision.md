@@ -130,6 +130,16 @@ Items no branch owns, which must not evaporate at merge:
    is in the projector agent's report (catalog from
    `verified_model_catalog`, resource root from `StorageContext`, cache
    the admission decision off the hot rebuild path).
+   **Done, 2026-08-15**: `library_snapshot_with` (the one production
+   rebuild site) now injects `admitted_note_projector(state)` — catalog
+   from `verified_model_catalog`, manifest paths from the resource root
+   via constants owned by `note_projector_process.rs`, successful
+   admission cached for the process lifetime, refusal re-derived per
+   rebuild so a model installed mid-session admits without a restart
+   (`admit_note_projector` now returns `Option` to make that split
+   possible). Today it resolves to `UnavailableProjector` — no generate
+   manifest is bundled and the catalog carries no note-model role — and
+   activates mechanically once the catalog entry ships.
 
 ## Merge record (2026-08-14, late night)
 

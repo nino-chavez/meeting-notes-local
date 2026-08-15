@@ -18,7 +18,7 @@ use local_meeting_notes_session_core::meeting::{
     verify_record_artifacts, verify_record_static_artifacts,
 };
 use local_meeting_notes_session_core::meeting_title;
-use local_meeting_notes_session_core::note_projection::ClaimType;
+use local_meeting_notes_session_core::note_projection::{ClaimType, NoteProjector, UnavailableProjector};
 use local_meeting_notes_session_core::retention::meeting_dir;
 use local_meeting_notes_session_core::storage::StorageRoot;
 use local_meeting_notes_session_core::transcript_deletion::transcript_deletion_completed;
@@ -335,9 +335,26 @@ impl LibraryReader {
         storage: StorageRoot,
         excluded_meeting_ids: &HashSet<String>,
     ) -> Result<Self, ()> {
-        let projection = LibraryProjection::rebuild_excluding(
+        Self::rebuild_with_projector(
+            storage,
+            excluded_meeting_ids,
+            std::sync::Arc::new(UnavailableProjector),
+        )
+    }
+
+    /// The same rebuild through an admitted `note.project` transport.  The
+    /// projector is injected by the caller because admission is cached off
+    /// this hot path; `rebuild` above keeps the projector-less shape for
+    /// callers (and tests) that never project claims.
+    pub(crate) fn rebuild_with_projector(
+        storage: StorageRoot,
+        excluded_meeting_ids: &HashSet<String>,
+        projector: std::sync::Arc<dyn NoteProjector>,
+    ) -> Result<Self, ()> {
+        let projection = LibraryProjection::rebuild_with_projector_excluding(
             &storage,
             ReadLimits::default(),
+            projector,
             excluded_meeting_ids,
         )
         .map_err(|_| ())?;
