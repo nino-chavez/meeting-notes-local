@@ -2842,3 +2842,18 @@ self-test). Field-level content, fixed before implementation:
 Validation basis: the completed 2×2 matrix above (two meetings, two
 transports; unpruned recall 12–13/13, pruned always within gates on the
 adopted cells). Implementation follows this entry.
+
+### Amendment — product elapsed budget re-derived for batch size 1
+
+The adoption preregistration carried the 900 s elapsed budget forward from
+the batched era without re-deriving it: at the measured ~6–11 s per
+single-candidate MLX call, 165–300 candidates need 20–55 minutes, so every
+official product run would refuse on time — the same carried-constant
+failure the ship-gate keep budget exposed this afternoon, caught before the
+runs completed rather than after. Amended before any official result:
+`maximum_elapsed_seconds` becomes **3600**, derived from the measured
+worst case (300 calls × 11 s ≈ 55 min) with margin, and explicitly a
+harness budget: the app-side generation deadline is a separate product
+number owned by the bridge and revisited at wiring time. Product
+registration digest moves with this amendment; cycles and locks re-derive
+under the new digest with delegated approval.
