@@ -2950,3 +2950,26 @@ recall 13/13, gate PASS, elapsed 585.4 s, result_sha256 f982ea03…
 dump beside it). The preregistered prediction — pruned 27, 13/13 —
 held to the digit. Meeting 2's run was interrupted mid-inference again
 (fourth external stop); relaunching it alone.
+
+### Official product run — meeting 2 PASSES, prediction exact; both official runs green
+
+Second official gated run (fe493522, lock 67ebb40b…, ledger cd733aa2…),
+completed as a detached process after repeated harness-side task stops:
+candidates 300, keep 152, pruned 54, recall 12/13 (ev-012, the known
+pruning cost), gate PASS, elapsed 1449.8 s, result_sha256 3a9b7609….
+The preregistered prediction — pruned 54, 12/13 missing ev-012 — held
+to the digit, and its transfer assumption is now verified directly: the
+official ±2 verdict vector is byte-identical to the ±1 validation dump
+(300 shared ids, zero flips), matching meeting 1's window-insensitivity.
+
+**Both meetings now hold official passing results under the product
+registration.** The measured pipeline — one-candidate-per-call verdicts,
+gap-1/longest collapse, anchor-fragment evidence bundles — meets the
+ship gate (recall ≥ 11/13 on the pruned set, keep ≤ 64, elapsed ≤ 3600 s)
+on every capture it has been run against. Known cost, stated plainly:
+ev-012 on meeting 2 is lost to pruning, within the admitted 11/13 posture;
+the note is a cited entry point beside the transcript, not a replacement
+for it. Remaining before ship, all outside this delegation or the repo:
+model catalog entry + hosting (external publish), network-denial
+enforcement, and the release-time wiring recorded in
+docs/note-runtime-decision.md.
