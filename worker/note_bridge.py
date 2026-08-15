@@ -662,7 +662,6 @@ def load_validator(runtime: _VerifiedRuntime):
         getattr(sys.modules[name], "__loader__", None) is not finder for name in _VALIDATOR_MODULES
     ):
         raise BridgeRefused("validator helper did not load from the verified bundle")
-    _require_registered_deadline(sys.modules["candidate_first"])
     return module, finder
 
 
@@ -671,8 +670,13 @@ def _require_registered_deadline(candidate_first) -> None:
 
     The bridge cannot import the registration at module scope, so it restates
     the value — and a restated constant is a second owner unless something
-    checks it. This is that check: one registration, one budget, and a bundle
-    whose two halves disagree never reaches `ready`.
+    checks it. This is that check: one registration, one budget, and a
+    generate bundle whose two halves disagree never reaches `ready`.
+
+    Scoped to the role that runs a generator, deliberately. `project` and
+    `inspect` never read a deadline and never spawn a child, and the `project`
+    role is the shipped projection transport — making it refuse over a number
+    it does not use would turn a research-lane edit into a broken reader.
     """
     try:
         registered = candidate_first.PRODUCT_RUN["gates"]["maximum_elapsed_seconds"]
@@ -1294,6 +1298,8 @@ def run(
     root_fd = _open_absolute_directory(root_path, private=True)
     try:
         validator, bundle_loader = load_validator(runtime)
+        if runtime.role == "generate":
+            _require_registered_deadline(sys.modules["candidate_first"])
 
         def require_identity() -> None:
             if isinstance(runtime, _DescriptorRuntime):

@@ -1073,6 +1073,10 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         encoded = (json.dumps(document, indent=2) + "\n").encode()
         transcript_id = hashlib.sha256(encoded).hexdigest()
         directory = self.root / "meetings" / self.meeting_id / "transcript"
+        # The one this replaces goes, so a test that rewrites the transcript
+        # does not leave a second one in the tree the read-only assertions
+        # compare before and after.
+        (directory / f"{self._harness.transcript_id}.json").unlink(missing_ok=True)
         private_file(directory / f"{transcript_id}.json", encoded)
         self._harness.transcript_id = transcript_id
         return len(build_fragment_map(load_bytes(encoded, source="fixture"))["fragments"])
@@ -1517,6 +1521,25 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             bridge.close()
         self.assertEqual(bridge._process.returncode, 2)
         self.assertFalse(self.marker.exists())
+
+    def test_the_deadline_binding_does_not_reach_the_roles_that_never_use_it(self) -> None:
+        """Scope, pinned in both directions.
+
+        The generate role refuses the same divergent bundle (above). `project`
+        is the shipped projection transport and reads no deadline at all, so a
+        registration edit in `notes/` must not stop a note from being
+        projected. Without this the check would sit in `load_validator` and
+        silently widen to every role.
+        """
+        self._replace_validator_registration_budget(3599)
+        self._harness.role = "project"
+        self._harness._write_manifest()
+        bridge = self._start()
+        try:
+            self.assertIsNotNone(bridge.ready)
+            self.assertEqual(bridge.ready["role"], "project")
+        finally:
+            bridge.close()
 
     # Every test below was written after a blind mutation run: each weakens one
     # check and the whole suite still passed. They cover the checks that had no

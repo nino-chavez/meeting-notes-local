@@ -14,6 +14,8 @@ ENTITLEMENTS="$ROOT/apps/desktop/src-tauri/capture-entitlements.plist"
 EXPECTED_TEAM_ID="34VZ63G58M"
 FORBIDDEN_NOTE_RUNTIME_RESOURCES=(
   "note-bridge.py"
+  "note-generator-mlx.py"
+  "note-runtime-generate.json"
   "note-runtime-project.json"
   "note-validator.zip"
 )
