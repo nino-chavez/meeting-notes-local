@@ -2756,3 +2756,48 @@ DECISION-RECORD.md), promoted to ledger 77b4173f…, and the operator
 approved lock 622dd23a… scoped to the batch-size-1 ollama arm plus offline
 pruner scoring. The run is in flight; its script verifies the approved
 digest against the lock bytes before any inference.
+
+### Validation matrix complete — the pipeline clears the ship gate in all four cells
+
+Meeting 2 (81b2fe54), MLX transport, batch size 1, under the operator's
+extended lock: unpruned keep **152 of 300**, recall **13/13** — the second
+perfect out-of-sample recall of the night. (Procedural note for the record:
+the first MLX launch on this ledger was killed before any inference
+completed because the approved lock named the ollama transport only; the
+operator granted a scope extension before the relaunch. The lock protocol
+held because it was enforced against its author, which is the point.)
+
+The full 2×2, batch-size-1 unpruned:
+
+| Cell | Keep | Recall |
+| --- | --- | --- |
+| fdd59c81 · ollama | 71/165 | 12/13 |
+| fdd59c81 · MLX | 104/165 | 12/13 |
+| 81b2fe54 · ollama | 90/300 | 13/13 |
+| 81b2fe54 · MLX | 152/300 | 13/13 |
+
+And the pruner that survives everywhere — **contiguous-run collapse, gap 1,
+longest-anchor representative** — against the ship gate (recall ≥ 11/13,
+keep ≤ 64):
+
+| Cell | Keep after prune | Recall | Ship gate |
+| --- | --- | --- | --- |
+| fdd59c81 · ollama | 35 | 12/13 | pass |
+| fdd59c81 · MLX | 27 | 12/13 | pass |
+| 81b2fe54 · ollama | 48 | 12/13 | pass |
+| 81b2fe54 · MLX | 54 | 11/13 | pass |
+
+No other strategy passes all four cells. Margins recorded honestly: the
+thinnest cell (81b2fe54 · MLX) sits exactly at the 11/13 bar, MLX keep
+rates run ~1.5x ollama's and vary across meetings (63% vs 51%), and ev-012
+is pruned away in both meeting-2 cells — the pruner's known cost lands on
+events whose best anchors sit mid-run. The measured pipeline for adoption:
+single-candidate verdicts → gap-1/longest collapse → 27–54 cited excerpts.
+
+### What remains before the app surface
+
+One preregistered registration change, drafted for a fresh operator lock:
+±2 view, two-turn rendering, MLX runtime identity, batch size 1, the
+gap-1/longest pruning stage, and gates restated against it — then the
+official gated run, then the four parked branches wire it in per the merge
+checklist in docs/note-runtime-decision.md.
