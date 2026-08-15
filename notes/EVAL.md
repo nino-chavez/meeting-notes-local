@@ -3168,3 +3168,14 @@ stands on the observed footprint regardless of the panic's proximate
 mechanism. Caught by an independent re-read of the source file during
 the write-up of the incident; the lesson is the standing one — a
 diagnosis is not a finding until re-derived from the artifact it cites.
+
+### Zoom town hall — official pruner-v2 result (post-panic solo relaunch)
+
+Registration 98dcbbd9…, lock 8a096b53… (hash-reverified after the
+panic): 453 candidates, 298 keep, 58 pruned across 33 runs (gap 2,
+stride 8), recall 13/14 with ev-003 the only miss, 3034.1 s, result
+65ad0471…. PASS — the preregistered prediction held exactly, including
+which event would be lost. All three pruner-v2 official runs are now
+green with predictions exact; the run executed alone under the
+one-heavy-job rule. Next in queue: the meet-2026-07-24 official run
+(304 candidates, gate ≥13 of 15), then the vendor-notes A/B scoring.
