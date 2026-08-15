@@ -2692,3 +2692,42 @@ Disposition rule: interior keep count with recall ≥ 11/13 at keep ≤ 64 →
 the batching redesign becomes the registered product path. Near-uniform
 verdicts → this model family is disqualified for candidate selection and
 today's boundary is terminal pending a new model generation.
+
+### Batch-size-1 result — block hypothesis refuted; the family has per-candidate judgment
+
+All 165 single-candidate calls decoded strictly (prediction 1 held).
+Keep **71 of 165**, scattered across **35 separate regions** (the batched
+slab had 2), bare-assent keeps 3. Recall **12 of 13** — the highest any
+single configuration has measured, equal to the old cross-view union
+ceiling. The block-verdict prediction (near-uniform verdicts at n=1) is
+refuted: batching was destroying real per-candidate judgment, not
+revealing its absence.
+
+The miss is ev-005 (PROPOSAL). **ev-011 — missed by every batched
+configuration, every view, both scales, and the frontier roadmap — is
+caught.** The "universal miss" was a block artifact.
+
+Registered pruning strategies re-evaluated offline on this keep set:
+**five pass** the (keep ≤ 64, recall preserved at 12/13) rule —
+contiguous-run collapse at gap 1 (rep first/longest/ends: keep 35/35/51)
+and gap 2 (rep middle/longest: keep 20/20). Strategy selection is
+deliberately deferred to validation: choosing among five passes fitted to
+one meeting is the overfit the preregistration warned against.
+
+### Disposition — batching redesign is the registered product path
+
+Per the arm's disposition rule: interior keeps, recall 12/13, and pruned
+keep well under 64 → the product pipeline becomes: single-candidate
+verdicts → deterministic contiguous-run collapse → cited excerpts. Two
+registered steps remain before any official gated run, in order:
+
+1. **MLX batch-size-1 re-measurement** on this ledger (the ship runtime is
+   MLX; today's n=1 arm ran on ollama, and transport parity at n=1 is
+   unmeasured). Single-candidate prompts are small; cost is comparable to
+   today's run.
+2. **Second-capture validation**: a fresh meeting, operator-reviewed ledger
+   and lock, then the n=1 pipeline with all five passing pruners scored.
+   Only a pruner that passes on the meeting it was not fitted to advances
+   to the official registration change (±2 view, two-turn rendering, MLX
+   runtime identity, batch size 1, the surviving pruner, and the fresh
+   operator lock, as one preregistered adoption).
