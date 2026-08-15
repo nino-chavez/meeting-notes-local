@@ -3079,3 +3079,30 @@ official reruns (greedy decode; the verdict vectors will not move):
 cycles and locks re-derive under delegated approval; all three official
 runs repeat. The bridge's generate lane follows the registration
 mechanically and its restated constants are binding-checked at startup.
+
+### Fourth corpus staged — meet-2026-07-24 (work meeting, vendor-notes A/B)
+
+The second on-disk pair the operator pointed at: a 57-minute work
+meeting (Meet recording) with the vendor's own generated-notes document
+beside it — the first corpus with a vendor baseline to score against
+the same locked events. Employer-sensitive: all content stays in the
+packet; this log carries the generic id and numbers only.
+
+Transcription: local whisper-large-v3-turbo. First pass collapsed into
+a repetition loop from 28:32 onward (audio verified live at -19 dB —
+decode failure, not silence); second pass with
+condition_on_previous_text off transcribed the full duration with zero
+degenerate segments. Ingest normalization applied and recorded in the
+packet METHOD.md: whisper's ~4.5 s segments merge deterministically
+into app-like turns (median 17.8 s), because 770 candidates at measured
+pace would exceed the elapsed budget and because turn-count contract
+semantics do not transfer across ASR granularity (the zoom finding).
+Result: 170 turns, 304 candidates, estimated ~26 min.
+
+Bias-control ordering held: the session drafted the 15-event ground
+truth from the transcript with the vendor PDF still unopened, then
+locked the cycle (lock f953bbd3…, registration 98dcbbd9…, delegated).
+Gate at 15 events: recalled × 13 ≥ 165 → at least 13 of 15. The
+official run queues behind the three pruner-v2 reruns; the vendor
+notes are read and scored per-event only after the official result
+exists.
