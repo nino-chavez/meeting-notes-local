@@ -110,6 +110,18 @@ GENERATOR_CONTRACT = {
     "candidate_order": "anchor fragment order, then cue character order",
 }
 
+# The product lane's contract: identical to the registered research contract
+# except for the adopted two-fragment visible window (notes/EVAL.md,
+# "Preregistration — product registration v1"). `visible_window` is the
+# machine-readable width; absent means the registered one-fragment window.
+PRODUCT_CONTRACT = {
+    **GENERATOR_CONTRACT,
+    "visible_context": (
+        "two previous canonical fragments, anchor, two next canonical fragments"),
+    "visible_window": 2,
+}
+
+
 CLASSIFIER_SYSTEM = """\
 Classify deterministic evidence candidates from a meeting.
 
@@ -329,6 +341,126 @@ def registered_run_sha256() -> str:
     return _json_sha256(REGISTERED_RUN)
 
 
+# The product registration. Derived from the research registration per the
+# preregistered adoption (notes/EVAL.md, "Preregistration — product
+# registration v1"): corpus-independent, the adopted two-fragment window,
+# the MLX constrained-verdict transport at batch size 1, and the validated
+# pruning stage. The research registration above is untouched; its digest
+# must remain byte-identical (asserted in the self-test).
+PRODUCT_RUN_SCHEMA = "product-note-registration/1"
+
+PRODUCT_RUN = {
+    "schema": PRODUCT_RUN_SCHEMA,
+    "generator": {
+        "strategy": STRATEGY_BROAD,
+        "contract_sha256": (
+            "recomputed-at-import"
+        ),
+        "fragment_contract_sha256": (
+            "2ea37109a924fb26bcc070836417c6fd822c8318c0b428d8dcf5cb5600ec727c"
+        ),
+    },
+    "classifier": {
+        "system_sha256": (
+            "8dcacef1d52991e0972e1522e85617b1dec31a1b4a6cae2beb8522bbaf770119"
+        ),
+        "fixture_sha256": (
+            "52bb4ac93d1dc5e9a384c78b2801fca22865640304301510031ec16ab1e4fb91"
+        ),
+        "model": "mlx-community/gemma-3-12b-it-qat-4bit",
+        "model_snapshot": "66fc51ef25778c03d33c4c8bc446973d062e73f4",
+        "model_tree_sha256": (
+            "48dfcf4342f498dd8080ff0061a9c03e1f8c8c8b232e94c26885da4cd3ca89aa"
+        ),
+        "runtime_identity": {
+            "python": "3.14",
+            "mlx": "0.32.0",
+            "mlx_lm": "0.30.4",
+        },
+        "transport": "mlx-constrained-verdict/1",
+        "prompt_rendering": "gemma3-two-turn/1",
+        "batch_size": 1,
+        "temperature": 0.0,
+        "num_predict": "min(4096, 32 + 96 * candidates)",
+        "model_facing_candidate_ids": (
+            "batch-positional locators c01..cNN; local decode maps each "
+            "locator to its registered candidate ID, requires exact "
+            "single coverage, canonicalizes order, and counts "
+            "displacement as a diagnostic"
+        ),
+    },
+    "pruner": {
+        "strategy": "contiguous-run-collapse",
+        "gap": 1,
+        "representative": "longest-anchor",
+        "tie_break": "earliest-ordinal",
+    },
+    "gates": {
+        "minimum_event_recall": "recalled * 13 >= 11 * locked_events, on the pruned set",
+        "maximum_keep_after_prune": 64,
+        "maximum_elapsed_seconds": 900,
+        "event_ledger_required_before_inference": True,
+    },
+}
+PRODUCT_RUN["generator"]["contract_sha256"] = _json_sha256(PRODUCT_CONTRACT)
+
+
+def product_run_sha256() -> str:
+    return _json_sha256(PRODUCT_RUN)
+
+
+def prune_keeps(
+    candidates: list[dict],
+    decisions: list[dict],
+    *,
+    gap: int = 1,
+) -> dict:
+    """Collapse contiguous runs of kept candidates to their longest anchor.
+
+    The registered product pruning stage: adjacent keeps (anchor turns within
+    `gap`) form a run; each run retains the candidate with the longest anchor
+    span, earliest ordinal on ties. Deterministic, model-free, and measured
+    across the validation matrix before adoption (notes/EVAL.md).
+    """
+    by_id = {row["candidate_id"]: row for row in candidates}
+    verdicts = {}
+    for row in decisions:
+        if set(row) != {"candidate_id", "verdict"} or row["verdict"] not in {
+            "KEEP", "ABSTAIN"
+        } or row["candidate_id"] not in by_id:
+            raise StructuredOutputError("pruner received an invalid decision row")
+        if row["candidate_id"] in verdicts:
+            raise StructuredOutputError("pruner received a duplicated decision")
+        verdicts[row["candidate_id"]] = row["verdict"]
+    if set(verdicts) != set(by_id):
+        raise StructuredOutputError(
+            "pruner requires exactly one decision per candidate")
+    kept = sorted(
+        (by_id[cid] for cid, verdict in verdicts.items() if verdict == "KEEP"),
+        key=lambda row: row["ordinal"],
+    )
+    runs: list[list[dict]] = []
+    for row in kept:
+        if runs and row["anchor_turn"] - runs[-1][-1]["anchor_turn"] <= gap:
+            runs[-1].append(row)
+        else:
+            runs.append([row])
+    pruned = [
+        max(run, key=lambda row: row["anchor_char_end"] - row["anchor_char_start"])
+        for run in runs
+    ]
+    return {
+        "schema": "product-pruned-keeps/1",
+        "counts": {
+            "decisions": len(verdicts),
+            "keep": len(kept),
+            "runs": len(runs),
+            "pruned_keep": len(pruned),
+        },
+        "pruned_candidate_ids": [row["candidate_id"] for row in pruned],
+    }
+
+
 def validate_registered_model_identity(identity: object) -> dict:
     if not isinstance(identity, dict) or set(identity) != {
         "requested", "name", "digest"
@@ -358,9 +490,11 @@ def _fragment_index(fragment_map: dict) -> tuple[list[dict], dict[str, int]]:
     }
 
 
-def _visible_fragment_ids(fragments: list[dict], anchor_index: int) -> list[str]:
-    start = max(0, anchor_index - 1)
-    end = min(len(fragments), anchor_index + 2)
+def _visible_fragment_ids(
+    fragments: list[dict], anchor_index: int, window: int = 1,
+) -> list[str]:
+    start = max(0, anchor_index - window)
+    end = min(len(fragments), anchor_index + window + 1)
     return [row["source_fragment_id"] for row in fragments[start:end]]
 
 
@@ -373,6 +507,7 @@ def _candidate(
     cue_type: str | None,
     cue_start: int | None,
     cue_end: int | None,
+    window: int = 1,
 ) -> dict:
     fragments, _lookup = _fragment_index(fragment_map)
     anchor = fragments[anchor_index]
@@ -395,11 +530,11 @@ def _candidate(
         "cue_type": cue_type,
         "cue_start": cue_start,
         "cue_end": cue_end,
-        "visible_fragment_ids": _visible_fragment_ids(fragments, anchor_index),
+        "visible_fragment_ids": _visible_fragment_ids(fragments, anchor_index, window),
     }
 
 
-def _broad_candidates(fragment_map: dict) -> list[dict]:
+def _broad_candidates(fragment_map: dict, window: int = 1) -> list[dict]:
     fragments, _lookup = _fragment_index(fragment_map)
     return [
         _candidate(
@@ -410,6 +545,7 @@ def _broad_candidates(fragment_map: dict) -> list[dict]:
             cue_type=None,
             cue_start=None,
             cue_end=None,
+            window=window,
         )
         for ordinal, anchor_index in enumerate(range(len(fragments)), 1)
     ]
@@ -499,13 +635,23 @@ def _cue_candidates(transcript: Transcript, fragment_map: dict) -> list[dict]:
     ]
 
 
-def generate_manifest(transcript: Transcript, strategy: str) -> dict:
+def generate_manifest(
+    transcript: Transcript, strategy: str, *, contract: dict | None = None,
+) -> dict:
     if strategy not in STRATEGIES:
         raise StructuredOutputError(
             f"candidate strategy must be one of {', '.join(STRATEGIES)}")
+    if contract is None:
+        contract = GENERATOR_CONTRACT
+    window = contract.get("visible_window", 1)
+    if not isinstance(window, int) or not 1 <= window <= 2:
+        raise StructuredOutputError("generator contract visible window is invalid")
+    if window != 1 and strategy != STRATEGY_BROAD:
+        raise StructuredOutputError(
+            "a widened visible window is defined for the broad strategy only")
     fragment_map = build_fragment_map(transcript)
     candidates = (
-        _broad_candidates(fragment_map)
+        _broad_candidates(fragment_map, window)
         if strategy == STRATEGY_BROAD
         else _cue_candidates(transcript, fragment_map)
     )
@@ -516,8 +662,8 @@ def generate_manifest(transcript: Transcript, strategy: str) -> dict:
         "attribution": transcript.attribution,
         "transcript_view_sha256": fragment_map["transcript_view_sha256"],
         "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
-        "generator_contract": dict(GENERATOR_CONTRACT),
-        "generator_contract_sha256": _generator_contract_sha256(),
+        "generator_contract": dict(contract),
+        "generator_contract_sha256": _json_sha256(contract),
         "counts": {
             "turns": len(transcript.turns),
             "source_fragments": len(fragment_map["fragments"]),
@@ -551,10 +697,18 @@ def validate_manifest(manifest: object, transcript: Transcript) -> dict:
     if manifest.get("manifest_sha256") != _json_sha256(received_base):
         raise StructuredOutputError(
             "candidate manifest digest does not re-derive")
-    expected = generate_manifest(transcript, strategy)
+    embedded_contract = manifest.get("generator_contract")
+    if (
+        not isinstance(embedded_contract, dict)
+        or manifest.get("generator_contract_sha256") != _json_sha256(embedded_contract)
+    ):
+        raise StructuredOutputError(
+            "candidate manifest generator contract does not match its digest")
+    expected = generate_manifest(transcript, strategy, contract=embedded_contract)
     if _json_bytes(manifest) != _json_bytes(expected):
         raise StructuredOutputError(
             "candidate manifest does not re-derive from the transcript")
+    window = embedded_contract.get("visible_window", 1)
 
     candidates = manifest["candidates"]
     ids = [row["candidate_id"] for row in candidates]
@@ -575,7 +729,7 @@ def validate_manifest(manifest: object, transcript: Transcript) -> dict:
         if (
             anchor_id not in lookup
             or not isinstance(visible, list)
-            or not 1 <= len(visible) <= 3
+            or not 1 <= len(visible) <= 2 * window + 1
             or anchor_id not in visible
             or len(visible) != len(set(visible))
             or any(fragment_id not in lookup for fragment_id in visible)
@@ -1584,6 +1738,65 @@ def run_self_test() -> int:
             pass
         else:
             raise AssertionError("a sibling checkout output target was accepted")
+
+    # Product lane: the adopted two-fragment window generates and validates,
+    # and the registered one-fragment lane is byte-unmoved by its existence.
+    assert registered_run_sha256() == (
+        "cbbb4e2448475ce5375b075d806581448936c81f7942c489c55c2e0a923d7a69"
+    ), "the research registration moved; the product lane must not touch it"
+    product_manifest = generate_manifest(
+        transcript, STRATEGY_BROAD, contract=PRODUCT_CONTRACT)
+    validate_manifest(product_manifest, transcript)
+    widths = {len(row["visible_fragment_ids"]) for row in product_manifest["candidates"]}
+    assert max(widths) == min(5, len(product_manifest["candidates"])), (
+        "the product window must expose five fragments away from the edges")
+    assert product_manifest["generator_contract_sha256"] == (
+        PRODUCT_RUN["generator"]["contract_sha256"]
+    ), "the product manifest must bind the registered product contract"
+    try:
+        generate_manifest(transcript, STRATEGY_CUE, contract=PRODUCT_CONTRACT)
+    except StructuredOutputError:
+        pass
+    else:
+        raise AssertionError("a widened window must refuse the cue strategy")
+
+    # Pruner: run collapse, longest-anchor representative, refusal cases.
+    rows = product_manifest["candidates"]
+    all_abstain = [
+        {"candidate_id": row["candidate_id"], "verdict": "ABSTAIN"} for row in rows]
+
+    def _with_keeps(ordinals):
+        return [
+            {"candidate_id": row["candidate_id"],
+             "verdict": "KEEP" if row["ordinal"] in ordinals else "ABSTAIN"}
+            for row in rows
+        ]
+
+    lengths = {
+        row["ordinal"]: row["anchor_char_end"] - row["anchor_char_start"]
+        for row in rows
+    }
+    pruned = prune_keeps(rows, _with_keeps({1, 2, 4}))
+    assert pruned["counts"] == {
+        "decisions": len(rows), "keep": 3, "runs": 2, "pruned_keep": 2}
+    first_run_expected = max((1, 2), key=lambda o: (lengths[o], -o))
+    kept_ordinals = {
+        row["ordinal"] for row in rows
+        if row["candidate_id"] in set(pruned["pruned_candidate_ids"])}
+    assert kept_ordinals == {first_run_expected, 4}, (
+        "the pruner must keep the longest anchor per run and lone keeps intact")
+    assert prune_keeps(rows, all_abstain)["counts"]["pruned_keep"] == 0
+    for bad in (
+        all_abstain[:-1],
+        all_abstain[:-1] + [dict(all_abstain[-1], verdict="MAYBE")],
+        all_abstain + [all_abstain[0]],
+    ):
+        try:
+            prune_keeps(rows, bad)
+        except StructuredOutputError:
+            pass
+        else:
+            raise AssertionError("the pruner accepted an invalid decision set")
 
     print("all candidate-first controls behaved as specified")
     return 0
