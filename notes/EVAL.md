@@ -2940,3 +2940,13 @@ preregistered predictions above remain untested. All state is durable:
 amendment committed, cycles and locks built and approved, run commands
 in `~/.yawn-research/capture-exposure/OFFICIAL-RERUN.md`. The runs are
 deterministic; nothing is lost by the interruption.
+
+### Official product run — meeting 1 PASSES, prediction exact (2026-08-15)
+
+First official gated run under the amended registration (fe493522, lock
+7d3a45d9…, ledger 5091a666…): candidates 165, keep 104, pruned 27,
+recall 13/13, gate PASS, elapsed 585.4 s, result_sha256 f982ea03…
+(artifact `product-run-result.json` in the meeting-1 packet, ids-only
+dump beside it). The preregistered prediction — pruned 27, 13/13 —
+held to the digit. Meeting 2's run was interrupted mid-inference again
+(fourth external stop); relaunching it alone.
