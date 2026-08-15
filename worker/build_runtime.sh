@@ -63,7 +63,9 @@ verify() {
   [[ -x "$STAGE/bin/permission-probe" ]]
   [[ -f "$STAGE/app-runtime.json" ]]
   [[ -f "$STAGE/note-runtime-project.json" ]]
+  [[ -f "$STAGE/note-runtime-generate.json" ]]
   [[ -f "$STAGE/note-bridge.py" ]]
+  [[ -f "$STAGE/note-generator-mlx.py" ]]
   [[ -f "$STAGE/note-validator.zip" ]]
   PYTHONPATH="$REPO" python3 -c \
     'import sys; from pathlib import Path; from worker.build_manifest import verify_note_runtime; verify_note_runtime(Path(sys.argv[1]))' \
@@ -189,6 +191,7 @@ cp "$REPO/worker/__init__.py" "$REPO/worker/main.py" \
   "$REPO/worker/storage.py" "$REPO/worker/fbank.py" \
   "$REPO/worker/transcription.py" "$REPO/worker/embedding.py" "$STAGE/worker/"
 cp "$REPO/worker/note_bridge.py" "$STAGE/note-bridge.py"
+cp "$REPO/worker/note_generator_mlx.py" "$STAGE/note-generator-mlx.py"
 cp "$REPO/spike/verify_capture.py" "$REPO/spike/capture_health.py" \
   "$REPO/spike/dual_capture.py" "$REPO/spike/speaker_gate.py" \
   "$REPO/spike/aec_bound.py" "$STAGE/spike/"

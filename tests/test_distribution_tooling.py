@@ -195,14 +195,13 @@ class DistributionToolingTests(unittest.TestCase):
         ):
             self.assertIn(required, verifier)
 
-    def test_note_generate_manifest_pins_the_mlx_generator_and_stays_unwritten(self) -> None:
-        """The `generate` sibling builds, pins the real generator, and ships nowhere.
+    def test_note_generate_manifest_pins_the_mlx_generator_and_is_written(self) -> None:
+        """The `generate` sibling builds, pins the real generator, and is written.
 
-        Two halves, because either alone is misleading. The builder must
-        produce exactly the bytes Rust re-derives in `canonical_manifest`, and
-        `main()` must still not write it: the signed catalog carries no
-        note-model role, so a written file could only pin an empty model set,
-        which `note_projector_process.rs` refuses.
+        The builder must produce exactly the bytes Rust re-derives in
+        `canonical_manifest`, and `main()`'s note-runtime lane writes it
+        pinned to the `NOTE_MODELS` catalog entry — the signed catalog now
+        carries the note-model role, so the manifest names a real model set.
         """
         builder = source("worker/build_manifest.py")
         self.assertIn('NOTE_GENERATE_MANIFEST = Path("note-runtime-generate.json")', builder)
@@ -230,9 +229,13 @@ class DistributionToolingTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertFalse((root / "note-runtime-generate.json").exists())
-
             module = load_build_manifest()
+            self.assertEqual(
+                (root / "note-runtime-generate.json").read_bytes(),
+                module.canonical_note_manifest(
+                    module.note_generate_manifest(root, module.note_model_pins())
+                ),
+            )
             models = [
                 {"id": "note-generator-weights", "sha256": "b" * 64},
                 {"id": "note-generator-config", "sha256": "a" * 64},
@@ -261,6 +264,42 @@ class DistributionToolingTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 module.note_generate_manifest(root, [])
 
+    def test_note_model_pins_mirror_the_rust_identifier_derivation(self) -> None:
+        """The pins must equal what Rust's `note_runtime_models` derives.
+
+        The expected list is the same one
+        `note_runtime_model_ids_name_every_file_of_a_sharded_model_distinctly`
+        pins in `crates/session-core/src/note_projector_process.rs`; the two
+        tests drifting apart is the failure this pair exists to catch.
+        """
+        module = load_build_manifest()
+        self.assertEqual(
+            [pin["id"] for pin in module.note_model_pins()],
+            [
+                "note-generator-config",
+                "note-generator-tokenizer",
+                "note-generator-tokenizer-config",
+                "note-generator-weights-00001-of-00002",
+                "note-generator-weights-00002-of-00002",
+                "note-generator-weights-index",
+            ],
+        )
+        self.assertEqual(
+            module.note_runtime_model_id("weights", "model.safetensors"),
+            "note-generator-weights",
+        )
+        catalog = module.model_catalog()
+        self.assertEqual(list(catalog), ["schema", "models", "note_models"])
+        entry = catalog["note_models"][0]
+        self.assertEqual(entry["downloadBytes"], entry["installedBytes"])
+        self.assertEqual(
+            entry["downloadBytes"], sum(file["bytes"] for file in entry["files"])
+        )
+        for file in entry["files"]:
+            self.assertTrue(file["url"].startswith("https://"))
+            self.assertIn(entry["revision"], file["url"])
+            self.assertTrue(file["url"].endswith(file["name"]))
+
     def test_note_project_runtime_manifest_and_validator_zip_are_generated_canonically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -271,6 +310,7 @@ class DistributionToolingTests(unittest.TestCase):
                 "bin/permission-probe": b"probe",
                 "encoder-unavailable.identity": b"encoder",
                 "note-bridge.py": source("worker/note_bridge.py").encode(),
+                "note-generator-mlx.py": source("worker/note_generator_mlx.py").encode(),
             }
             for relative, contents in fixtures.items():
                 target = root / relative

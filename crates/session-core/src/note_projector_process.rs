@@ -34,11 +34,11 @@ use sha2::{Digest, Sha256};
 
 use crate::meeting::valid_opaque_id;
 use crate::model_store::{
-    ModelCatalog, TranscriptModel, TranscriptModelFileRole, verify_model_directory,
+    DownloadableModel, ModelCatalog, NoteModel, NoteModelFile, NoteModelFileRole,
 };
 use crate::note_projection::{
     MAX_PROJECTION_FRAME_BYTES, NoteProjector, ProjectRequest, ProjectTransportError,
-    ProjectionCancellation, StrictJson, UnavailableProjector, array, exact_object, strict_json,
+    ProjectionCancellation, StrictJson, array, exact_object, strict_json,
     string, u64_value,
 };
 use crate::storage::StorageRoot;
@@ -294,20 +294,50 @@ impl ProcessNoteProjector {
 /// The identifiers are note-scoped on purpose: `runtime_models` already names
 /// the same files for the transcription worker, and the two runtimes must not
 /// be able to satisfy each other's manifest by accident.
-fn note_runtime_models(entry: &TranscriptModel) -> Vec<RuntimeManifestModel> {
+///
+/// Weights shards derive distinct identifiers from the shard designator in
+/// their catalog-validated file name (`model-00001-of-00002.safetensors` →
+/// `note-generator-weights-00001-of-00002`); a single-file model keeps the
+/// bare `note-generator-weights`. `worker/build_manifest.py`
+/// (`note_runtime_model_id`) derives the same identifiers when it writes the
+/// `generate` manifest — admission compares the two derivations digest for
+/// digest, so a drift between them refuses rather than mis-admits. Any
+/// duplicate identifier — expressible only through weights names outside the
+/// shard shape — collapses the derivation to empty, which no valid manifest's
+/// non-empty pinned set can match: an honest refusal, never an ambiguous one.
+fn note_runtime_models(entry: &NoteModel) -> Vec<RuntimeManifestModel> {
     let mut models: Vec<_> = entry
         .files
         .iter()
         .map(|file| RuntimeManifestModel {
-            id: match file.role {
-                TranscriptModelFileRole::Config => "note-generator-config".to_owned(),
-                TranscriptModelFileRole::Weights => "note-generator-weights".to_owned(),
-            },
+            id: note_runtime_model_id(file),
             sha256: file.sha256.clone(),
         })
         .collect();
     models.sort_by(|left, right| left.id.cmp(&right.id));
+    if models.windows(2).any(|pair| pair[0].id == pair[1].id) {
+        return Vec::new();
+    }
     models
+}
+
+fn note_runtime_model_id(file: &NoteModelFile) -> String {
+    match file.role {
+        NoteModelFileRole::Config => "note-generator-config".to_owned(),
+        NoteModelFileRole::Weights => match file
+            .name
+            .strip_prefix("model-")
+            .and_then(|rest| rest.strip_suffix(".safetensors"))
+        {
+            Some(shard) if !shard.is_empty() => {
+                format!("note-generator-weights-{}", shard.replace('.', "-"))
+            }
+            _ => "note-generator-weights".to_owned(),
+        },
+        NoteModelFileRole::WeightsIndex => "note-generator-weights-index".to_owned(),
+        NoteModelFileRole::Tokenizer => "note-generator-tokenizer".to_owned(),
+        NoteModelFileRole::TokenizerConfig => "note-generator-tokenizer-config".to_owned(),
+    }
 }
 
 /// Chooses the `note.project` transport for one library snapshot.
@@ -323,7 +353,8 @@ fn note_runtime_models(entry: &TranscriptModel) -> Vec<RuntimeManifestModel> {
 /// 2. Exactly one signed-catalog model provides that pinned set, digest for
 ///    digest.
 /// 3. That model is installed in the private store and re-verified now by
-///    `model_store::verify_model_directory`, not merely recorded as present.
+///    `model_store::verify_note_model_directory`, not merely recorded as
+///    present.
 /// 4. The `project`-role manifest, which is the one this transport actually
 ///    hands to the child, verifies on its own terms.
 ///
@@ -366,17 +397,15 @@ fn admitted_process_projector(
     }
     pinned.sort_by(|left, right| left.id.cmp(&right.id));
     let mut admitted = catalog
-        .models
+        .note_models
         .iter()
         .filter(|entry| note_runtime_models(entry) == pinned);
     let entry = admitted.next()?;
     if admitted.next().is_some() {
         return None;
     }
-    let directory = storage
-        .resolve(&Path::new("models").join(&entry.id).join(&entry.revision))
-        .ok()?;
-    verify_model_directory(&directory, entry).ok()?;
+    let directory = storage.resolve(&entry.relative_path()).ok()?;
+    entry.verify_directory(&directory).ok()?;
     verify_manifest(project_manifest_path, PROJECT_ROLE).ok()?;
     Some(ProcessNoteProjector::product(
         storage.path().to_path_buf(),
@@ -1968,8 +1997,10 @@ mod tests {
 
     use super::*;
     use crate::model_store::{
-        INSTALL_RECEIPT_NAME, ModelCatalogSchema, TranscriptModelFile, install_receipt_bytes,
+        INSTALL_RECEIPT_NAME, ModelCatalogSchema, TranscriptModel, TranscriptModelFile,
+        TranscriptModelFileRole, note_install_receipt_bytes,
     };
+    use crate::note_projection::UnavailableProjector;
     use crate::storage::{create_private_dir, durable_create_new};
 
     const GENERATOR_FIXTURE: &[u8] = b"generator-fixture";
@@ -2044,22 +2075,25 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         }
 
         fn model_directory(&self) -> PathBuf {
-            let entry = &self.catalog.models[0];
-            self.storage
-                .resolve(&Path::new("models").join(&entry.id).join(&entry.revision))
-                .unwrap()
+            let entry = &self.catalog.note_models[0];
+            self.storage.resolve(&entry.relative_path()).unwrap()
         }
 
         fn install_note_model(&self) {
-            let entry = &self.catalog.models[0];
+            let entry = &self.catalog.note_models[0];
             let directory = self.model_directory();
+            for ancestor in directory.ancestors().skip(1).collect::<Vec<_>>().iter().rev() {
+                if ancestor.starts_with(self.storage.path()) && !ancestor.exists() {
+                    create_private_dir(ancestor).unwrap();
+                }
+            }
             create_private_dir(&directory).unwrap();
             durable_create_new(&directory.join("config.json"), NOTE_CONFIG_FIXTURE).unwrap();
-            durable_create_new(&directory.join("weights.safetensors"), NOTE_WEIGHTS_FIXTURE)
+            durable_create_new(&directory.join("model.safetensors"), NOTE_WEIGHTS_FIXTURE)
                 .unwrap();
             durable_create_new(
                 &directory.join(INSTALL_RECEIPT_NAME),
-                &install_receipt_bytes(entry),
+                &note_install_receipt_bytes(entry),
             )
             .unwrap();
         }
@@ -2125,7 +2159,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         }
 
         fn pinned_models(&self) -> Vec<RuntimeManifestModel> {
-            note_runtime_models(&self.catalog.models[0])
+            note_runtime_models(&self.catalog.note_models[0])
         }
 
         fn generator(&self) -> RuntimeManifestResource {
@@ -2133,12 +2167,42 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         }
     }
 
+    /// The smallest transcript entry `ModelCatalog::validate` accepts —
+    /// present because a catalog without one is invalid, unused by admission.
+    fn transcript_fixture_model() -> TranscriptModel {
+        let revision = "a".repeat(40);
+        TranscriptModel {
+            id: "whisper-test".into(),
+            revision: revision.clone(),
+            title: "Speech model".into(),
+            detail: "A local transcription model fixture.".into(),
+            download_bytes: 2,
+            installed_bytes: 2,
+            files: vec![
+                TranscriptModelFile {
+                    role: TranscriptModelFileRole::Config,
+                    name: "config.json".into(),
+                    url: format!("https://example.test/{revision}/config.json"),
+                    bytes: 1,
+                    sha256: "1".repeat(64),
+                },
+                TranscriptModelFile {
+                    role: TranscriptModelFileRole::Weights,
+                    name: "weights.safetensors".into(),
+                    url: format!("https://example.test/{revision}/weights.safetensors"),
+                    bytes: 1,
+                    sha256: "2".repeat(64),
+                },
+            ],
+        }
+    }
+
     fn note_catalog() -> ModelCatalog {
         let revision = "b".repeat(40);
         let catalog = ModelCatalog {
-            note_models: Vec::new(),
             schema: ModelCatalogSchema::V1,
-            models: vec![TranscriptModel {
+            models: vec![transcript_fixture_model()],
+            note_models: vec![NoteModel {
                 id: "note-generator-test".into(),
                 revision: revision.clone(),
                 title: "Note generator".into(),
@@ -2146,17 +2210,17 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
                 download_bytes: (NOTE_CONFIG_FIXTURE.len() + NOTE_WEIGHTS_FIXTURE.len()) as u64,
                 installed_bytes: (NOTE_CONFIG_FIXTURE.len() + NOTE_WEIGHTS_FIXTURE.len()) as u64,
                 files: vec![
-                    TranscriptModelFile {
-                        role: TranscriptModelFileRole::Config,
+                    NoteModelFile {
+                        role: NoteModelFileRole::Config,
                         name: "config.json".into(),
                         url: format!("https://example.test/{revision}/config.json"),
                         bytes: NOTE_CONFIG_FIXTURE.len() as u64,
                         sha256: format!("{:x}", Sha256::digest(NOTE_CONFIG_FIXTURE)),
                     },
-                    TranscriptModelFile {
-                        role: TranscriptModelFileRole::Weights,
-                        name: "weights.safetensors".into(),
-                        url: format!("https://example.test/{revision}/weights.safetensors"),
+                    NoteModelFile {
+                        role: NoteModelFileRole::Weights,
+                        name: "model.safetensors".into(),
+                        url: format!("https://example.test/{revision}/model.safetensors"),
                         bytes: NOTE_WEIGHTS_FIXTURE.len() as u64,
                         sha256: format!("{:x}", Sha256::digest(NOTE_WEIGHTS_FIXTURE)),
                     },
@@ -2962,13 +3026,13 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         assert!(fixture.is_admitted());
 
         let mut ambiguous = fixture.catalog.clone();
-        let mut twin = ambiguous.models[0].clone();
+        let mut twin = ambiguous.note_models[0].clone();
         twin.id = "note-generator-twin".into();
         twin.revision = "c".repeat(40);
         for file in &mut twin.files {
             file.url = format!("https://example.test/{}/{}", twin.revision, file.name);
         }
-        ambiguous.models.push(twin);
+        ambiguous.note_models.push(twin);
         ambiguous.validate().expect("two entries may share digests");
 
         assert!(
@@ -3062,60 +3126,86 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         }
     }
 
-    /// `note_runtime_models` derives one identifier per file *role*, so it can
-    /// only name a catalog entry carrying one file per role.  It does not
-    /// enforce that itself -- `ModelCatalog::validate` does, by requiring
-    /// exactly one `Config` and one `Weights`.  The mapping is injective by
-    /// inheritance, not by construction.
-    ///
-    /// That matters because a note-generation model large enough to be worth
-    /// shipping is normally sharded across several weights files.  The catalog
-    /// cannot express that today.  If a later slice teaches it to, two weights
-    /// files collide on one identifier and admission refuses at `parse_models`
-    /// -- an honest refusal, but one that reads as a malformed manifest rather
-    /// than as an identifier scheme that cannot name the model.  This test
-    /// pins the limit so the change fails here, where the reason is written.
+    /// `note_runtime_models` names every file of a sharded MLX tree with a
+    /// distinct identifier — the widening `docs/note-runtime-decision.md`
+    /// seam 3 recorded as blocked on the catalog's note-model role. The
+    /// expected list below is the cross-language contract:
+    /// `worker/build_manifest.py::note_runtime_model_id` must derive exactly
+    /// these identifiers for the same entry, because admission compares the
+    /// manifest Python writes against the derivation Rust performs here.
     #[test]
-    fn note_runtime_model_ids_are_one_per_role_and_cannot_name_a_sharded_model() {
-        let fixture = launch_fixture("descriptor-binding");
-        let entry = &fixture.catalog.models[0];
+    fn note_runtime_model_ids_name_every_file_of_a_sharded_model_distinctly() {
+        let revision = "c".repeat(40);
+        let file = |role, name: &str| NoteModelFile {
+            role,
+            name: name.into(),
+            url: format!("https://example.test/{revision}/{name}"),
+            bytes: 1,
+            sha256: format!("{:x}", Sha256::digest(name.as_bytes())),
+        };
+        let sharded = NoteModel {
+            id: "note-generator-sharded-test".into(),
+            revision: revision.clone(),
+            title: "Sharded note generator".into(),
+            detail: "A sharded local note-generation model.".into(),
+            download_bytes: 6,
+            installed_bytes: 6,
+            files: vec![
+                file(NoteModelFileRole::Config, "config.json"),
+                file(NoteModelFileRole::Weights, "model-00001-of-00002.safetensors"),
+                file(NoteModelFileRole::Weights, "model-00002-of-00002.safetensors"),
+                file(NoteModelFileRole::WeightsIndex, "model.safetensors.index.json"),
+                file(NoteModelFileRole::Tokenizer, "tokenizer.json"),
+                file(NoteModelFileRole::TokenizerConfig, "tokenizer_config.json"),
+            ],
+        };
+        ModelCatalog {
+            schema: ModelCatalogSchema::V1,
+            models: vec![transcript_fixture_model()],
+            note_models: vec![sharded.clone()],
+        }
+        .validate()
+        .unwrap();
         assert_eq!(
-            note_runtime_models(entry)
+            note_runtime_models(&sharded)
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            ["note-generator-config", "note-generator-weights"]
+            [
+                "note-generator-config",
+                "note-generator-tokenizer",
+                "note-generator-tokenizer-config",
+                "note-generator-weights-00001-of-00002",
+                "note-generator-weights-00002-of-00002",
+                "note-generator-weights-index",
+            ]
         );
 
-        let mut sharded = entry.clone();
-        sharded.files.push(TranscriptModelFile {
-            role: TranscriptModelFileRole::Weights,
-            name: "weights-00002.safetensors".into(),
-            url: format!(
-                "https://example.test/{}/weights-00002.safetensors",
-                sharded.revision
-            ),
-            bytes: 1,
-            sha256: "d".repeat(64),
-        });
+        // A weights name outside the shard shape that collides with another
+        // file's identifier collapses the derivation to empty — admission can
+        // then never match a non-empty pinned set, an honest refusal instead
+        // of an ambiguous one. Such an entry cannot come from `validate()`d
+        // catalogs today, but the guard is what makes the mapping injective
+        // by construction rather than by inheritance.
+        let mut collided = sharded.clone();
+        collided.files[1].name = "model-00002-of-00002.extra.safetensors".into();
+        collided.files[1].sha256 = "e".repeat(64);
         assert!(
-            ModelCatalog {
-                note_models: Vec::new(),
-                schema: ModelCatalogSchema::V1,
-                models: vec![sharded.clone()],
-            }
-            .validate()
-            .is_err(),
-            "the catalog, not this mapping, is what keeps the identifiers distinct"
+            note_runtime_models(&collided).is_empty()
+                || note_runtime_models(&collided)
+                    .iter()
+                    .map(|model| model.id.as_str())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    == note_runtime_models(&collided).len(),
+            "duplicate identifiers must never survive the derivation"
         );
-
-        let collided = note_runtime_models(&sharded);
-        assert_eq!(
-            collided[1].id, collided[2].id,
-            "sharded weights collapse onto one identifier"
+        let mut duplicate = sharded.clone();
+        duplicate.files[2].name = "model-00001-of-00002.safetensors".into();
+        assert!(
+            note_runtime_models(&duplicate).is_empty(),
+            "an identifier collision collapses the derivation to empty"
         );
-        fixture.write_generate_manifest(Some(&fixture.generator()), &collided);
-        assert!(!fixture.is_admitted());
     }
 
     #[test]
@@ -3144,7 +3234,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
     fn admission_refuses_an_installed_model_whose_bytes_or_inventory_changed() {
         let fixture = generative_fixture("descriptor-binding");
         assert!(fixture.is_admitted());
-        let weights = fixture.model_directory().join("weights.safetensors");
+        let weights = fixture.model_directory().join("model.safetensors");
         fs::write(&weights, b"different note weights of a different length").unwrap();
         assert!(!fixture.is_admitted());
         fs::write(&weights, NOTE_WEIGHTS_FIXTURE).unwrap();

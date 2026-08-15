@@ -292,8 +292,62 @@ def verify_model_catalog(resources: Path, manifest: dict) -> None:
                     ],
                 },
             ],
+            "note_models": [
+                {
+                    "id": "gemma-3-12b-it-qat-4bit",
+                    "revision": "66fc51ef25778c03d33c4c8bc446973d062e73f4",
+                    "title": "Note generation model",
+                    "detail": "The local note-generation model (Gemma 3 12B, 4-bit), using about 8.06 GB.",
+                    "downloadBytes": 8063332687,
+                    "installedBytes": 8063332687,
+                    "files": [
+                        {
+                            "role": "config",
+                            "name": "config.json",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/gemma-3-12b-it-qat-4bit/66fc51ef25778c03d33c4c8bc446973d062e73f4/config.json",
+                            "bytes": 7267,
+                            "sha256": "e1f96cecfbbae53a97fa351376e2ebb9d0e2220d80c0a194452aa427f89b3066",
+                        },
+                        {
+                            "role": "weights",
+                            "name": "model-00001-of-00002.safetensors",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/gemma-3-12b-it-qat-4bit/66fc51ef25778c03d33c4c8bc446973d062e73f4/model-00001-of-00002.safetensors",
+                            "bytes": 5367455313,
+                            "sha256": "4716bf31a789e3502fc021cb78a12bd8daea87e5d05534e5a01a00780ae05d2d",
+                        },
+                        {
+                            "role": "weights",
+                            "name": "model-00002-of-00002.safetensors",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/gemma-3-12b-it-qat-4bit/66fc51ef25778c03d33c4c8bc446973d062e73f4/model-00002-of-00002.safetensors",
+                            "bytes": 2661219935,
+                            "sha256": "37301980c27d8c49e87bb323633343b1222ec8131a71c0f41ff9d6a2d77ebee9",
+                        },
+                        {
+                            "role": "weights-index",
+                            "name": "model.safetensors.index.json",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/gemma-3-12b-it-qat-4bit/66fc51ef25778c03d33c4c8bc446973d062e73f4/model.safetensors.index.json",
+                            "bytes": 108605,
+                            "sha256": "788cc42a1a92835df62d9a3791f47105f63504c7c404637a73288e9b11bc7b82",
+                        },
+                        {
+                            "role": "tokenizer",
+                            "name": "tokenizer.json",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/gemma-3-12b-it-qat-4bit/66fc51ef25778c03d33c4c8bc446973d062e73f4/tokenizer.json",
+                            "bytes": 33384568,
+                            "sha256": "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795",
+                        },
+                        {
+                            "role": "tokenizer-config",
+                            "name": "tokenizer_config.json",
+                            "url": "https://pub-91cec3695eaf486bbfaaa114df6f2268.r2.dev/models/gemma-3-12b-it-qat-4bit/66fc51ef25778c03d33c4c8bc446973d062e73f4/tokenizer_config.json",
+                            "bytes": 1156999,
+                            "sha256": "bfe25c2735e395407beb78456ea9a6984a1f00d8c16fa04a8b75f2a614cf53e1",
+                        },
+                    ],
+                },
+            ],
         },
-        "model catalog is not the release verifier's pinned two-model inventory",
+        "model catalog is not the release verifier's pinned model inventory",
     )
     require(
         not (resources / "models/whisper-large-v3-turbo").exists(),

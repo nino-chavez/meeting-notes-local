@@ -18,11 +18,8 @@ NOTE_MANIFEST = Path("note-runtime-project.json")
 # The `generate`-role sibling. `crates/session-core/src/note_projector_process.rs`
 # reads it beside the project manifest to learn which generator and which model
 # digests the bundle pins, and refuses a generate manifest that names a
-# generator without pinning models (or the reverse). It is built here and not
-# yet written by `main()`: the signed model catalog carries no note-model role,
-# so any file written today would pin an empty model set and be refused anyway.
-# Adding the entry is the step that turns this on — see the note on
-# `note_generate_manifest`.
+# generator without pinning models (or the reverse). `main()` writes it in the
+# note-runtime lane, pinned to the `NOTE_MODELS` catalog entry.
 NOTE_GENERATE_MANIFEST = Path("note-runtime-generate.json")
 NOTE_BRIDGE = Path("note-bridge.py")
 NOTE_GENERATOR = Path("note-generator-mlx.py")
@@ -79,6 +76,60 @@ TRANSCRIPT_MODELS = [
                 "name": "weights.safetensors",
                 "bytes": 1_613_977_612,
                 "sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6",
+            },
+        ],
+    },
+]
+
+# The one note-generation model: the registration-pinned
+# mlx-community/gemma-3-12b-it-qat-4bit snapshot (notes/EVAL.md, product
+# registration — snapshot 66fc51ef…). These six files are the complete
+# behavioral surface of the snapshot for the product path: the fixed prompt
+# rendering never calls the tokenizer's chat template, and a six-file tree
+# was measured to load and tokenize byte-identically to the full snapshot
+# (same token ids, same greedy decode) before this entry was written.
+NOTE_MODELS = [
+    {
+        "id": "gemma-3-12b-it-qat-4bit",
+        "revision": "66fc51ef25778c03d33c4c8bc446973d062e73f4",
+        "title": "Note generation model",
+        "detail": "The local note-generation model (Gemma 3 12B, 4-bit), using about 8.06 GB.",
+        "files": [
+            {
+                "role": "config",
+                "name": "config.json",
+                "bytes": 7_267,
+                "sha256": "e1f96cecfbbae53a97fa351376e2ebb9d0e2220d80c0a194452aa427f89b3066",
+            },
+            {
+                "role": "weights",
+                "name": "model-00001-of-00002.safetensors",
+                "bytes": 5_367_455_313,
+                "sha256": "4716bf31a789e3502fc021cb78a12bd8daea87e5d05534e5a01a00780ae05d2d",
+            },
+            {
+                "role": "weights",
+                "name": "model-00002-of-00002.safetensors",
+                "bytes": 2_661_219_935,
+                "sha256": "37301980c27d8c49e87bb323633343b1222ec8131a71c0f41ff9d6a2d77ebee9",
+            },
+            {
+                "role": "weights-index",
+                "name": "model.safetensors.index.json",
+                "bytes": 108_605,
+                "sha256": "788cc42a1a92835df62d9a3791f47105f63504c7c404637a73288e9b11bc7b82",
+            },
+            {
+                "role": "tokenizer",
+                "name": "tokenizer.json",
+                "bytes": 33_384_568,
+                "sha256": "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795",
+            },
+            {
+                "role": "tokenizer-config",
+                "name": "tokenizer_config.json",
+                "bytes": 1_156_999,
+                "sha256": "bfe25c2735e395407beb78456ea9a6984a1f00d8c16fa04a8b75f2a614cf53e1",
             },
         ],
     },
@@ -222,9 +273,9 @@ def verify_note_runtime_absent(root: Path) -> None:
             raise SystemExit(f"test-only note runtime resource is present in bundle root: {relative}")
 
 
-def model_catalog() -> dict:
-    models = []
-    for source in TRANSCRIPT_MODELS:
+def _catalog_entries(sources: list[dict]) -> list[dict]:
+    entries = []
+    for source in sources:
         revision = source["revision"]
         files = [
             {
@@ -234,7 +285,7 @@ def model_catalog() -> dict:
             for file in source["files"]
         ]
         installed_bytes = sum(file["bytes"] for file in files)
-        models.append(
+        entries.append(
             {
                 "id": source["id"],
                 "revision": revision,
@@ -245,7 +296,60 @@ def model_catalog() -> dict:
                 "files": files,
             }
         )
-    return {"schema": "yawn-model-catalog/1", "models": models}
+    return entries
+
+
+def model_catalog() -> dict:
+    return {
+        "schema": "yawn-model-catalog/1",
+        "models": _catalog_entries(TRANSCRIPT_MODELS),
+        "note_models": _catalog_entries(NOTE_MODELS),
+    }
+
+
+def note_runtime_model_id(role: str, name: str) -> str:
+    """The note-runtime identifier for one catalog file.
+
+    Must derive exactly what `note_runtime_models` in
+    `crates/session-core/src/note_projector_process.rs` derives for the same
+    file: admission compares the manifest this module writes against the Rust
+    derivation digest for digest, so a drift refuses rather than mis-admits.
+    The characterization test
+    `note_runtime_model_ids_name_every_file_of_a_sharded_model_distinctly`
+    pins the Rust side; `tests/test_distribution_tooling.py` pins this one to
+    the same expected list.
+    """
+    if role == "config":
+        return "note-generator-config"
+    if role == "weights-index":
+        return "note-generator-weights-index"
+    if role == "tokenizer":
+        return "note-generator-tokenizer"
+    if role == "tokenizer-config":
+        return "note-generator-tokenizer-config"
+    if role == "weights":
+        if name.startswith("model-") and name.endswith(".safetensors"):
+            shard = name[len("model-") : -len(".safetensors")]
+            if shard:
+                return "note-generator-weights-" + shard.replace(".", "-")
+        return "note-generator-weights"
+    raise SystemExit(f"unknown note-model file role: {role}")
+
+
+def note_model_pins() -> list[dict]:
+    """The `{"id", "sha256"}` pins the generate manifest carries, sorted."""
+    if len(NOTE_MODELS) != 1:
+        raise SystemExit("the generate manifest pins exactly one note model")
+    pins = [
+        {
+            "id": note_runtime_model_id(file["role"], file["name"]),
+            "sha256": file["sha256"],
+        }
+        for file in NOTE_MODELS[0]["files"]
+    ]
+    if len({pin["id"] for pin in pins}) != len(pins):
+        raise SystemExit("note-model file identifiers collide")
+    return sorted(pins, key=lambda pin: pin["id"])
 
 
 def write_model_catalog(root: Path) -> Path:
@@ -292,6 +396,10 @@ def main() -> int:
     else:
         atomic_write(root / NOTE_VALIDATOR, validator_bundle())
         atomic_write(root / NOTE_MANIFEST, canonical_note_manifest(note_manifest(root)))
+        atomic_write(
+            root / NOTE_GENERATE_MANIFEST,
+            canonical_note_manifest(note_generate_manifest(root, note_model_pins())),
+        )
     # Tauri's resource map is intentionally identical in every lane. The
     # catalog is signed into all bundles; only app-runtime/2 authorizes models
     # installed outside the bundle.

@@ -1,12 +1,11 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use local_meeting_notes_session_core::model_store::{
-    INSTALL_RECEIPT_NAME, ModelStoreError, TranscriptModel, activate_model, install_receipt_bytes,
-    verify_model_directory,
+    DownloadableModel, INSTALL_RECEIPT_NAME, ModelStoreError,
 };
 use local_meeting_notes_session_core::storage::{
     StorageRoot, create_private_dir, durable_create_new, sync_directory,
@@ -31,24 +30,33 @@ pub(crate) enum ModelDownloadError {
 
 pub(crate) fn install(
     storage: &StorageRoot,
-    model: &TranscriptModel,
+    model: &impl DownloadableModel,
     mut progress: impl FnMut(u64),
 ) -> Result<(), ModelDownloadError> {
     let models = storage
         .resolve(Path::new("models"))
         .map_err(|_| ModelDownloadError::Storage)?;
     create_private_dir(&models)?;
+    let relative = model.relative_path();
+    let relative_parent = relative.parent().ok_or(ModelDownloadError::Storage)?;
+    let mut ancestor = PathBuf::new();
+    for component in relative_parent.components() {
+        ancestor.push(component);
+        let directory = storage
+            .resolve(&ancestor)
+            .map_err(|_| ModelDownloadError::Storage)?;
+        create_private_dir(&directory)?;
+    }
     let model_parent = storage
-        .resolve(&Path::new("models").join(&model.id))
+        .resolve(relative_parent)
         .map_err(|_| ModelDownloadError::Storage)?;
-    create_private_dir(&model_parent)?;
     let target = storage
-        .resolve(&Path::new("models").join(&model.id).join(&model.revision))
+        .resolve(&relative)
         .map_err(|_| ModelDownloadError::Storage)?;
     if target.exists() {
-        if verify_model_directory(&target, model).is_ok() {
-            activate_model(storage, model)?;
-            progress(model.download_bytes);
+        if model.verify_directory(&target).is_ok() {
+            model.activate(storage)?;
+            progress(model.download_bytes());
             return Ok(());
         }
         if target.is_symlink() || !target.is_dir() {
@@ -69,9 +77,9 @@ pub(crate) fn install(
             .build()
             .map_err(|_| ModelDownloadError::Network)?;
         let mut downloaded = 0_u64;
-        for expected in &model.files {
+        for expected in &model.files() {
             let mut response = client
-                .get(&expected.url)
+                .get(expected.url)
                 .header(reqwest::header::ACCEPT_ENCODING, "identity")
                 .send()
                 .and_then(reqwest::blocking::Response::error_for_status)
@@ -82,7 +90,7 @@ pub(crate) fn install(
             {
                 return Err(ModelDownloadError::Mismatch);
             }
-            let path = staging.join(&expected.name);
+            let path = staging.join(expected.name);
             let mut output = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -115,15 +123,12 @@ pub(crate) fn install(
                 return Err(ModelDownloadError::Mismatch);
             }
         }
-        durable_create_new(
-            &staging.join(INSTALL_RECEIPT_NAME),
-            &install_receipt_bytes(model),
-        )?;
-        verify_model_directory(&staging, model)?;
+        durable_create_new(&staging.join(INSTALL_RECEIPT_NAME), &model.receipt_bytes())?;
+        model.verify_directory(&staging)?;
         fs::rename(&staging, &target)?;
         sync_directory(&model_parent)?;
         sync_directory(&models)?;
-        activate_model(storage, model)?;
+        model.activate(storage)?;
         Ok(())
     })();
     if result.is_err() {
