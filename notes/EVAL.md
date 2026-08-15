@@ -3140,3 +3140,31 @@ pure-performance memoization is planned; it must leave request bytes
 and verdicts byte-identical, will be validated against the recorded
 decision dumps, and lands only after the queued official runs complete
 so no run straddles a code change.
+
+### Correction — the panic diagnosis above was overstated and partly wrong
+
+The previous entry states launchd was "killed under memory exhaustion"
+and that the panic log "carries the jetsam/memorystatus markers." Both
+clauses fail re-derivation against the panic file itself
+(panic-full-2026-08-15-105533):
+
+- The exit reason is namespace 2 subcode 0xb. Namespace 2 is
+  OS_REASON_SIGNAL (jetsam is namespace 1); subcode 0xb is signal 11,
+  SIGSEGV (verified against the local SDK signal.h). launchd
+  segfaulted; the kernel panicked because initproc may not exit. The
+  log does not attribute the death to jetsam.
+- The "jetsam/memorystatus" strings previously cited are per-process
+  bookkeeping fields every process in a panic report carries
+  (jetsamCoalition etc.), not evidence a jetsam kill occurred.
+- At the panic instant the report reads memoryPressure:false,
+  pagesWanted:0, ~846 MB free — alongside a 27.1 GiB-resident Python
+  (the inference run) and 844,864 compressor pages after 1.04 B
+  compressions on the 36 GB machine.
+
+Corrected status: launchd died of SIGSEGV, cause unrecorded. Memory
+exhaustion from the stacked workload remains the hypothesis that fits,
+stated as hypothesis. The operational rule (one heavy job at a time)
+stands on the observed footprint regardless of the panic's proximate
+mechanism. Caught by an independent re-read of the source file during
+the write-up of the incident; the lesson is the standing one — a
+diagnosis is not a finding until re-derived from the artifact it cites.
