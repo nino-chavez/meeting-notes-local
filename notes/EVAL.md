@@ -3106,3 +3106,37 @@ Gate at 15 events: recalled × 13 ≥ 165 → at least 13 of 15. The
 official run queues behind the three pruner-v2 reruns; the vendor
 notes are read and scored per-event only after the official result
 exists.
+
+### Official pruner-v2 results — two passes, one run destroyed by a kernel panic
+
+Meeting 1 (registration 98dcbbd9…, lock d906598a…): 165 candidates,
+104 keep, 35 pruned (gap 1, stride 5), recall 13/13, 772.5 s, result
+a033f56f…. PASS — the preregistered prediction held exactly.
+
+Meeting 2 (registration 98dcbbd9…, lock 391ac495…): 300 candidates,
+152 keep, 64 pruned, recall 13/13 with ev-012 recovered as predicted,
+1481.7 s, result ff8ec942…. PASS — prediction exact.
+
+Zoom town hall: the run was in flight when the machine kernel-panicked
+(2026-08-15 10:55, "initproc exited" — launchd killed under memory
+exhaustion; the panic log carries the jetsam/memorystatus markers). The
+proximate cause was operational, not the pipeline: the 12B MLX
+inference run was left executing while the full worker test suite (each
+test spawning bridge subprocesses) and profiling runs were stacked on
+top of it on a 36 GB machine. No partial result was written; the cycle
+and its approved lock (8a096b53…) are intact and hash-verified.
+
+Operational rule recorded: one heavy job at a time. Model inference
+runs get the machine to themselves; test suites and profiling wait for
+the run to finish. The zoom official run relaunches alone under the
+same lock and the same preregistered prediction (gap 2, stride 8, keep
+58, recall 13/14 missing ev-003).
+
+Also found before the panic, deferred until after the reruns: the
+per-batch request builder revalidates the entire manifest on every
+call, making a run quadratic in candidate count (~0.55 s/batch at 720
+candidates measured offline; ~2 min of pure CPU at zoom's 453). A
+pure-performance memoization is planned; it must leave request bytes
+and verdicts byte-identical, will be validated against the recorded
+decision dumps, and lands only after the queued official runs complete
+so no run straddles a code change.
