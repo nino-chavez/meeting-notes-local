@@ -13,6 +13,9 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "install_transcript_model",
     "transcript_model_settings",
     "remove_transcript_model",
+    "note_model_settings",
+    "install_note_model",
+    "remove_note_model",
     "first_run_permissions",
     "first_run_request_microphone",
     "first_run_request_system_audio",
@@ -162,6 +165,9 @@ fn settings_can_only_manage_audio_access_and_local_speech_models() {
             "allow-transcript-model-settings",
             "allow-install-transcript-model",
             "allow-remove-transcript-model",
+            "allow-note-model-settings",
+            "allow-install-note-model",
+            "allow-remove-note-model",
         ]
     );
 
@@ -173,6 +179,9 @@ fn settings_can_only_manage_audio_access_and_local_speech_models() {
         "transcript_model_settings",
         "install_transcript_model",
         "remove_transcript_model",
+        "note_model_settings",
+        "install_note_model",
+        "remove_note_model",
     ] {
         assert!(script.contains(command));
     }

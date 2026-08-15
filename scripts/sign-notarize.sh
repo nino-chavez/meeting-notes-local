@@ -122,7 +122,7 @@ if [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema
   MANIFEST_ARGS+=(--external-transcript-models)
 fi
 "$ROOT/worker/build_manifest.py" \
-  "$APP/Contents/Resources" --admission "$ADMISSION" --exclude-note-runtime \
+  "$APP/Contents/Resources" --admission "$ADMISSION" \
   --encoder "$ENCODER_PATH" "${MANIFEST_ARGS[@]}"
 
 echo "== signing app bundle"

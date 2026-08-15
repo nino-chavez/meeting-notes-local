@@ -934,6 +934,30 @@ pub fn activate_note_model(
     Ok(())
 }
 
+/// Clears the active-note-model pointer, leaving the installed tree intact.
+///
+/// Note generation is optional in a way transcription is not, so "no active
+/// note model" is an ordinary state the reader already renders as an honest
+/// refusal — this is what makes removing the only note model expressible:
+/// deactivate, then `remove_inactive_note_model`. Touches only
+/// `ACTIVE_NOTE_RECEIPT`; the transcript pointer is a separate file by design.
+pub fn deactivate_note_model(storage: &StorageRoot) -> Result<(), ModelStoreError> {
+    let path = storage
+        .resolve(Path::new(ACTIVE_NOTE_RECEIPT))
+        .map_err(io::Error::other)?;
+    if path.is_symlink() || (path.exists() && !path.is_file()) {
+        return Err(ModelStoreError::InvalidReceipt);
+    }
+    if !path.exists() {
+        return Ok(());
+    }
+    fs::remove_file(&path)?;
+    if let Some(parent) = path.parent() {
+        sync_directory(parent)?;
+    }
+    Ok(())
+}
+
 fn read_json<T: for<'de> Deserialize<'de>>(
     path: &Path,
     max_bytes: u64,
@@ -1298,6 +1322,24 @@ mod tests {
         assert!(remove_inactive_note_model(&storage, &catalog, &other.id).unwrap());
         assert!(!other_directory.exists());
         assert!(!remove_inactive_note_model(&storage, &catalog, &other.id).unwrap());
+    }
+
+    #[test]
+    fn deactivation_makes_the_only_note_model_removable_and_is_idempotent() {
+        let (_temp, storage, mut catalog) = fixture();
+        let note = push_note_fixture(&mut catalog);
+        let directory = write_installed_note_model(&storage, &note);
+        activate_note_model(&storage, &note).unwrap();
+        assert!(matches!(
+            remove_inactive_note_model(&storage, &catalog, &note.id),
+            Err(ModelStoreError::ActiveModel)
+        ));
+
+        deactivate_note_model(&storage).unwrap();
+        assert!(active_note_model(&storage, &catalog).unwrap().is_none());
+        deactivate_note_model(&storage).unwrap();
+        assert!(remove_inactive_note_model(&storage, &catalog, &note.id).unwrap());
+        assert!(!directory.exists());
     }
 
     #[test]

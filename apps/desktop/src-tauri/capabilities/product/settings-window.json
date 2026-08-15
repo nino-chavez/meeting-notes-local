@@ -1,7 +1,7 @@
 {
   "$schema": "../../gen/schemas/desktop-schema.json",
   "identifier": "settings-window",
-  "description": "The Settings window may show and request the two local capture permissions, show the signed speech-model catalog, install and activate one catalog model, and remove only an inactive local model. It cannot read meetings or use generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
+  "description": "The Settings window may show and request the two local capture permissions, show the signed speech-model and note-model catalogs, install and activate catalog models, remove an inactive speech model, and remove the note model. It cannot read meetings or use generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
   "windows": [
     "settings"
   ],
@@ -14,6 +14,9 @@
     "allow-first-run-request-system-audio",
     "allow-transcript-model-settings",
     "allow-install-transcript-model",
-    "allow-remove-transcript-model"
+    "allow-remove-transcript-model",
+    "allow-note-model-settings",
+    "allow-install-note-model",
+    "allow-remove-note-model"
   ]
 }

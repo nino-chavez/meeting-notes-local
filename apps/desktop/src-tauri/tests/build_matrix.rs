@@ -49,17 +49,24 @@ fn preview_is_the_only_optional_build_lane() {
 }
 
 #[test]
-fn product_builds_keep_the_unadmitted_note_runtime_out_of_the_bundle() {
+fn product_builds_ship_the_complete_note_runtime() {
+    // Flipped from its unadmitted-exclusion predecessor when the signed
+    // catalog gained the note-model role: the bundle now ships the note
+    // runtime, and shipping it *partially* is the failure this pins —
+    // a bundle with a bridge but no generate manifest admits nothing and
+    // reads as a build defect rather than an honest refusal.
     let production = config(include_str!("../tauri.conf.json"));
     let preview = config(include_str!("../tauri.preview.conf.json"));
     for config in [&production, &preview] {
         let resources = config["bundle"]["resources"].as_object().unwrap();
         for path in [
             "../runtime/note-bridge.py",
+            "../runtime/note-generator-mlx.py",
+            "../runtime/note-runtime-generate.json",
             "../runtime/note-runtime-project.json",
             "../runtime/note-validator.zip",
         ] {
-            assert!(!resources.contains_key(path), "unadmitted runtime resource: {path}");
+            assert!(resources.contains_key(path), "missing note runtime resource: {path}");
         }
     }
 }

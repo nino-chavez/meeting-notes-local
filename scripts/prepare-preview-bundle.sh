@@ -12,7 +12,7 @@ CAPTURE="$RESOURCES/bin/meeting-capture"
 PROBE="$RESOURCES/bin/permission-probe"
 ENTITLEMENTS="$ROOT/apps/desktop/src-tauri/capture-entitlements.plist"
 EXPECTED_TEAM_ID="34VZ63G58M"
-FORBIDDEN_NOTE_RUNTIME_RESOURCES=(
+REQUIRED_NOTE_RUNTIME_RESOURCES=(
   "note-bridge.py"
   "note-generator-mlx.py"
   "note-runtime-generate.json"
@@ -41,17 +41,17 @@ has_audio_input_entitlement() {
     | grep -qx true
 }
 
-require_note_runtime_absent() {
+require_note_runtime_complete() {
   local resource path
-  for resource in "${FORBIDDEN_NOTE_RUNTIME_RESOURCES[@]}"; do
+  for resource in "${REQUIRED_NOTE_RUNTIME_RESOURCES[@]}"; do
     path="$RESOURCES/$resource"
-    [[ ! -e "$path" && ! -L "$path" ]] \
-      || die "Preview bundle contains a test-only note runtime resource: $resource"
+    [[ -f "$path" && ! -L "$path" ]] \
+      || die "Preview bundle is missing a note runtime resource: $resource"
   done
 }
 
 verify_bundle() {
-  require_note_runtime_absent
+  require_note_runtime_complete
   codesign --verify --deep --strict "$APP"
   has_audio_input_entitlement "$APP" \
     || die "Preview app is missing the audio-input entitlement"
@@ -86,7 +86,7 @@ sign_bundle() {
   fi
   "$RESOURCES/python-runtime/bin/python3.12" -E -s -B \
     "$ROOT/worker/build_manifest.py" "$RESOURCES" --admission internal-alpha \
-    --exclude-note-runtime "${manifest_args[@]}"
+    "${manifest_args[@]}"
   # Sign the enclosing app last. Signing CFBundleExecutable as a standalone
   # path first makes it seal the surrounding bundle; replacing the outer
   # signature afterward then invalidates that inner resource seal.

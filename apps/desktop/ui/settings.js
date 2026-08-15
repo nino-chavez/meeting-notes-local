@@ -4,12 +4,17 @@ const invoke = window.__TAURI__?.core?.invoke;
 const permissionsRoot = document.querySelector("#permissions");
 const modelsRoot = document.querySelector("#models");
 const modelMessage = document.querySelector("#model-message");
+const noteModelsRoot = document.querySelector("#note-models");
+const noteModelMessage = document.querySelector("#note-model-message");
 const message = document.querySelector("#message");
 
 let permissions = null;
 let models = null;
 let modelLoadError = "";
 let modelPoll = null;
+let noteModels = null;
+let noteModelLoadError = "";
+let noteModelPoll = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -105,10 +110,103 @@ function renderModels() {
   modelMessage.dataset.tone = models.error ? "attention" : "neutral";
 }
 
+function renderNoteModels() {
+  if (!noteModels) {
+    noteModelsRoot.innerHTML = row("Checking note model", "checking", "Yawn is checking what is stored on this Mac.");
+    noteModelMessage.textContent = noteModelLoadError;
+    noteModelMessage.dataset.tone = noteModelLoadError ? "attention" : "neutral";
+    return;
+  }
+  const busy = noteModels.changeActive;
+  noteModelsRoot.setAttribute("aria-busy", busy ? "true" : "false");
+  noteModelsRoot.innerHTML = noteModels.options.map((option) => {
+    const selected = noteModels.selectedModelId === option.id;
+    const disabled = !noteModels.canChange || busy;
+    const status = option.active
+      ? `<span class="state" data-tone="ready">In use</span>`
+      : option.stored
+        ? `<span class="state">On this Mac</span>`
+        : `<span class="model-size">${byteSizeLabel(option.downloadBytes)}</span>`;
+    const progress = selected && busy
+      ? `<div class="model-progress"><progress max="${Math.max(1, noteModels.totalBytes)}" value="${Math.min(noteModels.totalBytes, noteModels.downloadedBytes)}"></progress><small>${noteModels.state === "verifying" ? "Checking the downloaded files…" : `${byteSizeLabel(noteModels.downloadedBytes)} of ${byteSizeLabel(noteModels.totalBytes)}`}</small></div>`
+      : "";
+    const use = option.active
+      ? ""
+      : `<button class="allow-button" type="button" data-action="use-note-model" data-model-id="${escapeHtml(option.id)}" ${disabled ? "disabled" : ""}>${option.stored ? "Use this model" : "Download and use"}</button>`;
+    const remove = option.stored
+      ? `<button class="quiet-button" type="button" data-action="remove-note-model" data-model-id="${escapeHtml(option.id)}" data-model-title="${escapeHtml(option.title)}" ${disabled ? "disabled" : ""}>Remove download</button>`
+      : "";
+    return `
+      <div class="model-line">
+        <div class="model-copy">
+          <div class="model-title-row"><strong>${escapeHtml(option.title)}</strong>${status}</div>
+          <p>${escapeHtml(option.detail)}</p>
+          ${progress}
+        </div>
+        <div class="model-actions">${use}${remove}</div>
+      </div>
+    `;
+  }).join("");
+  const installed = noteModels.options.some((option) => option.active);
+  noteModelMessage.textContent = noteModels.error || noteModels.unavailableReason || (installed
+    ? "Removing the note model returns meetings to transcript-only."
+    : "Without this model, meetings keep their transcript and no note is written.");
+  noteModelMessage.dataset.tone = noteModels.error ? "attention" : "neutral";
+}
+
 function scheduleModelPoll() {
   clearTimeout(modelPoll);
   if (models?.changeActive) {
     modelPoll = setTimeout(() => void refreshModels(), 500);
+  }
+}
+
+function scheduleNoteModelPoll() {
+  clearTimeout(noteModelPoll);
+  if (noteModels?.changeActive) {
+    noteModelPoll = setTimeout(() => void refreshNoteModels(), 500);
+  }
+}
+
+async function refreshNoteModels() {
+  if (!invoke) {
+    noteModelMessage.textContent = "Open Settings from the Yawn desktop app.";
+    return;
+  }
+  try {
+    noteModels = await invoke("note_model_settings");
+    noteModelLoadError = "";
+  } catch {
+    noteModels = null;
+    noteModelLoadError = "Yawn could not check the saved note model.";
+  }
+  renderNoteModels();
+  scheduleNoteModelPoll();
+}
+
+async function useNoteModel(modelId) {
+  if (!invoke) return;
+  noteModelMessage.textContent = "Starting the note model download…";
+  try {
+    noteModels = await invoke("install_note_model", { modelId });
+    renderNoteModels();
+    scheduleNoteModelPoll();
+  } catch (error) {
+    noteModelMessage.textContent = String(error || "Yawn could not install the note model.");
+    noteModelMessage.dataset.tone = "attention";
+  }
+}
+
+async function removeNoteModel(modelId, title) {
+  if (!invoke) return;
+  if (!window.confirm(`Remove ${title} from this Mac? Meetings keep their transcript, and you can download it again later.`)) return;
+  noteModelMessage.textContent = `Removing ${title}…`;
+  try {
+    noteModels = await invoke("remove_note_model", { modelId });
+    renderNoteModels();
+  } catch (error) {
+    noteModelMessage.textContent = String(error || "Yawn could not remove the note model.");
+    noteModelMessage.dataset.tone = "attention";
   }
 }
 
@@ -188,7 +286,10 @@ document.addEventListener("click", (event) => {
   if (action === "microphone" || action === "system-audio") void request(action);
   if (action === "use-model") void useModel(control.dataset.modelId);
   if (action === "remove-model") void removeModel(control.dataset.modelId, control.dataset.modelTitle);
+  if (action === "use-note-model") void useNoteModel(control.dataset.modelId);
+  if (action === "remove-note-model") void removeNoteModel(control.dataset.modelId, control.dataset.modelTitle);
 });
 
 void refresh();
 void refreshModels();
+void refreshNoteModels();

@@ -28,6 +28,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--q4-dir", required=True, type=Path)
     parser.add_argument("--full-dir", required=True, type=Path)
+    parser.add_argument(
+        "--note-dir",
+        type=Path,
+        help=(
+            "pinned note-model snapshot directory (the mlx-community tree);"
+            " omit to stage only the transcript models"
+        ),
+    )
     parser.add_argument("--output", required=True, type=Path)
     arguments = parser.parse_args()
 
@@ -40,8 +48,12 @@ def main() -> int:
         "whisper-large-v3-turbo": arguments.full_dir.resolve(strict=True),
     }
     catalog = model_catalog()
+    staged = list(catalog["models"])
+    if arguments.note_dir is not None:
+        sources["gemma-3-12b-it-qat-4bit"] = arguments.note_dir.resolve(strict=True)
+        staged.extend(catalog["note_models"])
     uploads = []
-    for model in catalog["models"]:
+    for model in staged:
         source_dir = sources[model["id"]]
         if not source_dir.is_dir():
             raise SystemExit(f"model source is unsafe: {source_dir}")

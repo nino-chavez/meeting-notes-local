@@ -47,7 +47,10 @@ ENCODER_PLACEHOLDER = "encoder-unavailable.identity"
 EXPECTED_ENCODER_ONNX_SHA256 = (
     "1d5e288b1037410fd0c98f618e94523a6b7ca8a99c7069f076efb40aa95759cd"
 )
-FORBIDDEN_NOTE_RUNTIME_RESOURCES = (
+# Flipped from a forbidden list when the signed catalog gained the note-model
+# role: the note runtime now ships, and a bundle missing any piece of it would
+# admit nothing while reading as a build defect rather than an honest refusal.
+REQUIRED_NOTE_RUNTIME_RESOURCES = (
     Path("note-bridge.py"),
     Path("note-generator-mlx.py"),
     Path("note-runtime-generate.json"),
@@ -76,12 +79,12 @@ def require(condition: bool, message: str) -> None:
         raise VerificationError(message)
 
 
-def verify_forbidden_note_runtime_resources_absent(resources: Path) -> None:
-    for relative in FORBIDDEN_NOTE_RUNTIME_RESOURCES:
+def verify_note_runtime_resources_present(resources: Path) -> None:
+    for relative in REQUIRED_NOTE_RUNTIME_RESOURCES:
         path = resources / relative
         require(
-            not path.exists() and not path.is_symlink(),
-            f"forbidden test-only note runtime resource is bundled: {relative}",
+            path.is_file() and not path.is_symlink(),
+            f"required note runtime resource is missing or unsafe: {relative}",
         )
 
 
@@ -139,7 +142,7 @@ def verify_runtime(resources: Path, admission: str) -> None:
         (manifest.get("permission_probe") or {}).get("path") == "bin/permission-probe",
         "runtime is not bound to the first-run permission probe",
     )
-    verify_forbidden_note_runtime_resources_absent(resources)
+    verify_note_runtime_resources_present(resources)
     require(
         manifest.get("admission") == admission,
         f"runtime admission is not {admission}; refusing this distribution candidate",

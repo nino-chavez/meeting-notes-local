@@ -65,7 +65,8 @@ use local_meeting_notes_session_core::note_projector_process::{
 };
 use local_meeting_notes_session_core::model_store::{
     InstalledTranscriptModel, ModelCatalog, TranscriptModel, activate_model, active_model,
-    installed_model, model_is_stored, remove_inactive_model,
+    active_note_model, deactivate_note_model, installed_model, model_is_stored,
+    note_model_is_stored, remove_inactive_model, remove_inactive_note_model,
 };
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::profile_lifecycle::ProfileLifecycleError;
@@ -176,6 +177,8 @@ struct ApplicationState {
     retention_started: AtomicBool,
     permission_observation: Mutex<Option<first_run::FirstRunPermissions>>,
     model_install_active: AtomicBool,
+    note_model_install_active: AtomicBool,
+    note_model_setup: Mutex<NoteModelSetup>,
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
     preview_profile: Mutex<PreviewProfileSnapshot>,
     preview_enrollment: Mutex<PreviewEnrollmentSurface>,
@@ -200,6 +203,11 @@ impl Default for ApplicationState {
             retention_started: AtomicBool::new(false),
             permission_observation: Mutex::new(None),
             model_install_active: AtomicBool::new(false),
+            note_model_install_active: AtomicBool::new(false),
+            note_model_setup: Mutex::new(NoteModelSetup {
+                state: "idle".into(),
+                ..NoteModelSetup::default()
+            }),
             preview_library: Mutex::new(None),
             preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
             preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
@@ -368,6 +376,46 @@ struct TranscriptModelSettingsSnapshot {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TranscriptModelSettingsOption {
+    id: String,
+    title: String,
+    detail: String,
+    download_bytes: u64,
+    installed_bytes: u64,
+    stored: bool,
+    active: bool,
+}
+
+/// Download-progress state for the optional note-generation model. Its own
+/// struct rather than a reuse of `ModelSetupSnapshot` because that one is a
+/// startup-flow state ("choose"/"downloading" gating the whole app); a note
+/// model downloads beside a fully started app and gates nothing but itself.
+#[derive(Clone, Default)]
+struct NoteModelSetup {
+    state: String,
+    selected_model_id: Option<String>,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteModelSettingsSnapshot {
+    state: String,
+    options: Vec<NoteModelSettingsOption>,
+    active_model_id: Option<String>,
+    selected_model_id: Option<String>,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    error: Option<String>,
+    change_active: bool,
+    can_change: bool,
+    unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteModelSettingsOption {
     id: String,
     title: String,
     detail: String,
@@ -2105,6 +2153,247 @@ fn remove_transcript_model(
             other => error_text(other),
         })?;
     transcript_model_settings_for(&state)
+}
+
+fn note_model_settings_for(
+    state: &ApplicationState,
+) -> Result<NoteModelSettingsSnapshot, String> {
+    let storage_context = state
+        .storage
+        .lock()
+        .map_err(|_| "the private workspace is unavailable".to_string())?
+        .clone()
+        .ok_or_else(|| "the private workspace is unavailable".to_string())?;
+    let manifest =
+        RuntimeManifest::load_and_verify(&storage_context.manifest_path).map_err(error_text)?;
+    let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
+        .ok_or_else(|| "this build does not use downloadable note models".to_string())?;
+    let active = active_note_model(&storage_context.storage, &catalog).map_err(error_text)?;
+    let active_model_id = active.as_ref().map(|entry| entry.id.clone());
+    let options = catalog
+        .note_models
+        .iter()
+        .map(|entry| {
+            let stored =
+                note_model_is_stored(&storage_context.storage, entry).map_err(error_text)?;
+            Ok(NoteModelSettingsOption {
+                id: entry.id.clone(),
+                title: entry.title.clone(),
+                detail: entry.detail.clone(),
+                download_bytes: entry.download_bytes,
+                installed_bytes: entry.installed_bytes,
+                stored,
+                active: active_model_id.as_deref() == Some(entry.id.as_str()),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let installing = state.note_model_install_active.load(Ordering::SeqCst);
+    let setup = state
+        .note_model_setup
+        .lock()
+        .expect("note model setup lock")
+        .clone();
+    let (startup, capture) = {
+        let model = state.model.lock().expect("application model lock");
+        (model.reducer.startup(), model.reducer.capture())
+    };
+    let startup_ready = matches!(startup, StartupState::Ready | StartupState::ModelRequired);
+    let audio_idle = capture == CaptureState::Idle && !sitting_task_active(state);
+    let can_change = startup_ready && audio_idle && !installing;
+    let unavailable_reason = if installing {
+        Some("Wait for the current note model change to finish.".into())
+    } else if !audio_idle {
+        Some("Finish the current meeting before changing the note model.".into())
+    } else if !startup_ready {
+        Some("Yawn must finish starting before the note model can be changed.".into())
+    } else {
+        None
+    };
+    Ok(NoteModelSettingsSnapshot {
+        state: setup.state,
+        options,
+        active_model_id,
+        selected_model_id: setup.selected_model_id,
+        downloaded_bytes: setup.downloaded_bytes,
+        total_bytes: setup.total_bytes,
+        error: setup.error,
+        change_active: installing,
+        can_change,
+        unavailable_reason,
+    })
+}
+
+#[tauri::command]
+fn note_model_settings(
+    state: State<'_, ApplicationState>,
+) -> Result<NoteModelSettingsSnapshot, String> {
+    note_model_settings_for(&state)
+}
+
+#[tauri::command]
+fn install_note_model(app: AppHandle, model_id: String) -> Result<NoteModelSettingsSnapshot, String> {
+    let state = app.state::<ApplicationState>();
+    let _command = state.command_lock.lock().expect("command lock");
+    let capture_active = state
+        .model
+        .lock()
+        .expect("application model lock")
+        .reducer
+        .capture()
+        != CaptureState::Idle;
+    if capture_active || sitting_task_active(&state) {
+        return Err("The note model cannot be installed while audio work is active.".into());
+    }
+    if state.model_install_active.load(Ordering::SeqCst) {
+        return Err("Wait for the speech model change to finish.".into());
+    }
+    if state
+        .note_model_install_active
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("The note model is already downloading.".into());
+    }
+    let preparation = (|| {
+        let storage_context = state
+            .storage
+            .lock()
+            .map_err(|_| "the private workspace is unavailable".to_string())?
+            .clone()
+            .ok_or_else(|| "the private workspace is unavailable".to_string())?;
+        let manifest =
+            RuntimeManifest::load_and_verify(&storage_context.manifest_path).map_err(error_text)?;
+        let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
+            .ok_or_else(|| "this build does not use downloadable note models".to_string())?;
+        let selected = catalog.note_model(&model_id).map_err(error_text)?.clone();
+        {
+            let mut setup = state.note_model_setup.lock().expect("note model setup lock");
+            *setup = NoteModelSetup {
+                state: "downloading".into(),
+                selected_model_id: Some(selected.id.clone()),
+                downloaded_bytes: 0,
+                total_bytes: selected.download_bytes,
+                error: None,
+            };
+        }
+        Ok::<_, String>((storage_context, selected))
+    })();
+    let (storage_context, selected) = match preparation {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            state.note_model_install_active.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
+    };
+    let task_app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("note-model-download".into())
+        .spawn(move || {
+            let install_result = model_download::install(
+                &storage_context.storage,
+                &selected,
+                |downloaded_bytes| {
+                    let state = task_app.state::<ApplicationState>();
+                    let mut setup = state.note_model_setup.lock().expect("note model setup lock");
+                    if setup.selected_model_id.as_deref() == Some(selected.id.as_str()) {
+                        setup.downloaded_bytes = downloaded_bytes;
+                    }
+                },
+            );
+            let state = task_app.state::<ApplicationState>();
+            match install_result {
+                Ok(()) => {
+                    {
+                        let mut setup =
+                            state.note_model_setup.lock().expect("note model setup lock");
+                        *setup = NoteModelSetup {
+                            state: "idle".into(),
+                            ..NoteModelSetup::default()
+                        };
+                    }
+                    // The next library read must rebuild: admission caches
+                    // only success, so a rebuild against the newly installed
+                    // model admits the projector without a restart.
+                    if let Ok(mut library) = state.preview_library.lock() {
+                        *library = None;
+                    }
+                    state.note_model_install_active.store(false, Ordering::SeqCst);
+                }
+                Err(error) => {
+                    state.note_model_install_active.store(false, Ordering::SeqCst);
+                    let detail = error.to_string();
+                    let _ = write_private_diagnostic(
+                        &storage_context.diagnostics,
+                        "note_model_download_failed",
+                        &detail,
+                    );
+                    let mut setup = state.note_model_setup.lock().expect("note model setup lock");
+                    setup.state = "failed".into();
+                    setup.error = Some(
+                        "The note model could not be downloaded and verified. Choose it again to retry."
+                            .into(),
+                    );
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        state.note_model_install_active.store(false, Ordering::SeqCst);
+        {
+            let mut setup = state.note_model_setup.lock().expect("note model setup lock");
+            setup.state = "failed".into();
+            setup.error = Some("The note model download could not start.".into());
+        }
+        write_diagnostic(&state, "note_model_download_spawn_failed", &error.to_string());
+        return Err("The note model download could not start.".into());
+    }
+    note_model_settings_for(&state)
+}
+
+#[tauri::command]
+fn remove_note_model(
+    model_id: String,
+    state: State<'_, ApplicationState>,
+) -> Result<NoteModelSettingsSnapshot, String> {
+    let _command = state.command_lock.lock().expect("command lock");
+    if state.note_model_install_active.load(Ordering::SeqCst) {
+        return Err("Wait for the current note model change to finish.".into());
+    }
+    let ready = {
+        let model = state.model.lock().expect("application model lock");
+        model.reducer.capture() == CaptureState::Idle
+    };
+    if !ready || sitting_task_active(&state) {
+        return Err("Finish the current meeting before removing the note model.".into());
+    }
+    let storage_context = state
+        .storage
+        .lock()
+        .map_err(|_| "the private workspace is unavailable".to_string())?
+        .clone()
+        .ok_or_else(|| "the private workspace is unavailable".to_string())?;
+    let manifest =
+        RuntimeManifest::load_and_verify(&storage_context.manifest_path).map_err(error_text)?;
+    let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
+        .ok_or_else(|| "this build does not use downloadable note models".to_string())?;
+    // Unlike a speech model, the note model may be removed while active:
+    // "no note model" is an ordinary state the library renders honestly, so
+    // deactivate first and then remove. The cached projector admission is
+    // dropped so the next rebuild re-derives against the emptied store.
+    if active_note_model(&storage_context.storage, &catalog)
+        .map_err(error_text)?
+        .is_some_and(|active| active.id == model_id)
+    {
+        deactivate_note_model(&storage_context.storage).map_err(error_text)?;
+    }
+    remove_inactive_note_model(&storage_context.storage, &catalog, &model_id)
+        .map_err(error_text)?;
+    if let Ok(mut cached) = state.note_projector.lock() {
+        *cached = None;
+    }
+    if let Ok(mut library) = state.preview_library.lock() {
+        *library = None;
+    }
+    note_model_settings_for(&state)
 }
 
 /// Runs one organization mutation under the held process writer lock.
@@ -4866,6 +5155,9 @@ fn main() {
             install_transcript_model,
             transcript_model_settings,
             remove_transcript_model,
+            note_model_settings,
+            install_note_model,
+            remove_note_model,
             first_run_permissions,
             first_run_request_microphone,
             first_run_request_system_audio,
