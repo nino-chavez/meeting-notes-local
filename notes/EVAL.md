@@ -2857,3 +2857,31 @@ harness budget: the app-side generation deadline is a separate product
 number owned by the bridge and revisited at wiring time. Product
 registration digest moves with this amendment; cycles and locks re-derive
 under the new digest with delegated approval.
+
+### Official product run 1 — REFUSED at the recall gate (falsification)
+
+The first official gated run (meeting fdd59c81, lock `cc5ce794…`,
+registration `957858c6…`) refused: `run_product_classifier` raised "the
+pruned keep set does not meet the registered recall gate". Meeting 2 never
+ran (the launch chained on success). Two facts stand:
+
+- The refusal is the registration working as designed — an official run
+  under a gate it cannot meet must refuse, and it did.
+- The registration's validation basis was thinner than the preregistration
+  claimed. The 2×2 validation matrix was measured under the research
+  contract's ±1 visible window; `PRODUCT_CONTRACT` registers ±2. The
+  batch-1 verdict pattern under ±2 was never measured — the third
+  carried-assumption failure of the day (keep budget, elapsed budget, now
+  the visible window), and the first caught by a refusal instead of
+  before launch.
+
+The runner also discarded every number on refusal — the exception names
+the gate but not the margin. Instrumentation amendment, preregistered
+before any rerun: the failure path computes the same pruned/recall/elapsed
+numbers the success path would record, prints them to stderr on refusal,
+and honors an env-gated ids-only decisions dump (`YAWN_DECISIONS_DUMP`;
+candidate ids and verdicts, never transcript text). Gate logic, order of
+refusals, and the `PRODUCT_RUN` registration block are unchanged; the
+registration digest does not move. Both official commands then rerun
+deterministically (greedy decode) with dumps enabled — meeting 1 to learn
+the miss, meeting 2 for its first official result.
