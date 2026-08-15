@@ -2099,6 +2099,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
     fn note_catalog() -> ModelCatalog {
         let revision = "b".repeat(40);
         let catalog = ModelCatalog {
+            note_models: Vec::new(),
             schema: ModelCatalogSchema::V1,
             models: vec![TranscriptModel {
                 id: "note-generator-test".into(),
@@ -3037,6 +3038,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         });
         assert!(
             ModelCatalog {
+                note_models: Vec::new(),
                 schema: ModelCatalogSchema::V1,
                 models: vec![sharded.clone()],
             }
