@@ -2585,3 +2585,41 @@ four views, does not pass through (recall ≥ 11/13, keep ≤ 64). The ship
 gate as ratified embeds a joint constraint nothing measured has met; the
 morning's product decision priced the recall number but not the keep bloat.
 This goes back to the operator before any further arm.
+
+### Operator decision + preregistration — deterministic pruning stage
+
+The operator chose to keep both gate numbers and measure a third path: a
+deterministic second stage that prunes the recall-satisfying keep set down
+to the 64 budget while preserving at least one acceptable anchor per locked
+event. No model runs in the pruner; it is local code over verdicts, so it
+composes with the bridge's existing decode step and reads its budget from
+the registration like everything else.
+
+Instrument: the adopted configuration (gemma-3-12b-it-qat-4bit, constrained
+verdicts, ollama two-turn rendering, ±2 view) re-runs once with a decisions
+dump (candidate ids and verdicts only, private file). Pruning strategies
+are then evaluated OFFLINE against the dumped keep set and the locked
+ledger — no further inference. The strategy family registered for
+evaluation, all deterministic:
+
+1. Contiguous-run collapse: adjacent keeps (overlapping visible windows)
+   merge into one run; each run retains one representative anchor
+   (first/middle/longest — each scored).
+2. Bare-assent drop: keeps whose anchor matches the registered assent
+   pattern are pruned first.
+3. Per-region cap: at most N keeps per transcript section, N swept.
+4. Compositions of 1–3.
+
+Gate for this arm: some registered strategy yields keep ≤ 64 AND retains an
+acceptable anchor for all events the unpruned set recalled (11/13 here).
+
+Honesty constraint, recorded up front: any pruner selected on this ledger
+is FITTED to one meeting (n=1). Passing offline does not clear the ship
+gate; it authorizes a validation run on a second, freshly reviewed capture
+before any official gated run. A pruner that only works on the meeting it
+was tuned on is a memorized answer, not a capability.
+
+Prediction: contiguous-run collapse alone brings keep under 64 (the 136
+keeps tile mostly contiguous spans; runs, not points, are what the model
+is really marking). No prediction on whether anchor retention survives
+representative selection — that is what the offline evaluation measures.
