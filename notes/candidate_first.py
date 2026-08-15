@@ -398,7 +398,9 @@ PRODUCT_RUN = {
     "gates": {
         "minimum_event_recall": "recalled * 13 >= 11 * locked_events, on the pruned set",
         "maximum_keep_after_prune": 64,
-        "maximum_elapsed_seconds": 900,
+        # Re-derived for batch size 1 (EVAL.md amendment, 2026-08-14 late):
+        # a harness budget from the measured worst case, not an app deadline.
+        "maximum_elapsed_seconds": 3600,
         "event_ledger_required_before_inference": True,
     },
 }
