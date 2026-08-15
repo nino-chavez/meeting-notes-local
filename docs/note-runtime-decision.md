@@ -105,3 +105,17 @@ Items no branch owns, which must not evaporate at merge:
    is in the projector agent's report (catalog from
    `verified_model_catalog`, resource root from `StorageContext`, cache
    the admission decision off the hot rebuild path).
+
+## Merge record (2026-08-14, late night)
+
+All four branches merged to local main under the operator's standing
+delegation, after the measurement gate cleared via the batch-size-1
+adoption (notes/EVAL.md). One cross-branch fix at merge: the projector's
+test catalogs gained the catalog branch's `note_models` field. Full lanes
+green post-merge: session-core, desktop, UI, worker, root. Worktrees
+removed. Remaining from the checklist: the shared cross-language fixture
+pass (open, owner still unassigned), network enforcement (pre-ship),
+seam-6 widening for sharded weights (pinned by characterization test),
+catalog entry + model hosting (needs the external-publish step the
+delegation excludes), and app-side admission wiring (in progress:
+bridge product alignment + real MLX generator child).
