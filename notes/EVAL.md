@@ -3299,3 +3299,57 @@ config 1,156,999 B). One instrument note: r2.dev returns 403 to
 Python's default urllib user agent while serving the same URL to curl
 — the verifier streams through curl. The catalog entry is now servable
 end-to-end; the ship record above may be relied on.
+
+### Preregistration — offer-stride classification (prune before classify, s=2)
+
+Operator asked for the next step on note-generation speed. The costly
+stage is classification: one MLX constrained-verdict call per candidate
+(~6–11 s each, 165–453 candidates per corpus; official passes 585–1482
+s). The broad strategy makes adjacent candidates near-duplicates — each
+fragment is visible in up to five overlapping windows — so most calls
+re-ask an already-answered question.
+
+**Arm: offer every second candidate.** The manifest stays the full
+broad manifest (unchanged digest; candidate-evidence/1 replay in the
+shipped assembler is untouched, since points reference full-manifest
+candidate ids and the offered set is a subset). Only the classifier's
+offer changes: candidates[::2] by ordinal. The registered pruner (v2
+budget-fitted collapse) then runs on the offered set, and the recall
+gate is unchanged.
+
+**Why the offline sweep is exact, not an estimate.** At the registered
+batch size 1, `classification_request` builds the prompt from the one
+candidate's visible fragments and the transcript alone — the prompt is
+a pure function of (candidate, transcript), independent of what else is
+offered. Greedy decode. So the official decision dumps already contain
+the verdict every candidate would receive in a strided run, and
+replaying them on the strided subset predicts the official result
+exactly.
+
+Sweep over all four corpora's official dumps, strides 1–5 (script:
+session scratchpad, reads the private packet only):
+
+- s=2 passes all four with margin: meeting 1 13/13, meeting 2 12/13,
+  zoom town hall 13/14, meet 15/15.
+- s=3 also passes all four but leaves meeting 1 at exactly 11/13 —
+  zero margin. Rejected: the town-hall refusal taught that clearing
+  the gate without margin is how the next corpus fails.
+- s=4 fails meeting 2 (10/13); s=5 fails meeting 1 (10/13).
+
+**Exact predictions for the official confirming runs (s=2):**
+
+- meeting 1 (630): 83 calls, keep 54, pruned 53, recall 13/13 — PASS
+- meeting 2: 150 calls, keep 72, pruned 39, recall 12/13 — PASS
+- zoom town hall: 227 calls, keep 145, pruned 58, recall 13/14 — PASS
+- meet: 152 calls, keep 93, pruned 43, recall 15/15 — PASS
+
+Expected user-facing effect: call count halves, so per-meeting
+generation drops from ~10–25 minutes toward ~5–12, with no download
+change and no product-contract change.
+
+**Registration change required (delegated approval, per the standing
+pattern):** `PRODUCT_RUN` gains an offer stride (2) under the
+classifier; `classification_request` admits contiguous batches of the
+strided offer; registration digest moves; cycles and locks re-derive;
+all four official runs repeat against the predictions above. No
+official run until the code change lands and tests are green.
