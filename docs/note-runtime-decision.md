@@ -400,3 +400,33 @@ Remaining: slice 3 (coordinator sequencing behind `accept_regeneration`
 — the desktop `NoteGenerationWorker` impl that runs the generate child,
 parses `note-generation-result/1`, and issues this `note.create`), then
 slice 4 (UI regenerate control).
+
+**Model-size research (2026-08-16, operator question: newer open-weight
+models with better compression).** Web research plus direct HF API
+verification. The current note model (gemma-3-12b-it-qat-4bit, 8.06 GB)
+now has credible smaller challengers; the two worth evaluating, both
+license-verified Apache-2.0 via the HF API (redistribution on our R2
+mirror is clean, no Gemma-terms passthrough):
+
+- **Qwen3.5-4B** (mlx-community/Qwen3.5-4B-MLX-4bit): 3,061,132,920
+  bytes (verified). Vendor benchmarks place it above the Gemma-3-12B
+  class; hybrid linear-attention architecture should also cut per-call
+  latency. Risk: newer architecture — confirm the pinned mlx-lm
+  supports it before committing. Conservative fallback:
+  Qwen3-4B-Instruct-2507-4bit (2.28 GB, standard transformer).
+- **Granite-4.0-h-micro** (3B, 1.81 GB): best verified
+  instruction-following for its size (IFEval 82.3 from IBM's card);
+  hybrid Mamba2 built for exactly our latency profile. Knowledge below
+  12B class — but the product task is constrained KEEP/ABSTAIN plus
+  extractive points, where instruction adherence dominates.
+
+Also noted: Gemma 4 reportedly moved to Apache-2.0 (single-source,
+re-verify before mirroring), but its E4B is 5.25 GB at MLX 4-bit —
+over target; LFM2.5-2.6B (1.54 GB) is capped by its license at <$10M
+commercial revenue — rejected for a shipped product; MLX now supports
+MXFP4/NVFP4 and DWQ conversions, a second compression lever beyond
+uniform 4-bit.
+
+Any adoption runs the full preregistered eval (11/13 recall bar on all
+four corpora) as a new arm — sequenced after the offer-stride arm
+lands, which halves the cost of exactly that evaluation.
