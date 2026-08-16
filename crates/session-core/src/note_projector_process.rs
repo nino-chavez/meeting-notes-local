@@ -79,7 +79,6 @@ const PYTHON_ENTITLEMENT: &str = "com.apple.security.cs.allow-unsigned-executabl
 const CODE_SIGNATURE_RUNTIME: u32 = 0x0001_0000;
 const CODE_DIRECTORY_SHA256: i32 = 2;
 const SECURITY_NO_NETWORK_ACCESS: u32 = 1 << 29;
-const SECURITY_MATCH_GUEST_REQUIREMENT_IN_KERNEL: u32 = 1 << 23;
 const SECURITY_CHECK_ALL_ARCHITECTURES: u32 = 1 << 0;
 const SECURITY_CHECK_NESTED_CODE: u32 = 1 << 3;
 const SECURITY_STRICT_VALIDATE: u32 = 1 << 4;
@@ -1566,7 +1565,7 @@ impl PreparedCodeAdmission for SecurityPreparedAdmission {
         let live_code = security_live_code(pid)?;
         security_dynamic_check(
             live_code.as_ref(),
-            SECURITY_NO_NETWORK_ACCESS | SECURITY_MATCH_GUEST_REQUIREMENT_IN_KERNEL,
+            SECURITY_NO_NETWORK_ACCESS,
             Some(self.requirement.as_ref()),
         )?;
         let live_identity = security_code_identity(live_code.as_ref(), true, true)?;
