@@ -599,3 +599,103 @@ still passes.
    site-packages root the generate child's `sys.path` is pointed at)
    and a corresponding change to the admission/signing recipe, which
    currently assumes one Python runtime per bundle.
+
+**Operational close-out, continued (2026-08-16) — the chain ran end to
+end.** Option 3 above was chosen: `worker/note_bridge.py`'s generator
+bootstrap now inserts a private `generate-site-packages/` ahead of the
+shared one on `sys.path`, derived from `sys.executable`, before the
+child imports anything. `mlx_whisper` keeps resolving the shared,
+already-verified `mlx==0.29.3`; only the generate role's own bootstrap
+sees the isolated tree carrying `mlx-lm` and its newer `mlx` pin. With
+that in place, the app was driven through capture → transcript →
+candidate generation → note publication → re-inspection on this
+machine, against a real meeting, for the first time. Four more defects
+surfaced running it, three fixed here and the fourth already fixed
+above; the fifth (below) is why the run didn't complete on the first
+try even with all four landed.
+
+*Unbounded memory growth, fixed.* The registered classifier batch size
+is 1, so `decide()` runs once per offered candidate — up to a few
+hundred per real meeting — and mlx's Metal allocator caches freed
+scratch buffers for reuse rather than returning them to the OS.
+Nothing in the loop reused a cache across calls, so it grew unbounded
+across the run instead of staying near one batch's peak: measured at
+27GB on this machine, which forced a hard restart mid-session (Force
+Quit reported the app at 27.39GB, non-responding). `mx.clear_cache()`
+after each candidate's `decide()`, mirrored identically between
+`worker/note_generator_mlx.py` and `notes/product_run.py`'s
+`MLXVerdictTransport` per that file's own sync obligation, brought RSS
+back to ~1GB between batches — verified by live memory monitoring
+during a real run.
+
+*Staged bundle missing a dependency, fixed.* Generation failed with
+`ModuleNotFoundError: No module named 'candidate_first'` inside the
+injected note generator, even though `notes/candidate_first.py`
+already existed in the repo. `apps/desktop/runtime/notes/` — the
+staging directory `tauri.conf.json` bundles into the app — was a stale
+subset (3 of 82 files) that predated `note.create`'s dependency on it.
+This directory is gitignored and rebuilt at package time, so the fix
+is staging discipline, not a source change: copy `notes/candidate_first.py`
+into the staging tree (and the currently-built app's `Resources/`
+copy) alongside the other `notes/` modules it already carried.
+
+*Admission gap, fixed (commit 9baa602).* `note.inspect` stayed
+boundary-lane-only under the belief that it ran through the sandboxed
+bridge's own `inspect` role rather than the standing worker port — but
+`WorkerProcessNoteInspectBridge` always calls the standing worker
+regardless of admission level, so under `internal-alpha` the worker
+refused the operation outright. A published note could reach
+`note.create` and then get stuck one step short of the meeting record:
+`apply_result` never ran, `meeting.json`'s `lifecycle` never advanced
+past its pre-note state. Promoted `note.inspect` into
+`ALPHA_OPERATIONS`, the same move made for `corpus.embed` once its
+model was packaged — see `crates/session-core/src/supervision.rs`'s
+`the_alpha_operation_set_is_read_from_the_worker_itself`, which parses
+`worker/main.py`'s literal set from source so the two sides cannot
+silently disagree (a mismatch here is what caused the 2026-08-08
+`OperationMismatch` incident referenced in that test).
+
+*Read-time claim-length cap, fixed (commit 6d1c84d).* With generation,
+creation, and inspection all landing, the library rebuild's
+`note.project` step then refused the very first real note with
+`artifact-invalid`, non-recoverable — on a retry, not a fluke.
+Root-caused with a standalone script replaying `note_validator.py`'s
+`project()` re-derivation against the actual published note file:
+`validate_claim_rows` was rejecting a 165-character claim over its
+160-character cap. That cap traces to the older LLM-extraction
+contract's `MAX_STRUCTURED_CLAIM_CHARS`, enforced at write time only
+for that contract — candidate-first claims are verbatim transcript
+excerpts (`summarize.py`'s `validate_candidate_evidence`), never capped
+at write time, and `candidate_first.py`'s fragment/anchor spans carry
+no length bound either. Not a rare edge case: any note whose kept
+candidates include one longer spoken sentence would write successfully
+and then permanently fail projection, every time. Operator decision
+(asked, since this was a real contract question, not a mechanical
+bug): remove the cap entirely rather than special-case it to
+`"point"`-type claims or push it upstream into candidate generation.
+Removed from both `note_validator.py` and `note_projection.rs`'s
+`parse_claim` — the Rust side independently re-enforced the same 160
+characters and would not have followed a Python-only fix. Consequence
+worth flagging: the projection frame no longer has a knowable
+worst-case size, since claim length is now unbounded on both sides. A
+meeting whose kept candidates run long enough could in principle
+overflow `MAX_PROJECTION_FRAME_BYTES` (64KB) through ordinary claim
+length rather than corruption; it fails closed as `Unavailable`, the
+same fallback already documented for that case, so the failure mode is
+unchanged even though it is now reachable by a different, more
+ordinary path.
+
+*Outcome.* With all five defects fixed, the packaged app ran the full
+chain against a real meeting on this machine: `note.generate` (165
+candidates) → `note.create` (published) → `note.inspect` (re-verified)
+→ `meeting.json` committed (`lifecycle: "ready"`, `current_note` set)
+→ library rebuild's `note.project` step succeeded. Confirmed three
+ways: the standalone re-derivation script passing against the real
+published note and transcript files under the fixed validator; the
+full Rust (`cargo test --workspace`, 439 tests) and Python
+(`pytest worker/tests/test_note_bridge.py`, 102 tests) suites green;
+and the running app's own UI showing no `Generate note` prompt and no
+refusal toast for that meeting after a clean relaunch. The operator's
+own read of the generated note is the next step, and stays the
+operator's alone — no note or transcript content appears in this repo
+or in any tooling output from this close-out.
