@@ -226,3 +226,20 @@ export function transcriptTurnsMatching(turns, query) {
     && String(turn?.text || "").toLocaleLowerCase().includes(needle)
   ));
 }
+
+// The generate control renders only from the note response's own eligibility
+// signal — the backend includes the source pin exactly when the facade would
+// admit the operation, so the browser never re-derives lifecycle rules. The
+// copy states the honest costs: it runs locally, and it takes minutes.
+export function noteGenerationPresentation(note, generatingMeetingId) {
+  if (!note?.regenerationSourceSha256 || !note?.meetingId) return null;
+  const generating = generatingMeetingId === note.meetingId;
+  return {
+    action: "generate-note",
+    label: generating ? "Generating note…" : "Generate note",
+    disabled: generating,
+    help: generating
+      ? "The note model is reading this transcript on your Mac. This can take several minutes — you can keep using Yawn."
+      : "Runs the downloaded note model on this Mac. It usually takes several minutes, longer for long meetings. Nothing leaves your computer.",
+  };
+}

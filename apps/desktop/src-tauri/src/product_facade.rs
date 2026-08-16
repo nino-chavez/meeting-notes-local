@@ -5,18 +5,15 @@
 //! storage-backed owner. It remains out of `tauri::generate_handler!` today:
 //! no rendered control invokes it yet.
 //!
-//! `regenerate_note` is registered in `tauri::generate_handler!` on the
-//! `note-runtime-decision.md` seam-4/5 branch, ahead of the projector and
-//! model work (seams 2, 3, and 6 of that doc) that still has to land before
-//! merge. Registering the command early is safe today only because
-//! `DesktopProductCoordinator::accept_regeneration` truthfully refuses with
-//! `CoordinatorError::Unavailable` before touching the worker — no note
-//! generator is admitted, so the facade never claims the single-operation
-//! slot (see `regeneration_stays_truthfully_unavailable_even_with_a_live_runtime`
-//! in `product_coordinator.rs`). This branch merges to main only after the
-//! measurement gate clears and a real projector is admitted, so the invariant
-//! "no rendered control that cannot work" holds at merge time even though it
-//! is relaxed, deliberately, for the life of this branch.
+//! `regenerate_note` is registered in `tauri::generate_handler!` and, as of
+//! the generation invocation chain landing (docs/note-runtime-decision.md,
+//! slices 1–4), runs the real path: `DesktopProductCoordinator::
+//! accept_regeneration` drives the sandboxed generate child and the worker's
+//! `note.create` to a terminal receipt. Without an installed note model the
+//! coordinator still refuses `Unavailable` before touching the worker (see
+//! `regeneration_without_an_installed_note_model_is_unavailable_before_the_worker`
+//! in `product_coordinator.rs`), so the rendered control degrades to the
+//! facade's generic copy rather than claiming the single-operation slot.
 
 use std::sync::{Arc, Mutex};
 
@@ -219,22 +216,37 @@ pub(crate) fn restore_withheld_turn(
     Ok(accepted)
 }
 
-/// Registered in `invoke_handler` on this branch ahead of its coordinator's
-/// real worker path — see the module header for why that is still safe today
-/// and what has to land before merge.
+/// Registered generation command. Like restoration, the storage-backed
+/// coordinator runs to a terminal receipt before returning — but the middle
+/// of this one is the sandboxed generate child, so the call legitimately
+/// lasts minutes. Tauri runs sync commands off the main thread, the UI's
+/// snapshot polling continues meanwhile, and the facade's single-operation
+/// slot keeps a second product operation from starting underneath it. A
+/// rejected note is still a terminal receipt: the command returns the
+/// accepted operation and the meeting's summary-failed state carries the
+/// product answer.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn regenerate_note(
     meeting_id: Uuid,
     source_transcript_sha256: String,
     facade: State<'_, ProductOperationFacade>,
+    app: State<'_, crate::ApplicationState>,
 ) -> Result<UiOperationAccepted, String> {
-    facade
+    // Same writer-lock contention rule as restoration: an active setup
+    // recording holds the app-data writer lock this generation's
+    // coordination handle would queue behind.
+    if crate::sitting_task_active(&app) {
+        return Err("Finish the setup recording first.".into());
+    }
+    let accepted = facade
         .regenerate_note(RegenerateNoteUiArgs {
             meeting_id,
             source_transcript_sha256,
         })
         .map_err(ProductOperationFacadeError::safe_copy)
-        .map_err(str::to_owned)
+        .map_err(str::to_owned)?;
+    facade.finish(accepted.operation_id);
+    Ok(accepted)
 }
 
 #[cfg(test)]

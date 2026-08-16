@@ -228,6 +228,12 @@ pub(crate) struct LibraryNoteResponse {
     /// audio has already been released can still be removed in full.
     pub(crate) meeting_deletion_handle: Option<String>,
     pub(crate) meeting_id: String,
+    /// The retained current transcript's digest, present only when this
+    /// meeting is eligible for note generation (no current note, lifecycle
+    /// transcript-ready or summary-failed). It is the exact source pin the
+    /// `regenerate_note` command requires, so the browser can ask for
+    /// generation without ever holding an artifact path or content.
+    pub(crate) regeneration_source_sha256: Option<String>,
     pub(crate) claims: Vec<LibraryClaim>,
     pub(crate) audio_retention: LibraryAudioRetention,
     /// The operator's own note (§ D), carried here so it stays reachable after
@@ -783,15 +789,23 @@ impl LibraryReader {
             Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
             Ok(_) | Err(_) => return Self::stale_note(""),
         };
-        let Some(lifecycle) = self
+        let Some((lifecycle, row_transcript_sha256)) = self
             .projection
             .rows()
             .iter()
             .find(|row| row.meeting_id == meeting_id)
-            .map(|row| row.lifecycle())
+            .map(|row| (row.lifecycle(), row.transcript_sha256.clone()))
         else {
             return Self::stale_note(&meeting_id);
         };
+        // The exact source pin `regenerate_note` requires; present only for
+        // the two lifecycles the facade admits for generation.
+        let regeneration_source_sha256 = matches!(
+            lifecycle,
+            MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed
+        )
+        .then_some(row_transcript_sha256)
+        .flatten();
         let audio_retention = self.audio_retention(&meeting_id);
         let operator_note = self.operator_note(&meeting_id);
         let operator_note_handle = (!operator_note.unreadable)
@@ -811,6 +825,7 @@ impl LibraryReader {
                     transcript_deletion_handle,
                     meeting_deletion_handle,
                     meeting_id: meeting_id.clone(),
+                    regeneration_source_sha256,
                     claims: Vec::new(),
                     audio_retention,
                     operator_note,
@@ -829,6 +844,7 @@ impl LibraryReader {
                     transcript_deletion_handle,
                     meeting_deletion_handle,
                     meeting_id: meeting_id.clone(),
+                    regeneration_source_sha256,
                     claims: Vec::new(),
                     audio_retention,
                     operator_note,
@@ -880,6 +896,7 @@ impl LibraryReader {
             transcript_deletion_handle,
             meeting_deletion_handle,
             meeting_id: meeting_id.into(),
+            regeneration_source_sha256: None,
             claims,
             audio_retention,
             operator_note,
@@ -1068,6 +1085,7 @@ impl LibraryReader {
             transcript_deletion_handle: None,
             meeting_deletion_handle: None,
             meeting_id: meeting_id.into(),
+            regeneration_source_sha256: None,
             claims: Vec::new(),
             audio_retention: Self::unavailable_audio_retention(),
             operator_note: crate::operator_note::OperatorNote::none(),
@@ -1502,6 +1520,7 @@ impl LibraryReader {
             transcript_deletion_handle: None,
             meeting_deletion_handle: None,
             meeting_id: meeting_id.into(),
+            regeneration_source_sha256: None,
             claims: Vec::new(),
             audio_retention: Self::unavailable_audio_retention(),
             operator_note: crate::operator_note::OperatorNote::none(),

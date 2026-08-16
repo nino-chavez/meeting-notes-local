@@ -10,6 +10,7 @@ import {
   capturePresentation,
   humanize,
   mergePermissions,
+  noteGenerationPresentation,
   permissionSummary,
   retentionLabel,
   shouldPollSnapshot,
@@ -112,4 +113,27 @@ test("startup keeps polling until the app is ready", () => {
   assert.equal(shouldPollSnapshot({ startup: "checking", capture: "idle" }), true);
   assert.equal(shouldPollSnapshot({ startup: "ready", capture: "idle" }), false);
   assert.equal(shouldPollSnapshot({ startup: "ready", capture: "recording" }), true);
+});
+
+test("the generate control follows the backend's eligibility signal alone", () => {
+  const eligible = { meetingId: "m-1", regenerationSourceSha256: "a".repeat(64) };
+  const idle = noteGenerationPresentation(eligible, "");
+  assert.equal(idle.action, "generate-note");
+  assert.equal(idle.disabled, false);
+  assert.equal(idle.label, "Generate note");
+  assert.match(idle.help, /on this Mac/);
+  assert.match(idle.help, /minutes/);
+
+  const busy = noteGenerationPresentation(eligible, "m-1");
+  assert.equal(busy.disabled, true);
+  assert.equal(busy.label, "Generating note…");
+  assert.match(busy.help, /keep using Yawn/);
+
+  // Another meeting generating does not disable this one's control.
+  assert.equal(noteGenerationPresentation(eligible, "m-2").disabled, false);
+
+  // No source pin — a ready note, a stale view, a deleted transcript — no control.
+  assert.equal(noteGenerationPresentation({ meetingId: "m-1" }, ""), null);
+  assert.equal(noteGenerationPresentation({ regenerationSourceSha256: "x" }, ""), null);
+  assert.equal(noteGenerationPresentation(null, ""), null);
 });

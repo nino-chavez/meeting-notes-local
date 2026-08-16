@@ -6,6 +6,7 @@ import {
   capturePresentation,
   humanize,
   mergePermissions,
+  noteGenerationPresentation,
   permissionSummary,
   retentionLabel,
   shouldPollSnapshot,
@@ -23,6 +24,7 @@ const state = {
   consent: { participantsConsented: false, headphones: false, operatorAlone: false },
   error: "",
   library: null,
+  generatingMeetingId: "",
   meetingManagementOpen: false,
   modal: "",
   notice: "",
@@ -550,6 +552,7 @@ function renderMeeting() {
         <p class="meeting-storage-note">${escapeHtml(retentionMessage)}</p>
       </header>
       ${note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
+      ${renderGenerateNote(note)}
       <div class="meeting-workspace">
         <main class="meeting-source-pane">
           ${renderDraftPoints(claims, claimEvidence)}
@@ -570,6 +573,17 @@ function renderMeeting() {
         </aside>
       </div>
     </article>
+  `;
+}
+
+function renderGenerateNote(note) {
+  const control = noteGenerationPresentation(note, state.generatingMeetingId);
+  if (!control) return "";
+  return `
+    <section class="note-section generate-note-section" aria-label="Generate a meeting note">
+      <button class="button button-primary" type="button" data-action="${control.action}" ${control.disabled ? "disabled" : ""}>${escapeHtml(control.label)}</button>
+      <p class="note-editor-help">${escapeHtml(control.help)}</p>
+    </section>
   `;
 }
 
@@ -885,6 +899,35 @@ async function reopenSelectedMeeting(meetingId) {
     return;
   }
   await loadSelectedMeeting(row);
+}
+
+async function generateSelectedNote() {
+  const note = state.selected?.note;
+  const control = noteGenerationPresentation(note, state.generatingMeetingId);
+  if (!control || control.disabled || state.generatingMeetingId) return;
+  const meetingId = note.meetingId;
+  state.generatingMeetingId = meetingId;
+  render();
+  try {
+    await invoke("regenerate_note", {
+      meetingId,
+      sourceTranscriptSha256: note.regenerationSourceSha256,
+    });
+  } catch (error) {
+    reportError(error);
+  } finally {
+    state.generatingMeetingId = "";
+    try {
+      if (state.activeView === "meeting" && state.selected?.note?.meetingId === meetingId) {
+        await reopenSelectedMeeting(meetingId);
+      } else {
+        await refreshLibrary();
+      }
+    } catch {
+      // The refreshed view is a convenience; the durable receipt is not.
+    }
+    render();
+  }
 }
 
 function openMeetingRename() {
@@ -1224,6 +1267,7 @@ function handleClick(event) {
     state.meetingManagementOpen = !state.meetingManagementOpen;
     render();
   }
+  else if (action === "generate-note") void generateSelectedNote();
   else if (action === "rename-meeting") openMeetingRename();
   else if (action === "delete-recording") openMeetingDeletion("delete-recording");
   else if (action === "delete-transcript") openMeetingDeletion("delete-transcript");
