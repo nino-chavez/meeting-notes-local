@@ -1375,6 +1375,52 @@ def note_inspect(root: Path, arguments: object) -> dict[str, str]:
     }
 
 
+def _candidate_note_generator(arguments: object) -> NoteGenerator | None:
+    """Build the deterministic assembler for a generation-bearing request.
+
+    Returns None for the bare argument shape or any malformed one, preserving
+    `note.create`'s original refusal — no admitted generator — and leaving the
+    precise refusal message to `note_create`'s own validation. The assembler
+    runs no model: the sandboxed generate child already chose the kept
+    candidates, and everything here is re-derived from the transcript and the
+    registered product contract by `summarize.candidate_note_document`.
+    """
+    try:
+        values = validate_note_create_arguments(arguments)
+    except ProductContractRefused:
+        return None
+    generation = values.get("generation")
+    if generation is None:
+        return None
+
+    def generator(transcript) -> dict:
+        import candidate_first
+        from summarize import candidate_note_document
+
+        registered = candidate_first.PRODUCT_RUN["classifier"]
+        return candidate_note_document(
+            transcript,
+            {
+                key: generation[key]
+                for key in (
+                    "schema", "transcript_sha256", "manifest_sha256",
+                    "candidates", "points",
+                )
+            },
+            meeting_id=values["meeting_id"],
+            transcript_sha256=values["source_transcript_sha256"],
+            model=registered["model"],
+            model_identity={
+                "requested": registered["model"],
+                "name": registered["model"],
+                "digest": registered["model_tree_sha256"],
+            },
+            elapsed_s=float(generation["receipt"]["elapsed_s"]),
+        )
+
+    return generator
+
+
 def note_create(
     root: Path,
     arguments: object,
@@ -1536,6 +1582,9 @@ def dispatch(
             encoder_path=encoder_path,
         ),
         "note.inspect": lambda: note_inspect(root, arguments),
+        "note.create": lambda: note_create(
+            root, arguments, generator=_candidate_note_generator(arguments)
+        ),
         "corpus.embed": lambda: corpus_embed(arguments, embedding_dir),
         "capture.finalize": lambda: capture_finalize(root, arguments),
         "transcript.restore": lambda: transcript_restore(root, arguments),

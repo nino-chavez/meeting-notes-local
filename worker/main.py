@@ -42,12 +42,20 @@ _PROTOCOL_WRITE_LOCK = threading.Lock()
 # refuse; that reason expired the moment the model was in the bundle. Note what
 # it does *not* mean: the model is packaged and measured, and whether its
 # retrieval is useful is still the operator's judgment.
+# note.create joined 2026-08-16 with the generation-invocation decision --
+# docs/note-runtime-decision.md, slice 2. Its generator is the deterministic
+# candidate-point assembler built from the request's own generation payload;
+# the model still runs only in the sandboxed one-shot bridge child, never in
+# this worker. The comment sits above the literal because Rust's lockstep
+# test parses the frozenset source up to its first closing parenthesis.
 ALPHA_OPERATIONS = frozenset(
     {"capture.finalize", "capture.inspect", "transcript.create",
      "sitting.derive", "transcript.restore", "corpus.embed",
-     "profile.choices", "profile.build", "profile.inspect", "profile.discard"}
+     "profile.choices", "profile.build", "profile.inspect", "profile.discard",
+     "note.create"}
 )
-# note.inspect stays boundary-lane only: no note generator is admitted.
+# note.inspect stays boundary-lane only: the app inspects published notes
+# through the bridge's inspect role, not through the standing worker.
 BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
     {"profile.adopt", "note.inspect"}
 )

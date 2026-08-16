@@ -316,6 +316,10 @@ class WorkerProtocolTests(unittest.TestCase):
                 # the embedding model. It spent one change boundary-only so the
                 # shipped worker would not advertise what it could only refuse.
                 "corpus.embed",
+                # In every lane since 2026-08-16, with the generation-invocation
+                # decision: the deterministic candidate-point assembler needs no
+                # model in this worker, so there is nothing it can only refuse.
+                "note.create",
             }
             if self.admission != "internal-alpha":
                 expected_operations |= {
@@ -1388,6 +1392,99 @@ class ProductArtifactAdapterTests(unittest.TestCase):
         self.assertEqual(retried, result)
         self.assertEqual(note_path.read_bytes(), note_before)
         self.assertEqual(markdown_path.read_bytes(), markdown_before)
+
+    def test_note_create_dispatch_assembles_and_publishes_from_generation_points(self) -> None:
+        """The product path end-to-end: generation points in, published pair out.
+
+        The dispatched arguments carry the sandboxed generate child's payload;
+        the registry builds the deterministic assembler from it, and the
+        published note/2 must replay through the artifact validator with every
+        claim typed `point`. The bare argument shape keeps its original
+        refusal in the same registry entry.
+        """
+        import candidate_first
+        from summarize import build_fragment_map, structured_artifact_citations
+
+        meeting_id = str(uuid.uuid4())
+        _, transcript_id, _pack = self._write_note_transcript(meeting_id)
+        transcript = resolve_transcript(self.root, meeting_id, transcript_id)
+        manifest = candidate_first.generate_manifest(
+            transcript,
+            candidate_first.STRATEGY_BROAD,
+            contract=candidate_first.PRODUCT_CONTRACT,
+        )
+        fragments = {
+            fragment["source_fragment_id"]: fragment
+            for fragment in build_fragment_map(transcript)["fragments"]
+        }
+        kept = manifest["candidates"][:2]
+        self.assertEqual(len(kept), 2, "fixture transcript must offer candidates")
+        points = []
+        for index, candidate in enumerate(kept):
+            anchor = fragments[candidate["anchor_fragment_id"]]
+            points.append({
+                "point_ordinal": index,
+                "candidate_id": candidate["candidate_id"],
+                "evidence_state": "located",
+                "locators": [{
+                    "turn": anchor["turn"],
+                    "start": anchor["char_start"],
+                    "end": anchor["char_end"],
+                    "text_sha256": anchor["text_sha256"],
+                }],
+            })
+        arguments = {
+            "meeting_id": meeting_id,
+            "source_transcript_sha256": transcript_id,
+            "generation": {
+                "schema": "note-generation/1",
+                "transcript_sha256": transcript_id,
+                "manifest_sha256": manifest["manifest_sha256"],
+                "candidates": len(manifest["candidates"]),
+                "points": points,
+                "receipt": {
+                    "responses": len(kept),
+                    "response_bytes": 64,
+                    "last_response_sha256": "0" * 64,
+                    "elapsed_s": 12.5,
+                },
+            },
+        }
+        result = adapters.dispatch(
+            self.root, "note.create", arguments, encoder_digest="0" * 64
+        )
+        notes = self.root / "meetings" / meeting_id / "notes"
+        document = json.loads((notes / (result["note"] + ".json")).read_text())
+        self.assertEqual(document["schema"], "note/2")
+        self.assertIs(document["passed"], True)
+        self.assertEqual(document["claim_evidence_contract"], "candidate-evidence/1")
+        self.assertEqual(document["meeting"]["id"], meeting_id)
+        citations = structured_artifact_citations(document, transcript)
+        self.assertEqual(document["checks"]["citations"], citations)
+        self.assertEqual(
+            [row["type"] for row in citations["cited"]], ["point"] * len(kept)
+        )
+        for row, point in zip(citations["cited"], points, strict=True):
+            locator = point["locators"][0]
+            self.assertEqual(
+                row["evidence_refs"][0]["text_sha256"], locator["text_sha256"]
+            )
+            self.assertEqual(
+                row["claim"],
+                transcript.turns[locator["turn"]].text[
+                    locator["start"]:locator["end"]
+                ],
+            )
+        with self.assertRaises(AdapterRefused):
+            adapters.dispatch(
+                self.root,
+                "note.create",
+                {
+                    "meeting_id": meeting_id,
+                    "source_transcript_sha256": transcript_id,
+                },
+                encoder_digest="0" * 64,
+            )
 
     def test_note_publication_repairs_orphan_markdown_but_refuses_collision_bytes(self) -> None:
         meeting_id = str(uuid.uuid4())

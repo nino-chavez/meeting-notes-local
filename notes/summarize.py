@@ -1770,6 +1770,11 @@ STRUCTURED_RUN_CONTRACT = "structured-run/4"
 STRUCTURED_STAGE_RECEIPT = "structured-stage-receipt/5"
 LOCAL_NORMALIZATION_RECEIPT = "local-normalization-receipt/1"
 SOURCE_EVIDENCE_CONTRACT = "source-evidence/1"
+# The candidate-first product lane's evidence discriminator.  A note carrying
+# it stores kept, located candidate points; validation regenerates the
+# candidate manifest from the transcript and the registered product contract
+# and replays every point against it (`validate_candidate_evidence`).
+CANDIDATE_EVIDENCE_CONTRACT = "candidate-evidence/1"
 MAX_NORMALIZATION_GROUP = 3
 MAX_STRUCTURED_CLAIM_CHARS = 160
 MAX_EXTRACTION_ITEMS_PER_SLICE = 48
@@ -2535,6 +2540,9 @@ def artifact_uses_source_evidence(doc: dict) -> bool:
 
 def structured_citations(result: dict, transcript: Transcript) -> dict:
     """Build citation findings from validated fragment references, not Markdown search."""
+    if result.get("claim_evidence_contract") == CANDIDATE_EVIDENCE_CONTRACT:
+        resolved = validate_candidate_evidence(result.get("evidence_contract"), transcript)
+        return _candidate_citation_rows(resolved, result["note"], transcript)
     if result.get("claim_evidence_contract") != SOURCE_EVIDENCE_CONTRACT:
         raise StructuredOutputError(
             "Repair 4 runtime result has no explicit evidence discriminator")
@@ -2627,6 +2635,22 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
     if doc.get("schema") != STRUCTURED_NOTE_SCHEMA:
         raise StructuredOutputError(
             f"Repair 4 artifact requires schema {STRUCTURED_NOTE_SCHEMA}")
+    if doc.get("claim_evidence_contract") == CANDIDATE_EVIDENCE_CONTRACT:
+        evidence = doc.get("evidence")
+        resolved = validate_candidate_evidence(evidence, transcript)
+        expected_provenance = {
+            key: evidence[key]
+            for key in (
+                "schema", "transcript_view_sha256",
+                "fragment_contract_sha256", "fragment_map_sha256",
+            )
+        }
+        if doc.get("provenance", {}).get("source_evidence") != expected_provenance:
+            raise StructuredOutputError(
+                "artifact candidate evidence provenance disagrees with its graph")
+        return _candidate_citation_rows(
+            resolved, doc["note"], transcript, stored_claims=doc.get("claims")
+        )
     if doc.get("claim_evidence_contract") != SOURCE_EVIDENCE_CONTRACT:
         raise StructuredOutputError(
             "Repair 4 artifact has no current evidence discriminator")
@@ -2750,6 +2774,363 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
         "reversed_locatable": 0,
         "authority": "source-evidence/1",
     }
+
+
+def validate_candidate_evidence(evidence: object, transcript: Transcript) -> list[dict]:
+    """Resolve a candidate-first evidence graph against the transcript alone.
+
+    The replay is stronger than storage: the candidate manifest is a pure
+    function of the transcript and the registered product contract, so it is
+    regenerated here and the stored digest must match. Every point's
+    `candidate_id` must name a candidate that manifest enumerates, its stored
+    anchor must be that candidate's anchor, its single locator must be exactly
+    the anchor's span, and the claim digest must be the digest of the span's
+    own bytes. Nothing stored is trusted; nothing model-authored exists to
+    validate — the model's entire contribution was which candidates to keep,
+    and that selection needs no replay because every kept row is checked
+    against transcript-derived facts directly.
+    """
+    import candidate_first
+
+    if (not isinstance(evidence, dict)
+            or evidence.get("schema") != CANDIDATE_EVIDENCE_CONTRACT):
+        raise StructuredOutputError("missing or unknown candidate evidence contract")
+    fragment_map = build_fragment_map(transcript)
+    for key in (
+        "transcript_view_sha256",
+        "fragment_contract_sha256",
+        "fragment_map_sha256",
+    ):
+        if evidence.get(key) != fragment_map[key]:
+            raise StructuredOutputError(
+                f"candidate evidence {key} does not match transcript")
+    if evidence.get("fragment_contract") != fragment_map["fragment_contract"]:
+        raise StructuredOutputError("candidate evidence fragment contract is not current")
+    manifest = candidate_first.generate_manifest(
+        transcript,
+        candidate_first.STRATEGY_BROAD,
+        contract=candidate_first.PRODUCT_CONTRACT,
+    )
+    if evidence.get("candidate_manifest_sha256") != manifest["manifest_sha256"]:
+        raise StructuredOutputError(
+            "candidate evidence manifest digest does not match the regenerated manifest")
+    if evidence.get("generator_contract_sha256") != manifest["generator_contract_sha256"]:
+        raise StructuredOutputError(
+            "candidate evidence generator contract is not the registered product contract")
+    candidates = {row["candidate_id"]: row for row in manifest["candidates"]}
+    fragments = {
+        fragment["source_fragment_id"]: fragment
+        for fragment in fragment_map["fragments"]
+    }
+    points = evidence.get("points")
+    if not isinstance(points, list) or not points:
+        raise StructuredOutputError("candidate evidence carries no points")
+    resolved: list[dict] = []
+    seen: set[str] = set()
+    for index, row in enumerate(points):
+        if not isinstance(row, dict) or set(row) != {
+                "point_ordinal", "candidate_id", "anchor_fragment_id",
+                "claim_sha256", "evidence_refs"}:
+            raise StructuredOutputError(
+                f"candidate evidence point {index} has the wrong shape")
+        if row["point_ordinal"] != index:
+            raise StructuredOutputError("candidate evidence points are out of order")
+        candidate_id = row["candidate_id"]
+        if not isinstance(candidate_id, str) or candidate_id in seen:
+            raise StructuredOutputError(
+                "candidate evidence point IDs must be unique nonblank strings")
+        seen.add(candidate_id)
+        candidate = candidates.get(candidate_id)
+        if candidate is None:
+            raise StructuredOutputError(
+                "candidate evidence point names no enumerated candidate")
+        if candidate["anchor_fragment_id"] != row["anchor_fragment_id"]:
+            raise StructuredOutputError(
+                "candidate evidence anchor disagrees with the regenerated manifest")
+        anchor = fragments.get(row["anchor_fragment_id"])
+        if anchor is None:
+            raise StructuredOutputError("candidate evidence anchor is unknown")
+        expected_ref = {
+            key: anchor[key]
+            for key in (
+                "source_fragment_id", "turn", "char_start", "char_end",
+                "text_sha256",
+            )
+        }
+        if row["evidence_refs"] != [expected_ref]:
+            raise StructuredOutputError(
+                "candidate evidence locator is not exactly the anchor span")
+        excerpt = transcript.turns[anchor["turn"]].text[
+            anchor["char_start"]:anchor["char_end"]
+        ]
+        if (_sha256(excerpt) != anchor["text_sha256"]
+                or row["claim_sha256"] != _sha256(excerpt)):
+            raise StructuredOutputError(
+                "candidate evidence claim is not the anchor span's own bytes")
+        resolved.append({
+            "label": "POINT",
+            "claim": excerpt,
+            "quote": excerpt,
+            "claim_sha256": row["claim_sha256"],
+            "candidate_id": candidate_id,
+            "evidence_refs": [expected_ref],
+        })
+    return resolved
+
+
+def _candidate_citation_rows(
+    resolved: list[dict],
+    note: str,
+    transcript: Transcript,
+    stored_claims: object = None,
+) -> dict:
+    """Citation findings for a candidate-first note, from resolved points only."""
+    if note != render_structured_note(resolved):
+        raise StructuredOutputError(
+            "candidate note contains text outside evidence-bound points")
+    parsed = _parse_claims(note)
+    if len(parsed) != len(resolved):
+        raise StructuredOutputError(
+            "rendered note count does not match candidate evidence points")
+    cited = []
+    for rendered, row in zip(parsed, resolved, strict=True):
+        if (rendered["claim"], rendered["quote"], rendered["type"]) != (
+                row["claim"], row["quote"], "point"):
+            raise StructuredOutputError(
+                "rendered Markdown disagrees with resolved candidate evidence")
+        primary = row["evidence_refs"][0]
+        cited.append({
+            "claim": row["claim"],
+            "quote": row["quote"],
+            "at": rendered["at"],
+            "type": "point",
+            "turn": primary["turn"],
+            "start": transcript.turns[primary["turn"]].start,
+            "candidate_id": row["candidate_id"],
+            "claim_sha256": row["claim_sha256"],
+            "evidence_refs": row["evidence_refs"],
+        })
+    if stored_claims is not None:
+        if not isinstance(stored_claims, list) or len(stored_claims) != len(cited):
+            raise StructuredOutputError(
+                "artifact claims do not match candidate evidence cardinality")
+        for old, new in zip(stored_claims, cited, strict=True):
+            keys = (
+                "claim", "quote", "at", "type", "turn", "start",
+                "candidate_id", "claim_sha256", "evidence_refs",
+            )
+            if {key: old.get(key) for key in ("status", *keys)} != {
+                "status": LOCATED,
+                **{key: new[key] for key in keys},
+            }:
+                raise StructuredOutputError(
+                    "artifact claim metadata disagrees with candidate evidence")
+    repeats = len(cited) - len({" ".join(_seq(row["claim"])) for row in cited})
+    return {
+        "applies": bool(transcript.turns),
+        "ok": True,
+        "items": len(cited),
+        "cited": cited,
+        "fabricated": [],
+        "unverifiable": [],
+        "uncited": [],
+        "template_echo": sum(1 for item in parsed if item["wrapped"]),
+        "layout": parsed[0]["layout"] if parsed else "none",
+        "separator": parsed[0]["separator"] if parsed else None,
+        "repeats": repeats,
+        "reversed_locatable": 0,
+        "authority": CANDIDATE_EVIDENCE_CONTRACT,
+    }
+
+
+def candidate_note_result(
+    transcript: Transcript,
+    generation: dict,
+    *,
+    transcript_sha256: str,
+    model: str,
+    model_identity: dict,
+    elapsed_s: float,
+) -> dict:
+    """Build the deterministic runtime result for a candidate-first note.
+
+    `generation` is a `note-generation/1` payload: kept, located points from
+    the sandboxed classifier child. Every field of the result this returns is
+    re-derived from the transcript and the registered product contract; the
+    generation payload only chooses which candidates appear, and each of its
+    locators must equal the anchor span the regenerated manifest assigns to
+    its candidate. The result then replays through its own validator before it
+    is returned, so a caller can never publish what would not re-validate.
+    """
+    import candidate_first
+
+    if not isinstance(generation, dict) or generation.get("schema") != "note-generation/1":
+        raise StructuredOutputError("candidate generation payload has the wrong schema")
+    if generation.get("transcript_sha256") != transcript_sha256:
+        raise StructuredOutputError(
+            "candidate generation names a different transcript")
+    fragment_map = build_fragment_map(transcript)
+    manifest = candidate_first.generate_manifest(
+        transcript,
+        candidate_first.STRATEGY_BROAD,
+        contract=candidate_first.PRODUCT_CONTRACT,
+    )
+    if generation.get("manifest_sha256") != manifest["manifest_sha256"]:
+        raise StructuredOutputError(
+            "candidate generation manifest digest does not match this transcript")
+    candidates = {row["candidate_id"]: row for row in manifest["candidates"]}
+    fragments = {
+        fragment["source_fragment_id"]: fragment
+        for fragment in fragment_map["fragments"]
+    }
+    points_in = generation.get("points")
+    if not isinstance(points_in, list) or not points_in:
+        raise StructuredOutputError("candidate generation carries no points")
+    points: list[dict] = []
+    for index, row in enumerate(points_in):
+        if not isinstance(row, dict) or set(row) != {
+                "point_ordinal", "candidate_id", "evidence_state", "locators"}:
+            raise StructuredOutputError(
+                f"candidate generation point {index} has the wrong shape")
+        if row["point_ordinal"] != index or row["evidence_state"] != "located":
+            raise StructuredOutputError(
+                "candidate generation points are out of order or unlocated")
+        candidate = candidates.get(row["candidate_id"])
+        if candidate is None:
+            raise StructuredOutputError(
+                "candidate generation point names no enumerated candidate")
+        anchor = fragments[candidate["anchor_fragment_id"]]
+        expected_locator = {
+            "turn": anchor["turn"],
+            "start": anchor["char_start"],
+            "end": anchor["char_end"],
+            "text_sha256": anchor["text_sha256"],
+        }
+        if row["locators"] != [expected_locator]:
+            raise StructuredOutputError(
+                "candidate generation locator is not exactly the anchor span")
+        excerpt = transcript.turns[anchor["turn"]].text[
+            anchor["char_start"]:anchor["char_end"]
+        ]
+        points.append({
+            "point_ordinal": index,
+            "candidate_id": row["candidate_id"],
+            "anchor_fragment_id": candidate["anchor_fragment_id"],
+            "claim_sha256": _sha256(excerpt),
+            "evidence_refs": [{
+                key: anchor[key]
+                for key in (
+                    "source_fragment_id", "turn", "char_start", "char_end",
+                    "text_sha256",
+                )
+            }],
+        })
+    evidence = {
+        "schema": CANDIDATE_EVIDENCE_CONTRACT,
+        "transcript_view_sha256": fragment_map["transcript_view_sha256"],
+        "fragment_contract": fragment_map["fragment_contract"],
+        "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
+        "fragment_map_sha256": fragment_map["fragment_map_sha256"],
+        "candidate_manifest_sha256": manifest["manifest_sha256"],
+        "generator_contract_sha256": manifest["generator_contract_sha256"],
+        "points": points,
+    }
+    resolved = validate_candidate_evidence(evidence, transcript)
+    result = {
+        "claim_evidence_contract": CANDIDATE_EVIDENCE_CONTRACT,
+        "evidence_contract": evidence,
+        "note": render_structured_note(resolved),
+        "model": model,
+        "model_identity": model_identity,
+        "elapsed_s": elapsed_s,
+        "candidate_generation": {
+            key: generation[key]
+            for key in ("schema", "transcript_sha256", "manifest_sha256", "candidates")
+        },
+    }
+    structured_citations(result, transcript)
+    return result
+
+
+def candidate_note_checks(result: dict, transcript: Transcript) -> dict:
+    """The stored verdict for a candidate-first note, every gate truthful.
+
+    The shared `verdict()` formula stays the only owner of pass/fail.
+    `citations` is computed for real by the candidate replay. Gates that
+    measure model-prose pathologies record their actual state: no prompt was
+    truncated (`context.ok: null` -- the established meaning for a stage that
+    was not scored), no actor attribution or extraction stage exists
+    (`applies: false`), numbers are genuinely checked against the transcript's
+    own text, and there is no prose prompt to echo.
+    """
+    citations = structured_citations(result, transcript)
+    source_text = "\n".join(turn.text for turn in transcript.turns)
+    checks = {
+        "context": {
+            "ok": None,
+            "reason": "no model prompt: deterministic rendering of located excerpts",
+        },
+        "attribution": {"applies": False, "ok": None},
+        "numbers": check_numbers(result["note"], source_text),
+        "prompt_echo": {
+            "ok": True,
+            "reason": "no prose prompt exists; the note is rendered locally",
+        },
+        "grounding": {"applies": False, "ok": None},
+        "owner_grounding": {"applies": False, "ok": None},
+        "recall": {"applies": False, "ok": None},
+        "citations": citations,
+        "extraction": {"applies": False, "ok": None},
+    }
+    return {"passed": verdict(checks), **checks}
+
+
+def candidate_note_document(
+    transcript: Transcript,
+    generation: dict,
+    *,
+    meeting_id: str,
+    transcript_sha256: str,
+    model: str,
+    model_identity: dict,
+    elapsed_s: float,
+) -> dict:
+    """Assemble the publishable note/2 pair content for kept candidate points.
+
+    This is the product assembler: the injected generator `note.create` runs.
+    It is deterministic -- no model executes here -- and the returned document
+    carries the meeting-relative transcript reference and digest-named render
+    path `worker/adapters.py::note_create` requires, so publication either
+    verifies byte-identically or refuses.
+    """
+    result = candidate_note_result(
+        transcript,
+        generation,
+        transcript_sha256=transcript_sha256,
+        model=model,
+        model_identity=model_identity,
+        elapsed_s=elapsed_s,
+    )
+    checks = candidate_note_checks(result, transcript)
+    transcript_path = (
+        Path("meetings") / meeting_id / "transcript" / f"{transcript_sha256}.json"
+    )
+    out_dir = Path("meetings") / meeting_id / "notes"
+    markdown_sha256 = _sha256(result["note"] + "\n")
+    document = note_artifact(
+        result,
+        transcript,
+        checks,
+        transcript_path,
+        out_dir,
+        markdown_path=out_dir / f"{markdown_sha256}.md",
+    )
+    # `note_artifact` derives the meeting identity from the transcript file
+    # stem, which is right for the research corpus and wrong for the product
+    # store, where the transcript is named by its digest and the meeting by
+    # its UUID.  The product identity is authoritative here.
+    document["meeting"]["id"] = meeting_id
+    return document
 
 
 EXTRACT_STRUCTURED_RULES = EXTRACT_RULES + """
@@ -4563,7 +4944,9 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
     artifact = {
         "schema": STRUCTURED_NOTE_SCHEMA if structured else LEGACY_NOTE_SCHEMA,
         **({
-            "claim_evidence_contract": SOURCE_EVIDENCE_CONTRACT
+            "claim_evidence_contract": result.get(
+                "claim_evidence_contract", SOURCE_EVIDENCE_CONTRACT
+            )
         } if structured else {}),
         "meeting": {
             "id": transcript_path.stem,
@@ -4629,6 +5012,7 @@ def note_artifact(result: dict, transcript: Transcript, checks: dict,
             # become artifact authority.
             "structured_stages": result.get("structured_provenance"),
             "structured_contract": result.get("structured_contract"),
+            "candidate_generation": result.get("candidate_generation"),
             "source_evidence": (
                 {
                     key: result["evidence_contract"][key]

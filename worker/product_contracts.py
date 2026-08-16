@@ -62,13 +62,58 @@ def validate_transcript_restore_arguments(value: object) -> dict:
 
 
 def validate_note_create_arguments(value: object) -> dict:
-    arguments = _exact_object(
-        value,
-        {"meeting_id", "source_transcript_sha256"},
-        "note.create arguments",
-    )
+    """Admit both note.create shapes: bare, and carrying a generation payload.
+
+    The bare shape keeps its original meaning — no admitted generator, so the
+    adapter refuses — and the widened shape carries the sandboxed generate
+    child's `note-generation/1` result for the deterministic assembler. Deep
+    validation of the payload (manifest replay, anchor spans) is the
+    assembler's job; this contract only closes the outer shape.
+    """
+    names = {"meeting_id", "source_transcript_sha256"}
+    if isinstance(value, dict) and "generation" in value:
+        names = names | {"generation"}
+    arguments = _exact_object(value, names, "note.create arguments")
     _uuid(arguments["meeting_id"], "meeting_id")
     _digest(arguments["source_transcript_sha256"], "source_transcript_sha256")
+    if "generation" in arguments:
+        generation = _exact_object(
+            arguments["generation"],
+            {"schema", "transcript_sha256", "manifest_sha256", "candidates",
+             "points", "receipt"},
+            "note.create generation payload",
+        )
+        if generation["schema"] != "note-generation/1":
+            raise ProductContractRefused(
+                "note.create generation payload schema is unsupported")
+        _digest(generation["transcript_sha256"], "generation transcript_sha256")
+        _digest(generation["manifest_sha256"], "generation manifest_sha256")
+        if generation["transcript_sha256"] != arguments["source_transcript_sha256"]:
+            raise ProductContractRefused(
+                "generation payload names a different transcript")
+        candidates = generation["candidates"]
+        if (
+            isinstance(candidates, bool)
+            or not isinstance(candidates, int)
+            or candidates < 1
+        ):
+            raise ProductContractRefused(
+                "generation candidate count must be a positive integer")
+        if not isinstance(generation["points"], list) or not generation["points"]:
+            raise ProductContractRefused(
+                "generation payload must carry at least one point")
+        receipt = _exact_object(
+            generation["receipt"],
+            {"responses", "response_bytes", "last_response_sha256", "elapsed_s"},
+            "generation receipt",
+        )
+        if (
+            isinstance(receipt["elapsed_s"], bool)
+            or not isinstance(receipt["elapsed_s"], (int, float))
+            or receipt["elapsed_s"] < 0
+        ):
+            raise ProductContractRefused(
+                "generation receipt elapsed_s must be a nonnegative number")
     return arguments
 
 

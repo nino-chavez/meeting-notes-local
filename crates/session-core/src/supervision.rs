@@ -1251,6 +1251,10 @@ pub fn internal_alpha_operations() -> HashSet<Operation> {
         ProfileBuild,
         ProfileInspect,
         ProfileDiscard,
+        // NoteCreate joined 2026-08-16 with the generation-invocation
+        // decision: the deterministic candidate-point assembler, moving in
+        // lockstep with `worker/main.py`'s ALPHA_OPERATIONS.
+        NoteCreate,
     ]
     .into_iter()
     .collect()
