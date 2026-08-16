@@ -229,3 +229,74 @@ multipart was cleaned, both shards uploaded, and all six objects were
 downloaded end-to-end from the public URLs — byte counts and sha256
 digests match the catalog pins exactly. The catalog entry is servable;
 the hosting requirement of the distribution runbook is met.
+
+## Design — the generation invocation chain (2026-08-15)
+
+The last unbuilt stretch: nothing invokes generation. `regenerate_note`
+is registered but `accept_regeneration` refuses by design; the worker
+refuses `note.create` (no admitted generator); the Rust child launcher
+only speaks the `project` role. Three candidate structures were
+developed and compared before committing to one.
+
+**Candidate A — generation inside the worker.** Admit `note.create` into
+the worker's operation set and have the worker itself run the model
+(spawn `note-generator-mlx.py` or load MLX in-process). One transport
+(the existing supervised worker), and the `note.create` heartbeat and
+Rust progress plumbing already exist. Rejected on one decisive fact: the
+kernel no-network sandbox and the code-signing admission chain are
+applied by the Rust one-shot launcher's `pre_exec`; the standing worker
+is not launched that way, so the model child would run without the
+guarantee the bridge architecture was built to provide. Sandboxing the
+long-lived worker instead is a far larger change with its own risks.
+
+**Candidate C — the bridge generate lane publishes end-to-end.** Extend
+`validator.generate` to assemble the note/2 pair and write it. One
+launch, sandbox intact. Rejected because it breaks two deliberate
+boundaries the code states in its own comments: the validator "writes no
+note" by design, and durable publication (immutable pair, meeting
+record, lifecycle) is the worker's storage discipline — duplicating it
+into the one-shot bridge is drift in the most hardened component.
+
+**Candidate B — split at the points boundary (chosen).** Two steps, each
+component doing exactly what it was built for:
+
+1. A generate-role launch of the hardened one-shot child
+   (`note_projector_process.rs` grows a generate lane): same
+   interpreter admission, same `pre_exec` seatbelt, generate manifest
+   (`note-runtime-generate.json`), registered 3600 s deadline. The
+   bridge runs the model child and returns
+   `note-generation-result/1` — KEEP verdict points, locators only,
+   bounded by the existing 64 KiB frame cap.
+2. The worker's `note.create`, admitted at last, with its generator
+   argument satisfied by a *deterministic assembler* built from those
+   points: kept locators → `render_structured_note` → citation checks →
+   `note_artifact` (all already shipped in the runtime's `summarize`)
+   → the validated immutable pair. No model in the worker — the
+   adapter's "no model default" stance is preserved literally; the
+   model never runs outside the sandboxed one-shot child.
+
+Consequences accepted with B: the `note.create` argument contract widens
+to carry the generation points; the coordinator sequences two child
+launches per regeneration; failure surfaces stay honest and distinct
+(model-side failures arrive as the bridge's `transcript-only` outcome,
+assembler failures are deterministic artifact bugs that must be loud).
+
+Sub-decision within B, recorded here: the generate-role child launches
+through an **extended descriptor bootstrap** (a fourth descriptor for
+the generator bytes), not through the path-based `main()` entry. The
+descriptor protocol exists so the child executes pinned bytes, never
+pathnames; a path-based generate launch would quietly weaken that for
+the one role that runs the model. Both structural refusals — the Rust
+`BOOTSTRAP` role check and `verify_descriptor_runtime`'s
+project-only gate — widen together, with the generator descriptor
+required exactly when the role is `generate` (the same biconditional
+the manifest already enforces).
+
+Build order: (1) Rust generate transport + descriptor widening, (2)
+worker `note.create` admission + assembler (operation sets move in
+lockstep with `supervision::internal_alpha_operations()`), (3)
+coordinator sequencing behind `accept_regeneration`, (4) the UI
+regenerate control. Memory contention is already handled: whisper's
+runtime is released inside the worker before the `transcript.create`
+terminal frame, so any regeneration accepted at `TranscriptReady` or
+later starts past the release.
