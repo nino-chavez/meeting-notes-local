@@ -471,3 +471,23 @@ advances. Without an installed note model, admission refuses before
 any process is launched. Remaining: slice 4 — the UI regenerate
 control and the facade command registration, where the long-running
 generate call moves off the command thread.
+
+**Slice 4 landed (2026-08-16, commit 2d2db87) — the chain is complete.**
+The meeting view renders a Generate-note control whenever the backend's
+note response carries `regeneration_source_sha256` — the eligibility
+signal and the source pin in one field, present exactly when the
+facade would admit the operation. The button goes busy per meeting
+while the minutes-long command runs (Tauri executes it off the main
+thread; snapshot polling and the rest of the app stay live), and
+completion re-opens the meeting to show either the published note or
+the summary-failed answer. The command now finishes the facade's
+single-operation slot at the terminal receipt and carries the same
+setup-recording guard as restoration; `regenerate_note` joined the
+shell contract's pinned product-command set. With slices 1–4 landed,
+the full path exists: button → facade → coordinator → sandboxed
+generate child (admitted model, strided offer, constrained verdicts,
+pruner) → worker `note.create` (deterministic assembler,
+candidate-evidence/1 replay) → fresh `note.inspect` → published
+meeting note. What remains is operational, not structural: a real
+end-to-end run on this machine against an installed model, and the
+operator's read of a generated note.
