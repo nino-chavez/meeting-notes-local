@@ -444,3 +444,14 @@ DeepSeek: every 2026 release is giant MoE (V4-Flash is 304B —
 and emit long chain-of-thought before answering — the wrong shape for
 a single-token constrained verdict, and slower, not faster, per call.
 Shortlist unchanged: Qwen3.5-4B, then Granite-4.0-h-micro.
+
+**Model-selection closure (2026-08-16).** All three shortlist
+candidates were evaluated against the four locked corpora under the
+preregistered gates (notes/EVAL.md): Qwen3-4B-2507 passed 1 of 4,
+Granite-4.0-h-micro 0 of 4, Qwen3.5-4B 0 of 4 (run under a separate
+research venv with mlx-lm 0.31.3; the product runtime pin is
+untouched). Small models under-keep real meeting speech by 5–25x and
+miss most locked events; a probe confirmed the abstention is model
+judgment, not the harness. **The 12B stays; the question is closed**
+until a materially new small-model release, and the arm harness in the
+packet makes a future re-test a one-command affair per candidate.
