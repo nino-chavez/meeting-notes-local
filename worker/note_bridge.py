@@ -83,17 +83,31 @@ _REQUIRED_FLAGS = {
 }
 # The generator child keeps every isolation flag the bridge can keep and drops
 # exactly the two it cannot. `-I` and `-S` suppress site initialization, and
-# site initialization is what puts MLX-LM on the import path; a generator that
-# kept them could not load the model runtime at all. `-E` (ignore environment)
-# and `-s` (no user site) survive, the environment is emptied rather than
-# filtered, and the child never sees the bridge's own confined import path.
+# site initialization is what puts the shared runtime's site-packages on the
+# import path; a generator that kept them could not import anything at all.
+# `-E` (ignore environment) and `-s` (no user site) survive, the environment is
+# emptied rather than filtered, and the child never sees the bridge's own
+# confined import path.
 _GENERATOR_FLAGS = ("-E", "-s", "-B")
 # The child runs the manifest-pinned generator bytes read from an inherited
 # descriptor, never a pathname. The pathname was already verified, but a name
 # can be replaced between verification and exec while a descriptor cannot, so
 # the verified bytes are the ones that run.
+#
+# mlx-lm's own mlx pin runs ahead of the transcription runtime's shared mlx
+# (docs/note-runtime-decision.md, "mlx-lm packaging options"), so the
+# generator gets a private site-packages directory inserted ahead of the
+# shared one on sys.path -- generate-site-packages/, a sibling of the regular
+# site-packages under the same interpreter. mlx_whisper keeps resolving the
+# shared, already-verified mlx from the regular site-packages unchanged; only
+# this bootstrap's own interpreter sees the isolated one, and only after it
+# has already imported nothing else. The directory is derived from
+# `sys.executable`, never an inherited environment variable -- the generator
+# child's environment is emptied deliberately, and this must not reopen that.
 _GENERATOR_BOOTSTRAP = (
-    "import os\n"
+    "import os,sys\n"
+    "sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(sys.executable)),"
+    " 'lib', 'python%d.%d' % sys.version_info[:2], 'generate-site-packages'))\n"
     "c=[]\n"
     "while True:\n"
     " b=os.read({fd},1048576)\n"
