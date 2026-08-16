@@ -124,6 +124,8 @@ pub struct TranscriptRestorationResult {
 pub enum NoteGenerationRequestSchema {
     #[serde(rename = "note-generation-request/1")]
     V1,
+    #[serde(rename = "note-generation-request/2")]
+    V2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +136,8 @@ pub struct NoteGenerationRequest {
     pub meeting_id: Uuid,
     pub requested_at_epoch_seconds: u64,
     pub source_transcript_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_note: Option<NoteRevisionRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,7 +342,22 @@ impl NoteGenerationRequest {
                 "request time must be positive",
             ));
         }
-        validate_digest(&self.source_transcript_sha256)
+        validate_digest(&self.source_transcript_sha256)?;
+        match (self.schema, &self.prior_note) {
+            (NoteGenerationRequestSchema::V1, Some(_)) => Err(OperationContractError::Malformed(
+                "request/1 cannot replace a prior note",
+            )),
+            (_, Some(note)) => {
+                validate_note(note)?;
+                if note.source_transcript_sha256 != self.source_transcript_sha256 {
+                    return Err(OperationContractError::Malformed(
+                        "prior note binds another transcript",
+                    ));
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -423,6 +442,11 @@ impl MeetingOperationCommit {
                 ProductOperationOutcome::NoteRejected,
                 MeetingLifecycle::SummaryFailed,
                 false
+            ) | (
+                ProductOperationKind::GenerateNote,
+                ProductOperationOutcome::NoteRejected,
+                MeetingLifecycle::Ready,
+                true
             )
         );
         if !coherent {
@@ -633,6 +657,10 @@ pub fn validate_note_receipts(
         NoteGenerationStatus::Accepted => ProductOperationOutcome::NoteAccepted,
         NoteGenerationStatus::Rejected => ProductOperationOutcome::NoteRejected,
     };
+    let expected_current_note = match result.status {
+        NoteGenerationStatus::Accepted => result.note.as_ref(),
+        NoteGenerationStatus::Rejected => request.prior_note.as_ref(),
+    };
     if request.operation_id != result.operation_id
         || request.operation_id != commit.operation_id
         || request.meeting_id != result.meeting_id
@@ -643,7 +671,7 @@ pub fn validate_note_receipts(
         || digest_pretty(result)? != commit.result_sha256
         || commit.kind != ProductOperationKind::GenerateNote
         || commit.outcome != expected_outcome
-        || commit.current_note != result.note
+        || commit.current_note.as_ref() != expected_current_note
     {
         return Err(OperationContractError::Malformed(
             "note receipts do not form one operation",
@@ -748,11 +776,13 @@ pub fn classify_note_recovery(
     request.validate()?;
     validate_digest(current_transcript_sha256)?;
     let source_state_matches = current_transcript_sha256 == request.source_transcript_sha256
-        && current_note.is_none()
-        && matches!(
-            lifecycle,
-            MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed
-        );
+        && match (&request.prior_note, current_note, lifecycle) {
+            (Some(prior), Some(current), MeetingLifecycle::Ready) => prior == current,
+            (None, None, MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed) => {
+                true
+            }
+            _ => false,
+        };
     let Some(result) = result else {
         return if source_state_matches {
             Ok(IncompleteOperationRecovery::RetryRequest)
@@ -775,9 +805,10 @@ pub fn classify_note_recovery(
         NoteGenerationStatus::Accepted => {
             lifecycle == MeetingLifecycle::Ready && current_note == result.note.as_ref()
         }
-        NoteGenerationStatus::Rejected => {
-            lifecycle == MeetingLifecycle::SummaryFailed && current_note.is_none()
-        }
+        NoteGenerationStatus::Rejected => match &request.prior_note {
+            Some(prior) => lifecycle == MeetingLifecycle::Ready && current_note == Some(prior),
+            None => lifecycle == MeetingLifecycle::SummaryFailed && current_note.is_none(),
+        },
     };
     if current_transcript_sha256 == request.source_transcript_sha256 && result_is_applied {
         return Ok(IncompleteOperationRecovery::WriteMissingCommit);

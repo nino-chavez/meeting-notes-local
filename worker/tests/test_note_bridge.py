@@ -20,7 +20,7 @@ import zipfile
 from pathlib import Path
 
 from worker.note_validator import ArtifactFailure, GenerationRefused
-from worker.note_validator import locate_kept_candidates, validate_locators
+from worker.note_validator import _decode_synthesis, locate_kept_candidates, validate_locators
 from worker.note_validator import TRANSPORT_NUM_CTX
 from worker.note_validator import forbidden_in_claim, validate_claim_rows
 from worker.note_validator import inspect as inspect_snapshot
@@ -889,12 +889,31 @@ def batches():
         if not line:
             return
         request = json.loads(line)
+        if request.get("schema") == "note-synthesis-request/1":
+            aliases = [
+                json.loads(source_line)["id"]
+                for source_line in request["user"].splitlines()[1:]
+                if source_line.strip()
+            ]
+            proposal = {
+                "overview": [
+                    {
+                        "text": f"Summary grounded in selected excerpt {alias}.",
+                        "evidence_ids": [alias],
+                    }
+                    for alias in aliases[:4]
+                ],
+                "items": [],
+            }
+            answer({"content": json.dumps(proposal)})
+            continue
         enum = request["response_format"]["properties"]["items"]["items"]
         yield request, list(enum["properties"]["candidate_id"]["enum"])
 
 
 def answer(rows):
-    sys.stdout.write(json.dumps({"items": rows}) + chr(10))
+    envelope = {"items": rows} if isinstance(rows, list) else rows
+    sys.stdout.write(json.dumps(envelope) + chr(10))
     sys.stdout.flush()
 
 
@@ -1245,7 +1264,7 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             turn for turn in json.loads(raw).get("turns", []) if isinstance(turn, dict)
         ]
 
-    def test_generate_manifest_reaches_ready_and_returns_validated_points(self) -> None:
+    def test_generate_manifest_reaches_ready_and_returns_validated_note(self) -> None:
         before = self._tree()
         request_id, command = self._generate_command()
         bridge = self._start()
@@ -1275,31 +1294,31 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         product, research = self._manifest_digests()
         self.assertEqual(result["generation"]["manifest_sha256"], product)
         self.assertNotEqual(result["generation"]["manifest_sha256"], research)
-        points = result["generation"]["points"]
+        claims = result["generation"]["claims"]
         # One keep every twentieth of seventy single-candidate requests (the
         # strided offer holds the request count at seventy), kept anchors at
         # least twenty turns apart, so the pruner collapses nothing: four
         # points. A session that only served its first request would report one.
-        self.assertEqual(len(points), 4)
-        for ordinal, point in enumerate(points):
-            self.assertEqual(point["point_ordinal"], ordinal)
-            self.assertTrue(point["candidate_id"].startswith("cf-"))
-            self.assertEqual(point["evidence_state"], "located")
+        self.assertEqual(len(claims), 4)
+        for ordinal, claim in enumerate(claims):
+            self.assertEqual(claim["claim_ordinal"], ordinal)
+            self.assertEqual(claim["claim_type"], "summary")
+            self.assertTrue(claim["candidate_ids"][0].startswith("cf-"))
+            self.assertEqual(claim["evidence_state"], "located")
             # One locator: the candidate's anchor. Not the classification
             # window, which is context the model saw and the point does not
             # cite — and which a wider view would grow past note/2's cap.
-            self.assertEqual(len(point["locators"]), 1)
-            # Locators are transcript spans, and the frame carries no prose.
-            self.assertNotIn("claim", point)
+            self.assertEqual(len(claim["locators"]), 1)
+            self.assertIn("Summary grounded in selected excerpt", claim["claim"])
         # Transcript order, which is what `point_ordinal` claims to number.
         # `point_ordinal` alone is just `enumerate` and witnesses nothing.
-        turns = [point["locators"][0]["turn"] for point in points]
+        turns = [claim["locators"][0]["turn"] for claim in claims]
         self.assertEqual(turns, sorted(turns))
         self.assertEqual(len(set(turns)), len(turns))
         receipt = result["generation"]["receipt"]
-        # One response per OFFERED candidate: batch size 1 over the strided offer.
+        # One response per offered candidate, then one synthesis response.
         self.assertEqual(
-            receipt["responses"], -(-self.candidates // OFFER_STRIDE))
+            receipt["responses"], -(-self.candidates // OFFER_STRIDE) + 1)
         self.assertGreater(receipt["response_bytes"], 0)
         # Nothing under the private root moved: no note, no markdown, no receipt.
         self.assertEqual(self._tree(), before)
@@ -1308,8 +1327,8 @@ class NoteGenerateBridgeTests(unittest.TestCase):
     def test_generated_locators_resolve_to_the_transcripts_own_bytes(self) -> None:
         result, _, _, _ = self._run()
         turns = self._transcript_turns()
-        for point in result["generation"]["points"]:
-            for locator in point["locators"]:
+        for claim in result["generation"]["claims"]:
+            for locator in claim["locators"]:
                 text = turns[locator["turn"]]["text"][locator["start"]:locator["end"]]
                 self.assertEqual(
                     hashlib.sha256(text.encode()).hexdigest(), locator["text_sha256"]
@@ -1398,17 +1417,19 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertIsNone(result["failure"])
         offered = self._offered_rows()
         self.assertGreater(len(offered), 64)
-        self.assertEqual(result["generation"]["receipt"]["responses"], len(offered))
+        self.assertEqual(result["generation"]["receipt"]["responses"], len(offered) + 1)
         import candidate_first
         pruned = candidate_first.prune_keeps(
             offered,
             [{"candidate_id": row["candidate_id"], "verdict": "KEEP"}
              for row in offered])
-        self.assertEqual(
-            [point["candidate_id"] for point in result["generation"]["points"]],
-            pruned["pruned_candidate_ids"])
-        self.assertLessEqual(len(result["generation"]["points"]), 64)
-        self.assertGreater(len(result["generation"]["points"]), 0)
+        cited = [
+            claim["candidate_ids"][0]
+            for claim in result["generation"]["claims"]
+        ]
+        self.assertEqual(cited, pruned["pruned_candidate_ids"][:4])
+        self.assertLessEqual(len(pruned["pruned_candidate_ids"]), 64)
+        self.assertGreater(len(pruned["pruned_candidate_ids"]), 0)
 
     def test_more_pruned_points_than_the_keep_budget_are_refused_not_trimmed(self) -> None:
         """Keeps isolated past every fitting gap still force a refusal."""
@@ -1886,6 +1907,83 @@ class NoteGenerateBridgeTests(unittest.TestCase):
 
 
 
+class NoteSynthesisValidationTests(unittest.TestCase):
+    def test_synthesis_keeps_useful_rows_and_resolves_at_most_three_sources(self) -> None:
+        sources = [
+            {"alias": f"E{index:02d}", "candidate_id": f"candidate-{index}", "text": f"source {index}"}
+            for index in range(1, 6)
+        ]
+        points = [
+            {
+                "candidate_id": source["candidate_id"],
+                "locators": [{
+                    "turn": index,
+                    "start": 0,
+                    "end": 8,
+                    "text_sha256": f"{index:064x}",
+                }],
+            }
+            for index, source in enumerate(sources)
+        ]
+        content = """```json
+{"overview":[{"text":"The meeting covered the website plan.","evidence_ids":["E01","unknown","E02","E03","E04"]}],"items":[{"type":"proposal","text":"Explore a partner page.","evidence_ids":["E04"]},{"type":"decision","text":"The team is good to go.","evidence_ids":["E05"]}]}
+```"""
+        claims = _decode_synthesis(
+            json.dumps({"content": content}), sources, points
+        )
+        self.assertEqual([row["claim_type"] for row in claims], ["summary", "proposal"])
+        self.assertEqual(
+            claims[0]["candidate_ids"],
+            ["candidate-1", "candidate-2", "candidate-3"],
+        )
+        self.assertEqual(len(claims[0]["locators"]), 3)
+
+    def test_synthesis_refuses_when_no_evidence_linked_overview_survives(self) -> None:
+        with self.assertRaises(GenerationRefused) as raised:
+            _decode_synthesis(
+                json.dumps({"content": '{"overview":[],"items":[]}'}),
+                [],
+                [],
+            )
+        self.assertEqual(raised.exception.code, "no-model-summary")
+
+    def test_synthesis_drops_decisions_and_actions_without_explicit_evidence(self) -> None:
+        sources = [{
+            "alias": "E01",
+            "candidate_id": "candidate-1",
+            "text": "We could explore a partner page and maybe update the roster.",
+        }]
+        points = [{
+            "candidate_id": "candidate-1",
+            "locators": [{
+                "turn": 0,
+                "start": 0,
+                "end": 61,
+                "text_sha256": "0" * 64,
+            }],
+        }]
+        content = json.dumps({
+            "overview": [{
+                "text": "The meeting explored possible website changes.",
+                "evidence_ids": ["E01"],
+            }],
+            "items": [
+                {
+                    "type": "decision",
+                    "text": "The team decided to add a partner page.",
+                    "evidence_ids": ["E01"],
+                },
+                {
+                    "type": "action",
+                    "text": "The team will update the roster.",
+                    "evidence_ids": ["E01"],
+                },
+            ],
+        })
+        claims = _decode_synthesis(json.dumps({"content": content}), sources, points)
+        self.assertEqual([row["claim_type"] for row in claims], ["summary"])
+
+
 class NoteGeneratorChildTests(unittest.TestCase):
     """`worker/note_generator_mlx.py`, everywhere it can be checked without MLX.
 
@@ -2056,6 +2154,9 @@ class NoteGeneratorChildTests(unittest.TestCase):
             def decide(self, system, user, locators):
                 return [verdict] * len(locators)
 
+            def synthesize(self, system, user, max_tokens):
+                return json.dumps({"overview": [], "items": []})
+
         return _Stub
 
     def _drive(self, requests: list[dict], session=None) -> tuple[int, list[str]]:
@@ -2116,6 +2217,23 @@ class NoteGeneratorChildTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(list(json.loads(lines[0])), ["error"])
         self.assertEqual(session.resolved, [])
+
+    def test_the_session_returns_synthesis_as_one_transport_line(self) -> None:
+        request = {
+            "schema": "note-synthesis-request/1",
+            "system": "summarize",
+            "user": "selected excerpts",
+            "temperature": 0,
+            "num_predict": 1800,
+            "model_directory": "/",
+        }
+        code, lines = self._drive([request])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(
+            json.loads(json.loads(lines[0])["content"]),
+            {"overview": [], "items": []},
+        )
 
 
 class FrameSerializationContractTests(unittest.TestCase):

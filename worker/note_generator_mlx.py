@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The product note generator: MLX constrained verdicts, one session, one line each.
+"""The product note generator: evidence selection plus note synthesis in one session.
 
 This is the child `worker/note_bridge.py` spawns on the `generate` role. It
 speaks the bridge's session protocol — one JSON request line in on stdin, one
@@ -7,14 +7,11 @@ JSON response line out on stdout, until stdin closes — and it implements the
 registered `mlx-constrained-verdict/1` transport from
 `candidate_first.PRODUCT_RUN`.
 
-What the model is allowed to say is one greedy KEEP-or-ABSTAIN choice per
-candidate locator it was offered. Everything else in the response — the object,
-the array, the key order, the locator strings, the quoting — is assembled here
-from the offered locators, so the response *cannot* name an unoffered
-candidate, drop one, duplicate one, or reorder them. That is not a convenience:
-it is the property the unconstrained MLX diagnostic lacked (notes/EVAL.md, "MLX
-diagnostic, unconstrained emission"), which is why format constraint is a
-required transport property rather than a serialization detail.
+The first stage restricts the model to one greedy KEEP-or-ABSTAIN choice per
+candidate locator. The second stage asks the same local model for overview and
+outcome prose from only those retained excerpts. That prose remains untrusted:
+the pinned validator resolves its evidence aliases, rejects unsupported
+decision/action labels, and refuses a note without an evidence-linked overview.
 
 SYNC OBLIGATION. `notes/product_run.py` is the reference implementation, and
 these semantics must stay identical to it, function for function:
@@ -179,6 +176,35 @@ class _Session:
         return verdicts
     # --- end block mirrored from notes/product_run.py MLXVerdictTransport.decide
 
+    def synthesize(self, system: str, user: str, max_tokens: int) -> str:
+        """Generate one bounded meeting-note proposal from selected excerpts.
+
+        Unlike the registered KEEP/ABSTAIN classifier above, this is prose. The
+        child therefore contributes only an untrusted JSON string; the pinned
+        validator resolves every selected evidence ID, drops malformed rows,
+        and refuses when no usable overview survives.
+        """
+        from mlx_lm import generate
+        from mlx_lm.sample_utils import make_sampler
+
+        model, tok = self._loaded()
+        prompt = (
+            "<start_of_turn>user\n" + system + "<end_of_turn>\n"
+            + "<start_of_turn>user\n" + user + "<end_of_turn>\n"
+            + "<start_of_turn>model\n"
+        )
+        try:
+            return generate(
+                model,
+                tok,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                sampler=make_sampler(temp=0.0),
+                verbose=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - one failed decode is a refusal
+            raise _Refused("the meeting-note decode did not complete") from exc
+
 
 # --- begin block mirrored from notes/product_run.py _assemble_contract_response
 def _assemble_contract_response(locators: list[str], verdicts: list[str]) -> str:
@@ -191,7 +217,6 @@ def _assemble_contract_response(locators: list[str], verdicts: list[str]) -> str
 
 
 def _answer(session, request):
-    locators = _offered_locators(request)
     directory = _model_directory(request)
     system = request.get("system")
     user = request.get("user")
@@ -203,6 +228,13 @@ def _answer(session, request):
     if request.get("temperature") not in (0, 0.0):
         raise _Refused("request asks for a temperature the transport cannot honour")
     session.resolve(directory)
+    if request.get("schema") == "note-synthesis-request/1":
+        max_tokens = request.get("num_predict")
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 256 <= max_tokens <= 4096:
+            raise _Refused("meeting-note output bound is invalid")
+        content = session.synthesize(system, user, max_tokens)
+        return json.dumps({"content": content}, ensure_ascii=False, separators=(",", ":"))
+    locators = _offered_locators(request)
     try:
         verdicts = session.decide(system, user, locators)
     except _Refused:

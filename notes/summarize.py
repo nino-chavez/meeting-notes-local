@@ -612,7 +612,8 @@ _HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+(?P<title>\S.*?)[ \t]*$")
 # prompt already asks for. An unrecognised heading keeps its own words rather than
 # being forced into one of the four, because a note that grew a fifth section is
 # information and silently relabelling it would destroy that.
-_TYPES = {"decisions": "decision", "decision": "decision",
+_TYPES = {"summary": "summary", "overview": "summary",
+          "decisions": "decision", "decision": "decision",
           "action items": "action", "actions": "action", "action": "action",
           "proposed": "proposal", "proposals": "proposal",
           "proposal": "proposal", "suggestions": "proposal",
@@ -1741,8 +1742,8 @@ def chunk_transcript(transcript: Transcript, target_words: int,
     ]
 
 
-_LABELS = r"DECISION|ACTION|PROPOSAL|QUESTION|POINT"
-_LABEL_VALUES = ("DECISION", "ACTION", "PROPOSAL", "QUESTION", "POINT")
+_LABELS = r"SUMMARY|DECISION|ACTION|PROPOSAL|QUESTION|POINT"
+_LABEL_VALUES = ("SUMMARY", "DECISION", "ACTION", "PROPOSAL", "QUESTION", "POINT")
 # The model-extraction request contract is frozen at the four labels the
 # extraction pass emits.  It is embedded in every retained stage receipt and
 # replayed digest-for-digest by `structured_citations`, so widening it would
@@ -1775,6 +1776,7 @@ SOURCE_EVIDENCE_CONTRACT = "source-evidence/1"
 # candidate manifest from the transcript and the registered product contract
 # and replays every point against it (`validate_candidate_evidence`).
 CANDIDATE_EVIDENCE_CONTRACT = "candidate-evidence/1"
+SYNTHESIS_EVIDENCE_CONTRACT = "candidate-synthesis-evidence/1"
 MAX_NORMALIZATION_GROUP = 3
 MAX_STRUCTURED_CLAIM_CHARS = 160
 MAX_EXTRACTION_ITEMS_PER_SLICE = 48
@@ -2260,6 +2262,7 @@ def _response_provenance(source: str, ordinal: int, response: dict,
 def render_structured_note(items: list[dict]) -> str:
     """Render only evidence-bound claims under a deterministic local wrapper."""
     titles = {
+        "SUMMARY": "Summary",
         "DECISION": "Decisions",
         "ACTION": "Action items",
         "PROPOSAL": "Proposed",
@@ -2540,6 +2543,9 @@ def artifact_uses_source_evidence(doc: dict) -> bool:
 
 def structured_citations(result: dict, transcript: Transcript) -> dict:
     """Build citation findings from validated fragment references, not Markdown search."""
+    if result.get("claim_evidence_contract") == SYNTHESIS_EVIDENCE_CONTRACT:
+        resolved = validate_synthesis_evidence(result.get("evidence_contract"), transcript)
+        return _synthesis_citation_rows(resolved, result["note"], transcript)
     if result.get("claim_evidence_contract") == CANDIDATE_EVIDENCE_CONTRACT:
         resolved = validate_candidate_evidence(result.get("evidence_contract"), transcript)
         return _candidate_citation_rows(resolved, result["note"], transcript)
@@ -2635,6 +2641,22 @@ def structured_artifact_citations(doc: dict, transcript: Transcript) -> dict:
     if doc.get("schema") != STRUCTURED_NOTE_SCHEMA:
         raise StructuredOutputError(
             f"Repair 4 artifact requires schema {STRUCTURED_NOTE_SCHEMA}")
+    if doc.get("claim_evidence_contract") == SYNTHESIS_EVIDENCE_CONTRACT:
+        evidence = doc.get("evidence")
+        resolved = validate_synthesis_evidence(evidence, transcript)
+        expected_provenance = {
+            key: evidence[key]
+            for key in (
+                "schema", "transcript_view_sha256",
+                "fragment_contract_sha256", "fragment_map_sha256",
+            )
+        }
+        if doc.get("provenance", {}).get("source_evidence") != expected_provenance:
+            raise StructuredOutputError(
+                "artifact synthesis evidence provenance disagrees with its graph")
+        return _synthesis_citation_rows(
+            resolved, doc["note"], transcript, stored_claims=doc.get("claims")
+        )
     if doc.get("claim_evidence_contract") == CANDIDATE_EVIDENCE_CONTRACT:
         evidence = doc.get("evidence")
         resolved = validate_candidate_evidence(evidence, transcript)
@@ -2878,6 +2900,180 @@ def validate_candidate_evidence(evidence: object, transcript: Transcript) -> lis
     return resolved
 
 
+def validate_synthesis_evidence(evidence: object, transcript: Transcript) -> list[dict]:
+    """Replay model-authored note claims against candidate-derived locators."""
+    import candidate_first
+
+    if (
+        not isinstance(evidence, dict)
+        or evidence.get("schema") != SYNTHESIS_EVIDENCE_CONTRACT
+    ):
+        raise StructuredOutputError("missing or unknown synthesis evidence contract")
+    fragment_map = build_fragment_map(transcript)
+    for key in (
+        "transcript_view_sha256",
+        "fragment_contract_sha256",
+        "fragment_map_sha256",
+    ):
+        if evidence.get(key) != fragment_map[key]:
+            raise StructuredOutputError(
+                f"synthesis evidence {key} does not match transcript")
+    if evidence.get("fragment_contract") != fragment_map["fragment_contract"]:
+        raise StructuredOutputError("synthesis evidence fragment contract is not current")
+    manifest = candidate_first.generate_manifest(
+        transcript,
+        candidate_first.STRATEGY_BROAD,
+        contract=candidate_first.PRODUCT_CONTRACT,
+    )
+    if evidence.get("candidate_manifest_sha256") != manifest["manifest_sha256"]:
+        raise StructuredOutputError(
+            "synthesis evidence manifest digest does not match the regenerated manifest")
+    if evidence.get("generator_contract_sha256") != manifest["generator_contract_sha256"]:
+        raise StructuredOutputError(
+            "synthesis evidence generator contract is not the registered product contract")
+    candidates = {row["candidate_id"]: row for row in manifest["candidates"]}
+    fragments = {
+        fragment["source_fragment_id"]: fragment
+        for fragment in fragment_map["fragments"]
+    }
+    rows = evidence.get("claims")
+    if not isinstance(rows, list) or not rows:
+        raise StructuredOutputError("synthesis evidence carries no claims")
+    resolved = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or set(row) != {
+            "claim_ordinal", "claim_type", "claim", "claim_sha256",
+            "candidate_ids", "evidence_refs",
+        }:
+            raise StructuredOutputError(
+                f"synthesis evidence claim {index} has the wrong shape")
+        claim = row["claim"]
+        claim_type = row["claim_type"]
+        candidate_ids = row["candidate_ids"]
+        if (
+            row["claim_ordinal"] != index
+            or claim_type not in {
+                "summary", "decision", "action", "proposal", "question"
+            }
+            or not isinstance(claim, str)
+            or not claim
+            or any(unicodedata.category(character) in {"Cc", "Cs"}
+                   or character in "\u2028\u2029" for character in claim)
+            or row["claim_sha256"] != _sha256(claim)
+            or not isinstance(candidate_ids, list)
+            or not 1 <= len(candidate_ids) <= 3
+            or any(not isinstance(value, str) or not value for value in candidate_ids)
+            or len(set(candidate_ids)) != len(candidate_ids)
+        ):
+            raise StructuredOutputError("synthesis evidence claim is invalid")
+        expected_refs = []
+        for candidate_id in candidate_ids:
+            candidate = candidates.get(candidate_id)
+            if candidate is None:
+                raise StructuredOutputError(
+                    "synthesis evidence names no enumerated candidate")
+            anchor = fragments[candidate["anchor_fragment_id"]]
+            expected_refs.append({
+                key: anchor[key]
+                for key in (
+                    "source_fragment_id", "turn", "char_start", "char_end",
+                    "text_sha256",
+                )
+            })
+        expected_refs = sorted(
+            {tuple(ref.items()): ref for ref in expected_refs}.values(),
+            key=lambda ref: (
+                ref["turn"], ref["char_start"], ref["char_end"], ref["text_sha256"]
+            ),
+        )
+        if row["evidence_refs"] != expected_refs:
+            raise StructuredOutputError(
+                "synthesis evidence references disagree with candidate anchors")
+        primary = expected_refs[0]
+        quote = transcript.turns[primary["turn"]].text[
+            primary["char_start"]:primary["char_end"]
+        ]
+        resolved.append({
+            "label": claim_type.upper(),
+            "claim": claim,
+            "quote": quote,
+            "claim_sha256": row["claim_sha256"],
+            "candidate_ids": candidate_ids,
+            "evidence_refs": expected_refs,
+        })
+    if not any(row["label"] == "SUMMARY" for row in resolved):
+        raise StructuredOutputError("synthesis evidence carries no summary")
+    return resolved
+
+
+def _synthesis_citation_rows(
+    resolved: list[dict],
+    note: str,
+    transcript: Transcript,
+    stored_claims: object = None,
+) -> dict:
+    if note != render_structured_note(resolved):
+        raise StructuredOutputError(
+            "synthesis note contains text outside evidence-bound claims")
+    parsed = _parse_claims(note)
+    expected = [
+        row for label in _LABEL_VALUES for row in resolved if row["label"] == label
+    ]
+    if len(parsed) != len(expected):
+        raise StructuredOutputError(
+            "rendered note count does not match synthesis evidence claims")
+    cited = []
+    for rendered, row in zip(parsed, expected, strict=True):
+        if (rendered["claim"], rendered["quote"], rendered["type"]) != (
+            row["claim"], row["quote"], row["label"].lower()
+        ):
+            raise StructuredOutputError(
+                "rendered Markdown disagrees with synthesis evidence")
+        primary = row["evidence_refs"][0]
+        cited.append({
+            "claim": row["claim"],
+            "quote": row["quote"],
+            "at": rendered["at"],
+            "type": row["label"].lower(),
+            "turn": primary["turn"],
+            "start": transcript.turns[primary["turn"]].start,
+            "candidate_ids": row["candidate_ids"],
+            "claim_sha256": row["claim_sha256"],
+            "evidence_refs": row["evidence_refs"],
+        })
+    if stored_claims is not None:
+        if not isinstance(stored_claims, list) or len(stored_claims) != len(cited):
+            raise StructuredOutputError(
+                "artifact claims do not match synthesis evidence cardinality")
+        for old, new in zip(stored_claims, cited, strict=True):
+            keys = (
+                "claim", "quote", "at", "type", "turn", "start",
+                "candidate_ids", "claim_sha256", "evidence_refs",
+            )
+            if {key: old.get(key) for key in ("status", *keys)} != {
+                "status": LOCATED,
+                **{key: new[key] for key in keys},
+            }:
+                raise StructuredOutputError(
+                    "artifact claim metadata disagrees with synthesis evidence")
+    repeats = len(cited) - len({" ".join(_seq(row["claim"])) for row in cited})
+    return {
+        "applies": bool(transcript.turns),
+        "ok": True,
+        "items": len(cited),
+        "cited": cited,
+        "fabricated": [],
+        "unverifiable": [],
+        "uncited": [],
+        "template_echo": sum(1 for item in parsed if item["wrapped"]),
+        "layout": parsed[0]["layout"] if parsed else "none",
+        "separator": parsed[0]["separator"] if parsed else None,
+        "repeats": repeats,
+        "reversed_locatable": 0,
+        "authority": SYNTHESIS_EVIDENCE_CONTRACT,
+    }
+
+
 def _candidate_citation_rows(
     resolved: list[dict],
     note: str,
@@ -2941,6 +3137,134 @@ def _candidate_citation_rows(
         "reversed_locatable": 0,
         "authority": CANDIDATE_EVIDENCE_CONTRACT,
     }
+
+
+def synthesis_note_result(
+    transcript: Transcript,
+    generation: dict,
+    *,
+    transcript_sha256: str,
+    model: str,
+    model_identity: dict,
+    elapsed_s: float,
+) -> dict:
+    """Build a typed, evidence-linked note from a synthesis generation payload."""
+    import candidate_first
+
+    if not isinstance(generation, dict) or generation.get("schema") != "note-generation/2":
+        raise StructuredOutputError("synthesis generation payload has the wrong schema")
+    if generation.get("transcript_sha256") != transcript_sha256:
+        raise StructuredOutputError("synthesis generation names a different transcript")
+    fragment_map = build_fragment_map(transcript)
+    manifest = candidate_first.generate_manifest(
+        transcript,
+        candidate_first.STRATEGY_BROAD,
+        contract=candidate_first.PRODUCT_CONTRACT,
+    )
+    if generation.get("manifest_sha256") != manifest["manifest_sha256"]:
+        raise StructuredOutputError(
+            "synthesis generation manifest digest does not match this transcript")
+    candidates = {row["candidate_id"]: row for row in manifest["candidates"]}
+    fragments = {
+        fragment["source_fragment_id"]: fragment
+        for fragment in fragment_map["fragments"]
+    }
+    claims_in = generation.get("claims")
+    if not isinstance(claims_in, list) or not claims_in:
+        raise StructuredOutputError("synthesis generation carries no claims")
+    claims = []
+    for index, row in enumerate(claims_in):
+        if not isinstance(row, dict) or set(row) != {
+            "claim_ordinal", "claim_type", "claim", "candidate_ids",
+            "evidence_state", "locators",
+        }:
+            raise StructuredOutputError(
+                f"synthesis generation claim {index} has the wrong shape")
+        if row["claim_ordinal"] != index or row["evidence_state"] != "located":
+            raise StructuredOutputError(
+                "synthesis generation claims are out of order or unlocated")
+        claim = row["claim"]
+        claim_type = row["claim_type"]
+        candidate_ids = row["candidate_ids"]
+        if (
+            claim_type not in {"summary", "decision", "action", "proposal", "question"}
+            or not isinstance(claim, str)
+            or not claim
+            or len(claim) > 280
+            or not isinstance(candidate_ids, list)
+            or not 1 <= len(candidate_ids) <= 3
+            or len(set(candidate_ids)) != len(candidate_ids)
+        ):
+            raise StructuredOutputError("synthesis generation claim is invalid")
+        refs = []
+        expected_locators = []
+        for candidate_id in candidate_ids:
+            candidate = candidates.get(candidate_id)
+            if candidate is None:
+                raise StructuredOutputError(
+                    "synthesis generation claim names no enumerated candidate")
+            anchor = fragments[candidate["anchor_fragment_id"]]
+            refs.append({
+                key: anchor[key]
+                for key in (
+                    "source_fragment_id", "turn", "char_start", "char_end",
+                    "text_sha256",
+                )
+            })
+            expected_locators.append({
+                "turn": anchor["turn"],
+                "start": anchor["char_start"],
+                "end": anchor["char_end"],
+                "text_sha256": anchor["text_sha256"],
+            })
+        refs = sorted(
+            {tuple(ref.items()): ref for ref in refs}.values(),
+            key=lambda ref: (
+                ref["turn"], ref["char_start"], ref["char_end"], ref["text_sha256"]
+            ),
+        )
+        expected_locators = sorted(
+            {tuple(locator.items()): locator for locator in expected_locators}.values(),
+            key=lambda locator: (
+                locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
+            ),
+        )
+        if row["locators"] != expected_locators:
+            raise StructuredOutputError(
+                "synthesis generation locators disagree with candidate anchors")
+        claims.append({
+            "claim_ordinal": index,
+            "claim_type": claim_type,
+            "claim": claim,
+            "claim_sha256": _sha256(claim),
+            "candidate_ids": candidate_ids,
+            "evidence_refs": refs,
+        })
+    evidence = {
+        "schema": SYNTHESIS_EVIDENCE_CONTRACT,
+        "transcript_view_sha256": fragment_map["transcript_view_sha256"],
+        "fragment_contract": fragment_map["fragment_contract"],
+        "fragment_contract_sha256": fragment_map["fragment_contract_sha256"],
+        "fragment_map_sha256": fragment_map["fragment_map_sha256"],
+        "candidate_manifest_sha256": manifest["manifest_sha256"],
+        "generator_contract_sha256": manifest["generator_contract_sha256"],
+        "claims": claims,
+    }
+    resolved = validate_synthesis_evidence(evidence, transcript)
+    result = {
+        "claim_evidence_contract": SYNTHESIS_EVIDENCE_CONTRACT,
+        "evidence_contract": evidence,
+        "note": render_structured_note(resolved),
+        "model": model,
+        "model_identity": model_identity,
+        "elapsed_s": elapsed_s,
+        "candidate_generation": {
+            key: generation[key]
+            for key in ("schema", "transcript_sha256", "manifest_sha256", "candidates")
+        },
+    }
+    structured_citations(result, transcript)
+    return result
 
 
 def candidate_note_result(
@@ -3085,6 +3409,31 @@ def candidate_note_checks(result: dict, transcript: Transcript) -> dict:
     return {"passed": verdict(checks), **checks}
 
 
+def synthesis_note_checks(result: dict, transcript: Transcript) -> dict:
+    """Stored checks for model-authored prose with exact candidate evidence."""
+    citations = structured_citations(result, transcript)
+    source_text = "\n".join(turn.text for turn in transcript.turns)
+    checks = {
+        "context": {
+            "ok": None,
+            "reason": "MLX synthesis uses the model context and a bounded output",
+        },
+        "attribution": check_attribution(result["note"], transcript, []),
+        "numbers": check_numbers(result["note"], source_text),
+        "prompt_echo": check_prompt_echo(result["note"], source_text, ""),
+        "grounding": {
+            "applies": True,
+            "ok": citations["ok"],
+            "reason": "every displayed claim resolves to selected transcript evidence",
+        },
+        "owner_grounding": {"applies": False, "ok": None},
+        "recall": {"applies": False, "ok": None},
+        "citations": citations,
+        "extraction": {"applies": False, "ok": None},
+    }
+    return {"passed": verdict(checks), **checks}
+
+
 def candidate_note_document(
     transcript: Transcript,
     generation: dict,
@@ -3103,7 +3452,12 @@ def candidate_note_document(
     path `worker/adapters.py::note_create` requires, so publication either
     verifies byte-identically or refuses.
     """
-    result = candidate_note_result(
+    builder = (
+        synthesis_note_result
+        if isinstance(generation, dict) and generation.get("schema") == "note-generation/2"
+        else candidate_note_result
+    )
+    result = builder(
         transcript,
         generation,
         transcript_sha256=transcript_sha256,
@@ -3111,7 +3465,11 @@ def candidate_note_document(
         model_identity=model_identity,
         elapsed_s=elapsed_s,
     )
-    checks = candidate_note_checks(result, transcript)
+    checks = (
+        synthesis_note_checks(result, transcript)
+        if generation.get("schema") == "note-generation/2"
+        else candidate_note_checks(result, transcript)
+    )
     transcript_path = (
         Path("meetings") / meeting_id / "transcript" / f"{transcript_sha256}.json"
     )

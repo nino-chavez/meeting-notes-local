@@ -895,52 +895,160 @@ h3 {
   margin-bottom: 12px;
 }
 
-.draft-points {
+.meeting-note {
+  padding: clamp(22px, 3vw, 32px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.meeting-note-header {
+  max-width: 68ch;
+}
+
+.meeting-note-header h2 {
+  max-width: 24ch;
+  margin: 6px 0 9px;
+  font-size: clamp(23px, 3vw, 30px);
+  line-height: 1.12;
+}
+
+.meeting-note-header > p:last-child {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.meeting-note-unavailable {
+  border-color: rgb(156 103 21 / 34%);
+  background: var(--attention-soft);
+}
+
+.meeting-note-section {
+  padding-top: 24px;
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.meeting-note-section h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.meeting-note-summary-item > p {
+  max-width: 68ch;
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.meeting-note-summary-item + .meeting-note-summary-item {
+  margin-top: 12px;
+}
+
+.meeting-note-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.meeting-note-item {
+  position: relative;
+  padding: 12px 0 13px 18px;
+  border-top: 1px solid var(--line);
+}
+
+.meeting-note-item:first-child {
+  border-top: 0;
+}
+
+.meeting-note-item::before {
+  position: absolute;
+  top: 21px;
+  left: 1px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  content: "";
+}
+
+.meeting-note-item > p {
+  max-width: 68ch;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.transcript-highlights,
+.transcript-disclosure {
+  margin-top: 22px;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--paper-soft);
 }
 
-.draft-points summary {
+.transcript-highlights summary,
+.transcript-disclosure > summary {
   display: flex;
+  min-height: 52px;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 15px 17px;
+  padding: 12px 15px;
+  color: var(--ink-soft);
   cursor: pointer;
+  font-size: 13px;
+  font-weight: 680;
 }
 
-.draft-points summary strong,
-.draft-points summary small {
+.transcript-highlights summary span:last-child,
+.transcript-disclosure-state {
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.transcript-highlights[open] summary,
+.transcript-disclosure[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.transcript-highlights-content {
+  max-height: 340px;
+  padding: 6px 16px 10px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.transcript-disclosure {
+  margin-top: 0;
+  background: var(--paper);
+}
+
+.transcript-disclosure > summary span:first-child,
+.transcript-disclosure > summary strong,
+.transcript-disclosure > summary small {
   display: block;
 }
 
-.draft-points summary strong {
+.transcript-disclosure > summary strong {
   color: var(--ink);
   font-size: 13px;
 }
 
-.draft-points summary small,
-.draft-points-state {
+.transcript-disclosure > summary small {
+  margin-top: 3px;
   color: var(--ink-faint);
   font-size: 11px;
+  font-weight: 500;
   line-height: 1.4;
 }
 
-.draft-points-state {
-  flex: 0 0 auto;
-}
-
-.draft-points[open] summary {
-  border-bottom: 1px solid var(--line);
-}
-
-.draft-points-content {
-  max-height: 260px;
-  padding: 13px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+.transcript-disclosure-content {
+  padding: 14px;
 }
 
 .transcript-workspace {
@@ -1036,37 +1144,9 @@ h3 {
   border: 0;
 }
 
-.claim-list {
-  display: grid;
-  gap: 10px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.claim-item {
-  padding: 14px 15px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--paper);
-}
-
-.claim-item > p {
-  margin: 7px 0 9px;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.claim-label {
-  color: var(--ink-faint);
-  font-size: 10px;
-  font-weight: 760;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
 .claim-source-button {
-  padding: 0;
+  min-height: 44px;
+  padding: 0 4px;
   color: var(--accent);
   background: transparent;
   font-size: 12px;

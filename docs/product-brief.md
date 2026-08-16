@@ -37,9 +37,15 @@ between two nearby ideas. A tidy summary must never look like a complete record.
 
 - During a meeting, the operator needs an unconstrained place to write their
   own reminders before a detail disappears.
-- After a meeting, generated points are a **draft from the transcript**, not a
-  final account. Each displayed point needs a clear path back to the retained
-  source text.
+- After a meeting, the generated note starts with a short overview, then
+  separates decisions, follow-ups, and open questions. It saves the operator
+  from rereading the transcript to reconstruct what happened.
+- Every generated decision, follow-up, and open question needs a clear path
+  back to the retained source text. The note remains reviewable AI output, not
+  a final or complete account.
+- Selected transcript excerpts are supporting evidence, not a meeting note. If
+  Yawn cannot produce a summary, it says so and labels the excerpts **Transcript
+  highlights** instead of presenting them as a draft note.
 - The full transcript stays available in the same meeting view. It is the
   record for checking a decision, owner, or follow-up that matters.
 - The library remains organized around individual meetings. It does not become
@@ -72,6 +78,9 @@ it is not the home-screen subject. Settings remain a small auxiliary window.
   diagnostics, folders, templates, or planned features.
 - Give the operator a plain place to type during capture. Their notes guide what
   they need to remember; they are not a form to complete.
+- Make the generated meeting note the first readable result after capture. Lead
+  with the overview and outcomes. Keep source excerpts one click away and the
+  full transcript available without placing it in the main reading path.
 - Keep the status language concrete: recording, preparing, finishing,
   transcript ready, or needs attention.
 - Keep Settings limited to audio access and local speech-model storage. Show

@@ -1398,13 +1398,14 @@ def _candidate_note_generator(arguments: object) -> NoteGenerator | None:
         from summarize import candidate_note_document
 
         registered = candidate_first.PRODUCT_RUN["classifier"]
+        content_field = "claims" if generation["schema"] == "note-generation/2" else "points"
         return candidate_note_document(
             transcript,
             {
                 key: generation[key]
                 for key in (
                     "schema", "transcript_sha256", "manifest_sha256",
-                    "candidates", "points",
+                    "candidates", content_field,
                 )
             },
             meeting_id=values["meeting_id"],

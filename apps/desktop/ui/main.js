@@ -5,6 +5,7 @@ import {
   captureIsInProgress,
   capturePresentation,
   humanize,
+  meetingNotePresentation,
   mergePermissions,
   noteGenerationPresentation,
   permissionSummary,
@@ -490,17 +491,77 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
   `;
 }
 
-function renderDraftPoints(claims, claimEvidence) {
-  if (!claims.length) return "";
+function renderMeetingNoteItems(claims, claimEvidence) {
   return `
-    <details class="draft-points" open>
-      <summary><span><strong>Draft from transcript</strong><small>Generated points need review against the retained source.</small></span><span class="draft-points-state">Review</span></summary>
-      <div class="draft-points-content">
-        <ul class="claim-list">${claims.map((claim) => `<li class="claim-item">
-          <span class="claim-label">${escapeHtml(humanize(claim.claimType))}</span>
+    <ul class="meeting-note-list">${claims.map((claim) => `<li class="meeting-note-item">
           <p>${escapeHtml(claim.claim)}</p>
           ${renderClaimEvidence(claim, claimEvidence[claim.ordinal])}
         </li>`).join("")}</ul>
+  `;
+}
+
+function renderMeetingNote(note, claimEvidence) {
+  const presentation = meetingNotePresentation(note);
+  if (presentation.state === "empty") return "";
+  if (presentation.state === "extracts-only") {
+    const count = presentation.highlights.length;
+    return `
+      <section class="meeting-note meeting-note-unavailable" aria-labelledby="meeting-note-heading">
+        <header class="meeting-note-header">
+          <p class="eyebrow">Meeting note</p>
+          <h2 id="meeting-note-heading">A summary wasn’t produced.</h2>
+          <p>Yawn selected ${count} transcript ${count === 1 ? "excerpt" : "excerpts"}, but those excerpts are source material, not a meeting summary.</p>
+        </header>
+        <details class="transcript-highlights">
+          <summary><span>Review selected excerpts</span><span>${count}</span></summary>
+          <div class="transcript-highlights-content">${renderMeetingNoteItems(presentation.highlights, claimEvidence)}</div>
+        </details>
+      </section>
+    `;
+  }
+  return `
+    <section class="meeting-note" aria-labelledby="meeting-note-heading">
+      <header class="meeting-note-header">
+        <p class="eyebrow">Meeting note</p>
+        <h2 id="meeting-note-heading">What happened and what comes next</h2>
+        <p>Generated from the transcript. Use the source links to check anything that matters.</p>
+      </header>
+      ${presentation.summary.length ? `
+        <section class="meeting-note-section meeting-note-overview" aria-labelledby="meeting-overview-heading">
+          <h3 id="meeting-overview-heading">Overview</h3>
+          ${presentation.summary.map((claim) => `<div class="meeting-note-summary-item">
+            <p>${escapeHtml(claim.claim)}</p>
+            ${claim.handle ? renderClaimEvidence(claim, claimEvidence[claim.ordinal]) : ""}
+          </div>`).join("")}
+        </section>
+      ` : ""}
+      ${presentation.groups.map((group, index) => `
+        <section class="meeting-note-section" aria-labelledby="meeting-note-group-${index}">
+          <h3 id="meeting-note-group-${index}">${escapeHtml(group.title)}</h3>
+          ${renderMeetingNoteItems(group.claims, claimEvidence)}
+        </section>
+      `).join("")}
+      ${presentation.highlights.length ? `
+        <details class="transcript-highlights">
+          <summary><span>Additional transcript highlights</span><span>${presentation.highlights.length}</span></summary>
+          <div class="transcript-highlights-content">${renderMeetingNoteItems(presentation.highlights, claimEvidence)}</div>
+        </details>
+      ` : ""}
+    </section>
+  `;
+}
+
+function renderTranscriptDisclosure(transcript) {
+  if (!transcript?.turns?.length && !transcript?.message) return "";
+  return `
+    <details class="transcript-disclosure">
+      <summary><span><strong>Full transcript</strong><small>The retained record for checking a decision, owner, or follow-up.</small></span><span class="transcript-disclosure-state">Open</span></summary>
+      <div class="transcript-disclosure-content">
+        ${transcript?.turns?.length ? renderTranscript(transcript.turns, "Source transcript", "Search or read the complete retained conversation.", {
+          copyAction: "copy-library-transcript",
+          openFileAction: "open-library-transcript-file",
+          workspace: true,
+        }) : `<section class="note-section transcript-unavailable"><p class="message-card">${escapeHtml(transcript.message)}</p></section>`}
       </div>
     </details>
   `;
@@ -555,12 +616,8 @@ function renderMeeting() {
       ${renderGenerateNote(note)}
       <div class="meeting-workspace">
         <main class="meeting-source-pane">
-          ${renderDraftPoints(claims, claimEvidence)}
-          ${transcript?.turns?.length ? renderTranscript(transcript.turns, "Source transcript", "The retained record for checking a decision, owner, or follow-up.", {
-            copyAction: "copy-library-transcript",
-            openFileAction: "open-library-transcript-file",
-            workspace: true,
-          }) : transcript?.message ? `<section class="note-section transcript-unavailable"><p class="message-card">${escapeHtml(transcript.message)}</p></section>` : ""}
+          ${renderMeetingNote(note, claimEvidence)}
+          ${renderTranscriptDisclosure(transcript)}
         </main>
         <aside class="meeting-notes-pane">
           <section class="note-section your-notes-section" aria-labelledby="operator-note-heading">

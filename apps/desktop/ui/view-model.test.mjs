@@ -9,6 +9,7 @@ import {
   captureIsInProgress,
   capturePresentation,
   humanize,
+  meetingNotePresentation,
   mergePermissions,
   noteGenerationPresentation,
   permissionSummary,
@@ -80,6 +81,34 @@ test("small display helpers stay readable", () => {
   assert.equal(humanize("evidence_state"), "Evidence State");
 });
 
+test("a point-only artifact is not presented as a meeting summary", () => {
+  const point = { ordinal: 0, claimType: "point", claim: "A selected excerpt." };
+  assert.deepEqual(meetingNotePresentation({ claims: [point] }), {
+    state: "extracts-only",
+    summary: [],
+    groups: [],
+    highlights: [point],
+  });
+});
+
+test("a generated meeting note leads with summary and outcome groups", () => {
+  const decision = { ordinal: 0, claimType: "decision", claim: "Use the smaller battery." };
+  const action = { ordinal: 1, claimType: "action", claim: "Send the cost table." };
+  const presentation = meetingNotePresentation({
+    claims: [
+      { ordinal: 0, claimType: "summary", claim: "The group chose the smaller battery and assigned the cost follow-up." },
+      decision,
+      action,
+    ],
+  });
+  assert.equal(presentation.state, "note");
+  assert.deepEqual(presentation.summary, [
+    { ordinal: 0, claimType: "summary", claim: "The group chose the smaller battery and assigned the cost follow-up." },
+  ]);
+  assert.deepEqual(presentation.groups.map((group) => group.title), ["Decisions", "Follow-ups"]);
+  assert.deepEqual(presentation.highlights, []);
+});
+
 test("a copied transcript keeps known gaps visible", () => {
   const copied = transcriptPlainText([
     { start: 0, speaker: "Me", text: "we agreed to defer the migration" },
@@ -131,6 +160,10 @@ test("the generate control follows the backend's eligibility signal alone", () =
 
   // Another meeting generating does not disable this one's control.
   assert.equal(noteGenerationPresentation(eligible, "m-2").disabled, false);
+
+  const replacement = noteGenerationPresentation({ ...eligible, claims: [{ ordinal: 0 }] }, "");
+  assert.equal(replacement.label, "Regenerate note");
+  assert.match(replacement.help, /current note stays in place/);
 
   // No source pin — a ready note, a stale view, a deleted transcript — no control.
   assert.equal(noteGenerationPresentation({ meetingId: "m-1" }, ""), null);

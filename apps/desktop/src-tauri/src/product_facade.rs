@@ -118,11 +118,14 @@ impl ProductOperationFacade {
             ProductOperationKind::GenerateNote,
             UiOperationState::Summarizing,
             |source| {
-                !source.has_current_note
-                    && matches!(
-                        source.lifecycle,
-                        MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed
-                    )
+                matches!(
+                    (source.lifecycle, source.has_current_note),
+                    (MeetingLifecycle::Ready, true)
+                        | (
+                            MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed,
+                            false
+                        )
+                )
             },
             || self.coordinator.accept_regeneration(&args),
         )
@@ -369,10 +372,30 @@ mod tests {
         ));
         let note_facade = ProductOperationFacade::new(note_coordinator.clone());
         assert_eq!(
-            note_facade.regenerate_note(note_args).unwrap(),
+            note_facade.regenerate_note(note_args.clone()).unwrap(),
             note_expected
         );
         assert_eq!(*note_coordinator.regeneration_calls.lock().unwrap(), 1);
+
+        let replacement_coordinator = Arc::new(FakeCoordinator::accepting(
+            source_for(
+                note_args.meeting_id,
+                note_args.source_transcript_sha256.clone(),
+                MeetingLifecycle::Ready,
+                true,
+            ),
+            Uuid::nil(),
+            note_expected.operation_id,
+        ));
+        let replacement_facade = ProductOperationFacade::new(replacement_coordinator.clone());
+        assert_eq!(
+            replacement_facade.regenerate_note(note_args).unwrap(),
+            note_expected
+        );
+        assert_eq!(
+            *replacement_coordinator.regeneration_calls.lock().unwrap(),
+            1
+        );
     }
 
     #[test]

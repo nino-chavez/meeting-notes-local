@@ -77,13 +77,19 @@ def validate_note_create_arguments(value: object) -> dict:
     _uuid(arguments["meeting_id"], "meeting_id")
     _digest(arguments["source_transcript_sha256"], "source_transcript_sha256")
     if "generation" in arguments:
+        raw_generation = arguments["generation"]
+        if not isinstance(raw_generation, dict):
+            raise ProductContractRefused(
+                "note.create generation payload does not match the closed schema")
+        schema = raw_generation.get("schema")
+        collection = "claims" if schema == "note-generation/2" else "points"
         generation = _exact_object(
-            arguments["generation"],
+            raw_generation,
             {"schema", "transcript_sha256", "manifest_sha256", "candidates",
-             "points", "receipt"},
+             collection, "receipt"},
             "note.create generation payload",
         )
-        if generation["schema"] != "note-generation/1":
+        if generation["schema"] not in {"note-generation/1", "note-generation/2"}:
             raise ProductContractRefused(
                 "note.create generation payload schema is unsupported")
         _digest(generation["transcript_sha256"], "generation transcript_sha256")
@@ -99,9 +105,9 @@ def validate_note_create_arguments(value: object) -> dict:
         ):
             raise ProductContractRefused(
                 "generation candidate count must be a positive integer")
-        if not isinstance(generation["points"], list) or not generation["points"]:
+        if not isinstance(generation[collection], list) or not generation[collection]:
             raise ProductContractRefused(
-                "generation payload must carry at least one point")
+                f"generation payload must carry at least one {collection[:-1]}")
         receipt = _exact_object(
             generation["receipt"],
             {"responses", "response_bytes", "last_response_sha256", "elapsed_s"},

@@ -191,6 +191,42 @@ export function humanize(value) {
   return String(value || "").replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+const MEETING_NOTE_GROUPS = Object.freeze([
+  ["decision", "Decisions"],
+  ["action", "Follow-ups"],
+  ["proposal", "Ideas discussed"],
+  ["question", "Open questions"],
+]);
+
+// A finished note and a set of selected transcript excerpts are different
+// products. Keep that distinction in one view-model seam so the renderer cannot
+// turn a point-only backend response into an apparent summary through copy alone.
+export function meetingNotePresentation(note) {
+  const claims = Array.isArray(note?.claims) ? note.claims : [];
+  const legacySummary = Array.isArray(note?.summary)
+    ? note.summary.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())
+    : typeof note?.summary === "string" && note.summary.trim()
+      ? [note.summary.trim()]
+      : [];
+  const summaryClaims = claims.filter((claim) => claim?.claimType === "summary");
+  const summary = summaryClaims.length
+    ? summaryClaims
+    : legacySummary.map((claim) => ({ claimType: "summary", claim }));
+  const groups = MEETING_NOTE_GROUPS.map(([claimType, title]) => ({
+    claimType,
+    title,
+    claims: claims.filter((claim) => claim?.claimType === claimType),
+  })).filter((group) => group.claims.length);
+  const highlights = claims.filter((claim) => claim?.claimType === "point");
+  const hasNote = summary.length > 0 || groups.length > 0;
+  return {
+    state: hasNote ? "note" : highlights.length ? "extracts-only" : "empty",
+    summary,
+    groups,
+    highlights,
+  };
+}
+
 // Clipboard text is a portable reading copy, not a claim that the transcript
 // is complete. A turn the voice check withheld still occupies a visible line,
 // so pasting this elsewhere cannot silently turn a known gap into a seamless
@@ -234,12 +270,15 @@ export function transcriptTurnsMatching(turns, query) {
 export function noteGenerationPresentation(note, generatingMeetingId) {
   if (!note?.regenerationSourceSha256 || !note?.meetingId) return null;
   const generating = generatingMeetingId === note.meetingId;
+  const replacing = Array.isArray(note?.claims) && note.claims.length > 0;
   return {
     action: "generate-note",
-    label: generating ? "Generating note…" : "Generate note",
+    label: generating ? "Generating note…" : replacing ? "Regenerate note" : "Generate note",
     disabled: generating,
     help: generating
       ? "The note model is reading this transcript on your Mac. This can take several minutes — you can keep using Yawn."
+      : replacing
+        ? "Runs the downloaded note model again on this Mac. Your current note stays in place unless a replacement passes every check."
       : "Runs the downloaded note model on this Mac. It usually takes several minutes, longer for long meetings. Nothing leaves your computer.",
   };
 }

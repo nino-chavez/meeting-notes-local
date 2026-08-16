@@ -84,6 +84,7 @@ pub(crate) struct ProjectedClaim {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ClaimType {
+    Summary,
     Decision,
     Action,
     Proposal,
@@ -234,6 +235,7 @@ fn parse_claim(
         return Err(ProjectionError::Unavailable);
     }
     let claim_type = match string(values[2])? {
+        "summary" => ClaimType::Summary,
         "decision" => ClaimType::Decision,
         "action" => ClaimType::Action,
         "proposal" => ClaimType::Proposal,
@@ -594,6 +596,16 @@ mod tests {
         assert_eq!(non_ascii.len(), 1);
         assert_eq!(non_ascii[0].text, turns()[3]);
         assert!(non_ascii[0].text.chars().any(|c| !c.is_ascii()));
+    }
+
+    #[test]
+    fn summary_claim_type_crosses_the_projection_boundary() {
+        let fixture = fixture();
+        let mut result = fixture["valid_results"][1]["result"].clone();
+        result["projection"]["claims"][0]["claim_type"] = Value::from("summary");
+        let claims =
+            parse_result(&frame(&result), &request(), &turns()).expect("summary claim must parse");
+        assert!(matches!(claims[0].claim_type, ClaimType::Summary));
     }
 
     #[test]

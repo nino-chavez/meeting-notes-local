@@ -321,12 +321,14 @@ Both lanes produce a versioned, signed, notarized DMG for Apple-silicon Macs
 running macOS 14.4 or later. Installation is drag-to-Applications. Updates are
 manual for the first release.
 
-The first lane is an **internal transcript alpha**. It is for capture,
-permission, recovery, retention, and transcript feedback. It carries runtime
-admission `internal-alpha`, shows that label in the application, and never
-presents an automatic note as ready. It requires manual Start and Stop,
-headphones, one operator at the microphone, and nobody else in the room. It is
-not a beta and does not satisfy the automatic-note gate.
+The first lane is an **internal alpha**. It is for capture, permission,
+recovery, retention, transcript feedback, and review of the local generated
+meeting note. It carries runtime admission `internal-alpha` and shows that label
+in the application. Its generated note is explicitly reviewable output: it
+links outcomes to source evidence and labels transcript excerpts as a fallback
+when no summary is available. It requires manual Start and Stop, headphones,
+one operator at the microphone, and nobody else in the room. It is not a beta
+and does not satisfy the product admission gate.
 
 The alpha lane's main window carries the reviewed internal-alpha surface
 command set — capture, Library and exact search, voice status, guided
