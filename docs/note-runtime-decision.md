@@ -296,7 +296,43 @@ Build order: (1) Rust generate transport + descriptor widening, (2)
 worker `note.create` admission + assembler (operation sets move in
 lockstep with `supervision::internal_alpha_operations()`), (3)
 coordinator sequencing behind `accept_regeneration`, (4) the UI
-regenerate control. Memory contention is already handled: whisper's
+regenerate control.
+
+**Slice 1 landed 2026-08-15 (commit `ad2eeec`).** The descriptor set and
+the role are one decision on both sides: three descriptors speak
+`project` exactly as before, a fourth — the manifest-pinned generator
+bytes — speaks `generate`. Rust's hardened child-drive is one
+role-parameterized sequence shared by `ProcessNoteProjector` and the new
+`ProcessNoteGenerator`; `admit_note_generator` applies the projector's
+admission rules and binds the verified installed model directory.
+
+**Slice 2 spec (recorded before building, 2026-08-15).** The generate
+lane returns `note-generation/1` points: located anchor excerpts with no
+claim type and no prose — deliberately, because the candidate-first
+program classifies KEEP/ABSTAIN over transcript-anchored candidates and
+writes no claims. The note/2 claim vocabulary today is four types
+(decision, action, proposal, question) inherited from the cue-era
+extraction pipeline. Assigning any of those four to a typeless kept
+point would be mis-attestation by construction. The product brief
+resolves the shape: generated content is "points — a draft from the
+transcript", each with a clear path back to the source text. So slice 2
+adds one honest vocabulary entry — a `point` claim type rendering under
+a single "Points" section — rather than faking types or widening the
+note into a summary. Claim text is the anchor excerpt verbatim (claim
+and quote coincide; the pipeline writes no prose by design). The entry
+widens together everywhere the vocabulary is pinned: `summarize`'s label
+set, render titles and claim parser; `note_projection.rs::ClaimType`;
+the shared cross-language fixture (one additive valid row); and the UI
+claim presentation. `note.create`'s argument contract gains the
+generation result (points), and the injected generator becomes a
+deterministic assembler: points → excerpt items → the existing
+memory-only note/2 build chain (`attach_evidence_items` →
+`normalize_extraction_items` → `render_structured_note` →
+`structured_citations` → `structured_artifact_citations` replay), the
+same chain `mlx_note_admission.py` already drives for research
+candidates. The worker's operation sets and
+`supervision::internal_alpha_operations()` move in lockstep, exactly as
+the `corpus.embed` drift note in `supervision.rs` warns. Memory contention is already handled: whisper's
 runtime is released inside the worker before the `transcript.create`
 terminal frame, so any regeneration accepted at `TranscriptReady` or
 later starts past the release.
