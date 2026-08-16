@@ -380,6 +380,13 @@ PRODUCT_RUN = {
         "transport": "mlx-constrained-verdict/1",
         "prompt_rendering": "gemma3-two-turn/1",
         "batch_size": 1,
+        # Offer every second manifest candidate (EVAL.md preregistration,
+        # 2026-08-16): the broad strategy makes adjacent candidates
+        # near-duplicate windows, and at batch size 1 verdicts are
+        # offer-set-independent, so the offline dump sweep predicts the
+        # strided official runs exactly. s=2 passed all four corpora with
+        # margin; s=3 left one at the gate floor and was rejected.
+        "offer_stride": 2,
         "temperature": 0.0,
         "num_predict": "min(4096, 32 + 96 * candidates)",
         "model_facing_candidate_ids": (
@@ -1067,6 +1074,20 @@ def qmsum_span_report(
     }
 
 
+def offered_candidates(candidates: list[dict], stride: int) -> list[dict]:
+    """The classifier's offer: every stride-th candidate by manifest order.
+
+    The manifest itself is unchanged — the stride narrows only what the
+    classifier is asked about (EVAL.md preregistration, 2026-08-16). At the
+    registered batch size 1 each request is a pure function of (candidate,
+    transcript), so verdicts on the offered subset are identical to the
+    verdicts a full offer would produce.
+    """
+    if isinstance(stride, bool) or not isinstance(stride, int) or stride <= 0:
+        raise StructuredOutputError("offer stride must be a positive integer")
+    return candidates[::stride]
+
+
 def candidate_batches(candidates: list[dict], batch_size: int) -> list[list[dict]]:
     if (
         isinstance(batch_size, bool)
@@ -1286,6 +1307,8 @@ def classification_request(
     manifest: dict,
     batch: list[dict],
     batch_size: int,
+    *,
+    offer_stride: int = 1,
 ) -> tuple[dict, str, str]:
     validate_manifest(manifest, transcript)
     if (
@@ -1295,7 +1318,8 @@ def classification_request(
     ):
         raise StructuredOutputError(
             "classifier batch is empty or malformed")
-    expected_batches = candidate_batches(manifest["candidates"], batch_size)
+    offered = offered_candidates(manifest["candidates"], offer_stride)
+    expected_batches = candidate_batches(offered, batch_size)
     if not any(
         _json_bytes(batch) == _json_bytes(expected)
         for expected in expected_batches
@@ -1303,11 +1327,11 @@ def classification_request(
         raise StructuredOutputError(
             "classifier batch is not one registered contiguous batch")
     manifest_rows = {
-        row["candidate_id"]: row for row in manifest["candidates"]
+        row["candidate_id"]: row for row in offered
     }
     manifest_positions = {
         row["candidate_id"]: index
-        for index, row in enumerate(manifest["candidates"])
+        for index, row in enumerate(offered)
     }
     candidate_ids = [row.get("candidate_id") for row in batch]
     positions = [
@@ -1672,6 +1696,33 @@ def run_self_test() -> int:
         else:
             raise AssertionError(
                 "an altered or noncanonical classifier batch was accepted")
+
+    # Offer stride: every second candidate, batches drawn from the offer.
+    strided_offer = offered_candidates(broad["candidates"], 2)
+    assert strided_offer == broad["candidates"][::2]
+    assert offered_candidates(broad["candidates"], 1) == broad["candidates"]
+    for bad_stride in (0, -1, True, "2", None):
+        try:
+            offered_candidates(broad["candidates"], bad_stride)
+        except StructuredOutputError:
+            pass
+        else:
+            raise AssertionError(f"offer stride {bad_stride!r} was accepted")
+    strided_batch = candidate_batches(strided_offer, 1)[1]
+    _s_schema, _s_system, strided_user = classification_request(
+        transcript, broad, strided_batch, 1, offer_stride=2)
+    assert batch_locators(
+        [strided_batch[0]["candidate_id"]])[0] in strided_user
+    try:
+        # A full-offer batch of one is NOT a registered strided batch when
+        # its candidate falls outside the offer.
+        classification_request(
+            transcript, broad, [broad["candidates"][1]], 1, offer_stride=2)
+    except StructuredOutputError:
+        pass
+    else:
+        raise AssertionError(
+            "a batch outside the strided offer was accepted")
 
     fixture_schema, fixture_system, fixture_user, fixture_expected = (
         classifier_fixture_request()

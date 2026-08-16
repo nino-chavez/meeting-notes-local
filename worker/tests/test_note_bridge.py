@@ -43,6 +43,13 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "notes"))
 sys.path.insert(0, str(REPO / "spike"))
 
+# The registered classifier offer stride; generate-lane fixtures scale their
+# turn counts by it so the OFFERED candidate counts — what the scenarios are
+# actually about — stay constant whatever the registration says.
+from candidate_first import PRODUCT_RUN as _NOTE_PRODUCT_RUN  # noqa: E402
+
+OFFER_STRIDE = _NOTE_PRODUCT_RUN["classifier"]["offer_stride"]
+
 
 def private_file(path: Path, data: bytes) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1018,19 +1025,23 @@ class NoteGenerateBridgeTests(unittest.TestCase):
 
     MODEL_DIRECTORY = "models/note-model/rev-1"
 
-    # One candidate per turn, and the registered product batch size is 1, so
-    # this is also the number of requests one run makes: the session protocol
-    # that makes one model load serve a whole meeting is exercised seventy
-    # times over. It is also past the registered keep budget of 64, so a
-    # classifier that keeps everything overruns the raw keep count — which, per
-    # `PRODUCT_RUN`, is no longer the number the gate is applied to.
-    TRANSCRIPT_TURNS = 70
+    # One candidate per turn, and the classifier offers every
+    # `offer_stride`-th of them at the registered batch size 1, so scaling
+    # the turn count by the stride holds the OFFERED count — the number of
+    # requests one run makes — at seventy whatever the registered stride is:
+    # the session protocol that makes one model load serve a whole meeting is
+    # exercised seventy times over. Seventy offered keeps is also past the
+    # registered keep budget of 64, so a classifier that keeps everything
+    # overruns the raw keep count — which, per `PRODUCT_RUN`, is no longer
+    # the number the gate is applied to.
+    TRANSCRIPT_TURNS = 70 * OFFER_STRIDE
 
-    # 720 turns with a keep every 11th: 66 keeps, each isolated past the
-    # pruner's largest fitting gap (10 turns), so every gap in range leaves
-    # more than 64 runs and the budget-fitted collapse cannot fit — the one
-    # shape the fitted pruner must still refuse.
-    SPREAD_TRANSCRIPT_TURNS = 720
+    # 792 OFFERED candidates with a keep every 11th request: 72 keeps, each
+    # isolated past the pruner's largest fitting gap (10 turns — kept anchors
+    # sit 11 * OFFER_STRIDE turns apart), so every gap in range leaves more
+    # than 64 runs and the budget-fitted collapse cannot fit — the one shape
+    # the fitted pruner must still refuse.
+    SPREAD_TRANSCRIPT_TURNS = 792 * OFFER_STRIDE
 
     def setUp(self) -> None:
         self._harness = NoteBridgeHarnessTests()
@@ -1180,6 +1191,23 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             bridge.close()
         return result, returncode, error, request_id
 
+    def _offered_rows(self) -> list[dict]:
+        """The registered classifier offer for this fixture's transcript."""
+        sys.path.insert(0, str(REPO / "notes"))
+        import candidate_first
+        from transcript import load_bytes
+
+        raw = (
+            self.root / "meetings" / self.meeting_id / "transcript" / f"{self.transcript_id}.json"
+        ).read_bytes()
+        manifest = candidate_first.generate_manifest(
+            load_bytes(raw, source="fixture"), candidate_first.STRATEGY_BROAD,
+            contract=candidate_first.PRODUCT_CONTRACT,
+        )
+        return candidate_first.offered_candidates(
+            manifest["candidates"],
+            candidate_first.PRODUCT_RUN["classifier"]["offer_stride"])
+
     def _manifest_digests(self) -> tuple[str, str]:
         """The product manifest's digest, and the research one it must not be.
 
@@ -1248,9 +1276,10 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(result["generation"]["manifest_sha256"], product)
         self.assertNotEqual(result["generation"]["manifest_sha256"], research)
         points = result["generation"]["points"]
-        # One keep every twentieth of seventy single-candidate requests, none
-        # of them adjacent, so the pruner collapses nothing: four points. A
-        # session that only served its first request would report one.
+        # One keep every twentieth of seventy single-candidate requests (the
+        # strided offer holds the request count at seventy), kept anchors at
+        # least twenty turns apart, so the pruner collapses nothing: four
+        # points. A session that only served its first request would report one.
         self.assertEqual(len(points), 4)
         for ordinal, point in enumerate(points):
             self.assertEqual(point["point_ordinal"], ordinal)
@@ -1268,8 +1297,9 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual(turns, sorted(turns))
         self.assertEqual(len(set(turns)), len(turns))
         receipt = result["generation"]["receipt"]
-        # One response per candidate, because the registered batch size is 1.
-        self.assertEqual(receipt["responses"], self.candidates)
+        # One response per OFFERED candidate: batch size 1 over the strided offer.
+        self.assertEqual(
+            receipt["responses"], -(-self.candidates // OFFER_STRIDE))
         self.assertGreater(receipt["response_bytes"], 0)
         # Nothing under the private root moved: no note, no markdown, no receipt.
         self.assertEqual(self._tree(), before)
@@ -1356,9 +1386,9 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         raw keeps run past 64 on every real meeting. A budget checked as
         verdicts accumulate would refuse all of them before the pruning stage
         that exists precisely to bring the count down. Here the classifier
-        keeps all seventy consecutive turns: one run, and the budget-fitted
-        coverage collapse (stride 5 fits) keeps one point per five-turn
-        stretch — fourteen points, every kept anchor within two turns of one.
+        keeps all seventy offered candidates — past the budget — and the
+        result must be exactly what the registered budget-fitted coverage
+        collapse keeps of that offer, in the same order.
         """
         self._write_generator(STUB_KEEPS_EVERYTHING)
         self._write_generate_manifest()
@@ -1366,9 +1396,19 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertEqual((returncode, error), (0, b""))
         self.assertEqual(result["outcome"], "generated")
         self.assertIsNone(result["failure"])
-        self.assertGreater(self.candidates, 64)
-        self.assertEqual(result["generation"]["receipt"]["responses"], self.candidates)
-        self.assertEqual(len(result["generation"]["points"]), 14)
+        offered = self._offered_rows()
+        self.assertGreater(len(offered), 64)
+        self.assertEqual(result["generation"]["receipt"]["responses"], len(offered))
+        import candidate_first
+        pruned = candidate_first.prune_keeps(
+            offered,
+            [{"candidate_id": row["candidate_id"], "verdict": "KEEP"}
+             for row in offered])
+        self.assertEqual(
+            [point["candidate_id"] for point in result["generation"]["points"]],
+            pruned["pruned_candidate_ids"])
+        self.assertLessEqual(len(result["generation"]["points"]), 64)
+        self.assertGreater(len(result["generation"]["points"]), 0)
 
     def test_more_pruned_points_than_the_keep_budget_are_refused_not_trimmed(self) -> None:
         """Keeps isolated past every fitting gap still force a refusal."""
@@ -1384,11 +1424,12 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         # produces the same overrun, so a retry is not the answer.
         self.assertIs(result["failure"]["recoverable"], False)
         # No early stop any more: the gate is applied once, after every
-        # candidate has a verdict, because the pruner needs all of them.
-        self.assertEqual(result["failure"]["receipt"]["responses"], candidates)
+        # offered candidate has a verdict, because the pruner needs all of them.
+        offered = -(-candidates // OFFER_STRIDE)
+        self.assertEqual(result["failure"]["receipt"]["responses"], offered)
         # More isolated keeps than the budget at every gap the fit may use,
         # which is the one shape the previous case cannot produce.
-        self.assertGreater((candidates + 10) // 11, 64)
+        self.assertGreater((offered + 10) // 11, 64)
 
     def test_generator_carrying_project_manifest_is_still_refused(self) -> None:
         self._write_generate_manifest(role="project")

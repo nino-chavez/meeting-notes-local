@@ -45,6 +45,7 @@ from candidate_first import (
     candidate_batches,
     classification_num_predict,
     classification_request,
+    offered_candidates,
     decode_classification,
     generate_manifest,
     product_run_sha256,
@@ -56,7 +57,7 @@ from summarize import StructuredOutputError
 from transcript import Transcript, Turn, load
 
 PRODUCT_REGISTRATION_SHA256 = (
-    "98dcbbd94000cb3339676347c36e36f7abdca82914877bf3e912a574190c715f"
+    "baaac5aadf61eb3700b4e2cd8127ec5340998856621da11f0579f46fd9f459a9"
 )
 
 RESULT_SCHEMA = "product-run-result/1"
@@ -352,13 +353,16 @@ def run_product_classifier(
 
     identity = transport.identity()
     decisions_rows: list[dict] = []
+    offered = offered_candidates(
+        manifest["candidates"], PRODUCT_RUN["classifier"]["offer_stride"])
     for batch in candidate_batches(
-            manifest["candidates"], PRODUCT_RUN["classifier"]["batch_size"]):
+            offered, PRODUCT_RUN["classifier"]["batch_size"]):
         if monotonic() > deadline:
             raise StructuredOutputError(
                 "the product run exceeded its registered time budget")
         _schema, system, user = classification_request(
-            view, manifest, batch, PRODUCT_RUN["classifier"]["batch_size"])
+            view, manifest, batch, PRODUCT_RUN["classifier"]["batch_size"],
+            offer_stride=PRODUCT_RUN["classifier"]["offer_stride"])
         candidate_ids = [row["candidate_id"] for row in batch]
         from candidate_first import batch_locators
 
@@ -371,12 +375,12 @@ def run_product_classifier(
         decoded = decode_classification(
             _assemble_contract_response(locators, verdicts), candidate_ids)
         decisions_rows.extend(decoded["items"])
-    if len(decisions_rows) != manifest["counts"]["candidates"]:
+    if len(decisions_rows) != len(offered):
         raise StructuredOutputError(
-            "the product run did not decide every candidate exactly once")
+            "the product run did not decide every offered candidate exactly once")
 
     pruned = prune_keeps(
-        manifest["candidates"], decisions_rows,
+        offered, decisions_rows,
         budget=PRODUCT_RUN["pruner"]["budget"],
         stride_floor=PRODUCT_RUN["pruner"]["stride_floor"],
         max_gap=PRODUCT_RUN["pruner"]["max_gap"])
@@ -400,6 +404,7 @@ def run_product_classifier(
         "model_identity": identity,
         "counts": {
             "candidates": manifest["counts"]["candidates"],
+            "offered": len(offered),
             "keep": sum(row["verdict"] == "KEEP" for row in decisions_rows),
             "pruned_keep": pruned["counts"]["pruned_keep"],
             "runs": pruned["counts"]["runs"],
@@ -459,25 +464,21 @@ class _StubTransport:
             row["candidate_id"] for row in manifest["candidates"]
             if row["ordinal"] in keep_ordinals
         }
-        self._manifest = manifest
+        # The run offers the registered strided subset; the stub's cursor
+        # must walk the same sequence the runner batches.
+        self._offer = offered_candidates(
+            manifest["candidates"], PRODUCT_RUN["classifier"]["offer_stride"])
 
     def identity(self) -> dict:
         return {"model": "stub", "model_tree_sha256": "0" * 64}
 
     def decide(self, system: str, user: str, locators: list[str]) -> list[str]:
-        by_locator = dict(zip(
-            locators,
-            [row["candidate_id"] for row in self._manifest["candidates"]
-             if json.dumps(row["candidate_id"])],
-            strict=False,
-        ))
-        del by_locator
         # locators arrive one per call at the registered batch size; map the
         # single offered candidate through the request order.
         verdicts = []
         offset = getattr(self, "_cursor", 0)
         for index, _locator in enumerate(locators):
-            row = self._manifest["candidates"][offset + index]
+            row = self._offer[offset + index]
             verdicts.append(
                 "KEEP" if row["candidate_id"] in self._keep_ids else "ABSTAIN")
         self._cursor = offset + len(locators)
@@ -525,9 +526,21 @@ def _self_test() -> int:
             provenance_note="self-test fixture ratification")
         assert summary["registration_sha256"] == PRODUCT_REGISTRATION_SHA256
 
-        ordinals = {row["candidate_id"]: row["ordinal"]
-                    for row in manifest["candidates"]}
-        keep_ordinals = {ordinals[by_turn[3][0]], ordinals[by_turn[9][0]]}
+        # An event's anchor candidate may fall outside the strided offer;
+        # recall only needs some KEPT offered candidate whose visible window
+        # covers the event's anchor fragment, so pick those.
+        offered = offered_candidates(
+            manifest["candidates"], PRODUCT_RUN["classifier"]["offer_stride"])
+        anchor_of = {row["candidate_id"]: row["anchor_fragment_id"]
+                     for row in manifest["candidates"]}
+
+        def covering_ordinal(turn: int) -> int:
+            target = anchor_of[by_turn[turn][0]]
+            return next(
+                row["ordinal"] for row in offered
+                if target in row["visible_fragment_ids"])
+
+        keep_ordinals = {covering_ordinal(3), covering_ordinal(9)}
         result = run_product_classifier(
             transcript_path, cycle_dir, summary["lock_file_sha256"],
             _StubTransport(keep_ordinals, manifest))

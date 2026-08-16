@@ -447,7 +447,9 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
             contract=candidate_first.PRODUCT_CONTRACT,
         )
         candidate_first.validate_manifest(manifest, transcript)
-        batches = candidate_first.candidate_batches(manifest["candidates"], batch_size)
+        offered = candidate_first.offered_candidates(
+            manifest["candidates"], registered["offer_stride"])
+        batches = candidate_first.candidate_batches(offered, batch_size)
     except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
         raise GenerationRefused("no-generatable-transcript", True) from exc
     if not batches:
@@ -457,7 +459,8 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
         candidate_ids = [row["candidate_id"] for row in batch]
         try:
             schema, system, user = candidate_first.classification_request(
-                transcript, manifest, batch, batch_size
+                transcript, manifest, batch, batch_size,
+                offer_stride=registered["offer_stride"],
             )
         except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise GenerationRefused("request-contract", False) from exc
@@ -485,7 +488,7 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
         raise GenerationRefused("no-model-candidates", True)
     try:
         pruned = candidate_first.prune_keeps(
-            manifest["candidates"], decisions,
+            offered, decisions,
             budget=pruner["budget"], stride_floor=pruner["stride_floor"],
             max_gap=pruner["max_gap"])
     except (StructuredOutputError, ValueError, KeyError, TypeError) as exc:
