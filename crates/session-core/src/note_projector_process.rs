@@ -31,6 +31,7 @@ use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::url::{CFURL, CFURLRef};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::meeting::valid_opaque_id;
 use crate::model_store::{
@@ -46,7 +47,18 @@ use crate::storage::StorageRoot;
 const MANIFEST_FD: RawFd = 100;
 const BRIDGE_FD: RawFd = 101;
 const VALIDATOR_FD: RawFd = 102;
-const FIRST_STAGING_FD: RawFd = 103;
+/// Staged only for a `generate`-role launch: the manifest-pinned generator
+/// bytes.  The descriptor set and the role are one decision — the bridge
+/// refuses a generate manifest without this descriptor and a project manifest
+/// with it.
+const GENERATOR_FD: RawFd = 103;
+const FIRST_STAGING_FD: RawFd = 104;
+/// The registered whole-run generation budget (`candidate_first.PRODUCT_RUN`
+/// `gates.maximum_elapsed_seconds`).  The bridge restates the same number as
+/// `GENERATOR_DEADLINE_S` and refuses at ready if its validator bundle
+/// disagrees, so a drifted copy here cannot silently widen the budget: the
+/// bridge caps every requested deadline at its own registered bound.
+const GENERATE_DEADLINE_SECONDS: u64 = 3600;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 16 * 1024;
 const CLEANUP_GRACE: Duration = Duration::from_millis(750);
@@ -100,18 +112,26 @@ def _resource(v):
  if not isinstance(p,str) or not p or any(c not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/' for c in p) or any(c in ('','.', '..') for c in p.split('/')): raise RuntimeError('bad resource path')
  if not isinstance(h,str) or len(h)!=64 or any(c not in '0123456789abcdef' for c in h): raise RuntimeError('bad resource digest')
  return v
+role=sys.argv[3]
+if role not in ('project','generate'): raise RuntimeError('bad role')
 raw=_read(100)
 if b'\\' in raw: raise RuntimeError('manifest escape')
 d=json.loads(raw.decode('utf-8'),object_pairs_hook=_pairs)
-if not isinstance(d,dict) or tuple(d)!=F or d['schema']!='note-runtime/1' or d['role']!='project' or d['generator'] is not None or d['models']!=[]: raise RuntimeError('bad project manifest')
+if not isinstance(d,dict) or tuple(d)!=F or d['schema']!='note-runtime/1' or d['role']!=role: raise RuntimeError('bad manifest')
+if role=='project':
+ if d['generator'] is not None or d['models']!=[]: raise RuntimeError('bad project manifest')
+else:
+ if not isinstance(d['models'],list) or not d['models']: raise RuntimeError('bad generate manifest')
+ _resource(d['generator'])
 for n in ('runtime','bridge','validator'): _resource(d[n])
 if json.dumps(d,ensure_ascii=False,indent=2).encode()!=raw: raise RuntimeError('noncanonical manifest')
 b=_read(101); v=_read(102)
 if hashlib.sha256(b).hexdigest()!=d['bridge']['sha256'] or hashlib.sha256(v).hexdigest()!=d['validator']['sha256']: raise RuntimeError('inherited digest mismatch')
+if role=='generate' and hashlib.sha256(_read(103)).hexdigest()!=d['generator']['sha256']: raise RuntimeError('inherited digest mismatch')
 m=types.ModuleType('_lmn_note_bridge_fd'); m.__file__='<verified-bridge-fd>'
 sys.modules[m.__name__]=m
 exec(compile(b,'<verified-bridge-fd>','exec'),m.__dict__)
-raise SystemExit(m.main_from_fds(100,101,102,sys.argv[2],int(sys.argv[1])))
+raise SystemExit(m.main_from_fds(100,101,102,sys.argv[2],int(sys.argv[1]),generator_fd=(103 if role=='generate' else None)))
 "#;
 
 #[derive(Clone)]
@@ -124,6 +144,10 @@ enum InterpreterAdmission {
 struct Deadlines {
     ready: Duration,
     project: Duration,
+    /// Outer bound on the generate result: the registered whole-run budget
+    /// the bridge enforces internally, plus grace for the bridge's own
+    /// verification and teardown around the model run.
+    generate: Duration,
 }
 
 impl Default for Deadlines {
@@ -131,6 +155,7 @@ impl Default for Deadlines {
         Self {
             ready: Duration::from_secs(10),
             project: Duration::from_secs(30),
+            generate: Duration::from_secs(GENERATE_DEADLINE_SECONDS + 60),
         }
     }
 }
@@ -187,106 +212,153 @@ impl ProcessNoteProjector {
         validate_storage_root(&self.storage_root)?;
         validate_request(request)?;
         let mut runtime = verify_manifest(&self.manifest_path, PROJECT_ROLE)?;
-        let prepared_admission = prepare_interpreter_admission(&runtime, &self.admission)?;
-        runtime.require_unchanged()?;
-
-        let staged = stage_descriptors([
-            runtime.manifest.file.as_raw_fd(),
-            runtime.bridge.file.as_raw_fd(),
-            runtime.validator.file.as_raw_fd(),
-        ])?;
-        let inherited = [
-            (staged[0].as_raw_fd(), MANIFEST_FD),
-            (staged[1].as_raw_fd(), BRIDGE_FD),
-            (staged[2].as_raw_fd(), VALIDATOR_FD),
-        ];
-        let mut command = Command::new(&runtime.executable.path);
-        command
-            .args(["-I", "-S", "-E", "-s", "-B", "-c", BOOTSTRAP])
-            .arg(std::process::id().to_string())
-            .arg(&self.storage_root)
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        unsafe {
-            command.pre_exec(move || {
-                if libc::setpgid(0, 0) != 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                deny_network_in_child()?;
-                install_descriptor_mappings(inherited)
-            });
-        }
-        let mut child = command.spawn().map_err(|_| InternalOutcome::Unavailable)?;
-        let stdin = child.stdin.take().ok_or(InternalOutcome::Unavailable)?;
-        let stdout = child.stdout.take().ok_or(InternalOutcome::Unavailable)?;
-        let stderr = child.stderr.take().ok_or(InternalOutcome::Unavailable)?;
-        let stderr_monitor = StderrMonitor::start(stderr);
-        let mut guard = ChildGuard::new(child, stderr_monitor);
-        let live_code = match prepared_admission.as_deref() {
-            Some(prepared) => Some(bind_live_code(
-                prepared,
-                guard.pid(),
-                &SystemProcessStartTimeInspector,
-                &runtime.executable,
-            )?),
-            None => None,
-        };
-        runtime.require_unchanged()?;
-
-        let ready_deadline = Instant::now() + self.deadlines.ready;
-        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
-        let ready_thread = std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let frame = read_bounded_line(&mut reader);
-            let _ = ready_sender.send((frame, reader));
-        });
-        let (ready, reader) =
-            wait_receiver(&ready_receiver, ready_deadline, cancellation, &mut guard)?;
-        let _ = ready_thread.join();
-        parse_ready(
-            &ready.map_err(|_| InternalOutcome::Unavailable)?,
-            &runtime.manifest.digest,
-        )?;
-        runtime.require_unchanged()?;
-        if let Some(binding) = live_code.as_ref() {
-            binding.require_same_process(
-                guard.pid(),
-                &SystemProcessStartTimeInspector,
-                &runtime.executable,
-            )?;
-        }
-        guard.require_unexited()?;
-        runtime.require_unchanged()?;
-        if let Some(binding) = live_code.as_ref() {
-            binding.require_same_process(
-                guard.pid(),
-                &SystemProcessStartTimeInspector,
-                &runtime.executable,
-            )?;
-        }
-
-        let mut stdin = stdin;
-        stdin
-            .write_all(&project_command(request)?)
-            .map_err(|_| InternalOutcome::Unavailable)?;
-        drop(stdin);
-
-        let result_deadline = Instant::now() + self.deadlines.project;
-        let (result_sender, result_receiver) = mpsc::sync_channel(1);
-        let result_thread = std::thread::spawn(move || {
-            let _ = result_sender.send(read_to_exact_eof(reader));
-        });
-        let result = wait_receiver(&result_receiver, result_deadline, cancellation, &mut guard)?;
-        let _ = result_thread.join();
-        let result = result.map_err(|_| InternalOutcome::Unavailable)?;
-        runtime.require_unchanged()?;
-        if !guard.finish_success(result_deadline, cancellation)? {
-            return Err(InternalOutcome::Unavailable);
-        }
-        Ok(result)
+        drive_bridge_child(
+            &mut runtime,
+            &self.storage_root,
+            &self.admission,
+            PROJECT_ROLE,
+            project_command(request)?,
+            self.deadlines.ready,
+            self.deadlines.project,
+            cancellation,
+        )
     }
+}
+
+/// Drives one verified bridge child from spawn to result, identically for
+/// both roles.  The role decides exactly one structural difference -- whether
+/// the manifest-pinned generator bytes are staged as a fourth descriptor --
+/// and everything else (interpreter admission, seatbelt, descriptor
+/// bootstrap, ready handshake, re-verification cadence, teardown) is one
+/// sequence, so a hardening fix can never land on one role and miss the
+/// other.
+#[allow(clippy::too_many_arguments)]
+fn drive_bridge_child(
+    runtime: &mut VerifiedRuntime,
+    storage_root: &Path,
+    admission: &InterpreterAdmission,
+    role: &'static str,
+    command_bytes: Vec<u8>,
+    ready_deadline: Duration,
+    result_deadline: Duration,
+    cancellation: &ProjectionCancellation,
+) -> Result<Vec<u8>, InternalOutcome> {
+    let prepared_admission = prepare_interpreter_admission(runtime, admission)?;
+    runtime.require_unchanged()?;
+
+    let mut sources = vec![
+        runtime.manifest.file.as_raw_fd(),
+        runtime.bridge.file.as_raw_fd(),
+        runtime.validator.file.as_raw_fd(),
+    ];
+    // The descriptor set and the role are one decision, mirrored by the
+    // bridge and the bootstrap: generate stages the generator bytes,
+    // project must not have any to stage.
+    if role == GENERATE_ROLE {
+        let generator = runtime
+            .generator
+            .as_ref()
+            .ok_or(InternalOutcome::Unavailable)?;
+        sources.push(generator.file.as_raw_fd());
+    } else if runtime.generator.is_some() {
+        return Err(InternalOutcome::Unavailable);
+    }
+    let staged = stage_descriptors(&sources)?;
+    let mut inherited = [ABSENT_DESCRIPTOR_MAPPING; 4];
+    for (index, target) in [MANIFEST_FD, BRIDGE_FD, VALIDATOR_FD, GENERATOR_FD]
+        .into_iter()
+        .take(staged.len())
+        .enumerate()
+    {
+        inherited[index] = (staged[index].as_raw_fd(), target);
+    }
+    let mut command = Command::new(&runtime.executable.path);
+    command
+        .args(["-I", "-S", "-E", "-s", "-B", "-c", BOOTSTRAP])
+        .arg(std::process::id().to_string())
+        .arg(storage_root)
+        .arg(role)
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            deny_network_in_child()?;
+            install_descriptor_mappings(inherited)
+        });
+    }
+    let mut child = command.spawn().map_err(|_| InternalOutcome::Unavailable)?;
+    let stdin = child.stdin.take().ok_or(InternalOutcome::Unavailable)?;
+    let stdout = child.stdout.take().ok_or(InternalOutcome::Unavailable)?;
+    let stderr = child.stderr.take().ok_or(InternalOutcome::Unavailable)?;
+    let stderr_monitor = StderrMonitor::start(stderr);
+    let mut guard = ChildGuard::new(child, stderr_monitor);
+    let live_code = match prepared_admission.as_deref() {
+        Some(prepared) => Some(bind_live_code(
+            prepared,
+            guard.pid(),
+            &SystemProcessStartTimeInspector,
+            &runtime.executable,
+        )?),
+        None => None,
+    };
+    runtime.require_unchanged()?;
+
+    let ready_deadline = Instant::now() + ready_deadline;
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let ready_thread = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let frame = read_bounded_line(&mut reader);
+        let _ = ready_sender.send((frame, reader));
+    });
+    let (ready, reader) = wait_receiver(&ready_receiver, ready_deadline, cancellation, &mut guard)?;
+    let _ = ready_thread.join();
+    parse_ready(
+        &ready.map_err(|_| InternalOutcome::Unavailable)?,
+        &runtime.manifest.digest,
+        role,
+    )?;
+    runtime.require_unchanged()?;
+    if let Some(binding) = live_code.as_ref() {
+        binding.require_same_process(
+            guard.pid(),
+            &SystemProcessStartTimeInspector,
+            &runtime.executable,
+        )?;
+    }
+    guard.require_unexited()?;
+    runtime.require_unchanged()?;
+    if let Some(binding) = live_code.as_ref() {
+        binding.require_same_process(
+            guard.pid(),
+            &SystemProcessStartTimeInspector,
+            &runtime.executable,
+        )?;
+    }
+
+    let mut stdin = stdin;
+    stdin
+        .write_all(&command_bytes)
+        .map_err(|_| InternalOutcome::Unavailable)?;
+    drop(stdin);
+
+    let result_deadline = Instant::now() + result_deadline;
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let result_thread = std::thread::spawn(move || {
+        let _ = result_sender.send(read_to_exact_eof(reader));
+    });
+    let result = wait_receiver(&result_receiver, result_deadline, cancellation, &mut guard)?;
+    let _ = result_thread.join();
+    let result = result.map_err(|_| InternalOutcome::Unavailable)?;
+    runtime.require_unchanged()?;
+    if !guard.finish_success(result_deadline, cancellation)? {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(result)
 }
 
 /// The note-runtime model identifiers a catalog entry provides, one per file.
@@ -413,10 +485,143 @@ fn admitted_process_projector(
     ))
 }
 
-fn stage_descriptors(sources: [RawFd; 3]) -> Result<[File; 3], InternalOutcome> {
+/// One `note.generate` request for the hardened one-shot child.
+///
+/// It names no note -- the note is what the run is asked to propose -- and no
+/// model: the admitted generator already knows which installed directory its
+/// manifest pins, so a caller cannot point the run at different weights.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenerateNoteRequest {
+    pub request_id: Uuid,
+    pub meeting_id: String,
+    pub transcript_sha256: String,
+}
+
+/// The `note.generate` transport: the same hardened one-shot child as the
+/// projector, launched on the generate manifest with the manifest-pinned
+/// generator bytes staged as a fourth inherited descriptor.
+///
+/// Admission (`admit_note_generator`) is where the model directory is chosen
+/// and verified; a constructed generator re-verifies its manifest on every
+/// launch but trusts the admission-time directory choice, exactly as the
+/// projector trusts its admission.  The returned bytes are the child's raw
+/// `note-generation-result/1` frame, parsed downstream.
+pub struct ProcessNoteGenerator {
+    storage_root: PathBuf,
+    manifest_path: PathBuf,
+    admission: InterpreterAdmission,
+    deadlines: Deadlines,
+    /// Storage-root-relative installed model directory, verified at
+    /// admission against the signed catalog entry that provides the
+    /// manifest's pinned set.
+    model_directory: String,
+}
+
+impl ProcessNoteGenerator {
+    #[cfg(test)]
+    fn development(storage_root: PathBuf, manifest_path: PathBuf, model_directory: String) -> Self {
+        Self {
+            storage_root,
+            manifest_path,
+            admission: InterpreterAdmission::DevelopmentHarness,
+            deadlines: Deadlines::default(),
+            model_directory,
+        }
+    }
+
+    pub fn generate(
+        &self,
+        request: &GenerateNoteRequest,
+    ) -> Result<Vec<u8>, ProjectTransportError> {
+        self.generate_with_cancellation(request, &ProjectionCancellation::default())
+    }
+
+    pub fn generate_with_cancellation(
+        &self,
+        request: &GenerateNoteRequest,
+        cancellation: &ProjectionCancellation,
+    ) -> Result<Vec<u8>, ProjectTransportError> {
+        self.generate_inner(request, cancellation)
+            .map_err(|outcome| match outcome {
+                InternalOutcome::Unavailable => ProjectTransportError::Unavailable,
+                InternalOutcome::Cancelled => ProjectTransportError::Cancelled,
+            })
+    }
+
+    fn generate_inner(
+        &self,
+        request: &GenerateNoteRequest,
+        cancellation: &ProjectionCancellation,
+    ) -> Result<Vec<u8>, InternalOutcome> {
+        if cancellation.is_cancelled() {
+            return Err(InternalOutcome::Cancelled);
+        }
+        validate_storage_root(&self.storage_root)?;
+        validate_generate_request(request)?;
+        if !valid_relative_path(&self.model_directory) {
+            return Err(InternalOutcome::Unavailable);
+        }
+        let mut runtime = verify_manifest(&self.manifest_path, GENERATE_ROLE)?;
+        drive_bridge_child(
+            &mut runtime,
+            &self.storage_root,
+            &self.admission,
+            GENERATE_ROLE,
+            generate_command(request, &self.model_directory)?,
+            self.deadlines.ready,
+            self.deadlines.generate,
+            cancellation,
+        )
+    }
+}
+
+/// Chooses the `note.generate` transport, under exactly the admission rules
+/// of `admit_note_projector` -- the same manifest verification, the same
+/// one-catalog-entry match, the same re-verified install -- differing only in
+/// what is constructed: the generate-role launcher bound to the verified
+/// model directory, rather than a project-role projector.  `None` is refusal,
+/// with the same caching contract: success may be held, refusal must be
+/// re-derived.
+pub fn admit_note_generator(
+    storage: &StorageRoot,
+    catalog: &ModelCatalog,
+    generate_manifest_path: &Path,
+) -> Option<ProcessNoteGenerator> {
+    let generate = verify_manifest(generate_manifest_path, GENERATE_ROLE).ok()?;
+    generate.generator.as_ref()?;
+    let mut pinned = generate.models;
+    if pinned.is_empty() {
+        return None;
+    }
+    pinned.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut admitted = catalog
+        .note_models
+        .iter()
+        .filter(|entry| note_runtime_models(entry) == pinned);
+    let entry = admitted.next()?;
+    if admitted.next().is_some() {
+        return None;
+    }
+    let relative = entry.relative_path();
+    let directory = storage.resolve(&relative).ok()?;
+    entry.verify_directory(&directory).ok()?;
+    let model_directory = relative.to_str()?.to_owned();
+    if !valid_relative_path(&model_directory) {
+        return None;
+    }
+    Some(ProcessNoteGenerator {
+        storage_root: storage.path().to_path_buf(),
+        manifest_path: generate_manifest_path.to_path_buf(),
+        admission: InterpreterAdmission::Product(Arc::new(SecurityCodeVerifier)),
+        deadlines: Deadlines::default(),
+        model_directory,
+    })
+}
+
+fn stage_descriptors(sources: &[RawFd]) -> Result<Vec<File>, InternalOutcome> {
     let mut staged = Vec::with_capacity(sources.len());
     let mut minimum = FIRST_STAGING_FD;
-    for source in sources {
+    for &source in sources {
         let descriptor = unsafe { libc::fcntl(source, libc::F_DUPFD_CLOEXEC, minimum) };
         if descriptor < 0 {
             return Err(InternalOutcome::Unavailable);
@@ -426,7 +631,7 @@ fn stage_descriptors(sources: [RawFd; 3]) -> Result<[File; 3], InternalOutcome> 
             .ok_or(InternalOutcome::Unavailable)?;
         staged.push(unsafe { File::from_raw_fd(descriptor) });
     }
-    staged.try_into().map_err(|_| InternalOutcome::Unavailable)
+    Ok(staged)
 }
 
 // Seatbelt entry point.  Deprecated in the headers since 10.8 with no
@@ -457,8 +662,17 @@ fn deny_network_in_child() -> io::Result<()> {
     Ok(())
 }
 
-fn install_descriptor_mappings(inherited: [(RawFd, RawFd); 3]) -> io::Result<()> {
+/// A slot in the fixed-size mapping table that carries no descriptor.  The
+/// table is sized for the largest role (generate, four descriptors) and
+/// filled from the front, so the sentinel keeps the `pre_exec` closure free
+/// of allocation while the descriptor count stays role-dependent.
+const ABSENT_DESCRIPTOR_MAPPING: (RawFd, RawFd) = (-1, -1);
+
+fn install_descriptor_mappings(inherited: [(RawFd, RawFd); 4]) -> io::Result<()> {
     for (source, target) in inherited {
+        if (source, target) == ABSENT_DESCRIPTOR_MAPPING {
+            continue;
+        }
         debug_assert!(source >= FIRST_STAGING_FD);
         if unsafe { libc::dup2(source, target) } == -1 {
             return Err(io::Error::last_os_error());
@@ -1651,6 +1865,13 @@ fn validate_request(request: &ProjectRequest) -> Result<(), InternalOutcome> {
     Ok(())
 }
 
+fn validate_generate_request(request: &GenerateNoteRequest) -> Result<(), InternalOutcome> {
+    if !valid_opaque_id(&request.meeting_id) || !valid_digest(&request.transcript_sha256) {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(())
+}
+
 fn valid_relative_path(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -1710,7 +1931,48 @@ fn project_command(request: &ProjectRequest) -> Result<Vec<u8>, InternalOutcome>
     Ok(bytes)
 }
 
-fn parse_ready(frame: &[u8], manifest_sha256: &str) -> Result<(), InternalOutcome> {
+#[derive(Serialize)]
+struct GenerateCommand<'a> {
+    schema: &'static str,
+    request_id: String,
+    operation: &'static str,
+    arguments: GenerateArguments<'a>,
+}
+
+/// Field order is the wire contract: `worker/note_bridge.py::_parse_command`
+/// compares the argument key list exactly.
+#[derive(Serialize)]
+struct GenerateArguments<'a> {
+    meeting_id: &'a str,
+    transcript_id: &'a str,
+    model_directory: &'a str,
+    deadline_s: u64,
+}
+
+fn generate_command(
+    request: &GenerateNoteRequest,
+    model_directory: &str,
+) -> Result<Vec<u8>, InternalOutcome> {
+    let mut bytes = serde_json::to_vec(&GenerateCommand {
+        schema: "note-bridge-command/1",
+        request_id: request.request_id.to_string(),
+        operation: "note.generate",
+        arguments: GenerateArguments {
+            meeting_id: &request.meeting_id,
+            transcript_id: &request.transcript_sha256,
+            model_directory,
+            deadline_s: GENERATE_DEADLINE_SECONDS,
+        },
+    })
+    .map_err(|_| InternalOutcome::Unavailable)?;
+    bytes.push(b'\n');
+    if bytes.len() > MAX_PROJECTION_FRAME_BYTES {
+        return Err(InternalOutcome::Unavailable);
+    }
+    Ok(bytes)
+}
+
+fn parse_ready(frame: &[u8], manifest_sha256: &str, role: &str) -> Result<(), InternalOutcome> {
     if frame.len() > MAX_PROJECTION_FRAME_BYTES
         || !frame.ends_with(b"\n")
         || frame[..frame.len() - 1]
@@ -1733,13 +1995,14 @@ fn parse_ready(frame: &[u8], manifest_sha256: &str) -> Result<(), InternalOutcom
     )
     .map_err(|_| InternalOutcome::Unavailable)?;
     let operations = array(fields[5]).map_err(|_| InternalOutcome::Unavailable)?;
+    let operation = format!("note.{role}");
     if string(fields[0]).map_err(|_| InternalOutcome::Unavailable)? != "note-bridge-event/1"
         || string(fields[1]).map_err(|_| InternalOutcome::Unavailable)? != "ready"
         || u64_value(fields[2]).map_err(|_| InternalOutcome::Unavailable)? != 1
-        || string(fields[3]).map_err(|_| InternalOutcome::Unavailable)? != "project"
+        || string(fields[3]).map_err(|_| InternalOutcome::Unavailable)? != role
         || string(fields[4]).map_err(|_| InternalOutcome::Unavailable)? != manifest_sha256
         || operations.len() != 1
-        || string(&operations[0]).map_err(|_| InternalOutcome::Unavailable)? != "note.project"
+        || string(&operations[0]).map_err(|_| InternalOutcome::Unavailable)? != operation
     {
         return Err(InternalOutcome::Unavailable);
     }
@@ -2020,16 +2283,20 @@ mod tests {
     const LAUNCH_FIXTURE_BRIDGE: &str = r#"import hashlib,json,os,sys,time
 def _read(fd):
  os.lseek(fd,0,os.SEEK_SET); return os.read(fd,1048576)
-def _ready(manifest):
- print(json.dumps({'schema':'note-bridge-event/1','event':'ready','protocol':1,'role':'project','manifest_sha256':hashlib.sha256(manifest).hexdigest(),'operations':['note.project']},separators=(',',':')),flush=True)
-def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_parent_pid):
+def _ready(manifest,role):
+ print(json.dumps({'schema':'note-bridge-event/1','event':'ready','protocol':1,'role':role,'manifest_sha256':hashlib.sha256(manifest).hexdigest(),'operations':['note.'+role]},separators=(',',':')),flush=True)
+def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_parent_pid,generator_fd=None):
  mode=open(storage_root+'/fixture-mode').read()
  manifest=_read(manifest_fd); bridge=_read(bridge_fd); validator=_read(validator_fd)
  document=json.loads(manifest)
+ role='generate' if generator_fd is not None else 'project'
+ if document['role']!=role: return 9
  if hashlib.sha256(bridge).hexdigest()!=document['bridge']['sha256'] or hashlib.sha256(validator).hexdigest()!=document['validator']['sha256']: return 7
- if not all(os.get_inheritable(fd) for fd in (manifest_fd,bridge_fd,validator_fd)): return 8
+ if generator_fd is not None and hashlib.sha256(_read(generator_fd)).hexdigest()!=document['generator']['sha256']: return 7
+ watched=(manifest_fd,bridge_fd,validator_fd)+(() if generator_fd is None else (generator_fd,))
+ if not all(os.get_inheritable(fd) for fd in watched): return 8
  if mode=='ready-timeout': time.sleep(5)
- _ready(manifest)
+ _ready(manifest,role)
  if mode=='ready-then-exit': os._exit(0)
  command=sys.stdin.buffer.readline()
  if mode=='descriptor-binding':
@@ -2352,6 +2619,33 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         fixture
     }
 
+    fn note_generator(
+        fixture: &LaunchFixture,
+        ready_ms: u64,
+        generate_ms: u64,
+    ) -> ProcessNoteGenerator {
+        let entry = &fixture.catalog.note_models[0];
+        let mut generator = ProcessNoteGenerator::development(
+            fixture.storage_root.clone(),
+            fixture.generate_manifest_path.clone(),
+            entry.relative_path().to_str().unwrap().to_owned(),
+        );
+        generator.deadlines = Deadlines {
+            ready: Duration::from_millis(ready_ms),
+            generate: Duration::from_millis(generate_ms),
+            ..Deadlines::default()
+        };
+        generator
+    }
+
+    fn generate_request() -> GenerateNoteRequest {
+        GenerateNoteRequest {
+            request_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+            meeting_id: "meeting-a".into(),
+            transcript_sha256: "c".repeat(64),
+        }
+    }
+
     fn projector(fixture: &LaunchFixture, ready_ms: u64, project_ms: u64) -> ProcessNoteProjector {
         let mut projector = ProcessNoteProjector::development(
             fixture.storage_root.clone(),
@@ -2360,6 +2654,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         projector.deadlines = Deadlines {
             ready: Duration::from_millis(ready_ms),
             project: Duration::from_millis(project_ms),
+            ..Deadlines::default()
         };
         projector
     }
@@ -2380,7 +2675,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
             runtime.manifest.identity = FileIdentity::from_file(&runtime.manifest.file).unwrap();
             runtime.manifest.digest = format!("{:x}", Sha256::digest(&bytes));
         }
-        let staged = stage_descriptors([
+        let staged = stage_descriptors(&[
             runtime.manifest.file.as_raw_fd(),
             runtime.bridge.file.as_raw_fd(),
             runtime.validator.file.as_raw_fd(),
@@ -2395,6 +2690,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
             (staged[0].as_raw_fd(), MANIFEST_FD),
             (staged[1].as_raw_fd(), BRIDGE_FD),
             (staged[2].as_raw_fd(), VALIDATOR_FD),
+            ABSENT_DESCRIPTOR_MAPPING,
         ];
         let sentinel = File::open("/dev/null").unwrap();
         let sentinel_fd = sentinel.as_raw_fd();
@@ -2403,6 +2699,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
             .args(["-I", "-S", "-E", "-s", "-B", "-c", BOOTSTRAP])
             .arg(std::process::id().to_string())
             .arg(&fixture.storage_root)
+            .arg(PROJECT_ROLE)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -2430,10 +2727,11 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         assert!(!marker.exists());
     }
 
-    /// The descriptor transport is `project`-only on both sides.  A generator
-    /// on that role is refused by `verify_descriptor_runtime` in
-    /// `worker/note_bridge.py`, so the bootstrap must refuse it too rather
-    /// than admit a shape the real bridge rejects one layer down.
+    /// The descriptor set and the role are one decision on both sides.  A
+    /// generator on the `project` role is refused by
+    /// `verify_descriptor_runtime` in `worker/note_bridge.py`, so the
+    /// bootstrap must refuse it too rather than admit a shape the real
+    /// bridge rejects one layer down.
     #[test]
     fn bootstrap_refuses_a_generator_on_the_project_role() {
         let fixture = launch_fixture("descriptor-binding");
@@ -2453,7 +2751,7 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         private_file(&fixture.manifest_path, &bytes, false);
         verified.manifest.file = File::open(&fixture.manifest_path).unwrap();
         verified.manifest.identity = FileIdentity::from_file(&verified.manifest.file).unwrap();
-        let staged = stage_descriptors([
+        let staged = stage_descriptors(&[
             verified.manifest.file.as_raw_fd(),
             verified.bridge.file.as_raw_fd(),
             verified.validator.file.as_raw_fd(),
@@ -2463,12 +2761,14 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
             (staged[0].as_raw_fd(), MANIFEST_FD),
             (staged[1].as_raw_fd(), BRIDGE_FD),
             (staged[2].as_raw_fd(), VALIDATOR_FD),
+            ABSENT_DESCRIPTOR_MAPPING,
         ];
         let mut command = Command::new(&verified.executable.path);
         command
             .args(["-I", "-S", "-E", "-s", "-B", "-c", BOOTSTRAP])
             .arg(std::process::id().to_string())
             .arg(&fixture.storage_root)
+            .arg(PROJECT_ROLE)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -2478,6 +2778,53 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         let output = command.output().unwrap();
         assert!(!output.status.success());
         assert!(!marker.exists());
+    }
+
+    /// The generate lane end-to-end on the development harness: the fourth
+    /// descriptor stages the manifest-pinned generator bytes, the child
+    /// answers ready on the generate role, and the command it receives names
+    /// the admitted model directory and the registered deadline.
+    #[test]
+    fn an_admitted_generator_drives_the_child_on_the_generate_manifest() {
+        let fixture = generative_fixture("descriptor-binding");
+        let transport = note_generator(&fixture, 2000, 2000);
+        let result = transport.generate(&generate_request()).unwrap();
+        assert_eq!(result, b"{}\n");
+        let bound = fs::read(fixture.storage_root.join("bound-command")).unwrap();
+        let entry = &fixture.catalog.note_models[0];
+        let expected = generate_command(
+            &generate_request(),
+            entry.relative_path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bound, expected);
+    }
+
+    /// Role and manifest must agree before any child exists: pointing the
+    /// generate transport at the bundled project manifest refuses at
+    /// `verify_manifest`, never launching an interpreter.
+    #[test]
+    fn a_generate_launch_refuses_a_project_manifest() {
+        let fixture = generative_fixture("descriptor-binding");
+        let mut transport = note_generator(&fixture, 2000, 2000);
+        transport.manifest_path = fixture.manifest_path.clone();
+        assert!(matches!(
+            transport.generate(&generate_request()),
+            Err(ProjectTransportError::Unavailable)
+        ));
+        assert!(!fixture.storage_root.join("bound-command").exists());
+    }
+
+    #[test]
+    fn generate_command_is_closed_and_bounded() {
+        assert_eq!(
+            generate_command(&generate_request(), "models/note.d/m/r").unwrap(),
+            format!(
+                "{{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.generate\",\"arguments\":{{\"meeting_id\":\"meeting-a\",\"transcript_id\":\"{}\",\"model_directory\":\"models/note.d/m/r\",\"deadline_s\":3600}}}}\n",
+                "c".repeat(64)
+            )
+            .into_bytes()
+        );
     }
 
     #[test]
@@ -2562,8 +2909,21 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
         let ready = format!(
             "{{\"schema\":\"note-bridge-event/1\",\"event\":\"ready\",\"protocol\":1,\"role\":\"project\",\"manifest_sha256\":\"{digest}\",\"operations\":[\"note.project\"]}}\n"
         );
-        assert!(parse_ready(ready.as_bytes(), &digest).is_ok());
-        assert!(parse_ready(format!("{}{{}}\n", ready.trim_end()).as_bytes(), &digest).is_err());
+        assert!(parse_ready(ready.as_bytes(), &digest, PROJECT_ROLE).is_ok());
+        assert!(parse_ready(ready.as_bytes(), &digest, GENERATE_ROLE).is_err());
+        assert!(
+            parse_ready(
+                format!("{}{{}}\n", ready.trim_end()).as_bytes(),
+                &digest,
+                PROJECT_ROLE
+            )
+            .is_err()
+        );
+        let generate_ready = format!(
+            "{{\"schema\":\"note-bridge-event/1\",\"event\":\"ready\",\"protocol\":1,\"role\":\"generate\",\"manifest_sha256\":\"{digest}\",\"operations\":[\"note.generate\"]}}\n"
+        );
+        assert!(parse_ready(generate_ready.as_bytes(), &digest, GENERATE_ROLE).is_ok());
+        assert!(parse_ready(generate_ready.as_bytes(), &digest, PROJECT_ROLE).is_err());
         assert!(read_to_exact_eof(&b"{}\n{}\n"[..]).is_err());
         assert!(read_to_exact_eof(&vec![b'x'; MAX_PROJECTION_FRAME_BYTES + 1][..]).is_err());
     }

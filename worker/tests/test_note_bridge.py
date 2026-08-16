@@ -1409,6 +1409,58 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             bridge.close()
         self.assertEqual(bridge._process.returncode, 2)
 
+    def test_descriptor_generate_launch_admits_only_the_four_descriptor_shape(self) -> None:
+        """A fourth inherited descriptor is what makes `generate` reachable.
+
+        The descriptor set and the role are one decision: four descriptors
+        against the generate manifest admit, and the runtime carries the
+        generator resource and the pinned models `_run_generation` needs.
+        """
+        paths = (self.manifest, self.bridge, self.validator, self.generator)
+        descriptors = [os.open(path, os.O_RDONLY) for path in paths]
+        runtime = None
+        try:
+            with mock.patch("worker.note_bridge.sys.executable", str(self.runtime)):
+                runtime = verify_descriptor_runtime(
+                    *descriptors[:3], generator_fd=descriptors[3]
+                )
+            self.assertEqual(runtime.role, "generate")
+            self.assertEqual(runtime.resources["generator"].digest, digest(self.generator))
+            self.assertEqual(runtime.models, tuple(self._model_entries()))
+        finally:
+            if runtime is not None:
+                runtime.close()
+            for descriptor in descriptors:
+                os.close(descriptor)
+
+    def test_descriptor_generate_manifest_without_a_generator_descriptor_refuses(self) -> None:
+        descriptors = [
+            os.open(path, os.O_RDONLY)
+            for path in (self.manifest, self.bridge, self.validator)
+        ]
+        try:
+            with mock.patch("worker.note_bridge.sys.executable", str(self.runtime)):
+                with self.assertRaises(BridgeRefused):
+                    verify_descriptor_runtime(*descriptors)
+        finally:
+            for descriptor in descriptors:
+                os.close(descriptor)
+
+    def test_descriptor_generator_against_a_project_manifest_refuses(self) -> None:
+        document = self._harness._manifest_document()
+        self._harness._write_manifest(document)
+        paths = (self.manifest, self.bridge, self.validator, self.generator)
+        descriptors = [os.open(path, os.O_RDONLY) for path in paths]
+        try:
+            with mock.patch("worker.note_bridge.sys.executable", str(self.runtime)):
+                with self.assertRaises(BridgeRefused):
+                    verify_descriptor_runtime(
+                        *descriptors[:3], generator_fd=descriptors[3]
+                    )
+        finally:
+            for descriptor in descriptors:
+                os.close(descriptor)
+
     def test_missing_transcript_refuses_without_loading_the_model(self) -> None:
         """Nothing before the first batch needs a model, so none is loaded."""
         (

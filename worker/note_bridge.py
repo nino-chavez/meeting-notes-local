@@ -194,6 +194,7 @@ class _DescriptorRuntime:
     manifest: _DescriptorResource
     resources: dict[str, _DescriptorResource]
     role: str
+    models: tuple[dict, ...] = ()
 
     def require_unchanged(self) -> None:
         self.manifest.require_unchanged()
@@ -554,6 +555,7 @@ def verify_descriptor_runtime(
     manifest_fd: int,
     bridge_fd: int,
     validator_fd: int,
+    generator_fd: int | None = None,
 ) -> _DescriptorRuntime:
     manifest = _resource_from_descriptor(manifest_fd)
     resources: dict[str, _DescriptorResource] = {}
@@ -566,13 +568,15 @@ def verify_descriptor_runtime(
             raise BridgeRefused("manifest fields or field order are not current")
         if json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8") != raw:
             raise BridgeRefused("manifest bytes are not canonical")
-        # The descriptor transport stages exactly three inherited descriptors
-        # (manifest, bridge, validator) and no fourth for a generator, so this
-        # launch cannot reach manifest-pinned generator bytes at all. It stays
-        # project-only until that protocol gains a descriptor; the shared
-        # admission rule below keeps the refusal identical to the one it
-        # replaced for every manifest the app ships.
-        if document["schema"] != "note-runtime/1" or document["role"] != "project":
+        # The descriptor set and the role are one decision, made by the
+        # launching parent: three descriptors (manifest, bridge, validator)
+        # speak `project` and cannot reach generator bytes at all; a fourth
+        # descriptor speaks `generate` and is the only way this launch can
+        # receive them. The pairing is a biconditional exactly like
+        # `_require_generator_admission`: a generate manifest without a
+        # generator descriptor and a project manifest with one both refuse.
+        expected_role = "project" if generator_fd is None else "generate"
+        if document["schema"] != "note-runtime/1" or document["role"] != expected_role:
             raise BridgeRefused("descriptor bridge manifest has the wrong role")
         for field in ("runtime", "bridge", "validator"):
             document[field] = _resource(document[field], field)
@@ -583,6 +587,10 @@ def verify_descriptor_runtime(
             raise BridgeRefused("inherited bridge differs from the manifest")
         if resources["validator"].digest != document["validator"]["sha256"]:
             raise BridgeRefused("inherited validator differs from the manifest")
+        if generator_fd is not None:
+            resources["generator"] = _resource_from_descriptor(generator_fd)
+            if resources["generator"].digest != document["generator"]["sha256"]:
+                raise BridgeRefused("inherited generator differs from the manifest")
         executable_fd = os.open(
             sys.executable,
             os.O_RDONLY | getattr(os, "O_NOFOLLOW_ANY", os.O_NOFOLLOW),
@@ -596,7 +604,9 @@ def verify_descriptor_runtime(
             os.close(executable_fd)
         if hashlib.sha256(executable_bytes).hexdigest() != document["runtime"]["sha256"]:
             raise BridgeRefused("running interpreter differs from the manifest")
-        runtime = _DescriptorRuntime(manifest, resources, "project")
+        runtime = _DescriptorRuntime(
+            manifest, resources, document["role"], tuple(document["models"])
+        )
         runtime.require_unchanged()
         return runtime
     except Exception:
@@ -1179,7 +1189,7 @@ def _require_descriptor_identity(
 
 
 def _run_generation(
-    runtime: _VerifiedRuntime,
+    runtime: "_VerifiedRuntime | _DescriptorRuntime",
     validator,
     root_fd: int,
     root_path: Path,
@@ -1283,18 +1293,19 @@ def run(
     parent_fd: int | None,
     *,
     descriptor_fds: tuple[int, int, int] | None = None,
+    generator_fd: int | None = None,
     expected_parent_pid: int | None = None,
 ) -> int:
     standard_library = _confine_runtime_imports()
     if descriptor_fds is None:
-        if manifest_path is None or parent_fd is None:
+        if manifest_path is None or parent_fd is None or generator_fd is not None:
             raise BridgeRefused("path bridge launch is incomplete")
         runtime = verify_runtime(manifest_path)
     else:
         if manifest_path is not None or parent_fd is not None or expected_parent_pid is None:
             raise BridgeRefused("descriptor bridge launch is incomplete")
         _watch_parent_pid(expected_parent_pid)
-        runtime = verify_descriptor_runtime(*descriptor_fds)
+        runtime = verify_descriptor_runtime(*descriptor_fds, generator_fd=generator_fd)
     root_fd = _open_absolute_directory(root_path, private=True)
     try:
         validator, bundle_loader = load_validator(runtime)
@@ -1430,14 +1441,22 @@ def main_from_fds(
     validator_fd: int,
     storage_root: str,
     expected_parent_pid: int,
+    generator_fd: int | None = None,
 ) -> int:
-    """Entry point used only by the signed Rust-owned descriptor bootstrap."""
+    """Entry point used only by the signed Rust-owned descriptor bootstrap.
+
+    Three descriptors launch the `project` role; the fourth, when the parent
+    stages one, carries the manifest-pinned generator bytes and launches
+    `generate`. The role is derived from the descriptor set, never from the
+    manifest alone, so a mislabeled manifest refuses instead of escalating.
+    """
     try:
         return run(
             Path(storage_root),
             None,
             None,
             descriptor_fds=(manifest_fd, bridge_fd, validator_fd),
+            generator_fd=generator_fd,
             expected_parent_pid=expected_parent_pid,
         )
     except Exception:
