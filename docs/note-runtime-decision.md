@@ -430,3 +430,17 @@ uniform 4-bit.
 Any adoption runs the full preregistered eval (11/13 recall bar on all
 four corpora) as a new arm — sequenced after the offer-stride arm
 lands, which halves the cost of exactly that evaluation.
+
+**Family follow-up (operator question: GLM, Grok, DeepSeek).** All
+three ruled out, verified against the HF API through Aug 2026. GLM:
+licensing is fine (MIT across the family) but size is not — the
+smallest MLX conversions are GLM-4-9B-0414 at 5.31 GB and
+GLM-4.6V-Flash at 7.09 GB, the 2026 releases are all flagship-scale
+MoE, and GLM-Edge (1.5B/4B, 2024) has no MLX conversion at all. Grok:
+xAI has only ever open-weighted 100B+ models (Grok-1, Grok-2.5, the
+latter under a restrictive community license); nothing small exists.
+DeepSeek: every 2026 release is giant MoE (V4-Flash is 304B —
+"Flash" is not small); the R1-Distill small models are reasoning-tuned
+and emit long chain-of-thought before answering — the wrong shape for
+a single-token constrained verdict, and slower, not faster, per call.
+Shortlist unchanged: Qwen3.5-4B, then Granite-4.0-h-micro.
