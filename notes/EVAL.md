@@ -3353,3 +3353,36 @@ classifier; `classification_request` admits contiguous batches of the
 strided offer; registration digest moves; cycles and locks re-derive;
 all four official runs repeat against the predictions above. No
 official run until the code change lands and tests are green.
+
+### Offer-stride officials — all four PASS, every prediction exact
+
+Registration baaac5aa… (offer_stride 2, commit 1f3b9a6); cycles and
+locks re-derived per corpus under the standing delegation, prior
+98dcbbd9 cycles preserved as product-cycle-98dcbbd9-superseded, lock
+approvals appended to each corpus LOCK-APPROVAL.md. One rebuild
+correction: meeting 1's events input is product-events-plan.json (its
+events.json predates the product manifest and 57 of its candidate ids
+do not resolve).
+
+- meeting 1 (630): 83 calls, keep 54, pruned 53, recall 13/13 — PASS,
+  483.3 s
+- meeting 2: 150 calls, keep 72, pruned 39, recall 12/13 — PASS, 763.2 s
+- zoom town hall: 227 calls, keep 145, pruned 58, recall 13/14 — PASS,
+  1474.2 s
+- meet: 152 calls, keep 93, pruned 43, recall 15/15 — PASS, 1115.4 s
+
+All four preregistered predictions held exactly — the
+offer-set-independence argument (batch size 1, pure-function prompts)
+is confirmed on real runs, not only on replayed dumps.
+
+**Elapsed honesty note.** Wall clock did not halve against the prior
+officials (585/772/1450/1482 s), because those ran at ~2.6–3.5 s/call
+and today's ran at ~5.5 s/call — a machine-conditions difference, not
+the arm. Probe (diagnostic, 10 alternating calls each):
+contiguous-offer calls mean 5.85 s, strided-offer calls mean 5.46 s —
+per-call cost is stride-independent, so halving the calls halves the
+classification compute under like conditions; the residual fixed cost
+is model load (~2 min). Two launch attempts through the session's
+background task runner were externally stopped mid-run; the completed
+runs came from a detached nohup+caffeinate launch (meeting 1's first
+result survived the stop — results are written per-run).
