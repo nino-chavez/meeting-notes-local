@@ -3457,3 +3457,26 @@ Qwen3.5-4B (3.06 GB, vendor-benchmarked above the 12B's class), which
 requires an mlx-lm newer than the pinned 0.30.4 to load; next step is
 a research-env-only arm for it (separate venv; the product runtime pin
 stays untouched unless it passes).
+
+### Qwen3.5-4B arm — killed (0 of 4); the model-selection question is CLOSED
+
+Run in a separate research venv (mlx-env-next, mlx-lm 0.31.3, qwen3_5
+arch) so the product runtime pin (mlx-lm 0.30.4) stayed untouched.
+Same prompts, strided offer, constrained transport, pruner, gates.
+
+- meeting 1: 83 calls, keep 10, recall 7/13 — FAIL (122 s)
+- meeting 2: 150 calls, keep 2, recall 0/13 — FAIL (392 s)
+- zoom town hall: 227 calls, keep 15, recall 6/14 — FAIL (475 s)
+- meet: 152 calls, keep 9, pruned 6, recall 5/15 — FAIL (355 s)
+
+**Closure.** Three challengers (2.28, 1.81, 3.06 GB), twelve corpus
+passes, one gate pass among them (qwen3-4b on meet). The consistent
+mechanism: small models under-keep real meeting speech by 5–25x
+against the 12B (0–15 keeps where it keeps 54–145) and miss most
+locked events. Per the preregistered decision rule the 12B stays;
+"vendor-benchmarked above the 12B class" (Qwen3.5's card) did not
+survive contact with this task. The install stays 8.06 GB and the
+honest user-facing copy stays "large one-time download, several
+minutes per note" — with the offer-stride halving already landed.
+Reopen only on a materially new small-model release, and reuse this
+arm's harness (packet: small-model-arm.py, per-corpus decision dumps).
