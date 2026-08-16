@@ -382,3 +382,21 @@ alike. Memory contention is already handled: whisper's
 runtime is released inside the worker before the `transcript.create`
 terminal frame, so any regeneration accepted at `TranscriptReady` or
 later starts past the release.
+
+**Slice 2 landed (2026-08-16, commit 4a3404a).** The worker now admits
+`note.create` with an optional exact-shape `generation` payload
+(`note-generation/1`: transcript pin, `manifest_sha256`, candidate
+count, points, run receipt) and assembles a published note/2 through
+the deterministic candidate-point assembler in `summarize`
+(`candidate_note_document`). Points-notes declare
+`claim_evidence_contract: candidate-evidence/1` and their citations
+replay by regenerating the manifest from the transcript, exactly as
+designed in 2b — the end-to-end dispatch test drives manifest points
+through the worker to a published note whose artifact replays
+digest-for-digest. Bare `note.create` (no payload) still refuses, and
+`ALPHA_OPERATIONS`/`internal_alpha_operations` moved in lockstep. All
+four lanes green (session-core 412, worker 192+40, desktop 130, UI 10).
+Remaining: slice 3 (coordinator sequencing behind `accept_regeneration`
+— the desktop `NoteGenerationWorker` impl that runs the generate child,
+parses `note-generation-result/1`, and issues this `note.create`), then
+slice 4 (UI regenerate control).
