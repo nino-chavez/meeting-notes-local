@@ -326,7 +326,7 @@ def validate_claim_rows(cited: list, transcript) -> list[dict]:
             or not claim
             or len(claim) > 160
             or any(forbidden_in_claim(character) for character in claim)
-            or claim_type not in {"decision", "action", "proposal", "question"}
+            or claim_type not in {"decision", "action", "proposal", "question", "point"}
             or row.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()
         ):
             raise ArtifactFailure("artifact-invalid", False)

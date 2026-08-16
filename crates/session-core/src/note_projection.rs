@@ -88,6 +88,10 @@ pub enum ClaimType {
     Action,
     Proposal,
     Question,
+    /// A located transcript excerpt the candidate-first classifier kept,
+    /// deliberately untyped: a point is evidence, not a decision the
+    /// pipeline inferred.
+    Point,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -229,6 +233,7 @@ fn parse_claim(
         "action" => ClaimType::Action,
         "proposal" => ClaimType::Proposal,
         "question" => ClaimType::Question,
+        "point" => ClaimType::Point,
         _ => return Err(ProjectionError::Unavailable),
     };
     let locators: Vec<_> = array(values[5])?

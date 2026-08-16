@@ -617,7 +617,8 @@ _TYPES = {"decisions": "decision", "decision": "decision",
           "proposed": "proposal", "proposals": "proposal",
           "proposal": "proposal", "suggestions": "proposal",
           "open questions": "question", "questions": "question",
-          "question": "question"}
+          "question": "question",
+          "points": "point", "point": "point"}
 
 
 def _claim_type(section: str | None) -> str | None:
@@ -1740,8 +1741,15 @@ def chunk_transcript(transcript: Transcript, target_words: int,
     ]
 
 
-_LABELS = r"DECISION|ACTION|PROPOSAL|QUESTION"
-_LABEL_VALUES = ("DECISION", "ACTION", "PROPOSAL", "QUESTION")
+_LABELS = r"DECISION|ACTION|PROPOSAL|QUESTION|POINT"
+_LABEL_VALUES = ("DECISION", "ACTION", "PROPOSAL", "QUESTION", "POINT")
+# The model-extraction request contract is frozen at the four labels the
+# extraction pass emits.  It is embedded in every retained stage receipt and
+# replayed digest-for-digest by `structured_citations`, so widening it would
+# refuse every previously written note/2.  POINT never comes from extraction:
+# it is the candidate-first product lane's label, admitted by the validation
+# vocabulary above and rendered by its own section, with its own provenance.
+_EXTRACTION_LABEL_VALUES = ("DECISION", "ACTION", "PROPOSAL", "QUESTION")
 FRAGMENT_CONTRACT = {
     "schema": "source-fragments/1",
     "word_definition": "non-whitespace Unicode runs",
@@ -1976,7 +1984,7 @@ def extraction_format(fragment_ids: list[str]) -> dict:
                 "maxItems": 3,
                 "uniqueItems": True,
             },
-            "label": {"type": "string", "enum": list(_LABEL_VALUES)},
+            "label": {"type": "string", "enum": list(_EXTRACTION_LABEL_VALUES)},
             "claim": {
                 "type": "string",
                 "minLength": 1,
@@ -2251,6 +2259,10 @@ def render_structured_note(items: list[dict]) -> str:
         "ACTION": "Action items",
         "PROPOSAL": "Proposed",
         "QUESTION": "Open questions",
+        # The candidate-first product lane: located transcript excerpts kept
+        # by the classifier, deliberately untyped -- a point is evidence, not
+        # a decision the pipeline inferred.
+        "POINT": "Points",
     }
     lines = [
         STRUCTURED_NOTE_CONTRACT["heading"],

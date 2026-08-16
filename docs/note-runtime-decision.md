@@ -332,7 +332,27 @@ memory-only note/2 build chain (`attach_evidence_items` →
 same chain `mlx_note_admission.py` already drives for research
 candidates. The worker's operation sets and
 `supervision::internal_alpha_operations()` move in lockstep, exactly as
-the `corpus.embed` drift note in `supervision.rs` warns. Memory contention is already handled: whisper's
+the `corpus.embed` drift note in `supervision.rs` warns.
+
+**Slice 2a landed 2026-08-15: the vocabulary, with one compatibility
+finding.** The `point` type is admitted end-to-end (summarize's label
+set, `_TYPES` section mapping, render titles; the validator's claim-row
+gate; `ClaimType::Point`; the library reader's serialization — the UI
+humanizes types generically). The finding: the model-extraction request
+schema embeds the label enum, and every retained note/2 replays that
+schema digest-for-digest through `structured_citations` — widening the
+enum in place refused eight fixture notes, which is exactly what it
+would do to a shipped user's existing notes after an update. So the
+extraction contract is now its own frozen four-label constant
+(`_EXTRACTION_LABEL_VALUES`); POINT lives only in the validation
+vocabulary and rendering, and a points-note must carry candidate-first
+provenance rather than a synthesized extraction stage. That constrains
+the slice-2 assembler design: it cannot reuse the extraction stage
+receipts; the `checks` a product note stores come from `report()`,
+whose gates assume a model-written note (`calls`, prompt-echo,
+context), so the assembler needs either a candidate-first-native checks
+path or a deliberate satisfaction of those gates — the next design
+question, not yet decided. Memory contention is already handled: whisper's
 runtime is released inside the worker before the `transcript.create`
 terminal frame, so any regeneration accepted at `TranscriptReady` or
 later starts past the release.

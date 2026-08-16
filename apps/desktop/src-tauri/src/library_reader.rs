@@ -1581,6 +1581,7 @@ fn claim_type_name(value: ClaimType) -> &'static str {
         ClaimType::Action => "action",
         ClaimType::Proposal => "proposal",
         ClaimType::Question => "question",
+        ClaimType::Point => "point",
     }
 }
 
