@@ -3287,3 +3287,15 @@ the shipped catalog entry is code-complete but not servable — a
 download attempt fails at the missing shards. Upload and the full
 six-object verification resume on explicit operator clearance, and
 this record is not relied on until they do.
+
+Addendum — hosting complete and verified, 2026-08-15 evening. Operator
+back on wifi; the aborted multipart was cleaned and both shards
+uploaded (75–83 MiB/s, immutable cache-control, octet-stream). Full
+verification then ran against the public r2.dev URLs: all six objects
+downloaded end-to-end, byte counts and sha256 digests match the
+catalog pins exactly (config 7,267 B; shard 1 5,367,455,313 B; shard 2
+2,661,219,935 B; index 108,605 B; tokenizer 33,384,568 B; tokenizer
+config 1,156,999 B). One instrument note: r2.dev returns 403 to
+Python's default urllib user agent while serving the same URL to curl
+— the verifier streams through curl. The catalog entry is now servable
+end-to-end; the ship record above may be relied on.

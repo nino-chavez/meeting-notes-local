@@ -223,3 +223,9 @@ Until the shards land and all six objects verify against the catalog pins,
 an `install_note_model` against the published catalog fails at download or
 at digest verification; the catalog entry is code-complete but not yet
 servable. Upload and verification resume on operator clearance.
+
+**Resolved, 2026-08-15 evening**: on operator clearance the aborted
+multipart was cleaned, both shards uploaded, and all six objects were
+downloaded end-to-end from the public URLs — byte counts and sha256
+digests match the catalog pins exactly. The catalog entry is servable;
+the hosting requirement of the distribution runbook is met.
