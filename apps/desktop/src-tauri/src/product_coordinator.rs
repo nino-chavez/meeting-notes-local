@@ -12,18 +12,36 @@
 //! the coordinator's terminal receipt) remains a separate slice gated on the
 //! operator's admission decision.
 //!
-//! Note regeneration stays truthfully unavailable: `note.create` has no
-//! admitted note generator, so a coordinator here could only relabel that
-//! refusal.
+//! Note regeneration composes two seams (docs/note-runtime-decision.md,
+//! slice 3): the sandboxed generate child proposes located candidate points
+//! under the manifest-pinned model, and the worker's `note.create` assembles
+//! and publishes the note deterministically from that payload. The
+//! generation object crosses this module verbatim -- the worker's frozen
+//! contract deep-validates it, the assembler re-derives every digest from
+//! the retained transcript, and the coordinator re-inspects the published
+//! pair before anything lands in the meeting record.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use local_meeting_notes_session_core::meeting::load_meeting;
+use local_meeting_notes_session_core::meeting::{NoteRevisionRef, load_meeting};
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
-use local_meeting_notes_session_core::operations::TranscriptRestoreWorkerArgs;
+use local_meeting_notes_session_core::note_generation::{
+    NoteArtifactError, NoteArtifactInspector, NoteGenerationCoordinator,
+    NoteGenerationCoordinatorError, NoteGenerationWorker, NoteGenerationWorkerError,
+    NoteWorkerResult,
+};
+use local_meeting_notes_session_core::note_projector_process::{
+    GENERATE_MANIFEST_FILE, GenerateNoteRequest, NoteGenerationChildOutcome,
+    ProcessNoteGenerator, admit_note_generator, parse_note_generation_result,
+};
+use local_meeting_notes_session_core::operations::{
+    NoteCreateWorkerArgs, NoteCreateWorkerFailure, NoteCreateWorkerFailureCode,
+    TranscriptRestoreWorkerArgs,
+};
+use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::protocol::{
     Operation, ProtocolError, WorkerCommand, WorkerProgress, WorkerResult,
 };
@@ -145,6 +163,136 @@ impl TranscriptRestoreWorker for WorkerProcessRestoreBridge {
     }
 }
 
+/// Runs the two-step note generation behind the session-core coordinator's
+/// `NoteGenerationWorker` seam: admit and run the sandboxed generate child,
+/// then hand its validated points to the worker's `note.create` assembler.
+///
+/// Admission happens per call, from live storage state -- the same rule as
+/// the projector cache's source: a model installed or removed since startup
+/// must change the answer.
+pub(crate) struct WorkerProcessNoteGenerationBridge {
+    port: Arc<dyn WorkerPort>,
+    storage: Arc<Mutex<Option<StorageContext>>>,
+}
+
+impl WorkerProcessNoteGenerationBridge {
+    pub(crate) fn new(
+        port: Arc<dyn WorkerPort>,
+        storage: Arc<Mutex<Option<StorageContext>>>,
+    ) -> Self {
+        Self { port, storage }
+    }
+
+    fn admitted_generator(&self) -> Option<ProcessNoteGenerator> {
+        let context = self
+            .storage
+            .lock()
+            .ok()?
+            .clone()?;
+        let manifest = RuntimeManifest::load_and_verify(&context.manifest_path).ok()?;
+        let catalog = crate::verified_model_catalog(&context.manifest_path, &manifest).ok()??;
+        admit_note_generator(
+            &context.storage,
+            &catalog,
+            &context.resource_root.join(GENERATE_MANIFEST_FILE),
+        )
+    }
+}
+
+impl NoteGenerationWorker for WorkerProcessNoteGenerationBridge {
+    fn create(
+        &self,
+        arguments: &NoteCreateWorkerArgs,
+    ) -> Result<NoteWorkerResult, NoteGenerationWorkerError> {
+        let generator = self
+            .admitted_generator()
+            .ok_or(NoteGenerationWorkerError::Unavailable)?;
+        let request = GenerateNoteRequest {
+            request_id: Uuid::new_v4(),
+            meeting_id: arguments.meeting_id.to_string(),
+            transcript_sha256: arguments.source_transcript_sha256.clone(),
+        };
+        let frame = generator
+            .generate(&request)
+            .map_err(|_| NoteGenerationWorkerError::Unavailable)?;
+        let generation = match parse_note_generation_result(&frame, &request)
+            .map_err(|_| NoteGenerationWorkerError::Unavailable)?
+        {
+            NoteGenerationChildOutcome::Generated(generation) => generation,
+            NoteGenerationChildOutcome::TranscriptOnly { recoverable, .. } => {
+                // The child's failure codes are content-free by design; the
+                // durable receipt records the one product fact -- no note,
+                // transcript stands -- plus whether a retry could differ.
+                return Ok(NoteWorkerResult::Rejected(NoteCreateWorkerFailure {
+                    code: NoteCreateWorkerFailureCode::NoteRejected,
+                    recoverable,
+                    artifact_digests: HashMap::new(),
+                }));
+            }
+        };
+        let mut create_arguments = serde_json::to_value(arguments)
+            .map_err(|_| NoteGenerationWorkerError::Unavailable)?;
+        let Some(fields) = create_arguments.as_object_mut() else {
+            return Err(NoteGenerationWorkerError::Unavailable);
+        };
+        fields.insert("generation".into(), generation);
+        let result = self
+            .port
+            .request(
+                Operation::NoteCreate,
+                create_arguments,
+                WORKER_REQUEST_TIMEOUT,
+            )
+            .map_err(|_| NoteGenerationWorkerError::Unavailable)?;
+        if result.ok {
+            Ok(NoteWorkerResult::Accepted(result.artifact_digests))
+        } else {
+            // The generate child already validated these points against the
+            // same retained transcript, so an assembler refusal is a local
+            // contract break, not a model outcome.
+            Err(NoteGenerationWorkerError::Refused)
+        }
+    }
+}
+
+/// Fresh `note.inspect` across the process boundary: the published pair must
+/// re-verify content-addressed and semantically passing before the meeting
+/// record advances. The worker's refusal is deliberately reasonless; either
+/// artifact fault maps to "changed", and only a dead port reads as missing.
+pub(crate) struct WorkerProcessNoteInspectBridge {
+    port: Arc<dyn WorkerPort>,
+}
+
+impl WorkerProcessNoteInspectBridge {
+    pub(crate) fn new(port: Arc<dyn WorkerPort>) -> Self {
+        Self { port }
+    }
+}
+
+impl NoteArtifactInspector for WorkerProcessNoteInspectBridge {
+    fn inspect(
+        &self,
+        _meeting_dir: &Path,
+        meeting_id: Uuid,
+        note: &NoteRevisionRef,
+    ) -> Result<HashMap<String, String>, NoteArtifactError> {
+        let arguments = serde_json::json!({
+            "meeting_id": meeting_id.to_string(),
+            "note_id": note.json.sha256,
+            "transcript_id": note.source_transcript_sha256,
+        });
+        let result = self
+            .port
+            .request(Operation::NoteInspect, arguments, WORKER_REQUEST_TIMEOUT)
+            .map_err(|_| NoteArtifactError::Missing)?;
+        if result.ok {
+            Ok(result.artifact_digests)
+        } else {
+            Err(NoteArtifactError::Changed)
+        }
+    }
+}
+
 /// The storage-backed `ProductOperationCoordinator`. Holds live handles to the
 /// application's storage, writer-lock, and worker slots so every call reads
 /// the current runtime state instead of a startup snapshot.
@@ -196,6 +344,19 @@ impl DesktopProductCoordinator {
         )
         .map_err(|_| CoordinatorError::Unavailable)
     }
+
+    fn generation_coordinator(&self) -> Result<NoteGenerationCoordinator, CoordinatorError> {
+        NoteGenerationCoordinator::new(
+            self.storage_root()?,
+            self.coordination()?,
+            Arc::new(WorkerProcessNoteGenerationBridge::new(
+                self.port.clone(),
+                self.storage.clone(),
+            )),
+            Arc::new(WorkerProcessNoteInspectBridge::new(self.port.clone())),
+        )
+        .map_err(|_| CoordinatorError::Unavailable)
+    }
 }
 
 impl ProductOperationCoordinator for DesktopProductCoordinator {
@@ -242,12 +403,17 @@ impl ProductOperationCoordinator for DesktopProductCoordinator {
 
     fn accept_regeneration(
         &self,
-        _args: &local_meeting_notes_session_core::operations::RegenerateNoteUiArgs,
+        args: &local_meeting_notes_session_core::operations::RegenerateNoteUiArgs,
     ) -> Result<Uuid, CoordinatorError> {
-        // No note generator is admitted (`note.create` refuses without one),
-        // so regeneration cannot reach a terminal receipt yet. Report the
-        // refusal here instead of relabeling it through a coordinator.
-        Err(CoordinatorError::Unavailable)
+        self.generation_coordinator()?
+            .regenerate_note(args)
+            .map_err(|error| match error {
+                NoteGenerationCoordinatorError::Worker(NoteGenerationWorkerError::Unavailable)
+                | NoteGenerationCoordinatorError::StorageUnavailable => {
+                    CoordinatorError::Unavailable
+                }
+                _ => CoordinatorError::Refused,
+            })
     }
 }
 
@@ -545,7 +711,10 @@ mod tests {
     }
 
     #[test]
-    fn regeneration_stays_truthfully_unavailable_even_with_a_live_runtime() {
+    fn regeneration_without_an_installed_note_model_is_unavailable_before_the_worker() {
+        // Admission is the gate now, not a stub: the fixture runtime has no
+        // verified note-model install, so the generate child is never
+        // launched and the worker port is never touched.
         let fixture = runtime_fixture(gated_turns());
         let port = Arc::new(FakePort::new(FakeOutcome::Accept(HashMap::new())));
         let coordinator = coordinator_for(&fixture, port.clone());

@@ -575,6 +575,117 @@ impl ProcessNoteGenerator {
     }
 }
 
+/// One parsed `note-generation-result/1` frame.
+///
+/// `Generated` carries the child's `generation` object verbatim as JSON: the
+/// desktop forwards it into the worker's `note.create` arguments, where the
+/// frozen contract deep-validates the shape and the deterministic assembler
+/// re-derives every digest from the retained transcript.  Nothing in it is
+/// trusted here beyond the envelope; parsing it into typed fields would only
+/// duplicate the worker's authority.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NoteGenerationChildOutcome {
+    Generated(serde_json::Value),
+    TranscriptOnly { code: String, recoverable: bool },
+}
+
+/// Parses the generate child's raw result frame against the request it
+/// answers.  Any envelope violation -- wrong schema, foreign request id, a
+/// generation that disagrees with the pinned transcript, an outcome/payload
+/// mismatch -- is `Unavailable`: the sandboxed child broke its contract, and
+/// no product decision can be read from a broken frame.
+pub fn parse_note_generation_result(
+    frame: &[u8],
+    request: &GenerateNoteRequest,
+) -> Result<NoteGenerationChildOutcome, ProjectTransportError> {
+    if frame.is_empty()
+        || frame.len() > MAX_PROJECTION_FRAME_BYTES
+        || !frame.ends_with(b"\n")
+        || frame[..frame.len() - 1]
+            .iter()
+            .any(|byte| matches!(byte, b'\n' | b'\r'))
+    {
+        return Err(ProjectTransportError::Unavailable);
+    }
+    let root: serde_json::Value = serde_json::from_slice(&frame[..frame.len() - 1])
+        .map_err(|_| ProjectTransportError::Unavailable)?;
+    let serde_json::Value::Object(values) = &root else {
+        return Err(ProjectTransportError::Unavailable);
+    };
+    let expected_keys = [
+        "schema",
+        "request_id",
+        "operation",
+        "outcome",
+        "generation",
+        "failure",
+    ];
+    if values.len() != expected_keys.len()
+        || expected_keys.iter().any(|key| !values.contains_key(*key))
+    {
+        return Err(ProjectTransportError::Unavailable);
+    }
+    let text = |key: &str| values.get(key).and_then(serde_json::Value::as_str);
+    if text("schema") != Some("note-generation-result/1")
+        || text("operation") != Some("note.generate")
+        || text("request_id")
+            .and_then(|value| Uuid::try_parse(value).ok())
+            .filter(|value| {
+                *value == request.request_id
+                    && text("request_id") == Some(value.to_string().as_str())
+            })
+            .is_none()
+    {
+        return Err(ProjectTransportError::Unavailable);
+    }
+    let generation = values.get("generation").expect("checked key");
+    let failure = values.get("failure").expect("checked key");
+    match text("outcome") {
+        Some("generated") => {
+            if !failure.is_null() {
+                return Err(ProjectTransportError::Unavailable);
+            }
+            let serde_json::Value::Object(fields) = generation else {
+                return Err(ProjectTransportError::Unavailable);
+            };
+            // The envelope binds the payload to the request's pinned
+            // transcript; every deeper field is the worker contract's to
+            // judge.
+            if fields.get("transcript_sha256").and_then(serde_json::Value::as_str)
+                != Some(request.transcript_sha256.as_str())
+            {
+                return Err(ProjectTransportError::Unavailable);
+            }
+            Ok(NoteGenerationChildOutcome::Generated(generation.clone()))
+        }
+        Some("transcript-only") => {
+            if !generation.is_null() {
+                return Err(ProjectTransportError::Unavailable);
+            }
+            let serde_json::Value::Object(fields) = failure else {
+                return Err(ProjectTransportError::Unavailable);
+            };
+            if fields.len() != 3 || !fields.contains_key("receipt") {
+                return Err(ProjectTransportError::Unavailable);
+            }
+            let code = fields
+                .get("code")
+                .and_then(serde_json::Value::as_str)
+                .filter(|code| !code.is_empty())
+                .ok_or(ProjectTransportError::Unavailable)?;
+            let recoverable = fields
+                .get("recoverable")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or(ProjectTransportError::Unavailable)?;
+            Ok(NoteGenerationChildOutcome::TranscriptOnly {
+                code: code.to_owned(),
+                recoverable,
+            })
+        }
+        _ => Err(ProjectTransportError::Unavailable),
+    }
+}
+
 /// Chooses the `note.generate` transport, under exactly the admission rules
 /// of `admit_note_projector` -- the same manifest verification, the same
 /// one-catalog-entry match, the same re-verified install -- differing only in
@@ -3655,5 +3766,111 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
             Err(ProjectTransportError::Cancelled)
         );
         assert!(!fixture.storage_root.join("bound-command").exists());
+    }
+
+    fn generation_frame(outcome: &str, generation: serde_json::Value, failure: serde_json::Value) -> Vec<u8> {
+        let mut bytes = serde_json::to_vec(&serde_json::json!({
+            "schema": "note-generation-result/1",
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "operation": "note.generate",
+            "outcome": outcome,
+            "generation": generation,
+            "failure": failure,
+        }))
+        .unwrap();
+        bytes.push(b'\n');
+        bytes
+    }
+
+    fn generation_payload() -> serde_json::Value {
+        serde_json::json!({
+            "schema": "note-generation/1",
+            "transcript_sha256": "c".repeat(64),
+            "manifest_sha256": "d".repeat(64),
+            "candidates": 7,
+            "points": [{"point_ordinal": 0, "candidate_id": "cf-a", "evidence_state": "located", "locators": []}],
+            "receipt": {"responses": 4, "response_bytes": 100, "last_response_sha256": "e".repeat(64), "elapsed_s": 1.5},
+        })
+    }
+
+    #[test]
+    fn a_generated_frame_parses_and_carries_the_generation_verbatim() {
+        let frame = generation_frame("generated", generation_payload(), serde_json::Value::Null);
+        assert_eq!(
+            parse_note_generation_result(&frame, &generate_request()),
+            Ok(NoteGenerationChildOutcome::Generated(generation_payload()))
+        );
+    }
+
+    #[test]
+    fn a_transcript_only_frame_parses_to_its_failure_code() {
+        let frame = generation_frame(
+            "transcript-only",
+            serde_json::Value::Null,
+            serde_json::json!({"code": "no-model-candidates", "recoverable": true, "receipt": {}}),
+        );
+        assert_eq!(
+            parse_note_generation_result(&frame, &generate_request()),
+            Ok(NoteGenerationChildOutcome::TranscriptOnly {
+                code: "no-model-candidates".into(),
+                recoverable: true,
+            })
+        );
+    }
+
+    #[test]
+    fn generation_result_envelope_violations_are_unavailable() {
+        let request = generate_request();
+        let ok = generation_frame("generated", generation_payload(), serde_json::Value::Null);
+        assert!(parse_note_generation_result(&ok, &request).is_ok());
+
+        // A frame answering a different request.
+        let mut foreign = request.clone();
+        foreign.request_id = Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap();
+        assert_eq!(
+            parse_note_generation_result(&ok, &foreign),
+            Err(ProjectTransportError::Unavailable)
+        );
+
+        // A generation pinned to a different transcript.
+        let mut other = request.clone();
+        other.transcript_sha256 = "f".repeat(64);
+        assert_eq!(
+            parse_note_generation_result(&ok, &other),
+            Err(ProjectTransportError::Unavailable)
+        );
+
+        // Outcome/payload disagreements and malformed envelopes.
+        for frame in [
+            generation_frame("generated", generation_payload(), serde_json::json!({"code": "x", "recoverable": false, "receipt": {}})),
+            generation_frame("generated", serde_json::Value::Null, serde_json::Value::Null),
+            generation_frame("transcript-only", generation_payload(), serde_json::Value::Null),
+            generation_frame("transcript-only", serde_json::Value::Null, serde_json::Value::Null),
+            generation_frame("transcript-only", serde_json::Value::Null, serde_json::json!({"code": "", "recoverable": true, "receipt": {}})),
+            generation_frame("transcript-only", serde_json::Value::Null, serde_json::json!({"code": "x", "recoverable": true})),
+            generation_frame("refused", serde_json::Value::Null, serde_json::Value::Null),
+            ok[..ok.len() - 1].to_vec(),
+            b"not json\n".to_vec(),
+            Vec::new(),
+        ] {
+            assert_eq!(
+                parse_note_generation_result(&frame, &request),
+                Err(ProjectTransportError::Unavailable),
+                "frame was accepted: {:?}",
+                String::from_utf8_lossy(&frame)
+            );
+        }
+
+        // A schema or operation swap refuses.
+        for (key, value) in [("schema", "note-projection-result/1"), ("operation", "note.project")] {
+            let mut root: serde_json::Value = serde_json::from_slice(&ok[..ok.len() - 1]).unwrap();
+            root[key] = serde_json::Value::String(value.into());
+            let mut bytes = serde_json::to_vec(&root).unwrap();
+            bytes.push(b'\n');
+            assert_eq!(
+                parse_note_generation_result(&bytes, &request),
+                Err(ProjectTransportError::Unavailable)
+            );
+        }
     }
 }
