@@ -3386,3 +3386,37 @@ is model load (~2 min). Two launch attempts through the session's
 background task runner were externally stopped mid-run; the completed
 runs came from a detached nohup+caffeinate launch (meeting 1's first
 result survived the stop — results are written per-run).
+
+### Preregistration — small-model arm (Qwen3-4B-2507, Granite-4.0-h-micro)
+
+Operator asked what finishes the model-selection question. The research
+shortlist (docs/note-runtime-decision.md, 2026-08-16) has two
+candidates runnable under the pinned runtime (mlx-lm 0.30.4):
+mlx-community/Qwen3-4B-Instruct-2507-4bit (2.28 GB, Apache-2.0,
+model_type qwen3) and mlx-community/granite-4.0-h-micro-4bit (1.81 GB,
+Apache-2.0, model_type granitemoehybrid). The preferred
+Qwen3.5-4B needs an mlx-lm upgrade (model_type qwen3_5 postdates the
+pin) and is deferred unless both in-runtime candidates fail. Both
+candidates pass the transport qualification: KEEP/ABSTAIN diverge at
+the first token under each tokenizer.
+
+**Arm design.** Research eval, no product registration change: same
+prompts (`classification_request` content, byte-identical), same
+strided offer (s=2), same constrained first-token verdict transport,
+same pruner and ledgers — only the model and its chat-template
+rendering differ (each model's own template renders the same
+system/user strings; gemma3-two-turn/1 is gemma-specific by
+construction). Greedy decode, temperature 0.
+
+**Gates (same as product):** recall ≥ 11/13 equivalent on every one of
+the four corpora, pruned keeps within the 64 budget. **Decision rule,
+fixed now:** a candidate that passes all four corpora with margin (no
+corpus at the exact gate floor) is eligible; between eligible
+candidates, take the SMALLER model; eligibility failure on any corpus
+kills the candidate outright. If both fail, the 12B stays and the
+selection question closes as "no smaller model clears the bar under
+the pinned runtime." No predictions are possible (new model verdicts);
+the preregistered content is the gates and this decision rule.
+
+Per-corpus per-candidate results append below when the runs land; one
+candidate at a time, machine to itself.
