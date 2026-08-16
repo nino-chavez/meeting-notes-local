@@ -316,7 +316,14 @@ def validate_locators(evidence_refs: list, transcript) -> list[dict]:
 
 
 def validate_claim_rows(cited: list, transcript) -> list[dict]:
-    """Re-derive every stored claim and its locators against the transcript."""
+    """Re-derive every stored claim and its locators against the transcript.
+
+    No length cap on `claim`: candidate-first claims are verbatim transcript
+    excerpts (`summarize.py`'s `validate_candidate_evidence`), unbounded by
+    `candidate_first.py`'s fragment spans, and write time never caps them
+    either -- a cap here only reproduced the older LLM-extraction contract's
+    `MAX_STRUCTURED_CLAIM_CHARS`, which is not this contract's rule.
+    """
     claims = []
     for ordinal, row in enumerate(cited):
         claim = row["claim"]
@@ -324,7 +331,6 @@ def validate_claim_rows(cited: list, transcript) -> list[dict]:
         if (
             not isinstance(claim, str)
             or not claim
-            or len(claim) > 160
             or any(forbidden_in_claim(character) for character in claim)
             or claim_type not in {"decision", "action", "proposal", "question", "point"}
             or row.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()

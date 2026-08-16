@@ -2335,20 +2335,25 @@ class EvidenceRuleTests(unittest.TestCase):
         # not a UnicodeEncodeError escaping from the digest computation.
         self.assertEqual(caught.exception.code, "artifact-invalid")
 
-    def test_a_claim_at_the_cap_passes_and_one_over_it_is_refused(self) -> None:
-        """160 is the boundary `note_projection.rs` enforces; both sides count."""
+    def test_a_claim_past_the_former_cap_still_passes(self) -> None:
+        """No length cap: candidate-first claims are verbatim transcript
+        excerpts, unbounded by `candidate_first.py`'s fragment spans, and
+        write time never caps them either. `note_projection.rs`'s matching
+        cap was removed the same change; both sides now agree there is none.
+        """
         transcript = self._transcript()
-        at_cap = "a" * 160
-        self.assertEqual(len(validate_claim_rows([self._claim_row(at_cap)], transcript)), 1)
-        with self.assertRaises(ArtifactFailure):
-            validate_claim_rows([self._claim_row("a" * 161)], transcript)
+        past_former_cap = "a" * 400
+        self.assertEqual(
+            len(validate_claim_rows([self._claim_row(past_former_cap)], transcript)), 1
+        )
 
-    def test_the_claim_cap_counts_characters_not_bytes(self) -> None:
+    def test_a_long_claim_counts_characters_not_bytes_for_other_rules(self) -> None:
         """160 emoji are 640 bytes and still one legal claim.
 
-        Rust counts with `chars().count()`. A byte-length cap here would refuse
-        a claim Rust admits, which is the same divergence class as the control
-        characters, pointing the other way.
+        Length carries no rule now, but other checks (the digest, the
+        forbidden-character set) must still operate on characters, not bytes
+        -- the same divergence class as the control characters, pointing the
+        other way.
         """
         claim = "\U0001f642" * 160
         self.assertGreater(len(claim.encode("utf-8")), 160)

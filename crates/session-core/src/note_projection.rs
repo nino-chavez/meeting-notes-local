@@ -220,8 +220,13 @@ fn parse_claim(
     if u64_value(values[0])? != expected_ordinal || string(values[3])? != "located" {
         return Err(ProjectionError::Unavailable);
     }
+    // No character cap: candidate-first claims are verbatim transcript
+    // excerpts, unbounded by `candidate_first.py`'s fragment spans, and the
+    // Python side never caps them at write time either -- matches
+    // `worker/note_validator.py`'s `validate_claim_rows`, which the same
+    // change removed the cap from.
     let text = string(values[4])?.to_owned();
-    if text.is_empty() || text.chars().count() > 160 || text.chars().any(forbidden) {
+    if text.is_empty() || text.chars().any(forbidden) {
         return Err(ProjectionError::Unavailable);
     }
     let sha256 = digest(string(values[1])?)?.to_owned();
@@ -704,12 +709,11 @@ mod tests {
     /// offsets are counted in characters. Claim *text* over non-ASCII is not,
     /// and no fixture frame is written in the escaped spelling at all.
     ///
-    /// Three invariants the cross-language contract rests on, none covered:
-    /// a frame must parse identically whether non-ASCII arrives raw or
-    /// escaped; the 160 cap counts characters, not bytes or UTF-16 units; and
-    /// `claim_sha256` is taken over decoded UTF-8 so both spellings agree on
-    /// it. Escaping is a serializer flag on the far side of the boundary, so
-    /// nothing here may depend on which one is set.
+    /// Two invariants the cross-language contract rests on, both covered: a
+    /// frame must parse identically whether non-ASCII arrives raw or
+    /// escaped, and `claim_sha256` is taken over decoded UTF-8 so both
+    /// spellings agree on it. Escaping is a serializer flag on the far side
+    /// of the boundary, so nothing here may depend on which one is set.
     ///
     /// Pinned on this side rather than by widening the shared fixture: both
     /// test suites index that fixture positionally, so inserting a case is a
@@ -718,10 +722,9 @@ mod tests {
     #[test]
     fn non_ascii_claim_text_parses_identically_raw_or_escaped() {
         let text: String = "é🙂".repeat(80);
-        assert_eq!(text.chars().count(), 160, "the cap is 160 characters");
         assert!(
-            text.len() > 160,
-            "and this text is longer than that in bytes"
+            text.len() > text.chars().count(),
+            "non-ASCII text is longer in bytes than in characters"
         );
 
         let raw = frame(&non_ascii_result(&text));
@@ -749,112 +752,30 @@ mod tests {
         );
     }
 
-    /// One character past the cap is refused in either spelling, so the bound
-    /// cannot be widened by choosing a serializer.
+    /// Candidate-first claims are verbatim transcript excerpts with no
+    /// upstream length bound, so a claim well past the old 160-character cap
+    /// must still parse -- in either spelling.
     #[test]
-    fn a_claim_over_the_character_cap_is_refused_in_either_spelling() {
-        let text: String = "é".repeat(161);
+    fn a_claim_past_the_former_character_cap_still_parses() {
+        let text: String = "é".repeat(400);
         let raw = frame(&non_ascii_result(&text));
         let escaped = {
             let mut bytes = escape_non_ascii(&ordered_json(&non_ascii_result(&text))).into_bytes();
             bytes.push(b'\n');
             bytes
         };
-        assert!(parse_result(&raw, &request(), &turns()).is_err());
-        assert!(parse_result(&escaped, &request(), &turns()).is_err());
+        assert!(parse_result(&raw, &request(), &turns()).is_ok());
+        assert!(parse_result(&escaped, &request(), &turns()).is_ok());
     }
 
-    /// Serialized size of one claim, in the shape `parse_claim` accepts.
-    fn escaped_len(serialized: &str) -> usize {
-        serialized
-            .chars()
-            .map(|character| match character as u32 {
-                0..=0x7F => 1,
-                0x80..=0xFFFF => 6,
-                _ => 12,
-            })
-            .sum()
-    }
-
-    /// The projection frame has under 1% headroom at the current keep budget,
-    /// and the margin turns on a serialization choice nobody pinned.
-    ///
-    /// A worst-case legal projection is 64 claims -- the keep budget in
-    /// `notes/EVAL.md` -- each carrying the maximum 160 characters and the
-    /// maximum three locators. Written as raw UTF-8 with non-ASCII text that
-    /// is about 65,200 bytes against a 65,536-byte frame. Written with
-    /// non-ASCII escaped as `\uXXXX` the same projection is about 96,000
-    /// bytes, and overflows somewhere in the forties.
-    ///
-    /// Unlike the runtime manifest, the result frame carries no canonicality
-    /// rule: `parse_result` accepts either spelling. So whether a legal
-    /// projection fits depends on a serializer flag on the far side of the
-    /// process boundary, which no test on either side pins.
-    ///
-    /// An over-large frame is refused by the length check as `Unavailable`,
-    /// never `CapacityExceeded`. That is deliberate -- at that point a valid
-    /// oversized frame is indistinguishable from a malformed one, and the
-    /// transport must not guess -- but the two map to different
-    /// `LibraryReadError` variants, so the rebuild reports the wrong reason.
-    ///
-    /// This pins the headroom so a keep-budget or locator-cap change fails
-    /// here, where the arithmetic is written down, rather than as an
-    /// unexplained `Unavailable` on one meeting.
-    #[test]
-    fn a_worst_case_legal_projection_fits_the_frame_only_while_unescaped() {
-        let text: String = "\u{6f22}".repeat(160);
-        assert_eq!(
-            text.chars().count(),
-            160,
-            "the parser cap is 160 characters"
-        );
-        let claims: Vec<_> = (0..64_u64)
-            .map(|ordinal| {
-                serde_json::json!({
-                    "claim_ordinal": ordinal,
-                    "claim_sha256": "a".repeat(64),
-                    "claim_type": "proposal",
-                    "evidence_state": "located",
-                    "claim": text,
-                    "locators": (0..3_u64).map(|index| serde_json::json!({
-                        "turn": 999,
-                        "start": 1000 + index,
-                        "end": 2000 + index,
-                        "text_sha256": "b".repeat(64),
-                    })).collect::<Vec<_>>(),
-                })
-            })
-            .collect();
-        let document = serde_json::json!({
-            "schema": "note-projection-result/1",
-            "request_id": "11111111-1111-4111-8111-111111111111",
-            "operation": "note.project",
-            "outcome": "succeeded",
-            "projection": {
-                "schema": "note-claim-projection/1",
-                "note_json_sha256": "c".repeat(64),
-                "note_markdown_sha256": "d".repeat(64),
-                "transcript_sha256": "e".repeat(64),
-                "claims": claims,
-            },
-            "failure": Value::Null,
-        });
-        let serialized = serde_json::to_string(&document).unwrap();
-
-        let raw = serialized.len() + 1;
-        assert!(
-            raw <= MAX_PROJECTION_FRAME_BYTES,
-            "a worst-case legal projection must fit unescaped: {raw} bytes"
-        );
-        assert!(
-            MAX_PROJECTION_FRAME_BYTES - raw < MAX_PROJECTION_FRAME_BYTES / 100,
-            "headroom is under one percent; a wider budget or cap will not fit"
-        );
-        assert!(
-            escaped_len(&serialized) + 1 > MAX_PROJECTION_FRAME_BYTES,
-            "the same projection escaped does not fit, and nothing pins which is sent"
-        );
-    }
+    // The per-claim character cap this frame-capacity headroom test used to
+    // pin (`a_worst_case_legal_projection_fits_the_frame_only_while_unescaped`)
+    // is gone -- candidate-first claims are unbounded, so there is no more a
+    // knowable "worst-case legal projection" to size against. A meeting whose
+    // kept candidates run long enough can now overflow
+    // `MAX_PROJECTION_FRAME_BYTES` through ordinary claim length, not only
+    // through corruption; it is refused as `Unavailable`, the same fallback
+    // this removed test documented for the previously-hypothetical case.
 
     /// A lone surrogate never becomes a claim, because the escape never
     /// parses.
