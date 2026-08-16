@@ -1255,6 +1255,12 @@ pub fn internal_alpha_operations() -> HashSet<Operation> {
         // decision: the deterministic candidate-point assembler, moving in
         // lockstep with `worker/main.py`'s ALPHA_OPERATIONS.
         NoteCreate,
+        // NoteInspect joined the same day, promoted out of the boundary lane
+        // once the first real end-to-end run showed the standing worker
+        // refusing it under internal-alpha left every published note stuck
+        // one step short of the meeting record -- moving in lockstep with
+        // `worker/main.py`'s ALPHA_OPERATIONS.
+        NoteInspect,
     ]
     .into_iter()
     .collect()

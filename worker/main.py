@@ -48,16 +48,22 @@ _PROTOCOL_WRITE_LOCK = threading.Lock()
 # the model still runs only in the sandboxed one-shot bridge child, never in
 # this worker. The comment sits above the literal because Rust's lockstep
 # test parses the frozenset source up to its first closing parenthesis.
+# note.inspect joined 2026-08-16 with the operational close-out of the same
+# decision: it sat boundary-lane-only while note.create's publication path
+# was unproven, the same staging corpus.embed used while its model was
+# unpackaged. The first real end-to-end run showed the gap -- a published
+# note could never clear the re-inspection slice 3 requires before the
+# meeting record advances, because the standing worker refused the operation
+# outright under internal-alpha admission. Promoted for the same reason
+# corpus.embed was: the packaging it was waiting on is done.
 ALPHA_OPERATIONS = frozenset(
     {"capture.finalize", "capture.inspect", "transcript.create",
      "sitting.derive", "transcript.restore", "corpus.embed",
      "profile.choices", "profile.build", "profile.inspect", "profile.discard",
-     "note.create"}
+     "note.create", "note.inspect"}
 )
-# note.inspect stays boundary-lane only: the app inspects published notes
-# through the bridge's inspect role, not through the standing worker.
 BOUNDARY_OPERATIONS = ALPHA_OPERATIONS | frozenset(
-    {"profile.adopt", "note.inspect"}
+    {"profile.adopt"}
 )
 
 
