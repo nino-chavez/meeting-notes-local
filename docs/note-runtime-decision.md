@@ -455,3 +455,19 @@ miss most locked events; a probe confirmed the abstention is model
 judgment, not the harness. **The 12B stays; the question is closed**
 until a materially new small-model release, and the arm harness in the
 packet makes a future re-test a one-command affair per candidate.
+
+**Slice 3 landed (2026-08-16, commit a5462e4).** `accept_regeneration`
+now runs the real chain: the desktop admits the generate child per
+call from live storage (verified catalog, generate manifest), runs it
+sandboxed, parses the `note-generation-result/1` frame under a strict
+envelope (session-core `parse_note_generation_result` — request-id and
+transcript pins bound, outcome/payload coherence enforced), and hands
+the generation object verbatim to the worker's `note.create`, whose
+frozen contract and deterministic assembler own every deeper judgment.
+A `transcript-only` child outcome becomes a durable Rejected receipt
+carrying only recoverability; the published pair is re-inspected
+through the worker's `note.inspect` before the meeting record
+advances. Without an installed note model, admission refuses before
+any process is launched. Remaining: slice 4 — the UI regenerate
+control and the facade command registration, where the long-running
+generate call moves off the command thread.
