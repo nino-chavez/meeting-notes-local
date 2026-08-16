@@ -3420,3 +3420,40 @@ the preregistered content is the gates and this decision rule.
 
 Per-corpus per-candidate results append below when the runs land; one
 candidate at a time, machine to itself.
+
+### Small-model arm results — both in-runtime candidates killed
+
+Same prompts, strided offer, constrained first-token verdicts, pruner,
+and gates as the product lane; each model's own chat template rendered
+the identical system/user strings. Greedy, temperature 0. Per-corpus
+(calls, keep, pruned, recall, gate):
+
+**Qwen3-4B-Instruct-2507-4bit — killed (1 of 4).**
+- meeting 1: 83 calls, keep 5, recall 2/13 — FAIL (148 s)
+- meeting 2: 150 calls, keep 10, recall 5/13 — FAIL (352 s)
+- zoom town hall: 227 calls, keep 53, recall 10/14 — FAIL (517 s)
+- meet: 152 calls, keep 28, pruned 20, recall 13/15 — PASS (380 s)
+
+**Granite-4.0-h-micro-4bit — killed (0 of 4).**
+- meeting 1: 83 calls, keep 0, recall 0/13 — FAIL (139 s)
+- meeting 2: 150 calls, keep 1, recall 0/13 — FAIL (267 s)
+- zoom town hall: 227 calls, keep 10, recall 5/14 — FAIL (425 s)
+- meet: 152 calls, keep 4, recall 1/15 — FAIL (244 s)
+
+**The abstention is the model, not the harness.** Probe on three
+candidates the 12B officially KEPT (meeting 1): granite's top-2 next
+tokens at the forced-verdict position are exactly the verdict options
+("AB", "KEEP") — the rendering reaches the decision point cleanly —
+and its free generation is well-formed task JSON; it simply scores
+ABSTAIN above KEEP (logit gaps 3.0–9.4). Decision dumps for both
+models are in the packet (small-model-arm-*-decisions.json per corpus).
+
+**Selection under the pinned runtime is closed: the 12B stays.** Both
+in-runtime candidates fail the preregistered gates; per the decision
+rule, no adoption. The speed observation stands for the record: the 4B
+ran all four corpora in ~23 min vs ~64 for the 12B — the win is there
+if a small model ever clears quality. The one open path is
+Qwen3.5-4B (3.06 GB, vendor-benchmarked above the 12B's class), which
+requires an mlx-lm newer than the pinned 0.30.4 to load; next step is
+a research-env-only arm for it (separate venv; the product runtime pin
+stays untouched unless it passes).
