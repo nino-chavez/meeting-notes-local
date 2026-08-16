@@ -225,6 +225,12 @@
           "markdownDescription": "Enables the get_desktop_layout command without any pre-configured scope."
         },
         {
+          "description": "Enables the install_note_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-note-model",
+          "markdownDescription": "Enables the install_note_model command without any pre-configured scope."
+        },
+        {
           "description": "Enables the install_transcript_model command without any pre-configured scope.",
           "type": "string",
           "const": "allow-install-transcript-model",
@@ -289,6 +295,12 @@
           "type": "string",
           "const": "allow-library-snapshot",
           "markdownDescription": "Enables the library_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the note_model_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-note-model-settings",
+          "markdownDescription": "Enables the note_model_settings command without any pre-configured scope."
         },
         {
           "description": "Enables the open_current_transcript_file command without any pre-configured scope.",
@@ -429,6 +441,12 @@
           "markdownDescription": "Enables the regenerate_note command without any pre-configured scope."
         },
         {
+          "description": "Enables the remove_note_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-note-model",
+          "markdownDescription": "Enables the remove_note_model command without any pre-configured scope."
+        },
+        {
           "description": "Enables the remove_transcript_model command without any pre-configured scope.",
           "type": "string",
           "const": "allow-remove-transcript-model",
@@ -525,6 +543,12 @@
           "markdownDescription": "Denies the get_desktop_layout command without any pre-configured scope."
         },
         {
+          "description": "Denies the install_note_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-note-model",
+          "markdownDescription": "Denies the install_note_model command without any pre-configured scope."
+        },
+        {
           "description": "Denies the install_transcript_model command without any pre-configured scope.",
           "type": "string",
           "const": "deny-install-transcript-model",
@@ -589,6 +613,12 @@
           "type": "string",
           "const": "deny-library-snapshot",
           "markdownDescription": "Denies the library_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the note_model_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-note-model-settings",
+          "markdownDescription": "Denies the note_model_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the open_current_transcript_file command without any pre-configured scope.",
@@ -727,6 +757,12 @@
           "type": "string",
           "const": "deny-regenerate-note",
           "markdownDescription": "Denies the regenerate_note command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_note_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-note-model",
+          "markdownDescription": "Denies the remove_note_model command without any pre-configured scope."
         },
         {
           "description": "Denies the remove_transcript_model command without any pre-configured scope.",

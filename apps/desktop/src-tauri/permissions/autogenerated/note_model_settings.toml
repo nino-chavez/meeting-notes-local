@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-note-model-settings"
+description = "Enables the note_model_settings command without any pre-configured scope."
+commands.allow = ["note_model_settings"]
+
+[[permission]]
+identifier = "deny-note-model-settings"
+description = "Denies the note_model_settings command without any pre-configured scope."
+commands.deny = ["note_model_settings"]
