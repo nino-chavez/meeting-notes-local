@@ -122,6 +122,18 @@ Items no branch owns, which must not evaporate at merge:
    pinned by a characterization test and must widen when the catalog's
    sharded-weights role merges; `worker/build_manifest.py` needs the
    `note-runtime-generate.json` sibling constant.
+   **Done, 2026-08-15**: `note_runtime_models` now derives one identifier
+   per file from `catalog.note_models` (shards carry their designator:
+   `note-generator-weights-00001-of-00002`; duplicate identifiers collapse
+   the derivation to empty — honest refusal, never an ambiguous match), and
+   `build_manifest.py::note_runtime_model_id` mirrors it, each side pinned
+   to the same expected list by its own test. The catalog carries the
+   registration-pinned gemma-3-12b-it-qat-4bit entry (snapshot 66fc51ef…,
+   six files), hosted on the same R2 bucket as the whisper weights. A
+   six-file tree was measured to load and tokenize byte-identically to the
+   full snapshot on the product rendering path before the entry landed —
+   the fixed two-turn rendering never calls the tokenizer's chat template,
+   so the files the catalog cannot express are behaviorally inert.
 4. **Registration adoption**: the official gated run adopts the ±2 view,
    the ollama two-turn rendering, the MLX runtime identity, and — if the
    pruning arm passes its second-capture validation — the pruning stage,
@@ -170,12 +182,44 @@ deadline bound to the registration at startup), and the real
 enforced as a byte-identity test against `notes/product_run.py`. The
 generate manifest builder lands unwired by decision: Rust refuses an
 empty-models manifest and the signed catalog carries no note-model role
-yet, so wiring waits on the catalog entry. The future catalog entry must
-use exactly the ids Rust derives — `note-generator-config` and
-`note-generator-weights`, sorted. All lanes green post-merge.
+yet, so wiring waits on the catalog entry. All lanes green post-merge.
+(The id constraint this paragraph originally stated — exactly
+`note-generator-config` and `note-generator-weights`, sorted — described
+the pre-widening derivation; seam 3's 2026-08-15 closure in the checklist
+above owns the current per-file scheme.)
 
 Caveat carried from notes/EVAL.md: the product registration this lane
 aligns to is under an open refusal — official run 1 missed the recall
 gate at the registered ±2 window. The lane binds to the registration
 mechanism, not the numbers; an amendment moves the digest and the
 startup binding check refuses any half-updated bundle loudly.
+(Superseded 2026-08-14/15: the amended registration 98dcbbd9… holds
+official passes on four corpora; see EVAL.md.)
+
+## Merge record addendum (2026-08-15) — the catalog entry shipped
+
+The operator pointed out the hosting question answered itself: the whisper
+weights already serve from the `yawn-releases` R2 bucket, so the note model
+ships the same way. Landed as one thread: the six-file catalog entry
+(checklist item 3 above), `main()` writing the generate manifest, and the
+packaging flip —
+the five note runtime resources moved from a forbidden list to a required
+one in both Tauri configs, `prepare-preview-bundle.sh`,
+`sign-notarize.sh`, and `verify-release-bundle.py`, each flip pinned by its
+updated test. The Settings window gained a "Note model" section backed by
+three new commands (`note_model_settings`, `install_note_model`,
+`remove_note_model`); `model_download::install` was generified over
+`DownloadableModel` exactly as its trait comment documented. Unlike a
+speech model, the note model may be removed while active — "no note model"
+is an ordinary state the library renders honestly — so removal deactivates
+first (`deactivate_note_model`) and drops the cached projector admission.
+
+Hosting status at the time of this addendum: four of the six objects
+(config, weights index, tokenizer, tokenizer config) are uploaded and live
+on R2. The two weight shards (~8 GB) are **not uploaded** — the transfer was
+stopped mid-flight when the operator moved to a metered connection — and no
+public byte-count or downloaded-hash verification has run for any object.
+Until the shards land and all six objects verify against the catalog pins,
+an `install_note_model` against the published catalog fails at download or
+at digest verification; the catalog entry is code-complete but not yet
+servable. Upload and verification resume on operator clearance.

@@ -71,14 +71,21 @@ Prepare the R2 upload tree with:
 scripts/prepare-model-hosting.py \
   --q4-dir <pinned-q4-snapshot> \
   --full-dir <pinned-full-turbo-snapshot> \
+  --note-dir <pinned-gemma-note-snapshot> \
   --output <new-empty-staging-directory>
 ```
 
 The resulting `hosting-manifest.json` is an upload receipt, not runtime
-authority. Upload its four object keys to `yawn-releases` with immutable cache
-control. Verify public byte counts and full downloaded hashes before building
-the app that advertises those URLs. Do not overwrite an existing revision key;
-a changed model gets a new revision path and a newly signed app catalog.
+authority. Upload its object keys to `yawn-releases` with immutable cache
+control (`--note-dir` adds the six note-model keys; omit it to stage only the
+four transcript-model keys). Objects over wrangler's 300 MiB `r2 object put`
+ceiling — both note-model weight shards — go through the S3 API instead: the
+scoped key in 1Password ("Cloudflare yawn-app", object read/write on
+`yawn-releases`) with any S3 client, e.g. rclone with `--s3-no-check-bucket`
+(the key cannot create buckets, and the client must not try). Verify public
+byte counts and full downloaded hashes before building the app that
+advertises those URLs. Do not overwrite an existing revision key; a changed
+model gets a new revision path and a newly signed app catalog.
 
 The operator reported that the completed 0.5.6 checks passed. That report is not
 a recorded accuracy measurement: no transcript content or comparison score is

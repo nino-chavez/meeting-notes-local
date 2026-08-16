@@ -3236,3 +3236,54 @@ Worker suite after the perf fix: 99 passed, 0 failed, 59.4 s (was
 259.7 s with one timeout failure). The previously-failing refusal-path
 test passes with no test changes — its failure was the quadratic
 validation cost, not its premise.
+
+## Ship record — 2026-08-15 afternoon: catalog entry, hosting, activation surface
+
+The excluded external-publish step dissolved on operator direction: the
+whisper weights already serve from the product's public R2 bucket, so the
+note model ships through the identical channel. Operator message treated as
+the authorization the delegation had reserved.
+
+Catalog entry: `gemma-3-12b-it-qat-4bit`, revision the registration's
+snapshot pin `66fc51ef…`, six files (config, two weight shards, weights
+index, tokenizer, tokenizer config), 8,063,332,687 bytes, each sha256-pinned
+in the signed catalog and the release verifier's independent literal.
+
+File-set decision, measured before the entry was written: the catalog's
+validation admits exactly six file names of the snapshot's fourteen. A
+six-file tree was proven behaviorally identical to the full snapshot on the
+product path — same tokenizer ids over special-token, unicode, and
+control-marker samples, same BOS handling, same eight-token greedy decode
+(`KEEP` then end-of-turn) from an mlx_lm load of each tree. The excluded
+files are inert for the product because the registered `gemma3-two-turn/1`
+rendering is manual string construction: it never calls the tokenizer's
+chat template. Registration digest `98dcbbd9…` is untouched — model bytes,
+prompt rendering, view, and decoding are unchanged; the tree digest
+`48dfcf43…` remains the identity of the *research* snapshot, enforced by the
+research harness only.
+
+Wiring landed with it (commits `eca760c`, `3ee6d9f`): seam-6 widening
+(per-file note-runtime ids, shards distinct, derivation collapses to empty
+on any duplicate id; Python and Rust derivations pinned to the same list by
+paired tests), the generate manifest written by the bundle builder, the
+packaging flip (five note-runtime resources now required in both Tauri
+configs, the preview preparer, and the release verifier — previously
+forbidden), a Settings "Note model" download/remove surface, and
+`model_download::install` generified over the prepared trait. Removal is
+legal while active: deactivation clears only the note pointer, and "no note
+model" renders as the library's ordinary honest refusal.
+
+Upload verification pending at the time of this entry's first draft; the
+addendum below records the result before any of this is relied on.
+
+Addendum — hosting stopped mid-upload, 2026-08-15. Four of six objects
+are live on R2 (config, weights index, tokenizer, tokenizer config,
+each reported "Upload complete"). The two weight shards (~8 GB
+combined) are not uploaded: the operator moved to a metered connection
+and stopped the transfer; a partial multipart for shard 2 may remain
+server-side and should be cleaned before the retry. No public
+byte-count or hash verification has run for any object. Consequence:
+the shipped catalog entry is code-complete but not servable — a
+download attempt fails at the missing shards. Upload and the full
+six-object verification resume on explicit operator clearance, and
+this record is not relied on until they do.
