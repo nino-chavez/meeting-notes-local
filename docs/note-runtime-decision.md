@@ -352,7 +352,33 @@ receipts; the `checks` a product note stores come from `report()`,
 whose gates assume a model-written note (`calls`, prompt-echo,
 context), so the assembler needs either a candidate-first-native checks
 path or a deliberate satisfaction of those gates — the next design
-question, not yet decided. Memory contention is already handled: whisper's
+question, not yet decided.
+
+**Slice 2b design (decided 2026-08-16): a second evidence contract,
+not a synthesized model run.** `structured_artifact_citations`
+hard-replays extraction stage receipts — per-slice prompts, request
+schemas, model identity — none of which a deterministic points assembly
+possesses, and synthesizing them would be the same mis-attestation the
+fake claim types were rejected for. The note/2 artifact already carries
+a discriminator (`claim_evidence_contract`, single-valued until now),
+so points-notes declare `candidate-evidence/1` and the citation entry
+point dispatches on it. Its replay is stronger than storage: the
+candidate manifest is a pure function of the transcript and the
+registered product contract, so the validator regenerates it
+(`generate_manifest`, broad strategy, ±2 window), requires the stored
+`manifest_sha256` to match, resolves each point's `candidate_id` back
+to its anchor fragment, and re-derives every locator span and digest
+from the transcript itself. Claim text must equal the anchor excerpt
+verbatim. The stored `checks` object keeps the one shared verdict
+formula (`verdict()` stays the only owner): `citations` is computed for
+real by the candidate replay; gates that measure model pathologies
+record their own truthful state — `context.ok: null` (not scored — the
+established meaning for a stage that does not exist), `attribution`
+and `extraction` `applies: false`, `numbers` computed genuinely against
+the transcript text, `prompt_echo` vacuously true with its reason
+recorded. The assembler and the candidate replay both live in
+`summarize` — one owner, shipped to the worker and the validator bundle
+alike. Memory contention is already handled: whisper's
 runtime is released inside the worker before the `transcript.create`
 terminal frame, so any regeneration accepted at `TranscriptReady` or
 later starts past the release.
