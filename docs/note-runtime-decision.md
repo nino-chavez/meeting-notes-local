@@ -491,3 +491,111 @@ candidate-evidence/1 replay) → fresh `note.inspect` → published
 meeting note. What remains is operational, not structural: a real
 end-to-end run on this machine against an installed model, and the
 operator's read of a generated note.
+
+**Operational close-out (2026-08-16) — three defects found running the
+chain for real, one still blocking.** The note model was hand-installed
+against the sealed catalog digests (`gemma-3-12b-it-qat-4bit`, six
+files under `models/note.d/<id>/<revision>/`) and the packaged app was
+driven end-to-end for the first time on this machine.
+
+*Release-blocking catalog bug, fixed (commit 98102da).* The packaged
+worker's exact-shape check on the runtime catalog predated `note_models`
+joining that schema, so the shipped 0.5.7 worker refused the whole
+catalog and exited silently at startup once a note model was present.
+Widened the check plus a regression fixture; full worker suite green.
+
+*Running a local build requires the release lane's signing stage, not
+just `npm run build`.* The preview-signed dev bundle has an
+ad-hoc/linker-signed Python and an outer app with no hardened-runtime
+flag, so `SecurityCodeVerifier` correctly refuses child admission
+before any model runs. A runnable local build needs the same signing
+`scripts/sign-notarize.sh` performs minus the Apple submission: sign
+every nested Mach-O (`--options runtime --timestamp`, Python gets
+`--identifier com.ninochavez.local-meeting-notes.python-runtime` and
+the Python entitlements), refresh `app-runtime.json` and the
+`note-runtime-*.json` manifests from the signed bytes
+(`worker/build_manifest.py`, which must run *before* the outer sign —
+running it after breaks the outer seal), then sign and verify the
+outer bundle. Never replace the binary on disk under a running
+process — the kernel SIGKILLs it on the next `CODESIGNING`/"Invalid
+Page" fault; always stop the app first.
+
+*Admission defect, fixed (commit 13d1aff).* With a properly signed
+bundle, admission reached child spawn and then failed at the dynamic
+bind: `SecCodeCheckValidity` with `kSecCSMatchGuestRequirementInKernel`
+returned `errSecCSReqInvalid` for the live child. Reproduced standalone
+outside the app — same result against a fresh admission child,
+`/bin/sleep`, and the process's own self-code, on macOS 26.5.2,
+independent of which requirement was passed (a bare cdhash requirement
+failed identically to the full designated requirement). The flag has
+never worked in this app; the affected path (`drive_bridge_child` →
+`bind_live_code`) is shared by both the `project` and `generate` roles,
+so 46a3eef's admitted note projector never actually admitted a live
+child on this OS either — the library-rebuild path degrades to no
+projection, not a crash, so this was silent. Fix: dropped the flag,
+keeping the plain designated-requirement match. The residual guarantee
+against a between-checks path swap is unchanged — `bind_live` already
+re-verifies the live executable's pinned fd identity and digest
+(`verify_live_executable_file`) after the dynamic check returns.
+
+*Packaging gap, unresolved — this is what blocks the run.* With
+admission fixed, generation itself now runs the full sandboxed child
+protocol (spawn, ready, result) cleanly, but the child immediately
+refuses with `response-contract`. Traced to source: `worker/note_generator_mlx.py`
+imports `mlx_lm` to load and decode against the model, but `mlx_lm` is
+not installed anywhere in the bundled Python runtime
+(`apps/desktop/vendor/python-runtime` and the staged
+`apps/desktop/runtime/python-runtime` both carry `mlx` and
+`mlx_whisper` for transcription only). `_Session.resolve()` raises
+`ModuleNotFoundError` → the child writes `{"error": "model could not be
+loaded"}` and exits → the bridge reads a well-formed JSON line whose
+shape isn't the classifier contract → `response-contract`,
+non-recoverable. This is a first-run discovery, not a regression: no
+build has ever run this path to completion, so the dependency gap was
+never exercised. `mlx-lm==0.31.3` is what the research venv used for
+model selection (`notes/EVAL.md`), but naively `pip install`-ing it
+into the product runtime pulls a newer `mlx`/`mlx-metal` (0.29.3 →
+0.32.0) as a transitive dependency, upgrading the same package
+`mlx_whisper`'s already-shipped transcription path depends on — an
+untested, unrequested change to a working feature. There is no
+lockfile for either vendored Python runtime tree (both are
+git-ignored, machine-local); `spike/requirements.txt` pins
+`mlx-whisper`, `numpy`, `speechbrain`, `torch` and has never named
+`mlx-lm`. This is a packaging decision, not a one-line fix — see the
+options below. The end-to-end run and the operator's read of a
+generated note stay blocked until it lands.
+
+*Known gap, not addressed here.* `recover_incomplete` exists in
+session-core but the desktop never calls it, so a failed or
+interrupted generation leaves a nonterminal operation record that
+permanently refuses every later `regenerate_note` attempt for that
+meeting (`Ambiguous("another nonterminal operation already exists")`).
+Manual workaround used during this session: delete the stale directory
+under `.../operations/<uuid>/` (safe when it holds only
+`request.json`). Wiring the recovery call into the desktop coordinator
+is its own slice.
+
+**mlx-lm packaging options, priced.** Whichever is chosen, land it as
+its own slice with the arm harness re-run to confirm `mlx_whisper`
+still passes.
+
+1. *Add `mlx-lm` + transitive deps to the shared product runtime,
+   upgrading `mlx`/`mlx-metal` in the process.* Cheapest to implement —
+   one `pip install --target`, one re-sign. Cost: ~15 new packages
+   (`transformers`, `safetensors`, `sentencepiece`, `protobuf`, `typer`,
+   `rich`, …) with new compiled `.so` files into a bundle whose
+   admission model rests on signed, digest-pinned bytes — bundle-size
+   and notarization-surface growth — and an unverified `mlx_whisper`
+   run against a newer `mlx` than it shipped on.
+2. *Pin an older `mlx-lm` release compatible with the already-installed
+   `mlx==0.29.3`,* if one exists, avoiding the shared-dependency bump
+   entirely. Needs a compatibility check against the release history
+   before committing; not yet done.
+3. *Isolate the generate child's site-packages* from the transcription
+   runtime's, so `mlx-lm`'s newer `mlx` only ever loads inside the
+   sandboxed generate role and `mlx_whisper` keeps running against its
+   already-verified `mlx==0.29.3`. Avoids the cross-feature risk
+   entirely; costs a second vendored Python tree (or a second
+   site-packages root the generate child's `sys.path` is pointed at)
+   and a corresponding change to the admission/signing recipe, which
+   currently assumes one Python runtime per bundle.
