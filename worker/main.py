@@ -293,9 +293,15 @@ def external_transcript_model(
     catalog_entry = manifest["model_catalog"]
     catalog_path = manifest_path.parent / catalog_entry["path"]
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    if not isinstance(catalog, dict) or set(catalog) != {"schema", "models"}:
+    # `note_models` joined the catalog with the note-generation seam; this
+    # reader consumes only the transcript entries, so the key is admitted by
+    # shape alone and its contents are judged where they are used (the desktop
+    # verifies the whole catalog against the manifest digest before any use).
+    if not isinstance(catalog, dict) or set(catalog) - {"note_models"} != {"schema", "models"}:
         raise ValueError("transcript model catalog is malformed")
     if catalog["schema"] != "yawn-model-catalog/1" or not isinstance(catalog["models"], list):
+        raise ValueError("transcript model catalog schema is not current")
+    if "note_models" in catalog and not isinstance(catalog["note_models"], list):
         raise ValueError("transcript model catalog schema is not current")
     matches = [
         model

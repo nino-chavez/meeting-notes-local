@@ -425,6 +425,11 @@ class WorkerProtocolTests(unittest.TestCase):
                     "files": files,
                 }
             ],
+            # The shipped catalog carries note-model entries alongside the
+            # transcript entries; the transcript reader must admit the key
+            # (regression: the packaged worker refused the whole catalog the
+            # first time `note_models` appeared in it).
+            "note_models": [],
         }
         catalog_path = self.resources / "model-catalog.json"
         private_file(catalog_path, (json.dumps(catalog) + "\n").encode())
