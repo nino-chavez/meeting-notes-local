@@ -169,6 +169,13 @@ class _Session:
             )
             verdicts.append(verdict)
             last = feed(tok.encode(verdict + '"}', add_special_tokens=False))
+        # The registered batch size is 1, so this runs once per candidate and a
+        # real meeting offers up to a few hundred — mlx's allocator caches freed
+        # scratch buffers for reuse rather than returning them to the OS, and
+        # nothing here ever reuses a cache across calls (each call builds its
+        # own above), so without this the cache grows unbounded across the run
+        # instead of staying near one batch's peak.
+        mx.clear_cache()
         return verdicts
     # --- end block mirrored from notes/product_run.py MLXVerdictTransport.decide
 
