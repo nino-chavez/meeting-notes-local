@@ -496,6 +496,8 @@ fn verify_recovered_capture_receipt(
         }
         "capture-session/2" => {
             let receipt: CaptureSessionReceipt = serde_json::from_value(value)?;
+            let _quality_present = receipt.quality.is_some();
+            let _microphone_present = receipt.microphone.is_some();
             if receipt.status != CaptureSessionStatus::Complete
                 || !receipt.started_at.is_string()
                 || !receipt.finalized_at.is_string()
@@ -570,6 +572,10 @@ struct CaptureSessionReceipt {
     started_at: Value,
     finalized_at: Value,
     health: Value,
+    #[serde(default)]
+    quality: Option<Value>,
+    #[serde(default)]
+    microphone: Option<Value>,
     reconciliation: Value,
     artifacts: Vec<CaptureReceiptArtifact>,
 }
@@ -929,6 +935,111 @@ mod tests {
         meeting.artifacts.current_transcript = Some(reference("transcript/current.json", 'f'));
         meeting.lifecycle = MeetingLifecycle::TranscriptReady;
         assert!(meeting.validate("meeting-a").is_err());
+    }
+
+    #[test]
+    fn capture_session_v2_accepts_quality_and_microphone_without_relaxing_receipt_checks() {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        fn private_file(path: &Path, bytes: &[u8]) {
+            fs::write(path, bytes).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        let temporary = TempDir::new().unwrap();
+        let meeting_dir = temporary.path().join("meeting-a");
+        fs::create_dir(&meeting_dir).unwrap();
+        fs::set_permissions(&meeting_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let capture_dir = meeting_dir.join("capture");
+        fs::create_dir(&capture_dir).unwrap();
+        fs::set_permissions(&capture_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        private_file(&meeting_dir.join("attempt.json"), b"attempt");
+        private_file(&meeting_dir.join("ownership.json"), b"ownership");
+        private_file(&capture_dir.join("mic.wav"), &[0_u8; 64]);
+        private_file(&capture_dir.join("system.wav"), &[1_u8; 64]);
+
+        let mut meeting = captured();
+        meeting.artifacts.attempt = artifact_ref(&meeting_dir, "attempt.json").unwrap();
+        meeting.artifacts.ownership = Some(artifact_ref(&meeting_dir, "ownership.json").unwrap());
+        meeting.artifacts.microphone_audio =
+            Some(artifact_ref(&meeting_dir, MICROPHONE_AUDIO_PATH).unwrap());
+        meeting.artifacts.system_audio =
+            Some(artifact_ref(&meeting_dir, SYSTEM_AUDIO_PATH).unwrap());
+
+        let receipt = serde_json::json!({
+            "schema": "capture-session/2",
+            "status": "complete",
+            "started_at": "2000-01-01T00:00:00+0000",
+            "finalized_at": "2000-01-01T00:00:01+0000",
+            "health": {"schema": "capture-health/1", "usable": true},
+            "quality": {
+                "schema": "capture-quality/1",
+                "observations": {"silence": {"status": "unknown"}}
+            },
+            "microphone": {
+                "schema": "capture-microphone/1",
+                "index": 4,
+                "name": "Fixture microphone"
+            },
+            "reconciliation": {"legs": {}},
+            "artifacts": [
+                {
+                    "name": "mic.wav",
+                    "bytes": 64,
+                    "sha256": meeting.artifacts.microphone_audio.as_ref().unwrap().sha256,
+                    "mode": "0600"
+                },
+                {
+                    "name": "system.wav",
+                    "bytes": 64,
+                    "sha256": meeting.artifacts.system_audio.as_ref().unwrap().sha256,
+                    "mode": "0600"
+                }
+            ]
+        });
+        private_file(
+            &capture_dir.join("session.json"),
+            serde_json::to_string_pretty(&receipt).unwrap().as_bytes(),
+        );
+        meeting.artifacts.capture_session =
+            Some(artifact_ref(&meeting_dir, "capture/session.json").unwrap());
+
+        verify_recovered_capture_receipt(&meeting_dir, &meeting).unwrap();
+
+        // Omitting the new siblings remains valid for legacy capture-session/2.
+        let mut legacy = receipt.clone();
+        legacy.as_object_mut().unwrap().remove("quality");
+        legacy.as_object_mut().unwrap().remove("microphone");
+        private_file(
+            &capture_dir.join("session.json"),
+            serde_json::to_string_pretty(&legacy).unwrap().as_bytes(),
+        );
+        meeting.artifacts.capture_session =
+            Some(artifact_ref(&meeting_dir, "capture/session.json").unwrap());
+        verify_recovered_capture_receipt(&meeting_dir, &meeting).unwrap();
+
+        // The closed receipt still refuses an unrelated sibling.
+        let mut unknown = legacy;
+        unknown["unexpected"] = serde_json::json!(true);
+        private_file(
+            &capture_dir.join("session.json"),
+            serde_json::to_string_pretty(&unknown).unwrap().as_bytes(),
+        );
+        meeting.artifacts.capture_session =
+            Some(artifact_ref(&meeting_dir, "capture/session.json").unwrap());
+        assert!(verify_recovered_capture_receipt(&meeting_dir, &meeting).is_err());
+
+        // Receipt parsing never substitutes for the existing byte/hash checks.
+        private_file(
+            &capture_dir.join("session.json"),
+            serde_json::to_string_pretty(&receipt).unwrap().as_bytes(),
+        );
+        private_file(&capture_dir.join("mic.wav"), &[9_u8; 64]);
+        meeting.artifacts.capture_session =
+            Some(artifact_ref(&meeting_dir, "capture/session.json").unwrap());
+        assert!(verify_recovered_capture_receipt(&meeting_dir, &meeting).is_err());
     }
 
     #[test]
