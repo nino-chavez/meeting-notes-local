@@ -55,6 +55,7 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "operator_note",
     "save_operator_note",
     "open_current_transcript_file",
+    "restore_withheld_turn",
     "regenerate_note",
 ];
 

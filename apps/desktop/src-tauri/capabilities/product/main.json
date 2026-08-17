@@ -34,7 +34,7 @@
     "allow-operator-note",
     "allow-save-operator-note",
     "allow-open-current-transcript-file",
-    "allow-regenerate-note",
-    "allow-restore-withheld-turn"
+    "allow-restore-withheld-turn",
+    "allow-regenerate-note"
   ]
 }

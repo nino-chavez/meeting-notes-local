@@ -33,6 +33,7 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "operator_note",
     "save_operator_note",
     "open_current_transcript_file",
+    "restore_withheld_turn",
     // Admitted with the generation invocation chain (docs/
     // note-runtime-decision.md, slice 4): the rendered control can reach a
     // terminal receipt now, so the command joins the pinned product set.
@@ -65,6 +66,7 @@ const MAIN_PERMISSIONS: &[&str] = &[
     "allow-operator-note",
     "allow-save-operator-note",
     "allow-open-current-transcript-file",
+    "allow-restore-withheld-turn",
     "allow-regenerate-note",
 ];
 
