@@ -671,15 +671,6 @@ function renderGenerateNote(note, recovery = meetingRecoveryPresentation(note, s
   if (recovery && recovery.state !== "audio-released") return "";
   const control = noteGenerationPresentation(note, state.generatingMeetingId);
   if (!control) return "";
-  const correctionsPendingProjection = state.selected?.transcript?.turns?.some((turn) => turn.speakerCorrected);
-  if (correctionsPendingProjection) {
-    return `
-      <section class="note-section generate-note-section" aria-label="Generate a meeting note">
-        <button class="button button-primary" type="button" disabled>${escapeHtml(control.label)}</button>
-        <p class="note-editor-help">Speaker-name corrections are saved for review, but note regeneration does not use them yet. The existing note was not replaced.</p>
-      </section>
-    `;
-  }
   return `
     <section class="note-section generate-note-section" aria-label="Generate a meeting note">
       <button class="button button-primary" type="button" data-action="${control.action}" ${control.disabled ? "disabled" : ""}>${escapeHtml(control.label)}</button>

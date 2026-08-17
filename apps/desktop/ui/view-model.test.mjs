@@ -267,14 +267,12 @@ test("released audio remains visible even when a usable note is present", () => 
   assert.equal(recovery.action, null);
 });
 
-test("speaker correction pending keeps the current note and has no premature generation action", () => {
+test("speaker corrections no longer create a recovery block before note generation", () => {
   const recovery = meetingRecoveryPresentation({
     state: "ready",
     meetingId: "m-1",
     regenerationSourceSha256: "a".repeat(64),
     claims: [{ claimType: "summary", claim: "The current note." }],
   }, { state: "transcript", turns: [{ speakerCorrected: true }] });
-  assert.equal(recovery.state, "speaker-correction-pending");
-  assert.equal(recovery.action, null);
-  assert.match(recovery.detail, /current note stays unchanged/);
+  assert.equal(recovery, null);
 });

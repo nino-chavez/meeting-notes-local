@@ -309,8 +309,6 @@ export function meetingRecoveryPresentation(note, transcript, generatingMeetingI
     && Boolean(meetingId);
   const transcriptState = transcript?.state || "";
   const transcriptUnavailable = ["stale", "unavailable"].includes(transcriptState);
-  const correctionPending = Array.isArray(transcript?.turns)
-    && transcript.turns.some((turn) => turn?.speakerCorrected);
   const generating = Boolean(meetingId) && generatingMeetingId === meetingId;
   const hasUsableNote = Array.isArray(note?.claims) && note.claims.length > 0;
 
@@ -322,18 +320,6 @@ export function meetingRecoveryPresentation(note, transcript, generatingMeetingI
       detail: hasUsableNote
         ? "Yawn is trying again. Your current note stays in place until a replacement passes every check."
         : "Yawn is trying again. Your transcript stays available while the note is prepared.",
-      action: null,
-    };
-  }
-
-  if (correctionPending) {
-    return {
-      state: "speaker-correction-pending",
-      tone: "attention",
-      title: "Speaker corrections are saved.",
-      detail: hasUsableNote
-        ? "The corrected transcript remains visible. Your current note stays unchanged until note generation uses those corrections."
-        : "The corrected transcript remains visible. Note generation is not available for this correction yet.",
       action: null,
     };
   }
