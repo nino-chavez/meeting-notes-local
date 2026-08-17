@@ -43,18 +43,14 @@ const PRODUCT_COMMANDS: &[&str] = &[
     // note-runtime-decision.md, slice 4): the rendered control can reach a
     // terminal receipt now, so the command joins the pinned product set.
     "regenerate_note",
-    // The next webview packet owns invoking these. They are admitted here so
-    // the native contract and its capabilities land atomically first.
+    // Retry creation, resume, and decision are all invoked by the comparison
+    // sheet and therefore belong to the pinned product command set.
     "transcript_retry_start",
     "transcript_retry_pending",
     "transcript_retry_decide",
 ];
 
-const NATIVE_ONLY_COMMANDS: &[&str] = &[
-    "transcript_retry_start",
-    "transcript_retry_pending",
-    "transcript_retry_decide",
-];
+const NATIVE_ONLY_COMMANDS: &[&str] = &[];
 
 const MAIN_PERMISSIONS: &[&str] = &[
     "core:window:allow-start-dragging",
