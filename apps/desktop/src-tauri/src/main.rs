@@ -278,8 +278,8 @@ impl RetainedAudioPlayback {
         }
     }
 
-    fn is_running(&mut self) -> bool {
-        self.child.try_wait().ok().flatten().is_none()
+    fn poll(&mut self) -> io::Result<bool> {
+        self.child.try_wait().map(|status| status.is_none())
     }
 
     fn stop_and_reap(&mut self) {
@@ -356,12 +356,25 @@ fn owned_audio_playback_status(state: &ApplicationState) -> RetainedAudioPlaybac
     let Some(playback) = slot.as_mut() else {
         return audio_playback_response("idle", None, "No recording is playing.");
     };
-    if playback.is_running() {
-        return audio_playback_response(
-            "playing",
-            Some(playback.source_name()),
-            "Playing retained audio.",
-        );
+    match playback.poll() {
+        Ok(true) => {
+            return audio_playback_response(
+                "playing",
+                Some(playback.source_name()),
+                "Playing retained audio.",
+            );
+        }
+        Err(_) => {
+            if let Some(mut playback) = slot.take() {
+                playback.stop_and_reap();
+            }
+            return audio_playback_response(
+                "unavailable",
+                None,
+                "Retained audio is unavailable. Reopen Library and try again.",
+            );
+        }
+        Ok(false) => {}
     }
     slot.take();
     audio_playback_response("completed", None, "The recording finished.")
