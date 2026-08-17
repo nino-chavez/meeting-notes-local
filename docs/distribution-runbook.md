@@ -560,6 +560,48 @@ RESULTS.md when it arrives. Admission of the encoder is not admission of
 enrolment: the recorder and profile operations stay unregistered until their
 own operator decisions.
 
+## Local Developer ID gate — signed, not released
+
+Use this lane when the app needs the real Developer ID and hardened-runtime
+shape for local verification, but no release has been authorized:
+
+```bash
+scripts/sign-notarize.sh local --admission internal-alpha \
+  "target/release/bundle/macos/Yawn.app"
+```
+
+Use `--admission product` only for a product-admission runtime. The admission
+is mandatory so the command cannot silently choose a wider runtime contract.
+
+The lane runs the same nested signing, manifest refresh, outer signing, deep
+signature check, and signed runtime verifier used before a release. It then
+exits. It does not check the notary profile, submit to Apple for notarization,
+staple, build or sign a DMG, run Gatekeeper, install, or replace an app. The
+default target is the generated app under `target/release/bundle/macos`; do not
+pass an installed app path unless modifying that exact installation is the
+explicit job.
+
+This lane is local in scope, not offline. `codesign --timestamp` contacts
+Apple's timestamp authority. The completion line is deliberately bounded:
+
+```text
+DONE: locally signed and verified app (not notarized or packaged)
+```
+
+On 2026-08-17, the `internal-alpha` lane at commit `644aaaf` signed and verified
+the current unreleased source build, version 0.5.8, at
+`target/release/bundle/macos/Yawn.app`. The app source was built at commit
+`97ff8c9`; this is not the released 0.5.8 artifact recorded at the top of this
+runbook. The verifier confirmed 169 arm64-compatible Mach-O files, identifier
+`com.ninochavez.local-meeting-notes`, Team `34VZ63G58M`, Developer ID authority,
+and the hardened-runtime flag. The signed outer bundle's CDHash is
+`5b878972e00a7a42657fda2abf06076f00b388eb`.
+
+The recorded before/after comparison found the installed
+`/Applications/Yawn.app` binary and the existing DMG unchanged by inode, size,
+and modification time. This receipt is not evidence of notarization,
+installation, publication, or shipment.
+
 ## Check Apple release access
 
 Run the host-level preflight:

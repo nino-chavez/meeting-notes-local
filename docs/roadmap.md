@@ -379,13 +379,30 @@ keep, promote, and post-promotion note state still lack rendered evidence. No
 real meeting audio was played, no private content was reproduced, no field was
 edited, and no permission was accepted to manufacture a passing check.
 
+**Developer ID-signed local-bundle receipt — 2026-08-17.** The unreleased source
+build at `target/release/bundle/macos/Yawn.app`, built from app source commit
+`97ff8c9`, passed the `internal-alpha` admission check. The bounded local lane
+then signed 169 Mach-O files with Developer ID and hardened runtime, rebuilt the
+runtime manifest from those signed bytes, signed the outer bundle, and passed
+strict signed-bundle verification. The verifier confirmed identifier
+`com.ninochavez.local-meeting-notes`, Team `34VZ63G58M`, and the hardened-runtime
+flag. The signed outer bundle's CDHash is
+`5b878972e00a7a42657fda2abf06076f00b388eb`.
+
+This is signed local evidence, not a release. The lane did not check a notary
+profile, submit to Apple for notarization, staple, build a DMG, run Gatekeeper,
+install, or replace an app. The recorded before/after comparison found the
+existing DMG and checksum unchanged by inode, size, and modification time. It
+found the same for the installed `/Applications/Yawn.app` binary. Developer ID
+signing still uses Apple's secure timestamp service, so “local” does not mean
+offline.
+
 **Remaining release gate.** The base completed-meeting reopen and Back journey
-now passes in the separately identified Preview package. The production 0.5.8
-bundle has not been signed, installed, or substituted for
-`/Applications/Yawn.app`. The remaining stateful journeys above require a
-disposable fixture or explicit human review, followed by the same walk against
-the exact installed production package, before these changes can be called
-shipped.
+now passes in the separately identified Preview package. The Developer
+ID-signed local bundle remains unnotarized and uninstalled. The remaining
+stateful journeys above require a disposable fixture or explicit human review,
+followed by the same walk against the exact installed production package,
+before these changes can be called shipped.
 
 **Remaining slice 1b gate.** Source acceptance is complete: note generation uses
 the corrected attribution while source links stay bound to the retained
