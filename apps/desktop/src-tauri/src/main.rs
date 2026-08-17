@@ -474,14 +474,6 @@ struct RetryTranscriptProjection {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RetryQualityProjection {
-    state: &'static str,
-    observations: Vec<String>,
-    message: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct RetryComparisonResponse {
     meeting_id: Uuid,
     operation_id: Uuid,
@@ -489,7 +481,7 @@ struct RetryComparisonResponse {
     candidate_transcript_sha256: String,
     current: RetryTranscriptProjection,
     candidate: RetryTranscriptProjection,
-    quality: RetryQualityProjection,
+    quality: local_meeting_notes_session_core::capture_quality::CaptureQualityProjection,
 }
 
 #[derive(Deserialize)]
@@ -5643,6 +5635,14 @@ fn retry_comparison_response(
         &operation.meeting_id.to_string(),
         &operation.candidate_transcript,
     )?;
+    let quality = local_meeting_notes_session_core::capture_quality::project_capture_quality(
+        &directory,
+        &meeting,
+    )
+    .map_err(|_| {
+        "Recording-quality evidence changed while opening this retry. Reopen the meeting and try again."
+            .to_string()
+    })?;
     Ok(RetryComparisonResponse {
         meeting_id: operation.meeting_id,
         operation_id: operation.operation_id,
@@ -5656,11 +5656,7 @@ fn retry_comparison_response(
             turns: candidate_turns,
             warnings: candidate_warnings,
         },
-        quality: RetryQualityProjection {
-            state: "unavailable",
-            observations: Vec::new(),
-            message: "Transcript quality comparison is unavailable in this build.".into(),
-        },
+        quality,
     })
 }
 
