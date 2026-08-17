@@ -20,6 +20,7 @@ import {
   shouldPollSnapshot,
   transcriptPlainText,
   transcriptRetryQualityPresentation,
+  transcriptRetryQualityKindLabel,
   transcriptSpeakerLabel,
   transcriptRetryPresentation,
   transcriptTurnsForSourceSpeaker,
@@ -268,21 +269,29 @@ test("retry quality keeps canonical observation labels from the reader projectio
     state: "available",
     message: "Capture checks are available.",
     observations: [
-      { kind: "Silence", status: "unknown", message: "No silence assessment was recorded." },
-      { kind: "Microphone", status: "ok", message: "The microphone was available." },
+      { kind: "silence", status: "unknown", message: "No silence assessment was recorded." },
+      { kind: "clipping", status: "ok", message: "No clipping was detected." },
     ],
   }), {
     state: "available",
     message: "Capture checks are available.",
     observations: [
       { kind: "Silence", detail: "No silence assessment was recorded." },
-      { kind: "Microphone", detail: "The microphone was available." },
+      { kind: "Clipping", detail: "No clipping was detected." },
     ],
   });
   assert.deepEqual(transcriptRetryQualityPresentation({
     observations: { silence: { status: "unknown" } },
-  }).observations, [{ kind: "silence", detail: "unknown" }]);
+  }).observations, [{ kind: "Silence", detail: "unknown" }]);
   assert.equal(transcriptRetryQualityPresentation().message, "Capture-quality details are unavailable for this retry.");
+});
+
+test("retry quality uses closed labels and keeps unknown kinds safe", () => {
+  assert.equal(transcriptRetryQualityKindLabel("silence"), "Silence");
+  assert.equal(transcriptRetryQualityKindLabel("clipping"), "Clipping");
+  assert.equal(transcriptRetryQualityKindLabel("low-input"), "Low input");
+  assert.equal(transcriptRetryQualityKindLabel("background-noise"), "Background noise");
+  assert.equal(transcriptRetryQualityKindLabel("<img src=x onerror=alert(1)>"), "Observation");
 });
 
 test("retry comparison UI keeps the decision explicit and uses exact backend commands", async () => {

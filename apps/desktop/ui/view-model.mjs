@@ -375,16 +375,26 @@ export function transcriptRetryQualityPresentation(quality = null) {
     : "Capture-quality details are unavailable for this retry.";
   const observations = Array.isArray(quality?.observations)
     ? quality.observations.map((observation) => ({
-      kind: typeof observation?.kind === "string" && observation.kind ? observation.kind : "Observation",
+      kind: transcriptRetryQualityKindLabel(observation?.kind),
       detail: observation?.message || observation?.detail || observation?.status || "Observed",
     }))
     : quality?.observations && typeof quality.observations === "object"
       ? Object.entries(quality.observations).map(([kind, observation]) => ({
-        kind,
+        kind: transcriptRetryQualityKindLabel(kind),
         detail: observation?.message || observation?.detail || observation?.status || observation || "Observed",
       }))
       : [];
   return { state, message, observations };
+}
+
+export function transcriptRetryQualityKindLabel(kind) {
+  const labels = {
+    silence: "Silence",
+    clipping: "Clipping",
+    "low-input": "Low input",
+    "background-noise": "Background noise",
+  };
+  return labels[kind] || "Observation";
 }
 
 // The generate control renders only from the note response's own eligibility
