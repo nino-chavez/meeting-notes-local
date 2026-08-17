@@ -21,6 +21,8 @@ from .product_contracts import (
     transcript_view_digest,
     validate_note_create_arguments,
     validate_note_create_join,
+    validate_transcript_retry_arguments,
+    validate_transcript_retry_join,
     validate_transcript_restore_arguments,
     validate_transcript_restore_join,
     validate_transcript_view,
@@ -491,6 +493,227 @@ def transcript_create(
         gate_filter=_installed_voiceprint_gate(root, encoder_digest, encoder_path),
     )
     return {"transcript": transcript_digest}
+
+
+def _retry_artifact_reference(
+    artifacts: dict,
+    name: str,
+    relative_path: str,
+) -> str:
+    reference = artifacts.get(name)
+    if not isinstance(reference, dict) or set(reference) != {"relative_path", "sha256"}:
+        raise AdapterRefused(f"meeting receipt has no exact {name} reference")
+    digest = content_digest_id(reference["sha256"], f"{name} digest")
+    if reference["relative_path"] != relative_path:
+        raise AdapterRefused(f"meeting receipt {name} path is not canonical")
+    return digest
+
+
+def _retry_source_bindings(root: Path, values: dict) -> dict[str, tuple[Path, str]]:
+    """Resolve the exact retained sources a retry is allowed to read.
+
+    This is intentionally separate from transcript.create. A create operation
+    may work from a newly completed capture; a retry may only re-run immutable
+    transcription against a still-retained meeting receipt and its current
+    transcript pointer.
+    """
+    meeting_id = values["meeting_id"]
+    meeting_path = resolve_below(root, "meetings", meeting_id, "meeting.json")
+    try:
+        meeting = json.loads(
+            read_private_file(
+                meeting_path,
+                max_bytes=MAX_MEETING_RECEIPT_BYTES,
+                label="meeting receipt",
+            )
+        )
+    except (StorageRefused, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AdapterRefused("meeting receipt is not valid UTF-8 JSON") from exc
+    if (
+        not isinstance(meeting, dict)
+        or set(meeting)
+        != {
+            "schema",
+            "meeting_id",
+            "lifecycle",
+            "retention",
+            "artifacts",
+            "pending_storage_operation",
+        }
+        or meeting.get("schema") != "meeting/2"
+        or meeting.get("meeting_id") != meeting_id
+        or not isinstance(meeting.get("retention"), dict)
+        or set(meeting["retention"])
+        != {
+            "rule",
+            "policy_sha256",
+            "next_deletion_at_epoch_seconds",
+            "state",
+            "deletion_receipt",
+        }
+        or meeting["retention"].get("state") != "retained"
+        or meeting.get("pending_storage_operation") is not None
+        or not isinstance(meeting.get("artifacts"), dict)
+        or set(meeting["artifacts"])
+        != {
+            "attempt",
+            "ownership",
+            "capture_session",
+            "microphone_audio",
+            "system_audio",
+            "current_transcript",
+            "current_note",
+        }
+    ):
+        raise AdapterRefused("meeting receipt does not retain an exact retry source set")
+
+    artifacts = meeting["artifacts"]
+    bindings = {
+        "source-transcript": (
+            _transcript_path(root, meeting_id, values["source_transcript_sha256"]),
+            _retry_artifact_reference(
+                artifacts,
+                "current_transcript",
+                f"transcript/{values['source_transcript_sha256']}.json",
+            ),
+        ),
+        "capture-session": (
+            resolve_below(root, "meetings", meeting_id, "capture", "session.json"),
+            _retry_artifact_reference(
+                artifacts, "capture_session", "capture/session.json"
+            ),
+        ),
+        "capture-mic": (
+            resolve_below(root, "meetings", meeting_id, "capture", "mic.wav"),
+            _retry_artifact_reference(
+                artifacts, "microphone_audio", "capture/mic.wav"
+            ),
+        ),
+        "capture-system": (
+            resolve_below(root, "meetings", meeting_id, "capture", "system.wav"),
+            _retry_artifact_reference(
+                artifacts, "system_audio", "capture/system.wav"
+            ),
+        ),
+    }
+    requested = {
+        "source-transcript": values["source_transcript_sha256"],
+        "capture-session": values["capture_session_sha256"],
+        "capture-mic": values["microphone_audio_sha256"],
+        "capture-system": values["system_audio_sha256"],
+    }
+    for name, (_, digest) in bindings.items():
+        if digest != requested[name]:
+            raise AdapterRefused(f"meeting receipt {name} differs from retry request")
+    return bindings
+
+
+def _stable_private_digest(path: Path, expected: str, label: str) -> str:
+    """Hash a retained source without accepting replacement during the read."""
+    _private_regular_file(path, label)
+    try:
+        before = path.stat()
+        digest = sha256(path)
+        after = path.stat()
+    except OSError as exc:
+        raise AdapterRefused(f"{label} is missing or unsafe ({exc})") from None
+    if (
+        before.st_dev != after.st_dev
+        or before.st_ino != after.st_ino
+        or before.st_mode != after.st_mode
+        or before.st_uid != after.st_uid
+        or before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+    ):
+        raise AdapterRefused(f"{label} changed while being read")
+    if digest != expected:
+        raise AdapterRefused(f"{label} changed from its retained digest")
+    return digest
+
+
+def _read_retry_sources(bindings: dict[str, tuple[Path, str]]) -> dict[str, str]:
+    snapshots: dict[str, str] = {}
+    for name, (path, expected) in bindings.items():
+        _private_regular_file(path, name)
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise AdapterRefused(f"{name} is missing or unsafe ({exc})") from None
+        if name == "source-transcript" and size > MAX_TRANSCRIPT_REVISION_BYTES:
+            raise AdapterRefused("source-transcript exceeds its bounded read limit")
+        if name == "capture-session" and size > MAX_MEETING_RECEIPT_BYTES:
+            raise AdapterRefused("capture-session exceeds its bounded read limit")
+        snapshots[name] = _stable_private_digest(path, expected, name)
+    return snapshots
+
+
+def transcript_retry(
+    root: Path,
+    arguments: object,
+    *,
+    admission: str,
+    model_dir: Path | None,
+    encoder_digest: str,
+    encoder_path: Path | None = None,
+) -> dict[str, str]:
+    """Create an uncommitted immutable transcript candidate from retained audio."""
+    root = require_private_root(root)
+    try:
+        values = validate_transcript_retry_arguments(arguments)
+    except ProductContractRefused as exc:
+        raise AdapterRefused(str(exc)) from None
+    if admission not in {"internal-alpha", "product"} or model_dir is None:
+        raise AdapterRefused("runtime admission lacks the fixed transcript model")
+
+    bindings = _retry_source_bindings(root, values)
+    before = _read_retry_sources(bindings)
+    capture_dir = _meeting_capture(root, values["meeting_id"])
+    target_dir = resolve_below(root, "meetings", values["meeting_id"], "transcript")
+    private_directory(target_dir)
+    from verify_capture import verify_acquisition
+    from .transcription import create_transcript_revision
+
+    try:
+        verify_acquisition(capture_dir)
+    except (OSError, ValueError, SystemExit) as exc:
+        raise AdapterRefused(f"retained capture is invalid ({exc})") from None
+    candidate_digest, candidate_path = create_transcript_revision(
+        capture_dir,
+        target_dir,
+        model_dir,
+        gate_filter=_installed_voiceprint_gate(root, encoder_digest, encoder_path),
+    )
+    candidate_digest = content_digest_id(
+        candidate_digest, "candidate transcript digest"
+    )
+    expected_candidate_path = _transcript_path(root, values["meeting_id"], candidate_digest)
+    if candidate_path != expected_candidate_path:
+        raise AdapterRefused("candidate transcript path is not canonical")
+    after = _read_retry_sources(bindings)
+    if after != before:
+        raise AdapterRefused("retry changed or raced a retained source")
+    try:
+        candidate = read_private_file(
+            expected_candidate_path,
+            max_bytes=MAX_TRANSCRIPT_REVISION_BYTES,
+            label="candidate transcript",
+        )
+    except StorageRefused as exc:
+        raise AdapterRefused(str(exc)) from None
+    if hashlib.sha256(candidate).hexdigest() != candidate_digest:
+        raise AdapterRefused("candidate transcript changed from its content address")
+    digests = {
+        "candidate-transcript": candidate_digest,
+        "source-transcript": after["source-transcript"],
+        "capture-session": after["capture-session"],
+        "capture-mic": after["capture-mic"],
+        "capture-system": after["capture-system"],
+    }
+    try:
+        validate_transcript_retry_join(values, digests)
+    except ProductContractRefused as exc:
+        raise AdapterRefused(str(exc)) from None
+    return digests
 
 
 def _canonical_sitting_id(value: object) -> str:
@@ -1567,6 +1790,14 @@ def dispatch(
         "profile.discard": lambda: profile_discard(root, arguments),
         "capture.inspect": lambda: capture_inspect(root, arguments),
         "transcript.create": lambda: transcript_create(
+            root,
+            arguments,
+            admission=admission,
+            model_dir=model_dir,
+            encoder_digest=encoder_digest,
+            encoder_path=encoder_path,
+        ),
+        "transcript.retry": lambda: transcript_retry(
             root,
             arguments,
             admission=admission,

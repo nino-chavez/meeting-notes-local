@@ -92,6 +92,35 @@ class TranscriptionTests(unittest.TestCase):
         self.assertFalse((self.capture / "transcript.json").exists())
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_refuses_an_existing_different_revision_without_overwrite(self) -> None:
+        digest, path = create_transcript_revision(
+            self.capture,
+            self.root / "transcript",
+            self.model,
+            transcribe_audio=self.fake_transcribe,
+            voicing_filter=self.keep,
+            bleed_filter=self.keep,
+        )
+        path.unlink()
+        conflicting = b'{"not":"the transcript named by this digest"}\n'
+        with open_private_binary(path) as handle:
+            handle.write(conflicting)
+
+        with self.assertRaisesRegex(
+            TranscriptionRefused, "existing transcript revision disagrees"
+        ):
+            create_transcript_revision(
+                self.capture,
+                self.root / "transcript",
+                self.model,
+                transcribe_audio=self.fake_transcribe,
+                voicing_filter=self.keep,
+                bleed_filter=self.keep,
+            )
+
+        self.assertEqual(path.name, f"{digest}.json")
+        self.assertEqual(path.read_bytes(), conflicting)
+
     def test_partial_mic_bleed_withdraws_channel_attribution_during_overlap(self) -> None:
         def overlapping_transcribe(audio, _model, _language):
             if float(audio[0]) < 0.02:

@@ -57,7 +57,7 @@ _PROTOCOL_WRITE_LOCK = threading.Lock()
 # outright under internal-alpha admission. Promoted for the same reason
 # corpus.embed was: the packaging it was waiting on is done.
 ALPHA_OPERATIONS = frozenset(
-    {"capture.finalize", "capture.inspect", "transcript.create",
+    {"capture.finalize", "capture.inspect", "transcript.create", "transcript.retry",
      "sitting.derive", "transcript.restore", "corpus.embed",
      "profile.choices", "profile.build", "profile.inspect", "profile.discard",
      "note.create", "note.inspect"}
@@ -123,7 +123,7 @@ def start_transcription_heartbeat(
     *,
     protocol_output,
 ) -> tuple[threading.Event, threading.Thread] | None:
-    if operation != "transcript.create" or not isinstance(arguments, dict):
+    if operation not in {"transcript.create", "transcript.retry"} or not isinstance(arguments, dict):
         return None
     meeting_id = arguments.get("meeting_id")
     if not isinstance(meeting_id, str):

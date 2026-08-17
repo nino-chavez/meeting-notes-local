@@ -138,6 +138,27 @@ def validate_transcript_restore_arguments(value: object) -> dict:
     return arguments
 
 
+def validate_transcript_retry_arguments(value: object) -> dict:
+    """Close a retry to the current transcript and retained capture bytes."""
+    arguments = _exact_object(
+        value,
+        {
+            "meeting_id",
+            "source_transcript_sha256",
+            "capture_session_sha256",
+            "microphone_audio_sha256",
+            "system_audio_sha256",
+        },
+        "transcript.retry arguments",
+    )
+    _uuid(arguments["meeting_id"], "meeting_id")
+    _digest(arguments["source_transcript_sha256"], "source_transcript_sha256")
+    _digest(arguments["capture_session_sha256"], "capture_session_sha256")
+    _digest(arguments["microphone_audio_sha256"], "microphone_audio_sha256")
+    _digest(arguments["system_audio_sha256"], "system_audio_sha256")
+    return arguments
+
+
 def validate_note_create_arguments(value: object) -> dict:
     """Admit both note.create shapes: bare, and carrying a generation payload.
 
@@ -276,6 +297,42 @@ def validate_transcript_restore_digests(
     return digests
 
 
+def validate_transcript_retry_digests(
+    value: object, arguments: object
+) -> dict:
+    requested = validate_transcript_retry_arguments(arguments)
+    digests = _exact_object(
+        value,
+        {
+            "candidate-transcript",
+            "source-transcript",
+            "capture-session",
+            "capture-mic",
+            "capture-system",
+        },
+        "transcript.retry result digests",
+    )
+    for name, digest in digests.items():
+        _digest(digest, f"transcript.retry {name} digest")
+    if digests["source-transcript"] != requested["source_transcript_sha256"]:
+        raise ProductContractRefused(
+            "transcript.retry result differs from its requested current transcript"
+        )
+    if digests["capture-session"] != requested["capture_session_sha256"]:
+        raise ProductContractRefused(
+            "transcript.retry result differs from its requested capture session"
+        )
+    if digests["capture-mic"] != requested["microphone_audio_sha256"]:
+        raise ProductContractRefused(
+            "transcript.retry result differs from its requested microphone audio"
+        )
+    if digests["capture-system"] != requested["system_audio_sha256"]:
+        raise ProductContractRefused(
+            "transcript.retry result differs from its requested system audio"
+        )
+    return digests
+
+
 def validate_note_create_digests(value: object, source_transcript_sha256: str) -> dict:
     digests = _exact_object(
         value,
@@ -311,6 +368,14 @@ def validate_transcript_restore_join(
             "transcript.restore digests disagree with authoritative artifacts"
         )
     return arguments, view, digests
+
+
+def validate_transcript_retry_join(
+    arguments_value: object, digests_value: object
+) -> tuple[dict, dict]:
+    arguments = validate_transcript_retry_arguments(arguments_value)
+    digests = validate_transcript_retry_digests(digests_value, arguments)
+    return arguments, digests
 
 
 def validate_note_create_join(

@@ -32,6 +32,8 @@ pub enum Operation {
     SittingDerive,
     #[serde(rename = "transcript.create")]
     TranscriptCreate,
+    #[serde(rename = "transcript.retry")]
+    TranscriptRetry,
     #[serde(rename = "transcript.restore")]
     TranscriptRestore,
     #[serde(rename = "note.create")]
@@ -269,7 +271,10 @@ impl RequestTracker {
             return Err(ProtocolError::DuplicateRequest);
         }
         let meeting_id = match command.operation {
-            Operation::CaptureStart | Operation::TranscriptCreate | Operation::NoteCreate => {
+            Operation::CaptureStart
+            | Operation::TranscriptCreate
+            | Operation::TranscriptRetry
+            | Operation::NoteCreate => {
                 let value = command
                     .arguments
                     .get("meeting_id")
@@ -309,7 +314,9 @@ impl RequestTracker {
                 pending.saw_recording = true;
                 Ok(())
             }
-            Operation::TranscriptCreate if progress.state == CaptureProgressState::Transcribing => {
+            Operation::TranscriptCreate | Operation::TranscriptRetry
+                if progress.state == CaptureProgressState::Transcribing =>
+            {
                 // A transcription heartbeat confirms the worker still owns the
                 // request. It is intentionally repeatable and carries no
                 // fabricated completion estimate.
@@ -461,6 +468,39 @@ mod tests {
             schema: "worker-command/2",
             request_id,
             operation: Operation::TranscriptCreate,
+            arguments: serde_json::json!({"meeting_id": meeting_id}),
+        };
+        let result = WorkerResult {
+            schema: ResultSchema::V2,
+            request_id,
+            ok: true,
+            code: None,
+            recoverable: None,
+            artifact_digests: HashMap::new(),
+        };
+        let heartbeat = WorkerProgress {
+            schema: WorkerEventSchema::V2,
+            request_id,
+            event: ProgressEvent::CaptureState,
+            state: CaptureProgressState::Transcribing,
+            meeting_id,
+        };
+
+        let mut tracker = RequestTracker::default();
+        tracker.register(&command).unwrap();
+        tracker.progress(&heartbeat).unwrap();
+        tracker.progress(&heartbeat).unwrap();
+        tracker.terminal(&result).unwrap();
+    }
+
+    #[test]
+    fn retry_transcription_heartbeats_are_repeatable_for_the_active_request() {
+        let request_id = Uuid::new_v4();
+        let meeting_id = Uuid::new_v4();
+        let command = WorkerCommand {
+            schema: "worker-command/2",
+            request_id,
+            operation: Operation::TranscriptRetry,
             arguments: serde_json::json!({"meeting_id": meeting_id}),
         };
         let result = WorkerResult {

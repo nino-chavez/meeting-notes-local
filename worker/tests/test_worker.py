@@ -306,6 +306,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 "capture.finalize",
                 "capture.inspect",
                 "transcript.create",
+                "transcript.retry",
                 "sitting.derive",
                 "transcript.restore",
                 "profile.choices",
@@ -976,6 +977,20 @@ while True:
             protocol_output=io.StringIO(),
         )
         self.assertIsNone(heartbeat)
+
+    def test_transcription_heartbeat_is_started_for_transcript_retry(self) -> None:
+        from worker.main import start_transcription_heartbeat
+
+        heartbeat = start_transcription_heartbeat(
+            str(uuid.uuid4()),
+            "transcript.retry",
+            {"meeting_id": str(uuid.uuid4())},
+            protocol_output=io.StringIO(),
+        )
+        self.assertIsNotNone(heartbeat)
+        stopped, thread = heartbeat
+        stopped.set()
+        thread.join()
 
     def test_note_generation_heartbeat_uses_the_protocol_stream(self) -> None:
         from worker.main import start_note_generation_heartbeat
