@@ -282,6 +282,13 @@ impl LocalVocabularyStore {
                 });
             if let Some(entry) = best {
                 let end = cursor + entry.source_phrase.len();
+                if output
+                    .len()
+                    .checked_add(entry.preferred_replacement.len())
+                    .is_none_or(|length| length > MAX_PROJECTION_BYTES)
+                {
+                    return Err(LocalVocabularyError::TextTooLarge);
+                }
                 applied.push(VocabularyApplication {
                     entry_id: entry.id,
                     range: cursor..end,
@@ -293,6 +300,13 @@ impl LocalVocabularyStore {
                     .chars()
                     .next()
                     .expect("cursor is a character boundary");
+                if output
+                    .len()
+                    .checked_add(character.len_utf8())
+                    .is_none_or(|length| length > MAX_PROJECTION_BYTES)
+                {
+                    return Err(LocalVocabularyError::TextTooLarge);
+                }
                 output.push(character);
                 cursor += character.len_utf8();
             }
@@ -672,5 +686,19 @@ mod tests {
         );
         assert_ne!(projection.text, std::str::from_utf8(bytes).unwrap());
         assert_eq!(projection.applied[0].entry_id, entry.id);
+    }
+
+    #[test]
+    fn projection_stops_before_worst_case_expansion_can_grow_unbounded() {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .add("x", &"y".repeat(MAX_ENTRY_TEXT_SCALARS))
+            .unwrap();
+        let input = "x".repeat(MAX_PROJECTION_BYTES);
+        assert!(matches!(
+            fixture.store.project(&input),
+            Err(LocalVocabularyError::TextTooLarge)
+        ));
     }
 }
