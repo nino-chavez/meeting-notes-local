@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import importlib.util
+import os
 import plistlib
 import re
 import subprocess
@@ -119,6 +120,69 @@ class DistributionToolingTests(unittest.TestCase):
             'if [[ "$LOCAL_ONLY" == "0" ]]; then\n  xcrun notarytool history',
             signing,
         )
+
+    def test_local_signing_mode_exits_before_notarytool_stapler_and_dmg(self) -> None:
+        signing = source("scripts/sign-notarize.sh")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            log = root / "calls.log"
+
+            def stub(name: str, body: str) -> None:
+                path = bin_dir / name
+                path.write_text(
+                    f"#!/bin/sh\nprintf '%s ' '{name}' >> '{log}'\nprintf '%s ' \"$@\" >> '{log}'\nprintf '\\n' >> '{log}'\n{body}\n"
+                )
+                path.chmod(0o755)
+
+            # The local lane must never call any of these release-only tools.
+            stub("xcrun", "exit 99")
+            stub("stapler", "exit 99")
+            stub("hdiutil", "exit 99")
+            stub("codesign", "exit 0")
+            stub("security", "printf '%s\\n' '  1) ABC \"Developer ID Application: Test (34VZ63G58M)\"'")
+            stub("file", "printf '%s\\n' 'Mach-O 64-bit executable arm64'")
+            stub("python3", "case \"$*\" in *'\\\"schema\\\"'*) printf '%s\\n' app-runtime/1 ;; *'\\\"encoder\\\"'*) printf '%s\\n' encoder-unavailable.identity ;; esac")
+
+            scripts_dir = root / "scripts"
+            scripts_dir.mkdir()
+            signing_script = scripts_dir / "sign-notarize.sh"
+            signing_script.write_text(source("scripts/sign-notarize.sh"))
+            signing_script.chmod(0o755)
+            (scripts_dir / "verify-release-bundle.py").write_text("#!/usr/bin/env python3\n")
+            (scripts_dir / "verify-release-bundle.py").chmod(0o755)
+            worker_dir = root / "worker"
+            worker_dir.mkdir()
+            (worker_dir / "build_manifest.py").write_text("#!/usr/bin/env python3\n")
+            (worker_dir / "build_manifest.py").chmod(0o755)
+            entitlements_dir = root / "apps/desktop/src-tauri"
+            entitlements_dir.mkdir(parents=True)
+            (entitlements_dir / "python-entitlements.plist").write_text("fixture")
+            (entitlements_dir / "capture-entitlements.plist").write_text("fixture")
+
+            app = root / "Yawn.app/Contents/Resources"
+            app.mkdir(parents=True)
+            (app / "Info.plist").write_text("fixture")
+            (app / "app-runtime.json").write_text('{"encoder":{"path":"encoder-unavailable.identity"},"schema":"app-runtime/1"}')
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+            result = subprocess.run(
+                [str(signing_script), "local", "--admission", "product", str(root / "Yawn.app")],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text()
+            self.assertIn("codesign --force --options runtime", calls)
+            self.assertIn("verify-release-bundle.py", calls)
+            self.assertNotIn("notarytool", calls)
+            self.assertNotIn("stapler", calls)
+            self.assertNotIn("build-dmg", calls)
 
         # Every binary that asks macOS for the microphone must be signed with the
         # audio-input entitlement. Shipping a requester without it is not a

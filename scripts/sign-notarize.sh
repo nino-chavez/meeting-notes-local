@@ -75,7 +75,7 @@ if [[ "$cmd" == "local" ]]; then
 elif [[ "$cmd" == "run" || "$cmd" == "run-alpha" ]]; then
   APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
 else
-  die "usage: sign-notarize.sh [preflight|run|run-alpha|local] [app]"
+  die "usage: sign-notarize.sh [preflight|run|run-alpha] [app] | local --admission [product|internal-alpha] [app]"
 fi
 [[ -d "$APP" ]] || die "no app bundle at $APP"
 [[ -f "$PYTHON_ENTITLEMENTS" ]] || die "missing Python entitlements"
