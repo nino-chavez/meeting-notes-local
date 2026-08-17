@@ -6,6 +6,7 @@ pub mod diagnostic;
 pub mod enrollment_guidance;
 pub mod library_metadata;
 pub mod library_read;
+pub mod local_vocabulary;
 pub mod meeting;
 pub mod meeting_coordination;
 pub mod meeting_deletion;
