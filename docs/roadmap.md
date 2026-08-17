@@ -10,8 +10,10 @@ shipped. The current product contract remains [the product brief](product-brief.
 Yawn should make the transcript easier to trust and correct before it expands
 into broader meeting intelligence.
 
-The next work is speaker correction, a local vocabulary, and recording-quality
-recovery. Cross-meeting questions can follow once the source record is reliable.
+The current work is wiring the new local vocabulary into review, then adding
+recording-quality recovery. Speaker correction now reaches generated notes in
+source and in the packaged Preview bundle. Cross-meeting questions can follow
+once the source record is reliable.
 Cloud accounts, automatic call detection, meeting bots, and live meeting chat do
 not enter the roadmap through competitor comparison alone.
 
@@ -75,10 +77,10 @@ The summary-first note is the baseline. It is not another roadmap item.
 |---|---|---|---|
 | 0 | A completed meeting remains visible and reopens from Meetings in the packaged app | Preview passed; release package pending | A readable artifact must not disappear from its own journey |
 | 1a | The reader can see who said what | Implemented in source and preview | Render the attribution already carried by each transcript turn |
-| 1b | The reader can correct who said what | Correction built; note projection pending | Never hide uncertainty or overwrite the source transcript |
-| 2 | Names and jargon stay correct across meetings | Queued | Vocabulary remains local, visible, editable, and bounded |
+| 1b | The reader can correct who said what | Implemented, tested, and packaged in Preview; rendered save-and-regenerate journey pending | Never hide uncertainty or overwrite the source transcript |
+| 2 | Names and jargon stay correct across meetings | Bounded local domain and storage built; controls and transcript application queued | Vocabulary remains local, visible, editable, and bounded |
 | 3 | The reader can tell whether the audio caused a bad transcript | Queued | Quality evidence stays distinct from capture-integrity evidence |
-| 4 | Every recoverable problem leads to its exact repair | Queued | Recovery actions must not imply that a failed operation succeeded |
+| 4 | Every recoverable problem leads to its exact repair | Current-meeting recovery presentation built; remaining destinations and retry flows queued | Recovery actions must not imply that a failed operation succeeded |
 | 5 | The reader can find source passages across past meetings | Separate product decision | Search remains local, source-linked, and unavailable during capture |
 
 ## Delivery plan
@@ -100,7 +102,7 @@ verified baseline
                 └── F. narrow cross-meeting source finding decision
 ```
 
-### Wave 1 — run in parallel
+### Wave 1 — completed in parallel
 
 | Packet | Outcome | Owned files | Must not do | Merge gate |
 |---|---|---|---|---|
@@ -117,7 +119,7 @@ states. The orchestrator resolves integration edits; workers do not edit outside
 their owned files to make another packet compile.
 
 After merge, the full Rust and UI suites must pass together. A separately
-identified Preview bundle must then prove this journey: reopen a completed
+identified Preview bundle must then prove this release journey: reopen a completed
 meeting, inspect the original speaker label, apply a correction in a disposable
 fixture, regenerate the note, follow a source link, return to Meetings, and
 reopen the same meeting. The installed production app remains untouched.
@@ -176,21 +178,42 @@ label, the exact number of matching turns, the unchanged-source promise, and an
 explicit source-label recovery action. No correction was saved during this
 rendered inspection.
 
-**Verification commands.** `npm run test:ui` passes the view-model tests. The
-desktop Rust test suite covers the library lifecycle. `npm run preview-build`
-produces the separately identified preview bundle used for the rendered check.
+**Wave 1 source and package receipt.** Three isolated worktrees started from the
+same baseline and merged through disjoint file ownership. The merge added the
+corrected-note input, the bounded local-vocabulary core, and contextual recovery
+presentation. Cross-review caught and removed unrelated formatting edits. It
+also added an incremental output bound before the vocabulary packet merged.
+
+The corrected-note path re-derives the active correction under the same meeting
+lease used for durable note replacement. The generator applies the validated
+speaker-label overlay only after reading and digest-checking the retained
+transcript. The generated note and its locators keep the original transcript
+digest. No correction keeps the former request shape.
+
+**Verification commands.** The session-core suite passed 428 unit tests, 17
+process-fault tests, and 8 doc tests. The desktop suite passed 131 tests, the
+shell contract passed 5, and the UI suite passed 22. The rebuilt packaged
+runtime passed 209 worker tests. `npm run preview-build` and
+`npm run preview-verify` produced and verified the separately identified
+`Yawn Preview.app` bundle.
+
+**Rendered verification boundary.** The earlier Preview observation above is
+still direct evidence for speaker controls and meeting continuity. The new
+bundle launched, but computer-use could not obtain an accessibility snapshot
+from that process. No real correction was saved and no private note was
+regenerated to manufacture a passing visual check. The source and package gates
+are green; the rendered save, regenerate, source-link, Back, and reopen journey
+remains a release gate.
 
 **Remaining release gate.** The production 0.5.8 bundle has not been signed,
-installed, or substituted for `/Applications/Yawn.app`. Production packaging
-remains blocked by the repository rule against signing from a dirty source tree.
-The next release must repeat the completed-meeting journey against that exact
-installed package before order 0 or slice 1a can be called shipped.
+installed, or substituted for `/Applications/Yawn.app`. The next release must
+start from a clean source tree and repeat the completed-meeting journey against
+that exact installed package before these changes can be called shipped.
 
-**Remaining slice 1b gate.** Note generation still reads the retained transcript
-artifact, not the speaker-correction projection. Yawn therefore disables note
-generation while a speaker correction is active and explains why. Slice 1b is
-complete only when note generation consumes the corrected attribution while its
-source links still resolve to the retained transcript.
+**Remaining slice 1b gate.** Source acceptance is complete: note generation uses
+the corrected attribution while source links stay bound to the retained
+transcript. Shipping still requires the non-destructive packaged journey above
+to be completed with a disposable fixture or explicit human review.
 
 ## 1. Show and correct who said what
 
@@ -202,9 +225,9 @@ wrong person. Speaker uncertainty also made the earlier in-person 630 meeting
 hard to review. Fixing attribution improves the transcript, the note, and every
 future search result.
 
-**Existing foundation.** Transcript turns already carry an optional `speaker`
-value. The copied transcript includes it, but the rendered transcript currently
-shows only the timestamp and text.
+**Existing foundation.** Transcript turns carry an optional `speaker` value.
+The copied and rendered transcript now expose it, and the visible label opens
+the meeting-local correction control.
 
 **Build sequence.** Slice 1a renders the existing attribution without changing
 stored data. Slice 1b adds a durable correction operation, a corrected
@@ -212,9 +235,9 @@ projection, and note regeneration from that projection. The visible label must
 land first so the correction control has an honest object to edit.
 
 **Current state.** The durable correction operation, corrected transcript
-projection, exact-group UI, reopen behavior, and source-label recovery are built.
-Note regeneration from that corrected projection is the remaining work in this
-slice.
+projection, exact-group UI, reopen behavior, source-label recovery, and note
+regeneration from the corrected projection are built and packaged in Preview.
+The rendered save-and-regenerate release journey remains unverified.
 
 **Scope.**
 
