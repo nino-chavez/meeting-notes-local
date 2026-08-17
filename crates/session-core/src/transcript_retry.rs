@@ -59,6 +59,19 @@ pub enum TranscriptRetryCandidateSchema {
     V1,
 }
 
+/// Closed source identity returned alongside a worker candidate. Every field
+/// is checked against the current meeting and private artifacts before the
+/// candidate is written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptRetrySourceBinding {
+    pub source_transcript_sha256: String,
+    pub capture_session_sha256: String,
+    pub microphone_audio_sha256: String,
+    pub system_audio_sha256: String,
+    pub candidate_transcript_sha256: String,
+}
+
 /// The durable receipt for one immutable candidate and its operator decision.
 /// The four source digests are captured before the worker result is admitted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +114,14 @@ pub enum TranscriptRetryError {
     ConflictingOperation,
     #[error("retry source capture has changed or is stale")]
     StaleSource,
+    #[error("retry candidate binding does not match the reverified source")]
+    BindingMismatch,
+    #[error("retry candidate digest does not match its bytes")]
+    CandidateDigestMismatch,
+    #[error("meeting lifecycle does not admit transcript retry")]
+    IneligibleLifecycle,
+    #[error("meeting has a pending storage operation")]
+    PendingStorageOperation,
     #[error("retry candidate is not in an available state")]
     InvalidState,
 }
@@ -127,6 +148,7 @@ impl<'a> TranscriptRetryAuthority<'a> {
         meeting_id: &str,
         operation_id: Uuid,
         candidate_bytes: &[u8],
+        binding: &TranscriptRetrySourceBinding,
     ) -> Result<TranscriptRetryOutcome, TranscriptRetryError> {
         let _lease = self.coordination.acquire(meeting_id)?;
         let meeting_dir = self.meeting_dir(meeting_id)?;
@@ -134,48 +156,46 @@ impl<'a> TranscriptRetryAuthority<'a> {
         if candidate_bytes.is_empty() || candidate_bytes.len() as u64 > MAX_TRANSCRIPT_BYTES {
             return Err(TranscriptRetryError::CandidateChanged);
         }
+        validate_binding_shape(binding)?;
+        if binding.candidate_transcript_sha256 != digest_bytes(candidate_bytes) {
+            return Err(TranscriptRetryError::CandidateDigestMismatch);
+        }
 
         let operation_dir = self.operation_dir(&meeting_dir, operation_id)?;
         if path_exists(&operation_dir)? {
             let candidate = load_receipt(&operation_dir, operation_id)?;
             self.validate_receipt(&meeting_dir, &meeting, &candidate, meeting_id)?;
-            if candidate.candidate_transcript.sha256 != digest_bytes(candidate_bytes) {
+            if candidate.candidate_transcript.sha256 != binding.candidate_transcript_sha256
+                || !binding_matches_candidate(binding, &candidate)
+            {
                 return Err(TranscriptRetryError::ConflictingOperation);
             }
             verify_artifact_ref(&meeting_dir, &candidate.candidate_transcript)?;
             return Ok(candidate.state.into());
         }
 
-        let current = meeting
-            .artifacts
-            .current_transcript
-            .as_ref()
-            .ok_or(TranscriptRetryError::NoCurrentTranscript)?;
-        let capture_session = meeting
-            .artifacts
-            .capture_session
-            .as_ref()
-            .ok_or(TranscriptRetryError::StaleSource)?;
-        let microphone = meeting
-            .artifacts
-            .microphone_audio
-            .as_ref()
-            .ok_or(TranscriptRetryError::StaleSource)?;
-        let system = meeting
-            .artifacts
-            .system_audio
-            .as_ref()
-            .ok_or(TranscriptRetryError::StaleSource)?;
-        let candidate_sha = digest_bytes(candidate_bytes);
+        if meeting.artifacts.current_transcript.is_none() {
+            return Err(TranscriptRetryError::NoCurrentTranscript);
+        }
+        if meeting.artifacts.capture_session.is_none()
+            || meeting.artifacts.microphone_audio.is_none()
+            || meeting.artifacts.system_audio.is_none()
+        {
+            return Err(TranscriptRetryError::StaleSource);
+        }
+        if !binding_matches_meeting(binding, &meeting) {
+            return Err(TranscriptRetryError::BindingMismatch);
+        }
+        let candidate_sha = binding.candidate_transcript_sha256.clone();
         let candidate = TranscriptRetryCandidate {
             schema: TranscriptRetryCandidateSchema::V1,
             operation_id,
             meeting_id: meeting_id.to_owned(),
             state: TranscriptRetryState::CandidateAvailableForComparison,
-            source_transcript_sha256: current.sha256.clone(),
-            capture_session_sha256: capture_session.sha256.clone(),
-            microphone_audio_sha256: microphone.sha256.clone(),
-            system_audio_sha256: system.sha256.clone(),
+            source_transcript_sha256: binding.source_transcript_sha256.clone(),
+            capture_session_sha256: binding.capture_session_sha256.clone(),
+            microphone_audio_sha256: binding.microphone_audio_sha256.clone(),
+            system_audio_sha256: binding.system_audio_sha256.clone(),
             candidate_transcript: ArtifactRef {
                 relative_path: format!("transcript/{candidate_sha}.json"),
                 sha256: candidate_sha,
@@ -345,6 +365,17 @@ impl<'a> TranscriptRetryAuthority<'a> {
         if meeting.retention.state != AudioState::Retained {
             return Err(TranscriptRetryError::AudioReleased);
         }
+        if !matches!(
+            meeting.lifecycle,
+            MeetingLifecycle::TranscriptReady
+                | MeetingLifecycle::SummaryFailed
+                | MeetingLifecycle::Ready
+        ) {
+            return Err(TranscriptRetryError::IneligibleLifecycle);
+        }
+        if meeting.pending_storage_operation.is_some() {
+            return Err(TranscriptRetryError::PendingStorageOperation);
+        }
         verify_record_artifacts(meeting_dir, &meeting)?;
         Ok(meeting)
     }
@@ -456,6 +487,57 @@ fn validate_candidate_shape(
     Ok(())
 }
 
+fn validate_binding_shape(
+    binding: &TranscriptRetrySourceBinding,
+) -> Result<(), TranscriptRetryError> {
+    if !valid_sha256(&binding.source_transcript_sha256)
+        || !valid_sha256(&binding.capture_session_sha256)
+        || !valid_sha256(&binding.microphone_audio_sha256)
+        || !valid_sha256(&binding.system_audio_sha256)
+        || !valid_sha256(&binding.candidate_transcript_sha256)
+    {
+        return Err(TranscriptRetryError::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn binding_matches_meeting(
+    binding: &TranscriptRetrySourceBinding,
+    meeting: &MeetingRecord,
+) -> bool {
+    meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .is_some_and(|reference| reference.sha256 == binding.source_transcript_sha256)
+        && meeting
+            .artifacts
+            .capture_session
+            .as_ref()
+            .is_some_and(|reference| reference.sha256 == binding.capture_session_sha256)
+        && meeting
+            .artifacts
+            .microphone_audio
+            .as_ref()
+            .is_some_and(|reference| reference.sha256 == binding.microphone_audio_sha256)
+        && meeting
+            .artifacts
+            .system_audio
+            .as_ref()
+            .is_some_and(|reference| reference.sha256 == binding.system_audio_sha256)
+}
+
+fn binding_matches_candidate(
+    binding: &TranscriptRetrySourceBinding,
+    candidate: &TranscriptRetryCandidate,
+) -> bool {
+    candidate.source_transcript_sha256 == binding.source_transcript_sha256
+        && candidate.capture_session_sha256 == binding.capture_session_sha256
+        && candidate.microphone_audio_sha256 == binding.microphone_audio_sha256
+        && candidate.system_audio_sha256 == binding.system_audio_sha256
+        && candidate.candidate_transcript.sha256 == binding.candidate_transcript_sha256
+}
+
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -555,6 +637,41 @@ mod tests {
         }
     }
 
+    fn binding(fixture: &Fixture, candidate: &[u8]) -> TranscriptRetrySourceBinding {
+        let meeting = load_meeting(&fixture.meeting_dir).unwrap();
+        TranscriptRetrySourceBinding {
+            source_transcript_sha256: meeting
+                .artifacts
+                .current_transcript
+                .as_ref()
+                .unwrap()
+                .sha256
+                .clone(),
+            capture_session_sha256: meeting
+                .artifacts
+                .capture_session
+                .as_ref()
+                .unwrap()
+                .sha256
+                .clone(),
+            microphone_audio_sha256: meeting
+                .artifacts
+                .microphone_audio
+                .as_ref()
+                .unwrap()
+                .sha256
+                .clone(),
+            system_audio_sha256: meeting
+                .artifacts
+                .system_audio
+                .as_ref()
+                .unwrap()
+                .sha256
+                .clone(),
+            candidate_transcript_sha256: digest_bytes(candidate),
+        }
+    }
+
     #[test]
     fn candidate_is_available_without_pointer_mutation_and_can_be_kept() {
         let fixture = fixture();
@@ -567,7 +684,12 @@ mod tests {
         let id = Uuid::new_v4();
         assert_eq!(
             authority
-                .create_candidate("meeting-a", id, b"candidate")
+                .create_candidate(
+                    "meeting-a",
+                    id,
+                    b"candidate",
+                    &binding(&fixture, b"candidate")
+                )
                 .unwrap(),
             TranscriptRetryOutcome::CandidateAvailableForComparison
         );
@@ -601,7 +723,7 @@ mod tests {
             .join(format!("{}.json", digest_bytes(&fixture.source)));
         assert_eq!(
             authority
-                .create_candidate("meeting-a", id, candidate)
+                .create_candidate("meeting-a", id, candidate, &binding(&fixture, candidate))
                 .unwrap(),
             TranscriptRetryOutcome::CandidateAvailableForComparison
         );
@@ -630,7 +752,12 @@ mod tests {
         let authority = TranscriptRetryAuthority::new(&fixture.storage, &fixture.coordination);
         let id = Uuid::new_v4();
         authority
-            .create_candidate("meeting-a", id, b"candidate")
+            .create_candidate(
+                "meeting-a",
+                id,
+                b"candidate",
+                &binding(&fixture, b"candidate"),
+            )
             .unwrap();
         let receipt = authority.inspect_candidate("meeting-a", id).unwrap();
         let mut meeting = load_meeting(&fixture.meeting_dir).unwrap();
@@ -644,12 +771,59 @@ mod tests {
     }
 
     #[test]
+    fn stale_binding_and_candidate_digest_are_rejected_before_any_write() {
+        let fixture = fixture();
+        let authority = TranscriptRetryAuthority::new(&fixture.storage, &fixture.coordination);
+        let mut stale = binding(&fixture, b"candidate");
+        stale.source_transcript_sha256 = "a".repeat(64);
+        assert!(matches!(
+            authority.create_candidate("meeting-a", Uuid::new_v4(), b"candidate", &stale),
+            Err(TranscriptRetryError::BindingMismatch)
+        ));
+        assert!(!fixture.meeting_dir.join(RETRY_DIRECTORY).exists());
+
+        let mut mismatch = binding(&fixture, b"candidate");
+        mismatch.candidate_transcript_sha256 = "b".repeat(64);
+        assert!(matches!(
+            authority.create_candidate("meeting-a", Uuid::new_v4(), b"candidate", &mismatch),
+            Err(TranscriptRetryError::CandidateDigestMismatch)
+        ));
+        assert!(!fixture.meeting_dir.join(RETRY_DIRECTORY).exists());
+    }
+
+    #[test]
+    fn ineligible_lifecycle_is_rejected_before_candidate_storage() {
+        let fixture = fixture();
+        let authority = TranscriptRetryAuthority::new(&fixture.storage, &fixture.coordination);
+        let candidate_binding = binding(&fixture, b"candidate");
+        let mut meeting = load_meeting(&fixture.meeting_dir).unwrap();
+        meeting.lifecycle = MeetingLifecycle::Captured;
+        meeting.artifacts.current_transcript = None;
+        write_meeting(&fixture.meeting_dir, &meeting).unwrap();
+        assert!(matches!(
+            authority.create_candidate(
+                "meeting-a",
+                Uuid::new_v4(),
+                b"candidate",
+                &candidate_binding
+            ),
+            Err(TranscriptRetryError::IneligibleLifecycle)
+        ));
+        assert!(!fixture.meeting_dir.join(RETRY_DIRECTORY).exists());
+    }
+
+    #[test]
     fn released_audio_and_stale_source_fail_closed() {
         let fixture = fixture();
         let authority = TranscriptRetryAuthority::new(&fixture.storage, &fixture.coordination);
         let id = Uuid::new_v4();
         authority
-            .create_candidate("meeting-a", id, b"candidate")
+            .create_candidate(
+                "meeting-a",
+                id,
+                b"candidate",
+                &binding(&fixture, b"candidate"),
+            )
             .unwrap();
         let mut meeting = load_meeting(&fixture.meeting_dir).unwrap();
         create_private_dir(&fixture.meeting_dir.join("deletion")).unwrap();
@@ -662,7 +836,12 @@ mod tests {
             Some(artifact_ref(&fixture.meeting_dir, "deletion/audio-deletion.json").unwrap());
         write_meeting(&fixture.meeting_dir, &meeting).unwrap();
         assert!(matches!(
-            authority.create_candidate("meeting-a", Uuid::new_v4(), b"other"),
+            authority.create_candidate(
+                "meeting-a",
+                Uuid::new_v4(),
+                b"other",
+                &binding(&fixture, b"other"),
+            ),
             Err(TranscriptRetryError::AudioReleased)
         ));
     }
