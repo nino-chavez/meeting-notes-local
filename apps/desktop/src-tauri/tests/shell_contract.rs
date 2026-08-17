@@ -153,13 +153,16 @@ fn product_windows_have_only_the_commands_the_new_surface_uses() {
 }
 
 #[test]
-fn retained_audio_playback_stays_on_the_fixed_native_file_descriptor_route() {
+fn retained_audio_playback_stays_on_the_fixed_native_standard_input_route() {
     let source = include_str!("../src/main.rs");
     assert!(source.contains("const RETAINED_AUDIO_PLAYER: &str = \"/usr/bin/afplay\""));
-    assert!(source.contains("const RETAINED_AUDIO_FD: RawFd = 3"));
-    assert!(source.contains("handoff_retained_audio_fd(inherited_fd)"));
+    assert!(source.contains("const RETAINED_AUDIO_STDIN: &str = \"/dev/stdin\""));
     assert!(source.contains("Command::new(RETAINED_AUDIO_PLAYER)"));
-    assert!(source.contains("/dev/fd/{RETAINED_AUDIO_FD}"));
+    assert!(source.contains(".stdin(Stdio::from(input))"));
+    let playback_impl = &source[source.find("impl RetainedAudioPlayback").unwrap()
+        ..source.find("struct RetainedAudioPlaybackResponse").unwrap()];
+    assert!(!playback_impl.contains("pre_exec("));
+    assert!(!source.contains("/dev/fd/3"));
     assert!(!source.contains("tauri_plugin_shell"));
     assert!(!source.contains("tauri_plugin_fs"));
 }

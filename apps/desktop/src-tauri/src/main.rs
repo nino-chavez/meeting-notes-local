@@ -125,7 +125,10 @@ const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 const SETTINGS_WINDOW_LABEL: &str = "settings";
 const RETAINED_AUDIO_PLAYER: &str = "/usr/bin/afplay";
-const RETAINED_AUDIO_FD: RawFd = 3;
+/// `afplay` opens this fixed standard-input alias. The player never receives a
+/// meeting path, and Rust owns the standard-descriptor setup without a custom
+/// low-numbered descriptor that could conflict with its exec-error plumbing.
+const RETAINED_AUDIO_STDIN: &str = "/dev/stdin";
 #[cfg(feature = "preview-surface")]
 const ACTIVE_WINDOW_LABEL: &str = "preview";
 #[cfg(not(feature = "preview-surface"))]
@@ -241,9 +244,9 @@ impl Drop for ApplicationState {
 }
 
 /// A fixed native player attached to one already-open, verified retained-audio
-/// file. The child receives `/dev/fd/3`, not a meeting path: the descriptor is
-/// duplicated in the child immediately before exec, which keeps the file
-/// authority out of the webview and prevents `afplay` from reopening storage.
+/// file. The child receives that file as standard input and opens only the
+/// fixed `/dev/stdin` alias, which keeps the file authority out of the webview
+/// and prevents `afplay` from reopening storage.
 struct RetainedAudioPlayback {
     child: Child,
     source: library_reader::RetainedAudioSource,
@@ -251,19 +254,16 @@ struct RetainedAudioPlayback {
 
 impl RetainedAudioPlayback {
     fn spawn(grant: library_reader::LibraryAudioPlaybackGrant) -> io::Result<Self> {
-        let inherited_fd = grant.file().as_raw_fd();
+        // `Stdio` performs the canonical child setup at descriptor zero. It
+        // avoids reserving a low descriptor ourselves, which could collide
+        // with Rust's private exec-error pipe on macOS.
+        let input = grant.file().try_clone()?;
         let mut command = Command::new(RETAINED_AUDIO_PLAYER);
         command
-            .arg(format!("/dev/fd/{RETAINED_AUDIO_FD}"))
-            .stdin(Stdio::null())
+            .arg(RETAINED_AUDIO_STDIN)
+            .stdin(Stdio::from(input))
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        // `dup2` makes descriptor 3 survive exec (including when the source
-        // descriptor was opened with CLOEXEC). `afplay` receives exactly that
-        // inherited file and has no storage path to reopen.
-        unsafe {
-            command.pre_exec(move || handoff_retained_audio_fd(inherited_fd));
-        }
         let child = command.spawn()?;
         Ok(Self {
             child,
@@ -286,32 +286,6 @@ impl RetainedAudioPlayback {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-
-/// Places the one verified input at the fixed descriptor the player receives.
-/// The equal-descriptor case is intentional: it must still clear CLOEXEC, but
-/// does not need a second duplicate that could obscure a failure.
-fn handoff_retained_audio_fd(inherited_fd: RawFd) -> io::Result<()> {
-    if inherited_fd < 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid audio descriptor",
-        ));
-    }
-    if inherited_fd != RETAINED_AUDIO_FD
-        && unsafe { libc::dup2(inherited_fd, RETAINED_AUDIO_FD) } == -1
-    {
-        return Err(io::Error::last_os_error());
-    }
-    set_close_on_exec(RETAINED_AUDIO_FD, false)?;
-    let flags = unsafe { libc::fcntl(RETAINED_AUDIO_FD, libc::F_GETFD) };
-    if flags == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    if flags & libc::FD_CLOEXEC != 0 {
-        return Err(io::Error::other("audio descriptor remained close-on-exec"));
-    }
-    Ok(())
 }
 
 #[derive(Serialize)]
@@ -6690,48 +6664,11 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let state = app.state::<ApplicationState>();
-            let coordination = match state.meeting_storage_coordination() {
-                Ok(coordination) => coordination,
-                Err(_) => {
-                    let _ = write_private_diagnostic(
-                        &diagnostics,
-                        "retention_coordination_failed",
-                        "meeting storage coordination is unavailable",
-                    );
-                    mark_retention_unavailable(&state);
-                    continue;
-                }
-            };
-            let storage_sequence = match coordination.lock_sequence() {
-                Ok(sequence) => sequence,
-                Err(_) => {
-                    let _ = write_private_diagnostic(
-                        &diagnostics,
-                        "retention_coordination_failed",
-                        "meeting storage sequence lock is unavailable",
-                    );
-                    mark_retention_unavailable(&state);
-                    continue;
-                }
-            };
-            let active_meetings = match storage_sequence.active_meeting_ids() {
-                Ok(active) => active,
-                Err(_) => {
-                    drop(storage_sequence);
-                    let _ = write_private_diagnostic(
-                        &diagnostics,
-                        "retention_coordination_failed",
-                        "active meeting registry is unavailable",
-                    );
-                    mark_retention_unavailable(&state);
-                    continue;
-                }
-            };
             let retention_result =
-                execute_due_retention_excluding(&storage, now_epoch_seconds(), &active_meetings);
-            drop(storage_sequence);
+                execute_scheduled_retention(&state, &storage, now_epoch_seconds());
             match retention_result {
-                Ok(outcomes) => {
+                Ok(None) => {}
+                Ok(Some(outcomes)) => {
                     let mut retention_failed = false;
                     for outcome in outcomes {
                         if let RetentionOutcome::Quarantined(meeting_id) = outcome {
@@ -6751,17 +6688,92 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
                         mark_retention_unavailable(&state);
                     }
                 }
-                Err(error) => {
+                Err(ScheduledRetentionError::Coordination(message)) => {
+                    let _ = write_private_diagnostic(
+                        &diagnostics,
+                        "retention_coordination_failed",
+                        message,
+                    );
+                    mark_retention_unavailable(&state);
+                }
+                Err(ScheduledRetentionError::Retention) => {
                     let _ = write_private_diagnostic(
                         &diagnostics,
                         "retention_tick_failed",
-                        &error.to_string(),
+                        "scheduled retained-audio release could not complete",
                     );
                     mark_retention_unavailable(&state);
                 }
             }
         }
     });
+}
+
+#[derive(Debug)]
+enum ScheduledRetentionError {
+    Coordination(&'static str),
+    Retention,
+}
+
+/// Runs one scheduled retention pass under the same first-tier command lock
+/// as playback launch and explicit deletion. A live owned child defers the
+/// whole pass before it can acquire the storage sequence; a completed child is
+/// reaped before the pass continues. The order is deliberately `command_lock`,
+/// playback slot, then meeting-storage sequence; no storage lock is held while
+/// acquiring an earlier tier.
+fn execute_scheduled_retention(
+    state: &ApplicationState,
+    storage: &StorageRoot,
+    now: u64,
+) -> Result<Option<Vec<RetentionOutcome>>, ScheduledRetentionError> {
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| ScheduledRetentionError::Coordination("command lock is unavailable"))?;
+    if scheduled_retention_playback_is_active(state)? {
+        return Ok(None);
+    }
+
+    let coordination = state.meeting_storage_coordination().map_err(|_| {
+        ScheduledRetentionError::Coordination("meeting storage coordination is unavailable")
+    })?;
+    let storage_sequence = coordination.lock_sequence().map_err(|_| {
+        ScheduledRetentionError::Coordination("meeting storage sequence lock is unavailable")
+    })?;
+    let active_meetings = storage_sequence.active_meeting_ids().map_err(|_| {
+        ScheduledRetentionError::Coordination("active meeting registry is unavailable")
+    })?;
+
+    execute_due_retention_excluding(storage, now, &active_meetings)
+        .map(Some)
+        .map_err(|_| ScheduledRetentionError::Retention)
+}
+
+/// Polls only Yawn's retained child while the command lock is held. A live
+/// child keeps the reviewed artifact in place; an exited or failed child is
+/// reaped before retention obtains storage authority.
+fn scheduled_retention_playback_is_active(
+    state: &ApplicationState,
+) -> Result<bool, ScheduledRetentionError> {
+    let mut slot = state.audio_playback.lock().map_err(|_| {
+        ScheduledRetentionError::Coordination("retained-audio playback is unavailable")
+    })?;
+    let Some(playback) = slot.as_mut() else {
+        return Ok(false);
+    };
+    match playback.poll() {
+        Ok(true) => Ok(true),
+        Ok(false) => {
+            slot.take();
+            Ok(false)
+        }
+        Err(_) => {
+            if let Some(mut playback) = slot.take() {
+                playback.stop_and_reap();
+            }
+            Ok(false)
+        }
+    }
 }
 
 fn mark_retention_unavailable(state: &ApplicationState) {
@@ -8441,35 +8453,89 @@ mod tests {
     }
 
     #[test]
-    fn retained_audio_fd_handoff_survives_exec_even_when_descriptor_three_is_preoccupied() {
+    fn retained_audio_stdin_handoff_survives_exec_with_close_on_exec_input() {
         let temporary = TempDir::new().unwrap();
         let wav = temporary.path().join("synthetic.wav");
-        // A minimal synthetic WAV prefix is enough for this descriptor test;
+        // A minimal synthetic WAV prefix is enough for this spawn-level test;
         // no meeting recording is read or played.
         fs::write(&wav, b"RIFF\x24\0\0\0WAVEfmt ").unwrap();
         let file = File::open(wav).unwrap();
-        let source_fd = file.as_raw_fd();
-        let mut command = Command::new("/bin/sh");
-        command
-            .args(["-c", "dd bs=4 count=1 <&3 2>/dev/null"])
-            .stdin(Stdio::null())
+        let input = file.try_clone().unwrap();
+        set_close_on_exec(input.as_raw_fd(), true).unwrap();
+        let output = Command::new("/bin/sh")
+            .args(["-c", "dd bs=4 count=1 </dev/stdin 2>/dev/null"])
+            .stdin(Stdio::from(input))
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        unsafe {
-            command.pre_exec(move || {
-                // Simulate an inherited descriptor collision that carries
-                // CLOEXEC. The handoff must make the fixed player descriptor
-                // readable after exec rather than silently closing it.
-                if libc::dup2(source_fd, RETAINED_AUDIO_FD) == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                set_close_on_exec(RETAINED_AUDIO_FD, true)?;
-                handoff_retained_audio_fd(RETAINED_AUDIO_FD)
-            });
-        }
-        let output = command.output().unwrap();
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, b"RIFF");
+    }
+
+    #[test]
+    fn scheduled_retention_defers_active_playback_then_releases_after_stop() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = "due-playback";
+        write_transcript_fixture(&storage, meeting_id, 0, AudioState::Retained, "synthetic");
+        let directory = meeting_dir(&storage, meeting_id).unwrap();
+        let mut meeting = load_meeting(&directory).unwrap();
+        meeting.retention.next_deletion_at_epoch_seconds = Some(1);
+        write_meeting(&directory, &meeting).unwrap();
+
+        let state = ApplicationState::default();
+        *state.app_data_writer_lock.lock().unwrap() =
+            Some(Arc::new(acquire_app_data_writer_lock(&storage).unwrap()));
+        let playback_pid = directory.join("playback.pid");
+        let child = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "echo $$ > \"$1\"; exec sleep 30",
+                "retained-audio-test",
+                playback_pid.to_str().unwrap(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        for _ in 0..100 {
+            if playback_pid.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid: libc::pid_t = fs::read_to_string(&playback_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        *state.audio_playback.lock().unwrap() = Some(RetainedAudioPlayback {
+            child,
+            source: library_reader::RetainedAudioSource::Microphone,
+        });
+
+        assert_eq!(execute_scheduled_retention(&state, &storage, 1).unwrap(), None);
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/system.wav").exists());
+        assert_eq!(load_meeting(&directory).unwrap().retention.state, AudioState::Retained);
+
+        stop_owned_audio_playback(&state);
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+
+        let outcomes = execute_scheduled_retention(&state, &storage, 1)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            outcomes,
+            vec![RetentionOutcome::AudioReleased(meeting_id.into())]
+        );
+        assert!(state.audio_playback.lock().unwrap().is_none());
+        assert!(!directory.join("capture/mic.wav").exists());
+        assert!(!directory.join("capture/system.wav").exists());
     }
 
     #[test]
