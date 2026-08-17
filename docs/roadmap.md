@@ -10,10 +10,11 @@ shipped. The current product contract remains [the product brief](product-brief.
 Yawn should make the transcript easier to trust and correct before it expands
 into broader meeting intelligence.
 
-The current work is exposing the new local vocabulary and recording-quality
-evidence in review, then adding safe transcription retry. Speaker correction
-and vocabulary replacements now reach generated notes in source and in the
-packaged Preview bundle. Cross-meeting questions can follow once the source
+Local vocabulary is now visible and editable in meeting review, and its exact
+replacements reach future generated notes without changing the retained
+transcript. Recording-quality evidence and a source-bound transcription retry
+foundation are built. The next slice is the desktop comparison and explicit
+keep-or-promote journey. Cross-meeting questions can follow once the source
 record is reliable.
 Cloud accounts, automatic call detection, meeting bots, and live meeting chat do
 not enter the roadmap through competitor comparison alone.
@@ -79,9 +80,9 @@ The summary-first note is the baseline. It is not another roadmap item.
 | 0 | A completed meeting remains visible and reopens from Meetings in the packaged app | Preview passed; release package pending | A readable artifact must not disappear from its own journey |
 | 1a | The reader can see who said what | Implemented in source and preview | Render the attribution already carried by each transcript turn |
 | 1b | The reader can correct who said what | Implemented, tested, and packaged in Preview; rendered save-and-regenerate journey pending | Never hide uncertainty or overwrite the source transcript |
-| 2 | Names and jargon stay correct across meetings | Bounded storage and provenance-safe note application built; review controls queued | Vocabulary remains local, visible, editable, and bounded |
-| 3 | The reader can tell whether the audio caused a bad transcript | New captures persist separate quality evidence and microphone identity; review and retry queued | Quality evidence stays distinct from capture-integrity evidence |
-| 4 | Every recoverable problem leads to its exact repair | Note retry, Meetings, and withheld-turn restoration are real; remaining destinations queued | Recovery actions must not imply that a failed operation succeeded |
+| 2 | Names and jargon stay correct across meetings | Review controls, bounded storage, and provenance-safe note application are implemented, tested, and packaged in Preview | Vocabulary remains local, visible, editable, and bounded |
+| 3 | The reader can tell whether the audio caused a bad transcript | New captures persist separate quality evidence and microphone identity; retry worker and durable candidate core built; review UI queued | Quality evidence stays distinct from capture-integrity evidence |
+| 4 | Every recoverable problem leads to its exact repair | Note retry, Meetings, withheld-turn restoration, and vocabulary destinations are real; transcript-retry UI queued | Recovery actions must not imply that a failed operation succeeded |
 | 5 | The reader can find source passages across past meetings | Separate product decision | Search remains local, source-linked, and unavailable during capture |
 
 ## Delivery plan
@@ -129,19 +130,22 @@ reopen the same meeting. The installed production app remains untouched.
 
 | Packet | Delivered foundation | Remaining product work |
 |---|---|---|
-| Vocabulary projection | Exact replacements travel as bounded original-source ranges. Changed-length prompt text maps evidence back to the retained transcript. The current store is re-attested before durable note replacement. | Add the dedicated controls, show applications in transcript review, and support **Always correct this**. |
+| Vocabulary projection | Exact replacements travel as bounded original-source ranges. Changed-length prompt text maps evidence back to the retained transcript. The current store is re-attested before durable note replacement. | Dedicated controls and current-meeting application counts are now built. **Always correct this** remains a later shortcut into the same ledger. |
 | Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Expose the evidence in review, add retained-audio playback, and build versioned transcription retry. |
 | Withheld-turn recovery | A valid withheld row now exposes one source-bound restore action. The command, capability, build contract, and shell contract are synchronized. | Add the remaining exact destinations only after their owning controls exist. |
 
-### Wave 2 integration — continue in dependency order
+### Wave 2 integration — in progress
 
-1. Expose local vocabulary through a small dedicated sheet. Keep every entry
-   visible, editable, disableable, and local.
-2. Show current vocabulary applications through the same immutable projection
-   already used by note generation. Keep retained transcript offsets visible.
-3. Surface the stored recording-quality evidence. Then add transcription retry from
-   retained audio, version comparison, and explicit keep-or-replace choice.
-4. Complete the exact-repair map only after every destination exists. A button
+1. **Built and packaged in Preview:** expose local vocabulary through a small
+   dedicated sheet. Keep every entry visible, editable, disableable, and local.
+2. **Built and packaged in Preview:** show current-meeting application counts
+   through the same immutable projection already used by note generation.
+3. **Foundation built:** create a retry only from reverified retained audio and
+   the current transcript. Store the candidate separately. Never replace the
+   active transcript during retry creation.
+4. **Next:** surface recording-quality evidence, compare the current and retry
+   transcripts, and require an explicit keep-or-promote choice.
+5. Complete the exact-repair map only after every destination exists. A button
    that opens a placeholder does not count as recovery.
 
 ### Wave 3 — make the separate product decision
@@ -237,6 +241,31 @@ and 8 doc tests. The desktop suite passed 132 tests, the shell contract passed
 5, and the UI suite passed 23. The rebuilt runtime passed 217 worker tests.
 The refreshed Preview bundle built and passed bundle verification. The installed
 production app remains unchanged.
+
+**Wave 2 integration receipt.** The meeting review now has a dedicated local
+vocabulary sheet. It lists every exact Before → After row, its enabled state,
+and its application count in the current non-withheld transcript. Add, edit,
+enable, disable, and two-step delete actions are source-digest-bound and run
+under the meeting lease. They do not rewrite the visible transcript or trigger
+note generation. Future note regenerations use the saved local projection.
+
+The retry foundation now accepts only the current retained transcript, capture
+session, microphone audio, and system audio digests. The worker rechecks those
+artifacts before and after creating an immutable candidate. Session-core checks
+the same five-part binding under the meeting lease, stores the candidate beside
+the source, and leaves the active transcript and note unchanged. A later
+explicit promotion changes the transcript pointer and clears the stale note
+pointer while preserving all prior files. The desktop command and comparison
+journey are not built yet, so transcription retry is not user-visible.
+
+The merged session-core suite passed 441 unit tests, 17 process-fault tests, and
+8 doc tests. The desktop suite passed 133 tests, the shell contract passed 5,
+and the UI suite passed 24. The worker suite passed 222 tests with 10 platform
+skips. One long note-budget case first hit its 240-second deadline while Rust
+and Python suites ran concurrently; it passed alone in 191 seconds, and the
+full worker suite then passed alone in 188 seconds. The internal worker runtime
+rebuilt and verified. `Yawn Preview.app` rebuilt and passed bundle verification.
+The installed production app remains unchanged.
 
 **Remaining release gate.** The production 0.5.8 bundle has not been signed,
 installed, or substituted for `/Applications/Yawn.app`. The next release must
