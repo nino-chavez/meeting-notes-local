@@ -84,7 +84,7 @@ The summary-first note is the baseline. It is not another roadmap item.
 | 2 | Names and jargon stay correct across meetings | Review controls, bounded storage, and provenance-safe note application are implemented, tested, and packaged in Preview | Vocabulary remains local, visible, editable, and bounded |
 | 3 | The reader can tell whether the audio caused a bad transcript | Verified quality guidance, safe device context, retained-audio playback, and a source-bound retry comparison are implemented, tested, and packaged in Preview; rendered verification remains | Quality evidence stays distinct from capture-integrity evidence |
 | 4 | Every recoverable problem leads to its exact repair | Existing recovery controls and the current stable reopen errors route to the selected meeting or Meetings; warnings without a real destination remain future work | Recovery actions must not imply that a failed operation succeeded |
-| 5 | The reader can find source passages across past meetings | Separate product decision | Search remains local, source-linked, and unavailable during capture |
+| 5 | The reader can find source passages across past meetings | Decision closed: keep semantic source finding out of the shipped interface until retrieval evidence establishes usefulness | Search remains local, source-linked, and unavailable during capture |
 
 ## Delivery plan
 
@@ -159,11 +159,30 @@ The remaining product work is now the rendered journey and warnings whose
 destinations do not exist yet. Those gates do not weaken the source-bound retry
 or playback contracts, but they keep these outcomes short of release.
 
-### Wave 3 decision — not started
+### Wave 3 decision — closed, do not ship yet
 
-Test a narrow, local source finder against real review tasks. Do not build a
-general meeting assistant by default. Proceed only if quoted passages, coverage
-limits, and capture-time unavailability still leave a useful product.
+The local source-finder backend already exists. It uses bounded transcript
+windows, returns quoted passages with turn provenance, reports prepared-window
+coverage and near ties, mints opaque transcript handles after the worker round
+trip, and refuses semantic work during capture. The product shell deliberately
+keeps the command unregistered.
+
+The committed 200-meeting scale probe explains why. The best bounded unit found
+7 of 10 intended meetings and 3 of the 5 questions that exact search could not
+answer. Its own registered conclusion says that this decides the storage unit,
+not whether retrieval is useful. Human usefulness was explicitly unreachable
+from that synthetic corpus.
+
+Do not re-admit the command or build a global semantic-search surface from this
+evidence. Keep title search, per-meeting exact transcript search, and claim-level
+**Show source** as the shipped recognition paths. A later experiment must use
+disposable data, preserve quoted source passages and honest coverage, show near
+ties, abstain when evidence is missing, and remain unavailable during capture.
+Only then should the candidate journey be reconsidered.
+
+A focused independent review checked the committed probe, dormant command,
+shell exclusion, and current title, transcript, and claim-evidence routes. It
+reported zero material findings in this no-ship decision.
 
 ### Drift controls
 
@@ -494,14 +513,22 @@ succeeds.
 the launch date?” and receive quoted passages linked to the meetings that contain
 them.
 
-**Existing foundation.** A local corpus-question command and source-handle path
-already exist in the desktop backend. The command is deliberately not registered
-in the shipped interface.
+**Existing foundation.** A local corpus-question command, bounded vector store,
+quoted-passage response, coverage report, and source-handle path already exist
+in the desktop backend. The command is deliberately not registered in the
+shipped interface.
 
-**Decision gate.** The product brief excludes chat over every meeting from the
-current reset. Before this work starts, decide whether the reader needs a narrow
-source-finding tool or a broader assistant. The narrow tool is the default
-proposal because it preserves Yawn's evidence-first shape.
+**Decision.** Do not ship the semantic source finder yet. The committed scale
+probe selected 128-word windows as the least costly valid storage unit, but its
+best arm retrieved 7 of 10 intended meetings and only 3 of the 5 questions that
+exact search could not answer. That probe explicitly did not establish human
+usefulness. The shell contract continues to keep the command out of the product.
+
+If a later disposable-fixture experiment supplies stronger evidence, the
+candidate journey is Meetings → **Find something I remember** → quoted result
+cards → the existing meeting detail anchored at the source turn. It must reuse
+the existing transcript reader rather than create a second answer or chat
+surface.
 
 **Required boundaries.**
 
@@ -512,9 +539,10 @@ proposal because it preserves Yawn's evidence-first shape.
   transcription worker
 - No email, calendar, Slack, or web context is added through this slice
 
-**Not yet.** Live “What did I miss?” summaries. The current worker boundary makes
-capture the priority, and a live summary would add an uncapped interpretation
-path while the source is still being recorded.
+**Not yet.** Global semantic source finding and live “What did I miss?”
+summaries. The current evidence does not establish the first as useful. The
+worker boundary also makes capture the priority, and a live summary would add an
+uncapped interpretation path while the source is still being recorded.
 
 ## Ideas this roadmap does not adopt
 
