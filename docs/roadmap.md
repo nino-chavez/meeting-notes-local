@@ -10,10 +10,11 @@ shipped. The current product contract remains [the product brief](product-brief.
 Yawn should make the transcript easier to trust and correct before it expands
 into broader meeting intelligence.
 
-The current work is wiring the new local vocabulary into review, then adding
-recording-quality recovery. Speaker correction now reaches generated notes in
-source and in the packaged Preview bundle. Cross-meeting questions can follow
-once the source record is reliable.
+The current work is exposing the new local vocabulary and recording-quality
+evidence in review, then adding safe transcription retry. Speaker correction
+and vocabulary replacements now reach generated notes in source and in the
+packaged Preview bundle. Cross-meeting questions can follow once the source
+record is reliable.
 Cloud accounts, automatic call detection, meeting bots, and live meeting chat do
 not enter the roadmap through competitor comparison alone.
 
@@ -78,9 +79,9 @@ The summary-first note is the baseline. It is not another roadmap item.
 | 0 | A completed meeting remains visible and reopens from Meetings in the packaged app | Preview passed; release package pending | A readable artifact must not disappear from its own journey |
 | 1a | The reader can see who said what | Implemented in source and preview | Render the attribution already carried by each transcript turn |
 | 1b | The reader can correct who said what | Implemented, tested, and packaged in Preview; rendered save-and-regenerate journey pending | Never hide uncertainty or overwrite the source transcript |
-| 2 | Names and jargon stay correct across meetings | Bounded local domain and storage built; controls and transcript application queued | Vocabulary remains local, visible, editable, and bounded |
-| 3 | The reader can tell whether the audio caused a bad transcript | Queued | Quality evidence stays distinct from capture-integrity evidence |
-| 4 | Every recoverable problem leads to its exact repair | Current-meeting recovery presentation built; remaining destinations and retry flows queued | Recovery actions must not imply that a failed operation succeeded |
+| 2 | Names and jargon stay correct across meetings | Bounded storage and provenance-safe note application built; review controls queued | Vocabulary remains local, visible, editable, and bounded |
+| 3 | The reader can tell whether the audio caused a bad transcript | New captures persist separate quality evidence and microphone identity; review and retry queued | Quality evidence stays distinct from capture-integrity evidence |
+| 4 | Every recoverable problem leads to its exact repair | Note retry, Meetings, and withheld-turn restoration are real; remaining destinations queued | Recovery actions must not imply that a failed operation succeeded |
 | 5 | The reader can find source passages across past meetings | Separate product decision | Search remains local, source-linked, and unavailable during capture |
 
 ## Delivery plan
@@ -124,13 +125,21 @@ meeting, inspect the original speaker label, apply a correction in a disposable
 fixture, regenerate the note, follow a source link, return to Meetings, and
 reopen the same meeting. The installed production app remains untouched.
 
-### Wave 2 — integrate in dependency order
+### Wave 2 foundation — completed in parallel
+
+| Packet | Delivered foundation | Remaining product work |
+|---|---|---|
+| Vocabulary projection | Exact replacements travel as bounded original-source ranges. Changed-length prompt text maps evidence back to the retained transcript. The current store is re-attested before durable note replacement. | Add the dedicated controls, show applications in transcript review, and support **Always correct this**. |
+| Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Expose the evidence in review, add retained-audio playback, and build versioned transcription retry. |
+| Withheld-turn recovery | A valid withheld row now exposes one source-bound restore action. The command, capability, build contract, and shell contract are synchronized. | Add the remaining exact destinations only after their owning controls exist. |
+
+### Wave 2 integration — continue in dependency order
 
 1. Expose local vocabulary through a small dedicated sheet. Keep every entry
    visible, editable, disableable, and local.
-2. Apply vocabulary and explicit text corrections through the same immutable
-   corrected-transcript projection used by note generation.
-3. Surface stored recording-quality evidence. Then add transcription retry from
+2. Show current vocabulary applications through the same immutable projection
+   already used by note generation. Keep retained transcript offsets visible.
+3. Surface the stored recording-quality evidence. Then add transcription retry from
    retained audio, version comparison, and explicit keep-or-replace choice.
 4. Complete the exact-repair map only after every destination exists. A button
    that opens a placeholder does not count as recovery.
@@ -204,6 +213,30 @@ from that process. No real correction was saved and no private note was
 regenerated to manufacture a passing visual check. The source and package gates
 are green; the rendered save, regenerate, source-link, Back, and reopen journey
 remains a release gate.
+
+**Wave 2 source and package receipt.** Vocabulary replacements are now stored
+in durable note-generation requests as bounded source ranges. The note child
+checks the retained transcript and each source-span digest before model use.
+It changes only model-facing excerpts; generated-note provenance and locators
+continue to name the original transcript. Empty vocabulary keeps the former
+wire shape.
+
+New captures now persist resolved microphone identity and a separate versioned
+quality block. Capture integrity remains the existing pass/fail floor; silence,
+clipping, low input, and steady background energy are guidance evidence and do
+not change that verdict. Rust recovery accepts the two named optional receipt
+fields while continuing to reject unrelated fields and changed audio.
+
+A withheld transcript row now exposes **Restore this turn** only when the
+current meeting, transcript digest, source row, and idle capture state agree.
+The backend repeats those checks and refreshes the meeting only after the
+existing immutable restoration operation succeeds.
+
+The combined session-core suite passed 429 unit tests, 17 process-fault tests,
+and 8 doc tests. The desktop suite passed 132 tests, the shell contract passed
+5, and the UI suite passed 23. The rebuilt runtime passed 217 worker tests.
+The refreshed Preview bundle built and passed bundle verification. The installed
+production app remains unchanged.
 
 **Remaining release gate.** The production 0.5.8 bundle has not been signed,
 installed, or substituted for `/Applications/Yawn.app`. The next release must
