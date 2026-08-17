@@ -365,6 +365,28 @@ export function transcriptRetryPresentation({
   };
 }
 
+// The read projection uses an array so each observation carries its own
+// human-readable kind. Keep map tolerance for an older local candidate while
+// normalizing the renderer to one small, content-safe shape.
+export function transcriptRetryQualityPresentation(quality = null) {
+  const state = typeof quality?.state === "string" && quality.state ? quality.state : "unavailable";
+  const message = typeof quality?.message === "string" && quality.message
+    ? quality.message
+    : "Capture-quality details are unavailable for this retry.";
+  const observations = Array.isArray(quality?.observations)
+    ? quality.observations.map((observation) => ({
+      kind: typeof observation?.kind === "string" && observation.kind ? observation.kind : "Observation",
+      detail: observation?.message || observation?.detail || observation?.status || "Observed",
+    }))
+    : quality?.observations && typeof quality.observations === "object"
+      ? Object.entries(quality.observations).map(([kind, observation]) => ({
+        kind,
+        detail: observation?.message || observation?.detail || observation?.status || observation || "Observed",
+      }))
+      : [];
+  return { state, message, observations };
+}
+
 // The generate control renders only from the note response's own eligibility
 // signal — the backend includes the source pin exactly when the facade would
 // admit the operation, so the browser never re-derives lifecycle rules. The

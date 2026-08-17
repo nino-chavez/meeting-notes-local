@@ -14,6 +14,7 @@ import {
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
+  transcriptRetryQualityPresentation,
   transcriptSpeakerLabel,
   transcriptRetryPresentation,
   transcriptTurnsForSourceSpeaker,
@@ -1024,23 +1025,16 @@ function renderRetryWarnings(warnings, label) {
   return `<section class="retry-warnings" aria-label="${escapeHtml(label)} warnings"><h4>${escapeHtml(label)} warnings</h4><ul>${warnings.map((warning) => `<li>${escapeHtml(retryWarningText(warning))}</li>`).join("")}</ul></section>`;
 }
 
-function retryQualityObservation(label, observation) {
-  const detail = observation && typeof observation === "object"
-    ? observation.message || observation.detail || observation.status || "Observed"
-    : observation;
-  return `<li><span>${escapeHtml(label)}</span><strong>${escapeHtml(detail)}</strong></li>`;
+function retryQualityObservation(observation) {
+  return `<li><span>${escapeHtml(observation.kind)}</span><strong>${escapeHtml(observation.detail)}</strong></li>`;
 }
 
 function renderRetryQuality(quality) {
-  const stateName = quality?.state || "unavailable";
-  const message = quality?.message || "Capture-quality details are unavailable for this retry.";
-  const observations = quality?.observations && typeof quality.observations === "object"
-    ? Object.entries(quality.observations)
-    : [];
+  const presentation = transcriptRetryQualityPresentation(quality);
   return `
-    <section class="retry-quality" data-state="${escapeHtml(stateName)}" aria-labelledby="retry-quality-heading">
-      <div><h3 id="retry-quality-heading">Capture quality</h3><p>${escapeHtml(message)}</p></div>
-      ${observations.length ? `<ul>${observations.map(([label, observation]) => retryQualityObservation(label, observation)).join("")}</ul>` : ""}
+    <section class="retry-quality" data-state="${escapeHtml(presentation.state)}" aria-labelledby="retry-quality-heading">
+      <div><h3 id="retry-quality-heading">Capture quality</h3><p>${escapeHtml(presentation.message)}</p></div>
+      ${presentation.observations.length ? `<ul>${presentation.observations.map(retryQualityObservation).join("")}</ul>` : ""}
     </section>
   `;
 }

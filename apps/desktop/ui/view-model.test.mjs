@@ -19,6 +19,7 @@ import {
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
+  transcriptRetryQualityPresentation,
   transcriptSpeakerLabel,
   transcriptRetryPresentation,
   transcriptTurnsForSourceSpeaker,
@@ -262,6 +263,28 @@ test("a retry candidate resumes only when it is bound to the current transcript"
   assert.equal(transcriptRetryPresentation({ ...context, pending: { ...pending, sourceTranscriptSha256: "c".repeat(64) } }).pending, null);
 });
 
+test("retry quality keeps canonical observation labels from the reader projection", () => {
+  assert.deepEqual(transcriptRetryQualityPresentation({
+    state: "available",
+    message: "Capture checks are available.",
+    observations: [
+      { kind: "Silence", status: "unknown", message: "No silence assessment was recorded." },
+      { kind: "Microphone", status: "ok", message: "The microphone was available." },
+    ],
+  }), {
+    state: "available",
+    message: "Capture checks are available.",
+    observations: [
+      { kind: "Silence", detail: "No silence assessment was recorded." },
+      { kind: "Microphone", detail: "The microphone was available." },
+    ],
+  });
+  assert.deepEqual(transcriptRetryQualityPresentation({
+    observations: { silence: { status: "unknown" } },
+  }).observations, [{ kind: "silence", detail: "unknown" }]);
+  assert.equal(transcriptRetryQualityPresentation().message, "Capture-quality details are unavailable for this retry.");
+});
+
 test("retry comparison UI keeps the decision explicit and uses exact backend commands", async () => {
   const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
   assert.match(source, /invoke\("transcript_retry_pending", \{\s*meetingId: retry\.meetingId,\s*sourceTranscriptSha256: retry\.sourceTranscriptSha256,/);
@@ -282,7 +305,6 @@ test("retry comparison redacts withheld text and keeps the summary before person
   assert.match(source, /turn\.withheld \? "This turn was withheld by the voice check\." : escapeHtml\(turn\.text\)/);
   assert.match(source, /renderMeetingNote\(note, claimEvidence\)\}\n\s*\$\{renderTranscriptRetryAction\(note, transcript, recovery\)\}\n\s*\$\{renderTranscriptDisclosure\(transcript, recovery\)\}/);
   assert.match(source, /<aside class="meeting-notes-pane">\s*<section class="note-section your-notes-section"/);
-  assert.match(source, /Capture-quality details are unavailable for this retry\./);
   assert.match(source, /function renderRetryWarnings\(warnings, label\)/);
 });
 
