@@ -82,8 +82,8 @@ The summary-first note is the baseline. It is not another roadmap item.
 | 1a | The reader can see who said what | Implemented in source and preview | Render the attribution already carried by each transcript turn |
 | 1b | The reader can correct who said what | Implemented, tested, and packaged in Preview; rendered save-and-regenerate journey pending | Never hide uncertainty or overwrite the source transcript |
 | 2 | Names and jargon stay correct across meetings | Review controls, bounded storage, and provenance-safe note application are implemented, tested, and packaged in Preview | Vocabulary remains local, visible, editable, and bounded |
-| 3 | The reader can tell whether the audio caused a bad transcript | Verified quality guidance and a source-bound retry comparison are implemented, tested, and packaged in Preview; retained-audio playback, device explanation, and rendered verification remain | Quality evidence stays distinct from capture-integrity evidence |
-| 4 | Every recoverable problem leads to its exact repair | Note retry, Meetings, withheld-turn restoration, vocabulary, and transcript retry are real destinations; the remaining warning map is incomplete | Recovery actions must not imply that a failed operation succeeded |
+| 3 | The reader can tell whether the audio caused a bad transcript | Verified quality guidance, safe device context, retained-audio playback, and a source-bound retry comparison are implemented, tested, and packaged in Preview; rendered verification remains | Quality evidence stays distinct from capture-integrity evidence |
+| 4 | Every recoverable problem leads to its exact repair | Existing recovery controls and the current stable reopen errors route to the selected meeting or Meetings; warnings without a real destination remain future work | Recovery actions must not imply that a failed operation succeeded |
 | 5 | The reader can find source passages across past meetings | Separate product decision | Search remains local, source-linked, and unavailable during capture |
 
 ## Delivery plan
@@ -132,7 +132,7 @@ reopen the same meeting. The installed production app remains untouched.
 | Packet | Delivered foundation | Remaining product work |
 |---|---|---|
 | Vocabulary projection | Exact replacements travel as bounded original-source ranges. Changed-length prompt text maps evidence back to the retained transcript. The current store is re-attested before durable note replacement. | Dedicated controls and current-meeting application counts are now built. **Always correct this** remains a later shortcut into the same ledger. |
-| Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Reader-safe review guidance and versioned retry are now built. Retained-audio playback and device explanation remain. |
+| Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Reader-safe guidance, bounded device context, retained-audio playback, and versioned retry are now built. Rendered verification remains. |
 | Withheld-turn recovery | A valid withheld row now exposes one source-bound restore action. The command, capability, build contract, and shell contract are synchronized. | Add the remaining exact destinations only after their owning controls exist. |
 
 ### Wave 2 integration — built, rendered gate pending
@@ -148,13 +148,16 @@ reopen the same meeting. The installed production app remains untouched.
    guidance, compare the current and retry transcripts, and require an explicit
    keep-or-promote choice. Promotion clears the stale note pointer but does not
    regenerate a note automatically.
-5. Complete the exact-repair map only after every destination exists. A button
-   that opens a placeholder does not count as recovery.
+5. **Built and packaged in Preview:** route the current stable reopen errors to
+   the selected meeting or Meetings. A failed playback attempt offers a refresh
+   that mints new single-use handles instead of leaving dead controls.
+6. Complete future additions to the exact-repair map only after their
+   destinations exist. A button that opens a placeholder does not count as
+   recovery.
 
-The remaining product work in this outcome is narrower: retained-audio
-playback, a safe explanation of the recorded device, and the warnings whose
-destinations do not exist yet. Those gaps do not weaken the retry contract, but
-they keep roadmap outcomes 3 and 4 open.
+The remaining product work is now the rendered journey and warnings whose
+destinations do not exist yet. Those gates do not weaken the source-bound retry
+or playback contracts, but they keep these outcomes short of release.
 
 ### Wave 3 decision — not started
 
@@ -297,22 +300,51 @@ stale, released, corrupt, cross-meeting, or malformed candidates. The desktop
 handler, capabilities, permission schemas, and shell contract expose the same
 three commands.
 
-The combined session-core suite passed 453 unit tests. Its 17 process-fault and
+Meeting review now projects recording-device context as `identified` or
+`unknown`. The web view receives neither the microphone name nor its index or
+host API. The identified state says only that an identity was recorded. The
+unknown state offers **Check audio input** without claiming which device was
+used.
+
+Retained microphone and system audio now have separate **Play** controls. Each
+control spends one opaque, source-specific handle. Native code rechecks and
+opens the private artifact, passes that open file to fixed `/usr/bin/afplay`
+through standard input, and owns the child until it completes or is stopped.
+No recording path, bytes, digest, or generic file or shell authority crosses
+into the web view. While that child is active, scheduled retention defers its
+storage pass. The next pass may release due audio only after the child has been
+stopped or reaped.
+
+Failed playback and the current stable reopen errors now offer a refresh for
+the selected meeting. That refresh reloads Meetings, falls back to the home
+view if the meeting disappeared, and otherwise mints fresh single-use handles.
+The build command list, handler, capability, generated permissions, and shell
+contract now expose the same speaker-correction and playback commands.
+
+The combined session-core suite passed 456 unit tests. Its 17 process-fault and
 8 doc tests were unchanged from the prior combined gate. The desktop suite
-passed 137 tests, the shell contract passed 5, the build matrix passed 5, and
-the UI suite passed 30. The worker suite passed 222 tests with 10 platform
+passed 142 tests, the shell contract passed 6, the build matrix passed 5, and
+the UI suite passed 37. The worker suite passed 222 tests with 10 platform
 skips. The internal worker runtime rebuilt and verified. `Yawn Preview.app`
 rebuilt and passed bundle verification.
 
-An independent read-only adversarial review re-derived the source bindings,
-mutation boundaries, restart behavior, web-view projection, and command parity.
-It reported no material findings. That review inspected source and assertions;
+Independent read-only review first found a missing speaker-correction command in
+the build manifest, spent playback handles without a recovery action, three
+unmapped stable reopen errors, unsafe use of file descriptor 3, and scheduled
+retention that could release audio while the owned player still held it. The
+fixes synchronized the command contract, completed the exact map for current
+stable reopen errors,
+moved playback to inherited standard input, and made active playback defer the
+retention pass without touching storage. A second focused review reported zero
+material findings in that scope. Those reviews inspected source and assertions;
 the executable test evidence above comes from the build session.
 
-**Rendered retry boundary.** Computer-use targeted the exact Preview bundle,
+**Rendered review boundary.** Computer-use targeted the exact Preview bundle,
 but the Mac was locked and automatic unlock failed. The retry comparison,
-quality messages, decide-later close, keep, promote, and post-promotion note
-state have not been observed in the rendered app. They remain a release gate.
+quality and device messages, retained-audio controls, recovery actions,
+decide-later close, keep, promote, and post-promotion note state have not been
+observed in the rendered app. They remain a release gate. No real meeting audio
+was played to manufacture a passing check.
 
 **Remaining release gate.** The production 0.5.8 bundle has not been signed,
 installed, or substituted for `/Applications/Yawn.app`. The next release must
@@ -398,20 +430,22 @@ It does not widen Settings beyond audio access and model storage.
 
 ## 3. Explain recording quality and allow a safe retry
 
-**Outcome.** When a transcript looks wrong, the reader can determine whether the
-recording was silent, clipped, noisy, incomplete, or captured from the wrong
-microphone before blaming the speech or note model.
+**Outcome.** When a transcript looks wrong, the reader can inspect verified
+quality evidence, confirm whether a microphone identity was recorded, listen to
+retained audio, and compare a source-bound retry before blaming the speech or
+note model. A recorded identity does not prove that it was the intended input.
 
 **Current state.** Capture persists integrity evidence, resolved microphone
 identity, and a separate quality block. Meeting review exposes only verified,
-product-authored quality guidance. The retry comparison and explicit keep or
-promote decisions are built and packaged in Preview. Retained-audio playback,
-safe device explanation, and the rendered journey remain open.
+product-authored quality guidance. The retry comparison, explicit keep or
+promote decisions, retained-audio playback, and bounded device explanation are
+built and packaged in Preview. The rendered journey remains open.
 
 **Scope.**
 
-- Show the microphone selected for the recording
-- Surface silence, clipping, low input, dropouts, and material background noise
+- Say whether a microphone identity was recorded without exposing its name,
+  index, or host API, and link an unknown state to **Check audio input**
+- Surface silence, clipping, low input, and material background noise
   as separate observations
 - Let the reader play retained audio while the retention period allows it
 - Retry transcription from the unchanged recording
@@ -435,7 +469,7 @@ where the reader can fix it.
 
 Examples:
 
-- Wrong microphone → open audio access and device guidance
+- Recording device not verified → open audio access guidance
 - Misspelled name → open the local vocabulary
 - Wrong speaker → open speaker correction for that turn
 - Incomplete transcript → listen to retained audio and retry transcription
@@ -446,8 +480,9 @@ does not satisfy the outcome when Yawn already knows the failing meeting and
 operation.
 
 **Current state.** Note retry, Meetings, withheld-turn restoration, local
-vocabulary, speaker correction, and transcript retry have real destinations.
-The remaining warning inventory has not yet been closed against that map.
+vocabulary, speaker correction, transcript retry, failed playback, and the
+current stable reopen errors have real destinations. Future warnings remain
+blocked until their owning controls exist.
 
 **Done when.** Every recoverable warning has one primary action, lands at the
 correct meeting or control, and preserves the failed artifact until the repair
