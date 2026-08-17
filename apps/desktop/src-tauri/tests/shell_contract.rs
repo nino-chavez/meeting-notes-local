@@ -22,6 +22,9 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "library_snapshot",
     "library_set_meeting_title",
     "library_open_note",
+    "library_play_retained_audio",
+    "library_retained_audio_playback_status",
+    "library_stop_retained_audio",
     "preview_library_open_evidence",
     "library_open_transcript",
     "library_open_transcript_file",
@@ -67,6 +70,9 @@ const MAIN_PERMISSIONS: &[&str] = &[
     "allow-library-snapshot",
     "allow-library-set-meeting-title",
     "allow-library-open-note",
+    "allow-library-play-retained-audio",
+    "allow-library-retained-audio-playback-status",
+    "allow-library-stop-retained-audio",
     "allow-preview-library-open-evidence",
     "allow-library-open-transcript",
     "allow-library-open-transcript-file",
@@ -130,12 +136,32 @@ fn product_windows_have_only_the_commands_the_new_surface_uses() {
 
     assert_eq!(main, expected);
     assert_eq!(preview, expected);
-    for forbidden in ["profile", "folder", "layout", "corpus", "reference"] {
+    for forbidden in [
+        "profile",
+        "folder",
+        "layout",
+        "corpus",
+        "reference",
+        "shell",
+        "fs",
+    ] {
         assert!(
             main.iter()
                 .all(|permission| !permission.contains(forbidden))
         );
     }
+}
+
+#[test]
+fn retained_audio_playback_stays_on_the_fixed_native_file_descriptor_route() {
+    let source = include_str!("../src/main.rs");
+    assert!(source.contains("const RETAINED_AUDIO_PLAYER: &str = \"/usr/bin/afplay\""));
+    assert!(source.contains("const RETAINED_AUDIO_FD: RawFd = 3"));
+    assert!(source.contains("handoff_retained_audio_fd(inherited_fd)"));
+    assert!(source.contains("Command::new(RETAINED_AUDIO_PLAYER)"));
+    assert!(source.contains("/dev/fd/{RETAINED_AUDIO_FD}"));
+    assert!(!source.contains("tauri_plugin_shell"));
+    assert!(!source.contains("tauri_plugin_fs"));
 }
 
 #[test]

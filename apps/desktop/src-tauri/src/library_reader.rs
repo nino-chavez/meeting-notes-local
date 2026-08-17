@@ -224,6 +224,10 @@ pub(crate) struct LibraryNoteResponse {
     /// those acts authorizes changing the reader's private note.
     pub(crate) operator_note_handle: Option<String>,
     pub(crate) audio_deletion_handle: Option<String>,
+    /// Opaque, source-specific native playback authorities. They carry no
+    /// file identity and are valid for one immediate play request only.
+    pub(crate) microphone_playback_handle: Option<String>,
+    pub(crate) system_playback_handle: Option<String>,
     /// Separate from the raw-recording and whole-meeting handles. It exists
     /// only while this projection still proves an admitted source transcript.
     pub(crate) transcript_deletion_handle: Option<String>,
@@ -826,10 +830,14 @@ impl LibraryReader {
         if !self.revalidate(active_meeting_ids) {
             return Self::stale_note("");
         }
-        self.open_note_current(handle)
+        self.open_note_current(handle, active_meeting_ids)
     }
 
-    fn open_note_current(&mut self, handle: &str) -> LibraryNoteResponse {
+    fn open_note_current(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+    ) -> LibraryNoteResponse {
         // Opening a note establishes the next evidence-response boundary.
         let Some(hit) = self.handles.get(handle).cloned() else {
             self.clear_handles();
@@ -867,6 +875,24 @@ impl LibraryReader {
             .flatten();
         let audio_deletion_handle =
             self.retain_audio_deletion_handle(&meeting_id, audio_retention.state == "retained");
+        let microphone_playback_handle = (audio_retention.state == "retained")
+            .then(|| {
+                self.retain_audio_playback_handle(
+                    &meeting_id,
+                    RetainedAudioSource::Microphone,
+                    active_meeting_ids,
+                )
+            })
+            .flatten();
+        let system_playback_handle = (audio_retention.state == "retained")
+            .then(|| {
+                self.retain_audio_playback_handle(
+                    &meeting_id,
+                    RetainedAudioSource::System,
+                    active_meeting_ids,
+                )
+            })
+            .flatten();
         let transcript_deletion_handle = self.retain_transcript_deletion_handle(&meeting_id);
         let meeting_deletion_handle = self.retain_meeting_deletion_handle(&meeting_id);
         match lifecycle {
@@ -876,6 +902,8 @@ impl LibraryReader {
                     transcript_handle: self.retain_transcript_handle(&meeting_id),
                     operator_note_handle,
                     audio_deletion_handle,
+                    microphone_playback_handle,
+                    system_playback_handle,
                     transcript_deletion_handle,
                     meeting_deletion_handle,
                     meeting_id: meeting_id.clone(),
@@ -895,6 +923,8 @@ impl LibraryReader {
                     transcript_handle: transcript_handle.clone(),
                     operator_note_handle,
                     audio_deletion_handle,
+                    microphone_playback_handle,
+                    system_playback_handle,
                     transcript_deletion_handle,
                     meeting_deletion_handle,
                     meeting_id: meeting_id.clone(),
@@ -947,6 +977,8 @@ impl LibraryReader {
             transcript_handle: self.retain_transcript_handle(&meeting_id),
             operator_note_handle,
             audio_deletion_handle,
+            microphone_playback_handle,
+            system_playback_handle,
             transcript_deletion_handle,
             meeting_deletion_handle,
             meeting_id: meeting_id.into(),
@@ -1136,6 +1168,8 @@ impl LibraryReader {
             transcript_handle: None,
             operator_note_handle: None,
             audio_deletion_handle: None,
+            microphone_playback_handle: None,
+            system_playback_handle: None,
             transcript_deletion_handle: None,
             meeting_deletion_handle: None,
             meeting_id: meeting_id.into(),
@@ -1688,6 +1722,8 @@ impl LibraryReader {
             transcript_handle: None,
             operator_note_handle: None,
             audio_deletion_handle: None,
+            microphone_playback_handle: None,
+            system_playback_handle: None,
             transcript_deletion_handle: None,
             meeting_deletion_handle: None,
             meeting_id: meeting_id.into(),

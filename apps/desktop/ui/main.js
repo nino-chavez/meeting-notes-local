@@ -14,6 +14,7 @@ import {
   noteGenerationPresentation,
   permissionSummary,
   recordingDevicePresentation,
+  retainedAudioPlaybackPresentation,
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
@@ -31,6 +32,7 @@ const invoke = window.__TAURI__?.core?.invoke;
 
 const state = {
   activeView: "home",
+  audioPlayback: { state: "idle", source: null, message: "No recording is playing." },
   busyAction: "",
   consent: { participantsConsented: false, headphones: false, operatorAlone: false },
   error: "",
@@ -64,6 +66,7 @@ let noteSaveTimer;
 let libraryNoteSaveTimer;
 let permissionsRefreshTask;
 let activityTimer;
+let audioPlaybackPollActive = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -706,6 +709,7 @@ function renderMeeting() {
   const canManage = canDeleteRecording || canDeleteTranscript || canDeleteMeeting;
   const retentionMessage = note?.audioRetention?.message || "Audio-retention details are unavailable for this meeting.";
   const recovery = meetingRecoveryPresentation(note, transcript, state.generatingMeetingId);
+  const playback = retainedAudioPlaybackPresentation(note, recovery, state.audioPlayback);
   return `
     <article class="meeting-page meeting-workspace-page" aria-labelledby="meeting-title">
       <button class="text-button" type="button" data-action="meetings">Back to meetings</button>
@@ -739,6 +743,7 @@ function renderMeeting() {
           ${renderTranscriptDisclosure(transcript, recovery)}
         </main>
         <aside class="meeting-notes-pane">
+          ${renderRetainedAudioPlayback(playback)}
           <section class="note-section your-notes-section" aria-labelledby="operator-note-heading">
           <div class="note-editor-head"><h3 id="operator-note-heading">Your notes</h3><span class="save-state" id="library-note-save-state">${escapeHtml(selectedNoteCopy)}</span></div>
           ${operatorNote?.unreadable
@@ -749,6 +754,28 @@ function renderMeeting() {
         </aside>
       </div>
     </article>
+  `;
+}
+
+function renderRetainedAudioPlayback(playback) {
+  if (!playback) return "";
+  const playingLabel = playback.playingSource === "microphone"
+    ? "Playing microphone recording"
+    : playback.playingSource === "system"
+      ? "Playing system audio recording"
+      : playback.status === "completed"
+        ? "Recording finished"
+        : "No recording is playing";
+  return `
+    <section class="note-section retained-audio-section" aria-labelledby="retained-audio-heading">
+      <h3 id="retained-audio-heading">Listen to saved audio</h3>
+      <p class="note-editor-help">Microphone and system audio are separate recordings.</p>
+      <div class="retained-audio-controls">
+        ${playback.controls.map((control) => `<button class="button button-secondary button-small" type="button" data-action="play-retained-audio" data-source="${escapeHtml(control.source)}" ${playback.isPlaying ? "disabled" : ""}>${escapeHtml(control.label)}</button>`).join("")}
+        ${playback.isPlaying ? `<button class="button button-quiet button-small" type="button" data-action="stop-retained-audio">Stop</button>` : ""}
+      </div>
+      <p class="save-state" aria-live="polite">${escapeHtml(playingLabel)}</p>
+    </section>
   `;
 }
 
@@ -1413,7 +1440,43 @@ async function loadSelectedMeeting(row) {
     operatorNoteSaveQueue: Promise.resolve(),
     operatorNoteSaveState: operatorNote.unreadable ? "unreadable" : operatorNote.text ? "saved" : "local",
   };
+  state.audioPlayback = { state: "idle", source: null, message: "No recording is playing." };
   state.activeView = "meeting";
+}
+
+async function playRetainedAudio(source) {
+  const note = state.selected?.note;
+  const handle = source === "microphone"
+    ? note?.microphonePlaybackHandle
+    : source === "system"
+      ? note?.systemPlaybackHandle
+      : "";
+  if (!handle) return;
+  await runBusy(`play-${source}`, async () => {
+    const response = await invoke("library_play_retained_audio", { handle });
+    state.audioPlayback = response;
+    if (response.state !== "playing") throw new Error(response.message || "Retained audio is unavailable. Reopen Library and try again.");
+  });
+}
+
+async function stopRetainedAudio() {
+  await runBusy("stop-retained-audio", async () => {
+    state.audioPlayback = await invoke("library_stop_retained_audio");
+  });
+}
+
+async function refreshRetainedAudioPlayback() {
+  if (!state.selected || state.audioPlayback?.state !== "playing" || audioPlaybackPollActive) return;
+  audioPlaybackPollActive = true;
+  try {
+    state.audioPlayback = await invoke("library_retained_audio_playback_status");
+    render();
+  } catch (error) {
+    state.audioPlayback = { state: "unavailable", source: null, message: "Retained audio is unavailable. Reopen Library and try again." };
+    reportError(error);
+  } finally {
+    audioPlaybackPollActive = false;
+  }
 }
 
 async function loadPendingTranscriptRetry(note, transcript) {
@@ -1799,6 +1862,9 @@ async function flushSelectedNoteSave() {
 
 async function openMeetings() {
   await flushSelectedNoteSave();
+  if (invoke && state.audioPlayback?.state === "playing") {
+    state.audioPlayback = await invoke("library_stop_retained_audio");
+  }
   state.selected = null;
   state.meetingManagementOpen = false;
   state.transcriptQuery = "";
@@ -1947,6 +2013,8 @@ function handleClick(event) {
     render();
   }
   else if (action === "generate-note") void generateSelectedNote();
+  else if (action === "play-retained-audio") void playRetainedAudio(control.dataset.source);
+  else if (action === "stop-retained-audio") void stopRetainedAudio();
   else if (action === "rename-meeting") openMeetingRename();
   else if (action === "delete-recording") openMeetingDeletion("delete-recording");
   else if (action === "delete-transcript") openMeetingDeletion("delete-transcript");
@@ -2070,6 +2138,7 @@ async function initialize() {
     if (shouldPollSnapshot(state.snapshot)) {
       void refreshSnapshot().catch(reportError);
     }
+    void refreshRetainedAudioPlayback();
   }, 900);
 }
 

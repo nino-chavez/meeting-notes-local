@@ -929,6 +929,26 @@ h3 {
   top: 78px;
   min-width: 0;
   align-self: start;
+  display: grid;
+  gap: 14px;
+}
+
+.retained-audio-section {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.retained-audio-section .note-editor-help {
+  margin: -4px 0 14px;
+}
+
+.retained-audio-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .meeting-notes-pane .your-notes-section {

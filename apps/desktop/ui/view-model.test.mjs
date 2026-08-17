@@ -19,6 +19,7 @@ import {
   noteGenerationPresentation,
   permissionSummary,
   recordingDevicePresentation,
+  retainedAudioPlaybackPresentation,
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
@@ -91,6 +92,23 @@ test("small display helpers stay readable", () => {
   assert.equal(retentionLabel(1), "1 day");
   assert.equal(retentionLabel(7), "7 days");
   assert.equal(humanize("evidence_state"), "Evidence State");
+});
+
+test("retained audio playback keeps sources separate and disappears outside a normal retained detail", () => {
+  const note = {
+    state: "note",
+    audioRetention: { state: "retained" },
+    microphonePlaybackHandle: "opaque-mic",
+    systemPlaybackHandle: "opaque-system",
+  };
+  const idle = retainedAudioPlaybackPresentation(note, null, { state: "idle" });
+  assert.deepEqual(idle.controls.map((control) => control.label), ["Play microphone", "Play system audio"]);
+  const playing = retainedAudioPlaybackPresentation(note, null, { state: "playing", source: "system" });
+  assert.equal(playing.isPlaying, true);
+  assert.equal(playing.playingSource, "system");
+  assert.deepEqual(playing.controls, []);
+  assert.equal(retainedAudioPlaybackPresentation({ ...note, audioRetention: { state: "released" } }, null), null);
+  assert.equal(retainedAudioPlaybackPresentation(note, { state: "recovery" }), null);
 });
 
 test("a point-only artifact is not presented as a meeting summary", () => {
@@ -341,7 +359,7 @@ test("retry comparison redacts withheld text and keeps the summary before person
   const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
   assert.match(source, /turn\.withheld \? "This turn was withheld by the voice check\." : escapeHtml\(turn\.text\)/);
   assert.match(source, /renderMeetingNote\(note, claimEvidence\)\}\n\s*\$\{renderGenerateNote\(note, recovery\)\}\n\s*\$\{renderTranscriptRetryAction\(note, transcript, recovery\)\}\n\s*\$\{renderTranscriptDisclosure\(transcript, recovery\)\}/);
-  assert.match(source, /<aside class="meeting-notes-pane">\s*<section class="note-section your-notes-section"/);
+  assert.match(source, /<aside class="meeting-notes-pane">\s*\$\{renderRetainedAudioPlayback\(playback\)\}\s*<section class="note-section your-notes-section"/);
   assert.match(source, /function renderRetryWarnings\(warnings, label\)/);
   assert.match(source, /renderRetryRecordingDevice\(retry\.recordingDevice\)/);
   assert.doesNotMatch(source, /retry\.recordingDevice\.(name|index|hostapi|message)/);
@@ -505,4 +523,13 @@ test("speaker corrections no longer create a recovery block before note generati
     claims: [{ claimType: "summary", claim: "The current note." }],
   }, { state: "transcript", turns: [{ speakerCorrected: true }] });
   assert.equal(recovery, null);
+});
+
+test("meeting detail exposes only explicit retained-audio controls and polls the owned player", async () => {
+  const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  assert.match(source, /Microphone and system audio are separate recordings\./);
+  assert.match(source, /data-action="stop-retained-audio"/);
+  assert.match(source, /invoke\("library_play_retained_audio", \{ handle \}\)/);
+  assert.match(source, /invoke\("library_retained_audio_playback_status"\)/);
+  assert.match(source, /invoke\("library_stop_retained_audio"\)/);
 });

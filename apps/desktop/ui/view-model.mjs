@@ -187,6 +187,27 @@ export function retentionLabel(days) {
   return `${days} ${Number(days) === 1 ? "day" : "days"}`;
 }
 
+// Playback is available only for a freshly opened, retained recording on a
+// normal completed detail view. Handles remain opaque values for the native
+// command; this presentation deliberately contains no fallback selector.
+export function retainedAudioPlaybackPresentation(note, recovery, playback = {}) {
+  if (!note || recovery || note.audioRetention?.state !== "retained") return null;
+  if (!["note", "summary-failed", "transcript-only"].includes(note.state)) return null;
+  const availableControls = [
+    { source: "microphone", handle: note.microphonePlaybackHandle, label: "Play microphone" },
+    { source: "system", handle: note.systemPlaybackHandle, label: "Play system audio" },
+  ].filter((control) => Boolean(control.handle));
+  if (!availableControls.length) return null;
+  const playingSource = playback?.state === "playing" ? playback.source : "";
+  return {
+    controls: playback?.state === "idle" || !playback?.state ? availableControls : [],
+    playingSource,
+    isPlaying: Boolean(playingSource),
+    status: playback?.state || "idle",
+    message: typeof playback?.message === "string" ? playback.message : "",
+  };
+}
+
 export function humanize(value) {
   return String(value || "").replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

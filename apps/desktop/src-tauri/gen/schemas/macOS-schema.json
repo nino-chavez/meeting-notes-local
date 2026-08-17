@@ -279,10 +279,22 @@
           "markdownDescription": "Enables the library_open_transcript_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the library_play_retained_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-play-retained-audio",
+          "markdownDescription": "Enables the library_play_retained_audio command without any pre-configured scope."
+        },
+        {
           "description": "Enables the library_rename_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-library-rename-folder",
           "markdownDescription": "Enables the library_rename_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_retained_audio_playback_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-retained-audio-playback-status",
+          "markdownDescription": "Enables the library_retained_audio_playback_status command without any pre-configured scope."
         },
         {
           "description": "Enables the library_save_operator_note command without any pre-configured scope.",
@@ -301,6 +313,12 @@
           "type": "string",
           "const": "allow-library-snapshot",
           "markdownDescription": "Enables the library_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_stop_retained_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-stop-retained-audio",
+          "markdownDescription": "Enables the library_stop_retained_audio command without any pre-configured scope."
         },
         {
           "description": "Enables the local_vocabulary_add command without any pre-configured scope.",
@@ -651,10 +669,22 @@
           "markdownDescription": "Denies the library_open_transcript_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the library_play_retained_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-play-retained-audio",
+          "markdownDescription": "Denies the library_play_retained_audio command without any pre-configured scope."
+        },
+        {
           "description": "Denies the library_rename_folder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-library-rename-folder",
           "markdownDescription": "Denies the library_rename_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_retained_audio_playback_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-retained-audio-playback-status",
+          "markdownDescription": "Denies the library_retained_audio_playback_status command without any pre-configured scope."
         },
         {
           "description": "Denies the library_save_operator_note command without any pre-configured scope.",
@@ -673,6 +703,12 @@
           "type": "string",
           "const": "deny-library-snapshot",
           "markdownDescription": "Denies the library_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_stop_retained_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-stop-retained-audio",
+          "markdownDescription": "Denies the library_stop_retained_audio command without any pre-configured scope."
         },
         {
           "description": "Denies the local_vocabulary_add command without any pre-configured scope.",

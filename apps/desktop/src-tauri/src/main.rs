@@ -124,6 +124,8 @@ const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 const SETTINGS_WINDOW_LABEL: &str = "settings";
+const RETAINED_AUDIO_PLAYER: &str = "/usr/bin/afplay";
+const RETAINED_AUDIO_FD: RawFd = 3;
 #[cfg(feature = "preview-surface")]
 const ACTIVE_WINDOW_LABEL: &str = "preview";
 #[cfg(not(feature = "preview-surface"))]
@@ -185,6 +187,10 @@ struct ApplicationState {
     note_model_install_active: AtomicBool,
     note_model_setup: Mutex<NoteModelSetup>,
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
+    /// The one audio child the shell owns. This is deliberately a `Child`,
+    /// never a PID: every stop and reap action is constrained to this exact
+    /// process object rather than a reused system process identifier.
+    audio_playback: Mutex<Option<RetainedAudioPlayback>>,
     preview_profile: Mutex<PreviewProfileSnapshot>,
     preview_enrollment: Mutex<PreviewEnrollmentSurface>,
     // Successful note-projector admission, cached off the hot library-rebuild
@@ -214,11 +220,151 @@ impl Default for ApplicationState {
                 ..NoteModelSetup::default()
             }),
             preview_library: Mutex::new(None),
+            audio_playback: Mutex::new(None),
             preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
             preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
             note_projector: Mutex::new(None),
         }
     }
+}
+
+impl Drop for ApplicationState {
+    fn drop(&mut self) {
+        // App teardown owns the same child slot as explicit Stop. No PID is
+        // retained or signalled after this state goes away.
+        if let Ok(slot) = self.audio_playback.get_mut() {
+            if let Some(mut playback) = slot.take() {
+                playback.stop_and_reap();
+            }
+        }
+    }
+}
+
+/// A fixed native player attached to one already-open, verified retained-audio
+/// file. The child receives `/dev/fd/3`, not a meeting path: the descriptor is
+/// duplicated in the child immediately before exec, which keeps the file
+/// authority out of the webview and prevents `afplay` from reopening storage.
+struct RetainedAudioPlayback {
+    child: Child,
+    source: library_reader::RetainedAudioSource,
+}
+
+impl RetainedAudioPlayback {
+    fn spawn(grant: library_reader::LibraryAudioPlaybackGrant) -> io::Result<Self> {
+        let inherited_fd = grant.file().as_raw_fd();
+        let mut command = Command::new(RETAINED_AUDIO_PLAYER);
+        command
+            .arg(format!("/dev/fd/{RETAINED_AUDIO_FD}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // `dup2` makes descriptor 3 survive exec (including when the source
+        // descriptor was opened with CLOEXEC). `afplay` receives exactly that
+        // inherited file and has no storage path to reopen.
+        unsafe {
+            command.pre_exec(move || handoff_retained_audio_fd(inherited_fd));
+        }
+        let child = command.spawn()?;
+        Ok(Self {
+            child,
+            source: grant.source(),
+        })
+    }
+
+    fn source_name(&self) -> &'static str {
+        match self.source {
+            library_reader::RetainedAudioSource::Microphone => "microphone",
+            library_reader::RetainedAudioSource::System => "system",
+        }
+    }
+
+    fn is_running(&mut self) -> bool {
+        self.child.try_wait().ok().flatten().is_none()
+    }
+
+    fn stop_and_reap(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Places the one verified input at the fixed descriptor the player receives.
+/// The equal-descriptor case is intentional: it must still clear CLOEXEC, but
+/// does not need a second duplicate that could obscure a failure.
+fn handoff_retained_audio_fd(inherited_fd: RawFd) -> io::Result<()> {
+    if inherited_fd < 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid audio descriptor",
+        ));
+    }
+    if inherited_fd != RETAINED_AUDIO_FD
+        && unsafe { libc::dup2(inherited_fd, RETAINED_AUDIO_FD) } == -1
+    {
+        return Err(io::Error::last_os_error());
+    }
+    set_close_on_exec(RETAINED_AUDIO_FD, false)?;
+    let flags = unsafe { libc::fcntl(RETAINED_AUDIO_FD, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::FD_CLOEXEC != 0 {
+        return Err(io::Error::other("audio descriptor remained close-on-exec"));
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetainedAudioPlaybackResponse {
+    state: &'static str,
+    source: Option<&'static str>,
+    message: &'static str,
+}
+
+fn audio_playback_response(
+    state: &'static str,
+    source: Option<&'static str>,
+    message: &'static str,
+) -> RetainedAudioPlaybackResponse {
+    RetainedAudioPlaybackResponse {
+        state,
+        source,
+        message,
+    }
+}
+
+/// Stops and reaps only the process object held by Yawn. A failed kill can
+/// mean the child has just exited; `wait` is still attempted to collect it.
+fn stop_owned_audio_playback(state: &ApplicationState) {
+    let Ok(mut slot) = state.audio_playback.lock() else {
+        return;
+    };
+    if let Some(mut playback) = slot.take() {
+        playback.stop_and_reap();
+    }
+}
+
+fn owned_audio_playback_status(state: &ApplicationState) -> RetainedAudioPlaybackResponse {
+    let Ok(mut slot) = state.audio_playback.lock() else {
+        return audio_playback_response(
+            "unavailable",
+            None,
+            "Retained audio is unavailable. Reopen Library and try again.",
+        );
+    };
+    let Some(playback) = slot.as_mut() else {
+        return audio_playback_response("idle", None, "No recording is playing.");
+    };
+    if playback.is_running() {
+        return audio_playback_response(
+            "playing",
+            Some(playback.source_name()),
+            "Playing retained audio.",
+        );
+    }
+    slot.take();
+    audio_playback_response("completed", None, "The recording finished.")
 }
 
 struct AppModel {
@@ -1644,6 +1790,7 @@ fn start_meeting(
     validate_start_request(retention_days, &attestation)?;
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
+    stop_owned_audio_playback(&state);
     if state.model_install_active.load(Ordering::SeqCst) {
         return Err("Wait for the speech model change to finish before starting a meeting.".into());
     }
@@ -1713,6 +1860,7 @@ fn start_meeting(
 fn stop_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
+    stop_owned_audio_playback(&state);
     let mut model = state.model.lock().expect("application model lock");
     if model.reducer.capture() != CaptureState::Recording {
         return Err("No recording is ready to stop.".into());
@@ -1738,6 +1886,7 @@ fn stop_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
 fn dismiss_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
+    stop_owned_audio_playback(&state);
     let mut model = state.model.lock().expect("application model lock");
     if model.reducer.startup() != StartupState::Ready {
         return Err("Finish the installation check before starting another meeting.".into());
@@ -4507,10 +4656,98 @@ fn library_open_note(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibraryNoteResponse {
+    // A detail view is a playback boundary: reopening it must never leave an
+    // earlier recording playing behind a different meeting.
+    stop_owned_audio_playback(&state);
     state.with_preview_library(
         || library_reader::LibraryReader::unavailable_note(""),
         |reader, active| reader.open_note(&handle, active),
     )
+}
+
+/// Starts the only retained-audio playback route. `handle` is an opaque,
+/// source-bound Library capability; the browser cannot select a path, source,
+/// executable, or any other child-process argument.
+#[tauri::command]
+fn library_play_retained_audio(
+    handle: String,
+    state: State<'_, ApplicationState>,
+) -> RetainedAudioPlaybackResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return audio_playback_response(
+            "unavailable",
+            None,
+            "Retained audio is unavailable. Reopen Library and try again.",
+        );
+    };
+    // A new source always owns the sole player slot. Reap the former child
+    // before consuming the freshly revalidated capability for this launch.
+    stop_owned_audio_playback(&state);
+    let grant = match state.with_preview_library(
+        || {
+            Err(library_reader::LibraryAudioPlaybackAccess {
+                state: "unavailable",
+                message: "Retained audio is unavailable. Reopen Library and try again.".into(),
+            })
+        },
+        |reader, active| reader.authorize_audio_playback(&handle, active),
+    ) {
+        Ok(grant) => grant,
+        Err(access) if access.state == "stale" => {
+            return audio_playback_response(
+                "unavailable",
+                None,
+                "That view is no longer current. Reopen it and try again.",
+            );
+        }
+        Err(_) => {
+            return audio_playback_response(
+                "unavailable",
+                None,
+                "Retained audio is unavailable. Reopen Library and try again.",
+            );
+        }
+    };
+    let source = match grant.source() {
+        library_reader::RetainedAudioSource::Microphone => "microphone",
+        library_reader::RetainedAudioSource::System => "system",
+    };
+    let playback = match RetainedAudioPlayback::spawn(grant) {
+        Ok(playback) => playback,
+        Err(_) => {
+            return audio_playback_response(
+                "unavailable",
+                None,
+                "Retained audio is unavailable. Reopen Library and try again.",
+            );
+        }
+    };
+    let Ok(mut slot) = state.audio_playback.lock() else {
+        let mut playback = playback;
+        playback.stop_and_reap();
+        return audio_playback_response(
+            "unavailable",
+            None,
+            "Retained audio is unavailable. Reopen Library and try again.",
+        );
+    };
+    *slot = Some(playback);
+    audio_playback_response("playing", Some(source), "Playing retained audio.")
+}
+
+#[tauri::command]
+fn library_retained_audio_playback_status(
+    state: State<'_, ApplicationState>,
+) -> RetainedAudioPlaybackResponse {
+    owned_audio_playback_status(&state)
+}
+
+#[tauri::command]
+fn library_stop_retained_audio(
+    state: State<'_, ApplicationState>,
+) -> RetainedAudioPlaybackResponse {
+    stop_owned_audio_playback(&state);
+    audio_playback_response("idle", None, "No recording is playing.")
 }
 
 #[derive(Serialize)]
@@ -4570,6 +4807,7 @@ fn preview_delete_meeting_audio_for(
     let Ok(_command) = state.command_lock.lock() else {
         return unavailable_preview_audio_deletion();
     };
+    stop_owned_audio_playback(state);
     // Deletion mutates retained-audio state the take's evidence writes sit
     // beside; like every mutating command it refuses during a take instead
     // of interleaving with it.
@@ -4735,6 +4973,7 @@ fn preview_delete_meeting_transcript_for(
     let Ok(_command) = state.command_lock.lock() else {
         return unavailable_preview_transcript_deletion();
     };
+    stop_owned_audio_playback(state);
     if sitting_task_active(state) {
         return PreviewTranscriptDeletionResponse {
             state: "capture-active",
@@ -4903,6 +5142,7 @@ fn preview_delete_meeting_for(
     let Ok(_command) = state.command_lock.lock() else {
         return unavailable_preview_meeting_deletion();
     };
+    stop_owned_audio_playback(state);
     if sitting_task_active(state) {
         return PreviewMeetingDeletionResponse {
             state: "capture-active",
@@ -5841,6 +6081,9 @@ fn main() {
             library_snapshot,
             library_set_meeting_title,
             library_open_note,
+            library_play_retained_audio,
+            library_retained_audio_playback_status,
+            library_stop_retained_audio,
             library_open_transcript,
             library_open_transcript_file,
             correct_speaker_name,
@@ -5921,6 +6164,7 @@ fn main() {
 
 fn initialize_application(app: AppHandle, retry: bool) {
     let state = app.state::<ApplicationState>();
+    stop_owned_audio_playback(&state);
     if let Ok(mut profile) = state.preview_profile.lock() {
         *profile = PreviewProfileSnapshot::unavailable();
     }
@@ -8171,6 +8415,57 @@ mod tests {
         fs::create_dir(&repository).unwrap();
         let storage = StorageRoot::create(&temporary.path().join("app-data"), &repository).unwrap();
         (temporary, storage)
+    }
+
+    #[test]
+    fn retained_audio_fd_handoff_survives_exec_even_when_descriptor_three_is_preoccupied() {
+        let temporary = TempDir::new().unwrap();
+        let wav = temporary.path().join("synthetic.wav");
+        // A minimal synthetic WAV prefix is enough for this descriptor test;
+        // no meeting recording is read or played.
+        fs::write(&wav, b"RIFF\x24\0\0\0WAVEfmt ").unwrap();
+        let file = File::open(wav).unwrap();
+        let source_fd = file.as_raw_fd();
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "dd bs=4 count=1 <&3 2>/dev/null"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(move || {
+                // Simulate an inherited descriptor collision that carries
+                // CLOEXEC. The handoff must make the fixed player descriptor
+                // readable after exec rather than silently closing it.
+                if libc::dup2(source_fd, RETAINED_AUDIO_FD) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                set_close_on_exec(RETAINED_AUDIO_FD, true)?;
+                handoff_retained_audio_fd(RETAINED_AUDIO_FD)
+            });
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"RIFF");
+    }
+
+    #[test]
+    fn owned_audio_playback_reports_completion_once_then_reaps_its_child() {
+        let state = ApplicationState::default();
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        *state.audio_playback.lock().unwrap() = Some(RetainedAudioPlayback {
+            child,
+            source: library_reader::RetainedAudioSource::Microphone,
+        });
+        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(owned_audio_playback_status(&state).state, "completed");
+        assert_eq!(owned_audio_playback_status(&state).state, "idle");
     }
 
     fn storage_tree_bytes(path: &Path) -> Vec<(String, Vec<u8>)> {
